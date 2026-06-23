@@ -66,6 +66,9 @@ export type * from "../core/types.js";
 export type {
   ClientConfigStatus,
   CredentialClient,
+  CredentialAccessGrantSummary,
+  CredentialAccessSubjectSummary,
+  ManagedCredentialSummary,
   StoredCredentialSummary,
   StoreUrlBoundCredentialRequest,
   ConfigureClientRequest,

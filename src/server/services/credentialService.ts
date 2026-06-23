@@ -29,6 +29,8 @@ import type {
   CredentialBindingUse,
   CredentialFlowType,
   CredentialGrantAction,
+  CredentialAccessGrantSummary,
+  CredentialAccessSubjectSummary,
   CredentialUseGrant,
   DeleteClientConfigRequest,
   ForwardOAuthCallbackRequest,
@@ -37,6 +39,7 @@ import type {
   OAuthConnectionErrorCode,
   OAuthConnectionTransactionState,
   OAuthAccountValidationSpec,
+  ManagedCredentialSummary,
   ProxyGitHttpRequest,
   ProxyGitHttpResponse,
   RequestCredentialInputRequest,
@@ -46,6 +49,7 @@ import type {
   StoreUrlBoundCredentialRequest,
   UrlAudience,
 } from "../../../packages/shared/src/credentials/types.js";
+import type { EntityRecord, EntityKind } from "../../../packages/shared/src/runtime/entitySpec.js";
 import {
   findMatchingUrlAudience,
   normalizeCredentialInjection,
@@ -350,6 +354,23 @@ function buildClientLoopbackHandoff(
   };
 }
 
+interface CredentialRuntimePanelInfo {
+  panelId: string;
+  title?: string;
+  source?: string;
+  kind?: "workspace" | "browser";
+  parentId?: string | null;
+  contextId?: string;
+  runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
+}
+
+interface CredentialRuntimeInspector {
+  listActiveEntities(): EntityRecord[] | Promise<EntityRecord[]>;
+  resolvePanelSlotByEntity?(entityId: string): string | null | Promise<string | null>;
+  listPanels?(): CredentialRuntimePanelInfo[] | Promise<CredentialRuntimePanelInfo[]>;
+}
+
 interface CredentialServiceDeps {
   credentialStore?: CredentialStore;
   clientConfigStore?: ClientConfigStore;
@@ -367,6 +388,7 @@ interface CredentialServiceDeps {
   credentialLifecycle?: CredentialLifecycle;
   sessionCredentialCapture?: SessionCredentialCapture;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  runtimeInspector?: CredentialRuntimeInspector;
 }
 
 interface SessionCredentialCapture {
@@ -447,6 +469,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   const approvalQueue = deps.approvalQueue;
   const sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
   const sessionCredentialCapture = deps.sessionCredentialCapture;
+  const runtimeInspector = deps.runtimeInspector;
   const credentialLifecycle =
     deps.credentialLifecycle ??
     new CredentialLifecycle({
@@ -873,15 +896,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   ): Promise<ClientConfigStatus> {
     const request = params as GetClientConfigStatusRequest;
     const record = await clientConfigStore.load(request.configId);
-    if (
-      record?.owner &&
-      !isSameConfigTrustScope(
-        { ...resolveApprovalIdentity(ctx), callerId: ctx.caller.runtime.id },
-        record.owner
-      )
-    ) {
-      throw new OAuthConnectionError("client_not_authorized");
-    }
     return clientConfigStore.summarize(request.configId, record, request.fields);
   }
 
@@ -892,16 +906,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const request = params as DeleteClientConfigRequest;
     const existing = await clientConfigStore.load(request.configId);
     if (!existing) return;
-    if (
-      existing.owner &&
-      !isSameConfigTrustScope(
-        { ...resolveApprovalIdentity(ctx), callerId: ctx.caller.runtime.id },
-        existing.owner
-      )
-    ) {
-      throw new Error("Client config deletion is not authorized for this caller");
-    }
-    if (approvalQueue && isUserlandRuntimeCaller(ctx)) {
+    if (!canCallerBypassCredentialMutationApproval(ctx)) {
+      if (!approvalQueue || !isUserlandRuntimeCaller(ctx)) {
+        throw new Error("Client config deletion approval is unavailable for this caller");
+      }
       const identity = resolveApprovalIdentity(ctx);
       const decision = await approvalQueue.request({
         kind: "capability",
@@ -3071,11 +3079,238 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     return { token, secret };
   }
 
-  async function listStoredCredentials(ctx: ServiceContext): Promise<StoredCredentialSummary[]> {
+  async function listStoredCredentials(): Promise<StoredCredentialSummary[]> {
     const credentials = await credentialStore.listUrlBound();
-    return credentials
-      .filter((credential) => canCallerSeeStoredCredential(ctx, credential))
-      .map(summarizeUrlBoundCredential);
+    return credentials.map(summarizeUrlBoundCredential);
+  }
+
+  async function inspectStoredCredentials(): Promise<ManagedCredentialSummary[]> {
+    const credentials = await credentialStore.listUrlBound();
+    const runtimeIndex = await buildCredentialRuntimeIndex();
+    return Promise.all(
+      credentials.map((credential) => summarizeManagedCredential(credential, runtimeIndex))
+    );
+  }
+
+  type CredentialRuntimeIndex = {
+    activeEntities: EntityRecord[];
+    entitiesById: Map<string, EntityRecord>;
+    panelsByRuntimeEntityId: Map<string, CredentialRuntimePanelInfo>;
+    panelsByPanelId: Map<string, CredentialRuntimePanelInfo>;
+    slotByEntityId: Map<string, string | null>;
+  };
+
+  async function buildCredentialRuntimeIndex(): Promise<CredentialRuntimeIndex> {
+    const [activeEntities, panels] = await Promise.all([
+      safeListActiveCredentialEntities(),
+      safeListCredentialPanels(),
+    ]);
+    const panelsByRuntimeEntityId = new Map<string, CredentialRuntimePanelInfo>();
+    const panelsByPanelId = new Map<string, CredentialRuntimePanelInfo>();
+    for (const panel of panels) {
+      panelsByPanelId.set(panel.panelId, panel);
+      if (panel.runtimeEntityId) {
+        panelsByRuntimeEntityId.set(panel.runtimeEntityId, panel);
+      }
+    }
+    return {
+      activeEntities,
+      entitiesById: new Map(activeEntities.map((entity) => [entity.id, entity])),
+      panelsByRuntimeEntityId,
+      panelsByPanelId,
+      slotByEntityId: new Map(),
+    };
+  }
+
+  async function safeListActiveCredentialEntities(): Promise<EntityRecord[]> {
+    if (!runtimeInspector) return [];
+    try {
+      return await runtimeInspector.listActiveEntities();
+    } catch {
+      return [];
+    }
+  }
+
+  async function safeListCredentialPanels(): Promise<CredentialRuntimePanelInfo[]> {
+    if (!runtimeInspector?.listPanels) return [];
+    try {
+      return await runtimeInspector.listPanels();
+    } catch {
+      return [];
+    }
+  }
+
+  async function summarizeManagedCredential(
+    credential: Credential,
+    runtimeIndex: CredentialRuntimeIndex
+  ): Promise<ManagedCredentialSummary> {
+    const bindings = credentialBindings(credential);
+    const grants = await Promise.all(
+      (credential.grants ?? []).map((grant) =>
+        summarizeCredentialGrant(bindings, grant, runtimeIndex)
+      )
+    );
+    return {
+      ...summarizeUrlBoundCredential(credential),
+      grants,
+    };
+  }
+
+  async function summarizeCredentialGrant(
+    bindings: CredentialBinding[],
+    grant: CredentialUseGrant,
+    runtimeIndex: CredentialRuntimeIndex
+  ): Promise<CredentialAccessGrantSummary> {
+    const binding = bindings.find(
+      (candidate) => candidate.id === grant.bindingId && candidate.use === grant.use
+    );
+    const subjects = await summarizeCredentialGrantSubjects(grant, runtimeIndex);
+    return {
+      id: credentialUseGrantKey(grant),
+      bindingId: grant.bindingId,
+      ...(binding?.label ? { bindingLabel: binding.label } : {}),
+      use: grant.use,
+      resource: grant.resource,
+      action: grant.action,
+      scope: grant.scope,
+      ...(grant.callerId ? { callerId: grant.callerId } : {}),
+      ...(grant.repoPath ? { repoPath: grant.repoPath } : {}),
+      ...(grant.effectiveVersion ? { effectiveVersion: grant.effectiveVersion } : {}),
+      grantedAt: grant.grantedAt,
+      grantedBy: grant.grantedBy,
+      subjects,
+    };
+  }
+
+  async function summarizeCredentialGrantSubjects(
+    grant: CredentialUseGrant,
+    runtimeIndex: CredentialRuntimeIndex
+  ): Promise<CredentialAccessSubjectSummary[]> {
+    if (grant.scope === "caller") {
+      if (!grant.callerId) return [];
+      return [
+        await summarizeCredentialSubject(
+          grant.callerId,
+          runtimeIndex.entitiesById.get(grant.callerId) ?? null,
+          runtimeIndex
+        ),
+      ];
+    }
+    const subjects = runtimeIndex.activeEntities.filter(
+      (entity) =>
+        isCredentialAccessSubjectKind(entity.kind) &&
+        entity.source.repoPath === grant.repoPath &&
+        (grant.scope !== "version" || entity.source.effectiveVersion === grant.effectiveVersion)
+    );
+    return Promise.all(
+      subjects.map((entity) => summarizeCredentialSubject(entity.id, entity, runtimeIndex))
+    );
+  }
+
+  function isCredentialAccessSubjectKind(
+    kind: EntityKind
+  ): kind is "panel" | "worker" | "do" | "app" {
+    return kind === "panel" || kind === "worker" || kind === "do" || kind === "app";
+  }
+
+  async function summarizeCredentialSubject(
+    id: string,
+    entity: EntityRecord | null,
+    runtimeIndex: CredentialRuntimeIndex
+  ): Promise<CredentialAccessSubjectSummary> {
+    if (!entity) {
+      return {
+        id,
+        kind: "unknown",
+        active: false,
+        focusUnavailableReason: "Runtime is not active",
+      };
+    }
+    const focusTarget = await resolveCredentialSubjectFocusTarget(entity, runtimeIndex);
+    return {
+      id: entity.id,
+      kind: isCredentialAccessSubjectKind(entity.kind) ? entity.kind : "unknown",
+      active: entity.status === "active",
+      title: credentialSubjectTitle(entity, focusTarget?.panelInfo ?? null),
+      source: entity.source,
+      contextId: entity.contextId,
+      ...(entity.parentId ? { parentId: entity.parentId } : {}),
+      ...(focusTarget?.panelId ? { focusPanelId: focusTarget.panelId } : {}),
+      ...(focusTarget?.panelInfo?.title ? { focusPanelTitle: focusTarget.panelInfo.title } : {}),
+      ...(focusTarget?.panelInfo?.source ? { focusPanelSource: focusTarget.panelInfo.source } : {}),
+      ...(!focusTarget?.panelId
+        ? {
+            focusUnavailableReason:
+              entity.kind === "panel" ? "Panel is not open" : "No parent panel is open",
+          }
+        : {}),
+    };
+  }
+
+  async function resolveCredentialSubjectFocusTarget(
+    entity: EntityRecord,
+    runtimeIndex: CredentialRuntimeIndex
+  ): Promise<{ panelId: string; panelInfo: CredentialRuntimePanelInfo | null } | null> {
+    const panelEntity = findNearestCredentialPanelEntity(entity, runtimeIndex);
+    if (!panelEntity) return null;
+    const panelId = await resolvePanelSlotForCredentialEntity(panelEntity.id, runtimeIndex);
+    if (!panelId) return null;
+    return {
+      panelId,
+      panelInfo:
+        runtimeIndex.panelsByPanelId.get(panelId) ??
+        runtimeIndex.panelsByRuntimeEntityId.get(panelEntity.id) ??
+        null,
+    };
+  }
+
+  function findNearestCredentialPanelEntity(
+    entity: EntityRecord,
+    runtimeIndex: CredentialRuntimeIndex
+  ): EntityRecord | null {
+    if (entity.kind === "panel") return entity;
+    let current: EntityRecord | null = entity;
+    const seen = new Set<string>();
+    while (current?.parentId) {
+      const parentId: string = current.parentId;
+      if (seen.has(parentId)) break;
+      seen.add(parentId);
+      const parent: EntityRecord | null = runtimeIndex.entitiesById.get(parentId) ?? null;
+      if (!parent) return null;
+      if (parent.kind === "panel") return parent;
+      current = parent;
+    }
+    return null;
+  }
+
+  async function resolvePanelSlotForCredentialEntity(
+    entityId: string,
+    runtimeIndex: CredentialRuntimeIndex
+  ): Promise<string | null> {
+    if (runtimeIndex.slotByEntityId.has(entityId)) {
+      return runtimeIndex.slotByEntityId.get(entityId) ?? null;
+    }
+    let slotId = runtimeIndex.panelsByRuntimeEntityId.get(entityId)?.panelId ?? null;
+    if (!slotId && runtimeInspector?.resolvePanelSlotByEntity) {
+      try {
+        slotId = await runtimeInspector.resolvePanelSlotByEntity(entityId);
+      } catch {
+        slotId = null;
+      }
+    }
+    runtimeIndex.slotByEntityId.set(entityId, slotId);
+    return slotId;
+  }
+
+  function credentialSubjectTitle(
+    entity: EntityRecord,
+    panelInfo: CredentialRuntimePanelInfo | null
+  ): string {
+    if (entity.kind === "panel" && panelInfo?.title) return panelInfo.title;
+    if (entity.kind === "do")
+      return entity.className ? `${entity.className}:${entity.key}` : entity.id;
+    if (entity.kind === "worker" || entity.kind === "app") return entity.source.repoPath;
+    return entity.id;
   }
 
   async function revokeCredential(ctx: ServiceContext, params: CredentialIdParams): Promise<void> {
@@ -3083,9 +3318,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!credential) {
       return;
     }
-    if (!canCallerAdministerStoredCredential(ctx, credential)) {
-      throw new Error("Credential caller is not authorized to revoke");
-    }
+    await ensureCredentialRevocationApproved(ctx, credential, params.credentialId);
     try {
       await revokeProviderTokenIfConfigured(credential);
     } catch (error) {
@@ -3105,6 +3338,58 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       id: credential.id ?? params.credentialId,
       revokedAt: Date.now(),
     } as Credential & { id: string });
+  }
+
+  async function ensureCredentialRevocationApproved(
+    ctx: ServiceContext,
+    credential: Credential,
+    credentialId: string
+  ): Promise<void> {
+    if (canCallerBypassCredentialMutationApproval(ctx)) {
+      return;
+    }
+    if (!approvalQueue || !isUserlandRuntimeCaller(ctx)) {
+      throw new Error("Credential revocation approval is unavailable for this caller");
+    }
+
+    const identity = resolveApprovalIdentity(ctx);
+    const targetId = credential.id ?? credentialId;
+    const label = credential.label ?? credential.connectionLabel ?? targetId;
+    const decision = await approvalQueue.request({
+      kind: "capability",
+      dedupKey: `revoke-credential:${targetId}`,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
+      repoPath: identity.repoPath,
+      effectiveVersion: identity.effectiveVersion,
+      capability: "credential-revoke",
+      severity: "severe",
+      operation: {
+        kind: "credential",
+        verb: "Revoke credential",
+        object: {
+          type: "credential",
+          label: "Credential",
+          value: label,
+        },
+        groupKey: `revoke-credential:${targetId}`,
+      },
+      title: `Revoke ${label}`,
+      description: "Allow this requester to revoke this stored credential.",
+      resource: {
+        type: "credential",
+        label: "Credential",
+        value: label,
+      },
+      details: [
+        { label: "Credential ID", value: targetId },
+        { label: "Requester", value: ctx.caller.runtime.id },
+        { label: "Source", value: identity.repoPath },
+      ],
+    });
+    if (decision === "deny") {
+      throw new Error("Credential revocation denied");
+    }
   }
 
   async function revokeProviderTokenIfConfigured(credential: Credential): Promise<void> {
@@ -3708,20 +3993,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     resolvePendingCredentialUseGrants(credential.id, identity, decision, usage);
   }
 
-  function canCallerSeeStoredCredential(ctx: ServiceContext, credential: Credential): boolean {
-    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
-      return true;
-    }
-    const identity = ctx.caller.code;
-    if (!identity) {
-      return false;
-    }
-    if (credential.owner?.sourceId === identity.repoPath) {
-      return true;
-    }
-    return !!credential.grants?.some((grant) => grantAppliesToIdentity(grant, identity));
-  }
-
   function canCallerUseStoredCredential(
     ctx: ServiceContext,
     credential: Credential,
@@ -3736,14 +4007,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     );
   }
 
-  function canCallerAdministerStoredCredential(
-    ctx: ServiceContext,
-    credential: Credential
-  ): boolean {
-    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
-      return true;
-    }
-    return canCallerSeeStoredCredential(ctx, credential);
+  function canCallerBypassCredentialMutationApproval(ctx: ServiceContext): boolean {
+    return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
   }
 
   function grantSessionCredentialUse(
@@ -3856,7 +4121,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         case "forwardOAuthCallback":
           return forwardOAuthCallback(ctx, (args as [ForwardOAuthCallbackParams])[0]);
         case "listStoredCredentials":
-          return listStoredCredentials(ctx);
+          return listStoredCredentials();
+        case "inspectStoredCredentials":
+          return inspectStoredCredentials();
         case "revokeCredential":
           return revokeCredential(ctx, (args as [CredentialIdParams])[0]);
         case "grantCredential":
@@ -4220,16 +4487,6 @@ function anySignal(signals: Array<AbortSignal | undefined>): AbortSignal | undef
     signal.addEventListener("abort", abort, { once: true });
   }
   return controller.signal;
-}
-
-function isSameConfigTrustScope(
-  identity: { repoPath: string; effectiveVersion: string; callerId: string },
-  owner: { repoPath: string; effectiveVersion: string; callerId: string }
-): boolean {
-  return (
-    identity.repoPath === owner.repoPath &&
-    (identity.effectiveVersion === owner.effectiveVersion || identity.callerId === owner.callerId)
-  );
 }
 
 function deriveAccountIdentityFromJwt(

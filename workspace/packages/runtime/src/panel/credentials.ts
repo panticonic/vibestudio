@@ -5,10 +5,13 @@ import {
   type ConfigureClientRequest,
   type ConnectCredentialRequest,
   type CredentialClient,
+  type CredentialAccessGrantSummary,
+  type CredentialAccessSubjectSummary,
   type DeleteClientConfigRequest,
   type GetClientConfigStatusRequest,
   type GitHttpClient,
   type GrantUrlBoundCredentialRequest,
+  type ManagedCredentialSummary,
   type RequestCredentialInputRequest,
   type ResolveUrlBoundCredentialRequest,
   type StoredCredentialSummary,
@@ -68,6 +71,10 @@ export async function listStoredCredentials(): Promise<StoredCredentialSummary[]
   return requireClient().listStoredCredentials();
 }
 
+export async function inspectStoredCredentials(): Promise<ManagedCredentialSummary[]> {
+  return requireClient().inspectStoredCredentials();
+}
+
 export async function revokeCredential(credentialId: string): Promise<void> {
   await requireClient().revokeCredential(credentialId);
 }
@@ -105,11 +112,14 @@ export type {
   ClientConfigStatus,
   ConfigureClientRequest,
   ConnectCredentialRequest,
+  CredentialAccessGrantSummary,
+  CredentialAccessSubjectSummary,
   CredentialClient,
   DeleteClientConfigRequest,
   GetClientConfigStatusRequest,
   GitHttpClient,
   GrantUrlBoundCredentialRequest,
+  ManagedCredentialSummary,
   RequestCredentialInputRequest,
   ResolveUrlBoundCredentialRequest,
   StoredCredentialSummary,

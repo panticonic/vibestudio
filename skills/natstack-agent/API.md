@@ -104,6 +104,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
 | `credentials.deleteClientConfig` |  |
 | `credentials.forwardOAuthCallback` |  |
 | `credentials.listStoredCredentials` |  |
+| `credentials.inspectStoredCredentials` |  |
 | `credentials.revokeCredential` |  |
 | `credentials.grantCredential` |  |
 | `credentials.resolveCredential` |  |

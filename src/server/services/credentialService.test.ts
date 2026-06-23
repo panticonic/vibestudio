@@ -23,6 +23,7 @@ import type {
   AuditEntry,
   Credential,
   CredentialAuditEvent,
+  ManagedCredentialSummary,
   StoredCredentialSummary,
 } from "../../../packages/shared/src/credentials/types.js";
 import type { ClientConfigRecord } from "../../../packages/shared/src/credentials/clientConfigStore.js";
@@ -189,7 +190,7 @@ function jwtWithPayload(payload: Record<string, unknown>): string {
   );
 }
 
-function approvingQueue(decision: "once" | "session" | "version" | "repo" = "version") {
+function approvingQueue(decision: "once" | "session" | "version" | "repo" | "deny" = "version") {
   return {
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
@@ -266,9 +267,11 @@ describe("credentialService", () => {
   it("stores, lists, and revokes URL-bound credentials without returning secrets", async () => {
     const store = new MemoryCredentialStore();
     const auditLog = new MemoryAuditLog();
+    const approvalQueue = approvingQueue("once");
     const service = createCredentialService({
       credentialStore: store as never,
       auditLog: auditLog as never,
+      approvalQueue: approvalQueue as never,
     });
 
     const stored = (await service.handler(
@@ -304,13 +307,171 @@ describe("credentialService", () => {
     expect(listed).toHaveLength(1);
     expect(JSON.stringify(listed)).not.toContain("secret-token");
 
+    const listedByOtherCaller = (await service.handler(
+      { caller: verifiedTestCaller("worker:other", "worker") },
+      "listStoredCredentials",
+      []
+    )) as StoredCredentialSummary[];
+    expect(listedByOtherCaller).toHaveLength(1);
+    expect(JSON.stringify(listedByOtherCaller)).not.toContain("secret-token");
+
     await service.handler(
       { caller: verifiedTestCaller("worker:test", "worker") },
       "revokeCredential",
       [{ credentialId: stored.id }]
     );
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "capability",
+        capability: "credential-revoke",
+        callerId: "worker:test",
+      })
+    );
     expect((await store.loadUrlBound(stored.id))?.revokedAt).toEqual(expect.any(Number));
     expect(auditLog.entries).toHaveLength(1);
+  });
+
+  it("inspects persisted credential grants with focusable panel and worker subjects", async () => {
+    const store = new MemoryCredentialStore();
+    const grantedAt = Date.now();
+    await store.saveUrlBound({
+      id: "cred-1",
+      label: "Example API",
+      providerId: "url-bound",
+      connectionId: "cred-1",
+      connectionLabel: "Example API",
+      accountIdentity: { providerUserId: "acct-1", username: "alice" },
+      accessToken: "secret-token",
+      scopes: ["read"],
+      bindings: [
+        {
+          id: "fetch",
+          label: "REST API",
+          use: "fetch",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+        },
+      ],
+      grants: [
+        {
+          bindingId: "fetch",
+          use: "fetch",
+          resource: "https://api.example.test/",
+          action: "use",
+          scope: "version",
+          repoPath: "/owner",
+          effectiveVersion: "hash-1",
+          grantedAt,
+          grantedBy: "version",
+        },
+      ],
+    });
+    const resolvePanelSlotByEntity = vi.fn(async (entityId: string) =>
+      entityId === "panel:owner" ? "panel:tree/owner" : null
+    );
+    const service = createCredentialService({
+      credentialStore: store as never,
+      runtimeInspector: {
+        listActiveEntities: () => [
+          {
+            id: "panel:owner",
+            kind: "panel",
+            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            contextId: "ctx-owner",
+            key: "owner",
+            createdAt: grantedAt,
+            status: "active",
+            cleanupComplete: true,
+          },
+          {
+            id: "worker:/owner:jobs",
+            kind: "worker",
+            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            contextId: "ctx-owner",
+            key: "jobs",
+            parentId: "panel:owner",
+            createdAt: grantedAt,
+            status: "active",
+            cleanupComplete: true,
+          },
+          {
+            id: "do:/owner:Agent:main",
+            kind: "do",
+            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            contextId: "ctx-owner",
+            className: "Agent",
+            key: "main",
+            parentId: "worker:/owner:jobs",
+            createdAt: grantedAt,
+            status: "active",
+            cleanupComplete: true,
+          },
+          {
+            id: "worker:/owner:other-version",
+            kind: "worker",
+            source: { repoPath: "/owner", effectiveVersion: "hash-2" },
+            contextId: "ctx-owner",
+            key: "other-version",
+            parentId: "panel:owner",
+            createdAt: grantedAt,
+            status: "active",
+            cleanupComplete: true,
+          },
+        ],
+        resolvePanelSlotByEntity,
+        listPanels: () => [
+          {
+            panelId: "panel:tree/owner",
+            title: "Owner Panel",
+            source: "panels/owner",
+            kind: "workspace",
+            parentId: null,
+            contextId: "ctx-owner",
+            runtimeEntityId: "panel:owner",
+            effectiveVersion: "hash-1",
+          },
+        ],
+      },
+    });
+
+    const inspected = (await service.handler(
+      { caller: verifiedTestCaller("worker:other", "worker") },
+      "inspectStoredCredentials",
+      []
+    )) as ManagedCredentialSummary[];
+
+    expect(JSON.stringify(inspected)).not.toContain("secret-token");
+    expect(inspected).toHaveLength(1);
+    expect(inspected[0]!.grants).toHaveLength(1);
+    expect(inspected[0]!.grants[0]).toMatchObject({
+      bindingId: "fetch",
+      bindingLabel: "REST API",
+      scope: "version",
+      repoPath: "/owner",
+      effectiveVersion: "hash-1",
+      grantedAt,
+    });
+    expect(inspected[0]!.grants[0]!.subjects.map((subject) => subject.id)).toEqual([
+      "panel:owner",
+      "worker:/owner:jobs",
+      "do:/owner:Agent:main",
+    ]);
+    expect(inspected[0]!.grants[0]!.subjects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "worker:/owner:jobs",
+          kind: "worker",
+          focusPanelId: "panel:tree/owner",
+          focusPanelTitle: "Owner Panel",
+        }),
+        expect.objectContaining({
+          id: "do:/owner:Agent:main",
+          kind: "do",
+          focusPanelId: "panel:tree/owner",
+        }),
+      ])
+    );
+    expect(resolvePanelSlotByEntity).not.toHaveBeenCalled();
   });
 
   it("stores privileged credential input without returning the submitted token", async () => {
@@ -475,10 +636,12 @@ describe("credentialService", () => {
     expect(approvalQueue.requestCredentialInput).not.toHaveBeenCalled();
   });
 
-  it("rejects credential revocation from callers without owner or grant access", async () => {
+  it("prompts userland callers without owner or grant access before revoking credentials", async () => {
     const store = new MemoryCredentialStore();
+    const approvalQueue = approvingQueue("once");
     const service = createCredentialService({
       credentialStore: store as never,
+      approvalQueue: approvalQueue as never,
     });
 
     const stored = (await service.handler(
@@ -494,13 +657,65 @@ describe("credentialService", () => {
       ]
     )) as StoredCredentialSummary;
 
+    await service.handler(
+      { caller: verifiedTestCaller("worker:other", "worker") },
+      "revokeCredential",
+      [{ credentialId: stored.id }]
+    );
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "capability",
+        capability: "credential-revoke",
+        severity: "severe",
+        callerId: "worker:other",
+        callerKind: "worker",
+        repoPath: "/other",
+        effectiveVersion: "hash-2",
+        title: "Revoke Example API",
+        resource: { type: "credential", label: "Credential", value: "Example API" },
+      })
+    );
+    expect((await store.loadUrlBound(stored.id))?.revokedAt).toEqual(expect.any(Number));
+  });
+
+  it("does not revoke credentials when the out-of-band revocation approval is denied", async () => {
+    const store = new MemoryCredentialStore();
+    const approvalQueue = approvingQueue("once");
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue: approvalQueue as never,
+    });
+
+    const stored = (await service.handler(
+      { caller: verifiedTestCaller("worker:owner", "worker") },
+      "storeCredential",
+      [
+        {
+          label: "Example API",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          material: { type: "bearer-token", token: "secret-token" },
+        },
+      ]
+    )) as StoredCredentialSummary;
+    approvalQueue.request.mockResolvedValue("deny");
+
     await expect(
       service.handler(
         { caller: verifiedTestCaller("worker:other", "worker") },
         "revokeCredential",
         [{ credentialId: stored.id }]
       )
-    ).rejects.toThrow(/not authorized to revoke/);
+    ).rejects.toThrow(/Credential revocation denied/);
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "capability",
+        capability: "credential-revoke",
+        callerId: "worker:other",
+      })
+    );
 
     expect((await store.loadUrlBound(stored.id))?.revokedAt).toBeUndefined();
   });
@@ -2167,10 +2382,17 @@ describe("credentialService", () => {
         "getClientConfigStatus",
         [{ configId: "google-workspace" }]
       )
-    ).rejects.toThrow("client_not_authorized");
+    ).resolves.toMatchObject({
+      configId: "google-workspace",
+      configured: true,
+      fields: {
+        clientId: { configured: true },
+        clientSecret: { configured: true },
+      },
+    });
 
     await service.handler(
-      { caller: verifiedTestCaller("panel-owner", "panel") },
+      { caller: verifiedTestCaller("panel-other", "panel") },
       "deleteClientConfig",
       [{ configId: "google-workspace" }]
     );
@@ -2179,6 +2401,7 @@ describe("credentialService", () => {
       expect.objectContaining({
         kind: "capability",
         capability: "client-config-delete",
+        callerId: "panel-other",
         title: "Disable google-workspace",
         operation: expect.objectContaining({
           kind: "service-setup",

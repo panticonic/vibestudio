@@ -13,6 +13,7 @@ import type {
   ClientConfigStatus,
   CredentialBinding,
   ForwardOAuthCallbackRequest,
+  ManagedCredentialSummary,
   ProxyGitHttpResponse,
   StoredCredentialSummary,
   UrlAudience,
@@ -601,6 +602,51 @@ const StoredCredentialSummarySchema = z
   })
   .strict() satisfies z.ZodType<StoredCredentialSummary>;
 
+const EntitySourceSchema = z
+  .object({
+    repoPath: z.string(),
+    effectiveVersion: z.string(),
+  })
+  .strict();
+
+const CredentialAccessSubjectSummarySchema = z
+  .object({
+    id: z.string(),
+    kind: z.enum(["panel", "worker", "do", "app", "unknown"]),
+    active: z.boolean(),
+    title: z.string().optional(),
+    source: EntitySourceSchema.optional(),
+    contextId: z.string().optional(),
+    parentId: z.string().optional(),
+    focusPanelId: z.string().optional(),
+    focusPanelTitle: z.string().optional(),
+    focusPanelSource: z.string().optional(),
+    focusUnavailableReason: z.string().optional(),
+  })
+  .strict();
+
+const CredentialAccessGrantSummarySchema = z
+  .object({
+    id: z.string(),
+    bindingId: z.string(),
+    bindingLabel: z.string().optional(),
+    use: z.enum(["fetch", "git-http", "git-ssh"]),
+    resource: z.string(),
+    action: z.enum(["read", "write", "use"]),
+    scope: z.enum(["caller", "version", "repo"]),
+    callerId: z.string().optional(),
+    repoPath: z.string().optional(),
+    effectiveVersion: z.string().optional(),
+    grantedAt: z.number(),
+    grantedBy: z.string(),
+    subjects: z.array(CredentialAccessSubjectSummarySchema),
+  })
+  .strict();
+
+const ManagedCredentialSummarySchema = StoredCredentialSummarySchema.extend({
+  grants: z.array(CredentialAccessGrantSummarySchema),
+}).strict() satisfies z.ZodType<ManagedCredentialSummary>;
+
 const ClientConfigFieldStatusSchema = z
   .object({
     configured: z.boolean(),
@@ -722,6 +768,10 @@ export const credentialsMethods = defineServiceMethods({
   listStoredCredentials: {
     args: z.tuple([]),
     returns: z.array(StoredCredentialSummarySchema),
+  },
+  inspectStoredCredentials: {
+    args: z.tuple([]),
+    returns: z.array(ManagedCredentialSummarySchema),
   },
   revokeCredential: {
     args: z.tuple([CredentialIdParamsSchema]),

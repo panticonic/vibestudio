@@ -1473,6 +1473,32 @@ async function main() {
       credentialLifecycle,
       hasAppCapability: (callerId, capability) =>
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+      runtimeInspector: {
+        listActiveEntities: () => entityCache.listActive(),
+        resolvePanelSlotByEntity: async (entityId: string) =>
+          (await dispatcher.dispatch(
+            { caller: createVerifiedCaller("server", "server") },
+            "workspace-state",
+            "slot.resolveByEntity",
+            [entityId]
+          )) as string | null,
+        listPanels: async () =>
+          (await dispatcher.dispatch(
+            { caller: createVerifiedCaller("server", "server") },
+            "panelTree",
+            "list",
+            [null]
+          )) as Array<{
+            panelId: string;
+            title?: string;
+            source?: string;
+            kind?: "workspace" | "browser";
+            parentId?: string | null;
+            contextId?: string;
+            runtimeEntityId?: string | null;
+            effectiveVersion?: string | null;
+          }>,
+      },
       sessionCredentialCapture: {
         captureCookies: async (params) => {
           const response = await captureSessionCredential<{

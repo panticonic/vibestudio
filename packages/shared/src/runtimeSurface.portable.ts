@@ -59,6 +59,7 @@ export const CREDENTIALS_MEMBERS = [
   "getClientConfigStatus",
   "deleteClientConfig",
   "listStoredCredentials",
+  "inspectStoredCredentials",
   "revokeCredential",
   "grantCredential",
   "resolveCredential",
