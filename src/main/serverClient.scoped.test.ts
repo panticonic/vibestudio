@@ -13,7 +13,7 @@ async function startRpcHarness() {
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true });
   const grantRequests: unknown[][] = [];
-  const appRequests: string[] = [];
+  const scopedRequests: Array<{ callerId: string; callerKind: string; method: string }> = [];
 
   server.on("upgrade", (req, socket, head) => {
     if (req.url !== "/rpc") {
@@ -45,12 +45,20 @@ async function startRpcHarness() {
         if (msg.type === "ws:auth") {
           const shell = msg.token === "shell-token";
           const app = msg.token === "app-grant";
-          callerId = shell ? "electron-main" : app ? "@workspace-apps/shell" : "";
-          callerKind = shell ? "shell" : app ? "app" : "";
+          const panel = msg.token === "panel-grant";
+          callerId = shell
+            ? "electron-main"
+            : app
+              ? "@workspace-apps/shell"
+              : panel
+                ? "panel:nav-current"
+                : "";
+          callerKind = shell ? "shell" : app ? "app" : panel ? "panel" : "";
+          const success = shell || app || panel;
           ws.send(
             JSON.stringify({
               type: "ws:auth-result",
-              success: shell || app,
+              success,
               callerId,
               callerKind,
               connectionId: "conn",
@@ -58,7 +66,7 @@ async function startRpcHarness() {
               sessionDirty: false,
             })
           );
-          if (app) {
+          if (app || panel) {
             ws.send(
               JSON.stringify({
                 type: "ws:event",
@@ -74,16 +82,23 @@ async function startRpcHarness() {
         const { requestId, method, args = [] } = message;
         if (callerKind === "shell" && method === "auth.grantConnection") {
           grantRequests.push(args);
+          const principalId = String(args[0] ?? "");
           ws.send(
             JSON.stringify({
               type: "ws:rpc",
-              message: { type: "response", requestId, result: { token: "app-grant" } },
+              message: {
+                type: "response",
+                requestId,
+                result: {
+                  token: principalId.startsWith("panel:") ? "panel-grant" : "app-grant",
+                },
+              },
             })
           );
           return;
         }
-        if (callerKind === "app" && method === "workspace.getInfo") {
-          appRequests.push(method);
+        if ((callerKind === "app" || callerKind === "panel") && method === "workspace.getInfo") {
+          scopedRequests.push({ callerId, callerKind, method });
           ws.send(
             JSON.stringify({
               type: "ws:rpc",
@@ -109,7 +124,7 @@ async function startRpcHarness() {
     wss.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
-  return { port, grantRequests, appRequests };
+  return { port, grantRequests, scopedRequests };
 }
 
 describe("ServerClient scoped runtime callers", () => {
@@ -120,7 +135,8 @@ describe("ServerClient scoped runtime callers", () => {
     const events: unknown[] = [];
     client.addMessageListener(
       { callerId: "@workspace-apps/shell", callerKind: "app" },
-      (_fromId, message) => {
+      (envelope) => {
+        const message = envelope.message;
         if (message.type === "event") events.push(message.payload);
       }
     );
@@ -135,8 +151,38 @@ describe("ServerClient scoped runtime callers", () => {
     ).resolves.toEqual({ callerId: "@workspace-apps/shell", callerKind: "app" });
 
     expect(harness.grantRequests).toEqual([["@workspace-apps/shell"]]);
-    expect(harness.appRequests).toEqual(["workspace.getInfo"]);
+    expect(harness.scopedRequests).toEqual([
+      {
+        callerId: "@workspace-apps/shell",
+        callerKind: "app",
+        method: "workspace.getInfo",
+      },
+    ]);
     await expect.poll(() => events).toEqual([{ callerId: "@workspace-apps/shell" }]);
+  });
+
+  it("creates a panel-scoped WS client through a shell-issued connection grant", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+
+    await expect(
+      client.callAs(
+        { callerId: "panel:nav-current", callerKind: "panel" },
+        "workspace",
+        "getInfo",
+        []
+      )
+    ).resolves.toEqual({ callerId: "panel:nav-current", callerKind: "panel" });
+
+    expect(harness.grantRequests).toEqual([["panel:nav-current"]]);
+    expect(harness.scopedRequests).toEqual([
+      {
+        callerId: "panel:nav-current",
+        callerKind: "panel",
+        method: "workspace.getInfo",
+      },
+    ]);
   });
 
   it("fails closed for unsupported scoped caller kinds", async () => {
@@ -145,8 +191,8 @@ describe("ServerClient scoped runtime callers", () => {
     cleanup.push(() => client.close());
 
     await expect(
-      client.callAs({ callerId: "panel-1", callerKind: "panel" }, "workspace", "getInfo", [])
-    ).rejects.toThrow(/not available for panel/);
+      client.callAs({ callerId: "worker-1", callerKind: "worker" }, "workspace", "getInfo", [])
+    ).rejects.toThrow(/not available for worker/);
     expect(harness.grantRequests).toEqual([]);
   });
 });

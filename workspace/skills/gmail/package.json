@@ -9,6 +9,7 @@
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/gmail": "workspace:*",
     "@workspace/runtime": "workspace:*",
+    "@workspace-skills/agents": "workspace:*",
     "@workspace-skills/google-workspace": "workspace:*",
     "react": "^19.2.0"
   }

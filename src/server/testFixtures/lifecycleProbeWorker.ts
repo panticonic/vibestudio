@@ -5,7 +5,7 @@ import {
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
 } from "@natstack/durable";
-import { metaMethods } from "@natstack/shared/serviceSchemas/meta";
+import { docsMethods } from "@natstack/shared/serviceSchemas/docs";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 
 export class LifecycleProbeDO extends DurableObjectBase {
@@ -41,7 +41,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
     return { ok: true };
   }
 
-  @rpc({ callers: ["server", "harness", "shell"] })
+  @rpc({ callers: ["server", "shell"] })
   lifecycleEvents(): Array<{ kind: string; input: unknown; bootGeneration: string | null }> {
     this.ensureReady();
     return this.sql
@@ -58,7 +58,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
       }));
   }
 
-  @rpc({ callers: ["server", "harness", "shell"] })
+  @rpc({ callers: ["server", "shell"] })
   currentBootGeneration(): string | null {
     const value = this.env["WORKERD_BOOT_GENERATION"];
     return typeof value === "string" ? value : null;
@@ -67,7 +67,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
   /** Hold the inbound request open for `ms`, then return — an empirical probe for
    *  whether real workerd caps a long-held DO `fetch` handler (it should not; a DO
    *  is not a regular Worker with the ~30s wall limit). */
-  @rpc({ callers: ["server", "harness", "shell"] })
+  @rpc({ callers: ["server", "shell"] })
   async sleepProbe(ms: number): Promise<{ requestedMs: number; ok: true }> {
     await new Promise((resolve) => setTimeout(resolve, ms));
     return { requestedMs: ms, ok: true };
@@ -81,7 +81,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
    * `ran_at - started_at ≈ 3s` ⇒ ran continuously in the background; `≈` the gap
    * until the next request ⇒ the isolate froze and only resumed when re-woken.
    */
-  @rpc({ callers: ["server", "harness", "shell"] })
+  @rpc({ callers: ["server", "shell"] })
   async bgRunProbe(delayMs = 3000): Promise<{ hasWaitUntil: boolean }> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS bg (k TEXT PRIMARY KEY, v TEXT)`);
     this.sql.exec(`INSERT OR REPLACE INTO bg (k, v) VALUES ('started_at', ?)`, String(Date.now()));
@@ -98,10 +98,10 @@ export class LifecycleProbeDO extends DurableObjectBase {
       }
       this.sql.exec(`INSERT OR REPLACE INTO bg (k, v) VALUES ('ran_at', ?)`, String(Date.now()));
       try {
-        const meta = createTypedServiceClient("meta", metaMethods, (service, method, args) =>
+        const docs = createTypedServiceClient("docs", docsMethods, (service, method, args) =>
           this.rpc.call("main", `${service}.${method}`, args)
         );
-        await meta.listServices();
+        await docs.listServices();
         this.sql.exec(`INSERT OR REPLACE INTO bg (k, v) VALUES ('bg_io', 'ok')`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -113,7 +113,7 @@ export class LifecycleProbeDO extends DurableObjectBase {
     return { hasWaitUntil: typeof wu === "function" };
   }
 
-  @rpc({ callers: ["server", "harness", "shell"] })
+  @rpc({ callers: ["server", "shell"] })
   async bgRunResult(): Promise<Record<string, string>> {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS bg (k TEXT PRIMARY KEY, v TEXT)`);
     const out: Record<string, string> = {};

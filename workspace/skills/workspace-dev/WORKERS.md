@@ -23,7 +23,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `openExternal` | value |  |  |
 | `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
-| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
+| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
 | `vcs` | namespace | `applyEdits`, `readFile`, `listFiles`, `revert`, `status`, `unitStatus`, `log`, `diff`, `resolveHead`, `merge`, `abortMerge`, `pendingMerge`, `publishStatus`, `publish`, `recall` | Workspace GAD VCS (edit-first): applyEdits commits and projects edits atomically; status reports a head's unpublished changes vs main; diff compares state hashes. |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
@@ -177,7 +177,7 @@ gate. **In the workspace realm, every relay-reachable method MUST declare an
 `@rpc({ callers: [...] })` policy** — a method with no policy, or a call from a
 caller kind not listed, is refused (default-deny). `callers` is a coarse
 caller-KIND floor; values: `"panel" | "do" | "server" | "worker" | "shell" |
-"app" | "harness" | "extension"`.
+"app" | "extension"`.
 
 ```ts
 import { rpc } from "@workspace/runtime/worker";
@@ -186,7 +186,7 @@ export class MyStoreDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "do"] })       // a panel or an agent DO may call it
   async addItem(label: string): Promise<{ id: string }> { ... }
 
-  @rpc({ callers: ["server", "harness"] }) // server-dispatched only (webhook/alarm)
+  @rpc({ callers: ["server"] })            // server-dispatched only (webhook/alarm)
   async onWebhookDelivery(event: WebhookEvent): Promise<void> { ... }
 
   private bumpCounter(): void { ... }       // no @rpc — unreachable over RPC
@@ -194,8 +194,8 @@ export class MyStoreDO extends DurableObjectBase {
 ```
 
 Typical floors: panel-driven → `["panel"]`/`["panel","do"]`; channel/agent-internal
-→ `["do"]`; server-dispatched (webhooks/alarms/lifecycle) → `["server","harness"]`;
-broad reads → `["do","panel","server"]`; admin/destructive → `["server","shell","harness"]`.
+→ `["do"]`; server-dispatched (webhooks/alarms/lifecycle) → `["server"]`;
+broad reads → `["do","panel","server"]`; admin/destructive → `["server","shell"]`.
 
 ### Identity-level tightening (inline)
 

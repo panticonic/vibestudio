@@ -10,14 +10,15 @@ import { blobstoreMethods } from "./blobstore.js";
 import { buildMethods } from "./build.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { credentialsMethods } from "./credentials.js";
+import { docsMethods } from "./docs.js";
 import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
 import { gitInteropMethods } from "./gitInterop.js";
 import { menuMethods } from "./menu.js";
-import { metaMethods } from "./meta.js";
 import { notificationMethods } from "./notification.js";
+import { paletteMethods } from "./palette.js";
 import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
@@ -49,14 +50,15 @@ const serviceTables: ServiceTable[] = [
   { service: "build", file: "build.ts", methods: buildMethods },
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
+  { service: "docs", file: "docs.ts", methods: docsMethods },
   { service: "events", file: "events.ts", methods: eventsMethods },
   { service: "extensions", file: "extensions.ts", methods: extensionsMethods },
   { service: "externalOpen", file: "externalOpen.ts", methods: externalOpenMethods },
   { service: "fs", file: "fs.ts", methods: fsMethods },
   { service: "gitInterop", file: "gitInterop.ts", methods: gitInteropMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
-  { service: "meta", file: "meta.ts", methods: metaMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
+  { service: "palette", file: "palette.ts", methods: paletteMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
@@ -94,7 +96,10 @@ describe("service schema contracts", () => {
 
   it("declares args and approved return schemas for every method", () => {
     for (const { service, methods } of serviceTables) {
-      expect(Object.keys(methods).length, `${service} should declare at least one method`).toBeGreaterThan(0);
+      expect(
+        Object.keys(methods).length,
+        `${service} should declare at least one method`
+      ).toBeGreaterThan(0);
       for (const [method, schema] of Object.entries(methods)) {
         expect(
           typeof schema.args.safeParse,
@@ -111,9 +116,45 @@ describe("service schema contracts", () => {
 
   it("builds typed clients without dotted-method collisions", () => {
     for (const { service, methods } of serviceTables) {
-      expect(() =>
-        createTypedServiceClient(service, methods, async () => undefined)
-      ).not.toThrow();
+      expect(() => createTypedServiceClient(service, methods, async () => undefined)).not.toThrow();
     }
+  });
+
+  // Doc-coverage gate (replaces the deleted check:*-docs staleness gates).
+  // The literate-docs migration (Workstream F) is complete, so this now ENFORCES
+  // that every public method carries a non-empty `description` — new methods must
+  // be documented at the definition site (it flows to agents via the catalog).
+  it("documents every method (non-empty description at the definition site)", () => {
+    const undocumented: string[] = [];
+    for (const { service, methods } of serviceTables) {
+      for (const [method, schema] of Object.entries(methods)) {
+        if (!schema.description || schema.description.trim().length === 0) {
+          undocumented.push(`${service}.${method}`);
+        }
+      }
+    }
+    expect(
+      undocumented,
+      `Undocumented methods (add a \`description\`): ${undocumented.join(", ")}`
+    ).toEqual([]);
+  });
+
+  // Sensitivity-coverage gate: `access.sensitivity` is no longer enforced (the
+  // caller gate lives in `policy`), but it stays agent-facing documentation
+  // (rendered in docs_open) and the read-only dry-run key — so every public
+  // method must declare it (read | write | admin | destructive).
+  it("declares access.sensitivity on every method", () => {
+    const missing: string[] = [];
+    for (const { service, methods } of serviceTables) {
+      for (const [method, schema] of Object.entries(methods)) {
+        if (!schema.access?.sensitivity) {
+          missing.push(`${service}.${method}`);
+        }
+      }
+    }
+    expect(
+      missing,
+      `Methods missing \`access.sensitivity\` (add read|write|admin|destructive): ${missing.join(", ")}`
+    ).toEqual([]);
   });
 });

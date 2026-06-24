@@ -468,7 +468,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   }
 
   /** Entry point for workspace-level `recurring:` jobs (natstack.yml). */
-  @rpc({ callers: ["server", "harness"] })
+  @rpc({ callers: ["server"] })
   async runScheduledJob(args: unknown): Promise<{ ok: boolean }> {
     const input = record(args);
     const job = stringArg(input, "job") ?? "briefing";

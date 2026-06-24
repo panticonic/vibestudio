@@ -6,7 +6,6 @@
  */
 import {
   createRpcClient,
-  envelopeFromMessage,
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
@@ -19,6 +18,7 @@ import { menuMethods } from "@natstack/shared/serviceSchemas/menu";
 import { notificationMethods } from "@natstack/shared/serviceSchemas/notification";
 import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
 import { panelTreeMethods } from "@natstack/shared/serviceSchemas/panelTree";
+import { paletteMethods } from "@natstack/shared/serviceSchemas/palette";
 import { remoteCredMethods } from "@natstack/shared/serviceSchemas/remoteCred";
 import { settingsMethods } from "@natstack/shared/serviceSchemas/settings";
 import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
@@ -29,8 +29,8 @@ import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
-  send: (targetId: string, message: unknown) => Promise<void>;
-  onMessage: (handler: (fromId: string, message: unknown) => void) => () => void;
+  send: (envelope: RpcEnvelope) => Promise<void>;
+  onMessage: (handler: (envelope: RpcEnvelope) => void) => () => void;
 };
 type IncomingPairLinkBridge = {
   getPending: () => Promise<{ url: string; code: string } | null>;
@@ -42,19 +42,8 @@ const g = globalThis as unknown as {
 };
 if (!g.__natstackTransport) throw new Error("Shell transport not available");
 const transport: EnvelopeRpcTransport = {
-  send: (envelope) => assertPresent(g.__natstackTransport).send(envelope.target, envelope.message),
-  onMessage: (handler) =>
-    assertPresent(g.__natstackTransport).onMessage((fromId, message) => {
-      handler(
-        envelopeFromMessage({
-          selfId: "shell",
-          from: fromId,
-          target: "shell",
-          callerKind: fromId === "main" ? "server" : "unknown",
-          message: message as RpcEnvelope["message"],
-        })
-      );
-    }),
+  send: (envelope) => assertPresent(g.__natstackTransport).send(envelope),
+  onMessage: (handler) => assertPresent(g.__natstackTransport).onMessage(handler),
   status: () => "connected",
   ready: () => Promise.resolve(),
   onStatusChange: () => () => {},
@@ -81,7 +70,12 @@ const menuClient = createTypedServiceClient("menu", menuMethods, (service, metho
 const panelClient = createTypedServiceClient("panel", panelMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
-const panelTreeClient = createTypedServiceClient("panelTree", panelTreeMethods, (service, method, args) =>
+const panelTreeClient = createTypedServiceClient(
+  "panelTree",
+  panelTreeMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const paletteClient = createTypedServiceClient("palette", paletteMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
 const notificationClient = createTypedServiceClient(
@@ -118,7 +112,9 @@ const workspaceClient = createTypedServiceClient(
 import type {
   ThemeMode,
   ThemeAppearance,
+  ThemeConfig,
   MovePanelRequest,
+  PaletteCommand,
 } from "@natstack/shared/types";
 import type { BrowserNavigationIntent } from "@natstack/shared/panelCommands";
 import type {
@@ -147,12 +143,15 @@ export const panel = {
   getTree: async () => (await panelTreeClient.getTreeSnapshot()).rootPanels,
   getTreeSnapshot: () => panelTreeClient.getTreeSnapshot(),
   getFocusedPanelId: () => panelTreeClient.getFocusedPanelId(),
-  ensureLoaded: (panelId: string) => panelTreeClient.ensureLoaded(panelId),
+  ensureLoaded: (panelId: string) => panelClient.ensureLoaded(panelId),
   updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
+  updateThemeConfig: (config: ThemeConfig) => panelClient.updateThemeConfig(config),
   openDevTools: (panelId: string) => panelTreeClient.openDevTools(panelId),
   getChromeState: (panelId: string) => panelClient.getChromeState(panelId),
   getRuntimeLease: (panelId: string) => panelTreeClient.getRuntimeLease(panelId),
-  takeOver: (panelId: string) => panelTreeClient.takeOver(panelId),
+  takeOver: (panelId: string) => panelClient.takeOver(panelId),
+  togglePin: (panelId: string) => panelClient.togglePin(panelId),
+  listPinnedPanelIds: () => panelClient.listPinnedPanelIds(),
   getAddressOptions: (source: string, ref?: string) => panelClient.getAddressOptions(source, ref),
   getBrowserAddressOptions: (query: string) => panelClient.getBrowserAddressOptions(query),
   markBrowserNavigationIntent: (panelId: string, intent: BrowserNavigationIntent) =>
@@ -162,7 +161,8 @@ export const panel = {
   forceReloadView: (panelId: string) => panelClient.forceReloadView(panelId),
   rebuildPanel: (panelId: string) => panelTreeClient.rebuildPanel(panelId),
   rebuildAndReload: (panelId: string) => panelTreeClient.rebuildAndReload(panelId),
-  navigateHistory: (panelId: string, delta: -1 | 1) => panelTreeClient.navigateHistory(panelId, delta),
+  navigateHistory: (panelId: string, delta: -1 | 1) =>
+    panelTreeClient.navigateHistory(panelId, delta),
   unload: (panelId: string) => panelTreeClient.unload(panelId),
   archive: (panelId: string) => panelTreeClient.archive(panelId),
   updatePanelState: (
@@ -244,6 +244,15 @@ export const panel = {
   setCollapsed: (panelId: string, collapsed: boolean) =>
     panelTreeClient.setCollapsed(panelId, collapsed),
   expandIds: (panelIds: string[]) => panelTreeClient.expandIds(panelIds),
+};
+// =============================================================================
+// Palette Service (chrome lists + dispatches panel-contributed commands)
+// =============================================================================
+export const palette = {
+  register: (commands: PaletteCommand[]) => paletteClient.register(commands),
+  unregister: () => paletteClient.unregister(),
+  list: () => paletteClient.list(),
+  run: (panelId: string, commandId: string) => paletteClient.run(panelId, commandId),
 };
 // =============================================================================
 // View Service

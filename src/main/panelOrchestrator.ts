@@ -16,6 +16,8 @@ import type {
   PanelRecoverySnapshot,
   PanelSnapshot,
   PanelTreeSnapshot,
+  PaletteCommand,
+  ThemeConfig,
 } from "@natstack/shared/types";
 import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import type { EventService } from "@natstack/shared/eventsService";
@@ -46,7 +48,19 @@ import { panelRuntimeMethods } from "@natstack/shared/serviceSchemas/panelRuntim
 import type { WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { PanelRestorePolicy } from "@natstack/shared/workspace/types";
 import { buildPanelUrl } from "@natstack/shared/panelFactory";
+import {
+  selectCapEvictionVictims,
+  selectIdlePanelVictims,
+  type LoadedPanelSnapshot,
+} from "@natstack/shared/panel/panelGc";
+import {
+  PANEL_UI_IDLE_SWEEP_MS,
+  PANEL_UI_IDLE_SWEEP_MS_HEADLESS,
+  PANEL_UI_IDLE_UNLOAD_MS_HEADLESS,
+  PANEL_UI_MAX_LOADED_HEADLESS,
+} from "@natstack/shared/constants";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
+import type { PanelPinStoreApi } from "./panelPinStore.js";
 import {
   getCurrentSnapshot,
   getPanelSource,
@@ -84,31 +98,55 @@ export interface PanelOrchestratorDeps {
   workspaceConfig?: WorkspaceConfig;
   runtimeClient?: Partial<PanelHostRegistration> & {
     maxAssignedPanelViews?: number;
-    assignedPanelIdleMs?: number;
+    /**
+     * Idle threshold for the UI GC sweep. When set, a periodic sweep unloads
+     * panels inactive for this long via the shared GC selectors. Used by both
+     * desktop (1h) and the in-app headless host (5m) — there is one idle
+     * mechanism, not a separate per-panel-timer path.
+     */
+    uiIdleUnloadMs?: number;
+    /** Sweep cadence; defaults to PANEL_UI_IDLE_SWEEP_MS. Headless uses a finer one. */
+    uiIdleSweepMs?: number;
     restorePolicy?: PanelRestorePolicy;
   };
+  /**
+   * Client-local pin store (desktop). Absent on headless, where pins don't
+   * apply; GC then treats every panel as unpinned.
+   */
+  pinStore?: PanelPinStoreApi;
 }
 
 export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   private readonly deps: PanelOrchestratorDeps;
   private currentTheme: "light" | "dark" = "dark";
+  /** App-wide theme identity, broadcast to panels alongside appearance. */
+  private currentThemeConfig: ThemeConfig = {
+    accentColor: "iris",
+    grayColor: "slate",
+    radius: "medium",
+    scaling: "100%",
+    panelBackground: "translucent",
+  };
   private readonly runtimeClientSessionId: string;
   private readonly runtimeClientLabel: string;
   private readonly runtimeClientPlatform: "desktop" | "headless" | "mobile";
   private readonly runtimeClientSupportsCdp: boolean;
   private readonly loadOnLeaseAssignment: boolean;
   private readonly maxAssignedPanelViews: number | null;
-  private readonly assignedPanelIdleMs: number | null;
+  /** Idle threshold for the UI GC sweep; null disables the sweep. */
+  private readonly uiIdleUnloadMs: number | null;
+  /** Sweep cadence; finer on headless than desktop. */
+  private readonly uiIdleSweepMs: number;
+  private idleSweepTimer?: ReturnType<typeof setInterval>;
   private runtimeClientRegistered = false;
   private readonly runtimeConnectionBySlot = new Map<
     string,
     { runtimeEntityId: string; connectionId: string }
   >();
-  private readonly assignedPanelResources = new Map<
-    string,
-    { lastUsedAt: number; idleTimer?: ReturnType<typeof setTimeout> }
-  >();
+  private readonly assignedPanelResources = new Map<string, { lastUsedAt: number }>();
   private readonly stateArgsPushUnsubs = new Map<string, () => void>();
+  /** Last reactive view-build error per slot, surfaced to the imperative creator. */
+  private readonly viewBuildFailures = new Map<string, string>();
   private viewRevision = 0;
   private lastAppliedServerPanelTreeRevision = 0;
   private readonly explicitTitlePanelIds = new Set<string>();
@@ -131,14 +169,21 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     this.runtimeClientSupportsCdp =
       deps.runtimeClient?.supportsCdp ?? this.runtimeClientPlatform !== "mobile";
     this.loadOnLeaseAssignment = deps.runtimeClient?.loadOnLeaseAssignment ?? false;
+    const headlessAutoload =
+      this.runtimeClientPlatform === "headless" && this.loadOnLeaseAssignment;
     this.maxAssignedPanelViews =
       deps.runtimeClient?.maxAssignedPanelViews ??
-      (this.runtimeClientPlatform === "headless" && this.loadOnLeaseAssignment ? 8 : null);
-    this.assignedPanelIdleMs =
-      deps.runtimeClient?.assignedPanelIdleMs ??
-      (this.runtimeClientPlatform === "headless" && this.loadOnLeaseAssignment
-        ? 5 * 60 * 1000
-        : null);
+      (headlessAutoload ? PANEL_UI_MAX_LOADED_HEADLESS : null);
+    // One idle mechanism for every host: the sweep. Headless gets a default
+    // threshold/cadence so it keeps shedding idle panels without per-panel timers.
+    this.uiIdleUnloadMs =
+      deps.runtimeClient?.uiIdleUnloadMs ??
+      (headlessAutoload ? PANEL_UI_IDLE_UNLOAD_MS_HEADLESS : null);
+    this.uiIdleSweepMs =
+      deps.runtimeClient?.uiIdleSweepMs ??
+      (this.runtimeClientPlatform === "headless"
+        ? PANEL_UI_IDLE_SWEEP_MS_HEADLESS
+        : PANEL_UI_IDLE_SWEEP_MS);
     this.restorePolicy =
       deps.runtimeClient?.restorePolicy ?? deps.workspaceConfig?.panelRestorePolicy ?? "focused";
   }
@@ -167,9 +212,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
   private get cdpHost() {
     return this.deps.cdpHost;
-  }
-  private get workspaceConfig() {
-    return this.deps.workspaceConfig;
   }
 
   private callPanelTreeAs(
@@ -216,6 +258,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     createOpts: {
       parentId?: string | null;
       name?: string;
+      contextId?: string;
       ref?: string;
       stateArgs?: Record<string, unknown>;
     },
@@ -241,7 +284,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       );
       return { id: result.id, title: result.title };
     } catch (err) {
-      await callPanelTree("archive", [result.id]).catch(() => {});
+      const message = err instanceof Error ? err.message : String(err);
+      if (this.registry.getPanel(result.id)) {
+        this.markPanelLoadError(result.id, message);
+        if (attachOpts.focus) await this.focusPanel(result.id).catch(() => {});
+      } else {
+        await callPanelTree("archive", [result.id]).catch(() => {});
+      }
       throw err;
     }
   }
@@ -262,6 +311,60 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     });
   }
 
+  /**
+   * Wait (briefly) for the reactive view-host to build a panel's view after we
+   * acquired its lease. Building is now driven by the assigned-lease broadcast
+   * (handleRuntimeLeaseChanged → loadAssignedLeaseIntoView), which is one WS
+   * round-trip behind the synchronous acquire. By default this has no timeout:
+   * slow builds are valid, and failure must be reported by the actual build/load
+   * path. Tests or explicitly bounded probes may pass a timeout.
+   */
+  private async awaitViewBuilt(panelId: string, timeoutMs?: number): Promise<void> {
+    const view = this.getPanelView();
+    if (!view) return;
+    if (view.hasView(panelId)) return;
+    const failure = await new Promise<string | null | "built">((resolve) => {
+      const start = Date.now();
+      const tick = () => {
+        if (view.hasView(panelId)) {
+          resolve("built");
+          return;
+        }
+        const recorded = this.viewBuildFailures.get(panelId);
+        if (recorded !== undefined) {
+          resolve(recorded);
+          return;
+        }
+        if (timeoutMs !== undefined && Date.now() - start > timeoutMs) {
+          resolve(null);
+          return;
+        }
+        setTimeout(tick, 16);
+      };
+      tick();
+    });
+    if (failure === "built") return;
+    if (failure === null) {
+      throw new Error(`Timed out waiting for panel view to be created: ${panelId}`);
+    }
+    // The reactive host recorded a build error for this slot — surface it to the
+    // imperative creator so it can roll back (release lease + archive the slot).
+    this.viewBuildFailures.delete(panelId);
+    throw new Error(failure);
+  }
+
+  private markPanelLoadError(panelId: string, message: string): void {
+    const panel = this.registry.getPanel(panelId);
+    if (!panel) return;
+    this.registry.updateArtifacts(panelId, {
+      ...panel.artifacts,
+      buildState: "error",
+      error: message,
+      buildProgress: message,
+    });
+    this.registry.notifyPanelTreeUpdate();
+  }
+
   async createPanel(
     callerId: string,
     source: string,
@@ -270,14 +373,55 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     scopedCaller?: ScopedServerCaller
   ): Promise<{ id: string; title: string }> {
     const caller = this.registry.getPanel(callerId);
-    if (!caller) throw new Error(`Caller panel not found: ${callerId}`);
+    if (!caller && scopedCaller?.callerKind !== "app") {
+      throw new Error(`Caller panel not found: ${callerId}`);
+    }
     const panelTreeCaller = this.requirePanelTreeCaller(scopedCaller, "Panel creation");
     return this.createViaPanelTree(
       source,
-      { parentId: asPanelSlotId(callerId), name: options?.name, ref: options?.ref, stateArgs },
+      {
+        parentId: caller ? asPanelSlotId(callerId) : null,
+        name: options?.name,
+        contextId: options?.contextId,
+        ref: options?.ref,
+        stateArgs,
+      },
       { focus: options?.focus },
       this.panelTreeCallAs(panelTreeCaller)
     );
+  }
+
+  async navigatePanel(
+    panelId: string,
+    source: string,
+    options: {
+      contextId?: string;
+      env?: Record<string, string>;
+      ref?: string;
+      stateArgs?: Record<string, unknown>;
+    } = {},
+    scopedCaller?: ScopedServerCaller
+  ): Promise<{ id: string; title: string } | null> {
+    if (!this.registry.getPanel(panelId)) throw new Error(`Panel not found: ${panelId}`);
+    const panelTreeCaller = this.requirePanelTreeCaller(scopedCaller, "Panel navigation");
+    const result = (await this.callPanelTreeAs(panelTreeCaller, "navigate", [
+      panelId,
+      source,
+      options,
+    ])) as {
+      id?: string;
+      title?: string;
+      source?: string;
+      contextId?: string;
+    } | null;
+    if (!result) return null;
+    await this.rebuildViewAfterServerNavigate(
+      panelId,
+      result.source ?? source,
+      result.contextId,
+      options
+    );
+    return { id: result.id ?? panelId, title: result.title ?? "" };
   }
 
   async navigatePanelHistory(
@@ -327,13 +471,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       { panelId, title: "", contextId, source: newSource, options },
       { focus: true }
     );
-  }
-
-  async createInitPanel(
-    source: string,
-    stateArgs?: Record<string, unknown>
-  ): Promise<{ id: string; title: string }> {
-    return this.createViaPanelTree(source, { stateArgs }, {}, this.panelTreeCallAsServer());
   }
 
   async createBrowserUrlPanel(
@@ -441,13 +578,21 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     // Re-registers the panel principal and issues a fresh connection grant.
     await this.shellCore.getPanelInit(asPanelSlotId(panelId));
 
-    // Browser panels: skip build
+    // Browser panels: skip build. Acquire-only — the reactive host builds the
+    // view from the assigned-lease broadcast. A view that's still present is a
+    // navigate-in-place, so drive the existing renderer directly.
     if (getPanelSource(panel).startsWith("browser:")) {
       const url = getPanelSource(panel).slice("browser:".length);
       const view = this.getPanelView();
-      if (view?.createViewForBrowser) {
-        await view.createViewForBrowser(panelId, url, getPanelContextId(panel));
-        this.bumpViewRevision();
+      const navigateInPlace = Boolean(view?.hasView(panelId));
+      await this.acquireRuntimeLease(panelId, "acquire");
+      if (navigateInPlace) {
+        if (view?.createViewForBrowser) {
+          await view.createViewForBrowser(panelId, url, getPanelContextId(panel));
+          this.bumpViewRevision();
+        }
+      } else {
+        await this.awaitViewBuilt(panelId);
       }
       this.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
       this.registry.notifyPanelTreeUpdate();
@@ -464,11 +609,15 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
     this.panelHttpServer?.invalidateBuild(getPanelSource(panel));
 
-    const panelUrl = await this.buildPanelLoadUrl(panelId);
     const view = this.getPanelView();
-    if (panelUrl && view) {
+    const navigateInPlace = Boolean(view?.hasView(panelId));
+    // buildPanelLoadUrl acquires the lease (triggering the reactive build).
+    const panelUrl = await this.buildPanelLoadUrl(panelId);
+    if (navigateInPlace && panelUrl && view) {
       await view.createViewForPanel(panelId, panelUrl, getPanelContextId(panel));
       this.bumpViewRevision();
+    } else if (view) {
+      await this.awaitViewBuilt(panelId);
     }
     return this.lifecycleResult(panelId, "rebuild", "rebuild_requested", {
       loaded: Boolean(this.getPanelView()?.hasView(panelId)),
@@ -618,8 +767,18 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       };
     }
 
+    // Capture the outgoing panel before focus moves. "Inactive" means "1h since
+    // you last *viewed* it", so the panel we're leaving restarts its idle
+    // countdown now. The newly focused panel needs no bump — while focused it's
+    // protected by the sweep's protectedIds.
+    const previousFocused = this.registry.getFocusedPanelId();
+
     this.registry.updateSelectedPath(targetPanelId);
     this.registry.notifyPanelTreeUpdate();
+
+    if (previousFocused && previousFocused !== targetPanelId) {
+      this.refreshPanelActivity(previousFocused);
+    }
 
     // Persist focus to the server fire-and-forget: it's pure bookkeeping and
     // must not add an RPC round trip before an already-loaded view is shown.
@@ -667,6 +826,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           };
         }
         this.eventService.emit("navigate-to-panel", { panelId: targetPanelId });
+        this.markPanelLoadError(targetPanelId, "Panel view was not created");
         return {
           panelId: targetPanelId,
           status: "view_creation_failed",
@@ -678,6 +838,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         const message = error instanceof Error ? error.message : String(error);
         const lease = this.registry.getRuntimeLease(targetPanelId);
         const isLeaseFailure = /running on|leased by/i.test(message);
+        if (!isLeaseFailure) this.markPanelLoadError(targetPanelId, message);
         this.eventService.emit("navigate-to-panel", { panelId: targetPanelId });
         return {
           panelId: targetPanelId,
@@ -734,17 +895,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     try {
       await this.loadPanelIntoView(panelId);
       const nextView = this.getPanelView();
+      const loaded = Boolean(nextView?.hasView(panelId));
+      if (!loaded) this.markPanelLoadError(panelId, "Panel view was not created");
       return {
         panelId,
-        status: nextView?.hasView(panelId) ? "loaded" : "view_creation_failed",
+        status: loaded ? "loaded" : "view_creation_failed",
         focused: false,
-        loaded: Boolean(nextView?.hasView(panelId)),
-        ...(nextView?.hasView(panelId) ? {} : { message: "Panel view was not created" }),
+        loaded,
+        ...(loaded ? {} : { message: "Panel view was not created" }),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const lease = this.registry.getRuntimeLease(panelId);
       const isLeaseFailure = /running on|leased by/i.test(message);
+      if (!isLeaseFailure) this.markPanelLoadError(panelId, message);
       return {
         panelId,
         status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
@@ -761,6 +925,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // =========================================================================
 
   async initializePanelTree(): Promise<void> {
+    // The server is the sole tree authority and seeds initPanels server-side
+    // (seedPanelTreeIfEmpty, awaited before the panelTree service is ready), so
+    // loadTree() returns the seeded/persisted tree. The desktop never seeds:
+    // it loads the authoritative tree and restores metadata. The hosted shell
+    // chooses the visible panel and asks this local host to load it on focus.
     await this.shellCore.loadTree();
     await this.syncRuntimeLeaseSnapshot().catch((error: unknown) => {
       log.warn(
@@ -771,73 +940,29 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     });
 
     const roots = this.registry.getRootPanels();
-    if (roots.length > 0) {
-      // Mark restored panels as unloaded (they rebuild on focus)
-      for (const entry of this.registry.listPanels()) {
-        const panel = this.registry.getPanel(entry.panelId);
-        if (panel) {
-          const hasBuildArtifacts = Boolean(
-            panel.artifacts?.htmlPath || panel.artifacts?.bundlePath
-          );
-          if (panel.artifacts?.buildState !== "pending" || hasBuildArtifacts) {
-            this.registry.updateArtifacts(entry.panelId, {
-              buildState: "pending",
-              buildProgress: "Panel unloaded - will rebuild when focused",
-            });
-          }
-        }
-      }
+    if (roots.length === 0) {
+      // No roots yet (empty workspace, or the seed broadcast hasn't landed in
+      // the mirror). Nothing to build imperatively — the panel-tree-updated
+      // broadcast drives reactive rendering once roots appear.
+      log.info(`[initializePanelTree] No roots in authoritative tree at init.`);
       this.registry.notifyPanelTreeUpdate();
-      if (this.restorePolicy === "focused") {
-        const focusedPanelId = this.registry.getFocusedPanelId() ?? roots[0]?.id;
-        if (focusedPanelId) {
-          await this.focusPanel(focusedPanelId, { loadIfNeeded: true });
-        }
-      }
-    } else {
-      const entries = this.workspaceConfig?.initPanels;
-      log.info(
-        `[initializePanelTree] No existing roots. initPanels config:`,
-        JSON.stringify(entries)
-      );
-      if (entries && entries.length > 0) {
-        // Diagnostic: identical entries (same source + stateArgs) each spawn a SEPARATE root panel —
-        // almost always a stale/duplicated initPanels config. Surface it loudly, and stamp each create
-        // line with index/total + stateArgs so the duplication is visible even when only the create
-        // lines (not the config line above) are captured.
-        const entryKey = (e: { source: string; stateArgs?: Record<string, unknown> }): string =>
-          `${e.source} ${JSON.stringify(e.stateArgs ?? null)}`;
-        const counts = new Map<string, number>();
-        for (const e of entries) counts.set(entryKey(e), (counts.get(entryKey(e)) ?? 0) + 1);
-        const dupes = [...counts].filter(([, n]) => n > 1);
-        if (dupes.length > 0) {
-          log.warn(
-            `[initializePanelTree] DUPLICATE initPanels entries (${entries.length} total): ` +
-              dupes.map(([k, n]) => `${n}× {${k}}`).join("; ") +
-              ` — each creates its own root panel; this is almost certainly a stale/duplicated ` +
-              `initPanels config (check the setInitPanels writer / workspace setup).`
-          );
-        }
-        let index = 0;
-        for (const entry of entries) {
-          index += 1;
-          try {
-            log.info(
-              `[initializePanelTree] Creating init panel ${index}/${entries.length}: ${entry.source} ` +
-                `stateArgs=${JSON.stringify(entry.stateArgs ?? null)}`
-            );
-            await this.createInitPanel(entry.source, entry.stateArgs);
-          } catch (err) {
-            console.error(`[PanelOrchestrator] Failed to create init panel ${entry.source}:`, err);
-          }
-        }
-      }
-      const newRoots = this.registry.getRootPanels();
-      if (newRoots.length > 0 && this.restorePolicy === "focused") {
-        await this.focusPanel(assertPresent(newRoots[0]).id, { loadIfNeeded: true });
-      }
-      this.registry.notifyPanelTreeUpdate();
+      return;
     }
+
+    // Mark restored panels as unloaded (they rebuild on focus)
+    for (const entry of this.registry.listPanels()) {
+      const panel = this.registry.getPanel(entry.panelId);
+      if (panel) {
+        const hasBuildArtifacts = Boolean(panel.artifacts?.htmlPath || panel.artifacts?.bundlePath);
+        if (panel.artifacts?.buildState !== "pending" || hasBuildArtifacts) {
+          this.registry.updateArtifacts(entry.panelId, {
+            buildState: "pending",
+            buildProgress: "Panel unloaded - will rebuild when focused",
+          });
+        }
+      }
+    }
+    this.registry.notifyPanelTreeUpdate();
   }
 
   // =========================================================================
@@ -850,11 +975,64 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     this.registry.setCurrentTheme(theme);
   }
 
+  setCurrentThemeConfig(config: ThemeConfig): void {
+    this.currentThemeConfig = config;
+  }
+
+  getThemeConfig(): ThemeConfig {
+    return this.currentThemeConfig;
+  }
+
   broadcastTheme(theme: "light" | "dark"): void {
+    // The theme identity rides on the same event so panels converge appearance
+    // AND accent/radius in one push.
     for (const entry of this.registry.listPanels()) {
       if (this.getPanelView()?.hasView(entry.panelId)) {
-        this.deps.sendPanelEvent(entry.panelId, "runtime:theme", { theme });
+        this.deps.sendPanelEvent(entry.panelId, "runtime:theme", {
+          theme,
+          config: this.currentThemeConfig,
+        });
       }
+    }
+  }
+
+  /** Re-broadcast the current appearance + the (just-updated) theme identity. */
+  broadcastThemeConfig(): void {
+    this.broadcastTheme(this.currentTheme);
+  }
+
+  // =========================================================================
+  // Command palette contributions
+  // =========================================================================
+
+  /** Palette commands contributed by each panel, keyed by panel id (the same
+   *  id `sendPanelEvent` dispatches to). Pruned lazily in `listPaletteCommands`
+   *  when a contributing panel's view is gone. */
+  private readonly paletteContributions = new Map<string, PaletteCommand[]>();
+
+  registerPaletteCommands(panelId: string, commands: PaletteCommand[]): void {
+    if (commands.length === 0) this.paletteContributions.delete(panelId);
+    else this.paletteContributions.set(panelId, commands);
+  }
+
+  unregisterPaletteCommands(panelId: string): void {
+    this.paletteContributions.delete(panelId);
+  }
+
+  listPaletteCommands(): Array<{ panelId: string; commands: PaletteCommand[] }> {
+    const focused = this.registry.getFocusedPanelId();
+    const out: Array<{ panelId: string; commands: PaletteCommand[] }> = [];
+    for (const [panelId, commands] of this.paletteContributions) {
+      if (this.getPanelView()?.hasView(panelId)) out.push({ panelId, commands });
+      else this.paletteContributions.delete(panelId); // prune dead contributor
+    }
+    // Surface the focused panel's commands first.
+    return out.sort((a, b) => (a.panelId === focused ? -1 : b.panelId === focused ? 1 : 0));
+  }
+
+  runPaletteCommand(panelId: string, commandId: string): void {
+    if (this.getPanelView()?.hasView(panelId)) {
+      this.deps.sendPanelEvent(panelId, "runtime:palette-run", { commandId });
     }
   }
 
@@ -917,9 +1095,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   async registerRuntimeClient(): Promise<void> {
     await this.ensureRuntimeClientRegistered();
+    // Arm the client-side UI GC sweep (desktop only; null on headless, which
+    // uses per-panel one-shot timers instead).
+    this.startIdleSweep();
   }
 
   async unregisterRuntimeClient(): Promise<void> {
+    this.stopIdleSweep();
     if (!this.runtimeClientRegistered) return;
     this.runtimeClientRegistered = false;
     await this.panelRuntime.unregisterClient(this.runtimeClientSessionId);
@@ -933,9 +1115,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.shellCore.getCurrentEntityId(asPanelSlotId(panelId));
   }
 
-  async takeOverPanel(panelId: string): Promise<void> {
+  async takeOverPanel(panelId: string): Promise<PanelFocusResult> {
     await this.loadPanelIntoView(panelId, "takeOver");
-    await this.focusPanel(panelId);
+    return this.focusPanel(panelId);
   }
 
   async syncRuntimeLeaseSnapshot(): Promise<void> {
@@ -986,6 +1168,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     for (const panelId of beforeIds) {
       if (!this.registry.getPanel(panelId)) this.pruneRemovedPanelLocally(panelId);
     }
+    // Drop pins for slot ids no longer in the tree. Main is the GC source of
+    // truth; the shell atom is reconciled separately because named-panel slot
+    // ids are reused after remove+recreate.
+    this.deps.pinStore?.prune(this.registry.listPanels().map((p) => p.panelId));
     // Reactive navigate: reload the view of any still-hosted panel whose current
     // snapshot changed source/contextId (a navigate/history/replace by any client).
     // Entity caches were already refreshed above, so the lease targets the new entity.
@@ -1169,25 +1355,42 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       await this.unloadPanelIfPresent(slotId, "lease-transfer");
       return;
     }
-    if (disposition.kind === "assigned" && this.loadOnLeaseAssignment) {
+    // Reactive view-host: build the native view whenever a lease lands on THIS
+    // session. This is the sole desktop build path — the imperative panelTree
+    // mutators only *acquire* the lease; the assigned-lease broadcast (this
+    // handler) performs the build. Decoupled from `loadOnLeaseAssignment`,
+    // which now governs only CDP-default-host candidacy server-side
+    // (getDefaultCdpHostClient). The `view.hasView` guard keeps it idempotent
+    // so a redundant snapshot/lease event never double-builds.
+    if (disposition.kind === "assigned") {
       const lease = disposition.lease;
       const view = this.getPanelView();
       if (view && !view.hasView(slotId)) {
         try {
           const panel = this.registry.getPanel(slotId);
           if (panel) {
+            this.viewBuildFailures.delete(slotId);
             await this.loadAssignedLeaseIntoView(slotId, getCurrentSnapshot(panel), lease);
             this.trackAssignedPanelResource(slotId);
             await this.enforceAssignedPanelResourceCap(slotId);
           }
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
           log.warn(
-            `[handleRuntimeLeaseChanged] Failed to load assigned panel ${slotId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
+            `[handleRuntimeLeaseChanged] Failed to load assigned panel ${slotId}: ${message}`
           );
+          // The reactive build failed — record it so the imperative creator that
+          // acquired this lease (awaitViewBuilt) can surface the failure and roll
+          // back, and free the now-viewless lease so it doesn't leak.
+          this.viewBuildFailures.set(slotId, message);
+          this.releaseLocalPanelRuntime(slotId, "unload");
+          this.markPanelLoadError(slotId, message);
         }
       } else if (view?.hasView(slotId)) {
+        this.runtimeConnectionBySlot.set(slotId, {
+          runtimeEntityId: lease.runtimeEntityId,
+          connectionId: lease.connectionId,
+        });
         this.trackAssignedPanelResource(slotId);
       }
       return;
@@ -1203,7 +1406,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     if (data["type"] === "focus") {
       this.deps.sendPanelEvent(panelId, "runtime:focus", null);
     } else if (data["type"] === "theme") {
-      this.deps.sendPanelEvent(panelId, "runtime:theme", { theme: data["theme"] });
+      this.deps.sendPanelEvent(panelId, "runtime:theme", {
+        theme: data["theme"],
+        config: this.currentThemeConfig,
+      });
     } else if (data["type"] === "child-created") {
       this.deps.sendPanelEvent(panelId, "runtime:child-created", {
         childId: data["childId"],
@@ -1281,21 +1487,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   ): Promise<void> {
     this.ensureStateArgsPush(result.panelId);
     const panel = this.registry.getPanel(result.panelId);
-    const contextId = result.contextId ?? (panel ? getPanelContextId(panel) : undefined);
     const source = result.source ?? (panel ? getPanelSource(panel) : undefined);
     const view = this.getPanelView();
 
     if (opts.browserUrl) {
-      if (view?.createViewForBrowser) {
-        await this.acquireRuntimeLease(result.panelId, "acquire");
+      // Acquire-only: the assigned-lease broadcast drives the native build via
+      // handleRuntimeLeaseChanged → loadAssignedLeaseIntoView (reactive host).
+      if (view?.createViewForBrowser && !view.hasView(result.panelId)) {
         try {
-          await view.createViewForBrowser(
-            result.panelId,
-            opts.browserUrl,
-            assertPresent(contextId)
-          );
-          this.bumpViewRevision();
+          await this.acquireRuntimeLease(result.panelId, "acquire");
+          await this.awaitViewBuilt(result.panelId);
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (!/running on|leased by/i.test(message))
+            this.markPanelLoadError(result.panelId, message);
           this.releaseLocalPanelRuntime(result.panelId, "unload");
           throw error;
         }
@@ -1312,10 +1517,19 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       return;
     }
 
-    const panelUrl = await this.buildPanelLoadUrl(result.panelId);
-    if (panelUrl && view) {
-      await view.createViewForPanel(result.panelId, panelUrl, assertPresent(contextId));
-      this.bumpViewRevision();
+    // Acquire-only: acquiring the lease triggers the reactive build. We resolve
+    // the panel URL for the artifact record but no longer createView* directly.
+    let panelUrl: string | null;
+    try {
+      panelUrl = await this.buildPanelLoadUrl(result.panelId);
+      if (view && !view.hasView(result.panelId)) {
+        await this.awaitViewBuilt(result.panelId);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/running on|leased by/i.test(message)) this.markPanelLoadError(result.panelId, message);
+      this.releaseLocalPanelRuntime(result.panelId, "unload");
+      throw error;
     }
 
     const ref =
@@ -1391,12 +1605,24 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     // renderer in place — destroy/recreate costs a full renderer restart.
     this.destroyViewIfPartitionChanged(view, panelId, snapshot);
 
+    // Fresh build vs. navigate-in-place. A FRESH build (no view present after
+    // the partition check) is acquire-driven: acquiring the lease triggers the
+    // reactive host (handleRuntimeLeaseChanged → loadAssignedLeaseIntoView), so
+    // we acquire then await the build instead of createView* directly. A view
+    // that's still present is a navigate-in-place (same lease, new URL) — no
+    // lease event fires, so we must navigate the existing renderer directly.
+    const navigateInPlace = view.hasView(panelId);
+
     if (snapshot.source.startsWith("browser:")) {
       const url = snapshot.source.slice("browser:".length);
       await this.acquireRuntimeLease(panelId, leaseMode);
-      if (view.createViewForBrowser) {
-        await view.createViewForBrowser(panelId, url, snapshot.contextId);
-        this.bumpViewRevision();
+      if (navigateInPlace) {
+        if (view.createViewForBrowser) {
+          await view.createViewForBrowser(panelId, url, snapshot.contextId);
+          this.bumpViewRevision();
+        }
+      } else {
+        await this.awaitViewBuilt(panelId);
       }
       this.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
       this.registry.notifyPanelTreeUpdate();
@@ -1413,8 +1639,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       protocol: this.deps.protocol,
       basePath: this.deps.gatewayBasePath,
     });
-    await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
-    this.bumpViewRevision();
+    if (navigateInPlace) {
+      await view.createViewForPanel(panelId, panelUrl, snapshot.contextId);
+      this.bumpViewRevision();
+    } else {
+      await this.awaitViewBuilt(panelId);
+    }
     this.registry.updateArtifacts(panelId, {
       htmlPath: panelUrl,
       buildState: this.panelHttpServer?.hasBuild(snapshot.source, snapshot.options.ref)
@@ -1588,40 +1818,101 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.viewRevision;
   }
 
+  // ===========================================================================
+  // Client-side UI garbage collection (idle sweep + pin-aware count cap)
+  // ===========================================================================
+
+  /**
+   * Predicates shared by the idle sweep and the count cap. `isPinned` reads the
+   * client-local pin store (absent on headless ⇒ always false); `isKeepLoaded`
+   * reflects an active CDP/automation client on the lease.
+   */
+  private gcPredicates() {
+    return {
+      isPinned: (id: string) => this.deps.pinStore?.has(id) ?? false,
+      isKeepLoaded: (id: string) => !!this.registry.getRuntimeLease(id)?.keepLoaded,
+    };
+  }
+
+  private loadedSnapshots(): LoadedPanelSnapshot[] {
+    return [...this.assignedPanelResources.entries()].map(([panelId, r]) => ({
+      panelId,
+      lastActive: r.lastUsedAt,
+    }));
+  }
+
+  /**
+   * Refresh the activity timestamp of an *already-tracked* panel. Never creates
+   * an entry — only loaded panels are tracked, so this can't manufacture a
+   * phantom resource for an unloaded panel.
+   */
+  private refreshPanelActivity(panelId: string): void {
+    const entry = this.assignedPanelResources.get(panelId);
+    if (!entry) return;
+    entry.lastUsedAt = Date.now();
+  }
+
+  /**
+   * Start the periodic idle GC sweep. The single idle mechanism for every host
+   * (desktop 1h, headless 5m); idempotent; disabled when `uiIdleUnloadMs` is null.
+   */
+  private startIdleSweep(): void {
+    if (this.uiIdleUnloadMs === null || this.idleSweepTimer) return;
+    const idleMs = this.uiIdleUnloadMs;
+    this.idleSweepTimer = setInterval(() => {
+      const focused = this.registry.getFocusedPanelId();
+      const victims = selectIdlePanelVictims(this.loadedSnapshots(), {
+        now: Date.now(),
+        idleMs,
+        protectedIds: focused ? [focused] : [],
+        ...this.gcPredicates(),
+      });
+      for (const id of victims) void this.unloadAssignedPanelResource(id, "idle-timeout");
+    }, this.uiIdleSweepMs);
+  }
+
+  /** Stop the idle GC sweep (cleared from unregisterRuntimeClient). */
+  private stopIdleSweep(): void {
+    if (this.idleSweepTimer) {
+      clearInterval(this.idleSweepTimer);
+      this.idleSweepTimer = undefined;
+    }
+  }
+
+  /** Toggle the client-local pin for a slot id; returns the new pinned state. */
+  togglePanelPin(panelId: string): boolean {
+    return this.deps.pinStore?.toggle(panelId) ?? false;
+  }
+
+  isPanelPinned(panelId: string): boolean {
+    return this.deps.pinStore?.has(panelId) ?? false;
+  }
+
+  listPinnedPanelIds(): string[] {
+    return this.deps.pinStore?.list() ?? [];
+  }
+
   private trackAssignedPanelResource(panelId: string): void {
     if (!this.loadOnLeaseAssignment) return;
-    const previous = this.assignedPanelResources.get(panelId);
-    if (previous?.idleTimer) clearTimeout(previous.idleTimer);
-    const next: { lastUsedAt: number; idleTimer?: ReturnType<typeof setTimeout> } = {
-      lastUsedAt: Date.now(),
-    };
-    if (this.assignedPanelIdleMs !== null && this.assignedPanelIdleMs > 0) {
-      next.idleTimer = setTimeout(() => {
-        // Pinned by an active CDP client → exempt from idle unload.
-        if (this.registry.getRuntimeLease(panelId)?.keepLoaded) return;
-        void this.unloadAssignedPanelResource(panelId, "idle-timeout");
-      }, this.assignedPanelIdleMs);
-    }
-    this.assignedPanelResources.set(panelId, next);
+    // Record activity only — the idle sweep (not a per-panel timer) decides when
+    // to unload, so every host shares one GC mechanism.
+    this.assignedPanelResources.set(panelId, { lastUsedAt: Date.now() });
   }
 
   private clearAssignedPanelResource(panelId: string): void {
-    const tracked = this.assignedPanelResources.get(panelId);
-    if (tracked?.idleTimer) clearTimeout(tracked.idleTimer);
     this.assignedPanelResources.delete(panelId);
   }
 
   private async enforceAssignedPanelResourceCap(keepPanelId: string): Promise<void> {
     if (this.maxAssignedPanelViews === null || this.maxAssignedPanelViews <= 0) return;
-    while (this.assignedPanelResources.size > this.maxAssignedPanelViews) {
-      const oldest = [...this.assignedPanelResources.entries()]
-        .filter(([panelId]) => panelId !== keepPanelId)
-        // Never evict a panel pinned by an active CDP client (mid-automation).
-        .filter(([panelId]) => !this.registry.getRuntimeLease(panelId)?.keepLoaded)
-        .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt)[0]?.[0];
-      if (!oldest) return;
-      await this.unloadAssignedPanelResource(oldest, "resource-cap");
-    }
+    const focused = this.registry.getFocusedPanelId();
+    const protectedIds = [keepPanelId, ...(focused ? [focused] : [])];
+    const victims = selectCapEvictionVictims(this.loadedSnapshots(), {
+      cap: this.maxAssignedPanelViews,
+      protectedIds,
+      ...this.gcPredicates(),
+    });
+    for (const id of victims) await this.unloadAssignedPanelResource(id, "resource-cap");
   }
 
   private async unloadAssignedPanelResource(

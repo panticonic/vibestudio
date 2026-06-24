@@ -1,10 +1,10 @@
 /**
  * About Page - Shell panel showing application information.
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, Flex, Heading, Text, Box, Link, Badge, Separator, DataList } from "@radix-ui/themes";
 import { rpc } from "@workspace/runtime";
-import { useIsMobile } from "@workspace/react";
+import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { mountAboutPanel, BrandMark } from "@workspace/about-shared/ui";
 import type { AppInfo } from "@workspace/about-shared/types";
 
@@ -29,9 +29,22 @@ function AboutPage() {
   const isMobile = useIsMobile();
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
 
-  useEffect(() => {
+  const loadInfo = useCallback(() => {
     rpc.call<AppInfo>("main", "app.getInfo", []).then(setAppInfo).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    loadInfo();
+  }, [loadInfo]);
+
+  // Contribute a single action to the app-level command palette (Cmd/Ctrl+K).
+  const paletteCommands = useMemo(
+    () => [{ id: "about-reload-info", label: "Reload app info", section: "About" }],
+    []
+  );
+  usePaletteCommands(paletteCommands, (id) => {
+    if (id === "about-reload-info") loadInfo();
+  });
 
   return (
     <Flex

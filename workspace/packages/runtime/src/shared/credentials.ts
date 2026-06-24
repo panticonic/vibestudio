@@ -1,6 +1,6 @@
 import type { RpcCaller } from "@natstack/rpc";
-import type { ClientConfigStatus, ConfigureClientRequest, ConnectCredentialRequest, CredentialBinding, CredentialBindingUse, CredentialGrantResourceHint, CredentialInjection, DeleteClientConfigRequest, GetClientConfigStatusRequest, GrantUrlBoundCredentialRequest, ProxyGitHttpRequest, ProxyGitHttpResponse, RequestCredentialInputRequest, ResolveUrlBoundCredentialRequest, StoredCredentialSummary, StoreUrlBoundCredentialRequest, UrlAudience, } from "@natstack/shared/credentials/types";
-export type { ClientConfigStatus, ConfigureClientRequest, ConnectCredentialRequest, CredentialBinding, CredentialBindingUse, CredentialGrantResourceHint, CredentialInjection, DeleteClientConfigRequest, GetClientConfigStatusRequest, GrantUrlBoundCredentialRequest, ProxyGitHttpRequest, ProxyGitHttpResponse, RequestCredentialInputRequest, ResolveUrlBoundCredentialRequest, StoredCredentialSummary, StoreUrlBoundCredentialRequest, UrlAudience, } from "@natstack/shared/credentials/types";
+import type { ClientConfigStatus, ConfigureClientRequest, ConnectCredentialRequest, CredentialAccessGrantSummary, CredentialAccessSubjectSummary, CredentialBinding, CredentialBindingUse, CredentialGrantResourceHint, CredentialInjection, DeleteClientConfigRequest, GetClientConfigStatusRequest, GrantUrlBoundCredentialRequest, ManagedCredentialSummary, ProxyGitHttpRequest, ProxyGitHttpResponse, RequestCredentialInputRequest, ResolveUrlBoundCredentialRequest, StoredCredentialSummary, StoreUrlBoundCredentialRequest, UrlAudience, } from "@natstack/shared/credentials/types";
+export type { ClientConfigStatus, ConfigureClientRequest, ConnectCredentialRequest, CredentialAccessGrantSummary, CredentialAccessSubjectSummary, CredentialBinding, CredentialBindingUse, CredentialGrantResourceHint, CredentialInjection, DeleteClientConfigRequest, GetClientConfigStatusRequest, GrantUrlBoundCredentialRequest, ManagedCredentialSummary, ProxyGitHttpRequest, ProxyGitHttpResponse, RequestCredentialInputRequest, ResolveUrlBoundCredentialRequest, StoredCredentialSummary, StoreUrlBoundCredentialRequest, UrlAudience, } from "@natstack/shared/credentials/types";
 export interface CredentialClient {
     store(input: StoreUrlBoundCredentialRequest): Promise<StoredCredentialSummary>;
     connect(input: ConnectCredentialRequest): Promise<StoredCredentialSummary>;
@@ -9,6 +9,7 @@ export interface CredentialClient {
     getClientConfigStatus(input: GetClientConfigStatusRequest): Promise<ClientConfigStatus>;
     deleteClientConfig(input: DeleteClientConfigRequest | string): Promise<void>;
     listStoredCredentials(): Promise<StoredCredentialSummary[]>;
+    inspectStoredCredentials(): Promise<ManagedCredentialSummary[]>;
     revokeCredential(credentialId: string): Promise<void>;
     grantCredential(input: GrantUrlBoundCredentialRequest): Promise<StoredCredentialSummary>;
     resolveCredential(input: ResolveUrlBoundCredentialRequest): Promise<StoredCredentialSummary | null>;
@@ -100,6 +101,9 @@ export function createCredentialClient(rpc: RpcCaller): CredentialClient {
         },
         async listStoredCredentials() {
             return rpc.call<StoredCredentialSummary[]>("main", "credentials.listStoredCredentials", []);
+        },
+        async inspectStoredCredentials() {
+            return rpc.call<ManagedCredentialSummary[]>("main", "credentials.inspectStoredCredentials", []);
         },
         async revokeCredential(credentialId) {
             await rpc.call<void>("main", "credentials.revokeCredential", [{ credentialId }]);

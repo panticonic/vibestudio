@@ -140,6 +140,127 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("recovers docs_open name + args from a catalog-entry result when the tool name is lost", () => {
+    // Model tool-calls for docs_* arrive nameless/argless in the invocation event.
+    // The catalog shape of result.details lets the projection recover a useful pill
+    // ("Docs open · blobstore.getText") instead of a bare "invocation".
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-docs") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "invocation", request: {} },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-docs") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: {
+          content: [{ type: "text", text: "# blobstore.getText  (service)" }],
+          details: {
+            id: "service:blobstore.getText",
+            surface: "service",
+            qualifiedName: "blobstore.getText",
+            title: "blobstore.getText",
+            description: "Full UTF-8 text of a blob, or null if absent.",
+          },
+        },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const state = [envelope(started, 1), envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+    expect(chatMessagesFromChannelView(state)[0]?.invocation).toMatchObject({
+      name: "docs_open",
+      arguments: { id: "service:blobstore.getText" },
+    });
+  });
+
+  it("recovers docs_search name from a catalog-hit array result", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-search") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "invocation", request: {} },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-search") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: {
+          content: [{ type: "text", text: "2 results" }],
+          details: [
+            {
+              id: "service:blobstore.putText",
+              surface: "service",
+              qualifiedName: "blobstore.putText",
+              title: "blobstore.putText",
+            },
+            {
+              id: "service:blobstore.getText",
+              surface: "service",
+              qualifiedName: "blobstore.getText",
+              title: "blobstore.getText",
+            },
+          ],
+        },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const state = [envelope(started, 1), envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+    expect(chatMessagesFromChannelView(state)[0]?.invocation).toMatchObject({
+      name: "docs_search",
+    });
+  });
+
+  it("recovers docs_search name from an empty catalog-hit result", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-empty-search") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "invocation", request: {} },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-empty-search") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: 'No catalog matches for "zz-nope". Try broader keywords, or a different surface.',
+            },
+          ],
+          details: [],
+        },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const state = [envelope(started, 1), envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+    expect(chatMessagesFromChannelView(state)[0]?.invocation).toMatchObject({
+      name: "docs_search",
+    });
+  });
+
   it("projects failed invocation error payloads into copyable expanded error data", () => {
     const started: AgenticEvent<"invocation.started"> = {
       kind: "invocation.started",
@@ -452,7 +573,11 @@ describe("chatMessagesFromChannelView", () => {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
         blocks: [
-          { blockId: brandId<BlockId>("msg-legacy:block:0"), type: "text", content: "let me check" },
+          {
+            blockId: brandId<BlockId>("msg-legacy:block:0"),
+            type: "text",
+            content: "let me check",
+          },
           { type: "toolCall", id: "tc-9", name: "read" } as never,
         ],
         outcome: "completed",
@@ -820,6 +945,57 @@ describe("chatMessagesFromChannelView", () => {
         reason: "runner_restarted_mid_model",
       },
     });
+  });
+
+  it("suppresses recoverable restart cleanup failures while the retry remains active", () => {
+    const turnId = brandId<TurnId>("turn-restart-retry-active");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const started: AgenticEvent<"message.started"> = {
+      kind: "message.started",
+      actor: agent,
+      turnId,
+      causality: { messageId: brandId<MessageId>("msg-before-restart") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant" },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const failed: AgenticEvent<"message.failed"> = {
+      kind: "message.failed",
+      actor: agent,
+      turnId,
+      causality: { messageId: brandId<MessageId>("msg-before-restart") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "interrupted by restart",
+        recoverable: true,
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const retryStarted: AgenticEvent<"message.started"> = {
+      kind: "message.started",
+      actor: agent,
+      turnId,
+      causality: { messageId: brandId<MessageId>("msg-after-restart") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant" },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, started, failed, retryStarted]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    const messages = chatMessagesFromChannelView(state);
+    expect(messages.map((message) => message.id)).toEqual(["turn:turn-restart-retry-active"]);
+    expect(messages[0]).toMatchObject({
+      contentType: "typing",
+      complete: false,
+    });
+    expect(messages[0]?.error).toBeUndefined();
   });
 
   it("surfaces completed turns whose only assistant message is empty", () => {
@@ -1886,5 +2062,63 @@ describe("chatMessagesFromChannelView", () => {
         createInitialChannelViewState()
       )
     ).toThrow(/contains unresolved stored value refs/);
+  });
+
+  it("projects multi-recipient receipts and aggregates partial when only some read", () => {
+    const user = { kind: "user" as const, id: "user-1", participantId: "participant-user-1" };
+    const agentA = { kind: "agent" as const, id: "a", participantId: "pa" };
+    const agentB = { kind: "agent" as const, id: "b", participantId: "pb" };
+    const id = brandId<MessageId>("u-receipts");
+    const make = (kind: AgenticEvent["kind"], actor: typeof user | typeof agentA, extra = {}) =>
+      ({
+        kind,
+        actor,
+        causality: { messageId: id },
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, ...extra },
+        createdAt: "2026-05-20T12:00:05.000Z",
+      }) as AgenticEvent;
+    const sent: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: user,
+      causality: { messageId: id },
+      payload: textPayload(id, "user", "hello team"),
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const events = [
+      sent,
+      make("message.received", agentA),
+      make("message.received", agentB),
+      make("message.read", agentA, { turnId: "t-1" }),
+    ];
+    const state = events
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    const chat = chatMessagesFromChannelView(state).find((message) => message.id === id);
+    expect(chat?.receipts?.aggregate).toBe("partial");
+    expect(chat?.receipts?.byParticipant).toMatchObject({ pa: "read", pb: "received" });
+  });
+
+  it("marks a retracted message and drops it from no further ack", () => {
+    const user = { kind: "user" as const, id: "user-1", participantId: "participant-user-1" };
+    const id = brandId<MessageId>("u-retract");
+    const sent: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: user,
+      causality: { messageId: id },
+      payload: textPayload(id, "user", "oops"),
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const retract = {
+      kind: "message.retracted" as const,
+      actor: user,
+      causality: { messageId: id },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, by: user },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    } as AgenticEvent;
+    const state = [sent, retract]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    const chat = chatMessagesFromChannelView(state).find((message) => message.id === id);
+    expect(chat?.retracted).toBe(true);
   });
 });

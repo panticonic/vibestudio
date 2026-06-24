@@ -7,7 +7,7 @@ import { createTestDO } from "./durable-test-utils.js";
 class EchoDO extends DurableObjectBase {
   protected createTables(): void {}
 
-  @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+  @rpc({ callers: ["server", "panel", "do", "shell"] })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -27,7 +27,7 @@ class LifecycleProbeDO extends DurableObjectBase {
     this.resumed = true;
   }
 
-  @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+  @rpc({ callers: ["server", "panel", "do", "shell"] })
   callerKind(): string | null {
     return this.caller?.callerKind ?? null;
   }
@@ -48,7 +48,7 @@ class SchemaProbeDO extends DurableObjectBase {
     if (fromVersion > 0) this.sql.exec(`DROP TABLE IF EXISTS required_table`);
   }
 
-  @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+  @rpc({ callers: ["server", "panel", "do", "shell"] })
   hasRequiredTable(): boolean {
     return (
       this.sql

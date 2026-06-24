@@ -17,7 +17,7 @@ import {
   type DurableObjectServiceClient,
 } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
-import { usePanelTheme } from "@workspace/react";
+import { usePaletteCommands, usePanelTheme } from "@workspace/react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
@@ -59,6 +59,8 @@ import {
 } from "@radix-ui/react-icons";
 import { AgenticChat, ErrorBoundary, markdownComponents } from "@workspace/agentic-chat";
 import type { ConnectionConfig } from "@workspace/agentic-chat";
+import { useAppTheme } from "@workspace/ui/panel";
+import "@workspace/ui/tokens.css";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -460,6 +462,7 @@ function ArticleItem({
 
 export default function NewsPanel() {
   const theme = usePanelTheme();
+  const appTheme = useAppTheme();
   const stateArgs = panel.stateArgs.use<NewsStateArgs>();
   const resolvedContextId = resolveNewsContextId(stateArgs.contextId, runtimeContextId);
 
@@ -1022,7 +1025,7 @@ export default function NewsPanel() {
   if (!channelName) {
     return (
       <ErrorBoundary>
-        <Theme appearance={theme}>
+        <Theme appearance={theme} {...appTheme}>
           <Flex align="center" justify="center" gap="2" style={{ height: "100dvh" }}>
             <Spinner />
             <Text size="2" color="gray">
@@ -1067,9 +1070,27 @@ export default function NewsPanel() {
   const newCount = articles.filter(isNewSinceVisit).length;
   const searchBriefings = searchResults?.briefings ?? [];
 
+  // Contribute reader actions to the app-level command palette (Cmd/Ctrl+K).
+  const paletteCommands = useMemo(
+    () => [
+      { id: "news-refresh", label: "Refresh", section: "News" },
+      { id: "news-brief-now", label: "Brief me now", section: "News" },
+      { id: "news-mark-all-read", label: "Mark all read", section: "News" },
+      { id: "news-view-unread", label: "View unread", section: "News" },
+    ],
+    []
+  );
+  usePaletteCommands(paletteCommands, (id) => {
+    if (id === "news-refresh") void refresh();
+    else if (id === "news-brief-now") void callAgent("refreshNow", { briefing: true });
+    else if (id === "news-mark-all-read")
+      void callAgent("markRead", { articleIds: unreadIds.slice(0, 200) });
+    else if (id === "news-view-unread") setView("unread");
+  });
+
   return (
     <ErrorBoundary>
-      <Theme appearance={theme}>
+      <Theme appearance={theme} {...appTheme}>
         <Flex direction="column" style={{ height: "100dvh" }}>
           {/* On narrow panels the two panes don't fit side by side — toggle. */}
           {narrow ? (

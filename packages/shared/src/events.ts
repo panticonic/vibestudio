@@ -33,6 +33,7 @@ export type EventName =
   | "system-theme-changed"
   | "panel-tree-updated"
   | "open-workspace-switcher"
+  | "open-command-palette"
   | "toggle-address-bar"
   | "focus-address-bar"
   | "panel-chrome-command"
@@ -139,6 +140,7 @@ export interface EventPayloads {
   "panel-title-updated": { panelId: string; title: string; explicit?: boolean };
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
+  "open-command-palette": undefined;
   "toggle-address-bar": undefined;
   "focus-address-bar": undefined;
   "panel-chrome-command": { command: PanelCommandId };
@@ -223,6 +225,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel-title-updated",
   "panel:snapshot",
   "open-workspace-switcher",
+  "open-command-palette",
   "toggle-address-bar",
   "focus-address-bar",
   "panel-chrome-command",

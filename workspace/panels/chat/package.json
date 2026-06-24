@@ -14,12 +14,14 @@
       "@radix-ui/react-icons",
       "isomorphic-git",
       "@workspace/runtime",
+      "@workspace/ui",
       "@workspace/panel-browser"
     ]
   },
   "dependencies": {
     "@natstack/shared": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
+    "@workspace/ui": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/panel-browser": "workspace:*",

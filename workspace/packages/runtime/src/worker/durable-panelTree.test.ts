@@ -78,7 +78,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+      @rpc({ callers: ["server", "panel", "do", "shell"] })
       async probePanelTree(): Promise<{
         title: string | undefined;
         source: string | undefined;
@@ -153,7 +153,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+      @rpc({ callers: ["server", "panel", "do", "shell"] })
       async probePanelTree(): Promise<boolean> {
         return this.panelTree.get("slot-a").isLoaded();
       }
@@ -239,7 +239,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+      @rpc({ callers: ["server", "panel", "do", "shell"] })
       async probePanelTree(): Promise<{
         allIds: string[];
         childParentId: string | null | undefined;
@@ -320,7 +320,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelAliasProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+      @rpc({ callers: ["server", "panel", "do", "shell"] })
       async probePanelAliases(): Promise<{
         createdId: string;
         listedCount: number;
@@ -377,7 +377,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class ParentProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+      @rpc({ callers: ["server", "panel", "do", "shell"] })
       async probeParent(): Promise<{
         id: string;
         title: string | undefined;

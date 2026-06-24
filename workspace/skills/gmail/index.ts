@@ -1,4 +1,5 @@
-import { contextId as runtimeContextId, panel, rpc } from "@workspace/runtime";
+import { panel, rpc } from "@workspace/runtime";
+import { addAgentToChannel } from "@workspace-skills/agents";
 import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
 
 const GMAIL_AGENT_SOURCE = "workers/gmail-agent";
@@ -127,12 +128,8 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
   participantId?: string;
 }> {
   const channelId = args.channelId?.trim();
-  const contextId = args.contextId?.trim() || runtimeContextId;
   if (!channelId) {
     throw new Error("setupGmailAgent requires channelId");
-  }
-  if (!contextId) {
-    throw new Error("setupGmailAgent requires a runtime contextId");
   }
   const googleStatus = await getGoogleOnboardingStatus({ verify: true });
   const googleCredentialId = googleStatus.credentialId;
@@ -140,54 +137,45 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
     throw new Error("setupGmailAgent requires a verified Google Workspace credential");
   }
 
-  const key = gmailAgentObjectKey(channelId);
-  const entity = await rpc.call<{ id: string; targetId: string }>("main", "runtime.createEntity", [
-    {
-      kind: "do",
-      source: GMAIL_AGENT_SOURCE,
-      className: GMAIL_AGENT_CLASS,
-      key,
-      contextId,
-    },
-  ]);
-  const agentConfig = {
-    handle: GMAIL_AGENT_HANDLE,
-    name: "Gmail",
+  // Channel-membership mechanics are the general helper's job (per-channel key
+  // `gmail-${channelId}` === gmailAgentObjectKey); we only add the Google-credential
+  // prerequisite. `googleCredentialId` is NOT a behavior setting, so it survives
+  // toSubscriptionConfig and the worker still reads it from the subscription config;
+  // `approvalLevel` correctly moves to stateArgs.agentConfig.
+  const behavior = {
     approvalLevel: 2,
     googleCredentialId,
     ...(args.googlePubSubTopicName?.trim()
       ? { googlePubSubTopicName: args.googlePubSubTopicName.trim() }
       : {}),
   };
-  const subscription = await rpc.call<{ ok: boolean; participantId?: string }>(
-    entity.targetId,
-    "subscribeChannel",
-    [
-      {
-        channelId,
-        contextId,
-        config: agentConfig,
-      },
-    ]
-  );
+  const result = await addAgentToChannel({
+    source: GMAIL_AGENT_SOURCE,
+    className: GMAIL_AGENT_CLASS,
+    handle: GMAIL_AGENT_HANDLE,
+    name: "Gmail",
+    channelId,
+    contextId: args.contextId,
+    config: behavior,
+  });
 
   const stateArgs = panel.stateArgs.get() as Record<string, unknown>;
   await panel.stateArgs.set({
     installedAgents: updateInstalledAgents(stateArgs["installedAgents"], {
       agentId: GMAIL_AGENT_CLASS,
       handle: GMAIL_AGENT_HANDLE,
-      key,
+      key: result.key,
       source: GMAIL_AGENT_SOURCE,
       className: GMAIL_AGENT_CLASS,
-      config: agentConfig,
+      config: { handle: GMAIL_AGENT_HANDLE, name: "Gmail", ...behavior },
     }),
   });
 
   return {
-    ok: subscription.ok,
-    channelId,
-    contextId,
-    targetId: entity.targetId,
-    participantId: subscription.participantId,
+    ok: result.ok,
+    channelId: result.channelId,
+    contextId: result.contextId,
+    targetId: result.targetId,
+    participantId: result.participantId,
   };
 }

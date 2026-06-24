@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RpcMessage, RpcTransport } from "@natstack/rpc";
+import type { EnvelopeRpcTransport, RpcEnvelope } from "@natstack/rpc";
 import { initRuntime } from "./initRuntime.js";
 import { setStateArgs } from "../panel/stateArgs.js";
 
@@ -20,23 +20,38 @@ const g = globalThis as typeof globalThis & {
 
 function createTransport(options?: {
   onSend?: (
-    targetId: string,
-    message: RpcMessage,
-    deliver: (sourceId: string, message: RpcMessage) => void
+    envelope: RpcEnvelope,
+    deliver: (envelope: RpcEnvelope) => void
   ) => void | Promise<void>;
-}): RpcTransport {
-  let anyMessageHandler: ((sourceId: string, message: RpcMessage) => void) | null = null;
+}): EnvelopeRpcTransport {
+  let messageHandler: ((envelope: RpcEnvelope) => void) | null = null;
   return {
-    send: vi.fn(async (targetId, message) => {
-      await options?.onSend?.(targetId, message, (sourceId, inboundMessage) => {
-        anyMessageHandler?.(sourceId, inboundMessage);
+    send: vi.fn(async (envelope) => {
+      await options?.onSend?.(envelope, (inboundEnvelope) => {
+        messageHandler?.(inboundEnvelope);
       });
     }),
-    onMessage: vi.fn(() => vi.fn()),
-    onAnyMessage: vi.fn((handler) => {
-      anyMessageHandler = handler;
+    onMessage: vi.fn((handler) => {
+      messageHandler = handler;
       return vi.fn();
     }),
+  };
+}
+
+function responseFor(envelope: RpcEnvelope, result: unknown): RpcEnvelope {
+  if (envelope.message.type !== "request") {
+    throw new Error("responseFor expects a request envelope");
+  }
+  return {
+    from: envelope.target,
+    target: envelope.from,
+    delivery: { caller: { callerId: envelope.target, callerKind: "server" } },
+    provenance: envelope.provenance,
+    message: {
+      type: "response",
+      requestId: envelope.message.requestId,
+      result,
+    },
   };
 }
 
@@ -100,6 +115,52 @@ describe("initRuntime", () => {
     expect(runtime.rpc.selfId).toBe("panel:panel-1");
   });
 
+  it("preserves call delivery metadata through the runtime transport envelope", async () => {
+    const sent: RpcEnvelope[] = [];
+    g.__natstackEntityId = "panel:panel-1";
+    g.__natstackSlotId = "slot-1";
+    g.__natstackContextId = "ctx-1";
+    g.__natstackKind = "panel";
+    g.__natstackGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__natstackShell = {
+      setStateArgs: vi.fn(),
+      getInfo: vi.fn(),
+      focusPanel: vi.fn(),
+    };
+
+    const { runtime } = initRuntime({
+      createTransport: () =>
+        createTransport({
+          onSend: (envelope, deliver) => {
+            const message = envelope.message;
+            if (message.type !== "request") return;
+            sent.push(envelope);
+            deliver(responseFor(envelope, "ok"));
+          },
+        }),
+      fs: {} as never,
+    });
+
+    await expect(
+      runtime.rpc.call("main", "fs.writeFile", ["/tmp/x", "y"], {
+        idempotencyKey: "idem-1",
+        readOnly: true,
+      })
+    ).resolves.toBe("ok");
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      target: "main",
+      delivery: { idempotencyKey: "idem-1", readOnly: true },
+      message: {
+        type: "request",
+        method: "fs.writeFile",
+      },
+    });
+    expect(sent[0]!.message).not.toHaveProperty("idempotencyKey");
+    expect(sent[0]!.message).not.toHaveProperty("readOnly");
+  });
+
   it("uses the stable slot id and applies returned current-panel state args locally", async () => {
     const panelTreeSetStateArgsMock = vi.fn();
     const stateArgsChanged = vi.fn();
@@ -118,14 +179,11 @@ describe("initRuntime", () => {
     initRuntime({
       createTransport: () =>
         createTransport({
-          onSend: (_targetId, message, deliver) => {
+          onSend: (envelope, deliver) => {
+            const message = envelope.message;
             if (message.type !== "request") return;
             panelTreeSetStateArgsMock(message.method, message.args);
-            deliver("main", {
-              type: "response",
-              requestId: message.requestId,
-              result: { mode: "live", fromHost: true },
-            });
+            deliver(responseFor(envelope, { mode: "live", fromHost: true }));
           },
         }),
       fs: {} as never,
@@ -244,14 +302,13 @@ describe("initRuntime", () => {
     const { runtime, config } = initRuntime({
       createTransport: () =>
         createTransport({
-          onSend: (targetId, message, deliver) => {
+          onSend: (envelope, deliver) => {
+            const message = envelope.message;
             if (message.type !== "request") return;
-            sends.push({ targetId, method: message.method, args: message.args });
-            deliver(targetId, {
-              type: "response",
-              requestId: message.requestId,
-              result: { wsEndpoint: "ws://server/cdp/parent-slot", token: "t" },
-            });
+            sends.push({ targetId: envelope.target, method: message.method, args: message.args });
+            deliver(
+              responseFor(envelope, { wsEndpoint: "ws://server/cdp/parent-slot", token: "t" })
+            );
           },
         }),
       fs: {} as never,
@@ -297,13 +354,13 @@ describe("initRuntime", () => {
     const { runtime } = initRuntime({
       createTransport: () =>
         createTransport({
-          onSend: (targetId, message, deliver) => {
+          onSend: (envelope, deliver) => {
+            const message = envelope.message;
             if (message.type !== "request") return;
-            sends.push({ targetId, method: message.method, args: message.args });
-            deliver(targetId, {
-              type: "response",
-              requestId: message.requestId,
-              result:
+            sends.push({ targetId: envelope.target, method: message.method, args: message.args });
+            deliver(
+              responseFor(
+                envelope,
                 message.method === "panelTree.list"
                   ? [
                       {
@@ -315,8 +372,9 @@ describe("initRuntime", () => {
                         runtimeEntityId: "panel:sibling-entity",
                       },
                     ]
-                  : undefined,
-            });
+                  : undefined
+              )
+            );
           },
         }),
       fs: {} as never,
@@ -362,13 +420,12 @@ describe("initRuntime", () => {
     const { runtime } = initRuntime({
       createTransport: () =>
         createTransport({
-          onSend: (targetId, message, deliver) => {
+          onSend: (envelope, deliver) => {
+            const message = envelope.message;
             if (message.type !== "request") return;
-            sends.push({ targetId, method: message.method, args: message.args });
-            deliver(targetId, {
-              type: "response",
-              requestId: message.requestId,
-              result: {
+            sends.push({ targetId: envelope.target, method: message.method, args: message.args });
+            deliver(
+              responseFor(envelope, {
                 name: "agent",
                 source: "workers/agent",
                 contextId: "ctx-1",
@@ -376,8 +433,8 @@ describe("initRuntime", () => {
                 env: {},
                 bindings: {},
                 status: "running",
-              },
-            });
+              })
+            );
           },
         }),
       fs: {} as never,

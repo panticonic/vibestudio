@@ -47,7 +47,13 @@ type TestRpcServer = {
     { promise: Promise<void>; resolve: () => void; reject: (err: Error) => void }
   >;
   handleAuth(ws: unknown, token: string | null, connectionId: string): void;
-  handleRoute(client: WsClientState, targetId: string, message: unknown): Promise<void> | void;
+  handleRoute(
+    client: WsClientState,
+    targetId: string,
+    message: unknown,
+    targetConnectionId?: string,
+    routeEnvelope?: unknown
+  ): Promise<void> | void;
   handleClose(client: WsClientState, code: number, reason: string): void;
   handleRpc(client: WsClientState, message: unknown): Promise<void>;
   relayCall(
@@ -55,7 +61,9 @@ type TestRpcServer = {
     callerKind: string,
     targetId: string,
     method: string,
-    args: unknown[]
+    args: unknown[],
+    targetConnectionId?: string,
+    meta?: { requestId?: string; idempotencyKey?: string; readOnly?: boolean }
   ): Promise<unknown>;
   relayToDO(
     callerId: string,
@@ -615,25 +623,35 @@ describe("RpcServer relay behavior", () => {
       "do",
       "panel:tree/slot-b",
       "onMethodCall",
-      ["channel-1", "call-1", "eval", { code: "1 + 1" }]
+      ["channel-1", "call-1", "eval", { code: "1 + 1" }],
+      undefined,
+      { idempotencyKey: "idem-1", readOnly: true }
     );
 
     const sent = targetWs.send.mock.calls
       .map(([raw]) => JSON.parse(raw as string))
-      .find((message) => message.type === "ws:rpc" && message.message?.type === "request") as
-      | { message: { requestId: string } }
+      .find(
+        (message) => message.type === "ws:rpc" && message.envelope?.message?.type === "request"
+      ) as
+      | { envelope: { delivery: unknown; message: { requestId: string } }; message: unknown }
       | undefined;
     expect(sent).toMatchObject({
       type: "ws:rpc",
+      envelope: {
+        delivery: { idempotencyKey: "idem-1", readOnly: true },
+        message: { method: "onMethodCall" },
+      },
       message: { method: "onMethodCall" },
     });
+    expect(sent?.message).not.toHaveProperty("idempotencyKey");
+    expect(sent?.message).not.toHaveProperty("readOnly");
     expect(sent).toBeTruthy();
 
     targetWs.emitMessage({
       type: "ws:rpc",
       message: {
         type: "response",
-        requestId: sent!.message.requestId,
+        requestId: sent!.envelope.message.requestId,
         result: { ok: true },
       },
     });

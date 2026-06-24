@@ -1,9 +1,10 @@
 /**
  * LazyPanelTreeSidebar - Sortable panel tree sidebar with drag-and-drop.
  *
- * Visual design:
- * - Clean rows: a caret gutter, the title, and (on demand) a count / status / actions.
- * - Hierarchy is shown by indentation alone — no leading icons, no guide lines.
+ * Visual design (dense / IDE-like):
+ * - Compact rows: a caret gutter, the title, and (on demand) a count / status / actions.
+ * - Hierarchy is shown by indentation plus rounded connector guide-lines (see
+ *   TreeConnectors); the active branch's elbow brightens to the accent.
  * - Selection is a restrained accent wash; the selected *title* is the signal.
  *
  * Behavior:
@@ -21,10 +22,11 @@ import {
   CaretSortIcon,
   Cross2Icon,
   CubeIcon,
+  DrawingPinFilledIcon,
   LayersIcon,
   PlusIcon,
 } from "@radix-ui/react-icons";
-import { Badge, Box, Button, Flex, IconButton, Text } from "@radix-ui/themes";
+import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -38,14 +40,18 @@ import {
 } from "../shell/hooks/index.js";
 import type { PanelContextMenuAction } from "@natstack/shared/types";
 import { menu, panel } from "../shell/client.js";
-import { activeWorkspaceNameAtom, workspaceChooserDialogOpenAtom } from "../state/appModeAtoms.js";
+import {
+  activeWorkspaceNameAtom,
+  pinnedPanelIdsAtom,
+  workspaceChooserDialogOpenAtom,
+} from "../state/appModeAtoms.js";
 import { assertPresent } from "../utils/assertPresent";
 
 // ============================================================================
 // Style Constants
 // ============================================================================
 
-const ROW_HEIGHT = 30;
+const ROW_HEIGHT = 26;
 /** Left padding before the caret gutter of a depth-0 row. */
 const ROW_PADDING_LEFT = 8;
 /** Fixed-width gutter that holds the expand caret so titles align by depth. */
@@ -61,7 +67,7 @@ const AUTO_EXPAND_DELAY_MS = 600;
 const GUIDE_OFFSET = 6;
 /** Width of the elbow's horizontal run — ends exactly at the row's content. */
 const ELBOW_WIDTH = INDENTATION_WIDTH - GUIDE_OFFSET;
-const ELBOW_RADIUS = 6;
+const ELBOW_RADIUS = 4;
 const GUIDE_COLOR = "var(--gray-a5)";
 const GUIDE_COLOR_ACTIVE = "var(--accent-8)";
 
@@ -335,6 +341,8 @@ const SortableTreeItem = memo(
   }: SortableTreeItemProps) {
     const { panel, depth, collapsed } = item;
     const [isHovered, setIsHovered] = useState(false);
+    const pinnedPanelIds = useAtomValue(pinnedPanelIdsAtom);
+    const isPinned = pinnedPanelIds.has(panel.id);
     const expandTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Clear expand timeout on unmount
@@ -419,9 +427,9 @@ const SortableTreeItem = memo(
       height: ROW_HEIGHT,
       cursor: "pointer",
       backgroundColor: getRowBackground(isSelected, isHovered),
-      borderRadius: "var(--radius-3)",
+      borderRadius: "var(--radius-2)",
       paddingLeft: ROW_PADDING_LEFT + depth * INDENTATION_WIDTH,
-      transition: "background-color 120ms ease-out",
+      transition: "background-color var(--motion-fast) var(--ease-standard)",
     };
 
     // Show drop indicator when this item is designated to show it
@@ -481,7 +489,7 @@ const SortableTreeItem = memo(
                   height: CARET_SLOT,
                   margin: 0,
                   color: isSelected ? "var(--accent-11)" : "var(--gray-9)",
-                  transition: "transform 150ms ease",
+                  transition: "transform var(--motion-base) var(--ease-standard)",
                   transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
                 }}
               >
@@ -505,6 +513,16 @@ const SortableTreeItem = memo(
           >
             {panel.title}
           </Text>
+
+          {/* Pin indicator — quiet glyph, only when pinned */}
+          {isPinned && (
+            <Tooltip content="Pinned — exempt from auto-unload">
+              <DrawingPinFilledIcon
+                aria-label="Pinned"
+                style={{ flexShrink: 0, color: "var(--accent-11)", width: 12, height: 12 }}
+              />
+            </Tooltip>
+          )}
 
           {/* Build state indicator */}
           <BuildIndicator buildState={panel.buildState} />
@@ -618,8 +636,8 @@ function EndDropZone({ isOver, projectedDepth, isDragging }: EndDropZoneProps) {
         position: "relative",
         minHeight: isDragging ? 32 : 16,
         marginTop: 4,
-        borderTop: isDragging && !showIndicator ? "1px dashed var(--gray-a6)" : undefined,
-        transition: "min-height 150ms ease",
+        borderTop: isDragging && !showIndicator ? "1px dashed var(--surface-border)" : undefined,
+        transition: "min-height var(--motion-base) var(--ease-standard)",
       }}
     >
       {showIndicator && <Box style={getDropIndicatorStyle(projectedDepth, 0)} />}
@@ -653,6 +671,7 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
       <Button
         variant="soft"
         size="2"
+        className="app-touch-target"
         onClick={onNewPanel}
         aria-label="New panel"
         style={{ width: "100%" }}
@@ -664,7 +683,7 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
       {/* Workspace selector — the whole row is the switch affordance */}
       {activeWorkspaceName && (
         <Flex
-          className="app-tree-workspace"
+          className="app-tree-workspace app-touch-target"
           role="button"
           tabIndex={0}
           align="center"
@@ -814,7 +833,14 @@ export function LazyPanelTreeSidebar({
           <Text size="1" color="gray">
             Create your first panel to get started.
           </Text>
-          <Button variant="soft" size="2" mt="1" onClick={handleNewPanel} aria-label="New panel">
+          <Button
+            variant="soft"
+            size="2"
+            mt="1"
+            className="app-touch-target"
+            onClick={handleNewPanel}
+            aria-label="New panel"
+          >
             <PlusIcon />
             New panel
           </Button>

@@ -58,6 +58,8 @@ describe("workerdRpcRelay", () => {
           workerdUrl: "http://127.0.0.1:8787",
           workerdGatewayToken: "gateway-token",
           workerdDispatchSecret: "dispatch-secret",
+          idempotencyKey: "idem-1",
+          readOnly: true,
         }
       )
     ).resolves.toEqual({ ok: true });
@@ -73,6 +75,7 @@ describe("workerdRpcRelay", () => {
       })
     );
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
+    expect(body.delivery).toMatchObject({ idempotencyKey: "idem-1", readOnly: true });
     expect(body.message).toMatchObject({ type: "request", method: "ping", args: ["arg"] });
   });
 

@@ -151,6 +151,13 @@ export function buildCommonMenuItems(
     },
     { type: "separator" },
     {
+      label: "Command Palette...",
+      accelerator: "CmdOrCtrl+K",
+      click: () => {
+        eventService().emit("open-command-palette");
+      },
+    },
+    {
       label: "Switch Workspace...",
       accelerator: "CmdOrCtrl+Shift+O",
       click: () => {

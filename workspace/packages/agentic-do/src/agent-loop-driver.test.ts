@@ -38,6 +38,7 @@ async function makeHarness(opts: {
   policies?: StepPolicy[];
   ephemeral?: EphemeralEmit;
   executorOverride?: DriverDeps["executorOverride"];
+  runBackground?: DriverDeps["runBackground"];
   killPoint?: (point: string) => void;
   selfRefFor?: DriverDeps["selfRefFor"];
   gad?: Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
@@ -114,6 +115,7 @@ async function makeHarness(opts: {
     },
     now: () => (now += 7),
     scheduleAlarm: (at) => alarms.push(at),
+    ...(opts.runBackground ? { runBackground: opts.runBackground } : {}),
     executorOverride: (descriptor) => {
       const override = opts.executorOverride?.(descriptor);
       if (override) return override;
@@ -198,6 +200,122 @@ function deferred<T>() {
 }
 
 describe("AgentLoopDriver", () => {
+  it("publishes a read-ack EAGERLY at step time, not behind the (pending) model call", async () => {
+    // Regression for the steer-read-ack delay: a fire-and-forget publish_envelope
+    // (read-ack) co-emitted with a long model_call used to wait in the effect
+    // pump until the model finished. Hang the model call and DON'T drain the
+    // alarm — the read-ack must already be on the channel (eager step-time
+    // publish), proving it no longer queues behind the model dispatch.
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              execute: () => new Promise<EffectOutcome>(() => {}), // never resolves
+            } as EffectExecutor)
+          : null,
+    });
+    await harness.driver.handleIncoming(CHANNEL, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: CHANNEL,
+        source: { envelopeId: "env-1" },
+        sourceMessageId: "u1",
+        content: "hi",
+        senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
+      },
+    });
+    const reads = harness.channelPublishes.filter(
+      (p) => (p.payload as { kind?: string } | undefined)?.kind === "message.read"
+    );
+    expect(
+      reads.some(
+        (r) =>
+          (r.payload as { causality?: { messageId?: string } } | undefined)?.causality
+            ?.messageId === "u1"
+      )
+    ).toBe(true);
+  });
+
+  it("a long model_call on one channel does NOT pin the shared pump (other channels still dispatch)", async () => {
+    // Regression: dispatchDue used to `await Promise.all` every loop's due rows,
+    // so one channel's minutes-long model_call head-of-line-blocked every other
+    // channel. With detached dispatch, channel A's hung model must not stop
+    // channel B's turn from dispatching.
+    const CHANNEL_B = "chan-d2";
+    const hung = deferred<EffectOutcome>();
+    let bModelCalls = 0;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      runBackground: (fn) => {
+        void fn(); // simulate waitUntil: run the detached dispatch in the background
+      },
+      executorOverride: (descriptor) => {
+        if (descriptor.kind !== "model_call") return null;
+        if (descriptor.channelId === CHANNEL) {
+          return { kind: "model_call", execute: () => hung.promise } as EffectExecutor; // hangs forever
+        }
+        return {
+          kind: "model_call",
+          async execute() {
+            bModelCalls += 1;
+            return textReply("hi from B");
+          },
+        } as EffectExecutor;
+      },
+    });
+    // Channel A: model call hangs (detached — must not pin the pump).
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-a"));
+    // Channel B: a different channel's turn must still dispatch + complete.
+    await harness.driver.handleIncoming(CHANNEL_B, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: CHANNEL_B,
+        source: { envelopeId: "env-b" },
+        content: "hi",
+        senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
+      },
+    });
+    await settle(harness.driver, 6);
+    // Channel B got its model call despite channel A's model hanging.
+    expect(bModelCalls).toBe(1);
+  });
+
+  it("propagates detached dispatch driver failures to the background runner", async () => {
+    const background: Promise<unknown>[] = [];
+    let failAppends = false;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      runBackground: (fn) => {
+        const promise = fn();
+        promise.catch(() => {});
+        background.push(promise);
+      },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              async execute() {
+                failAppends = true;
+                return textReply("done");
+              },
+            } as EffectExecutor)
+          : null,
+      gadFault: (method) =>
+        failAppends && method === "appendLogEvent" ? new Error("append down") : null,
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-bg-fail"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(Promise.all(background)).rejects.toThrow("append down");
+    expect(harness.driver.outbox.all()[0]?.leaseExpiresAt).not.toBeNull();
+  });
+
   it("stamps channel-specific self identity on durable turn events", async () => {
     const harness = await makeHarness({
       script: { model: [], tool: [] },
@@ -257,7 +375,7 @@ describe("AgentLoopDriver", () => {
   });
 
   it("applies policy filters to executor-side ephemeral signals", async () => {
-    const messageId = ids.messageId(ids.turnId(CHANNEL, "env-1"), 1);
+    const messageId = ids.messageId(ids.turnId(CHANNEL, "env-1", "agent:self"), 1);
     const dropEphemeral: StepPolicy = {
       name: "drop-ephemeral",
       intercept: ({ output }) => output,
@@ -319,7 +437,7 @@ describe("AgentLoopDriver", () => {
     expect(harness.broadcasts.length).toBeGreaterThan(0);
     expect(harness.broadcasts.every((item) => item.channelId === CHANNEL)).toBe(true);
     expect(harness.broadcasts.flatMap((item) => item.envelopeIds)).toContain(
-      `pub:${ids.messageTerminal(ids.messageId(ids.turnId(CHANNEL, "env-1"), 1))}:${CHANNEL}`
+      `pub:${ids.messageTerminal(ids.messageId(ids.turnId(CHANNEL, "env-1", "agent:self"), 1))}:${CHANNEL}`
     );
   });
 
@@ -394,12 +512,16 @@ describe("AgentLoopDriver", () => {
       result: { protocolContent: [{ type: "text", text: "ok" }], details: {} },
       isError: false,
     };
-    await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL });
+    await expect(
+      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL })
+    ).resolves.toBe(true);
     await settle(harness.driver);
     const kindsAfterFirst = await logKinds(harness.gad);
 
     // Second delivery (the getRun poll backstop racing the onEvalComplete push) — idempotent no-op.
-    await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL });
+    await expect(
+      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL })
+    ).resolves.toBe(false);
     await settle(harness.driver);
     expect(await logKinds(harness.gad)).toEqual(kindsAfterFirst);
   });
@@ -497,8 +619,24 @@ describe("AgentLoopDriver", () => {
     expect(harness.driver.outbox.all()).toEqual([
       expect.objectContaining({ kind: "credential_wait" }),
     ]);
+    const effectId = ids.credentialWaitEffect(ids.credKey(CHANNEL, "openai-codex"));
+    await expect(
+      harness.driver.deliverEffectOutcome(
+        effectId,
+        { kind: "credential", resolved: true },
+        { channelId: CHANNEL }
+      )
+    ).resolves.toBe(true);
+    await expect(
+      harness.driver.deliverEffectOutcome(
+        effectId,
+        { kind: "credential", resolved: true },
+        { channelId: CHANNEL }
+      )
+    ).resolves.toBe(false);
     const loop = await harness.driver.loop(CHANNEL);
-    expect(loop.state.inFlightModelCall).toBeNull();
+    expect(loop.state.pendingCredentialWaits).toEqual({});
+    expect(loop.state.inFlightModelCall).not.toBeNull();
   });
 
   it("parks model auth failures behind a credential reconnect card", async () => {
@@ -590,6 +728,57 @@ describe("AgentLoopDriver", () => {
       "message.completed",
       "turn.closed",
     ]);
+  });
+
+  it("does not mark an unexpired leased model call failed after restart", async () => {
+    const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
+    const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });
+    const started = deferred<void>();
+    const first = await makeHarness({
+      script: { model: [], tool: [] },
+      gad,
+      driverSql: host,
+      runBackground: (fn) => {
+        void fn();
+      },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "model_call"
+          ? ({
+              kind: "model_call",
+              async execute() {
+                started.resolve();
+                return new Promise<EffectOutcome>(() => {});
+              },
+            } as EffectExecutor)
+          : null,
+    });
+
+    await first.driver.handleIncoming(CHANNEL, promptIncoming());
+    await first.driver.alarm();
+    await started.promise;
+    const leasedRow = first.driver.outbox.all()[0];
+    expect(leasedRow).toEqual(
+      expect.objectContaining({ kind: "model_call", leaseExpiresAt: expect.any(Number) })
+    );
+
+    const recovered = await makeHarness({
+      script: { model: [], tool: [] },
+      gad,
+      driverSql: host,
+    });
+    await recovered.driver.wake(CHANNEL);
+
+    expect(await logKinds(gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+    ]);
+    expect(recovered.driver.outbox.all()[0]).toEqual(
+      expect.objectContaining({
+        kind: "model_call",
+        leaseExpiresAt: leasedRow?.leaseExpiresAt,
+      })
+    );
   });
 
   it("closes a completed assistant turn when replay missed the terminal cascade", async () => {
@@ -732,7 +921,7 @@ describe("AgentLoopDriver", () => {
       resetAt: "2026-06-15T18:35:01.000Z",
     });
 
-    const messageId = ids.messageId(ids.turnId(CHANNEL, "env-1"), 0);
+    const messageId = ids.messageId(ids.turnId(CHANNEL, "env-1", "agent:self"), 0);
     await expect(
       harness.driver.scheduleResumeAtReset(CHANNEL, {
         messageId,
@@ -1037,9 +1226,9 @@ describe("AgentLoopDriver", () => {
     await driver.handleIncoming(CHANNEL, promptIncoming()).catch(() => {});
     await driver.alarm().catch(() => {});
     const effectId = ids.invocationEffect("tc-1");
-    await driver.deliverEffectOutcome(effectId, toolOk);
+    await expect(driver.deliverEffectOutcome(effectId, toolOk)).resolves.toBe(true);
     const kindsAfterFirst = await logKinds(harness.gad);
-    await driver.deliverEffectOutcome(effectId, toolOk); // duplicate
+    await expect(driver.deliverEffectOutcome(effectId, toolOk)).resolves.toBe(false); // duplicate
     expect(await logKinds(harness.gad)).toEqual(kindsAfterFirst);
     const terminals = await harness.gad.call<{ rows: Array<{ cnt: number }> }>(
       "query",

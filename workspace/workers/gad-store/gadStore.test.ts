@@ -685,7 +685,11 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
           },
         ],
       })
-    ).rejects.toThrow(/log envelope id collision with different content/u);
+    ).rejects.toThrow(
+      // Instrumentation: the error must NAME the diverging field (here the payload),
+      // not just say "different content" — so a live id-collision is diagnosable.
+      /log envelope id collision with different content:.*diverged at → .*payload/u
+    );
   });
 
   it("rejects appends whose expectedHeadEventHash does not match the current head", async () => {

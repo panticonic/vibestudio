@@ -64,13 +64,39 @@ describe("agentic.conversation.v1", () => {
       previousCompletedSender: "agent:a",
       previousCompletedMessageId: "msg-3",
       previousCompletedSeq: 3,
-      agentStreak: 2,
+      // Two completed messages from the SAME agent (one multi-round turn) = ONE hop, not
+      // two — the author never changed. (Was 2 before the hop-vs-message-count fix.)
+      agentStreak: 1,
     });
 
     // a user-completed message resets the streak
     const reset = policy.reduce(state, completedEnvelope(5, "user:1", "user"));
     expect(reset.agentStreak).toBe(0);
     expect(reset.previousCompletedSender).toBe("agent:a");
+  });
+
+  it("counts agent→agent hops (author alternations), not model-call rounds within a turn", () => {
+    const policy = conversationV1Policy;
+    let state = policy.init();
+    state = policy.reduce(state, completedEnvelope(1, "user:1", "user"));
+
+    // One agent turn emits a `message.completed` per model-call round (same sender). However
+    // many rounds, that's a SINGLE hop — otherwise a heavy-tool-use turn self-trips the agent
+    // hop breaker (the chat-storm bug).
+    for (let seq = 2; seq <= 12; seq += 1) {
+      state = policy.reduce(state, completedEnvelope(seq, "agent:a", "agent"));
+    }
+    expect(state.agentStreak).toBe(1);
+
+    // A different author replying IS a real hop; alternation accrues.
+    state = policy.reduce(state, completedEnvelope(13, "agent:b", "agent"));
+    expect(state.agentStreak).toBe(2);
+    state = policy.reduce(state, completedEnvelope(14, "agent:a", "agent"));
+    expect(state.agentStreak).toBe(3);
+
+    // A human message resets the chain.
+    state = policy.reduce(state, completedEnvelope(15, "user:1", "user"));
+    expect(state.agentStreak).toBe(0);
   });
 
   it("replay-fold equals incremental fold (cache derivation is pure)", () => {
@@ -104,8 +130,18 @@ describe("agentic.conversation.v1", () => {
       senderKind: "agent",
     };
     const before = JSON.stringify(payload);
-    expect(policy.annotate(state, draft)).toEqual({ agentHops: 2 });
+    // agent:a continuing its own turn (last completed was also agent:a) is NOT a new hop.
+    expect(policy.annotate(state, draft)).toEqual({ agentHops: 1 });
     expect(JSON.stringify(payload)).toBe(before);
+
+    // A DIFFERENT author replying IS a new hop (streak + 1).
+    const draftB = {
+      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: completedEnvelope(3, "agent:b", "agent").payload,
+      senderId: "agent:b",
+      senderKind: "agent" as const,
+    };
+    expect(policy.annotate(state, draftB)).toEqual({ agentHops: 2 });
 
     // explicit caller-computed hops win
     const explicit = completedEnvelope(3, "agent:a", "agent", undefined, { agentHops: 7 })

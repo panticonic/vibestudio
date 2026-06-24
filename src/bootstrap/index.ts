@@ -1,6 +1,5 @@
 import {
   createRpcClient,
-  envelopeFromMessage,
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
@@ -29,8 +28,8 @@ import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
 import type { HostTargetLaunchSessionSnapshot } from "@natstack/shared/hostTargets";
 
 type ShellTransportBridge = {
-  send: (targetId: string, message: unknown) => Promise<void>;
-  onMessage: (handler: (fromId: string, message: unknown) => void) => () => void;
+  send: (envelope: RpcEnvelope) => Promise<void>;
+  onMessage: (handler: (envelope: RpcEnvelope) => void) => () => void;
 };
 
 type BootstrapBridge = {
@@ -92,19 +91,8 @@ let rpc: RpcClient | null = null;
 function createWorkspaceClient() {
   if (!bootstrapTransport) throw new Error("Bootstrap transport unavailable");
   const transport: EnvelopeRpcTransport = {
-    send: (envelope) => bootstrapTransport.send(envelope.target, envelope.message),
-    onMessage: (handler) =>
-      bootstrapTransport.onMessage((fromId, message) => {
-        handler(
-          envelopeFromMessage({
-            selfId: "bootstrap",
-            from: fromId,
-            target: "bootstrap",
-            callerKind: fromId === "main" ? "server" : "unknown",
-            message: message as RpcEnvelope["message"],
-          })
-        );
-      }),
+    send: (envelope) => bootstrapTransport.send(envelope),
+    onMessage: (handler) => bootstrapTransport.onMessage(handler),
     status: () => "connected",
     ready: () => Promise.resolve(),
     onStatusChange: () => () => {},

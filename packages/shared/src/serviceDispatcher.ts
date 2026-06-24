@@ -50,8 +50,7 @@ function normalizeArgs(args: unknown[], schema: z.ZodType): unknown[] {
   const normalized = new Array<unknown>(length);
   for (let i = 0; i < length; i++) {
     const arg = i < args.length ? args[i] : undefined;
-    normalized[i] =
-      arg === null && i < items.length && items[i]!.isOptional() ? undefined : arg;
+    normalized[i] = arg === null && i < items.length && items[i]!.isOptional() ? undefined : arg;
   }
   return normalized;
 }
@@ -92,6 +91,54 @@ function formatReturnValidationError(error: z.ZodError): string {
   return summaries.join("; ");
 }
 
+/** Cap a JSON rendering so an enriched error can't blow the agent's context. */
+function safeJsonArg(value: unknown): string {
+  let s: string;
+  try {
+    s = JSON.stringify(value) ?? String(value);
+  } catch {
+    s = String(value);
+  }
+  return s.length > 200 ? `${s.slice(0, 200)}…` : s;
+}
+
+/**
+ * Error-driven JIT teaching: a compact usage hint appended to an args-validation
+ * error so the failing call itself teaches correct usage, from the literate
+ * metadata that lives with the method (description + first example).
+ */
+function formatUsageHint(
+  service: string,
+  method: string,
+  methodDef: MethodSchema | undefined
+): string {
+  const parts: string[] = [];
+  if (methodDef?.description) parts.push(methodDef.description);
+  const authored = methodDef?.examples?.[0];
+  if (authored && Array.isArray(authored.args)) {
+    parts.push(`Example: ${service}.${method}(${authored.args.map(safeJsonArg).join(", ")})`);
+  }
+  return parts.length ? ` — ${parts.join(" ")}` : "";
+}
+
+/**
+ * Compact access hint appended to an access-denied error: surfaces the declared
+ * conditional restrictions / approval gates so the caller learns the real reason
+ * rather than only "denied".
+ */
+function formatAccessHint(methodDef: MethodSchema | undefined): string {
+  const access = methodDef?.access;
+  if (!access) return "";
+  const parts: string[] = [];
+  for (const r of access.restrictedTo ?? []) {
+    parts.push(`when ${r.when}, only [${r.callers.join(", ")}] (${r.reason})`);
+  }
+  for (const a of access.approval ?? []) {
+    parts.push(`may require approval${a.capability ? ` for '${a.capability}'` : ""}: ${a.reason}`);
+  }
+  return parts.length ? ` (${parts.join("; ")})` : "";
+}
+
 function shouldValidateServiceReturns(): boolean {
   const override = process.env["NATSTACK_VALIDATE_SERVICE_RETURNS"];
   if (override === "0" || override === "false") return false;
@@ -130,7 +177,7 @@ export interface VerifiedCaller {
 export function createVerifiedCaller(
   callerId: string,
   callerKind: CallerKind,
-  code?: VerifiedCodeIdentity | null,
+  code?: VerifiedCodeIdentity | null
 ): VerifiedCaller {
   return {
     runtime: { id: callerId, kind: callerKind },
@@ -210,7 +257,7 @@ export interface DeferralApi {
 export function deferIfNeeded<T>(
   ctx: ServiceContext,
   needsApproval: boolean,
-  produce: (signal: AbortSignal) => Promise<T>,
+  produce: (signal: AbortSignal) => Promise<T>
 ): Promise<T> | DeferredResult {
   if (needsApproval && ctx.deferral?.canDefer) {
     return ctx.deferral.run(produce);
@@ -240,6 +287,14 @@ export type ServiceContext = {
    * a deferred reply. Handlers gate on `deferral?.canDefer` before deferring.
    */
   deferral?: DeferralApi;
+  /**
+   * Read-only containment. When true, the dispatcher refuses any method not
+   * declared `access.sensitivity === "read"` (default-deny: unknown/unmarked
+   * methods are treated as mutating). Enforced at this single choke point so a
+   * caller run read-only — e.g. an inspection agent or eval session — cannot
+   * bypass it regardless of which transport or proxy it calls through.
+   */
+  readOnly?: boolean;
 };
 
 export type ServiceHandler = (
@@ -254,13 +309,7 @@ export class ServiceError extends Error {
   /** Preserved error code from the original error (e.g. "ENOENT") */
   public readonly code?: string;
 
-  constructor(
-    service: string,
-    method: string,
-    message: string,
-    code?: string,
-    cause?: unknown,
-  ) {
+  constructor(service: string, method: string, message: string, code?: string, cause?: unknown) {
     super(`[${service}.${method}] ${message}`);
     this.service = service;
     this.method = method;
@@ -286,7 +335,7 @@ export class ServiceAccessError extends ServiceError {
       service,
       method,
       message ?? `Service '${service}.${method}' is not accessible to ${callerKind} callers`,
-      "EACCES",
+      "EACCES"
     );
     this.name = "ServiceAccessError";
   }
@@ -323,7 +372,7 @@ export class ServiceDispatcher {
       // (warn-then-replace-and-return-previous) visible.
       console.warn(
         `[ServiceDispatcher] Overwriting handler for service: ${def.name} ` +
-        `(replacing previous registration; description: ${previous?.description ?? "<unknown>"})`,
+          `(replacing previous registration; description: ${previous?.description ?? "<unknown>"})`
       );
     }
     this.definitions.set(def.name, def);
@@ -358,11 +407,12 @@ export class ServiceDispatcher {
     try {
       checkServiceAccess(service, ctx.caller.runtime.kind, this, method);
     } catch (error) {
+      const baseMsg = error instanceof Error ? error.message : String(error);
       throw new ServiceAccessError(
         service,
         method,
         ctx.caller.runtime.kind,
-        error instanceof Error ? error.message : String(error),
+        `${baseMsg}${formatAccessHint(this.getMethodSchema(service, method))}`
       );
     }
 
@@ -380,18 +430,34 @@ export class ServiceDispatcher {
         const normalized = normalizeArgs(args, methodDef.args);
         const parsed = methodDef.args.safeParse(normalized);
         if (!parsed.success) {
+          const reason = formatArgsValidationError(parsed.error);
           // ServiceError prefixes the message with `[service.method]`, so the
           // full error reads e.g.:
           //   [workspace.logs] Invalid args: invalid argument [1].limit — expected number, received string
           throw new ServiceError(
             service,
             method,
-            `Invalid args: ${formatArgsValidationError(parsed.error)}`
+            `Invalid args: ${reason}${formatUsageHint(service, method, methodDef)}`
           );
         }
         // Use normalized args so handlers see undefined (not null) for optional params
         args = normalized;
       }
+    }
+
+    // Read-only containment: a caller may request a mode in which only methods
+    // explicitly declared `access.sensitivity === "read"` may run. Default-deny —
+    // an unmarked method is treated as mutating. This is the load-bearing
+    // enforcement point (every dispatch path funnels here), so the containment
+    // can't be bypassed.
+    if (ctx.readOnly && methodDef?.access?.sensitivity !== "read") {
+      throw new ServiceError(
+        service,
+        method,
+        `Blocked in read-only mode: '${service}.${method}' is not declared read-only ` +
+          `(sensitivity ${methodDef?.access?.sensitivity ?? "unknown"}). A read-only caller may ` +
+          `only invoke methods declaring access.sensitivity === "read".`
+      );
     }
 
     try {
@@ -420,7 +486,7 @@ export class ServiceDispatcher {
         method,
         error instanceof Error ? error.message : String(error),
         error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined,
-        error,
+        error
       );
     }
   }
@@ -463,7 +529,11 @@ export class ServiceDispatcher {
   getMethodPolicy(service: string, method: string): ServicePolicy | undefined {
     const def = this.definitions.get(service);
     if (!def) return undefined;
-    return def.methods[method]?.policy;
+    const m = def.methods[method];
+    if (!m) return undefined;
+    // The method-level `policy` is the per-method caller gate; checkServiceAccess
+    // falls back to the service policy when this is undefined.
+    return m.policy;
   }
 }
 

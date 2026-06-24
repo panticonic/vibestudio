@@ -60,9 +60,21 @@ describe("createRpcClient", () => {
 
   it("scopes peer.on to events from that peer", async () => {
     const network = createInProcessNetwork();
-    const a = createRpcClient({ selfId: "a", callerKind: "panel", transport: inProcessTransport("a", network) });
-    const b = createRpcClient({ selfId: "b", callerKind: "worker", transport: inProcessTransport("b", network) });
-    const c = createRpcClient({ selfId: "c", callerKind: "worker", transport: inProcessTransport("c", network) });
+    const a = createRpcClient({
+      selfId: "a",
+      callerKind: "panel",
+      transport: inProcessTransport("a", network),
+    });
+    const b = createRpcClient({
+      selfId: "b",
+      callerKind: "worker",
+      transport: inProcessTransport("b", network),
+    });
+    const c = createRpcClient({
+      selfId: "c",
+      callerKind: "worker",
+      transport: inProcessTransport("c", network),
+    });
     const listener = vi.fn();
 
     a.peer("b").on("ready", listener);
@@ -75,8 +87,16 @@ describe("createRpcClient", () => {
 
   it("supports typed peer call proxy and withContract at runtime", async () => {
     const network = createInProcessNetwork();
-    const a = createRpcClient({ selfId: "a", callerKind: "panel", transport: inProcessTransport("a", network) });
-    const b = createRpcClient({ selfId: "b", callerKind: "worker", transport: inProcessTransport("b", network) });
+    const a = createRpcClient({
+      selfId: "a",
+      callerKind: "panel",
+      transport: inProcessTransport("a", network),
+    });
+    const b = createRpcClient({
+      selfId: "b",
+      callerKind: "worker",
+      transport: inProcessTransport("b", network),
+    });
     const contract = defineContract({
       caller: {
         methods: {} as {
@@ -116,6 +136,37 @@ describe("createRpcClient", () => {
     }
   });
 
+  it("carries call delivery metadata on envelopes", async () => {
+    const sent: unknown[] = [];
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: {
+        send: async (envelope) => {
+          sent.push(envelope);
+        },
+        onMessage: () => () => {},
+      },
+    });
+
+    void rpc.call("main", "fs.writeFile", ["/tmp/x", "y"], {
+      idempotencyKey: "idem-1",
+      readOnly: true,
+    });
+    await Promise.resolve();
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      delivery: { idempotencyKey: "idem-1", readOnly: true },
+      message: {
+        type: "request",
+        method: "fs.writeFile",
+      },
+    });
+    expect((sent[0] as { message: unknown }).message).not.toHaveProperty("idempotencyKey");
+    expect((sent[0] as { message: unknown }).message).not.toHaveProperty("readOnly");
+  });
+
   it("round-trips streaming responses", async () => {
     const network = createInProcessNetwork();
     const a = createRpcClient({ selfId: "a", transport: inProcessTransport("a", network) });
@@ -140,25 +191,33 @@ describe("createRpcClient", () => {
   });
 
   it("delegates stream() to the transport's stream hook when present (connectionless path)", async () => {
-    const streamCalls: Array<{ target: string; message: unknown }> = [];
+    const streamCalls: Array<{ target: string; delivery: unknown; message: unknown }> = [];
     const transport = {
       send: async () => {},
       onMessage: () => () => {},
-      stream: async (envelope: { target: string; message: unknown }) => {
-        streamCalls.push({ target: envelope.target, message: envelope.message });
+      stream: async (envelope: { target: string; delivery: unknown; message: unknown }) => {
+        streamCalls.push({
+          target: envelope.target,
+          delivery: envelope.delivery,
+          message: envelope.message,
+        });
         return new Response("streamed-bytes", { status: 206 });
       },
     };
     const rpc = createRpcClient({ selfId: "do:x", transport });
 
-    const response = await rpc.stream("main", "credentials.proxyFetch", [{ url: "u" }]);
+    const response = await rpc.stream("main", "credentials.proxyFetch", [{ url: "u" }], {
+      readOnly: true,
+    });
     // The transport hook is used (not the duplex frame path), with a stream-request envelope.
     expect(streamCalls).toHaveLength(1);
     expect(streamCalls[0]!.target).toBe("main");
+    expect(streamCalls[0]!.delivery).toMatchObject({ readOnly: true });
     expect(streamCalls[0]!.message).toMatchObject({
       type: "stream-request",
       method: "credentials.proxyFetch",
     });
+    expect(streamCalls[0]!.message).not.toHaveProperty("readOnly");
     expect(response.status).toBe(206);
     await expect(response.text()).resolves.toBe("streamed-bytes");
   });

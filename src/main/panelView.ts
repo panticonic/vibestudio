@@ -16,10 +16,15 @@ import {
   getCurrentSnapshot,
   getPanelSource,
   getPanelContextId,
+  getPanelRef,
   updatePanelNavigationState,
 } from "@natstack/shared/panelTypes";
 import { contextIdToPartition } from "@natstack/shared/contextIdToPartition.js";
-import { isManagedHost, parsePanelUrl } from "@natstack/shared/shell/urlParsing.js";
+import {
+  isManagedHost,
+  parsePanelUrl,
+  type ParsedPanelUrl,
+} from "@natstack/shared/shell/urlParsing.js";
 import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@natstack/shared/panelChrome";
 import type { PanelNavigationState } from "@natstack/shared/types";
 import { logMemorySnapshot } from "./memoryMonitor.js";
@@ -41,6 +46,34 @@ interface CdpHostLike {
 }
 
 interface PanelOrchestratorLike {
+  createPanel(
+    callerId: string,
+    source: string,
+    options?: {
+      name?: string;
+      contextId?: string;
+      ref?: string;
+      focus?: boolean;
+    },
+    stateArgs?: Record<string, unknown>,
+    scopedCaller?: PanelLinkCaller
+  ): Promise<{ id: string; title: string }>;
+  createBrowserUrlPanel(
+    callerId: string,
+    url: string,
+    options?: { name?: string; focus?: boolean },
+    scopedCaller?: PanelLinkCaller
+  ): Promise<{ id: string; title: string }>;
+  navigatePanel(
+    panelId: string,
+    source: string,
+    options?: {
+      contextId?: string;
+      ref?: string;
+      stateArgs?: Record<string, unknown>;
+    },
+    scopedCaller?: PanelLinkCaller
+  ): Promise<{ id: string; title: string } | null>;
   replaceCurrentSnapshot(
     panelId: string,
     contextId: string,
@@ -49,6 +82,10 @@ interface PanelOrchestratorLike {
   ): Promise<void>;
   updatePanelTitle(panelId: string, title: string): Promise<void>;
 }
+
+type PanelLinkCaller =
+  | { callerId: string; callerKind: "panel" }
+  | { callerId: string; callerKind: "app" };
 
 interface AutofillManagerLike {
   attachToWebContents(webContentsId: number, webContents: Electron.WebContents): void;
@@ -351,15 +388,21 @@ export class PanelView implements PanelViewLike {
         }
 
         if (/^https?:\/\//i.test(url) && !isManagedHost(url, this.externalHost)) {
-          this.rejectPanelTreeProxy(panelId, url, "main-frame external navigation");
+          this.handlePanelLinkError(
+            panelId,
+            new Error("Unexpected raw external main-frame navigation"),
+            url
+          );
           return;
         }
 
         const parsed = parsePanelUrl(url, this.externalHost);
         if (parsed && parsed.source !== currentSource) {
-          void this.panelOrchestrator
-            .replaceCurrentSnapshot(panelId, getPanelContextId(panel), parsed.source)
-            .catch(() => {});
+          this.handlePanelLinkError(
+            panelId,
+            new Error("Unexpected raw managed main-frame navigation"),
+            url
+          );
         }
       },
       didNavigateInPage: (_event: Electron.Event, url: string) => {
@@ -513,11 +556,15 @@ export class PanelView implements PanelViewLike {
       const url = details.url;
       const parsed = parsePanelUrl(url, this.externalHost);
       if (parsed) {
-        this.rejectPanelTreeProxy(panelId, url, "window.open");
+        void this.openManagedLink(panelId, parsed, url).catch((err: unknown) =>
+          this.handlePanelLinkError(panelId, err, url)
+        );
         return { action: "deny" as const };
       }
       if (/^https?:\/\//i.test(url)) {
-        this.rejectPanelTreeProxy(panelId, url, "window.open");
+        void this.openBrowserLink(panelId, url).catch((err: unknown) =>
+          this.handlePanelLinkError(panelId, err, url)
+        );
         return { action: "deny" as const };
       }
       return { action: "deny" as const };
@@ -527,25 +574,40 @@ export class PanelView implements PanelViewLike {
       if (!isManagedHost(url, this.externalHost)) {
         if (/^https?:\/\//i.test(url)) {
           event.preventDefault();
-          this.rejectPanelTreeProxy(panelId, url, "navigation");
+          void this.openBrowserLink(panelId, url).catch((err: unknown) =>
+            this.handlePanelLinkError(panelId, err, url)
+          );
         }
+        return;
+      }
+
+      const parsed = parsePanelUrl(url, this.externalHost);
+      if (!parsed) return;
+
+      const viewInfo = this.getHostedViewInfo(panelId);
+      if (viewInfo?.type === "app") {
+        event.preventDefault();
+        void this.openManagedLink(panelId, parsed, url).catch((err: unknown) =>
+          this.handlePanelLinkError(panelId, err, url)
+        );
         return;
       }
 
       const panel = this.panelRegistry.getPanel(panelId);
       if (!panel) return;
-      const parsed = parsePanelUrl(url, this.externalHost);
-      if (!parsed) return;
 
       const currentContextId = getPanelContextId(panel);
       const targetContextId = parsed.contextId ?? currentContextId;
       const sourceChanged = parsed.source !== getPanelSource(panel);
       const contextChanged = targetContextId !== currentContextId;
+      const refChanged = parsed.ref !== getPanelRef(panel);
       const stateArgsChanged = parsed.stateArgs !== undefined;
-      if (!sourceChanged && !contextChanged && !stateArgsChanged) return;
+      if (!sourceChanged && !contextChanged && !refChanged && !stateArgsChanged) return;
 
       event.preventDefault();
-      this.rejectPanelTreeProxy(panelId, url, "managed navigation");
+      void this.navigateManagedLink(panelId, parsed, url).catch((err: unknown) =>
+        this.handlePanelLinkError(panelId, err, url)
+      );
     };
 
     this.linkInterceptionHandlers.set(panelId, willNavigateHandler);
@@ -560,11 +622,98 @@ export class PanelView implements PanelViewLike {
     }
   }
 
-  private rejectPanelTreeProxy(panelId: string, url: string, action: string): void {
-    const error =
-      "Electron view host does not proxy panelTree mutations; use authenticated panelTree RPC.";
-    log.warn(`[PanelView] Rejected ${action} panelTree proxy for ${panelId}: ${url}`);
-    this.sendPanelEvent?.(panelId, "runtime:child-creation-error", { url, error });
+  private getHostedViewInfo(viewId: string): { type?: string } | null {
+    const viewManager = this.viewManager as unknown as {
+      getViewInfo?: (id: string) => { type?: string } | null;
+    };
+    return viewManager.getViewInfo?.(viewId) ?? null;
+  }
+
+  private scopedCallerForHostedView(viewId: string): PanelLinkCaller {
+    const viewInfo = this.getHostedViewInfo(viewId);
+    if (viewInfo?.type === "app") return { callerId: viewId, callerKind: "app" };
+
+    const panel = this.panelRegistry.getPanel(viewId);
+    if (!panel) throw new Error(`Panel link caller not found: ${viewId}`);
+    const runtimeEntityId = panel.runtimeEntityId;
+    if (!runtimeEntityId) throw new Error(`Panel link caller has no runtime entity: ${viewId}`);
+    return { callerId: runtimeEntityId, callerKind: "panel" };
+  }
+
+  private createOptionsForParsedLink(parsed: ParsedPanelUrl): {
+    name?: string;
+    contextId?: string;
+    ref?: string;
+    focus?: boolean;
+  } {
+    return {
+      ...(parsed.options.name !== undefined ? { name: parsed.options.name } : {}),
+      ...(parsed.contextId !== undefined ? { contextId: parsed.contextId } : {}),
+      ...(parsed.ref !== undefined ? { ref: parsed.ref } : {}),
+      ...(parsed.options.focus !== undefined ? { focus: parsed.options.focus } : {}),
+    };
+  }
+
+  private navigateOptionsForParsedLink(parsed: ParsedPanelUrl): {
+    contextId?: string;
+    ref?: string;
+    stateArgs?: Record<string, unknown>;
+  } {
+    return {
+      ...(parsed.contextId !== undefined ? { contextId: parsed.contextId } : {}),
+      ...(parsed.ref !== undefined ? { ref: parsed.ref } : {}),
+      ...(parsed.stateArgs !== undefined ? { stateArgs: parsed.stateArgs } : {}),
+    };
+  }
+
+  private async openManagedLink(
+    sourceViewId: string,
+    parsed: ParsedPanelUrl,
+    url: string
+  ): Promise<void> {
+    const caller = this.scopedCallerForHostedView(sourceViewId);
+    const result = await this.panelOrchestrator.createPanel(
+      sourceViewId,
+      parsed.source,
+      this.createOptionsForParsedLink(parsed),
+      parsed.stateArgs,
+      caller
+    );
+    this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
+  }
+
+  private async openBrowserLink(sourceViewId: string, url: string): Promise<void> {
+    const caller = this.scopedCallerForHostedView(sourceViewId);
+    const result = await this.panelOrchestrator.createBrowserUrlPanel(
+      sourceViewId,
+      url,
+      { focus: true },
+      caller
+    );
+    this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
+  }
+
+  private async navigateManagedLink(
+    panelId: string,
+    parsed: ParsedPanelUrl,
+    url: string
+  ): Promise<void> {
+    const caller = this.scopedCallerForHostedView(panelId);
+    const result = await this.panelOrchestrator.navigatePanel(
+      panelId,
+      parsed.source,
+      this.navigateOptionsForParsedLink(parsed),
+      caller
+    );
+    if (result) {
+      this.sendPanelEvent?.(panelId, "runtime:managed-navigation", { panelId: result.id, url });
+    }
+  }
+
+  private handlePanelLinkError(viewId: string, error: unknown, url: string): void {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`[PanelView] Failed to handle panel link for ${viewId}: ${url}: ${message}`);
+    this.sendPanelEvent?.(viewId, "runtime:child-creation-error", { url, error: message });
   }
 
   // ==== Crash recovery ======================================================

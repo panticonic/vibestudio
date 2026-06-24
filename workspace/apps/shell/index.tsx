@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { Provider as JotaiProvider } from "jotai";
 import "@radix-ui/themes/styles.css";
+import "@workspace/ui/tokens.css";
 import "./styles/overrides.css";
 
 import { App } from "./components/App";

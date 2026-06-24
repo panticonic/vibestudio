@@ -25,10 +25,6 @@ export const PRINCIPAL_KIND_REGISTRY = {
     callerKind: "shell",
     codeIdentity: false,
   },
-  harness: {
-    callerKind: "harness",
-    codeIdentity: false,
-  },
   server: {
     callerKind: "server",
     codeIdentity: false,

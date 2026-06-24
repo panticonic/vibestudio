@@ -93,12 +93,12 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
         px="3"
         py="2"
         style={{
-          backgroundColor: "var(--green-3)",
-          borderBottom: "1px solid var(--green-6)",
+          backgroundColor: "var(--intent-success-surface)",
+          borderBottom: "1px solid var(--intent-success-border)",
           flexShrink: 0,
         }}
       >
-        <Text size="2" color="green">
+        <Text size="2" style={{ color: "var(--intent-success)" }}>
           Password saved
         </Text>
       </Flex>
@@ -157,8 +157,8 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
       py="2"
       gap="3"
       style={{
-        backgroundColor: "var(--accent-3)",
-        borderBottom: "1px solid var(--accent-6)",
+        backgroundColor: "var(--intent-consent-surface)",
+        borderBottom: "1px solid var(--intent-consent-border)",
         flexShrink: 0,
       }}
     >
@@ -166,13 +166,13 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
         {message}
       </Text>
       <Flex gap="2" style={{ flexShrink: 0 }}>
-        <Button size="1" variant="solid" onClick={handleSave}>
+        <Button size="1" variant="solid" className="app-touch-target" onClick={handleSave}>
           {prompt.isUpdate ? "Update" : "Save"}
         </Button>
-        <Button size="1" variant="soft" onClick={handleNever}>
+        <Button size="1" variant="soft" className="app-touch-target" onClick={handleNever}>
           Never
         </Button>
-        <Button size="1" variant="ghost" onClick={handleDismiss}>
+        <Button size="1" variant="ghost" className="app-touch-target" onClick={handleDismiss}>
           Dismiss
         </Button>
       </Flex>

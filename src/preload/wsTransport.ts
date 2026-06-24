@@ -2,12 +2,12 @@
  * WebSocket transport bridge for preload scripts.
  */
 
-import type { RpcEvent, RpcMessage } from "@natstack/rpc";
+import type { RpcEnvelope, RpcMessage } from "@natstack/rpc";
 import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
 import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
 import type { RecoveryKind } from "@natstack/shared/shell/recoveryCoordinator";
 
-type AnyMessageHandler = (fromId: string, message: unknown) => void;
+type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 
 type PanelInitPayload = {
   gatewayConfig?: {
@@ -29,8 +29,8 @@ type NatstackTransportGlobals = typeof globalThis & {
 };
 
 export type TransportBridge = {
-  send: (targetId: string, message: unknown) => Promise<void>;
-  onMessage: (handler: AnyMessageHandler) => () => void;
+  send: (envelope: RpcEnvelope) => Promise<void>;
+  onMessage: (handler: EnvelopeHandler) => () => void;
   onRecovery: (kind: RecoveryKind, handler: () => void | Promise<void>) => () => void;
 };
 
@@ -90,22 +90,22 @@ const normalizeEndpointId = (targetId: string): string => {
 };
 
 export function createWsTransport(config: WsTransportConfig): TransportBridge {
-  const listeners = new Set<AnyMessageHandler>();
-  const bufferedMessages: Array<{ fromId: string; message: RpcMessage }> = [];
+  const listeners = new Set<EnvelopeHandler>();
+  const bufferedMessages: RpcEnvelope[] = [];
   let transportReady = false;
   let authToken = config.authToken;
   let connectionId = config.connectionId;
   let clientLabel = config.clientLabel;
 
-  const deliver = (fromId: string, message: RpcMessage) => {
+  const deliver = (envelope: RpcEnvelope) => {
     if (!transportReady) {
-      bufferedMessages.push({ fromId, message });
+      bufferedMessages.push(envelope);
       if (bufferedMessages.length > 500) bufferedMessages.shift();
       return;
     }
     for (const listener of listeners) {
       try {
-        listener(fromId, message);
+        listener(envelope);
       } catch (error) {
         console.error("Error in WS transport message handler:", error);
       }
@@ -193,32 +193,12 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
       createSocket: (url) => new BrowserWsLike(new WebSocket(url)),
     },
   });
-  base.onMessage((envelope) => deliver(envelope.from, envelope.message));
-  base.onMessage((envelope) => {
-    if (envelope.message.type !== "event") return;
-    if (envelope.message.event !== "runtime:routed-event-error") return;
-    deliver(envelope.from, {
-      type: "event",
-      fromId: envelope.from,
-      event: "runtime:routed-event-error",
-      payload: envelope.message.payload,
-    } as RpcEvent);
-  });
-  base.onMessage((envelope) => {
-    if (envelope.message.type !== "event") return;
-    if (envelope.message.event !== "runtime:routed-response-error") return;
-    deliver(envelope.from, {
-      type: "event",
-      fromId: envelope.from,
-      event: "runtime:routed-response-error",
-      payload: envelope.message.payload,
-    } as RpcEvent);
-  });
+  base.onMessage((envelope) => deliver(envelope));
   base.connect();
 
   return {
-    async send(targetId, message) {
-      const rpcMessage = message as RpcMessage;
+    async send(envelope) {
+      const rpcMessage = envelope.message;
       if (
         !rpcMessage ||
         typeof rpcMessage !== "object" ||
@@ -229,20 +209,14 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
       if (base.status?.() !== "connected") {
         await base.connectAndWait();
       }
-      return base.send({
-        from: config.viewId,
-        target: targetId,
-        delivery: { caller: { callerId: config.viewId, callerKind: "unknown" } },
-        provenance: [{ callerId: config.viewId, callerKind: "unknown" }],
-        message: rpcMessage,
-      });
+      return base.send(envelope);
     },
     onMessage(handler) {
       listeners.add(handler);
       queueMicrotask(() => {
         transportReady = true;
         for (const buffered of bufferedMessages.splice(0)) {
-          deliver(buffered.fromId, buffered.message);
+          deliver(buffered);
         }
       });
       return () => listeners.delete(handler);

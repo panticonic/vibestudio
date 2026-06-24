@@ -72,6 +72,10 @@ export interface AgentTurnMetadata {
   delivery?: "none" | "channel" | "last-contact";
   ackToken?: string;
   silentOk?: boolean;
+  /** Send-after-turn intent: while a turn is open this message is held in the
+   *  deferred post-turn queue and promoted (one per turn) after close, instead
+   *  of steering the open turn. */
+  deliverAfterTurn?: boolean;
 }
 
 /** Config fields that are FOLD-OWNED: the reducer derives them from the log
@@ -124,6 +128,11 @@ export interface OpenTurn {
   /** count of turn.waiting events (drives waiting envelope id suffix). */
   waitingCount: number;
   metadata?: AgentTurnMetadata;
+  /** A soft "flush queued steers" interrupt is in flight: the in-flight model
+   *  call is being aborted, but the turn must CONTINUE (re-run the model with
+   *  the queued steers) rather than close. Distinct from `interrupted` (a hard
+   *  interrupt that closes the turn). Cleared when the next model call starts. */
+  pendingFlush?: "steers";
 }
 
 export interface InFlightModelCall {
@@ -173,6 +182,8 @@ export interface PendingCredentialWait {
 export interface SteeringEntry {
   envelopeId: string;
   seq: number;
+  /** Sender's canonical message id; the read-ack/edit/retract correlation key. */
+  sourceMessageId?: string;
   senderRef: ParticipantRef;
   content: unknown;
   metadata?: AgentTurnMetadata;
@@ -181,10 +192,23 @@ export interface SteeringEntry {
 export interface PendingPrompt {
   envelopeId: string;
   seq: number;
+  sourceMessageId?: string;
   senderRef: ParticipantRef;
   content: unknown;
   agentHops?: number;
   metadata?: AgentTurnMetadata;
+}
+
+/** A "send after turn" message held until the current turn closes, then
+ *  promoted (one per turn) into a fresh turn of its own. */
+export interface DeferredPrompt {
+  sourceMessageId: string;
+  envelopeId: string;
+  seq: number;
+  senderRef: ParticipantRef;
+  content: unknown;
+  metadata?: AgentTurnMetadata;
+  agentHops?: number;
 }
 
 /** Linear session entry — the materialized model-context path. */
@@ -193,6 +217,7 @@ export type SessionEntry =
       kind: "user";
       seq: number;
       envelopeId: string;
+      sourceMessageId?: string;
       senderRef?: ParticipantRef;
       content: unknown;
       metadata?: AgentTurnMetadata;
@@ -201,6 +226,10 @@ export type SessionEntry =
       kind: "assistant";
       seq: number;
       messageId: string;
+      /** Author. When it differs from the loop's `selfId` (another agent in the channel),
+       *  the context builder presents this as an attributed `user` message, NOT as this
+       *  agent's own `assistant` turn — so the model doesn't read it as its own voice. */
+      senderRef?: ParticipantRef;
       blocks: unknown[];
       outcome?: string;
     }
@@ -225,6 +254,11 @@ export interface AgentState {
   /** fork boundary of this head (0 for root logs); pendings with
    *  startedAtSeq ≤ forkSeq are pre-cut (fork policy). */
   forkSeq: number;
+  /** This agent's own participant/actor id for this channel's loop. Turn/message
+   *  lifecycle events authored by ANOTHER participant are NOT folded into loop state
+   *  (the fold filters by this), so the agent never adopts another agent's open turn
+   *  from the shared channel replay. Undefined ⇒ no filtering (legacy/test folds). */
+  selfId?: string;
 
   config: AgentLoopConfig;
   entries: SessionEntry[];
@@ -236,6 +270,8 @@ export interface AgentState {
   pendingCredentialWaits: Record<string, PendingCredentialWait>;
   steeringQueue: SteeringEntry[];
   pendingPrompt: PendingPrompt | null;
+  /** "Send after turn" messages, drained one per turn after each turn closes. */
+  deferredPostTurnQueue: DeferredPrompt[];
 }
 
 export const GENESIS_LAST_HASH =
@@ -249,6 +285,8 @@ export interface InitialStateInput {
   forkSeq?: number;
   lastSeq?: number;
   lastHash?: string;
+  /** The agent's own participant/actor id (see AgentState.selfId). */
+  selfId?: string;
 }
 
 export function initialAgentState(input: InitialStateInput): AgentState {
@@ -269,6 +307,8 @@ export function initialAgentState(input: InitialStateInput): AgentState {
     pendingCredentialWaits: {},
     steeringQueue: [],
     pendingPrompt: null,
+    deferredPostTurnQueue: [],
+    ...(input.selfId ? { selfId: input.selfId } : {}),
   };
 }
 

@@ -2,6 +2,34 @@ import type { Buffer } from "buffer";
 
 export type ThemeAppearance = "light" | "dark";
 
+/** App-wide theme identity (accent/radius/scaling/surface), pushed live from
+ *  the shell over the runtime bridge. Structurally identical to
+ *  `@natstack/shared`'s ThemeConfig. */
+export interface ThemeConfig {
+  accentColor: string;
+  grayColor: string;
+  radius: "none" | "small" | "medium" | "large" | "full";
+  scaling: "90%" | "95%" | "100%" | "105%" | "110%";
+  panelBackground: "solid" | "translucent";
+}
+
+/** Default identity until the shell pushes the user's choice. */
+export const DEFAULT_THEME_CONFIG: ThemeConfig = {
+  accentColor: "iris",
+  grayColor: "slate",
+  radius: "medium",
+  scaling: "100%",
+  panelBackground: "translucent",
+};
+
+/** A command a panel contributes to the app-level command palette. */
+export interface PaletteCommand {
+  id: string;
+  label: string;
+  hint?: string;
+  section?: string;
+}
+
 export interface FileStats {
   isFile(): boolean;
   isDirectory(): boolean;

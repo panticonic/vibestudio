@@ -135,4 +135,56 @@ describe("HeadlessHost lifecycle guards", () => {
     // Oldest (pinned) was skipped; the next-oldest free panel is evicted instead.
     expect(releaseAndUnload).toHaveBeenCalledWith("free-new", "panel cap");
   });
+
+  it("idle-unloads stale panels via the shared selector but exempts keepLoaded ones", () => {
+    const host = new HeadlessHost(config()); // idleUnloadMs: 60_000
+    const tracker = new LeaseTracker("headless-test");
+    const makeLease = (slotId: string, keepLoaded: boolean) =>
+      ({
+        slotId,
+        runtimeEntityId: `panel:${slotId}`,
+        clientSessionId: "headless-test",
+        hostConnectionId: "headless-test",
+        connectionId: `c-${slotId}`,
+        holderLabel: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+        keepLoaded,
+        acquiredAt: 1,
+      }) as unknown as PanelRuntimeLease;
+    tracker.reconcile({
+      version: { epoch: "e1", counter: 1 },
+      leases: [makeLease("pinned-idle", true), makeLease("free-idle", false)],
+    });
+
+    const now = Date.now();
+    const lastUsed = new Map<string, number>([
+      ["pinned-idle", now - 120_000], // idle, but keepLoaded → exempt
+      ["free-idle", now - 120_000], // idle + free → unloaded
+      ["fresh", now - 1_000], // not idle → retained
+    ]);
+    const releaseAndUnload = vi.fn(async () => undefined);
+    Object.assign(
+      host as unknown as {
+        tracker: LeaseTracker;
+        pages: unknown;
+        releaseAndUnload: typeof releaseAndUnload;
+      },
+      {
+        tracker,
+        pages: {
+          slots: () => ["pinned-idle", "free-idle", "fresh"],
+          lastUsedAt: (slotId: string) => lastUsed.get(slotId),
+        },
+        releaseAndUnload,
+      }
+    );
+
+    (host as unknown as { checkIdle(): void }).checkIdle();
+
+    expect(releaseAndUnload).toHaveBeenCalledWith("free-idle", "idle");
+    expect(releaseAndUnload).not.toHaveBeenCalledWith("pinned-idle", "idle");
+    expect(releaseAndUnload).not.toHaveBeenCalledWith("fresh", "idle");
+  });
 });

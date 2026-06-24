@@ -54,6 +54,8 @@ export interface DurableObjectRelayDeps {
   requestId?: string;
   /** Optional dedup key, propagated so reissued calls collapse server-side. */
   idempotencyKey?: string;
+  /** Read-only containment flag propagated through the request envelope. */
+  readOnly?: boolean;
   /**
    * Held-connection call (the EvalDO's `executeRun`): use a no-`headersTimeout` undici dispatcher so
    * the fetch isn't reaped at undici's ~300s default while the DO holds the response for a long run.
@@ -180,6 +182,7 @@ export async function postToDurableObject(
     target: doTargetString(ref),
     caller,
     ...(deps.idempotencyKey ? { idempotencyKey: deps.idempotencyKey } : {}),
+    ...(deps.readOnly ? { readOnly: true } : {}),
     message: {
       type: "request",
       requestId: deps.requestId ?? generateRequestId(),

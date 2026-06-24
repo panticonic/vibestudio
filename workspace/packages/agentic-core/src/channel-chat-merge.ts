@@ -51,7 +51,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
       .map((turn) => turn.turnId as string)
   );
   const messages = Object.values(state.messages).flatMap((message) =>
-    projectedMessageToChatMessages(message)
+    projectedMessageToChatMessages(message, state.intendedRecipientsByMessage?.[message.messageId] ?? [])
   );
   const invocations = Object.values(state.invocations).map(projectedInvocationToChatMessage);
   const approvals = Object.values(state.approvals).map(projectedApprovalToChatMessage);
@@ -61,7 +61,8 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
         (message) =>
           message.turnId &&
           (message.role === "assistant" || message.actor.kind === "agent") &&
-          (message.status === "completed" || message.status === "failed")
+          (message.status === "completed" ||
+            (message.status === "failed" && !isSuppressedAssistantFailure(message)))
       )
       .map((message) => message.turnId as string)
   );
@@ -353,7 +354,52 @@ function assistantMessageIsIntermediate(message: ProjectedMessage): boolean {
   });
 }
 
-function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[] {
+/**
+ * Per-recipient delivery state from the intended-recipient snapshot plus the
+ * received/read ack maps. Tracked set = snapshot ∪ actual ackers, so an ack
+ * always shows even when the roster was empty at send time, while the snapshot
+ * keeps unacked recipients visible (aggregate stays `partial`/`pending` instead
+ * of prematurely `read`).
+ */
+function computeReceipts(
+  message: ProjectedMessage,
+  intendedRecipients: string[]
+): ChatMessage["receipts"] | undefined {
+  const receivedBy = message.receivedBy ?? {};
+  const readBy = message.readBy ?? {};
+  const tracked = new Set<string>([
+    ...intendedRecipients,
+    ...Object.keys(receivedBy),
+    ...Object.keys(readBy),
+  ]);
+  if (tracked.size === 0) return undefined;
+  const byParticipant: Record<string, "pending" | "received" | "read"> = {};
+  for (const key of tracked) {
+    byParticipant[key] = readBy[key] ? "read" : receivedBy[key] ? "received" : "pending";
+  }
+  const states = Object.values(byParticipant);
+  const readCount = states.filter((state) => state === "read").length;
+  const aggregate = readCount === 0 ? "pending" : readCount === states.length ? "read" : "partial";
+  return { byParticipant, aggregate };
+}
+
+function deliveryFields(
+  message: ProjectedMessage,
+  intendedRecipients: string[]
+): Partial<ChatMessage> {
+  const receipts = computeReceipts(message, intendedRecipients);
+  return {
+    ...(receipts ? { receipts } : {}),
+    ...(message.retracted ? { retracted: true } : {}),
+    ...(message.revision !== undefined ? { revision: message.revision } : {}),
+    ...(message.editedAt !== undefined ? { editedAt: message.editedAt } : {}),
+  };
+}
+
+function projectedMessageToChatMessages(
+  message: ProjectedMessage,
+  intendedRecipients: string[] = []
+): ChatMessage[] {
   const sortTime =
     Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0;
   const lifecycle = lifecycleNoticeFromMessage(message);
@@ -384,7 +430,7 @@ function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[
     ];
   });
   const failureReason = message.status === "failed" ? message.failureReason : undefined;
-  if (isCredentialSuspensionReason(failureReason)) return thinking;
+  if (isSuppressedAssistantFailure(message)) return thinking;
   const content = messageDisplayText(message.blocks);
   const diagnostic = diagnosticNoticeFromMessage(message);
   if (diagnostic) {
@@ -439,6 +485,7 @@ function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[
           : message.outcome === "interrupted"
             ? "Interrupted"
             : undefined,
+      ...deliveryFields(message, intendedRecipients),
       senderMetadata,
       sortTime,
     } as ChatMessage & { sortTime: number },
@@ -457,6 +504,20 @@ function messageShouldRenderStandalone(message: ProjectedMessage): boolean {
 
 function isCredentialSuspensionReason(reason: string | undefined): boolean {
   return reason === "model_credential_required" || reason === "model_credential_reconnect_required";
+}
+
+function isRecoverableRestartCleanup(message: ProjectedMessage): boolean {
+  return (
+    message.status === "failed" &&
+    message.failureRecoverable === true &&
+    message.failureReason === "interrupted by restart" &&
+    (message.role === "assistant" || message.actor.kind === "agent")
+  );
+}
+
+function isSuppressedAssistantFailure(message: ProjectedMessage): boolean {
+  const failureReason = message.status === "failed" ? message.failureReason : undefined;
+  return isCredentialSuspensionReason(failureReason) || isRecoverableRestartCleanup(message);
 }
 
 function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotice | null {
@@ -559,11 +620,20 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
     meaningfulInvocationName(invocation.name) ??
     meaningfulInvocationName(inferred.name) ??
     "invocation";
+  // Prefer the recorded tool-call request; fall back to the inferred request when the
+  // recorded one is absent OR empty (docs_* model tool-calls arrive argless, so `{}`
+  // would otherwise win over the request recovered from the result).
+  const request =
+    invocation.request &&
+    typeof invocation.request === "object" &&
+    Object.keys(invocation.request as Record<string, unknown>).length > 0
+      ? invocation.request
+      : (inferred.request ?? invocation.request);
   const payload: InvocationCardPayload = {
     id: invocation.invocationId,
     ...(invocation.transportCallId ? { transportCallId: invocation.transportCallId } : {}),
     name,
-    arguments: recordOrEmpty(invocation.request ?? inferred.request),
+    arguments: recordOrEmpty(request),
     execution: {
       status,
       ...(invocation.terminalOutcome ? { terminalOutcome: invocation.terminalOutcome } : {}),
@@ -852,6 +922,56 @@ function meaningfulInvocationName(value: unknown): string | undefined {
   return trimmed && trimmed !== "unknown" && trimmed !== "invocation" ? trimmed : undefined;
 }
 
+/**
+ * Recover a display for the `docs_search` / `docs_open` tools. Their model
+ * tool-call name + args don't survive into the invocation event (so the generic
+ * projection shows a nameless "invocation" pill with no args). Detect them by the
+ * catalog shape of `result.details` — a hit array or a single entry, both carrying
+ * `surface` + `qualifiedName` — and synthesize a name/summary/request.
+ */
+function inferDocsResultDisplay(
+  details: unknown,
+  content?: unknown
+): { name: string; summary?: string; request?: unknown } | undefined {
+  const isCatalogShape = (v: unknown): v is Record<string, unknown> =>
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as Record<string, unknown>)["surface"] === "string" &&
+    typeof (v as Record<string, unknown>)["qualifiedName"] === "string";
+  if (Array.isArray(details)) {
+    if (details.length === 0 && contentLooksLikeEmptyDocsSearch(content)) {
+      return { name: "docs_search", summary: "0 results" };
+    }
+    return isCatalogShape(details[0])
+      ? {
+          name: "docs_search",
+          summary: `${details.length} result${details.length === 1 ? "" : "s"}`,
+        }
+      : undefined;
+  }
+  if (isCatalogShape(details)) {
+    return {
+      name: "docs_open",
+      summary: String(details["qualifiedName"]),
+      ...(typeof details["id"] === "string" ? { request: { id: details["id"] } } : {}),
+    };
+  }
+  return undefined;
+}
+
+function contentLooksLikeEmptyDocsSearch(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((raw) => {
+    if (!raw || typeof raw !== "object") return false;
+    const block = raw as Record<string, unknown>;
+    return (
+      block["type"] === "text" &&
+      typeof block["text"] === "string" &&
+      block["text"].startsWith("No catalog matches for ")
+    );
+  });
+}
+
 function inferInvocationDisplay(value: unknown): {
   name?: string;
   request?: unknown;
@@ -868,6 +988,14 @@ function inferInvocationDisplay(value: unknown): {
     meaningfulInvocationName(record["toolName"]) ?? meaningfulInvocationName(record["name"]);
   const summary = typeof record["summary"] === "string" ? record["summary"] : undefined;
   const details = record["details"];
+  const docs = inferDocsResultDisplay(details, record["content"]);
+  if (docs) {
+    return {
+      name: name ?? docs.name,
+      summary: summary ?? docs.summary,
+      ...(docs.request !== undefined ? { request: docs.request } : {}),
+    };
+  }
   if (!details || typeof details !== "object" || Array.isArray(details)) return { name, summary };
   const detailRecord = details as Record<string, unknown>;
   return {

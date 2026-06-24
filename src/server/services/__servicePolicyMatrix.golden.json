@@ -75,6 +75,17 @@
       "storeCredential": null
     }
   },
+  "docs": {
+    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "methods": {
+      "describe": null,
+      "describeService": null,
+      "getSchema": null,
+      "listServices": null,
+      "listSurfaces": null,
+      "search": null
+    }
+  },
   "eval": {
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
@@ -131,14 +142,6 @@
       "importProject": null,
       "removeSharedRemote": null,
       "setSharedRemote": null
-    }
-  },
-  "meta": {
-    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-    "methods": {
-      "describeService": null,
-      "getRuntimeSurface": null,
-      "listServices": null
     }
   },
   "notification": {

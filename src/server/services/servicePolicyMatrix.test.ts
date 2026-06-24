@@ -22,7 +22,7 @@
  * such drift as a snapshot diff.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -109,6 +109,8 @@ async function collectPolicyMatrix(): Promise<PolicyMatrix> {
     for (const [method, schema] of Object.entries(def.methods).sort((a, b) =>
       a[0].localeCompare(b[0])
     )) {
+      // Method-level caller gate: the method `policy.allowed` when declared, else
+      // null (the method inherits the service-level policy in checkServiceAccess).
       methods[method] = schema.policy ? [...schema.policy.allowed].sort() : null;
     }
     matrix[def.name] = { service: [...def.policy.allowed].sort(), methods };
@@ -119,6 +121,9 @@ async function collectPolicyMatrix(): Promise<PolicyMatrix> {
 describe("service policy matrix", () => {
   it("matches the checked-in golden snapshot (any policy change is a reviewable diff)", async () => {
     const matrix = await collectPolicyMatrix();
+    if (process.env["UPDATE_GOLDEN"]) {
+      writeFileSync(goldenPath, `${JSON.stringify(matrix, null, 2)}\n`);
+    }
     const golden = JSON.parse(readFileSync(goldenPath, "utf8")) as PolicyMatrix;
     // toEqual gives a precise diff: a new service/method/policy change surfaces
     // exactly which key drifted, with both the live and golden values.

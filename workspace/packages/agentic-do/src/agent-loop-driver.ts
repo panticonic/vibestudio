@@ -106,6 +106,19 @@ const textEncoder = new TextEncoder();
  *  worth more persistence than the divergence errors. */
 const HEAD_CONFLICT_RETRIES = 3;
 
+/** Effect kinds whose dispatch can run long — a model_call up to its 10-min
+ *  lease, a channel_call waiting on the user (feedback form), eval/http I/O.
+ *  `dispatchDue` runs these in a background continuation instead of awaiting
+ *  them in its `Promise.all`, so one slow dispatch never head-of-line-blocks
+ *  other channels' or freshly-due effects. publish_envelope (fast, fire-and-
+ *  forget) and credential_wait (deadline-only, periodic redrive) stay inline. */
+const DETACHABLE_EFFECT_KINDS = new Set<OutboxRow["kind"]>([
+  "model_call",
+  "channel_call",
+  "http_call",
+  "local_tool",
+]);
+
 interface ScheduledModelResumeRow {
   channelId: string;
   messageId: string;
@@ -230,6 +243,9 @@ export class AgentLoopDriver {
       head: logId,
       channelId,
       config: this.deps.configFor(channelId),
+      // Fold filters out other participants' turn lifecycle so this agent never adopts
+      // another agent's open turn from the shared channel log.
+      selfId: this.selfRef(channelId).id,
     });
     const instance: LoopInstance = {
       channelId,
@@ -267,8 +283,11 @@ export class AgentLoopDriver {
     if (!row) return false;
     // A queued/backing-off row is not an orphan; let the pump dispatch/retry it.
     if (row.leaseExpiresAt === null) return true;
-    // A leased row with a live AbortController is running in this isolate. This
-    // covers model fetches parked behind credential-use approval prompts.
+    // A leased row that has not expired is still owned by the outbox lease. This
+    // covers the restart window after credential-use approval is deferred but
+    // before deferRedrive parks the row with a backstop.
+    if (row.leaseExpiresAt > this.deps.now()) return true;
+    // A leased row with a live AbortController is running in this isolate.
     return this.aborts.has(this.rowKey(row));
   }
 
@@ -575,6 +594,27 @@ export class AgentLoopDriver {
     this.foldCache.write(loop.state);
     this.kill("after-fold-cache");
     for (const effect of output.effects) {
+      // Fire-and-forget receipts (read/received acks) must NOT wait in the
+      // effect pump behind a long-running model_call dispatch — otherwise a
+      // steer's read-ack only publishes when the model FINISHES (its dispatchRow
+      // shares the pump's dispatch cycle), so the message lingers in the queue
+      // for the whole turn. Publish them eagerly here, at step time (the channel
+      // is idle before the model dispatches). The outbox insert below stays as a
+      // crash-recovery backstop; the channel idempotency key dedupes the redrive.
+      if (effect.kind === "publish_envelope") {
+        const deps = this.executorDeps(loop.channelId);
+        void executorFor(effect)
+          .execute({
+            descriptor: effect,
+            state: loop.state,
+            signal: new AbortController().signal,
+            deps,
+            onEphemeral: () => {},
+          })
+          .catch((err) =>
+            console.warn("[agent-loop-driver] eager publish_envelope failed:", err)
+          );
+      }
       this.outbox.insert(loop.logId, effect, this.initialDeadline(effect));
     }
     this.kill("after-outbox-insert");
@@ -742,6 +782,30 @@ export class AgentLoopDriver {
           work.push(this.failEffect(row, { message: "credential wait expired" }));
           continue;
         }
+      }
+      // Long-running effects (a model_call can run up to its 10-min lease; a
+      // channel_call to a feedback form waits on the user; eval/http can be
+      // slow) must NOT be `await`ed inside the pump: `dispatchDue` runs every
+      // loop's due rows in ONE `Promise.all`, so one channel's slow dispatch
+      // would head-of-line-block EVERY other channel's effects (and freshly-due
+      // effects on the same channel) for its whole duration. Run them in a
+      // background continuation instead — the lease (set eagerly here, so a
+      // re-pump can't re-snapshot the row before the detached dispatchRow leases
+      // it) + reconcile's INSERT-OR-IGNORE prevent re-dispatch, and the outcome
+      // routes back via applyOutcome. Falls back to inline await when the host
+      // gives no background runner (tests / no waitUntil), keeping the
+      // alarm-driven harness deterministic.
+      if (this.deps.runBackground && DETACHABLE_EFFECT_KINDS.has(row.kind)) {
+        this.outbox.lease(row.branchId, row.effectId, now);
+        this.deps.runBackground(async () => {
+          try {
+            await this.dispatchRow(row);
+          } catch (error) {
+            this.scheduleEarliest();
+            throw error;
+          }
+        });
+        continue;
       }
       work.push(this.dispatchRow(row));
     }
@@ -1129,10 +1193,11 @@ export class AgentLoopDriver {
     effectId: string,
     outcome: EffectOutcome,
     address: OutcomeAddress = {}
-  ): Promise<void> {
+  ): Promise<boolean> {
     const row = this.outcomeRow(effectId, address);
-    if (!row) return; // already settled — deterministic ids make this a no-op
+    if (!row) return false; // already settled — deterministic ids make this a no-op
     await this.applyOutcome(row, outcome);
+    return true;
   }
 
   async deliverDeferredResult(

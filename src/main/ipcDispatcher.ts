@@ -6,13 +6,20 @@
  */
 
 import { ipcMain, type WebContents } from "electron";
-import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
+import {
+  ELECTRON_LOCAL_SERVICE_NAMES,
+  responseEnvelopeFor,
+  type RpcCallOptions,
+  type RpcEnvelope,
+  type RpcMessage,
+  type RpcRequest,
+  type RpcResponse,
+} from "@natstack/rpc";
 import {
   createVerifiedCaller,
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
 } from "@natstack/shared/serviceDispatcher";
-import type { RpcMessage, RpcRequest, RpcResponse } from "@natstack/rpc";
 import type { ServerClient } from "./serverClient.js";
 import type { EventService, Subscriber } from "@natstack/shared/eventsService";
 import type { CallerKind } from "@natstack/shared/serviceDispatcher";
@@ -21,10 +28,54 @@ import { assertPresent } from "../lintHelpers";
 
 /** Electron-main services that are not owned by the NatStack server process. */
 const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
-const DESKTOP_SHELL_APP_CALLER = {
-  callerId: "@workspace-apps/shell",
-  callerKind: "app" as const,
-};
+
+const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
+
+function envelopeFor(target: string, from: string, message: RpcMessage): RpcEnvelope {
+  const caller = {
+    callerId: from,
+    callerKind: from === "main" ? ("server" as const) : ("unknown" as const),
+  };
+  return {
+    from,
+    target,
+    delivery: { caller },
+    provenance: [caller],
+    message,
+  };
+}
+
+function callOptionsFromEnvelope(envelope: RpcEnvelope): RpcCallOptions | undefined {
+  const options: RpcCallOptions = {};
+  if (envelope.delivery.idempotencyKey) options.idempotencyKey = envelope.delivery.idempotencyKey;
+  if (envelope.delivery.readOnly === true) options.readOnly = true;
+  return options.idempotencyKey || options.readOnly ? options : undefined;
+}
+
+function callServer(
+  serverClient: ServerClient,
+  service: string,
+  method: string,
+  args: unknown[],
+  options: RpcCallOptions | undefined
+): Promise<unknown> {
+  return options
+    ? serverClient.call(service, method, args, options)
+    : serverClient.call(service, method, args);
+}
+
+function callServerAs(
+  serverClient: ServerClient,
+  caller: { callerId: string; callerKind: CallerKind },
+  service: string,
+  method: string,
+  args: unknown[],
+  options: RpcCallOptions | undefined
+): Promise<unknown> {
+  return options
+    ? serverClient.callAs(caller, service, method, args, options)
+    : serverClient.callAs(caller, service, method, args);
+}
 
 export interface IpcDispatcherDeps {
   /** Electron-local service dispatcher */
@@ -66,6 +117,7 @@ class IpcSubscriber implements Subscriber {
 
   constructor(
     private getWebContents: () => WebContents | null,
+    private readonly callerId: string,
     readonly callerKind: CallerKind
   ) {}
 
@@ -78,12 +130,15 @@ class IpcSubscriber implements Subscriber {
     if (!this.isAlive) return;
     const wc = assertPresent(this.getWebContents());
     // Deliver as an RPC event message that the shell transport understands
-    wc.send("natstack:rpc:message", "main", {
-      type: "event",
-      fromId: "main",
-      event: channel,
-      payload,
-    });
+    wc.send(
+      "natstack:rpc:message",
+      envelopeFor(this.callerId, "main", {
+        type: "event",
+        fromId: "main",
+        event: channel,
+        payload,
+      })
+    );
   }
 
   isBoundTo(_ws: WebSocket): boolean {
@@ -111,10 +166,10 @@ export class IpcDispatcher {
 
     // Register an IPC-backed subscriber for the shell so EventService can push
     // events to it without requiring a WebSocket connection.
-    const shellSubscriber = new IpcSubscriber(deps.getShellWebContents, "shell");
+    const shellSubscriber = new IpcSubscriber(deps.getShellWebContents, "shell", "shell");
     deps.eventService.registerSubscriber("shell", shellSubscriber);
 
-    ipcMain.on("natstack:rpc:send", (event, targetId: string, message: unknown) => {
+    ipcMain.on("natstack:rpc:send", (event, envelope: RpcEnvelope) => {
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller || (caller.callerKind !== "shell" && caller.callerKind !== "app")) {
         console.warn(
@@ -127,13 +182,7 @@ export class IpcDispatcher {
         this.ensureAppMessageBridge(caller.callerId);
         this.ensureAppEventSubscriber(caller.callerId);
       }
-      this.handleMessage(
-        event.sender,
-        caller.callerId,
-        caller.callerKind,
-        targetId,
-        message as RpcMessage
-      );
+      this.handleEnvelope(event.sender, caller.callerId, caller.callerKind, envelope);
     });
   }
 
@@ -143,7 +192,7 @@ export class IpcDispatcher {
   sendToShell(fromId: string, message: RpcMessage): void {
     const wc = this.deps.getShellWebContents();
     if (wc && !wc.isDestroyed()) {
-      wc.send("natstack:rpc:message", fromId, message);
+      wc.send("natstack:rpc:message", envelopeFor("shell", fromId, message));
     }
   }
 
@@ -159,18 +208,20 @@ export class IpcDispatcher {
     });
   }
 
-  private async handleMessage(
+  private async handleEnvelope(
     sender: WebContents,
     callerId: string,
     callerKind: CallerKind,
-    targetId: string,
-    message: RpcMessage
+    envelope: RpcEnvelope
   ): Promise<void> {
+    const message = envelope.message;
+    const targetId = envelope.target;
     if (message.type === "request" && targetId === "main") {
       const req = message as RpcRequest;
+      const callOptions = callOptionsFromEnvelope(envelope);
       const dotIndex = req.method.indexOf(".");
       if (dotIndex === -1) {
-        this.sendResponse(sender, req.requestId, {
+        this.sendResponse(sender, envelope, {
           type: "response",
           requestId: req.requestId,
           error: `Invalid method format: ${req.method}`,
@@ -182,8 +233,6 @@ export class IpcDispatcher {
 
       try {
         let result: unknown;
-        let resultCallerId = callerId;
-        let resultCallerKind = callerKind;
         if (ELECTRON_LOCAL_SERVICES.has(service)) {
           // Dispatch locally to Electron services. The dispatcher itself
           // enforces policy via checkServiceAccess (single choke-point).
@@ -193,45 +242,49 @@ export class IpcDispatcher {
               callerKind,
               this.deps.getCodeIdentityForCaller?.(callerId) ?? null
             ),
+            requestId: req.requestId,
+            ...(callOptions?.idempotencyKey ? { idempotencyKey: callOptions.idempotencyKey } : {}),
+            ...(callOptions?.readOnly ? { readOnly: true } : {}),
           };
           result = await this.deps.dispatcher.dispatch(ctx, service, method, req.args);
         } else {
           // Server is the default owner so newly registered userland/workerd
           // services are reachable without a shared routing-list update.
           if (callerKind === "shell") {
-            if (service === "panelTree") {
-              result = await this.deps.serverClient.callAs(
-                DESKTOP_SHELL_APP_CALLER,
-                service,
-                method,
-                req.args
-              );
-              resultCallerId = DESKTOP_SHELL_APP_CALLER.callerId;
-              resultCallerKind = DESKTOP_SHELL_APP_CALLER.callerKind;
-            } else {
-              result = await this.deps.serverClient.call(service, method, req.args);
-            }
+            // electron-main / bootstrap launch gate are native-host `shell`
+            // principals — they reach the server on the admin connection. The
+            // workspace shell renderer is an `app` (apps/shell) and takes the
+            // app branch below; there is no longer a shell→app panelTree proxy.
+            result = await callServer(
+              this.deps.serverClient,
+              service,
+              method,
+              req.args,
+              callOptions
+            );
           } else if (callerKind === "app") {
             this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
-            result = await this.deps.serverClient.callAs(
+            result = await callServerAs(
+              this.deps.serverClient,
               { callerId, callerKind },
               service,
               method,
-              req.args
+              req.args,
+              callOptions
             );
           } else {
             throw new Error(`Server RPC relay is not available for ${callerKind} callers`);
           }
         }
         await this.deps.onServerRpcResult?.({
-          callerId: resultCallerId,
-          callerKind: resultCallerKind,
+          callerId,
+          callerKind,
           service,
           method,
           args: req.args,
           result,
         });
-        this.sendResponse(sender, req.requestId, {
+        this.sendResponse(sender, envelope, {
           type: "response",
           requestId: req.requestId,
           result,
@@ -239,7 +292,7 @@ export class IpcDispatcher {
       } catch (err) {
         const error = err instanceof Error ? err.message : String(err);
         const errorCode = (err as { code?: string })?.code;
-        this.sendResponse(sender, req.requestId, {
+        this.sendResponse(sender, envelope, {
           type: "response",
           requestId: req.requestId,
           error,
@@ -249,9 +302,16 @@ export class IpcDispatcher {
     }
   }
 
-  private sendResponse(sender: WebContents, _requestId: string, response: RpcResponse): void {
+  private sendResponse(
+    sender: WebContents,
+    requestEnvelope: RpcEnvelope,
+    response: RpcResponse
+  ): void {
     if (!sender.isDestroyed()) {
-      sender.send("natstack:rpc:message", "main", response);
+      sender.send(
+        "natstack:rpc:message",
+        responseEnvelopeFor(requestEnvelope, MAIN_CALLER, response)
+      );
     }
   }
 
@@ -259,10 +319,10 @@ export class IpcDispatcher {
     if (this.appMessageBridges.has(callerId)) return;
     const unsubscribe = this.deps.serverClient.addMessageListener(
       { callerId, callerKind: "app" },
-      (fromId, message) => {
+      (envelope) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
         if (!wc || wc.isDestroyed()) return;
-        wc.send("natstack:rpc:message", fromId, message);
+        wc.send("natstack:rpc:message", envelope);
       }
     );
     this.appMessageBridges.set(callerId, unsubscribe);
@@ -272,7 +332,11 @@ export class IpcDispatcher {
     const existing = this.appEventSubscribers.get(callerId);
     if (existing?.isAlive) return;
     existing?.destroy();
-    const subscriber = new IpcSubscriber(() => this.deps.getWebContentsForCaller(callerId), "app");
+    const subscriber = new IpcSubscriber(
+      () => this.deps.getWebContentsForCaller(callerId),
+      callerId,
+      "app"
+    );
     subscriber.onDestroyed(() => this.appEventSubscribers.delete(callerId));
     this.appEventSubscribers.set(callerId, subscriber);
     this.deps.eventService.registerSubscriber(callerId, subscriber);

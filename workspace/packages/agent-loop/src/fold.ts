@@ -5,10 +5,12 @@
  * lastSeq/lastHash advance.
  */
 
-import type { LogEnvelope } from "@workspace/agentic-protocol";
+import type { LogEnvelope, ParticipantRef } from "@workspace/agentic-protocol";
+import { participantKey } from "@workspace/agentic-protocol";
 import type {
   AgentState,
   AgentTurnMetadata,
+  DeferredPrompt,
   ModelRequestDescriptor,
   PendingInvocation,
   SessionEntry,
@@ -28,6 +30,48 @@ function metadataFromPayload(payload: Record<string, unknown>): AgentTurnMetadat
     : undefined;
 }
 
+/** Sender's canonical message id, carried on the recv payload IN ADDITION to
+ *  the private recv envelope id. The read-ack / edit / retract correlation key. */
+function sourceMessageIdFromPayload(payload: Record<string, unknown>): string | undefined {
+  const value = payload["sourceMessageId"];
+  return typeof value === "string" && value ? value : undefined;
+}
+
+/** The ORIGINAL sender, carried on the recv payload — the private recv
+ *  envelope's actor is the agent (driver-stamped), so the fold cannot use it
+ *  for the edit/retract author guard. */
+function senderRefFromPayload(
+  payload: Record<string, unknown>,
+  fallback: ParticipantRef
+): ParticipantRef {
+  const value = payload["senderRef"];
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as ParticipantRef)
+    : fallback;
+}
+
+/** Is the message still un-consumed (un-read) — present in a live queue? Once a
+ *  message has only an `entries` copy (consumed into a model context) it is
+ *  read, and edits/retracts no-op ("read wins"). */
+function liveSenderRef(state: AgentState, sourceMessageId: string): ParticipantRef | undefined {
+  for (const entry of state.steeringQueue) {
+    if (entry.sourceMessageId === sourceMessageId) return entry.senderRef;
+  }
+  if (state.pendingPrompt?.sourceMessageId === sourceMessageId) {
+    return state.pendingPrompt.senderRef;
+  }
+  for (const deferred of state.deferredPostTurnQueue) {
+    if (deferred.sourceMessageId === sourceMessageId) return deferred.senderRef;
+  }
+  return undefined;
+}
+
+/** Replace a user entry/queue item's content blocks in place (edit before read). */
+function withEditedBlocks(content: unknown, blocks: unknown): unknown {
+  const base = content && typeof content === "object" && !Array.isArray(content) ? content : {};
+  return { ...(base as Record<string, unknown>), blocks };
+}
+
 function withAdvance(state: AgentState, envelope: LogEnvelope): AgentState {
   return { ...state, lastSeq: envelope.seq, lastHash: envelope.hash };
 }
@@ -39,13 +83,19 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
   const causality = (envelope.causality ?? {}) as Record<string, unknown>;
   const turnId = typeof causality["turnId"] === "string" ? (causality["turnId"] as string) : undefined;
 
+  // Only THIS agent's turn lifecycle drives its loop state. The shared channel log carries
+  // every participant's events; a foreign-authored turn/message advances the fold position
+  // (withAdvance, above) but must NEVER make us adopt their open turn / model call as our
+  // own — that's how an agent ends up continuing another agent's turn → GAD id-collision.
+  const foreignAuthor = state.selfId != null && envelope.actor.id !== state.selfId;
+
   switch (true) {
     case kind === "message.delta":
       // Deltas are signal-only and never in the log (§2.4.1).
       throw new Error("message.delta must never be appended to a trajectory log");
 
     case kind === "turn.opened": {
-      if (!turnId) return state;
+      if (!turnId || foreignAuthor) return state;
       return {
         ...state,
         openTurn: {
@@ -62,12 +112,13 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
     }
 
     case kind === "turn.closed": {
+      if (foreignAuthor) return state;
       if (state.openTurn && turnId && state.openTurn.turnId !== turnId) return state;
       return { ...state, openTurn: null, inFlightModelCall: null };
     }
 
     case kind === "turn.waiting": {
-      if (!state.openTurn) return state;
+      if (foreignAuthor || !state.openTurn) return state;
       return {
         ...state,
         openTurn: { ...state.openTurn, waitingCount: state.openTurn.waitingCount + 1 },
@@ -76,7 +127,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
 
     case kind === "message.started": {
       const role = payload["role"];
-      if (role !== "assistant") return state;
+      if (role !== "assistant" || foreignAuthor) return state;
       const messageId = String(causality["messageId"] ?? "");
       const request = payload["modelRequest"] as ModelRequestDescriptor | undefined;
       if (!request) {
@@ -92,7 +143,12 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           request,
         },
         openTurn: state.openTurn
-          ? { ...state.openTurn, modelCallCount: state.openTurn.modelCallCount + 1 }
+          ? {
+              ...state.openTurn,
+              modelCallCount: state.openTurn.modelCallCount + 1,
+              // A new model call consumes any soft flush intent.
+              ...(state.openTurn.pendingFlush ? { pendingFlush: undefined } : {}),
+            }
           : state.openTurn,
         // Steered messages covered by this call's context snapshot are consumed.
         steeringQueue: state.steeringQueue.filter((entry) => entry.seq > contextThroughSeq),
@@ -103,17 +159,24 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       const role = payload["role"];
       const messageId = String(causality["messageId"] ?? "");
       if (role === "assistant") {
-        if (state.inFlightModelCall && state.inFlightModelCall.messageId !== messageId) {
-          return state; // stale terminal for an older attempt — fold ignores
-        }
         const entry: SessionEntry = {
           kind: "assistant",
           seq: envelope.seq,
           messageId,
+          senderRef: envelope.actor,
           blocks: Array.isArray(payload["blocks"]) ? (payload["blocks"] as unknown[]) : [],
           outcome:
             typeof payload["outcome"] === "string" ? (payload["outcome"] as string) : undefined,
         };
+        if (foreignAuthor) {
+          return {
+            ...state,
+            entries: [...state.entries, entry],
+          };
+        }
+        if (state.inFlightModelCall && state.inFlightModelCall.messageId !== messageId) {
+          return state; // stale terminal for an older attempt — fold ignores
+        }
         return {
           ...state,
           inFlightModelCall: null,
@@ -121,52 +184,144 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         };
       }
       // user (or panel) message — row 3
+      const metadata = metadataFromPayload(payload);
+      const sourceMessageId = sourceMessageIdFromPayload(payload);
+      const senderRef = senderRefFromPayload(payload, envelope.actor);
+      const agentHops =
+        typeof causality["agentHops"] === "number" ? (causality["agentHops"] as number) : undefined;
+
+      // Send-after-turn: while a turn is open, hold the message in the deferred
+      // queue ONLY. Skipping `entries` is exactly what keeps it out of the
+      // current turn's context (context is built from entries up to
+      // contextThroughSeq).
+      if (metadata?.deliverAfterTurn && state.openTurn) {
+        const deferred: DeferredPrompt = {
+          sourceMessageId: sourceMessageId ?? String(envelope.envelopeId),
+          envelopeId: String(envelope.envelopeId),
+          seq: envelope.seq,
+          senderRef,
+          content: payload,
+          ...(metadata ? { metadata } : {}),
+          ...(agentHops !== undefined ? { agentHops } : {}),
+        };
+        return { ...state, deferredPostTurnQueue: [...state.deferredPostTurnQueue, deferred] };
+      }
+
+      // A promoted after-turn recv carries the same sourceMessageId as its
+      // deferred entry — drop that entry from the queue as it enters context.
+      const deferredPostTurnQueue = sourceMessageId
+        ? state.deferredPostTurnQueue.filter((d) => d.sourceMessageId !== sourceMessageId)
+        : state.deferredPostTurnQueue;
+
       const entry: SessionEntry = {
         kind: "user",
         seq: envelope.seq,
         envelopeId: String(envelope.envelopeId),
-        senderRef: envelope.actor,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        senderRef,
         content: payload,
-        ...(metadataFromPayload(payload) ? { metadata: metadataFromPayload(payload) } : {}),
+        ...(metadata ? { metadata } : {}),
       };
       const steering = {
         envelopeId: String(envelope.envelopeId),
         seq: envelope.seq,
-        senderRef: envelope.actor,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        senderRef,
         content: payload,
-        ...(metadataFromPayload(payload) ? { metadata: metadataFromPayload(payload) } : {}),
+        ...(metadata ? { metadata } : {}),
       };
       if (state.openTurn) {
         return {
           ...state,
+          deferredPostTurnQueue,
           entries: [...state.entries, entry],
           steeringQueue: [...state.steeringQueue, steering],
         };
       }
       return {
         ...state,
+        deferredPostTurnQueue,
         entries: [...state.entries, entry],
         pendingPrompt: {
           envelopeId: String(envelope.envelopeId),
           seq: envelope.seq,
-          senderRef: envelope.actor,
+          ...(sourceMessageId ? { sourceMessageId } : {}),
+          senderRef,
           content: payload,
-          ...(metadataFromPayload(payload) ? { metadata: metadataFromPayload(payload) } : {}),
-          agentHops:
-            typeof causality["agentHops"] === "number"
-              ? (causality["agentHops"] as number)
-              : undefined,
+          ...(metadata ? { metadata } : {}),
+          agentHops,
         },
       };
     }
 
+    case kind === "message.edited": {
+      const sourceMessageId = String(causality["messageId"] ?? "");
+      if (!sourceMessageId) return state;
+      // Read wins: if no live (un-consumed) entry exists, the message was
+      // already folded into a model context — no-op.
+      const sender = liveSenderRef(state, sourceMessageId);
+      if (!sender) return state;
+      // Author guard: the private append actor is the agent, so the original
+      // author rides on payload.by; it must match the stored sender.
+      const by = payload["by"] as ParticipantRef | undefined;
+      if (by && participantKey(by) !== participantKey(sender)) return state;
+      const blocks = Array.isArray(payload["blocks"]) ? (payload["blocks"] as unknown[]) : [];
+      return {
+        ...state,
+        steeringQueue: state.steeringQueue.map((entry) =>
+          entry.sourceMessageId === sourceMessageId
+            ? { ...entry, content: withEditedBlocks(entry.content, blocks) }
+            : entry
+        ),
+        pendingPrompt:
+          state.pendingPrompt?.sourceMessageId === sourceMessageId
+            ? { ...state.pendingPrompt, content: withEditedBlocks(state.pendingPrompt.content, blocks) }
+            : state.pendingPrompt,
+        deferredPostTurnQueue: state.deferredPostTurnQueue.map((deferred) =>
+          deferred.sourceMessageId === sourceMessageId
+            ? { ...deferred, content: withEditedBlocks(deferred.content, blocks) }
+            : deferred
+        ),
+        entries: state.entries.map((entry) =>
+          entry.kind === "user" && entry.sourceMessageId === sourceMessageId
+            ? { ...entry, content: withEditedBlocks(entry.content, blocks) }
+            : entry
+        ),
+      };
+    }
+
+    case kind === "message.retracted": {
+      const sourceMessageId = String(causality["messageId"] ?? "");
+      if (!sourceMessageId) return state;
+      const sender = liveSenderRef(state, sourceMessageId);
+      if (!sender) return state; // read wins — already consumed
+      const by = payload["by"] as ParticipantRef | undefined;
+      if (by && participantKey(by) !== participantKey(sender)) return state;
+      return {
+        ...state,
+        steeringQueue: state.steeringQueue.filter(
+          (entry) => entry.sourceMessageId !== sourceMessageId
+        ),
+        pendingPrompt:
+          state.pendingPrompt?.sourceMessageId === sourceMessageId ? null : state.pendingPrompt,
+        deferredPostTurnQueue: state.deferredPostTurnQueue.filter(
+          (deferred) => deferred.sourceMessageId !== sourceMessageId
+        ),
+        entries: state.entries.filter(
+          (entry) => !(entry.kind === "user" && entry.sourceMessageId === sourceMessageId)
+        ),
+      };
+    }
+
     case kind === "message.failed": {
+      if (foreignAuthor) return state;
       const messageId = String(causality["messageId"] ?? "");
       if (state.inFlightModelCall && state.inFlightModelCall.messageId !== messageId) return state;
       return { ...state, inFlightModelCall: null };
     }
 
     case kind === "invocation.started": {
+      if (foreignAuthor) return state;
       const invocationId = String(causality["invocationId"] ?? "");
       if (!invocationId) return state;
       const transport = payload["transport"] as PendingInvocation["transport"] | undefined;
@@ -197,6 +352,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       kind === "invocation.failed" ||
       kind === "invocation.cancelled" ||
       kind === "invocation.abandoned": {
+      if (foreignAuthor) return state;
       const invocationId = String(causality["invocationId"] ?? "");
       const pending = state.pendingInvocations[invocationId];
       if (!pending) return state;
@@ -230,6 +386,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
     }
 
     case kind === "approval.requested": {
+      if (foreignAuthor) return state;
       const approvalId = String(causality["approvalId"] ?? "");
       const invocationId = String(causality["invocationId"] ?? "");
       if (!approvalId) return state;
@@ -258,6 +415,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
     }
 
     case kind === "approval.resolved": {
+      if (foreignAuthor) return state;
       const approvalId = String(causality["approvalId"] ?? "");
       const approval = state.pendingApprovals[approvalId];
       if (!approval) return state;
@@ -350,6 +508,14 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       if (detailKind === "interrupt") {
         return state.openTurn
           ? { ...state, openTurn: { ...state.openTurn, interrupted: true } }
+          : state;
+      }
+      if (detailKind === "flush_steers") {
+        // Soft flush: keep the turn open but mark it so the aborted model's
+        // interrupted terminal continues (consumes queued steers) instead of
+        // closing. Does NOT set `interrupted`.
+        return state.openTurn
+          ? { ...state, openTurn: { ...state.openTurn, pendingFlush: "steers" } }
           : state;
       }
       return state;

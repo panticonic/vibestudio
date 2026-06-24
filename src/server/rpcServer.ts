@@ -79,7 +79,7 @@ const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
 function envelopeTransportFromWsServer(transport: WsServerTransportInternal): EnvelopeRpcTransport {
   return {
     async send(envelope) {
-      await transport.send(envelope.target, envelope.message);
+      await transport.sendEnvelope(envelope);
     },
     onMessage(handler) {
       return transport.onAnyMessage((sourceId, message, callerKind) => {
@@ -115,6 +115,37 @@ interface PendingToolCall {
 }
 
 type RelayAuthCheck = { ok: true } | { ok: false; reason: string };
+
+type RelayCallMeta = {
+  requestId?: string;
+  idempotencyKey?: string;
+  readOnly?: boolean;
+};
+
+function relayCallOptions(
+  meta?: RelayCallMeta
+): { idempotencyKey?: string; readOnly?: boolean } | undefined {
+  if (!meta?.idempotencyKey && !meta?.readOnly) return undefined;
+  return {
+    ...(meta.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+    ...(meta.readOnly ? { readOnly: true } : {}),
+  };
+}
+
+function relayMetaFromEnvelope(envelope?: RpcEnvelope): RelayCallMeta | undefined {
+  if (!envelope) return undefined;
+  const message = envelope.message;
+  const requestId =
+    message.type === "request" || message.type === "stream-request" ? message.requestId : undefined;
+  const idempotencyKey = envelope.delivery.idempotencyKey;
+  const readOnly = envelope.delivery.readOnly === true;
+  if (!requestId && !idempotencyKey && !readOnly) return undefined;
+  return {
+    ...(requestId ? { requestId } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(readOnly ? { readOnly: true } : {}),
+  };
+}
 
 type ReconnectOutcome =
   | { kind: "reconnected"; client: WsClientState }
@@ -454,12 +485,14 @@ export class RpcServer {
 
   private serviceContextForRpcMessage(
     client: WsClientState,
-    message: Pick<RpcRequest | import("@natstack/rpc").RpcStreamRequest, "parentInvocationToken">
+    message: Pick<RpcRequest | import("@natstack/rpc").RpcStreamRequest, "parentInvocationToken">,
+    extras: Omit<ServiceContext, "caller" | "connectionId" | "wsClient" | "chainCaller"> = {}
   ): ServiceContext {
     const ctx: ServiceContext = {
       caller: client.caller,
       connectionId: client.connectionId,
       wsClient: client,
+      ...extras,
     };
     if (client.caller.runtime.kind !== "extension" || !message.parentInvocationToken) {
       return ctx;
@@ -857,7 +890,7 @@ export class RpcServer {
             return;
           }
         }
-        void this.handleRpc(client, rpcMessage);
+        void this.handleRpc(client, rpcMessage, msg.envelope);
         break;
       }
       case "ws:tool-result":
@@ -869,7 +902,8 @@ export class RpcServer {
             client,
             msg.envelope.target,
             msg.envelope.message,
-            msg.targetConnectionId
+            msg.targetConnectionId,
+            msg.envelope
           );
         } else if (msg.targetId && msg.message) {
           this.handleRoute(client, msg.targetId, msg.message, msg.targetConnectionId);
@@ -895,9 +929,13 @@ export class RpcServer {
     return `${callerId}\x00${connectionId}\x00${requestId}`;
   }
 
-  private async handleRpc(client: WsClientState, message: RpcMessage): Promise<void> {
+  private async handleRpc(
+    client: WsClientState,
+    message: RpcMessage,
+    envelope?: RpcEnvelope
+  ): Promise<void> {
     if (message.type === "stream-request") {
-      await this.handleWsStreamRequest(client, message);
+      await this.handleWsStreamRequest(client, message, envelope);
       return;
     }
     if (message.type === "stream-cancel") {
@@ -947,7 +985,13 @@ export class RpcServer {
       return;
     }
 
-    const ctx = this.serviceContextForRpcMessage(client, request);
+    const idempotencyKey = envelope?.delivery.idempotencyKey;
+    const readOnly = envelope?.delivery.readOnly === true;
+    const ctx = this.serviceContextForRpcMessage(client, request, {
+      ...(request.requestId ? { requestId: request.requestId } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(readOnly ? { readOnly: true } : {}),
+    });
 
     const dispatcher = this.dispatcher;
 
@@ -984,7 +1028,8 @@ export class RpcServer {
     client: WsClientState,
     targetId: string,
     message: RpcMessage,
-    targetConnectionId?: string
+    targetConnectionId?: string,
+    routeEnvelope?: RpcEnvelope
   ): void {
     const auth = this.checkRelayAuth(
       client.caller.runtime.id,
@@ -1068,7 +1113,8 @@ export class RpcServer {
           targetId,
           reqMethod,
           reqArgs ?? [],
-          targetConnectionId
+          targetConnectionId,
+          relayMetaFromEnvelope(routeEnvelope)
         ).then(
           (result) => {
             void this.sendRoutedResponseToOrigin(
@@ -1111,6 +1157,7 @@ export class RpcServer {
 
     this.sendToWs(targetClient.ws, {
       type: "ws:routed",
+      ...(routeEnvelope ? { envelope: routeEnvelope } : {}),
       fromId: client.caller.runtime.id,
       fromKind: client.caller.runtime.kind,
       message,
@@ -1580,6 +1627,7 @@ export class RpcServer {
     const args = message.args ?? [];
     const requestId = message.requestId;
     const idempotencyKey = envelope.delivery.idempotencyKey;
+    const readOnly = envelope.delivery.readOnly === true;
 
     // Direct service dispatch
     if (targetId === "main") {
@@ -1609,6 +1657,7 @@ export class RpcServer {
         ...(requestId ? { requestId } : {}),
         ...(idempotencyKey ? { idempotencyKey } : {}),
         ...(deferral ? { deferral } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
       });
       return await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
     }
@@ -1619,6 +1668,7 @@ export class RpcServer {
     return await this.relayCall(callerId, callerKind, targetId, method, args, undefined, {
       ...(requestId ? { requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(readOnly ? { readOnly: true } : {}),
     });
   }
 
@@ -1654,6 +1704,7 @@ export class RpcServer {
     method: string;
     callerKind: CallerKind;
     args: unknown[];
+    readOnly?: boolean;
   }):
     | {
         ok: true;
@@ -1692,6 +1743,20 @@ export class RpcServer {
         status: 403,
         error: err instanceof Error ? err.message : String(err),
       };
+    }
+    if (request.readOnly) {
+      const methodDef = this.dispatcher.getMethodSchema?.("credentials", "proxyFetch");
+      const sensitivity = methodDef?.access?.sensitivity;
+      if (sensitivity !== "read") {
+        return {
+          ok: false,
+          status: 403,
+          error:
+            `Blocked in read-only mode: 'credentials.proxyFetch' is not declared read-only ` +
+            `(sensitivity ${sensitivity ?? "unknown"}). A read-only caller may only invoke ` +
+            `methods declaring access.sensitivity === "read".`,
+        };
+      }
     }
     const params = (request.args?.[0] ?? {}) as {
       url?: string;
@@ -1800,6 +1865,8 @@ export class RpcServer {
     const method = streamMessage?.method;
     const args = streamMessage?.args ?? [];
     const targetId = streamEnvelope.target;
+    const idempotencyKey = streamEnvelope.delivery?.idempotencyKey;
+    const readOnly = streamEnvelope.delivery?.readOnly === true;
     const effectiveCaller = this.verifiedCallerFor(callerId, callerKind);
 
     if (targetId && targetId !== "main") {
@@ -1833,7 +1900,11 @@ export class RpcServer {
 
       let response: Response;
       try {
-        const ctx = this.serviceContextFor(callerId, callerKind);
+        const ctx = this.serviceContextFor(callerId, callerKind, {
+          ...(streamMessage?.requestId ? { requestId: streamMessage.requestId } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(readOnly ? { readOnly: true } : {}),
+        });
         const result = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
         if (!(result instanceof Response)) {
           res.writeHead(500, { "Content-Type": "application/json" });
@@ -1883,6 +1954,7 @@ export class RpcServer {
       method,
       callerKind,
       args,
+      readOnly,
     });
     if (!check.ok) {
       res.writeHead(check.status, { "Content-Type": "application/json" });
@@ -2022,8 +2094,11 @@ export class RpcServer {
    */
   private async handleWsStreamRequest(
     client: WsClientState,
-    request: import("@natstack/rpc").RpcStreamRequest
+    request: import("@natstack/rpc").RpcStreamRequest,
+    envelope?: RpcEnvelope
   ): Promise<void> {
+    const idempotencyKey = envelope?.delivery.idempotencyKey;
+    const readOnly = envelope?.delivery.readOnly === true;
     const sendFrame = (frameType: number, payload: string): void => {
       this.sendToWs(client.ws, {
         type: "ws:rpc",
@@ -2079,7 +2154,11 @@ export class RpcServer {
           this.dispatcher,
           parsed.method
         );
-        const ctx = this.serviceContextForRpcMessage(client, request);
+        const ctx = this.serviceContextForRpcMessage(client, request, {
+          ...(request.requestId ? { requestId: request.requestId } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(readOnly ? { readOnly: true } : {}),
+        });
         const result = await this.dispatcher.dispatch(
           ctx,
           parsed.service,
@@ -2113,6 +2192,7 @@ export class RpcServer {
       method: request.method,
       callerKind: client.caller.runtime.kind,
       args: request.args,
+      readOnly,
     });
     if (!check.ok) {
       emitFrame({ kind: "error", status: check.status, message: check.error });
@@ -2255,16 +2335,17 @@ export class RpcServer {
     method: string,
     args: unknown[],
     targetConnectionId?: string,
-    meta?: { requestId?: string; idempotencyKey?: string }
+    meta?: RelayCallMeta
   ): Promise<unknown> {
     const isPanelOrShellTarget = !targetId.startsWith("do:") && !targetId.startsWith("worker:");
     if (isPanelOrShellTarget) {
+      const options = relayCallOptions(meta);
       const routedTargetId = this.resolveRoutableTargetId(targetId);
       const wsClient = this.pickRoutableTarget(targetId, targetConnectionId);
       if (wsClient?.ws.readyState === WebSocket.OPEN) {
         const bridge = this.connections.getBridge(routedTargetId, wsClient.connectionId);
         if (bridge) {
-          return await bridge.call(routedTargetId, method, args);
+          return await bridge.call(routedTargetId, method, args, options);
         }
       }
 
@@ -2279,7 +2360,7 @@ export class RpcServer {
             `Target ${targetId}:${targetConnectionId} reconnected but bridge missing`
           );
         }
-        return await bridge.call(routedTargetId, method, args);
+        return await bridge.call(routedTargetId, method, args, options);
       }
 
       const outcome = await this.awaitReconnectIfPending(routedTargetId);
@@ -2289,7 +2370,7 @@ export class RpcServer {
           if (!bridge) {
             throw new Error(`Target ${targetId} reconnected but bridge missing`);
           }
-          return await bridge.call(routedTargetId, method, args);
+          return await bridge.call(routedTargetId, method, args, options);
         }
         case "server-shutdown":
           throw createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN");
@@ -2338,7 +2419,7 @@ export class RpcServer {
     targetId: string,
     method: string,
     args: unknown[],
-    meta?: { requestId?: string; idempotencyKey?: string }
+    meta?: RelayCallMeta
   ): Promise<unknown> {
     const ref = parseDOTarget(targetId);
     // Assertion-only: the concrete DO entity must exist before dispatch.
@@ -2377,6 +2458,7 @@ export class RpcServer {
         ...(callerPanelId ? { callerPanelId } : {}),
         ...(meta?.requestId ? { requestId: meta.requestId } : {}),
         ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+        ...(meta?.readOnly ? { readOnly: true } : {}),
       });
       return result;
     };
@@ -2399,7 +2481,7 @@ export class RpcServer {
     targetId: string,
     method: string,
     args: unknown[],
-    meta?: { requestId?: string; idempotencyKey?: string }
+    meta?: RelayCallMeta
   ): Promise<unknown> {
     // targetId format: "worker:{workerName}"
     const workerName = targetId.slice(7); // Remove "worker:"
@@ -2412,6 +2494,7 @@ export class RpcServer {
       target: targetId,
       caller,
       ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
+      ...(meta?.readOnly ? { readOnly: true } : {}),
       message: {
         type: "request",
         requestId: meta?.requestId ?? randomUUID(),

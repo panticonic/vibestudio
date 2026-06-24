@@ -28,6 +28,7 @@ import { useIsMobile, useTouchDevice } from "@workspace/react/responsive";
 import { useNavigation } from "./NavigationContext";
 import type { ChromeCommand } from "./PanelStack";
 import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
+import { ThemeSettings } from "./ThemeSettings";
 import { ConnectionSettingsDialog } from "./ConnectionSettingsDialog";
 
 const isMac = /\b(Mac|iPhone|iPad|iPod)\b/.test(globalThis.navigator?.platform ?? "");
@@ -114,8 +115,9 @@ export function TitleBar({
             appRegion: "drag",
             WebkitAppRegion: "drag",
             userSelect: "none",
-            backgroundColor: "var(--app-chrome-bg)",
-            borderBottom: "1px solid var(--app-chrome-border)",
+            backgroundColor: "var(--surface-chrome)",
+            borderBottom: "1px solid var(--surface-border)",
+            boxShadow: "var(--elevation-1)",
           } as CSSProperties
         }
       >
@@ -125,7 +127,13 @@ export function TitleBar({
             gap="1"
             style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
           >
-            <IconButton variant="ghost" size="2" onClick={handleHamburgerClick} aria-label="Menu">
+            <IconButton
+              variant="ghost"
+              size="2"
+              className="app-touch-target"
+              onClick={handleHamburgerClick}
+              aria-label="Menu"
+            >
               <HamburgerMenuIcon />
             </IconButton>
 
@@ -133,6 +141,7 @@ export function TitleBar({
               <IconButton
                 variant="ghost"
                 size="2"
+                className="app-touch-target"
                 onClick={handleNavigationToggle}
                 aria-label={navigationMode === "tree" ? "Close panel tree" : "Open panel tree"}
               >
@@ -168,6 +177,7 @@ export function TitleBar({
               <IconButton
                 variant="ghost"
                 size="2"
+                className="app-touch-target"
                 onClick={async () => {
                   const result = await panel.createAboutPanel("new");
                   window.dispatchEvent(
@@ -181,6 +191,7 @@ export function TitleBar({
                 <PlusIcon />
               </IconButton>
             </Tooltip>
+            <ThemeSettings />
             <ConnectionStatusBadge onOpenSettings={() => setConnectionSettingsOpen(true)} />
           </Flex>
         </Flex>
@@ -202,6 +213,7 @@ export function TitleBar({
                 <IconButton
                   variant="ghost"
                   size="2"
+                  className="app-touch-target"
                   onClick={() => setAddressBarVisible(false)}
                   aria-label="Back to breadcrumbs"
                 >
@@ -228,13 +240,14 @@ export function TitleBar({
           appRegion: "drag",
           WebkitAppRegion: "drag",
           userSelect: "none",
-          height: "32px",
-          backgroundColor: "var(--app-chrome-bg)",
-          borderBottom: "1px solid var(--app-chrome-border)",
+          height: "28px",
+          backgroundColor: "var(--surface-chrome)",
+          borderBottom: "1px solid var(--surface-border)",
+          boxShadow: "var(--elevation-1)",
         } as CSSProperties
       }
     >
-      <Flex align="center" justify="between" height="100%" px="2" gap="2">
+      <Flex align="center" justify="between" height="100%" px="2" gap="1">
         {/* Left side: Hamburger menu */}
         <Flex
           align="center"
@@ -542,6 +555,7 @@ function BrowserAddressBar({
         <IconButton
           size="1"
           variant="ghost"
+          className="app-touch-target"
           disabled={!chromeState?.canGoBack}
           onClick={() => onChromeCommand?.({ type: "back" })}
           aria-label="Back"
@@ -554,6 +568,7 @@ function BrowserAddressBar({
           <IconButton
             size="1"
             variant="ghost"
+            className="app-touch-target"
             disabled={!chromeState?.canGoForward}
             onClick={() => onChromeCommand?.({ type: "forward" })}
             aria-label="Forward"
@@ -566,6 +581,7 @@ function BrowserAddressBar({
         <IconButton
           size="1"
           variant="ghost"
+          className="app-touch-target"
           onClick={() =>
             onChromeCommand?.({ type: chromeState?.isLoading ? "stop" : "reload-panel" })
           }
@@ -760,6 +776,7 @@ function PanelAddressBar({
         <IconButton
           size="1"
           variant="ghost"
+          className="app-touch-target"
           disabled={!chromeState.canGoBack}
           onClick={() => onChromeCommand?.({ type: "back" })}
           aria-label="Back"
@@ -772,6 +789,7 @@ function PanelAddressBar({
           <IconButton
             size="1"
             variant="ghost"
+            className="app-touch-target"
             disabled={!chromeState.canGoForward}
             onClick={() => onChromeCommand?.({ type: "forward" })}
             aria-label="Forward"
@@ -784,6 +802,7 @@ function PanelAddressBar({
         <IconButton
           size="1"
           variant="ghost"
+          className="app-touch-target"
           onClick={() =>
             onChromeCommand?.({ type: chromeState.isLoading ? "stop" : "reload-panel" })
           }
@@ -880,11 +899,12 @@ const itemStyle: CSSProperties = {
   border: "1px solid transparent",
   minWidth: 0,
   maxWidth: "clamp(72px, 16vw, 180px)",
-  padding: "2px 6px",
-  borderRadius: "3px",
+  padding: "1px 5px",
+  borderRadius: "var(--radius-1)",
   cursor: "pointer",
   whiteSpace: "nowrap",
-  transition: "background-color 100ms",
+  transition:
+    "background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard)",
 } as CSSProperties;
 
 // Style for sibling group container. Border kept transparent (width preserved
@@ -898,7 +918,7 @@ const groupStyle = {
   maxWidth: "100%",
   flexShrink: 0,
   padding: "1px",
-  borderRadius: "4px",
+  borderRadius: "var(--radius-1)",
   border: "1px solid transparent",
   appRegion: "drag",
   WebkitAppRegion: "drag",

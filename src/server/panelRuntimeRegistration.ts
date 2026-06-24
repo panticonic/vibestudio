@@ -156,6 +156,95 @@ export function panelHostCommandAssignmentError(
   return null;
 }
 
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function initPanelSeedKey(source: string, stateArgs: Record<string, unknown> | undefined): string {
+  return `${source}\u0000${stableJson(stateArgs ?? {})}`;
+}
+
+type InitPanelRoot = {
+  id?: unknown;
+  panelId?: unknown;
+  source?: unknown;
+};
+
+/**
+ * The SERVER is the single authority that seeds the initial panel tree from the workspace's
+ * `initPanels`. Runs at workspace boot (before any client connects) and reconciles the
+ * configured init-root multiset against roots that already look like init roots. That gives
+ * retry semantics for a partial previous seed without re-seeding unrelated, established trees.
+ */
+export async function seedPanelTreeIfEmpty(
+  bridge: (
+    request: import("./services/panelTreeService.js").PanelTreeBridgeRequest
+  ) => Promise<unknown>,
+  initPanels: ReadonlyArray<{ source: string; stateArgs?: Record<string, unknown> }>
+): Promise<void> {
+  if (initPanels.length === 0) return;
+  const roots = (await bridge({
+    callerId: "server",
+    callerKind: "server",
+    method: "roots",
+    args: [],
+  })) as InitPanelRoot[];
+  if (!Array.isArray(roots)) {
+    throw new Error("panelTree.roots returned a non-array result during init-panel seed");
+  }
+
+  const desiredCounts = new Map<string, number>();
+  for (const entry of initPanels) {
+    const key = initPanelSeedKey(entry.source, entry.stateArgs);
+    desiredCounts.set(key, (desiredCounts.get(key) ?? 0) + 1);
+  }
+
+  const existingCounts = new Map<string, number>();
+  if (roots.length > 0) {
+    for (const root of roots) {
+      if (typeof root.source !== "string") return;
+      const rootId =
+        typeof root.panelId === "string"
+          ? root.panelId
+          : typeof root.id === "string"
+            ? root.id
+            : null;
+      if (!rootId) return;
+      const stateArgs = (await bridge({
+        callerId: "server",
+        callerKind: "server",
+        method: "getStateArgs",
+        args: [rootId],
+      })) as Record<string, unknown> | undefined;
+      const key = initPanelSeedKey(root.source, stateArgs);
+      if (!desiredCounts.has(key)) return;
+      existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  const remainingCounts = new Map(existingCounts);
+  for (const entry of initPanels) {
+    const key = initPanelSeedKey(entry.source, entry.stateArgs);
+    const remaining = remainingCounts.get(key) ?? 0;
+    if (remaining > 0) {
+      remainingCounts.set(key, remaining - 1);
+      continue;
+    }
+    await bridge({
+      callerId: "server",
+      callerKind: "server",
+      method: "create",
+      args: [entry.source, { stateArgs: entry.stateArgs }],
+    });
+  }
+}
+
 export async function createServerPanelTreeBridge(
   deps: CommonDeps
 ): Promise<
@@ -1206,13 +1295,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           )
         );
         const { createPanelTreeService } = await import("./services/panelTreeService.js");
+        const bridge = await getPanelTreeBridge();
+        // Seed the tree server-side before the service is marked ready (so clients that connect
+        // afterward mirror the seeded tree). See seedPanelTreeIfEmpty / plan Gate 3.
+        await seedPanelTreeIfEmpty(bridge, deps.workspaceConfig?.initPanels ?? []);
         panelTreeDefinition = createPanelTreeService({
           approvalQueue: assertPresent(deps.approvalQueue),
           grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
           hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
-          bridge: await getPanelTreeBridge(),
+          bridge,
         });
       },
       getServiceDefinition() {

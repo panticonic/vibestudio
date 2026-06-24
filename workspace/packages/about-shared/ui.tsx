@@ -7,7 +7,9 @@
 import type { ComponentType, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import "@radix-ui/themes/styles.css";
+import "@workspace/ui/tokens.css";
 import { Theme, Flex, Box, Heading, Text, Card } from "@radix-ui/themes";
+import { useAppTheme } from "@workspace/ui/panel";
 import { useIsMobile, usePanelTheme } from "@workspace/react";
 
 /** Brand gradient used for the app mark and page icons. Theme-aware via Radix color scales. */
@@ -16,8 +18,9 @@ export const BRAND_GRADIENT = "linear-gradient(135deg, var(--iris-9) 0%, var(--v
 /** Theme wrapper shared by all about panels. */
 export function AboutThemeRoot({ children }: { children: ReactNode }) {
   const theme = usePanelTheme();
+  const appTheme = useAppTheme();
   return (
-    <Theme appearance={theme} accentColor="iris" radius="large">
+    <Theme appearance={theme} {...appTheme}>
       {children}
     </Theme>
   );

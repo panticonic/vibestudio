@@ -1,5 +1,7 @@
 import { Theme } from "@radix-ui/themes";
 import "@radix-ui/themes/styles.css";
+import "@workspace/ui/tokens.css";
+import { APP_THEME } from "@workspace/ui";
 import { createRoot } from "react-dom/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
@@ -160,9 +162,22 @@ function isXtermTextareaFocused(): boolean {
     && document.activeElement.classList.contains("xterm-helper-textarea");
 }
 
+/**
+ * The standalone jig is not hosted by the panel runtime, so it cannot read
+ * `usePanelTheme()`. Resolve appearance from the system preference instead of
+ * hardcoding a literal so it still follows the user's light/dark choice.
+ */
+function systemAppearance(): "light" | "dark" {
+  if (typeof window !== "undefined" && window.matchMedia) {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "light";
+}
+
 function InputJig() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<VscodeTerminalInstance | null>(null);
+  const appearance = systemAppearance();
   const [state, setState] = useState<JigState>({
     events: [],
     writes: [],
@@ -191,7 +206,7 @@ function InputJig() {
       frontendFactory: createVscodeTerminalFrontend,
       fontFamily: "JetBrains Mono, Menlo, Consolas, monospace",
       fontSize: 14,
-      theme: resolveTerminalTheme("dark", host),
+      theme: resolveTerminalTheme(appearance, host),
       focused: true,
       onError: (message) => appendEvent({ at: Date.now(), kind: "error", value: message }),
       onNotification: () => {},
@@ -203,7 +218,7 @@ function InputJig() {
       terminal.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
     };
-  }, [shell]);
+  }, [shell, appearance]);
 
   useEffect(() => {
     const updateActive = () =>
@@ -241,7 +256,7 @@ function InputJig() {
   }, [state]);
 
   return (
-    <Theme appearance="dark" accentColor="blue" grayColor="slate" radius="small">
+    <Theme appearance={appearance} {...APP_THEME}>
       <main className="jig-shell">
         <section className="terminal-region">
           <div className="toolbar">

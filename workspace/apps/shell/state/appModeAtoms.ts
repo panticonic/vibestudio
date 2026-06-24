@@ -26,6 +26,26 @@ export const activeWorkspaceNameAtom = atom<string | null>(null);
  */
 export const workspaceErrorAtom = atom<string | null>(null);
 
+// =============================================================================
+// Panel Pin State (client-local)
+// =============================================================================
+
+/**
+ * Slot ids of client-local pinned panels, mirrored from the main process pin
+ * store. Read by the 📌 indicators (header + tree row); replaced wholesale on
+ * startup and on every tree-snapshot update (named-panel slot ids are reused
+ * after remove+recreate, so a stale pin must be reconciled, not just seeded).
+ */
+export const pinnedPanelIdsAtom = atom<Set<string>>(new Set<string>());
+
+/**
+ * Monotonic counter bumped on every local pin mutation (toggle). The tree-driven
+ * reconcile captures it before fetching `listPinnedPanelIds()` and discards a
+ * resolved response if a toggle happened meanwhile — so a stale in-flight
+ * reconcile can't clobber a just-toggled optimistic update.
+ */
+export const pinMutationSeqAtom = atom<number>(0);
+
 /**
  * Load workspaces from main process
  */

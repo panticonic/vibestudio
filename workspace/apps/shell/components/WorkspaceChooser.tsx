@@ -13,6 +13,7 @@ import {
   Text,
 } from "@radix-ui/themes";
 import { Cross2Icon, ExclamationTriangleIcon, PlusIcon } from "@radix-ui/react-icons";
+import { Surface } from "@workspace/ui";
 
 import {
   recentWorkspacesAtom,
@@ -115,7 +116,7 @@ export function WorkspaceChooser() {
       </Flex>
 
       {/* Workspaces */}
-      <Card style={{ flex: 1, overflow: "hidden" }}>
+      <Surface level="panel" bordered padding="4" flex={1} style={{ overflow: "hidden", minHeight: 0 }}>
         <Flex direction="column" style={{ height: "100%" }}>
           <Flex justify="between" align="center" mb="3">
             <Text size="2" weight="medium" color="gray">
@@ -176,11 +177,17 @@ export function WorkspaceChooser() {
             )}
           </Box>
         </Flex>
-      </Card>
+      </Surface>
 
       {/* Action Buttons */}
       <Flex gap="3" mt="4" justify="center">
-        <Button variant="soft" size="3" color="green" onClick={handleCreateNew}>
+        <Button
+          variant="soft"
+          size="3"
+          color="green"
+          className="app-touch-target"
+          onClick={handleCreateNew}
+        >
           <PlusIcon />
           Create New Workspace
         </Button>

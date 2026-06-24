@@ -35,7 +35,7 @@ natstack remote pair "natstack://connect?url=...&code=..."   # once per machine
 natstack agent attach                  # create/reuse session "default"
 natstack fs ls /                       # list the session context root
 natstack agent call workspace.listSkills '[]'
-natstack eval run -e 'return await services.meta.listServices()'
+natstack eval run -e 'return await services.docs.listServices()'
 natstack agent detach --rm             # retire session + remove its context
 ```
 

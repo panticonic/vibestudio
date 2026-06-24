@@ -33,7 +33,10 @@ import { rpc } from "@workspace/runtime";
 // arg-spreading wrapper over the portable `rpc.expose`, kept local to the panel.
 const expose = (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) =>
   rpc.expose(method, (request) => handler(...request.args));
-import { usePanelTheme } from "@workspace/react";
+import { usePanelTheme, usePaletteCommands } from "@workspace/react";
+import { PanelChrome, Stack } from "@workspace/ui";
+import { useAppTheme } from "@workspace/ui/panel";
+import "@workspace/ui/tokens.css";
 import {
   flameTreeFromProfile,
   listProfiles,
@@ -138,7 +141,7 @@ function SuitesTab() {
   }, [suites, selected]);
 
   return (
-    <Flex direction="column" gap="3">
+    <Stack gap="3">
       <Card>
         <Flex direction="column" gap="2">
           {suites.map((s) => (
@@ -179,7 +182,7 @@ function SuitesTab() {
           <TestRow key={`${r.suite}-${r.name}-${index}`} result={r} />
         ))}
       </Flex>
-    </Flex>
+    </Stack>
   );
 }
 
@@ -190,7 +193,7 @@ function HistoryTab() {
   }, []);
   useEffect(refresh, [refresh]);
   return (
-    <Flex direction="column" gap="2">
+    <Stack gap="2">
       <Button variant="soft" onClick={refresh}>
         <ReloadIcon /> Refresh
       </Button>
@@ -220,7 +223,7 @@ function HistoryTab() {
           )}
         </Card>
       ))}
-    </Flex>
+    </Stack>
   );
 }
 
@@ -239,7 +242,7 @@ function ProfilesTab() {
   }, []);
 
   return (
-    <Flex direction="column" gap="2">
+    <Stack gap="2">
       <Button variant="soft" onClick={refresh}>
         <ReloadIcon /> Refresh
       </Button>
@@ -285,25 +288,63 @@ function ProfilesTab() {
           <Flamegraph root={flame.root} />
         </Card>
       )}
-    </Flex>
+    </Stack>
   );
 }
 
 function App() {
   const theme = usePanelTheme();
+  const appTheme = useAppTheme();
+  const [activeTab, setActiveTab] = useState("suites");
+
+  // Contribute testbench actions to the app command palette (Cmd/Ctrl+K).
+  // Controlled tabs make tab-switching reachable; "Run all" mirrors the RPC
+  // path and jumps to History, which refetches on mount so the run shows up.
+  const paletteCommands = useMemo(
+    () => [
+      { id: "tb-suites", label: "Show test suites", section: "Testbench" },
+      { id: "tb-history", label: "Show run history", section: "Testbench" },
+      { id: "tb-profiles", label: "Show profiles", section: "Testbench" },
+      { id: "tb-run-all", label: "Run all test suites", section: "Testbench" },
+    ],
+    []
+  );
+  usePaletteCommands(paletteCommands, (id) => {
+    if (id === "tb-suites") setActiveTab("suites");
+    else if (id === "tb-history") setActiveTab("history");
+    else if (id === "tb-profiles") setActiveTab("profiles");
+    else if (id === "tb-run-all") {
+      void (async () => {
+        const result = await runSuites(allSuites(), {});
+        lastRunResult = result;
+        await saveRun(result, { label: "palette" }).catch(() => undefined);
+        setActiveTab("history");
+      })();
+    }
+  });
+
   return (
-    <Theme appearance={theme} accentColor="teal" radius="small">
-      <Box p="3" style={{ height: "100vh", boxSizing: "border-box" }}>
-        <Flex direction="column" gap="3" style={{ height: "100%" }}>
-          <Heading size="4">Testbench</Heading>
-          <Tabs.Root defaultValue="suites" style={{ flex: 1, minHeight: 0 }}>
-            <Tabs.List>
+    <Theme appearance={theme} {...appTheme}>
+      <Box style={{ height: "100vh", boxSizing: "border-box", background: "var(--surface-panel)" }}>
+        <PanelChrome
+          header={
+            <Heading size="4" truncate>
+              Testbench
+            </Heading>
+          }
+        >
+          <Tabs.Root
+            value={activeTab}
+            onValueChange={setActiveTab}
+            style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
+          >
+            <Tabs.List style={{ paddingInline: "var(--space-3)", flexShrink: 0 }}>
               <Tabs.Trigger value="suites">Suites</Tabs.Trigger>
               <Tabs.Trigger value="history">History</Tabs.Trigger>
               <Tabs.Trigger value="profiles">Profiles</Tabs.Trigger>
             </Tabs.List>
-            <ScrollArea style={{ height: "calc(100% - 40px)" }}>
-              <Box pt="3" pr="3">
+            <ScrollArea style={{ flex: 1, minHeight: 0 }}>
+              <Box p="3">
                 <Tabs.Content value="suites">
                   <SuitesTab />
                 </Tabs.Content>
@@ -316,7 +357,7 @@ function App() {
               </Box>
             </ScrollArea>
           </Tabs.Root>
-        </Flex>
+        </PanelChrome>
       </Box>
     </Theme>
   );

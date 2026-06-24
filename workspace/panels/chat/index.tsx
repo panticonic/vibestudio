@@ -13,6 +13,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Flex, Text, Theme } from "@radix-ui/themes";
 import { AgenticChat, ErrorBoundary } from "@workspace/agentic-chat";
 import type { ConnectionConfig, AgenticChatActions, ToolProvider } from "@workspace/agentic-chat";
+import { useAppTheme } from "@workspace/ui/panel";
+import "@workspace/ui/tokens.css";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import type { AvailableAgent, ModelCatalog, AgentSubscriptionConfig, ConnectProviderResult } from "@workspace/agentic-core";
 import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
@@ -186,6 +188,7 @@ async function unsubscribeDOFromChannel(
 
 export default function ChatPanel() {
   const theme = usePanelTheme();
+  const appTheme = useAppTheme();
   const stateArgs = panel.stateArgs.use<ChatStateArgs>();
   const resolvedContextId = resolveChatContextId(stateArgs.contextId, contextId);
   const initialPromptCaptured = useRef(stateArgs.initialPrompt);
@@ -685,7 +688,7 @@ export default function ChatPanel() {
   if (!channelName) {
     return (
       <ErrorBoundary surfaceName="chat panel">
-        <Theme appearance={theme}>
+        <Theme appearance={theme} {...appTheme}>
           <Flex
             align="center"
             justify="center"

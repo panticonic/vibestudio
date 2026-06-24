@@ -84,6 +84,43 @@ export interface CredentialUseGrant {
   grantedBy: string;
 }
 
+export type CredentialAccessSubjectKind = "panel" | "worker" | "do" | "app" | "unknown";
+
+export interface CredentialAccessSubjectSummary {
+  id: string;
+  kind: CredentialAccessSubjectKind;
+  active: boolean;
+  title?: string;
+  source?: CredentialAccessEntitySource;
+  contextId?: string;
+  parentId?: string;
+  focusPanelId?: string;
+  focusPanelTitle?: string;
+  focusPanelSource?: string;
+  focusUnavailableReason?: string;
+}
+
+export interface CredentialAccessEntitySource {
+  repoPath: string;
+  effectiveVersion: string;
+}
+
+export interface CredentialAccessGrantSummary {
+  id: string;
+  bindingId: string;
+  bindingLabel?: string;
+  use: CredentialBindingUse;
+  resource: string;
+  action: CredentialGrantAction;
+  scope: CredentialGrantScope;
+  callerId?: string;
+  repoPath?: string;
+  effectiveVersion?: string;
+  grantedAt: number;
+  grantedBy: string;
+  subjects: CredentialAccessSubjectSummary[];
+}
+
 export interface AccountIdentity {
   email?: string;
   username?: string;
@@ -485,6 +522,10 @@ export interface StoredCredentialSummary {
   expiresAt?: number;
   revokedAt?: number;
   metadata?: Record<string, string>;
+}
+
+export interface ManagedCredentialSummary extends StoredCredentialSummary {
+  grants: CredentialAccessGrantSummary[];
 }
 
 export type CredentialAuditEvent =

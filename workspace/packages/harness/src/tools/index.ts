@@ -40,6 +40,9 @@ export type { CloseTurnInput } from "./close-turn.js";
 export { createEvalTool, formatEvalResult, type EvalRunResult } from "./eval.js";
 export type { EvalToolInput } from "./eval.js";
 
+export { createDocsSearchTool, createDocsOpenTool } from "./docs.js";
+export type { DocsSearchInput, DocsOpenInput, CatalogHit, CatalogEntry } from "./docs.js";
+
 // Pure helpers
 export { resolveToCwd, resolveReadPath, expandPath } from "./path-utils.js";
 export {

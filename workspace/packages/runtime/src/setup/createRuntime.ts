@@ -4,7 +4,7 @@
  * Adds: stateArgs bridge, unified panel handles, panel lifecycle methods.
  */
 
-import type { RpcTransport } from "@natstack/rpc";
+import type { EnvelopeRpcTransport } from "@natstack/rpc";
 import { createBaseRuntime } from "./createBaseRuntime.js";
 import type { EndpointInfo } from "../core/index.js";
 import type { GatewayConfig } from "../shared/globals.js";
@@ -17,7 +17,7 @@ import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
 
 export interface RuntimeDeps {
   selfId: PanelEntityId;
-  createTransport: () => RpcTransport;
+  createTransport: () => EnvelopeRpcTransport;
   entityId: PanelEntityId;
   id?: PanelEntityId;
   slotId?: PanelSlotId;
@@ -112,6 +112,12 @@ export function createRuntime(deps: RuntimeDeps) {
 
     getTheme: base.getTheme,
     onThemeChange: base.onThemeChange,
+    getThemeConfig: base.getThemeConfig,
+    onThemeConfigChange: base.onThemeConfigChange,
+
+    registerPaletteCommands: base.registerPaletteCommands,
+    unregisterPaletteCommands: base.unregisterPaletteCommands,
+    onPaletteRun: base.onPaletteRun,
 
     onFocus: base.onFocus,
 

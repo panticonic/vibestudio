@@ -21,7 +21,7 @@ describe("envelope helpers", () => {
     expect(originOfEnvelope(envelope)).toEqual({ callerId: "panel:1", callerKind: "panel" });
   });
 
-  it("preserves forwarded provenance and idempotency keys", () => {
+  it("preserves forwarded provenance and delivery metadata", () => {
     const origin = authenticatedCaller("panel:1", "panel");
     const envelope = envelopeFromMessage({
       selfId: "worker:1",
@@ -30,11 +30,13 @@ describe("envelope helpers", () => {
       callerKind: "worker",
       provenance: [origin, authenticatedCaller("worker:1", "worker")],
       idempotencyKey: "idem-1",
+      readOnly: true,
       message: { type: "request", requestId: "r1", fromId: "worker:1", method: "save", args: [] },
     });
 
     expect(envelope.provenance[0]).toBe(origin);
     expect(envelope.delivery.idempotencyKey).toBe("idem-1");
+    expect(envelope.delivery.readOnly).toBe(true);
     expect(originOfEnvelope(envelope)).toBe(origin);
   });
 
@@ -48,11 +50,11 @@ describe("envelope helpers", () => {
     });
 
     expect(retargetEnvelope(request, "worker:2").target).toBe("worker:2");
-    const response = responseEnvelopeFor(
-      request,
-      authenticatedCaller("worker:1", "worker"),
-      { type: "response", requestId: "r1", result: "pong" },
-    );
+    const response = responseEnvelopeFor(request, authenticatedCaller("worker:1", "worker"), {
+      type: "response",
+      requestId: "r1",
+      result: "pong",
+    });
 
     expect(response.from).toBe("worker:1");
     expect(response.target).toBe("panel:1");

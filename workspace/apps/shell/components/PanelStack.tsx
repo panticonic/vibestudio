@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useSetAtom } from "jotai";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import { Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
 import { useIsMobile } from "@workspace/react/responsive";
@@ -33,6 +34,7 @@ import {
   useDescendantSiblingGroups,
 } from "../shell/hooks/PanelTreeContext";
 import { app, panel as panelService, view } from "../shell/client";
+import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../state/appModeAtoms";
 import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
 import { useNavigation } from "./NavigationContext";
 import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
@@ -122,6 +124,9 @@ export function PanelStack({
     registerNavigateToId,
     setAddressBarVisible,
   } = useNavigation();
+
+  const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
+  const bumpPinMutationSeq = useSetAtom(pinMutationSeqAtom);
 
   // ID-based visible panel state
   const [visiblePanelId, setVisiblePanelId] = useState<string | null>(null);
@@ -403,6 +408,20 @@ export function PanelStack({
         }
         break;
       }
+      case "toggle-pin": {
+        // Client-local pin: protects the panel from idle/cap GC. Update the
+        // mirror atom from the authoritative new state the main process returns,
+        // and bump the mutation seq so an in-flight tree reconcile can't clobber it.
+        const pinned = await panelService.togglePin(panelId);
+        setPinnedPanelIds((prev) => {
+          const next = new Set(prev);
+          if (pinned) next.add(panelId);
+          else next.delete(panelId);
+          return next;
+        });
+        bumpPinMutationSeq((seq) => seq + 1);
+        break;
+      }
       case "unload":
         // Unload panel resources but keep in tree (can be re-loaded later)
         await panelService.unload(panelId);
@@ -412,7 +431,7 @@ export function PanelStack({
         await panelService.archive(panelId);
         break;
     }
-  }, [navigatePanelHistory, navigateToPanelId]);
+  }, [navigatePanelHistory, navigateToPanelId, setPinnedPanelIds, bumpPinMutationSeq]);
 
   // Register panel action handler with parent
   useEffect(() => {
@@ -603,6 +622,17 @@ export function PanelStack({
           }
           return;
         }
+        case "toggle-pin":
+          void panelService.togglePin(panelId).then((pinned) => {
+            setPinnedPanelIds((prev) => {
+              const next = new Set(prev);
+              if (pinned) next.add(panelId);
+              else next.delete(panelId);
+              return next;
+            });
+            bumpPinMutationSeq((seq) => seq + 1);
+          });
+          return;
         case "unload":
           void panelService.unload(panelId);
           return;
@@ -772,7 +802,7 @@ export function PanelStack({
         }
       }
     },
-    [navigatePanelHistory, navigateToPanelId, visiblePanel]
+    [navigatePanelHistory, navigateToPanelId, setPinnedPanelIds, bumpPinMutationSeq, visiblePanel]
   );
 
   useEffect(() => {
@@ -901,7 +931,7 @@ export function PanelStack({
       return (
         <Flex direction="column" align="center" justify="center" height="100%" p="4">
           <Text color="red" size="4" weight="bold" mb="2">
-            Panel Build Error
+            Panel Error
           </Text>
           <Text color="red" size="2" style={{ fontFamily: "monospace" }}>
             {artifacts.error}

@@ -8,10 +8,11 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron";
+import type { RpcEnvelope } from "@natstack/rpc";
 import type { TransportBridge } from "./wsTransport.js";
 import { assertBootstrapRpcMessageAllowed } from "./bootstrapTransportPolicy.js";
 
-type AnyMessageHandler = (fromId: string, message: unknown) => void;
+type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 
 type BootstrapBridge = {
   getState: () => Promise<unknown>;
@@ -30,12 +31,12 @@ type BootstrapBridge = {
 };
 
 const bootstrapTransport: TransportBridge = (() => {
-  const listeners = new Set<AnyMessageHandler>();
+  const listeners = new Set<EnvelopeHandler>();
 
-  ipcRenderer.on("natstack:rpc:message", (_event, fromId: string, message: unknown) => {
+  ipcRenderer.on("natstack:rpc:message", (_event, envelope: RpcEnvelope) => {
     for (const listener of listeners) {
       try {
-        listener(fromId, message);
+        listener(envelope);
       } catch (error) {
         console.error("Error in bootstrap transport message handler:", error);
       }
@@ -43,12 +44,12 @@ const bootstrapTransport: TransportBridge = (() => {
   });
 
   return {
-    async send(targetId: string, message: unknown): Promise<void> {
-      assertBootstrapRpcMessageAllowed(targetId, message);
-      ipcRenderer.send("natstack:rpc:send", targetId, message);
+    async send(envelope: RpcEnvelope): Promise<void> {
+      assertBootstrapRpcMessageAllowed(envelope.target, envelope.message);
+      ipcRenderer.send("natstack:rpc:send", envelope);
     },
 
-    onMessage(handler: AnyMessageHandler): () => void {
+    onMessage(handler: EnvelopeHandler): () => void {
       listeners.add(handler);
       return () => listeners.delete(handler);
     },

@@ -20,8 +20,10 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { useAtomValue, useSetAtom } from "jotai";
 import { useShellEvent } from "../useShellEvent.js";
 import { panel as panelService } from "../client.js";
+import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../../state/appModeAtoms.js";
 import { coercePanelTreeUpdate } from "./panelTreeRevision.js";
 import type {
   Panel,
@@ -395,16 +397,43 @@ export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
   // Track if we've received a real-time event (always newer than getTree result)
   const receivedEventRef = useRef(false);
   const latestRevisionRef = useRef<number>(0);
+  const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
+  const pinMutationSeq = useAtomValue(pinMutationSeqAtom);
+  const pinMutationSeqRef = useRef(pinMutationSeq);
+  useEffect(() => {
+    pinMutationSeqRef.current = pinMutationSeq;
+  }, [pinMutationSeq]);
 
-  const applyTreeSnapshot = useCallback((snapshot: PanelTreeSnapshot): boolean => {
-    if (snapshot.revision < latestRevisionRef.current) {
-      return false;
-    }
-    latestRevisionRef.current = snapshot.revision;
-    setTree(snapshot.rootPanels);
-    setInitialized(true);
-    return true;
-  }, []);
+  // Seed/reconcile the client-local pin mirror from the main process source of
+  // truth. Run on every applied snapshot, not just the first: named-panel slot
+  // ids are deterministic and reused after remove+recreate, so a one-time seed
+  // would leave a stale 📌. The call is cheap (a small string array).
+  const reconcilePins = useCallback(() => {
+    const seqAtDispatch = pinMutationSeqRef.current;
+    panelService
+      .listPinnedPanelIds()
+      .then((ids) => {
+        // A local toggle since dispatch means our optimistic state is newer than
+        // this response — discard it so a stale reconcile can't revert the pin.
+        if (pinMutationSeqRef.current !== seqAtDispatch) return;
+        setPinnedPanelIds(new Set(ids));
+      })
+      .catch((error) => console.warn("[PanelTreeContext] Failed to reconcile pins:", error));
+  }, [setPinnedPanelIds]);
+
+  const applyTreeSnapshot = useCallback(
+    (snapshot: PanelTreeSnapshot): boolean => {
+      if (snapshot.revision < latestRevisionRef.current) {
+        return false;
+      }
+      latestRevisionRef.current = snapshot.revision;
+      setTree(snapshot.rootPanels);
+      setInitialized(true);
+      reconcilePins();
+      return true;
+    },
+    [reconcilePins]
+  );
 
   // Handle panel tree updates from main process
   const handleTreeUpdate = useCallback(

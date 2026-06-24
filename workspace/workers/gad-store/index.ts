@@ -1091,19 +1091,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.ensureEmptyState();
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   rawSql(sql: string, bindings: SqlBinding[] = []): { rows: JsonRecord[] } {
     this.ensureReady();
     if (!readOnlySql(sql)) throw new Error("rawSql writes are disabled");
     return { rows: this.sql.exec(sql, ...bindings).toArray() as JsonRecord[] };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   query(sql: string, bindings: SqlBinding[] = []): { rows: JsonRecord[] } {
     return this.rawSql(sql, bindings);
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   ensureBlob(hash: string, size = 0, mimeType?: string | null): void {
     this.ensureReady();
     this.sql.exec(
@@ -1119,7 +1119,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // Refs — the only mutable pointers (P1). Every update is CAS + reflog.
   // -------------------------------------------------------------------------
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   resolveRef(input: { refName: string }): RefRecord | null {
     this.ensureReady();
     const row = this.sql
@@ -1188,7 +1188,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM refs WHERE ref_name = ?`, refName);
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listRefs(input: { kind?: string | null; prefix?: string | null } = {}): RefRecord[] {
     this.ensureReady();
     const clauses: string[] = [];
@@ -1214,7 +1214,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listRefLog(input: { refName: string; limit?: number | null }): JsonRecord[] {
     this.ensureReady();
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
@@ -1239,7 +1239,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // Unified log core (one code path for every log kind — P5)
   // -------------------------------------------------------------------------
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getLogHead(input: { logId: string; head: string }): LogHeadInfo | null {
     this.ensureReady();
     const row = this.logHeadRow(input.logId, input.head);
@@ -1337,6 +1337,43 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return logEnvelopeSemantic(event);
   }
 
+  /**
+   * Field-level diff of two semantic slices — names which compared field(s)
+   * diverge (and for `payload`, which sub-keys), with values truncated. Turns a
+   * generic "id-collision: different content" into an actionable diagnostic:
+   * an idempotent re-append (retry/redelivery) of the SAME envelope id must have
+   * byte-identical semantic content, so any difference points at a non-deterministic
+   * field leaking into the journal.
+   */
+  private describeSemanticDivergence(
+    incoming: Record<string, unknown>,
+    stored: Record<string, unknown>
+  ): string {
+    const isObj = (v: unknown): v is Record<string, unknown> =>
+      typeof v === "object" && v !== null && !Array.isArray(v);
+    const trunc = (v: unknown): string => {
+      const s = stableJson(v) ?? "undefined";
+      return s.length > 160 ? `${s.slice(0, 160)}…(${s.length}b)` : s;
+    };
+    const parts: string[] = [];
+    for (const key of new Set([...Object.keys(incoming), ...Object.keys(stored)])) {
+      if (stableJson(incoming[key]) === stableJson(stored[key])) continue;
+      if (key === "payload" && isObj(incoming[key]) && isObj(stored[key])) {
+        const a = incoming[key] as Record<string, unknown>;
+        const b = stored[key] as Record<string, unknown>;
+        for (const pk of new Set([...Object.keys(a), ...Object.keys(b)])) {
+          if (stableJson(a[pk]) === stableJson(b[pk])) continue;
+          parts.push(`payload.${pk} (incoming=${trunc(a[pk])} stored=${trunc(b[pk])})`);
+        }
+      } else {
+        parts.push(`${key} (incoming=${trunc(incoming[key])} stored=${trunc(stored[key])})`);
+      }
+    }
+    return parts.length > 0
+      ? parts.join(", ")
+      : "(no field-level diff — likely appendedAt handling or stored-value encoding)";
+  }
+
   private mapLogEnvelope(row: JsonRecord): LogEnvelope {
     return {
       logId: String(row["log_id"]),
@@ -1401,7 +1438,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { count, ...(firstSeq !== undefined ? { firstSeq } : {}) };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   readLog(input: ReadLogInput): LogEnvelope[] {
     this.ensureReady();
     const limit =
@@ -1450,7 +1487,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return collected.reverse().map((row) => this.mapLogEnvelope(row));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getLogEvent(input: { logId: string; head: string; envelopeId: string }): LogEnvelope | null {
     this.ensureReady();
     const row = this.lineageEventRow(input.logId, input.head, input.envelopeId);
@@ -1550,10 +1587,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
           replayed.push(stored);
           continue;
         }
+        const divergence = this.describeSemanticDivergence(incomingSemantic, storedSemantic);
         throw new Error(
           gadAppendErrorMessage(
             "id-collision",
-            `log envelope id collision with different content: ${event.envelopeId}`
+            `log envelope id collision with different content: ${event.envelopeId} ` +
+              `[log=${input.logId} head=${input.head}] diverged at → ${divergence}`
           )
         );
       }
@@ -1564,7 +1603,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
         throw new Error(
           gadAppendErrorMessage(
             "replay-mismatch",
-            "log append replay has already-applied events after a new suffix"
+            `log append replay has already-applied events after a new suffix ` +
+              `[log=${input.logId} head=${input.head} alreadyApplied=${event.envelopeId} ` +
+              `replayedPrefix=${replayed.length}/${prepared.length}]`
           )
         );
       }
@@ -1971,7 +2012,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   async checkLogIntegrity(
     input: { logId?: string | null; head?: string | null } = {}
   ): Promise<{ ok: boolean; errors: JsonRecord[] }> {
@@ -2741,7 +2782,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return manifestHash;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listManifest(input: { stateHash: string; path?: string | null }): JsonRecord[] {
     this.ensureReady();
     const dirHash = this.manifestDirAtPath(input.stateHash, input.path);
@@ -2764,7 +2805,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     );
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getSubtreeHash(input: { stateHash: string; path: string }): { subtreeHash: string | null } {
     this.ensureReady();
     const segments = normalizePath(input.path).split("/");
@@ -2813,7 +2854,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   /** Batch form of getSubtreeHash — one DO round trip for a whole unit list
    *  (buildV2 EV computation hashes every workspace unit at once). */
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getSubtreeHashes(input: { stateHash: string; paths: string[] }): {
     subtreeHashes: Record<string, string | null>;
   } {
@@ -2825,7 +2866,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { subtreeHashes };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   readGadFileAtState(input: { stateHash: string; path: string }): JsonRecord | null {
     this.ensureReady();
     const path = normalizePath(input.path);
@@ -2875,7 +2916,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return files.sort((a, b) => String(a["path"]).localeCompare(String(b["path"])));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listGadBranchFiles(input: { branchId: string; trajectoryId?: string | null }): JsonRecord[] {
     this.ensureReady();
     const stateHash = input.trajectoryId
@@ -2895,7 +2936,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return EMPTY_STATE_HASH;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   diffGadStates(input: { leftStateHash: string; rightStateHash: string }): {
     added: JsonRecord[];
     removed: JsonRecord[];
@@ -2995,13 +3036,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Full recursive file listing of a worktree state (vcs materialize). */
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listStateFiles(input: { stateHash: string }): JsonRecord[] {
     this.ensureReady();
     return this.filesForState(input.stateHash);
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getGadStateProducer(input: { stateHash: string }): JsonRecord | null {
     this.ensureReady();
     return (
@@ -3015,7 +3056,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** The op union (provenance/intent) that authored a worktree state. */
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listWorktreeEditOps(input: { outputStateHash: string }): JsonRecord[] {
     this.ensureReady();
     return this.sql
@@ -3272,7 +3313,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * the one closest to `left` (newest-first BFS); null when histories are
    * unrelated (callers fall back to the empty state).
    */
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getMergeBase(input: { leftStateHash: string; rightStateHash: string }): {
     baseStateHash: string | null;
   } {
@@ -3348,7 +3389,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.setStateValue(`merge:${input.logId}:${input.head}`, JSON.stringify(input.info));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getPendingMerge(input: { logId: string; head: string }): {
     info: {
       oursStateHash: string;
@@ -3473,7 +3514,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Index marker (P1 cache pointer): which state the file index reflects. */
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getMemoryIndexMarker(input: { key: string }): { value: string | null } {
     this.ensureReady();
     return { value: this.getStateValue(`memidx:${input.key}`) };
@@ -3486,7 +3527,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Generic named marker (vcs bridge export positions etc.). */
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getMarker(input: { key: string }): { value: string | null } {
     this.ensureReady();
     return { value: this.getStateValue(`marker:${input.key}`) };
@@ -3503,7 +3544,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * anchor plus (for event-anchored rows) the event's actor and timestamp,
    * and (for file rows) the current content hash.
    */
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   recallMemory(input: { query: string; kinds?: string[] | null; limit?: number | null }): {
     results: Array<{
       kind: string;
@@ -3605,7 +3646,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *  - record unreferenced blob digests as sweep candidates.
    * The log itself is never collected (it IS the authority).
    */
-  @rpc({ callers: ["server", "harness"] })
+  @rpc({ callers: ["server"] })
   runGadGcMark(): {
     keptStates: number;
     sweptStates: number;
@@ -3778,7 +3819,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * caller to delete from the filesystem CAS (second phase of the two-phase
    * deletion).
    */
-  @rpc({ callers: ["server", "harness"] })
+  @rpc({ callers: ["server"] })
   runGadGcSweep(input: { minAgeMs?: number | null } = {}): { digests: string[] } {
     this.ensureReady();
     const minAge = input.minAgeMs ?? 60_000;
@@ -4009,7 +4050,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM refs WHERE ref_name = ?`, this.worktreeRefName(key.logId, key.head));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   rebuildTrajectoryProjections(): Promise<{ replayed: number }> {
     return this.replayTrajectoryProjections();
   }
@@ -4165,7 +4206,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listTrajectoryEvents(input: {
     trajectoryId?: string | null;
     branchId: string;
@@ -4197,7 +4238,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return row ? String(row["log_id"]) : null;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getTrajectoryEvent(input: { eventId: string }): TrajectoryEvent | null {
     this.ensureReady();
     const row = this.sql
@@ -4206,7 +4247,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return row ? this.trajectoryEventView(this.mapLogEnvelope(row)) : null;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getTrajectoryBranchHead(input: { trajectoryId: string; branchId: string }): JsonRecord | null {
     this.ensureReady();
     const row = this.logHeadRow(input.trajectoryId, input.branchId);
@@ -4379,7 +4420,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getChannelEnvelope(input: {
     envelopeId: string;
     channelId?: string | null;
@@ -4399,7 +4440,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return row ? this.channelEnvelopeView(this.mapLogEnvelope(row)) : null;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getChannelReplayWindow(input: {
     channelId: string;
     mode: "initial" | "after" | "before";
@@ -4455,7 +4496,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listChannelEnvelopesAfter(input: {
     channelId: string;
     seq?: number | null;
@@ -4469,7 +4510,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }).envelopes;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listChannelEnvelopesBefore(input: {
     channelId: string;
     seq: number;
@@ -4483,7 +4524,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }).envelopes;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getInitialChannelWindow(input: {
     channelId: string;
     limit?: number | null;
@@ -4495,7 +4536,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listChannelEnvelopes(input: {
     channelId: string;
     cursor?: number | null;
@@ -4514,7 +4555,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }).map((envelope) => this.channelEnvelopeView(envelope, input.channelId));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   inspectChannelEnvelopes(input: {
     channelId: string;
     cursor?: number | null;
@@ -4572,7 +4613,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listMessageTypes(input: { channelId: string }): ChannelMessageTypeDefinition[] {
     this.ensureReady();
     const rows = this.sql
@@ -4587,7 +4628,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return rows.map((row) => this.mapMessageType(row));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getMessageType(input: {
     channelId: string;
     typeId: string;
@@ -4787,7 +4828,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getTrajectoryForEnvelope(input: { envelopeId: string }): EnvelopeLineage | null {
     this.ensureReady();
     const channelRow = this.sql
@@ -4800,7 +4841,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.lineageForChannelRow(channelRow);
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listPublishedEnvelopesForTrajectory(input: {
     trajectoryId?: string | null;
     branchId?: string | null;
@@ -4849,7 +4890,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return lineages;
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getEnvelopesForTrajectory(input: {
     trajectoryId?: string | null;
     branchId?: string | null;
@@ -4861,7 +4902,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.listPublishedEnvelopesForTrajectory(input);
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getPublishedArtifactsForTurn(input: {
     branchId?: string | null;
     turnId: string;
@@ -4876,7 +4917,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }).map((lineage) => ({ lineage }));
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getPrivateLineageForPublishedEnvelope(input: {
     envelopeId: string;
   }): PrivateLineageForPublishedEnvelope | null {
@@ -4896,7 +4937,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getDownstreamConsumers(input: { envelopeId: string; limit?: number | null }): TrajectoryEvent[] {
     this.ensureReady();
     const needle = input.envelopeId;
@@ -4919,7 +4960,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   // --- Inspection / maintenance ----------------------------------------------
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   inspectPublicationIntegrity(
     input: { channelId?: string | null; branchId?: string | null; limit?: number | null } = {}
   ): PublicationIntegrityInspection {
@@ -4984,7 +5025,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   inspectTurnState(
     input: {
       trajectoryId?: string | null;
@@ -5056,7 +5097,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   inspectInvocationState(
     input: {
       trajectoryId?: string | null;
@@ -5131,7 +5172,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   inspectChannelRoster(input: {
     channelId: string;
     limit?: number | null;
@@ -5170,7 +5211,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   async inspectAgentHealth(input: {
     channelId: string;
     branchId?: string | null;
@@ -5235,7 +5276,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   inspectStorageDiagnostics(
     input: {
       rowByteLimit?: number | null;
@@ -5324,7 +5365,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { rows: rows.slice(0, limit) };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   listStoredValueRefs(
     input: {
       eventId?: string | null;
@@ -5363,7 +5404,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { rows };
   }
 
-  @rpc({ callers: ["server", "harness"] })
+  @rpc({ callers: ["server"] })
   collectGarbageBlobRefs(input: { dryRun?: boolean | null; limit?: number | null } = {}): {
     deleted: string[];
     kept: number;
@@ -5396,7 +5437,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { deleted, kept, dryRun };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   getStatus(): { metric: string; value: number }[] {
     const count = (sql: string, ...bindings: SqlBinding[]) =>
       asNumber(this.sql.exec(sql, ...bindings).one()["value"]);
@@ -5419,7 +5460,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     ];
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   async validateGadHashes(): Promise<{ ok: boolean; errors: string[] }> {
     const integrity = await this.checkGadIntegrity();
     return {
@@ -5430,12 +5471,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   clearDirtyAfterValidation(): Promise<{ ok: boolean; errors: string[] }> {
     return this.validateGadHashes();
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server", "harness"] })
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
   async checkGadIntegrity(): Promise<{ ok: boolean; errors: JsonRecord[] }> {
     this.ensureReady();
     const errors: JsonRecord[] = [];

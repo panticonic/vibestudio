@@ -34,20 +34,22 @@ const DEFAULT_TTLS: Record<NotificationPayload["type"], number> = {
   consent: 0,
 };
 
+// Map onto the unified semantic-intent tokens (tokens.css) so notifications,
+// the approval bar, and chat all speak ONE color vocabulary in both themes.
 const TYPE_BG: Record<NotificationPayload["type"], string> = {
-  info: "var(--blue-3)",
-  success: "var(--green-3)",
-  warning: "var(--orange-3)",
-  error: "var(--red-3)",
-  consent: "var(--violet-3)",
+  info: "var(--intent-info-surface)",
+  success: "var(--intent-success-surface)",
+  warning: "var(--intent-warning-surface)",
+  error: "var(--intent-error-surface)",
+  consent: "var(--intent-consent-surface)",
 };
 
 const TYPE_BORDER: Record<NotificationPayload["type"], string> = {
-  info: "var(--blue-6)",
-  success: "var(--green-6)",
-  warning: "var(--orange-6)",
-  error: "var(--red-6)",
-  consent: "var(--violet-6)",
+  info: "var(--intent-info-border)",
+  success: "var(--intent-success-border)",
+  warning: "var(--intent-warning-border)",
+  error: "var(--intent-error-border)",
+  consent: "var(--intent-consent-border)",
 };
 
 function TypeIcon({ type }: { type: NotificationPayload["type"] }) {

@@ -39,12 +39,15 @@ export type PanelCommandId =
   | "open-external"
   | "duplicate"
   | "add-child"
+  | "toggle-pin"
   | "unload"
   | "archive";
 
 export interface PanelCommandContext {
   chrome?: PanelChromeState | null;
   addressBarVisible?: boolean;
+  /** Client-local pin state of the panel the command targets. */
+  isPinned?: boolean;
 }
 
 export interface PanelCommandDefinition {
@@ -195,6 +198,14 @@ export function getPanelCommandDefinitions(
       id: "add-child",
       label: "Add Child",
       visible: true,
+      enabled: Boolean(chrome),
+    },
+    {
+      id: "toggle-pin",
+      label: context.isPinned ? "Unpin Panel" : "Pin Panel",
+      visible: true,
+      // Pinnable even when unloaded: callers build `chrome` from the registry
+      // entry, so this stays enabled for panels that only exist in the tree.
       enabled: Boolean(chrome),
     },
     {

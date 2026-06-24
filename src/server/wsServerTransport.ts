@@ -14,7 +14,7 @@
  */
 
 import type { WebSocket } from "ws";
-import type { RpcMessage, RpcTransport } from "@natstack/rpc";
+import type { RpcEnvelope, RpcMessage, RpcTransport } from "@natstack/rpc";
 import { createHandlerRegistry } from "@natstack/rpc";
 
 /** Error code stamped on rejections caused by the underlying WS closing. */
@@ -35,6 +35,13 @@ export interface WsServerTransportOptions {
 }
 
 export interface WsServerTransportInternal extends RpcTransport {
+  /**
+   * Send a full envelope to the connected client. Used by the server-side
+   * RpcClient bridge so envelope delivery metadata (readOnly, idempotencyKey)
+   * survives server -> panel/shell relays.
+   */
+  sendEnvelope(envelope: RpcEnvelope): Promise<void>;
+
   /**
    * Deliver an incoming RPC message from the client to this transport's
    * handler registry. Called by RpcServer when it determines a message
@@ -85,18 +92,27 @@ export function createWsServerTransport(
   };
   ws.on("close", onClose);
 
+  const sendFrame = async (message: RpcMessage, envelope?: RpcEnvelope): Promise<void> => {
+    if (closed || ws.readyState !== ws.OPEN) {
+      // A3: throw rather than silently resolve — a swallowed send leaves the
+      // caller's awaiter hanging forever. Throwing rejects the pending call.
+      throw connectionLostError(clientId);
+    }
+    if (message.type === "request" || message.type === "stream-request") {
+      inFlightRequests.add(message.requestId);
+    }
+    // Include both shapes: modern clients use `envelope` for delivery
+    // metadata, while legacy clients/tests still consume `message`.
+    ws.send(JSON.stringify({ type: "ws:rpc", ...(envelope ? { envelope } : {}), message }));
+  };
+
   const transport: WsServerTransportInternal = {
     async send(_targetId: string, message: RpcMessage): Promise<void> {
-      if (closed || ws.readyState !== ws.OPEN) {
-        // A3: throw rather than silently resolve — a swallowed send leaves the
-        // caller's awaiter hanging forever. Throwing rejects the pending call.
-        throw connectionLostError(clientId);
-      }
-      if (message.type === "request" || message.type === "stream-request") {
-        inFlightRequests.add(message.requestId);
-      }
-      // Wrap the RpcMessage in the ws:rpc envelope the client expects
-      ws.send(JSON.stringify({ type: "ws:rpc", message }));
+      await sendFrame(message);
+    },
+
+    async sendEnvelope(envelope: RpcEnvelope): Promise<void> {
+      await sendFrame(envelope.message, envelope);
     },
 
     onMessage(sourceId: string, handler: (message: RpcMessage) => void): () => void {

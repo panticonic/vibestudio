@@ -196,7 +196,19 @@ export const conversationV1Policy: ChannelPolicy<ConversationStateV1> = {
       lastCompletedMessageId: messageId,
       lastCompletedSeq: envelope.seq,
       lastCompletedAt: envelope.appendedAt,
-      agentStreak: actorKind === "agent" ? state.agentStreak + 1 : 0,
+      // Count agent→agent conversation HOPS (author alternations), NOT raw messages.
+      // A single turn emits a `message.completed` per model-call round (messageId =
+      // `m:${turnId}:${modelCallCount}`), so counting every message let ONE multi-step
+      // agent turn (heavy tool use) trip the agent-hop breaker (DEFAULT_AGENT_HOP_LIMIT)
+      // even with no actual back-and-forth. A real hop is "a different author replied",
+      // so only increment when the sender changed from the last completed message; a human
+      // message resets it.
+      agentStreak:
+        actorKind !== "agent"
+          ? 0
+          : envelope.senderId === state.lastCompletedSender
+            ? state.agentStreak
+            : state.agentStreak + 1,
     };
   },
 
@@ -205,8 +217,15 @@ export const conversationV1Policy: ChannelPolicy<ConversationStateV1> = {
     if (!completed) return null;
     const explicit = (completed as { causality?: { agentHops?: number } }).causality?.agentHops;
     // Caller-computed hop counts win (copied to annotations — the payload is
-    // never mutated by the transport).
-    return { agentHops: explicit ?? state.agentStreak + 1 };
+    // never mutated by the transport). Otherwise mirror the reduce: a continuation of
+    // the same author's own turn is NOT a new hop (only an author change is).
+    return {
+      agentHops:
+        explicit ??
+        (draft.senderId === state.lastCompletedSender
+          ? state.agentStreak
+          : state.agentStreak + 1),
+    };
   },
 
   callEventPayload,

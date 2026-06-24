@@ -294,6 +294,7 @@ export function createEvalService(deps: {
         imports?: Record<string, string>;
         runId?: string;
         timeoutMs?: number;
+        readOnly?: boolean;
       };
 
       // Resolve owner/objectKey + assemble the server-authoritative run args (gatewayToken, parent,
@@ -329,6 +330,7 @@ export function createEvalService(deps: {
             gatewayToken: mintGatewayToken(objectKey),
             parent,
             timeoutMs: runArgs.timeoutMs,
+            readOnly: runArgs.readOnly,
             ...chatBinding,
           },
           agentRef: isAgent ? ownerId : undefined,

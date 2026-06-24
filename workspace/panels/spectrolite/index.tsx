@@ -17,6 +17,8 @@ import { Flex, Spinner, Text, Theme } from "@radix-ui/themes";
 import { contextId as runtimeContextId, panel } from "@workspace/runtime";
 import { usePanelTheme, useAgentState } from "@workspace/react";
 import { ErrorBoundary } from "@workspace/agentic-chat";
+import { useAppTheme } from "@workspace/ui/panel";
+import "@workspace/ui/tokens.css";
 import { createSpectroliteApp } from "./app/createApp";
 import { AppProvider, useAppState } from "./app/context";
 import { Shell } from "./components/Shell";
@@ -26,6 +28,7 @@ import "./style.css";
 
 export default function SpectrolitePanel() {
   const theme = usePanelTheme();
+  const appTheme = useAppTheme();
   const app = useMemo(() => createSpectroliteApp(), []);
 
   useEffect(() => {
@@ -49,14 +52,7 @@ export default function SpectrolitePanel() {
   return (
     <ErrorBoundary surfaceName="Spectrolite panel">
       <AppProvider value={app}>
-        <Theme
-          appearance={theme}
-          accentColor="iris"
-          grayColor="slate"
-          radius="medium"
-          panelBackground="solid"
-          style={{ height: "100dvh" }}
-        >
+        <Theme appearance={theme} {...appTheme} style={{ height: "100dvh" }}>
           <SessionGate theme={theme} />
         </Theme>
       </AppProvider>
