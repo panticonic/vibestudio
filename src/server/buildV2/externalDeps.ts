@@ -338,7 +338,8 @@ function validateNpmSpecMap(kind: string, specs: Record<string, string>): void {
   // `validateNpmVersion` for the authoritative shape allow-list.
   // TODO: route legitimate non-registry installs through a separate,
   // shell-only API rather than relaxing this regex.
-  const NPM_DEP_VERSION_RE = /^(\^|~|>=|<=|=|>|<)?\d+\.\d+\.\d+(-[\w.+-]+)?(\+[\w.+-]+)?$/;
+  const NPM_DEP_VERSION_RE =
+    /^(\^|~|>=|<=|=|>|<)?(?:\d+|\d+\.\d+|\d+\.\d+\.\d+(-[\w.+-]+)?(\+[\w.+-]+)?)$/;
   for (const [name, version] of Object.entries(specs)) {
     if (typeof version !== "string" || version.length === 0 || version.length > 64) {
       throw new Error(`Invalid npm ${kind} version for ${name}: ${version}`);

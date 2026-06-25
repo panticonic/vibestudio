@@ -2,6 +2,7 @@ import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import { buildMethods } from "@natstack/shared/serviceSchemas/build";
 import type { BuildSystemV2, BuildUnitOptions } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
+import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
 
 export function createBuildService(deps: { buildSystem: BuildSystemV2 }): ServiceDefinition {
   return {
@@ -30,8 +31,18 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
             args[1] as string,
             args[2] as string[] | undefined
           );
-        case "getBuildMetadata":
-          return bs.getBuildByKey(args[0] as string)?.metadata ?? null;
+        case "getBuildMetadata": {
+          const key = args[0] as string;
+          const build = bs.getBuildByKey(key);
+          if (!build) return null;
+          const diagnostics =
+            diagnosticsForBuildKey(key) ?? diagnosticsForUnit(build.metadata.name) ?? undefined;
+          return diagnostics && diagnostics.length > 0
+            ? { ...build.metadata, diagnostics }
+            : build.metadata;
+        }
+        case "getBuildReport":
+          return bs.getBuildReport(args[0] as string, args[1] as string | undefined);
         case "getEffectiveVersion":
           return bs.getEffectiveVersion(args[0] as string);
         case "inspectBuildProvenance": {
@@ -103,6 +114,7 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
             buildKeys,
             cachedBuilds,
             recentBuildEvents: bs.listRecentBuildEvents(node.name),
+            diagnostics: bs.getUnitDiagnostics?.(node.name) ?? undefined,
           };
         }
         case "listRecentBuildEvents":

@@ -32,6 +32,7 @@ async function api(
         return { path: workspaceRoot, contextsPath };
       },
     },
+    fs: { ensureMaterialized: async () => {} },
     invocation: {
       current: () => callerInfo
         ? {
@@ -170,6 +171,7 @@ describe("@workspace-extensions/typecheck-service", () => {
           return { path: workspaceRoot, contextsPath };
         },
       },
+      fs: { ensureMaterialized: async () => {} },
       invocation: {
         current: () => ({
           caller: { callerId: "worker:agent" },
@@ -259,6 +261,7 @@ describe("@workspace-extensions/typecheck-service", () => {
           return { path: workspaceRoot, contextsPath };
         },
       },
+      fs: { ensureMaterialized: async () => {} },
       invocation: {
         current: () => ({
           caller: { callerId: "worker:agent" },

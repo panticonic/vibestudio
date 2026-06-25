@@ -23,6 +23,9 @@ function fakeWorkspaceSource(
     async resolveHead() {
       return "state:test";
     },
+    async resolveContextView() {
+      return "state:test";
+    },
     async discoverGraph() {
       return discoverPackageGraph(getWorkspaceRoot());
     },
@@ -64,6 +67,9 @@ function fakeMultiStateWorkspaceSource(
     },
     async resolveHead(head) {
       return heads[head] ?? null;
+    },
+    async resolveContextView(contextId) {
+      return heads[`ctx:${contextId}`] ?? "state:test";
     },
     async discoverGraph(stateHash) {
       return discoverPackageGraph(rootForState(stateHash));
@@ -247,5 +253,50 @@ describe("BuildSystemV2 library package subpaths", () => {
       libraryTarget: "panel",
     });
     expect(result.bundle).toContain("ctx-only-unit");
+  });
+
+  it("resolves context-only units without building them", async () => {
+    const mainRoot = path.join(root, "main-resolve-state");
+    const contextRoot = path.join(root, "context-resolve-state");
+    const panelDir = path.join(contextRoot, "panels", "context-panel");
+    fs.mkdirSync(path.join(mainRoot, "panels"), { recursive: true });
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/context-panel",
+        version: "0.1.0",
+        type: "module",
+        natstack: { entry: "index.tsx" },
+        dependencies: {},
+      })
+    );
+    fs.writeFileSync(
+      path.join(panelDir, "index.tsx"),
+      "export default function App() { return null; }\n"
+    );
+
+    buildSystem = await initBuildSystemV2(
+      mainRoot,
+      fakeMultiStateWorkspaceSource(
+        {
+          "state:main-resolve": mainRoot,
+          "state:ctx-resolve": contextRoot,
+        },
+        "state:main-resolve",
+        { "ctx:agent-resolve": "state:ctx-resolve" }
+      ),
+      []
+    );
+
+    await expect(buildSystem.resolveBuildUnit("panels/context-panel")).resolves.toBeNull();
+    await expect(
+      buildSystem.resolveBuildUnit("panels/context-panel", "ctx:agent-resolve")
+    ).resolves.toMatchObject({
+      unitPath: "panels/context-panel",
+      unitName: "@workspace-panels/context-panel",
+      kind: "panel",
+      stateHash: "state:ctx-resolve",
+    });
   });
 });

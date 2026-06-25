@@ -41,8 +41,29 @@ import {
   type BuildUnitOptions,
   type ExtensionDependencyDiagnostics,
 } from "./builder.js";
-import { setBuildSourceProvider, type BuildSourceProvider } from "./buildSource.js";
+import {
+  setBuildSourceProvider,
+  getBuildSourceProvider,
+  collectTransitiveInternalDeps,
+  type BuildSourceProvider,
+} from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
+import { typecheckUnit } from "./typecheckFold.js";
+import { CONTAINER_SECTIONS, CONTENT_SECTIONS } from "../gadVcs/repoDiscovery.js";
+
+/** Expected unit kind for a build-unit section, used to report a malformed
+ *  (unresolvable) unit at the right kind even when no GraphNode exists. */
+const SECTION_UNIT_KIND: Record<string, GraphNode["kind"]> = {
+  packages: "package",
+  panels: "panel",
+  about: "panel",
+  workers: "worker",
+  extensions: "extension",
+  apps: "app",
+};
+import { diagnosticsFromError, hasErrors, type BuildDiagnostic } from "./diagnostics.js";
+import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
+import type { LibraryBuildTarget } from "@natstack/shared/serviceSchemas/build";
 import {
   StateTransitionTrigger,
   unitsForChangedPaths,
@@ -88,6 +109,8 @@ export interface BuildSystemBuildEvent {
   relativePath?: string;
   buildKey?: string;
   error?: string;
+  /** Structured esbuild/tsc diagnostics on a build-error event. */
+  diagnostics?: BuildDiagnostic[];
   trigger?: StateAdvancedEvent;
   timestamp: string;
 }
@@ -104,6 +127,37 @@ export interface RuntimeImageBinding {
   buildKey: string;
 }
 
+// ---------------------------------------------------------------------------
+// Per-repo build report (push gate contract) — agent-actionable, not a blob.
+// ---------------------------------------------------------------------------
+
+export type RepoBuildTargetKind = "runtime" | "library:panel" | "library:worker";
+
+export interface RepoBuildTarget {
+  target: RepoBuildTargetKind;
+  exportPath?: string;
+  buildKey?: string;
+  /** Artifact manifests only — never byte content. */
+  artifacts?: Array<{ path: string; role: string; contentType: string; integrity?: string }>;
+  diagnostics: BuildDiagnostic[];
+}
+
+export interface RepoBuildReport {
+  repoPath: string;
+  unitName?: string;
+  kind: GraphNode["kind"] | "content";
+  role: "pushed" | "dependent";
+  required: boolean;
+  status: "ok" | "failed" | "skipped";
+  builds: RepoBuildTarget[];
+}
+
+export interface ValidateRepoPushOptions {
+  /** Workspace-rooted state to gate dependents against for the regression rule
+   *  (the state BEFORE the push). When omitted, dependents gate absolutely. */
+  baseView?: string;
+}
+
 export type { BuildUnitOptions } from "./builder.js";
 export type {
   WorkspaceStateSource,
@@ -112,6 +166,7 @@ export type {
   StateChangedUnit,
 } from "./stateTrigger.js";
 export type { BuildSourceProvider } from "./buildSource.js";
+export type { BuildDiagnostic } from "./diagnostics.js";
 export { setBuildSourceProvider, directorySourceProvider } from "./buildSource.js";
 export {
   clearBuildProvidersForTests,
@@ -122,7 +177,39 @@ export {
   unregisterBuildProvider,
 } from "./buildProviderRegistry.js";
 
-export interface BuildSystemV2 {
+/**
+ * The narrow push-gate contract WorkspaceVcs depends on — exactly the
+ * `validateRepoPush` method, extracted so the VCS core (which must not import
+ * the whole build system to avoid a build-dependency cycle) depends on a real
+ * typed interface instead of an ad-hoc `as unknown as { … }` cast at the seam.
+ * `BuildSystemV2` satisfies it structurally.
+ */
+export interface RepoPushValidator {
+  validateRepoPush(
+    repoPaths: string[],
+    candidateView: string,
+    options?: ValidateRepoPushOptions
+  ): Promise<RepoBuildReport[]>;
+  /**
+   * On-demand build from a WORKING composed view, scoped to specific repos/units.
+   * Unlike the push gate (`validateRepoPush`) this NEVER persists the EV baseline
+   * or records builds — it never poisons the published baseline (builds are
+   * authoritative only at push). Powers `vcs.previewBuild` (dev preview).
+   */
+  previewBuild(
+    workingView: string,
+    options?: { repoPaths?: string[]; units?: string[] }
+  ): Promise<RepoBuildReport[]>;
+}
+
+export interface BuildUnitResolution {
+  unitPath: string;
+  unitName: string;
+  kind: GraphNode["kind"];
+  stateHash: string;
+}
+
+export interface BuildSystemV2 extends RepoPushValidator {
   /**
    * Get build result for a panel/worker/extension/library.
    * `ref` selects the workspace state to build from: undefined = main HEAD
@@ -139,6 +226,9 @@ export interface BuildSystemV2 {
     ref?: string,
     options?: BuildUnitOptions & { library?: false | undefined }
   ): Promise<BuildResult>;
+
+  /** Resolve a build unit at main, a ctx:* head, or state:* without building it. */
+  resolveBuildUnit(unitPath: string, ref?: string): Promise<BuildUnitResolution | null>;
 
   /** Get an immutable build-store artifact by build key. */
   getBuildByKey(key: string): BuildResult | null;
@@ -190,6 +280,32 @@ export interface BuildSystemV2 {
 
   /** Force recompute all effective versions */
   recompute(): Promise<ChangeSet>;
+
+  /**
+   * Server-internal push build gate. For each pushed repoPath, resolve the
+   * owning unit against the candidate workspace view and build it directly
+   * (not via the public `getBuild`, which strips library results) — capturing
+   * structured esbuild + tsc diagnostics. Packages are validated as library
+   * bundles for dependent-inferred targets × (root + declared exports).
+   * EV-changed dependents are folded in under the regression gate (block only
+   * if green on `baseView`, red on `candidateView`). Returns one
+   * `RepoBuildReport` per repo, with artifact content stripped.
+   */
+  validateRepoPush(
+    repoPaths: string[],
+    candidateView: string,
+    options?: ValidateRepoPushOptions
+  ): Promise<RepoBuildReport[]>;
+
+  /**
+   * Queryable companion to `validateRepoPush`: build a single unit at a state
+   * (or main HEAD) and return its `RepoBuildReport` with structured
+   * diagnostics. Does NOT advance any head.
+   */
+  getBuildReport(unitName: string, stateHash?: string): Promise<RepoBuildReport>;
+
+  /** Most recent structured build diagnostics for a unit, if any were captured. */
+  getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null;
 
   /** Garbage collect unreferenced builds */
   gc(activeUnits: string[]): Promise<{ freed: number }>;
@@ -294,36 +410,21 @@ export async function initBuildSystemV2(
     persistEvState({ stateHash, evMap, contentHashes });
   }
 
-  // Step 3: Build anything that's missing from the store
+  // Step 3: Identify missing non-trusted builds. The prewarm runs after the
+  // build system is usable, so startup can continue to the app host while
+  // unrelated workspace units compile in the background.
   const buildableNodes = graph
     .allNodes()
     // Trusted units are built only after the approval/reconcile path.
     .filter((n) => isNodeBuildable(n) && n.kind !== "extension" && n.kind !== "app");
 
-  const missing = buildableNodes.filter((node) => {
+  const missingInitialBuilds = buildableNodes.filter((node) => {
     const ev = evMap[node.name];
     if (!ev) return false;
     return !buildStore.has(computeBuildKey(node.name, ev, sourcemapForNode(node)));
   });
-  if (missing.length > 0) {
-    console.log(`[BuildV2] Building ${missing.length} units...`);
-    await Promise.all(
-      missing.map(async (node) => {
-        try {
-          await buildUnit(node, assertPresent(evMap[node.name]), graph, workspaceRoot, stateHash);
-          console.log(`[BuildV2] Built ${node.name}`);
-        } catch (error) {
-          console.error(
-            `[BuildV2] Failed to build ${node.name}:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        }
-      })
-    );
-    console.log(`[BuildV2] Initial builds complete`);
-  } else {
-    console.log(`[BuildV2] All builds up-to-date`);
-  }
+  let shuttingDown = false;
+  let initialBuildPrewarm: Promise<void> = Promise.resolve();
 
   // Step 4: Start the state trigger (subscribes to vcs state advances)
   const trigger = new StateTransitionTrigger({
@@ -367,8 +468,8 @@ export async function initBuildSystemV2(
   trigger.on("build-complete", ({ name, buildKey, trigger: t }) => {
     recordBuildEvent({ type: "build-complete", name, buildKey, trigger: t });
   });
-  trigger.on("build-error", ({ name, error, trigger: t }) => {
-    recordBuildEvent({ type: "build-error", name, error, trigger: t });
+  trigger.on("build-error", ({ name, error, diagnostics, trigger: t }) => {
+    recordBuildEvent({ type: "build-error", name, error, diagnostics, trigger: t });
   });
   trigger.on("change-detected", ({ units, trigger: t }) => {
     for (const unit of units) {
@@ -382,6 +483,36 @@ export async function initBuildSystemV2(
       }
     }
   });
+
+  if (missingInitialBuilds.length > 0) {
+    console.log(
+      `[BuildV2] Prewarming ${missingInitialBuilds.length} missing non-app units in background...`
+    );
+    initialBuildPrewarm = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        if (shuttingDown) {
+          resolve();
+          return;
+        }
+        void prewarmInitialBuilds({
+          nodes: missingInitialBuilds,
+          evMap,
+          graph,
+          workspaceRoot,
+          stateHash,
+          recordBuildEvent,
+        }).then(resolve, (error: unknown) => {
+          console.error(
+            "[BuildV2] Initial build prewarm failed:",
+            error instanceof Error ? error.message : String(error)
+          );
+          resolve();
+        });
+      });
+    });
+  } else {
+    console.log(`[BuildV2] All builds up-to-date`);
+  }
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -428,9 +559,9 @@ export async function initBuildSystemV2(
       if (ref.startsWith("state:")) {
         stateHash = ref;
       } else if (ref.startsWith("ctx:")) {
-        const resolved = await source.resolveHead(ref);
-        if (!resolved) throw new Error(`Unknown vcs ref: ${ref}`);
-        stateHash = resolved;
+        // A context ref builds against the context's composed view (all repos at
+        // main, with the context's writable repos overlaid at their ctx heads).
+        stateHash = await source.resolveContextView(ref.slice(4));
       } else {
         throw new Error(`Invalid build ref after validation: ${ref}`);
       }
@@ -463,6 +594,383 @@ export async function initBuildSystemV2(
     };
   };
 
+  // -------------------------------------------------------------------------
+  // Push build gate (W6) — validateRepoPush / getBuildReport
+  // -------------------------------------------------------------------------
+
+  interface GraphView {
+    graph: PackageGraph;
+    evMap: EffectiveVersionMap;
+  }
+
+  /** Discover + EV-compute over a workspace-rooted view (composed live union). */
+  const viewAt = async (viewStateHash: string): Promise<GraphView> => {
+    const graph = await source.discoverGraph(viewStateHash);
+    const hashes = await contentHashesAt(graph, viewStateHash);
+    const evMap = computeEffectiveVersions(graph, hashes).evMap;
+    return { graph, evMap };
+  };
+
+  /** Manifest-only artifacts (no byte content) for a report. */
+  const artifactManifests = (build: BuildResult): RepoBuildTarget["artifacts"] =>
+    build.artifacts.map((a) => ({
+      path: a.path,
+      role: a.role,
+      contentType: a.contentType,
+      ...(a.integrity ? { integrity: a.integrity } : {}),
+    }));
+
+  /**
+   * Build a single target for a unit at a state, capturing structured esbuild
+   * diagnostics on failure + folding tsc diagnostics. Never throws — failures
+   * land in the returned target's `diagnostics`.
+   */
+  const buildOneTarget = async (
+    node: GraphNode,
+    ev: string,
+    graphAtView: PackageGraph,
+    viewStateHash: string,
+    spec: { target: "runtime" } | { target: "library:panel" | "library:worker"; exportPath: string }
+  ): Promise<RepoBuildTarget> => {
+    const libraryTarget: LibraryBuildTarget | null =
+      spec.target === "library:panel"
+        ? "panel"
+        : spec.target === "library:worker"
+          ? "worker"
+          : null;
+    const options: BuildUnitOptions | undefined = libraryTarget
+      ? {
+          library: true,
+          libraryTarget,
+          libraryEntrySubpath: (spec as { exportPath: string }).exportPath,
+        }
+      : undefined;
+    const buildKey = computeBuildUnitKey(node, ev, options);
+
+    const internalDeps = collectTransitiveInternalDeps(node, graphAtView);
+    let diagnostics: BuildDiagnostic[] = [];
+    let artifacts: RepoBuildTarget["artifacts"] | undefined;
+    let buildError: unknown = null;
+    try {
+      const build = await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
+      artifacts = artifactManifests(build);
+    } catch (error) {
+      buildError = error;
+    }
+
+    // Fold typecheck diagnostics from the materialized source (best effort).
+    // The same source root gives esbuild failure paths workspace coordinates
+    // instead of cache/temp checkout paths.
+    try {
+      const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
+        internalDeps,
+        viewStateHash,
+        workspaceRoot
+      );
+      if (buildError != null) {
+        diagnostics = diagnosticsFromError(buildError, {
+          workspaceRoot,
+          sourceRoot,
+          unitRelativePath: node.relativePath,
+        });
+      }
+      // Provision resolution exactly like the build: workspace deps from the
+      // materialized subtrees, external deps from the app node_modules. Without
+      // both, the bare source root resolves nothing → false "Cannot find module".
+      const tsc = await typecheckUnit(
+        node.relativePath,
+        sourceRoot,
+        internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
+        appNodeModuleRoots
+      );
+      diagnostics = [...diagnostics, ...tsc];
+    } catch (err) {
+      console.warn(
+        `[BuildV2] typecheck materialize failed for ${node.name}:`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+    if (buildError != null && diagnostics.length === 0) {
+      diagnostics = diagnosticsFromError(buildError, {
+        workspaceRoot,
+        unitRelativePath: node.relativePath,
+      });
+    }
+
+    recordDiagnostics(node.name, buildKey, diagnostics);
+    return {
+      target: spec.target,
+      ...(spec.target !== "runtime"
+        ? { exportPath: (spec as { exportPath: string }).exportPath }
+        : {}),
+      buildKey,
+      ...(artifacts ? { artifacts } : {}),
+      diagnostics,
+    };
+  };
+
+  /**
+   * Infer which library targets a package needs based on its dependents' kinds.
+   * panel/about → library:panel; worker/extension → library:worker; app builds
+   * its own graph but may pull a package as either, so it contributes both.
+   * Falls back to BOTH when no buildable dependents are known.
+   */
+  const libraryTargetsForDependents = (
+    pkgName: string,
+    graphAtView: PackageGraph
+  ): Set<"library:panel" | "library:worker"> => {
+    const targets = new Set<"library:panel" | "library:worker">();
+    for (const depName of graphAtView.getReverseDeps(pkgName)) {
+      const dep = graphAtView.tryGet(depName);
+      if (!dep) continue;
+      switch (dep.kind) {
+        case "panel":
+          targets.add("library:panel");
+          break;
+        case "worker":
+        case "extension":
+          targets.add("library:worker");
+          break;
+        case "app":
+          targets.add("library:panel");
+          targets.add("library:worker");
+          break;
+        default:
+          break;
+      }
+    }
+    if (targets.size === 0) {
+      targets.add("library:panel");
+      targets.add("library:worker");
+    }
+    return targets;
+  };
+
+  /** All export subpaths to validate for a package (root + declared exports). */
+  const packageExportPaths = (node: GraphNode): string[] => {
+    const set = new Set<string>(["."]);
+    for (const e of node.exports ?? []) set.add(e);
+    return [...set];
+  };
+
+  /**
+   * Build a unit's full report at a view. For packages this produces a
+   * library:* target per (inferred target × export path); for buildable units a
+   * single runtime target; content-only / templates are skipped.
+   */
+  const buildUnitReport = async (
+    node: GraphNode,
+    view: GraphView,
+    viewStateHash: string,
+    role: "pushed" | "dependent"
+  ): Promise<RepoBuildReport> => {
+    const ev = view.evMap[node.name];
+    const base: Omit<RepoBuildReport, "status" | "builds"> = {
+      repoPath: node.relativePath,
+      unitName: node.name,
+      kind: node.kind,
+      role,
+      required: role === "pushed",
+    };
+    if (!ev) {
+      return { ...base, status: "skipped", builds: [] };
+    }
+    if (node.kind === "template") {
+      return { ...base, status: "skipped", builds: [] };
+    }
+
+    const builds: RepoBuildTarget[] = [];
+    if (node.kind === "package") {
+      const targets = libraryTargetsForDependents(node.name, view.graph);
+      const exports = packageExportPaths(node);
+      for (const target of targets) {
+        for (const exportPath of exports) {
+          builds.push(
+            await buildOneTarget(node, ev, view.graph, viewStateHash, { target, exportPath })
+          );
+        }
+      }
+    } else {
+      builds.push(await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" }));
+    }
+
+    const failed = builds.some((b) => hasErrors(b.diagnostics));
+    return { ...base, status: failed ? "failed" : "ok", builds };
+  };
+
+  const validateRepoPushImpl = async (
+    repoPaths: string[],
+    candidateView: string,
+    options?: ValidateRepoPushOptions
+  ): Promise<RepoBuildReport[]> => {
+    const candidate = await viewAt(candidateView);
+    const base: GraphView | null = options?.baseView ? await viewAt(options.baseView) : null;
+
+    const reports: RepoBuildReport[] = [];
+    const pushedUnitNames = new Set<string>();
+
+    // 1) Pushed repos — absolute gate for buildable units; content-only skipped.
+    //    The per-repo builds are independent (buildUnit coalesces by key), so
+    //    build them concurrently; Promise.all preserves repoPaths order.
+    const pushedResults = await Promise.all(
+      repoPaths.map(async (repoPath): Promise<{ report: RepoBuildReport; unitName?: string }> => {
+        const node = resolveUnit(candidate.graph, repoPath, workspaceRoot);
+        if (!node) {
+          const section = repoPath.split("/")[0] ?? "";
+          const isBuildSection = CONTAINER_SECTIONS.has(section) && !CONTENT_SECTIONS.has(section);
+          if (isBuildSection) {
+            // A unit was expected here (packages/panels/workers/extensions/apps/about)
+            // but none resolved — a malformed unit (missing/invalid package.json).
+            // Surface a required failure with an actionable diagnostic instead of
+            // silently skipping it as content.
+            return {
+              report: {
+                repoPath,
+                kind: SECTION_UNIT_KIND[section] ?? "package",
+                role: "pushed",
+                required: true,
+                status: "failed",
+                builds: [
+                  {
+                    target: "runtime",
+                    diagnostics: [
+                      {
+                        source: "esbuild",
+                        severity: "error",
+                        file: `${repoPath}/package.json`,
+                        line: 1,
+                        column: 1,
+                        message:
+                          `No buildable unit resolved at ${repoPath}. A ${section}/ unit needs a ` +
+                          `package.json with a "name" (and a natstack manifest). Create/fix it, then re-push.`,
+                      },
+                    ],
+                  },
+                ],
+              },
+            };
+          }
+          // Genuine content-only repo (projects/<vault>, skills, templates, meta).
+          return {
+            report: {
+              repoPath,
+              kind: "content",
+              role: "pushed",
+              required: false,
+              status: "skipped",
+              builds: [],
+            },
+          };
+        }
+        return {
+          report: await buildUnitReport(node, candidate, candidateView, "pushed"),
+          unitName: node.name,
+        };
+      })
+    );
+    for (const { report, unitName } of pushedResults) {
+      reports.push(report);
+      if (unitName) pushedUnitNames.add(unitName);
+    }
+
+    // 2) Dependents of pushed buildable units — EV-changed only, regression gate.
+    const dependentNames = new Set<string>();
+    for (const name of pushedUnitNames) {
+      for (const dep of candidate.graph.getReverseDeps(name)) {
+        if (!pushedUnitNames.has(dep)) dependentNames.add(dep);
+      }
+    }
+
+    // Each dependent's candidate (and base-regression) build is independent —
+    // build them concurrently rather than serializing the whole gate.
+    const dependentReports = await Promise.all(
+      [...dependentNames].map(async (depName): Promise<RepoBuildReport | null> => {
+        const node = candidate.graph.tryGet(depName);
+        if (!node) return null;
+        const candEv = candidate.evMap[depName];
+        const baseEv = base?.evMap[depName];
+        // EV-changed only: skip dependents whose effective version is unchanged.
+        if (base && candEv && baseEv && candEv === baseEv) return null;
+
+        const report = await buildUnitReport(node, candidate, candidateView, "dependent");
+
+        // Regression gate: a dependent that is ALSO red on the base view is a
+        // pre-existing failure, not caused by this push — do not block on it.
+        // With NO base to diff against we cannot tell pre-existing from new, so a
+        // failed dependent gates absolutely (the documented `baseView`-omitted
+        // contract) rather than slipping through as non-required.
+        if (report.status === "failed") {
+          if (!base) {
+            report.required = true; // no base → gate absolutely
+          } else {
+            const baseReport = await buildUnitReport(node, base, options!.baseView!, "dependent");
+            // Pre-existing red on the base is informational; newly red blocks.
+            report.required = baseReport.status !== "failed";
+          }
+        } else {
+          report.required = false;
+        }
+        return report;
+      })
+    );
+    for (const report of dependentReports) {
+      if (report) reports.push(report);
+    }
+
+    return reports;
+  };
+
+  /**
+   * On-demand WORKING build (dev preview). Builds the requested repos/units from
+   * a working composed view via the same ctx-ref build path as `validateRepoPush`
+   * — BUT never persists the EV baseline and never records builds, so a preview
+   * can never poison the published main baseline. Builds are authoritative only
+   * at the push gate. Reports are role:"pushed" but required:false (advisory).
+   */
+  const previewBuildImpl = async (
+    workingView: string,
+    options?: { repoPaths?: string[]; units?: string[] }
+  ): Promise<RepoBuildReport[]> => {
+    const view = await viewAt(workingView);
+
+    // Resolve the explicit scope to a deduped set of nodes. `repoPaths` are
+    // workspace-relative repo roots; `units` are unit names / partial paths.
+    // Both resolve through the same resolver used by the push gate.
+    const requested = [...(options?.repoPaths ?? []), ...(options?.units ?? [])];
+    const nodes = new Map<string, GraphNode>();
+    const reports: RepoBuildReport[] = [];
+    for (const spec of requested) {
+      const node = resolveUnit(view.graph, spec, workspaceRoot);
+      if (!node) {
+        // Unresolvable target — surface as skipped/content rather than throwing,
+        // mirroring the push gate's content-repo handling for preview ergonomics.
+        reports.push({
+          repoPath: spec,
+          kind: "content",
+          role: "pushed",
+          required: false,
+          status: "skipped",
+          builds: [],
+        });
+        continue;
+      }
+      nodes.set(node.name, node);
+    }
+
+    // Build each resolved unit from the working view. buildUnitReport only calls
+    // buildUnit + recordDiagnostics + typecheck (no persistEvState/recordBuild),
+    // so this stays preview-only. Independent units build concurrently.
+    const built = await Promise.all(
+      [...nodes.values()].map((node) => buildUnitReport(node, view, workingView, "pushed"))
+    );
+    for (const report of built) {
+      // Preview is advisory: never required (the push gate alone gates merges).
+      reports.push({ ...report, required: false });
+    }
+
+    return reports;
+  };
+
   const getBuild = async function getBuild(
     unitPath: string,
     ref?: string,
@@ -475,9 +983,7 @@ export async function initBuildSystemV2(
       if (ref.startsWith("state:")) {
         buildState = ref;
       } else if (ref.startsWith("ctx:")) {
-        const resolved = await source.resolveHead(ref);
-        if (!resolved) throw new Error(`Unknown vcs ref: ${ref}`);
-        buildState = resolved;
+        buildState = await source.resolveContextView(ref.slice(4));
       } else {
         throw new Error(`Invalid build ref after validation: ${ref}`);
       }
@@ -596,6 +1102,45 @@ export async function initBuildSystemV2(
   return {
     getBuild,
     bindRuntimeImage,
+
+    async resolveBuildUnit(
+      unitPath: string,
+      requestedRef?: string
+    ): Promise<BuildUnitResolution | null> {
+      const ref = validateBuildRef(requestedRef);
+      const toResolution = (node: GraphNode, stateHash: string): BuildUnitResolution => ({
+        unitPath: node.relativePath,
+        unitName: node.name,
+        kind: node.kind,
+        stateHash,
+      });
+
+      if (ref && ref !== MAIN_HEAD) {
+        const stateHash = ref.startsWith("state:")
+          ? ref
+          : await source.resolveContextView(ref.slice("ctx:".length));
+        const graph = await source.discoverGraph(stateHash);
+        const node = resolveUnit(graph, unitPath, workspaceRoot);
+        return node ? toResolution(node, stateHash) : null;
+      }
+
+      const resolveCurrent = (): BuildUnitResolution | null => {
+        const snapshot = currentState();
+        const node = resolveUnit(snapshot.graph, unitPath, workspaceRoot);
+        return node ? toResolution(node, snapshot.stateHash) : null;
+      };
+
+      let resolved = resolveCurrent();
+      if (!resolved) {
+        const fresh = await source.ensureFresh();
+        await trigger.whenSettled();
+        if (currentState().stateHash !== fresh.stateHash) {
+          await rediscoverAt(fresh.stateHash);
+        }
+        resolved = resolveCurrent();
+      }
+      return resolved;
+    },
 
     async getBuildNpm(
       specifier: string,
@@ -784,6 +1329,69 @@ export async function initBuildSystemV2(
       return changes;
     },
 
+    validateRepoPush(
+      repoPaths: string[],
+      candidateView: string,
+      options?: ValidateRepoPushOptions
+    ): Promise<RepoBuildReport[]> {
+      return validateRepoPushImpl(repoPaths, candidateView, options);
+    },
+
+    previewBuild(
+      workingView: string,
+      options?: { repoPaths?: string[]; units?: string[] }
+    ): Promise<RepoBuildReport[]> {
+      return previewBuildImpl(workingView, options);
+    },
+
+    async getBuildReport(unitName: string, stateHash?: string): Promise<RepoBuildReport> {
+      const ref = validateBuildRef(stateHash);
+      let view: GraphView;
+      let viewStateHash: string;
+      if (!ref || ref === MAIN_HEAD) {
+        try {
+          const fresh = await source.ensureFresh();
+          await trigger.whenSettled();
+          if (currentState().stateHash !== fresh.stateHash) {
+            await rediscoverAt(fresh.stateHash);
+          }
+        } catch {
+          // best effort — fall back to current snapshot
+        }
+        const snapshot = currentState();
+        view = { graph: snapshot.graph, evMap: snapshot.evMap };
+        viewStateHash = snapshot.stateHash;
+      } else {
+        let resolvedState: string;
+        if (ref.startsWith("state:")) {
+          resolvedState = ref;
+        } else if (ref.startsWith("ctx:")) {
+          resolvedState = await source.resolveContextView(ref.slice(4));
+        } else {
+          throw new Error(`Invalid build ref after validation: ${ref}`);
+        }
+        viewStateHash = resolvedState;
+        view = await viewAt(resolvedState);
+      }
+      const node = resolveUnit(view.graph, unitName, workspaceRoot);
+      if (!node) {
+        return {
+          repoPath: unitName,
+          kind: "content",
+          role: "pushed",
+          required: false,
+          status: "skipped",
+          builds: [],
+        };
+      }
+      return buildUnitReport(node, view, viewStateHash, "pushed");
+    },
+
+    getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null {
+      const node = resolveUnit(currentState().graph, unitName, workspaceRoot);
+      return diagnosticsForUnit(node?.name ?? unitName);
+    },
+
     async gc(activeUnits: string[]): Promise<{ freed: number }> {
       const { graph, evMap } = currentState();
       const activeKeys = new Set<string>();
@@ -870,6 +1478,8 @@ export async function initBuildSystemV2(
     },
 
     async shutdown(): Promise<void> {
+      shuttingDown = true;
+      await initialBuildPrewarm.catch(() => {});
       trigger.stop();
       setBuildSourceProvider(null);
       console.log("[BuildV2] Shut down");
@@ -880,6 +1490,68 @@ export async function initBuildSystemV2(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+interface InitialBuildPrewarmOptions {
+  nodes: GraphNode[];
+  evMap: EffectiveVersionMap;
+  graph: PackageGraph;
+  workspaceRoot: string;
+  stateHash: string;
+  recordBuildEvent(event: Omit<BuildSystemBuildEvent, "relativePath" | "timestamp">): void;
+}
+
+async function prewarmInitialBuilds(opts: InitialBuildPrewarmOptions): Promise<void> {
+  await runLimited(opts.nodes, initialBuildPrewarmConcurrency(), async (node) => {
+    const ev = opts.evMap[node.name];
+    if (!ev) return;
+    const buildKey = computeBuildUnitKey(node, ev);
+    if (buildStore.has(buildKey)) {
+      opts.recordBuildEvent({ type: "build-complete", name: node.name, buildKey });
+      return;
+    }
+
+    opts.recordBuildEvent({ type: "build-started", name: node.name });
+    try {
+      await buildUnit(node, ev, opts.graph, opts.workspaceRoot, opts.stateHash);
+      opts.recordBuildEvent({ type: "build-complete", name: node.name, buildKey });
+      console.log(`[BuildV2] Prewarmed ${node.name}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const diagnostics = diagnosticsFromError(error, opts.workspaceRoot);
+      recordDiagnostics(node.name, buildKey, diagnostics);
+      opts.recordBuildEvent({
+        type: "build-error",
+        name: node.name,
+        error: message,
+        diagnostics,
+      });
+      console.error(`[BuildV2] Failed to prewarm ${node.name}:`, message);
+    }
+  });
+  console.log(`[BuildV2] Initial build prewarm complete`);
+}
+
+function initialBuildPrewarmConcurrency(): number {
+  const raw = Number.parseInt(process.env["NATSTACK_INITIAL_BUILD_CONCURRENCY"] ?? "", 10);
+  if (Number.isInteger(raw) && raw > 0) return raw;
+  return 4;
+}
+
+async function runLimited<T>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T) => Promise<void>
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next++];
+      if (item === undefined) continue;
+      await task(item);
+    }
+  });
+  await Promise.all(workers);
+}
 
 function resolveUnit(
   graph: PackageGraph,
