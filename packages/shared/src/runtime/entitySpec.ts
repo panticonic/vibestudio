@@ -15,6 +15,94 @@ export interface EntitySource {
 
 export type EntityStatus = "active" | "retired";
 
+/** A workspace-relative repo path (`packages/foo`, `panels/chat`, `meta`). */
+export type RepoPath = string;
+
+/** Per-repo context head name (`ctx:{contextId}`) on `vcs:repo:{repoPath}`. */
+export function contextHeadName(contextId: string): string {
+  return `ctx:${contextId}`;
+}
+
+/**
+ * A runtime context is a full logical workspace branch. The VCS layer presents
+ * the same workspace tree to every context and records per-repo ctx heads lazily
+ * as that context edits repos. Repo membership is not part of the runtime
+ * context contract; callers inspect changes through VCS status APIs.
+ */
+export interface WorkspaceContext {
+  contextId: string;
+}
+
+export function buildWorkspaceContext(contextId: string): WorkspaceContext {
+  return { contextId };
+}
+
+// Section taxonomy — the SINGLE source of truth for which workspace dirs are
+// repos and how (container sections = `section/<name>` is a repo; flat sections
+// = the section dir itself is one repo; content sections = container repos with
+// no build unit). Lives here in @natstack/shared because every layer depends on
+// it; `src/server/gadVcs/repoDiscovery.ts` and `workspace/remotes.ts` re-import
+// these rather than re-declaring them.
+
+/** Container sections: each immediate subdir `section/<name>` is its own repo. */
+export const CONTAINER_SECTIONS = new Set([
+  "packages",
+  "panels",
+  "workers",
+  "extensions",
+  "apps",
+  "about",
+  "skills",
+  "templates",
+  "projects",
+]);
+/** Content-only container sections (no build unit; pushes are ungated). */
+export const CONTENT_SECTIONS = new Set(["skills", "templates", "projects"]);
+/** Flat sections: the section dir itself is one repo (single-segment repoPath). */
+export const FLAT_SECTIONS = new Set(["meta"]);
+
+/** Is this section flat (the section dir itself a repo, single-segment path)? */
+export function isFlatSection(section: string): boolean {
+  return FLAT_SECTIONS.has(section);
+}
+
+/**
+ * The owning repo of a workspace-relative path BY SECTION TAXONOMY (not a fixed
+ * list) — used by full workspace contexts where any repo path is editable,
+ * including a brand-new repo that has no `main` yet. Returns null for a path
+ * that isn't inside any workspace repo.
+ */
+export function taxonomyRepoForPath(editPath: string): RepoPath | null {
+  const segs = editPath.replace(/^\/+/, "").split("/");
+  const section = segs[0];
+  if (!section) return null;
+  if (FLAT_SECTIONS.has(section)) return section;
+  if (CONTAINER_SECTIONS.has(section) && segs.length >= 2 && segs[1]) {
+    return `${section}/${segs[1]}`;
+  }
+  return null;
+}
+
+/**
+ * Split a workspace-relative path into its owning repo (by section taxonomy) and
+ * the repo-relative remainder. Returns null when the path is not inside any
+ * workspace repo. The single home for the `taxonomyRepoForPath` + prefix-strip
+ * pattern that fs edit routing and vcs edit routing both need (callers that also
+ * want segment validation wrap the `repoPath` in `normalizeWorkspaceRepoPath`).
+ * Input is slash-normalized and leading-slash-stripped first.
+ */
+export function splitRepoPath(
+  wsRelPath: string
+): { repoPath: RepoPath; repoRelPath: string } | null {
+  const normalized = wsRelPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const repoPath = taxonomyRepoForPath(normalized);
+  if (repoPath === null) return null;
+  return {
+    repoPath,
+    repoRelPath: normalized === repoPath ? "" : normalized.slice(repoPath.length + 1),
+  };
+}
+
 export interface EntityRecord {
   // ── Identity (immutable after first write) ──
   id: string;

@@ -74,6 +74,71 @@ export const buildChangeSetSchema = z
   })
   .strict();
 
+/**
+ * Structured, agent-actionable build diagnostic. Reuses the typecheck service's
+ * `BaseDiagnostic` shape (position + severity) so esbuild and tsc diagnostics
+ * are one uniform type the agent parses. `source` distinguishes the producer.
+ */
+export const buildDiagnosticSchema = z
+  .object({
+    source: z.enum(["esbuild", "tsc"]),
+    severity: z.enum(["error", "warning"]),
+    file: z.string(),
+    line: z.number().int().nonnegative(),
+    column: z.number().int().nonnegative(),
+    endLine: z.number().int().nonnegative().optional(),
+    endColumn: z.number().int().nonnegative().optional(),
+    message: z.string(),
+    lineText: z.string().optional(),
+    suggestion: z.string().optional(),
+  })
+  .strict();
+export type BuildDiagnosticWire = z.infer<typeof buildDiagnosticSchema>;
+
+/**
+ * One built target inside a repo build report. Artifacts carry only manifests
+ * (path/role/contentType/integrity) — never byte content — plus the structured
+ * diagnostics produced while building it.
+ */
+export const repoBuildTargetSchema = z
+  .object({
+    target: z.enum(["runtime", "library:panel", "library:worker"]),
+    exportPath: z.string().optional(),
+    buildKey: z.string().optional(),
+    artifacts: z
+      .array(
+        z
+          .object({
+            path: z.string(),
+            role: z.string(),
+            contentType: z.string(),
+            integrity: z.string().optional(),
+          })
+          .strict()
+      )
+      .optional(),
+    diagnostics: z.array(buildDiagnosticSchema),
+  })
+  .strict();
+export type RepoBuildTargetWire = z.infer<typeof repoBuildTargetSchema>;
+
+/**
+ * Per-repo build gate report — an agent-actionable error contract, not a blob.
+ * One per repo touched by a push (pushed repos + EV-changed dependents).
+ */
+export const repoBuildReportSchema = z
+  .object({
+    repoPath: z.string(),
+    unitName: z.string().optional(),
+    kind: z.string(),
+    role: z.enum(["pushed", "dependent"]),
+    required: z.boolean(),
+    status: z.enum(["ok", "failed", "skipped"]),
+    builds: z.array(repoBuildTargetSchema),
+  })
+  .strict();
+export type RepoBuildReportWire = z.infer<typeof repoBuildReportSchema>;
+
 export const aboutPageMetaSchema = z
   .object({
     name: z.string(),
@@ -156,6 +221,9 @@ export const recentBuildEventSchema = z
     relativePath: z.string().optional(),
     buildKey: z.string().optional(),
     error: z.string().optional(),
+    /** Structured esbuild/tsc diagnostics for this build event (replaces the
+     *  lossy `error` string when present). */
+    diagnostics: z.array(buildDiagnosticSchema).optional(),
     trigger: z
       .object({
         head: z.string(),
@@ -252,17 +320,35 @@ export const buildMethods = defineServiceMethods({
       "Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled.",
     args: z.tuple([
       z.string().describe("npm package specifier to bundle."),
-      z.string().describe("Exact package version to resolve and build."),
+      z
+        .string()
+        .describe('Registry semver/range to resolve and build, e.g. "1", "1.2.3", "^1.2.3", "latest", or "*".'),
       z.array(z.string()).optional().describe("Module specifiers to leave external (not bundled)."),
     ]),
     returns: buildBundleResultSchema,
     access: BUILD_ACCESS,
   },
   getBuildMetadata: {
-    description: "Cached build metadata for an immutable build key, or null if it is not cached.",
+    description:
+      "Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured.",
     args: z.tuple([z.string()]),
-    returns: buildMetadataSchema.nullable(),
+    returns: buildMetadataSchema
+      .extend({ diagnostics: z.array(buildDiagnosticSchema).optional() })
+      .nullable(),
     access: READ_ACCESS,
+  },
+  getBuildReport: {
+    description:
+      "Queryable companion to the synchronous push gate: build a unit (runtime, or library targets for packages) at the given workspace state (omitted = main HEAD) and return its agent-actionable RepoBuildReport with structured esbuild + tsc diagnostics. Does NOT advance any head.",
+    args: z.tuple([
+      z.string().describe("Unit name or workspace-relative path."),
+      z
+        .string()
+        .optional()
+        .describe("Workspace state to build from: omitted = main HEAD, or a 'state:…' hash."),
+    ]),
+    returns: repoBuildReportSchema,
+    access: BUILD_ACCESS,
   },
   getEffectiveVersion: {
     description:

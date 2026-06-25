@@ -116,6 +116,15 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/** Wire shape of a full logical workspace context branch. */
+export const WorkspaceContextSchema = z
+  .object({
+    contextId: z
+      .string()
+      .describe("Context id for a full logical workspace branch view."),
+  })
+  .strict();
+
 export const runtimeMethods = defineServiceMethods({
   createEntity: {
     description:
@@ -219,5 +228,21 @@ export const runtimeMethods = defineServiceMethods({
     policy: { allowed: ["panel", "app", "worker", "do"] },
     access: TITLE_ACCESS,
     examples: [{ args: ["Workspace Shell", { explicit: true }] }],
+  },
+  createContext: {
+    description:
+      "Create a full logical workspace context branch. Every context presents the whole workspace tree; per-repo ctx heads are created lazily as edits are made. Use vcs.contextStatus to inspect uncommitted changes, ahead/behind repos, and deleted refs.",
+    args: z.tuple([
+      z.object({
+        contextId: z
+          .string()
+          .optional()
+          .describe("Explicit context id; omit to mint a random UUID."),
+      }),
+    ]),
+    returns: WorkspaceContextSchema,
+    access: { sensitivity: "write" },
+    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
+    examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
   },
 });

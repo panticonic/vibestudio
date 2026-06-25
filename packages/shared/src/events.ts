@@ -14,7 +14,7 @@ import type {
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { CallerKind } from "./principalKinds.js";
-import type { VcsHeadAdvance } from "./serviceSchemas/vcs.js";
+import type { VcsHeadAdvance, VcsWorkingAdvance } from "./serviceSchemas/vcs.js";
 import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
 
 /**
@@ -24,6 +24,7 @@ export type EventName =
   | `extensions:${string}`
   | `apps:${string}`
   | `vcs:head:${string}`
+  | `vcs:working:${string}`
   | "workspace:unit-log"
   | "workspace:revision-bumped"
   | "presence:panel-active"
@@ -203,6 +204,7 @@ export interface EventPayloads {
   [key: `extensions:${string}`]: unknown;
   [key: `apps:${string}`]: unknown;
   [key: `vcs:head:${string}`]: VcsHeadAdvance;
+  [key: `vcs:working:${string}`]: VcsWorkingAdvance;
   "workspace:unit-log": {
     workspaceId: string;
     unitName: string;
@@ -257,6 +259,7 @@ export function isValidEventName(name: string): name is EventName {
   if (name.startsWith("extensions:")) return true;
   if (name.startsWith("apps:")) return true;
   if (name.startsWith("vcs:head:")) return true;
+  if (name.startsWith("vcs:working:")) return true;
   if (name === "workspace:unit-log") return true;
   if (name === "workspace:revision-bumped") return true;
   if (name === "presence:panel-active") return true;

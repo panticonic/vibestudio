@@ -36,7 +36,6 @@ import {
 } from "./sourceDirs.js";
 
 const WORKSPACE_CONFIG_FILE = "meta/natstack.yml";
-const WORKSPACE_TEMPLATE_SOURCE_FILE = "meta/.natstack-template-source.json";
 const CENTRAL_CONFIG_FILE = "config.yml";
 const SECRETS_FILE = ".secrets.yml";
 const ENV_FILE = ".env";
@@ -411,10 +410,7 @@ export function initWorkspace(
     throw new Error(`Workspace template is missing ${WORKSPACE_CONFIG_FILE}: ${templateSrc}`);
   }
 
-  if (templateSourceKind) {
-    writeTemplateSourceMarker(sourceRoot, templateSrc, templateSourceKind);
-  }
-
+  void templateSourceKind;
   log.info(`[Workspace] Created managed workspace "${name}" at ${wsDir}`);
 }
 
@@ -434,20 +430,6 @@ function copyDirRecursive(src: string, dest: string): void {
   }
 }
 
-function writeTemplateSourceMarker(
-  sourceRoot: string,
-  templateSrc: string,
-  kind: "template" | "fork"
-): void {
-  const markerPath = path.join(sourceRoot, WORKSPACE_TEMPLATE_SOURCE_FILE);
-  const marker = {
-    kind,
-    sourcePath: path.resolve(templateSrc),
-    copiedAt: new Date().toISOString(),
-  };
-  fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-  fs.writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, "utf-8");
-}
 
 export { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };
 

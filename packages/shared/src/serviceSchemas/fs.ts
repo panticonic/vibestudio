@@ -138,7 +138,7 @@ export const fsMethods = defineServiceMethods({
   },
   writeFile: {
     description:
-      "Write data to a file, replacing existing contents (creating it if absent); data may be a UTF-8 string or a base64 binary envelope. GAD-tracked context paths commit through the VCS rather than the worktree.",
+      "Write data to a file, replacing existing contents; context-scoped writes create missing parent directories. Data may be a UTF-8 string or a base64 binary envelope. GAD-tracked context paths commit through the VCS rather than the worktree.",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
@@ -149,7 +149,7 @@ export const fsMethods = defineServiceMethods({
   },
   appendFile: {
     description:
-      "Append data to the end of a file (creating it if absent); data may be a UTF-8 string or a base64 binary envelope.",
+      "Append data to the end of a file; context-scoped appends create the file and missing parent directories when absent. Data may be a UTF-8 string or a base64 binary envelope.",
     args: z.union([
       z.tuple([z.string(), fsDataSchema]),
       z.tuple([z.string(), z.string(), fsDataSchema]),
@@ -263,6 +263,13 @@ export const fsMethods = defineServiceMethods({
       "Resolve a path to its canonical form, returning it relative to the context root (sandboxed callers) or as an absolute host path (unrestricted callers).",
     args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
     returns: z.string(),
+    access: READ_ACCESS,
+  },
+  ensureMaterialized: {
+    description:
+      "Materialize the given workspace path(s)/repo(s) (or 'all') into the context working folder. Context folders are SPARSE — only what is materialized exists on disk — so call this for the narrowest scope you need (a repo path like 'panels/chat', a section like 'panels', or specific paths) before reading them OUTSIDE the fs.* API (e.g. a grep/find subprocess). fs.* reads materialize on demand automatically.",
+    args: z.tuple([z.union([z.string(), z.array(z.string()), z.literal("all")])]),
+    returns: voidSchema,
     access: READ_ACCESS,
   },
   truncate: {
@@ -383,7 +390,7 @@ export const fsMethods = defineServiceMethods({
   // Tmp files
   mktemp: {
     description:
-      "Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative path under it (for the write-to-temp-then-rename atomic-write pattern); the file itself is not created and the prefix is sanitized.",
+      "Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative scratch path under it (for direct fs write-to-temp-then-rename patterns); the file itself is not created, the prefix is sanitized, and the path is not a tracked edit/VCS destination.",
     args: z.union([z.tuple([z.string().optional()]), z.tuple([z.string(), z.string().optional()])]),
     returns: z.string(),
     access: {
