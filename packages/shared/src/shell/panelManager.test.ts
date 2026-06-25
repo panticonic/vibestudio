@@ -279,6 +279,80 @@ describe("PanelManager", () => {
     }
   });
 
+  it("creates browser panels for disposable document URLs", async () => {
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+
+    const dataResult = await manager.createBrowser(
+      null,
+      "data:text/html,<button>Click me</button>",
+      { addAsRoot: true }
+    );
+    const aboutResult = await manager.createBrowser(null, "about:blank", { addAsRoot: true });
+
+    expect(dataResult).toMatchObject({
+      source: "browser:data:text/html,<button>Click me</button>",
+      title: "data",
+      url: "data:text/html,<button>Click me</button>",
+    });
+    expect(aboutResult).toMatchObject({
+      source: "browser:about:blank",
+      title: "about",
+      url: "about:blank",
+    });
+    expect(getCurrentSnapshot(registry.getPanel(dataResult.panelId)!).source).toBe(
+      dataResult.source
+    );
+    expect(getCurrentSnapshot(registry.getPanel(aboutResult.panelId)!).source).toBe(
+      aboutResult.source
+    );
+    expect(mem.state.slots.size).toBe(2);
+  });
+
+  it("rejects unsupported browser URL schemes", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+
+    await expect(manager.createBrowser(null, "javascript:alert(1)")).rejects.toThrow(
+      "Invalid browser panel URL"
+    );
+  });
+
+  it("coerces human-readable create names to panel id segments", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "named");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "named", natstack: { title: "Named Panel" } })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+
+    const created = await manager.create("panels/named", {
+      isRoot: true,
+      addAsRoot: true,
+      name: "StateArgs CDP Test",
+    });
+
+    expect(created.panelId).toBe("panel:tree/StateArgs-CDP-Test");
+    expect(registry.getPanel(created.panelId)?.title).toBe("Named Panel");
+  });
+
   it("creates panel state locally, builds panel init, updates state args, and closes panels", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);

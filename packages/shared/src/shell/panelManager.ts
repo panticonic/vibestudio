@@ -7,13 +7,14 @@ import type { PanelSearchIndex } from "../panelSearchTypes.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 import { loadPanelManifest } from "../panelTypes.js";
 import { validateStateArgs } from "../stateArgsValidator.js";
-import { computePanelId } from "../panelIdUtils.js";
+import { computePanelId, panelIdSegmentFromName } from "../panelIdUtils.js";
 import {
   buildBootstrapConfig,
   browserSourceFromHostname,
   generateContextId,
   resolveSource,
 } from "../panelFactory.js";
+import { isOpenPanelBrowserUrl } from "../panelChrome.js";
 import {
   createSnapshot,
   getCurrentSnapshot,
@@ -242,7 +243,7 @@ export class PanelManager {
       computePanelId({
         relativePath,
         parent: opts?.parentId ? { id: opts.parentId } : null,
-        requestedId: opts?.name,
+        requestedId: opts?.name ? panelIdSegmentFromName(opts.name) : undefined,
         isRoot: opts?.isRoot,
       })
     );
@@ -330,16 +331,22 @@ export class PanelManager {
     url: string,
     opts?: { name?: string; addAsRoot?: boolean }
   ): Promise<CreatePanelResult & { url: string }> {
-    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
-      throw new Error(`Invalid browser panel URL (must be http/https string): ${String(url)}`);
+    if (typeof url !== "string" || !isOpenPanelBrowserUrl(url)) {
+      throw new Error(
+        `Invalid browser panel URL (must be http/https, data:, or about:blank string): ${String(
+          url
+        )}`
+      );
     }
     const parsed = new URL(url);
-    const normalizedSource = browserSourceFromHostname(parsed.hostname);
+    const normalizedSource = browserSourceFromHostname(
+      parsed.hostname || parsed.protocol.replace(/:$/, "") || "browser"
+    );
     const slotId = asPanelSlotId(
       computePanelId({
         relativePath: normalizedSource,
         parent: parentId ? { id: parentId } : null,
-        requestedId: opts?.name,
+        requestedId: opts?.name ? panelIdSegmentFromName(opts.name) : undefined,
         isRoot: parentId == null,
       })
     );
@@ -381,7 +388,7 @@ export class PanelManager {
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
-    const title = opts?.name ?? parsed.hostname;
+    const title = opts?.name ?? (parsed.hostname || parsed.protocol.replace(/:$/, "") || "browser");
     const panel: Panel = {
       id: slotId,
       title,

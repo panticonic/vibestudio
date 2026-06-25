@@ -101,7 +101,7 @@ describe("PanelView plain panel links", () => {
     webContents.emit(
       "will-navigate",
       event,
-      'http://127.0.0.1:1234/panels/chat/?stateArgs=%7B%22initialPrompt%22%3A%22hi%22%7D'
+      "http://127.0.0.1:1234/panels/chat/?stateArgs=%7B%22initialPrompt%22%3A%22hi%22%7D"
     );
 
     await vi.waitFor(() => {

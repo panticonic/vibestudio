@@ -39,6 +39,16 @@ export function sanitizePanelIdSegment(segment: string): string {
   return trimmed;
 }
 
+export function panelIdSegmentFromName(name: string): string {
+  const normalized = name
+    .trim()
+    .replace(/[^A-Za-z0-9_~-]+/g, "-")
+    .replace(/^[^A-Za-z0-9]+/, "")
+    .replace(/-+$/g, "");
+  if (!normalized) throw new Error(`Invalid panel identifier segment: ${name}`);
+  return sanitizePanelIdSegment(normalized);
+}
+
 /**
  * Generate a unique nonce for panel ID generation.
  * Format: base36-timestamp-hexrandom (e.g., "lk2f8g-3a1b9c4e")

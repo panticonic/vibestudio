@@ -361,10 +361,12 @@ class MobilePanels implements PanelHost {
         sourceTree: () => this.workspaceRpc.sourceTree(),
         findUnitForPath: (path) => this.workspaceRpc.findUnitForPath(path),
         unitStatus: async (unitPath) => {
-          const status = await this.vcs.unitStatus(unitPath);
+          // Per-repo VCS: `unitStatus` is replaced by repo-native `status(repoPath)`
+          // (the unit path IS the repo path). Status no longer returns a head.
+          const status = await this.vcs.status(unitPath);
           return {
-            unitPath: status.unitPath,
-            head: status.head,
+            unitPath,
+            head: null,
             stateHash: status.stateHash,
             dirty: status.dirty,
           } satisfies PanelRepoState & { unitPath: string };

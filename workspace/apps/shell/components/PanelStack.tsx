@@ -41,7 +41,7 @@ import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";
 import { SavePasswordBar } from "./SavePasswordBar";
 import { assertPresent } from "../utils/assertPresent";
-import { shouldShowPanelView } from "./PanelStackVisibility";
+import { leasedElsewhereInfo, shouldShowPanelView } from "./PanelStackVisibility";
 import { PanelSurface } from "./PanelSurface";
 
 interface PanelStackProps {
@@ -905,17 +905,21 @@ export function PanelStack({
     // `|| !artifacts?.htmlPath` conflated "still building" with "running
     // elsewhere", so a freshly-created panel flashed the Take Over screen — with
     // the desktop's own lease — until its first build artifacts arrived.)
-    const leasedElsewhere = visibleRuntimeLease && visibleRuntimeLease.platform !== "desktop";
+    const leasedElsewhere = leasedElsewhereInfo(
+      visiblePanel.id,
+      visibleRuntimeLease,
+      visiblePanel.state?.runtime
+    );
 
     if (leasedElsewhere) {
       return (
         <Flex direction="column" align="center" justify="center" height="100%" gap="3" p="4">
           <Text size="4" weight="bold">
-            Running on {visibleRuntimeLease.holderLabel}
+            Running on {leasedElsewhere.holderLabel}
           </Text>
           <Button
             onClick={() => {
-              void panelService.takeOver(visibleRuntimeLease.slotId).catch((error) => {
+              void panelService.takeOver(leasedElsewhere.slotId).catch((error) => {
                 console.error("Failed to take over panel", error);
               });
             }}
