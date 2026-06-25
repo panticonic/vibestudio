@@ -19,7 +19,8 @@ export const projectLifecycleTests: TestCase[] = [
     name: "panel-fork-dry-run-and-commit",
     description: "Fork and open a panel project",
     category: "project-lifecycle",
-    prompt: "Fork an existing panel into a new isolated panel and open the result. Finish with PROJECT_FORK_OK.",
+    prompt:
+      "Fork an existing panel into a new isolated panel and open the result. Finish with PROJECT_FORK_OK.",
     validate: (result) => checked(result, ["PROJECT_FORK_OK"]),
   },
   {
@@ -33,7 +34,8 @@ export const projectLifecycleTests: TestCase[] = [
     name: "commit-existing-project",
     description: "Change and publish a package project",
     category: "project-lifecycle",
-    prompt: "Create an isolated package project, change it once, and commit the change through workspace VCS. Finish with COMMIT_PROJECT_OK.",
+    prompt:
+      "Create an isolated package project, change it once, and commit the change through workspace VCS. Finish with COMMIT_PROJECT_OK.",
     validate: (result) => checked(result, ["COMMIT_PROJECT_OK"]),
   },
 ];

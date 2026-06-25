@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => {
   const files = new Map<string, string | Uint8Array>();
   const dirs = new Set<string>();
-  const applyEdits = vi.fn();
-  return { files, dirs, applyEdits };
+  const edit = vi.fn();
+  const commit = vi.fn();
+  const push = vi.fn();
+  return { files, dirs, edit, commit, push };
 });
 
 function normalize(p: string): string {
@@ -27,7 +29,9 @@ function addFile(p: string, content: string | Uint8Array): void {
 
 vi.mock("@workspace/runtime", () => ({
   vcs: {
-    applyEdits: mocks.applyEdits,
+    edit: mocks.edit,
+    commit: mocks.commit,
+    push: mocks.push,
   },
   fs: {
     async exists(p: string): Promise<boolean> {
@@ -73,45 +77,103 @@ vi.mock("@workspace/runtime", () => ({
   },
 }));
 
-describe("forkProject", () => {
-  beforeEach(() => {
-    mocks.files.clear();
-    mocks.dirs.clear();
-    mocks.applyEdits.mockReset();
-    // Edit-first scaffold: `writeProjectFiles` applies one GAD transition of
-    // create ops. The mock records each created file so fork assertions can
-    // inspect the projected content.
-    mocks.applyEdits.mockImplementation(
-      async (input: {
-        edits: Array<{
-          kind: string;
-          path: string;
-          content?: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
-        }>;
-      }) => {
-        for (const edit of input.edits) {
-          if ((edit.kind === "create" || edit.kind === "write") && edit.content) {
-            const value =
-              edit.content.kind === "text"
-                ? edit.content.text
-                : Uint8Array.from(atob(edit.content.base64), (c) => c.charCodeAt(0));
-            addFile(edit.path, value);
-          }
+function resetRuntimeMocks(): void {
+  mocks.files.clear();
+  mocks.dirs.clear();
+  mocks.edit.mockReset();
+  mocks.commit.mockReset();
+  mocks.push.mockReset();
+  // edit → commit → push scaffold: `writeProjectFiles` records the create ops
+  // as working edits, then commits and pushes the new repo. The edit mock
+  // records each created file so assertions can inspect the projected content.
+  mocks.edit.mockImplementation(
+    async (input: {
+      edits: Array<{
+        kind: string;
+        path: string;
+        content?: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+      }>;
+    }) => {
+      for (const edit of input.edits) {
+        if ((edit.kind === "create" || edit.kind === "write") && edit.content) {
+          const value =
+            edit.content.kind === "text"
+              ? edit.content.text
+              : Uint8Array.from(atob(edit.content.base64), (c) => c.charCodeAt(0));
+          addFile(edit.path, value);
         }
-        return {
-          status: "clean" as const,
-          stateHash: "state:test",
-          eventId: "e",
-          headHash: "h",
-          conflicts: [],
-          changedPaths: input.edits.map((edit) => edit.path),
-        };
       }
+      return {
+        head: "ctx:test",
+        stateHash: "state:test",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: input.edits.map((edit) => edit.path),
+      };
+    }
+  );
+  mocks.commit.mockResolvedValue([
+    {
+      repoPath: "workers/new",
+      head: "ctx:test",
+      stateHash: "state:test",
+      eventId: "e",
+      headHash: "h",
+      editCount: 1,
+      status: "committed" as const,
+      changedPaths: [],
+    },
+  ]);
+  mocks.push.mockResolvedValue({ status: "pushed", repoPaths: ["workers/new"], reports: [] });
+}
+
+describe("createProject", () => {
+  beforeEach(resetRuntimeMocks);
+
+  it("scaffolds a plain project as a content repo under projects/", async () => {
+    const { createProject } = await import("./create-project.js");
+
+    const result = await createProject({
+      projectType: "project",
+      name: "scratch-notes",
+      title: "Scratch Notes",
+    });
+
+    expect(result).toEqual({
+      created: "projects/scratch-notes",
+      files: ["README.md"],
+    });
+    expect(mocks.files.get("projects/scratch-notes/README.md")).toBe(
+      "# Scratch Notes\n\nPlain workspace project.\n"
     );
+    expect(mocks.files.has("projects/scratch-notes/package.json")).toBe(false);
+    expect(mocks.commit).toHaveBeenCalledWith({
+      message: "Scaffold project scratch-notes",
+      repoPaths: ["projects/scratch-notes"],
+    });
+    expect(mocks.push).toHaveBeenCalledWith({ repoPaths: ["projects/scratch-notes"] });
   });
+
+  it("rejects removed agent scaffolding", async () => {
+    const { createProject } = await import("./create-project.js");
+
+    await expect(createProject({ projectType: "agent", name: "helper" })).rejects.toThrow(
+      /panel, package, skill, project, worker/
+    );
+    expect(mocks.edit).not.toHaveBeenCalled();
+  });
+});
+
+describe("forkProject", () => {
+  beforeEach(resetRuntimeMocks);
 
   it("rewrites a single-class worker fork and preserves binary files", async () => {
     addDir("workers/source/.git");
+    addFile("workers/source/.gad/CHECKOUT.json", "{}");
+    addFile("workers/source/.env", "SECRET=yes\n");
+    addFile("workers/source/debug.log", "debug\n");
+    addFile("workers/source/node_modules/pkg/index.js", "module.exports = {}\n");
     addFile(
       "workers/source/package.json",
       JSON.stringify({
@@ -138,8 +200,10 @@ describe("forkProject", () => {
 
     expect(result.committed).toBe(true);
     expect(result.files).toContain("new-worker.ts");
-    // The fork wrote all files through a single GAD applyEdits transition.
-    expect(mocks.applyEdits).toHaveBeenCalledTimes(1);
+    // The fork wrote all files through one vcs.edit, then committed + pushed.
+    expect(mocks.edit).toHaveBeenCalledTimes(1);
+    expect(mocks.commit).toHaveBeenCalledTimes(1);
+    expect(mocks.push).toHaveBeenCalledTimes(1);
     // The fork wrote its files through one edit-first GAD transition.
     expect(JSON.parse(mocks.files.get("workers/new/package.json") as string)).toMatchObject({
       name: "@workspace-workers/new",
@@ -152,5 +216,13 @@ describe("forkProject", () => {
     expect(mocks.files.get("workers/new/new-worker.ts")).toContain("class NewWorker");
     expect(mocks.files.get("workers/new/new-worker.ts")).toContain("workers/new");
     expect(mocks.files.get("workers/new/icon.png")).toBeInstanceOf(Uint8Array);
+    expect(result.files).not.toContain(".gad/CHECKOUT.json");
+    expect(result.files).not.toContain(".env");
+    expect(result.files).not.toContain("debug.log");
+    expect(result.files).not.toContain("node_modules/pkg/index.js");
+    expect(mocks.files.has("workers/new/.gad/CHECKOUT.json")).toBe(false);
+    expect(mocks.files.has("workers/new/.env")).toBe(false);
+    expect(mocks.files.has("workers/new/debug.log")).toBe(false);
+    expect(mocks.files.has("workers/new/node_modules/pkg/index.js")).toBe(false);
   });
 });

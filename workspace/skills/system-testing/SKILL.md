@@ -14,7 +14,7 @@ Spin up headless agentic sessions to systematically test every NatStack capabili
 | runner.ts                                  | `HeadlessRunner` — spawn headless sessions from eval with one line |
 | test-runner.ts                             | `TestRunner` — orchestrate test suites, collect full diagnostics   |
 | types.ts                                   | `TestCase`, `TestResult`, `TestSuiteResult`, `TestExecutionResult` |
-| tests/                                     | 94 pre-built test cases across 19 categories                       |
+| tests/                                     | 97 pre-built test cases across 19 categories                       |
 | deterministic.ts                           | Bridge to `@workspace/testkit` deterministic suites (see below)    |
 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) | Workflow for analyzing failures and committing fixes               |
 
@@ -36,6 +36,14 @@ profiling); system-testing = agentic layer (LLM-driven sessions judged by
 validators). Prefer testkit when expected behavior is exactly specifiable.
 
 ## Quick Start
+
+`HeadlessRunner.spawn()` creates an isolated agent context by default. This keeps
+tests from sharing working VCS state with the orchestrating panel or with each
+other. If a scenario genuinely needs multiple actors, make it a harness-level
+`TestCase.orchestrate(...)` flow and spawn multiple headless sessions; do not
+prompt one agent to write a foreign `ctx:*` head. Use `runner.spawn({ context:
+"parent" })` only for tests that intentionally exercise the orchestrator's
+current context.
 
 ```
 eval({
@@ -90,8 +98,10 @@ eval calls.
 > `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, `help`, and (in agent
 > eval) `chat` are **pre-injected ambient globals** in eval — use them directly.
 > Do **not** `import` any of them from `@workspace/runtime`. The context id is
-> `ctx.contextId`; reach services through `services.<svc>.<method>(...)` or
-> `rpc.call("<svc>.<method>", [...])`. Run the block below as written.
+> `ctx.contextId`; reach raw service catalog methods through
+> `rpc.call("<svc>.<method>", [...])`. `services.<svc>` is convenience sugar and
+> may be an ergonomic runtime client when the service name collides with a
+> runtime binding. Run the block below as written.
 
 ```
 eval({
@@ -485,14 +495,15 @@ If `tester.runSuite(...)` throws before `scope.results` is set, capture bounded
 runtime diagnostics from the orchestrating channel instead of retrying blindly:
 
 ```typescript
-// In eval, `rpc` is injected (do not import it). `gad`/`build` are reached as
-// services: rpc.call("<svc>.<method>", [args]) or services.<svc>.<method>(...).
+// In eval, `rpc` is injected (do not import it). Raw service catalog calls use
+// rpc.call("<svc>.<method>", [args]); services.<svc> is convenience sugar for
+// non-colliding names.
 const channelId = "chat-...";
 const branchId = `branch:channel:${channelId}`;
 
 return {
-  health: await rpc.call("gad.inspectAgentHealth", [{ channelId, branchId }]),
-  build: await rpc.call("build.inspectBuildProvenance", [
+  health: await rpc.call("main", "gad.inspectAgentHealth", [{ channelId, branchId }]),
+  build: await rpc.call("main", "build.inspectBuildProvenance", [
     "@workspace-skills/system-testing",
   ]),
 };
@@ -501,33 +512,41 @@ return {
 You can also call `await runner.collectDiagnostics({ channelId, error })` to
 produce the same bounded packet explicitly.
 
-System-testing runs from a panel and uses that panel's stable `panel.slotId` as
-its channel/client identity. Do not key orchestrator channel state on
-`rpc.selfId`;
-that is the current runtime entity and may change when the panel is recreated.
+System-testing commonly runs from server-side eval. For eval, worker, and
+Durable Object orchestrators, `HeadlessRunner` uses the caller's authorized
+runtime identity (`rpc.selfId`) as its PubSub participant id. Do not invent
+synthetic client ids such as `headless-*`; PubSub rejects connectionless callers
+that subscribe as a different participant. Panel-only orchestrators with a
+stable panel slot may use that slot id.
 
 ### Background build failures
 
-Some build failures happen after a successful VCS commit, on the server's
-state-triggered background build path. Those failures are not returned by the
-commit call itself. Query the build service before retrying or guessing:
+A `vcs.push` is itself the build gate: a `build-failed` push advances no head and
+returns structured `file:line:col` diagnostics directly. Some other build
+failures still happen on the server's state-triggered background build path,
+separate from a push. To inspect those, query the build service before retrying
+or guessing:
 
 ```typescript
-// `rpc` is injected in eval — do not import it. The eval `rpc.call(method, args)`
-// targets the server, so pass just "<svc>.<method>" (no "main" target argument).
+// Eval uses the same portable `rpc.call(target, method, args)` shape as panels/workers.
+// Raw server services target "main".
 return {
-  recent: await rpc.call("build.listRecentBuildEvents", []),
-  forUnit: await rpc.call("build.listRecentBuildEvents", ["panels/example"]),
-  panel: await rpc.call("build.inspectBuildProvenance", ["panels/example"]),
+  recent: await rpc.call("main", "build.listRecentBuildEvents", []),
+  forUnit: await rpc.call("main", "build.listRecentBuildEvents", ["panels/example"]),
+  panel: await rpc.call("main", "build.inspectBuildProvenance", ["panels/example"]),
 };
 ```
 
 `build.listRecentBuildEvents` accepts an optional unit name or workspace path,
 for example `["panels/example"]`. Events include `build-error` messages and, for
 state-triggered builds, a `trigger` with head, state hash, changed paths, and the
-verified caller that caused the edit when the server can attribute it. An edit
-applied via `vcs.applyEdits(...)` returns the resulting `stateHash` and
-`changedPaths`; pass the unit path here for the matching build-event lookup.
+verified caller that caused the edit when the server can attribute it. Authoritative
+builds run at the push gate. A `vcs.commit(...)` returns a repo-rooted
+`stateHash` and `changedPaths`; push/build events expose the workspace-rooted
+trigger state used by the build. Pass the unit path here for matching
+build-event lookup.
+A `vcs.edit(...)` (uncommitted working change) does not build — use
+`vcs.previewBuild({ repoPaths })` for an on-demand build of working content.
 
 ### Agent debug port
 
@@ -571,7 +590,7 @@ if (fail.execution.snapshot) {
 | ------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `smokeTests`              | 4     | Basic sanity: eval, fs, package import, file tools                                                                                     |
 | `filesystemTests`         | 9     | All fs operations: read/write, dirs, stats, symlinks, handles                                                                          |
-| `vcsTests`                | 6     | GAD workspace status, commit, log, state diff, exact apply-edits, publish status                                                       |
+| `vcsTests`                | 9     | edit (uncommitted working ops) → commit → ff-only push, plus log, state diff, discardEdits, push status, divergence → merge → push     |
 | `panelTests`              | 5     | Open, browser panel create+navigate, screenshot, evaluate, list sources                                                                |
 | `workerTests`             | 6     | Create, list, unified RPC DO calls, destroy, env bindings, list sources                                                                |
 | `buildTests`              | 4     | Workspace + npm builds, build at GAD state ref, eval imports                                                                           |
@@ -589,7 +608,7 @@ if (fail.execution.snapshot) {
 | `harnessResilienceTests`  | 5     | Eval errors, huge returns, visible timeouts, invalid args, post-tool follow-ups                                                        |
 | `docsProbeTests`          | 10    | Scenario probes that require agents to apply relevant skills, not summarize docs                                                       |
 
-Use `allTests()` to get all 94 tests combined. For full-suite execution, prefer
+Use `allTests()` to get all 97 tests combined. For full-suite execution, prefer
 the staged-progress pattern above: initialize `testStages(allTests())`, build
 feedback choices with `testStageChoices(stages)`, run one selected stage per
 eval with a bounded concurrency cap (`1` for `workers`, at most `2` elsewhere),
@@ -604,18 +623,23 @@ with ordinary smoke testing:
 
 - state args must update the caller panel immediately from the returned host
   snapshot, while host-published events still update non-callers
-- browser-panel workspace edits must go through `edit`/`write`/`vcs.applyEdits`
-  (edit-first — they commit + project atomically, no separate commit step);
-  external Git remotes use `@natstack/git` with `credentials.gitHttp()`
+- browser-panel workspace edits go through `edit`/`write`/`vcs.edit` as
+  UNCOMMITTED working changes (projected to disk, not yet a commit); a deliberate
+  `vcs.commit(message)` then seals them, and `vcs.push` fast-forwards them into
+  `main`; external Git remotes use `@natstack/git` with `credentials.gitHttp()`
 - GAD raw SQL uses positional `(sql, bindings)` calls
 - channel/history inspection must stay bounded enough for agent context
 - large eval/tool results must complete visibly without pending invocation
   spinners or silent turns
 - the standard agent participant debug method should be discoverable
 - rich interaction surfaces must exercise MDX, `inline_ui`,
-  `load_action_bar`, and custom messages without hand-writing raw channel rows
-- project lifecycle flows must create real projects (scaffolding applies files
-  as one `vcs.applyEdits` transition — no separate commit step), fork
+  `load_action_bar`, and custom messages without hand-writing raw channel rows.
+  Because normal headless sessions do not have browser-panel UI tools, the
+  `inline_ui` and `load_action_bar` tests opt into the runner's synthetic panel
+  UI methods; those methods advertise the panel tools and publish the same typed
+  UI events, but they do not verify browser mounting or pixels.
+- project lifecycle flows must create real projects (scaffolding records files
+  as working edits via `vcs.edit`, then seals them with `vcs.commit`), fork
   panel and worker sources, open the result, and inspect snapshots/state
 - CDP/Playwright automation must be able to mutate browser UI, type/click,
   evaluate DOM state, and take screenshots through runtime panel handles
@@ -673,19 +697,33 @@ See `meta/natstack.yml` for the current testing agent configuration.
 
 ## Build Model
 
-**Workspace runtime units are built from the committed context head, in lockstep with your edits.** When fixing bugs in workspace source files (`apps/`, `extensions/`, `packages/`, `panels/`, `workers/`, `skills/`), edit with the `edit`/`write` tools or `vcs.applyEdits` — each edit commits to your context head and projects to disk atomically, so it takes effect for builds immediately with no separate commit step. Do not edit via `fs.writeFile` and expect it to build: the worktree is a disposable projection and the build system reads committed GAD state, so the edit must land on the head.
+**The model is edit → commit → push, a three-layer pipeline.** `vcs.edit` records
+UNCOMMITTED working changes on your context head — tracked durably with provenance
+and projected to disk, but NOT a commit: no head advance, no vcs.log entry, no
+build. `vcs.commit(message)` folds your uncommitted edits into a deliberate
+snapshot per repo, advancing the context head. `vcs.push` is fast-forward-only: it
+ships committed changes into the repo's `main` and is the authoritative build gate.
+When fixing bugs in workspace source files (`apps/`, `extensions/`, `packages/`,
+`panels/`, `workers/`, `skills/`), edit with the `edit`/`write` tools or `vcs.edit`
+(the working content projects to disk so a `vcs.previewBuild` sees it), then
+`vcs.commit` to seal the change and `vcs.push` to build + ship it. Do not edit via
+`fs.writeFile` and expect it to be tracked: the worktree is a disposable projection
+and the VCS reads GAD state, so the edit must land on the head via the edit tools.
 
 When a loose system test asks for VCS status, logs, or diffs, use the documented
 runtime API shape rather than guessing from filesystem terms:
 
-- `vcs.status()` reports the current context head's unpublished changes vs `main` (a GAD state-diff, not filesystem dirtiness); its optional argument is a materialized VCS head such as `main` or `ctx:...`.
-- `vcs.applyEdits({ baseStateHash, edits })` applies an edit to the context head (commits + projects atomically) and returns `stateHash` and `changedPaths`.
-- `vcs.diff(leftStateHash, rightStateHash)` compares committed state hashes.
-- `vcs.readFile("", "path")` reads from the current context/head.
-- `vcs.publishStatus()` reports unpublished context changes without moving `main`.
+- `vcs.status(repoPath, head?)` reports a repo head's unpushed changes vs the repo's own `main` (a GAD state-diff, not filesystem dirtiness) plus an `uncommitted` count of working edits; `repoPath` is a positional repo path (e.g. `panels/chat`) and the optional second arg is a materialized head such as `main` or `ctx:...`.
+- `vcs.edit({ edits })` records UNCOMMITTED working edits on your per-repo context head (routing each edit to its owning repo by path) and returns `stateHash`, `editSeq`, and `changedPaths` with `committed: false`. It does NOT commit, advance the head, or build.
+- `vcs.commit({ message })` folds your uncommitted edits into a snapshot per repo (`message` mandatory), advancing each context head; returns per-repo results with `stateHash` and `editCount`. `exclude` leaves listed paths uncommitted.
+- `vcs.discardEdits(repoPath)` drops a repo's uncommitted working edits (and any pending merge), restoring the committed head on disk.
+- `vcs.diff(leftStateHash, rightStateHash)` compares repo-rooted committed state hashes. To build at one of those states, first call `vcs.workspaceViewWithRepoAt(repoPath, repoStateHash)` and pass the returned workspace-rooted `stateHash` to `build.getBuild`.
+- `vcs.readFile("", "path", repoPath)` reads from a repo's current head (working content included).
+- `vcs.pushStatus(["panels/chat"])` reports how far each repo is ahead of its `main` (pre-push), its `uncommitted` count, and whether it has `diverged`, without moving anything.
+- `vcs.push({ repoPaths: ["panels/chat"] })` fast-forwards committed changes into each repo's `main`, build-gated. It REJECTS while edits are uncommitted (commit first) and, on divergence (main moved past your base), returns a structured `{ status: "diverged", divergences }` instead of pushing. Reconcile with `vcs.merge(repoPath)`, `vcs.commit(message)`, then re-push so it fast-forwards. Multiple repoPaths push as one atomic group.
 
-Do not pass workspace roots, cwd values, or unit paths to `vcs.status` or
-`vcs.diff`; those methods are not filesystem-root based.
+Pass a positional repo path to `vcs.status`; do not pass workspace roots, cwd
+values, or filesystem paths to `vcs.status` or `vcs.diff`.
 
 GAD VCS implementation files live under `src/server/services/vcsService.ts`,
 `src/server/gadVcs/`, and the runtime client
@@ -709,4 +747,7 @@ userland detection snippet.
 
 ## Environment Compatibility
 
-This skill requires a panel context (it uses the panel's `rpc` and stable `panel.slotId` for the PubSub connection and channel identity). It cannot run headlessly itself — it's the testing _orchestrator_ that spawns headless test sessions.
+This skill can run from server-side eval, workers, Durable Objects, or panels.
+In eval/worker/DO contexts the orchestrator must use its own `rpc.selfId` as the
+PubSub participant id. It then spawns separate headless test sessions for the
+individual test agents.

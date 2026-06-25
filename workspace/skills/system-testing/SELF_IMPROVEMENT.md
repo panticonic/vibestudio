@@ -311,17 +311,17 @@ captures dispatcher state, runner phase, persisted pending work, checkpoints,
 and recent lifecycle/debug events. See `docs/agent-debug-port.md` for the full
 field guide.
 
-If a build failure follows a successful VCS commit, inspect the server's
-state-triggered build event buffer before retrying. The commit call can return
-before the background build finishes:
+A `vcs.push` is build-gated and returns its own diagnostics, but if a build
+failure shows up on the server's state-triggered background build path (separate
+from a push), inspect the build event buffer before retrying:
 
 ```typescript
-// `rpc` is injected in eval — do not import it. The eval `rpc.call(method, args)`
-// targets the server, so pass just "<svc>.<method>" (no "main" target argument).
+// Eval uses the same portable `rpc.call(target, method, args)` shape as panels/workers.
+// Raw server services target "main".
 return {
-  recent: await rpc.call("build.listRecentBuildEvents", []),
-  forUnit: await rpc.call("build.listRecentBuildEvents", ["panels/example"]),
-  unit: await rpc.call("build.inspectBuildProvenance", [
+  recent: await rpc.call("main", "build.listRecentBuildEvents", []),
+  forUnit: await rpc.call("main", "build.listRecentBuildEvents", ["panels/example"]),
+  unit: await rpc.call("main", "build.inspectBuildProvenance", [
     "panels/example",
   ]),
 };
@@ -329,9 +329,12 @@ return {
 
 `build.listRecentBuildEvents` can be filtered with a unit name or
 workspace-relative path. State-triggered events include `trigger.head`,
-`trigger.stateHash`, and `trigger.changedPaths`. An edit applied via
-`vcs.applyEdits(...)` returns the resulting `stateHash` and `changedPaths`;
-pass the unit path here for the matching build-event lookup.
+`trigger.stateHash`, and `trigger.changedPaths`. Builds run authoritatively at
+the push gate. A `vcs.commit(...)` returns a repo-rooted `stateHash` and
+`changedPaths`; build events expose the workspace-rooted trigger state. Pass the
+unit path here for the matching build-event lookup. A
+`vcs.edit(...)` (uncommitted working change) does not build — use
+`vcs.previewBuild({ repoPaths })` for an on-demand build of working content.
 
 ## Phase 3: Classify the Root Cause
 
@@ -388,9 +391,9 @@ Pick the checkout type based on what failed.
 If the bug is in workspace-owned runtime source — from your file root that is
 `apps/`, `extensions/`, `packages/`, `panels/`, `workers/`, or `skills/` —
 edit the files directly in your context with the `edit`/`write` tools (which
-apply through `vcs.applyEdits`). Each edit commits to your context head and
-projects to disk atomically — there is no separate commit step. These trees are
-live build inputs.
+record working edits through `vcs.edit`). Each edit lands as an UNCOMMITTED
+working change projected to disk; seal a milestone with `vcs.commit(message)` and
+ship it (build-gated) with `vcs.push`. These trees are live build inputs.
 
 For `apps/` bugs, read `skills/appdev/SKILL.md` before
 editing. App fixes can require target-specific validation: Electron host chrome,
@@ -457,7 +460,7 @@ does not exist yet and the workspace is not dogfood-managed, import it with
 destination path, remote URL, and branch; records the shared remote in
 `meta/natstack.yml`; clones into canonical workspace source; and propagates the
 repo into contexts. The same API can import panels, packages, skills, workers,
-agents, templates, about pages, and plain projects by choosing the destination
+templates, about pages, and plain projects by choosing the destination
 path.
 
 ```
@@ -517,11 +520,20 @@ await fs.writeFile("projects/natstack/src/server/services/fsService.ts", fixedCo
 
 ## Phase 7: Publish, then Verify
 
-**Critical:** The build system builds from the committed context head, which is in lockstep with your edits. Edits made via the `edit`/`write` tools (or `vcs.applyEdits`) commit to your context head and project to disk atomically — there is no separate commit step. A stray `fs.writeFile` that never lands on the head has no effect on the build.
+**Critical:** The model is edit → commit → push. `vcs.edit` (and the `edit`/`write`
+tools) records UNCOMMITTED working changes projected to disk; `vcs.commit(message)`
+seals them onto your context head; `vcs.push` is the fast-forward-only build gate
+that ships them into `main`. A stray `fs.writeFile` that never lands on the head is
+not tracked and has no effect on the VCS.
 
 ```typescript
-// For workspace runtime units, editing via edit/write/vcs.applyEdits already
-// committed the change to your context head — no separate commit call needed.
+// For workspace runtime units, editing via edit/write/vcs.edit records an
+// UNCOMMITTED working change. Seal it with vcs.commit(message), then ship it
+// (build-gated) with vcs.push so the build runs authoritatively.
+// const committed = await services.vcs.commit({ message: "fix: describe the change" });
+// const pushed = await services.vcs.push({ repoPaths: [scope.checkoutDir] });
+// // push is ff-only: if it returns { status: "diverged" }, reconcile with
+// // vcs.merge(repoPath) + vcs.commit(message), then re-push.
 
 // For plain external project repos, use @natstack/git with credentials.gitHttp():
 // const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
@@ -560,8 +572,8 @@ console.log(`Re-test: ${retest.result.passed ? "PASS" : "FAIL"}`);
 Before assuming a fix failed, verify provenance:
 
 - the checkout containing the edit is the context the test is using
-- the edit landed on the head via `edit`/`write`/`vcs.applyEdits` (not a stray `fs.writeFile`)
-- the build/reload consumed the committed state
+- the edit landed on the head via `edit`/`write`/`vcs.edit` and was sealed with `vcs.commit` (not a stray `fs.writeFile`)
+- the build/reload consumed the committed state (an uncommitted `vcs.edit` does not build — commit + push, or use `vcs.previewBuild`)
 - external project edits under `projects/` were applied to the server under test
 
 Planned hardening: expose a runtime build-provenance API with context id,

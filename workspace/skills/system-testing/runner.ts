@@ -44,7 +44,9 @@ export class HeadlessRunner {
    * The test agent's eval executes server-side in the agent's own EvalDO. The
    * agent uses the standard NatStack chat prompt and tool surface; panel/UI
    * tools like inline_ui and feedback_form are simply absent because no panel
-   * is connected to this headless session.
+   * is connected to this headless session. Tests that specifically exercise
+   * UI-tool selection may opt into synthetic panel UI methods; those publish
+   * the same typed channel events but do not mount browser renderers.
    *
    * Per-test prompt overrides can be passed through spawn extraConfig as
    * `systemPrompt` and `systemPromptMode`.
@@ -52,6 +54,18 @@ export class HeadlessRunner {
   async spawn(opts?: {
     source?: string;
     className?: string;
+    /**
+     * System tests default to isolated agent contexts so VCS state cannot leak
+     * across tests or through the orchestrating panel. Use "parent" only when a
+     * test explicitly needs the orchestrator's context.
+     */
+    context?: "isolated" | "parent";
+    /**
+     * Test-only harness mode: advertise panel-local UI methods from the
+     * headless client so spawned agents can exercise inline_ui/action-bar tool
+     * calls and typed UI event publication without a browser panel.
+     */
+    syntheticPanelUiTools?: boolean;
   }): Promise<HeadlessSession> {
     return HeadlessSession.createWithAgent({
       config: {
@@ -61,7 +75,8 @@ export class HeadlessRunner {
       rpcCall: (t: string, m: string, args: unknown[]) => rpcConfig.call(t, m, args),
       source: opts?.source ?? "workers/agent-worker",
       className: opts?.className ?? "AiChatWorker",
-      contextId: this.contextId,
+      ...(opts?.context === "parent" ? { contextId: this.contextId } : {}),
+      includeSyntheticPanelUiMethods: opts?.syntheticPanelUiTools === true,
       // The model rides the spawned agent's CREATION config (per-agent, seeded
       // from stateArgs.agentConfig) so it inherits the orchestrator's model.
       extraConfig: {

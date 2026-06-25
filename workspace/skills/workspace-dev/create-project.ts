@@ -1,10 +1,10 @@
 import { fs, vcs } from "@workspace/runtime";
 
 // ---------------------------------------------------------------------------
-// writeProjectFiles — GAD-native scaffold write. Edit-first: the write IS the
-// commit (one atomic transition on the caller's context head); disk is a
-// projection of the head, never written behind GAD's back. There is no
-// separate commit step.
+// writeProjectFiles — GAD-native scaffold write. Follows the edit → commit →
+// push model: record the new files as working edits (vcs.edit), fold them into
+// a messaged snapshot (vcs.commit), then build-gate the new repo into main
+// (vcs.push). Disk is a projection of the head, never written behind GAD's back.
 // ---------------------------------------------------------------------------
 
 /** Encode bytes as base64 for GAD binary file content. */
@@ -18,13 +18,14 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Create a set of new project files as one atomic GAD transition, rooted at
- * `dir`. GAD addresses files by full path — no parent directories to create —
- * and `applyEdits` both commits to the head and projects the files to disk.
+ * Create a set of new project files rooted at `dir`, then commit + push them.
+ * GAD addresses files by full path (no parent directories to create). `dir` is
+ * the new project's repo path, so commit/push are scoped to it.
  */
 async function writeProjectFiles(
   dir: string,
-  files: Record<string, string | Uint8Array>
+  files: Record<string, string | Uint8Array>,
+  message: string
 ): Promise<void> {
   const root = dir.replace(/^\/+/, "").replace(/\/+$/, "");
   const edits = Object.entries(files).map(([filePath, content]) => ({
@@ -35,14 +36,18 @@ async function writeProjectFiles(
         ? { kind: "text" as const, text: content }
         : { kind: "bytes" as const, base64: bytesToBase64(content) },
   }));
-  await vcs.applyEdits({ edits });
+  // edit → commit → push: record the working edits, seal the snapshot, then
+  // build-gate the new repo into main.
+  await vcs.edit({ edits });
+  await vcs.commit({ message, repoPaths: [root] });
+  await vcs.push({ repoPaths: [root] });
 }
 
 const TYPE_DIRS: Record<string, string> = {
   panel: "panels",
   package: "packages",
   skill: "skills",
-  agent: "agents",
+  project: "projects",
   worker: "workers",
 };
 
@@ -50,9 +55,10 @@ const PACKAGE_SCOPES: Record<string, string> = {
   panel: "@workspace-panels",
   package: "@workspace",
   skill: "@workspace-skills",
-  agent: "@workspace-agents",
   worker: "@workspace-workers",
 };
+
+const SUPPORTED_PROJECT_TYPES = Object.keys(TYPE_DIRS).join(", ");
 
 function toPascalCase(str: string): string {
   return str
@@ -72,7 +78,7 @@ export async function createProject(params: {
   const typeDir = TYPE_DIRS[projectType];
   if (!typeDir)
     throw new Error(
-      `Unknown project type: ${projectType}. Must be one of: panel, package, skill, agent, worker`
+      `Unknown project type: ${projectType}. Must be one of: ${SUPPORTED_PROJECT_TYPES}`
     );
 
   const scope = PACKAGE_SCOPES[projectType];
@@ -276,17 +282,8 @@ function ${toPascalCase(name)}Content() {
       files["SKILL.md"] = `---\nname: ${name}\ndescription: ${title}\n---\n\n# ${title}\n`;
       break;
 
-    case "agent":
-      files["package.json"] = JSON.stringify(
-        {
-          name: `${scope}/${name}`,
-          version: "0.1.0",
-          natstack: { type: "agent", title },
-        },
-        null,
-        2
-      );
-      files["index.ts"] = `/**\n * ${title} agent\n */\n\nconsole.log("${title} agent started");\n`;
+    case "project":
+      files["README.md"] = `# ${title}\n\nPlain workspace project.\n`;
       break;
 
     case "worker":
@@ -426,20 +423,67 @@ export default {
       break;
   }
 
-  // Write the scaffold as one atomic GAD transition (edit-first: the write is
-  // the commit; no separate commit step).
-  await writeProjectFiles(projectPath, files);
+  // Write the scaffold, then commit + push the new repo (edit → commit → push).
+  await writeProjectFiles(projectPath, files, `Scaffold ${projectType} ${name}`);
 
   return { created: projectPath, files: Object.keys(files) };
 }
 
-const COPY_SKIP_DIRS = new Set([".git", "node_modules", ".cache", ".databases", "dist", "build"]);
+const COPY_SKIP_DIRS = new Set([
+  ".cache",
+  ".contexts",
+  ".databases",
+  ".gad",
+  ".git",
+  ".natstack",
+  ".parcel-cache",
+  ".pnpm-store",
+  ".testkit",
+  ".tmp",
+  ".turbo",
+  ".vite",
+  "build",
+  "coverage",
+  "dist",
+  "dist_electron",
+  "node_modules",
+  "out",
+  "release",
+  "test-results",
+]);
+
+const COPY_SKIP_FILES = new Set([
+  ".DS_Store",
+  ".npmrc",
+  ".npmrc.dist-tag-temp",
+  ".secrets.yml",
+  "firebase-service-account.json",
+  "GoogleService-Info.plist",
+  "google-services.json",
+  "Thumbs.db",
+]);
+
+function shouldSkipCopiedFile(name: string): boolean {
+  return (
+    COPY_SKIP_FILES.has(name) ||
+    name === ".env" ||
+    name.startsWith(".env.") ||
+    name.endsWith(".log") ||
+    name.endsWith(".tmp") ||
+    name.endsWith(".swp") ||
+    name.endsWith(".swo") ||
+    name.endsWith(".sublime-workspace") ||
+    name.endsWith(".tsbuildinfo") ||
+    name.endsWith(".tgz") ||
+    name.endsWith("~")
+  );
+}
 
 export interface ForkProjectOptions {
   from: string;
   to: string;
   title?: string;
-  projectType?: "panel" | "worker" | "package" | "skill" | "agent";
+  projectType?: "panel" | "worker" | "package" | "skill" | "project";
   dryRun?: boolean;
   rewrite?:
     | boolean
@@ -500,6 +544,7 @@ async function listFilesRecursive(dir: string, prefix = ""): Promise<string[]> {
   })) as Array<{ name: string; _isDirectory?: boolean; isDirectory?: () => boolean }>;
   for (const entry of entries) {
     if (COPY_SKIP_DIRS.has(entry.name)) continue;
+    if (shouldSkipCopiedFile(entry.name)) continue;
     const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
     const isDir =
       typeof entry.isDirectory === "function" ? entry.isDirectory() : entry._isDirectory;
@@ -695,7 +740,7 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
 
   const initialFiles: Record<string, string | Uint8Array> = {};
   for (const [rel, content] of Object.entries(planned)) initialFiles[rel] = content;
-  await writeProjectFiles(to, initialFiles);
+  await writeProjectFiles(to, initialFiles, `Fork ${from} -> ${to}`);
   return {
     source: from,
     created: to,
