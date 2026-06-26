@@ -1,0 +1,14 @@
+{
+  "name": "@workspace-panels/hello-vanilla",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "title": "Hello Vanilla",
+    "entry": "index.ts",
+    "template": "vanilla"
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*"
+  }
+}

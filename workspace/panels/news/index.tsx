@@ -17,7 +17,7 @@ import {
   type DurableObjectServiceClient,
 } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
-import { usePaletteCommands, usePanelTheme } from "@workspace/react";
+import { usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
@@ -463,7 +463,7 @@ function ArticleItem({
 export default function NewsPanel() {
   const theme = usePanelTheme();
   const appTheme = useAppTheme();
-  const stateArgs = panel.stateArgs.use<NewsStateArgs>();
+  const stateArgs = useStateArgs<NewsStateArgs>();
   const resolvedContextId = resolveNewsContextId(stateArgs.contextId, runtimeContextId);
 
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);

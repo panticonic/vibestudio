@@ -1565,6 +1565,25 @@ importers:
         specifier: workspace:*
         version: link:../../packages/ui
 
+  workspace/panels/hello-svelte:
+    dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@workspace/svelte':
+        specifier: workspace:*
+        version: link:../../packages/svelte
+    devDependencies:
+      svelte:
+        specifier: ^5.55.0
+        version: 5.55.0
+
+  workspace/panels/hello-vanilla:
+    dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
   workspace/panels/news:
     dependencies:
       '@natstack/shared':

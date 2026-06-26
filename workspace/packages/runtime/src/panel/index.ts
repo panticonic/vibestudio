@@ -188,7 +188,7 @@ export type { NotificationClient } from "./notifications.js";
 export type { CdpAutomation, CdpEndpoint } from "./cdpAutomation.js";
 
 // --- Panel-only affordances under the `panel` namespace (panel target only) ---
-import { getStateArgs, useStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js";
+import { getStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js";
 
 /**
  * Reopen THIS panel in place under a (possibly new) context + state args — a
@@ -237,7 +237,6 @@ export const panel = helpfulNamespace("panel", {
   stateArgs: helpfulNamespace("panel.stateArgs", {
     get: getStateArgs,
     set: setStateArgs,
-    use: useStateArgs,
     setForPanel: setStateArgsForPanel,
   }),
 });

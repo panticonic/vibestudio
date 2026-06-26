@@ -118,6 +118,12 @@
       "@workspace-panels/terminal": [
         "workspace/panels/terminal/index.tsx"
       ],
+      "@workspace-panels/hello-vanilla": [
+        "workspace/panels/hello-vanilla/index.ts"
+      ],
+      "@workspace-panels/hello-svelte": [
+        "workspace/panels/hello-svelte/index.ts"
+      ],
       "@workspace-extensions/shell": [
         "workspace/extensions/shell/index.ts"
       ],

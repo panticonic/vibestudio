@@ -83,8 +83,8 @@ await panel.stateArgs.set({ theme: "dark" });
 ```
 
 `panel.stateArgs.set()` persists through the host and immediately applies the
-returned, validated snapshot to the caller panel. `panel.stateArgs.use()`
-re-renders from that local snapshot and from later host-published
+returned, validated snapshot to the caller panel. The `useStateArgs()` hook
+(from `@workspace/react`) re-renders from that local snapshot and from later host-published
 `runtime:stateArgsChanged` events for updates made elsewhere.
 
 From an agent-held handle:

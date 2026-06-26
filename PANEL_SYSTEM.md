@@ -48,86 +48,100 @@ my-panel/
 
 ## Workspace Templates
 
-The `template` field in the natstack config selects a workspace template from `workspace/templates/{name}/`. Each template provides a `template.json` (framework config) and an `index.html` (HTML shell).
+The `template` field in the natstack config selects a workspace template from `workspace/templates/{name}/`. Each template provides a `template.json` (framework config) and an `index.html` (HTML shell that loads `bundle.js` into `#root`). The template defines the framework, so panels do not need a separate `framework` field.
 
-The `"default"` template (`workspace/templates/default/`) provides React + Radix UI and is used when no `template` is specified. Most panels should use the default. The template defines the framework, so panels do not need a separate `framework` field.
+Three frameworks are supported, one per template:
 
-Alternative templates (e.g., Svelte) can be used by setting the `template` field and adding the corresponding runtime package (e.g., `@workspace/svelte`).
+| Template | Framework | UI layer | Binding package |
+|----------|-----------|----------|-----------------|
+| `default` (`workspace/templates/default/`) | `react` | React + Radix UI | `@workspace/react` |
+| `svelte` (`workspace/templates/svelte/`) | `svelte` | Svelte 5 | `@workspace/svelte` |
+| `vanilla` (`workspace/templates/vanilla/`) | `vanilla` | none — pure DOM | none (`@workspace/runtime` only) |
+
+Most panels should use the `default` (React) template. To use another framework, set the `template` field and depend on its binding package (or none for vanilla). Canonical examples: `panels/hello-svelte` (Svelte) and `panels/hello-vanilla` (vanilla); see [PANEL_DEVELOPMENT.md](PANEL_DEVELOPMENT.md) for how to write each.
+
+### Framework resolution order
+
+The build's `src/server/buildV2/templateResolver.ts` picks the HTML shell and framework from the panel's source in this order:
+
+1. **Panel owns an `index.html`** → it is self-contained: its own HTML is used, and the default template's framework does **not** bleed in.
+2. **Otherwise, an explicit `natstack.template`** → that template's `index.html` and `template.json` are used.
+3. **Otherwise, the default template** (`templates/default/`, React) is used.
+
+The framework id is read from the chosen template's `template.json` (`{"framework": ...}`). When no template applies (a self-contained panel, or no template at all), it falls back to dependency auto-detection: `@workspace/react` ⇒ `react`, `@workspace/svelte` ⇒ `svelte`, neither ⇒ `vanilla`.
 
 ## Core Runtime API
 
 ```typescript
 import {
-  // Identity
-  id,                    // Current panel runtime entity ID
-  entityId,              // Same current runtime entity ID
-  slotId,                // Stable visible panel slot ID
-  parentId,              // Parent's ID or null
+  // Identity & storage context (top-level)
+  id,                    // Current runtime entity ID (changes on navigate/reopen)
   contextId,             // Storage context ID
 
-  // Navigation
-  buildPanelLink,        // Build URL for panel navigation
-
-  // Panel handles and tree
-  parent,                // Parent PanelHandle surface; operations fail loudly when root has no parent
-  panelTree,             // Get/list/open/focus/drive any panel-tree member
-  getPanelHandle,        // Get a PanelHandle by ID
-  listPanels,            // List accessible panels
-  getParent,             // Get typed parent PanelHandle or null
-  getParentWithContract, // Get contract-typed parent PanelHandle or null
+  // The `panel` namespace — identity, theme, lifecycle, state args
+  panel,                 // panel.slotId / entityId / parentId / env;
+                         // panel.getTheme() / onThemeChange() / getInfo();
+                         // panel.focusPanel() / onFocus() / onConnectionError() / reopen();
+                         // panel.registerPaletteCommands() / onPaletteRun();
+                         // panel.stateArgs.{ get, set, setForPanel }
 
   // RPC
-  rpc,                   // RPC bridge for expose/events
+  rpc,                   // RPC client: rpc.expose(), rpc.call(), events
+  callMain,              // Call a server ("main") service method
 
-  // Services
-  db,                    // SQLite database access
-  fs,                    // Filesystem (RPC-backed)
-  ai,                    // AI client (streaming text generation with tools)
+  // Panels & navigation
+  openPanel,             // Open a workspace/browser panel → PanelHandle
+  buildPanelLink,        // Build a navigation URL (low-level; prefer openPanel)
+  panelTree,             // Get/list/walk the panel tree (top-level, NOT workspace.panelTree)
+  getPanelHandle,        // Handle by id
+  listPanels,            // List open panels
+  parent,                // This panel's parent handle (no-op handle when root)
+  getParent,             // Parent handle, or null
+  getParentWithContract, // Contract-typed parent handle, or null
+  onChildCreated,        // window.open child notifications
+  openExternal,          // Open a URL in the system browser
 
-  // Configuration
-  env,                   // Environment variables (Record<string, string>)
+  // Filesystem & service namespaces
+  fs,                    // RPC-backed filesystem
+  workspace,             // Workspace catalog, source tree, units
+  vcs,                   // GAD VCS: edit → commit → push
+  gad,                   // GAD store queries
+  git, blobstore, credentials, workers,
+  extensions, approvals, notifications, webhooks,
 
-  // Lifecycle
-  focusPanel,            // Focus an existing panel by ID (does NOT open new panels)
-  getInfo,               // Get panel info
-  getTheme,              // Get current theme
-  onThemeChange,         // Subscribe to theme changes
-  onFocus,               // Subscribe to focus events
-  expose,                // Expose RPC methods
-  onConnectionError,     // Subscribe to RPC connection errors
+  // Durable Objects, gateway, agent APIs
+  doTargetId, createDurableObjectServiceClient,
+  gatewayConfig, gatewayFetch,
+  agentApi, adblock, journal,
 
-  // Workspace/VCS utilities
-  workspace,             // Workspace catalog, source tree, and unit helpers
-  vcs,                   // GAD-native repo status/log/diff/commit operations
-
-  // Utilities
-  parseContextId,        // Parse context ID components
-  isValidContextId,      // Validate context ID format
-  getInstanceId,         // Extract instance ID from context ID
-
-  // Path utilities
-  normalizePath,         // Cross-platform path normalization
-  getFileName,           // Extract file name from path
-  resolvePath,           // Resolve relative paths
-
-  // State args
-  getStateArgs,          // Get panel state arguments
-  useStateArgs,          // React hook for state arguments
-  setStateArgs,          // Set panel state arguments
-
-  // Panel navigation
-  openPanel,             // Open any panel — URLs become browser panels, source paths open workspace panels
-  buildPanelLink,        // Build URL for panel navigation (low-level — prefer openPanel)
-
-  // External URLs
-  openExternal,          // Open URL in system browser
-  onChildCreated,        // Subscribe to child-created events (window.open flow)
+  // Authoring helpers (portable: identical on panel · worker · eval)
+  z, defineContract, Rpc,
+  parseContextId, isValidContextId, getInstanceId,
+  normalizePath, getFileName, resolvePath, createGatewayFetch,
 } from "@workspace/runtime";
 export type { PanelHandle } from "@workspace/runtime";
 ```
 
-Use `slotId` for panel-tree operations and PubSub/channel client identity. Use
-`id`/`entityId`/`rpc.selfId` only when you need the current live runtime entity;
+The full, always-current surface is generated from the runtime manifest into
+[`workspace/skills/sandbox/RUNTIME_API.md`](workspace/skills/sandbox/RUNTIME_API.md)
+(CI-checked via `pnpm check:runtime-docs`); call `await help()` at runtime for the
+live surface. Identity, theme, lifecycle, and state args live under the `panel.*`
+namespace — they are **not** flat top-level exports.
+
+State args are read and written imperatively via `panel.stateArgs.get()` /
+`panel.stateArgs.set()`. For reactive access in a React panel, use the
+`useStateArgs` hook from `@workspace/react`:
+
+```typescript
+import { panel } from "@workspace/runtime";
+import { useStateArgs } from "@workspace/react";
+
+const snapshot = panel.stateArgs.get<{ channel: string }>(); // imperative
+const reactive = useStateArgs<{ channel: string }>();         // re-renders
+```
+
+Use `panel.slotId` for panel-tree operations and PubSub/channel client identity. Use
+`id`/`panel.entityId`/`rpc.selfId` only when you need the current live runtime entity;
 that entity can change when a panel navigates or reopens in place.
 
 `panelTree` is a top-level runtime export. Do not call

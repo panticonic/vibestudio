@@ -154,6 +154,81 @@ main/default build.
 
 ---
 
+## Non-React panels / Choosing a framework
+
+React is the default, but a panel can opt into another UI framework with
+`natstack.template`. The template's `template.json` decides which esbuild adapter
+compiles the panel: `"default"` ⇒ React + Radix, `"svelte"` ⇒ Svelte, `"vanilla"`
+⇒ no framework (plain DOM). See
+[PANEL_SYSTEM.md](PANEL_SYSTEM.md) for the full resolution order.
+
+The neutral `@workspace/runtime` API — identity, navigation, `rpc`, `openPanel`,
+`panel.stateArgs`, `vcs`, `workspace`, and so on — is **identical
+across all three frameworks**. Only the rendering layer and the binding package
+change.
+
+### Svelte (`panels/hello-svelte`)
+
+Set the template to `"svelte"` and depend on `@workspace/svelte`:
+
+```json
+// panels/hello-svelte/package.json
+{
+  "name": "@workspace-panels/hello-svelte",
+  "natstack": { "title": "Hello Svelte", "template": "svelte" },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*",
+    "@workspace/svelte": "workspace:*"
+  }
+}
+```
+
+The entry is a tiny `index.ts` that re-exports the root `.svelte` component:
+
+```ts
+// panels/hello-svelte/index.ts
+export { default } from "./App.svelte";
+```
+
+esbuild-svelte compiles `.svelte` files at build time, but `tsc` does not parse
+them — add a one-line ambient shim so type-checking resolves the import:
+
+```ts
+// panels/hello-svelte/svelte.d.ts
+declare module "*.svelte";
+```
+
+`panels/hello-svelte` is the canonical, working reference.
+
+### Vanilla (`panels/hello-vanilla`)
+
+No UI binding package — set the template to `"vanilla"` and depend only on
+`@workspace/runtime`:
+
+```json
+// panels/hello-vanilla/package.json
+{
+  "name": "@workspace-panels/hello-vanilla",
+  "natstack": { "title": "Hello Vanilla", "template": "vanilla" },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*"
+  }
+}
+```
+
+The entry is an `index.ts` that mounts itself into the template's `#root` with
+plain DOM:
+
+```ts
+// panels/hello-vanilla/index.ts
+const root = document.getElementById("root")!;
+root.textContent = "Hello from a vanilla panel!";
+```
+
+`panels/hello-vanilla` is the canonical, working reference.
+
+---
+
 ## Typed RPC Communication
 
 For type-safe parent-child communication, define a contract:
@@ -454,7 +529,8 @@ import type { MyType } from "@workspace-panels/my-panel/types";
 Pass and receive configuration data during panel navigation:
 
 ```typescript
-import { buildPanelLink, getStateArgs, useStateArgs, setStateArgs } from "@workspace/runtime";
+import { buildPanelLink, panel } from "@workspace/runtime";
+import { useStateArgs } from "@workspace/react"; // React hook — the reactive form of panel.stateArgs.get
 
 // Pass state when navigating
 window.location.href = buildPanelLink("panels/chat", {
@@ -466,10 +542,10 @@ window.location.href = buildPanelLink("panels/chat", {
 const stateArgs = useStateArgs<{ channelName: string; mode: string }>();
 
 // Read state non-reactively (snapshot, for event handlers)
-const args = getStateArgs<{ channelName: string }>();
+const args = panel.stateArgs.get<{ channelName: string }>();
 
 // Update state (persists to DB + triggers re-render via WebSocket)
-await setStateArgs({ mode: "expanded" });
+await panel.stateArgs.set({ mode: "expanded" });
 ```
 
 ---
@@ -482,7 +558,7 @@ storage. To persist state from a panel, dispatch to a worker DO that owns the
 schema. See `docs/architecture/storage.md` for the storage primitive and
 `workspace/workers/sample-do/index.ts` for a minimal example.
 
-For ephemeral or per-panel state, prefer `useStateArgs`/`setStateArgs` (above)
+For ephemeral or per-panel state, prefer `useStateArgs`/`panel.stateArgs.set` (above)
 or the panel scope persistence (`scope` RPC service) used by the agentic-chat
 REPL.
 

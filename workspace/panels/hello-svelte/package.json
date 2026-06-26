@@ -1,0 +1,18 @@
+{
+  "name": "@workspace-panels/hello-svelte",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "title": "Hello Svelte",
+    "entry": "index.ts",
+    "template": "svelte"
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*",
+    "@workspace/svelte": "workspace:*"
+  },
+  "devDependencies": {
+    "svelte": "^5.55.0"
+  }
+}

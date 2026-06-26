@@ -8,7 +8,7 @@
 
 import { contextId, rpc, panel, buildPanelLink, createDurableObjectServiceClient } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
-import { usePanelTheme } from "@workspace/react";
+import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Flex, Text, Theme } from "@radix-ui/themes";
 import { AgenticChat, ErrorBoundary } from "@workspace/agentic-chat";
@@ -189,7 +189,7 @@ async function unsubscribeDOFromChannel(
 export default function ChatPanel() {
   const theme = usePanelTheme();
   const appTheme = useAppTheme();
-  const stateArgs = panel.stateArgs.use<ChatStateArgs>();
+  const stateArgs = useStateArgs<ChatStateArgs>();
   const resolvedContextId = resolveChatContextId(stateArgs.contextId, contextId);
   const initialPromptCaptured = useRef(stateArgs.initialPrompt);
   const modelSettingsServiceRef = useRef<DurableObjectServiceClient | null>(null);
