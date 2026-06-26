@@ -266,6 +266,19 @@ const shellOverlayPreloadConfig = {
   logOverride,
 };
 
+const contentOverlayPreloadConfig = {
+  entryPoints: ["src/preload/contentOverlayPreload.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  outfile: "dist/contentOverlayPreload.cjs",
+  external: ["electron"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
 // Browser transport IIFE — used by PanelHttpServer to inject into panel HTML.
 // Reuses createWsTransport from the preload, compiled for the browser.
 const browserTransportConfig = {
@@ -577,6 +590,7 @@ async function build() {
     await esbuild.build(autofillPreloadConfig);
     await esbuild.build(autofillOverlayPreloadConfig);
     await esbuild.build(shellOverlayPreloadConfig);
+    await esbuild.build(contentOverlayPreloadConfig);
     await esbuild.build(browserTransportConfig);
     await esbuild.build(internalDoBundleConfig);
     // Read the internal-DO bundle output and inline it as a string into the

@@ -31,6 +31,11 @@ import {
 
 import { createDevLogger } from "@natstack/dev-log";
 import { ShellOverlayView, type ShellOverlayOptions } from "./shellOverlayView.js";
+import {
+  ShellContentOverlayView,
+  type ContentOverlayShowOptions,
+  type ContentOverlayUpdateOptions,
+} from "./shellContentOverlayView.js";
 import type { AppCapability } from "@natstack/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@natstack/shared/chromeTrust";
 
@@ -196,6 +201,7 @@ export class ViewManager {
    *  region is cleared from the shared BaseWindow (see show/hideBootstrapShell). */
   private bootstrapShellAttached = true;
   private nativeShellOverlay: ShellOverlayView;
+  private shellContentOverlay: ShellContentOverlayView;
   private currentThemeCss: string | null = null;
   /** Per-view locks to prevent concurrent withViewVisible operations */
   private visibilityLocks = new Map<string, Promise<unknown>>();
@@ -256,6 +262,7 @@ export class ViewManager {
     window: BaseWindow;
     shellPreload: string;
     shellOverlayPreload?: string;
+    contentOverlayPreload?: string;
     shellHtmlPath: string;
     shellAdditionalArguments?: string[];
     devTools?: boolean;
@@ -286,6 +293,17 @@ export class ViewManager {
       }
     );
     this.nativeShellOverlay.setWindow(this.window);
+    this.shellContentOverlay = new ShellContentOverlayView(
+      options.contentOverlayPreload ?? options.shellPreload,
+      () => {
+        const wc = this.getShellChromeWebContents();
+        return wc && !wc.isDestroyed() ? wc.getURL() : null;
+      },
+      (payload) => {
+        this.getShellChromeWebContents()?.send("natstack:content-overlay:forward", payload);
+      }
+    );
+    this.shellContentOverlay.setWindow(this.window);
 
     // Add shell to window and set it to fill
     this.window.contentView.addChildView(this.shellView);
@@ -1126,6 +1144,20 @@ export class ViewManager {
     return this.nativeShellOverlay.isVisible();
   }
 
+  showContentOverlay(options: ContentOverlayShowOptions): void {
+    // Like the rows overlay, just show + raise; no full reconcile (that re-stacks
+    // every managed view and can steal focus). `bringToFront` keeps it on top.
+    this.shellContentOverlay.show(options);
+  }
+
+  updateContentOverlay(options: ContentOverlayUpdateOptions): void {
+    this.shellContentOverlay.update(options);
+  }
+
+  hideContentOverlay(): void {
+    this.shellContentOverlay.hide();
+  }
+
   private shouldHidePanelViewForBootstrap(managed: ManagedView): boolean {
     return (
       this.hidePanelViewsUntilHostedShellReady &&
@@ -1463,6 +1495,7 @@ export class ViewManager {
       cb();
     }
     this.nativeShellOverlay.bringToFront();
+    this.shellContentOverlay.bringToFront();
   }
 
   /**
@@ -2133,6 +2166,7 @@ export class ViewManager {
     this.stopCompositorKeepalive();
     this.stopCompositorStallDetector();
     this.nativeShellOverlay.destroy();
+    this.shellContentOverlay.destroy();
 
     for (const id of this.views.keys()) {
       if (id !== "shell") {

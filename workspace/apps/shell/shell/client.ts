@@ -324,6 +324,11 @@ export const view = {
     }
   ) => viewClient.updateNativeShellOverlay(options),
   hideNativeShellOverlay: (id?: string) => viewClient.hideNativeShellOverlay(id),
+  showContentOverlay: (options: Parameters<typeof viewClient.showContentOverlay>[0]) =>
+    viewClient.showContentOverlay(options),
+  updateContentOverlay: (options: Parameters<typeof viewClient.updateContentOverlay>[0]) =>
+    viewClient.updateContentOverlay(options),
+  hideContentOverlay: () => viewClient.hideContentOverlay(),
   browserNavigate: (browserId: string, url: string) => viewClient.browserNavigate(browserId, url),
   browserGoBack: (browserId: string) => viewClient.browserGoBack(browserId),
   browserGoForward: (browserId: string) => viewClient.browserGoForward(browserId),
@@ -338,6 +343,25 @@ export const nativeShellOverlay = {
         __natstackShellOverlay?: NativeShellOverlayBridge;
       }
     ).__natstackShellOverlay;
+    if (!bridge) return () => {};
+    return bridge.on(handler);
+  },
+};
+type ContentOverlayHostBridge = {
+  on: (handler: (payload: unknown) => void) => () => void;
+};
+/**
+ * Receives intent payloads emitted by the content-overlay surface (forwarded by
+ * main to the hosted shell). The bridge is injected by the app preload; absent
+ * outside Electron, where `.on` is a no-op.
+ */
+export const contentOverlay = {
+  on: (handler: (payload: unknown) => void) => {
+    const bridge = (
+      globalThis as unknown as {
+        __natstackContentOverlayHost?: ContentOverlayHostBridge;
+      }
+    ).__natstackContentOverlayHost;
     if (!bridge) return () => {};
     return bridge.on(handler);
   },

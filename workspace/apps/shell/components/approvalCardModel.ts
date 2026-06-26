@@ -1,0 +1,156 @@
+/**
+ * Pure (React-free, RPC-free) model shared by the approval coordinator
+ * (`ConsentApprovalBar`, which runs in the chrome with RPC) and the
+ * presentational `ApprovalCard` (which renders inside the content-overlay
+ * surface, a separate document with NO RPC). Keeping these helpers here lets the
+ * card be hosted in the overlay without dragging in `../shell/client`.
+ */
+import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
+import { getApprovalRiskTone, getRequesterCategoryLabel } from "@natstack/shared/approvalCopy";
+
+export interface CallerInfo {
+  /** Friendly user-visible label — panel title, worker source basename, etc. */
+  label: string;
+  /** Caller kind, formatted for display ("Panel" / "Worker" / "Service"). */
+  kindLabel: string;
+  /** Caller kind as accepted by the approval payload. */
+  kind: "panel" | "app" | "worker" | "do" | "system";
+  /** Set when this caller refers to a panel that exists in the live tree. */
+  panelId?: string;
+  /** Truncated id, retained for the expandable details panel. */
+  shortId: string;
+}
+
+/** Risk tone → accent token key used by `data-approval-tone` in overrides.css. */
+export type ApprovalTone = "sky" | "amber" | "red";
+
+/** Browse position for the queue navigator (null when a single approval). */
+export interface ApprovalQueueInfo {
+  index: number;
+  total: number;
+  canPrev: boolean;
+  canNext: boolean;
+}
+
+/**
+ * Intents the presentational card emits up to its host. In the overlay these
+ * cross the process boundary (surface → main → chrome) as opaque payloads; the
+ * chrome coordinator runs the matching RPC handler.
+ */
+export type ApprovalCardIntentBody =
+  | { type: "decide"; decision: ApprovalDecision }
+  | { type: "submit-client-config"; values: Record<string, string> }
+  | { type: "submit-credential-input"; values: Record<string, string> }
+  | { type: "resolve-userland"; choice: string }
+  | { type: "device-cancel" }
+  | { type: "minimize" }
+  | { type: "browse"; dir: "prev" | "next" }
+  | { type: "show-panel" };
+export type ApprovalCardIntent = { approvalId: string } & ApprovalCardIntentBody;
+
+export function basename(path: string): string {
+  if (!path) return "";
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+}
+
+export function prettifyId(callerId: string): string {
+  // Drop common prefixes ("do-service:", "do:", "worker:") and trim noise.
+  return callerId.replace(/^(do-service:|do:|worker:|panel:)/, "");
+}
+
+export function truncateId(id: string, head = 8, tail = 4): string {
+  if (id.length <= head + tail + 1) return id;
+  return `${id.slice(0, head)}…${id.slice(-tail)}`;
+}
+
+export function approvalAccent(approval: PendingApproval): ApprovalTone {
+  const tone = getApprovalRiskTone(approval);
+  if (tone === "danger") return "red";
+  if (tone === "caution") return "amber";
+  return "sky";
+}
+
+/**
+ * Highest-risk tone across the whole pending queue, so a minimized red request
+ * can't hide behind a calmer sky one in the pill.
+ */
+export function highestPendingTone(pending: readonly PendingApproval[]): ApprovalTone {
+  let tone: ApprovalTone = "sky";
+  for (const approval of pending) {
+    const accent = approvalAccent(approval);
+    if (accent === "red") return "red";
+    if (accent === "amber") tone = "amber";
+  }
+  return tone;
+}
+
+/**
+ * Derive a display-friendly caller from an approval. Authoritative titles come
+ * from the server-side entity-title registry (mirrored onto `callerTitle` /
+ * `requester.title`); we fall back to a derived id-ish label.
+ */
+export function resolveCallerInfo(approval: PendingApproval): CallerInfo {
+  if (approval.requester) {
+    return {
+      label: approval.requester.title ?? approval.callerTitle ?? prettifyId(approval.callerId),
+      kindLabel: getRequesterCategoryLabel(approval.requester.category),
+      kind: approval.requester.kind,
+      panelId:
+        approval.requester.panel?.id ??
+        (approval.requester.kind === "panel" ? approval.requester.id : undefined),
+      shortId: truncateId(approval.requester.ephemeralInstanceKey),
+    };
+  }
+  const shortId = truncateId(approval.callerId);
+  const serverTitle = approval.callerTitle?.trim() || undefined;
+  if (approval.callerKind === "panel") {
+    return {
+      label: serverTitle ?? prettifyId(approval.callerId),
+      kindLabel: "Panel",
+      kind: "panel",
+      // "Show panel" is offered unconditionally — navigation is a no-op for
+      // unknown ids, so it's safe.
+      panelId: approval.callerId,
+      shortId,
+    };
+  }
+  if (approval.callerKind === "worker") {
+    const fromRepo = basename(approval.repoPath);
+    return {
+      label: serverTitle ?? fromRepo ?? prettifyId(approval.callerId),
+      kindLabel: "Worker",
+      kind: "worker",
+      shortId,
+    };
+  }
+  if (approval.callerKind === "app") {
+    const fromRepo = basename(approval.repoPath);
+    return {
+      label: serverTitle ?? fromRepo ?? prettifyId(approval.callerId),
+      kindLabel: "App",
+      kind: "app",
+      shortId,
+    };
+  }
+  if (approval.callerKind === "system") {
+    return {
+      label: serverTitle ?? "Workspace",
+      kindLabel: "Workspace",
+      kind: "system",
+      shortId,
+    };
+  }
+  // Durable-object service or unknown — show the trailing segment of the id.
+  const id = prettifyId(approval.callerId);
+  const segments = id.split(":");
+  return {
+    label: serverTitle ?? segments[segments.length - 1] ?? id,
+    kindLabel: "Service",
+    kind: "do",
+    shortId,
+  };
+}
+
+export type { ApprovalDecision };

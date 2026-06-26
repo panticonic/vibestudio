@@ -1533,6 +1533,7 @@ function createWindow(): void {
     window: mainWindow,
     shellPreload: path.join(__dirname, "bootstrapPreload.cjs"),
     shellOverlayPreload: path.join(__dirname, "shellOverlayPreload.cjs"),
+    contentOverlayPreload: path.join(__dirname, "contentOverlayPreload.cjs"),
     shellHtmlPath: path.join(__dirname, "index.html"),
     shellAdditionalArguments: [],
     devTools: false,
