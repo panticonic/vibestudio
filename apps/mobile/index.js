@@ -389,7 +389,7 @@ function NatStackMobileHostBootstrap() {
   const [openApprovalIds, setOpenApprovalIds] = useState(() => new Set());
   const launchGateGeneration = useRef(0);
 
-  const runLaunchGate = useCallback(async (grant) => {
+  const runLaunchGate = useCallback(async (grant, initialSession = null) => {
     const generation = ++launchGateGeneration.current;
     const isCurrent = () => generation === launchGateGeneration.current;
     setBusy(true);
@@ -400,7 +400,8 @@ function NatStackMobileHostBootstrap() {
     const deadline = Date.now() + 120000;
     let eventClient = null;
     try {
-      let session = await rpc(grant, "workspace.hostTargets.beginLaunch", ["react-native"]);
+      let session =
+        initialSession ?? (await rpc(grant, "workspace.hostTargets.beginLaunch", ["react-native"]));
       for (;;) {
         if (!isCurrent()) return;
         setLaunchSession(session);
@@ -466,11 +467,10 @@ function NatStackMobileHostBootstrap() {
           "workspace.hostTargets.resolveLaunchSessionApproval",
           [launchSession.sessionId, decision]
         );
-        setLaunchSession(session);
-        setApprovals(Array.isArray(session?.approvals) ? session.approvals : []);
         if (decision === "once") {
-          await runLaunchGate(launchGrant);
+          await runLaunchGate(launchGrant, session);
         } else {
+          setLaunchSession(session);
           setApprovals([]);
           setStatus("Workspace app approval denied.");
         }
