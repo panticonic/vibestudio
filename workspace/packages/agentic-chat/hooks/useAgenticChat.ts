@@ -28,6 +28,7 @@ import {
   type SandboxSourcePayload,
 } from "@workspace/agentic-protocol";
 import { useChatCore } from "./core/useChatCore";
+import { useDeferredAgent } from "./useDeferredAgent";
 import { useChatFeedback } from "./features/useChatFeedback";
 import { useChatTools } from "./features/useChatTools";
 import { useChatDebug } from "./features/useChatDebug";
@@ -237,6 +238,10 @@ export function useAgenticChat({
   const sandboxRef = useRef(sandbox);
   sandboxRef.current = sandbox;
   // --- Core (durable channel trajectory events -> transcript view model) ---
+  // Agent-managing hosts route initialPrompt through the deferred pre-send queue
+  // below so it waits for the first agent. Hosts without onAddAgent keep the
+  // historical core auto-send path; there is no agent for the deferred queue to
+  // spawn, so holding the prompt would strand it.
   const core = useChatCore({
     config,
     channelName,
@@ -244,8 +249,8 @@ export function useAgenticChat({
     contextId,
     metadata,
     theme,
-    initialPrompt,
-    forceInitialPrompt,
+    initialPrompt: actions?.onAddAgent ? undefined : initialPrompt,
+    forceInitialPrompt: actions?.onAddAgent ? undefined : forceInitialPrompt,
   });
   const scopeBlobBackend = useMemo<ScopeBlobBackend>(
     () => ({
@@ -1303,15 +1308,51 @@ Use package imports available to inline_ui plus relative imports for local helpe
   const availableAgents = actions?.availableAgents;
   const modelCatalog = actions?.modelCatalog;
   const defaultModelRef = actions?.defaultModelRef;
+  const defaultAgentConfig = actions?.defaultAgentConfig;
+  const onSaveDefaults = actions?.onSaveDefaults;
   const connectedModelRefs = actions?.connectedModelRefs;
   const onRemoveAgent = actions?.onRemoveAgent ? handleRemoveAgent : undefined;
   const onFocusPanel = actions?.onFocusPanel;
   const onReloadPanel = actions?.onReloadPanel;
   const onNewConversation = actions?.onNewConversation;
+
+  // --- Deferred first-agent flow (inline config + pre-send delivery queue) ---
+  const clearComposer = useCallback(() => {
+    core.handleInputChange("");
+    core.setPendingImages([]);
+  }, [core.handleInputChange, core.setPendingImages]);
+  const { deferredAgent, sendMessage: deferredSendMessage } = useDeferredAgent({
+    participants: core.participants,
+    pendingAgents: core.pendingAgents,
+    input: core.input,
+    clearComposer,
+    publishText: core.publishText,
+    maybeSetDefaultTitle: core.maybeSetDefaultTitle,
+    coreSendMessage: core.sendMessage,
+    onAddAgent,
+    availableAgents: availableAgents ?? [],
+    modelCatalog: modelCatalog ?? null,
+    connectedModelRefs: connectedModelRefs ?? [],
+    defaultModelRef,
+    defaultAgentConfig,
+    initialPrompt,
+    forceInitialPrompt,
+    channelName,
+    messages: core.messages,
+    replaySettled: core.replaySettled,
+  });
+  // Pre-send queue intercept: the composer's send becomes the deferred wrapper,
+  // which holds the first message(s) until the agent it spawns joins the roster.
+  const inputContextValue = useMemo<ChatInputContextValue>(
+    () => ({ ...core.inputContextValue, onSendMessage: deferredSendMessage }),
+    [core.inputContextValue, deferredSendMessage]
+  );
+
   // --- Assemble context values ---
   const contextValue: ChatContextValue = useMemo(
     () => ({
       connected: core.connected,
+      replaySettled: core.replaySettled,
       status: core.status,
       channelId: channelName,
       browserHandoffCaller: {
@@ -1341,6 +1382,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       debugConsoleAgent: debug.debugConsoleAgent,
       dirtyRepoWarnings: core.dirtyRepoWarnings,
       pendingAgents: core.pendingAgents,
+      deferredAgent,
       activeFeedbacks: feedback.activeFeedbacks,
       // Resolved appearance (explicit prop OR system) — never a "dark" literal.
       theme: core.theme,
@@ -1372,6 +1414,8 @@ Use package imports available to inline_ui plus relative imports for local helpe
       availableAgents,
       modelCatalog,
       defaultModelRef,
+      defaultAgentConfig,
+      onSaveDefaults,
       connectedModelRefs,
       onRemoveAgent,
       onFocusPanel,
@@ -1381,6 +1425,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
     }),
     [
       core.connected,
+      core.replaySettled,
       core.status,
       core.selfId,
       config.rpc.selfId,
@@ -1409,6 +1454,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       debug.debugConsoleAgent,
       core.dirtyRepoWarnings,
       core.pendingAgents,
+      deferredAgent,
       feedback.activeFeedbacks,
       core.theme,
       core.agentBusy,
@@ -1438,6 +1484,8 @@ Use package imports available to inline_ui plus relative imports for local helpe
       availableAgents,
       modelCatalog,
       defaultModelRef,
+      defaultAgentConfig,
+      onSaveDefaults,
       connectedModelRefs,
       onRemoveAgent,
       onFocusPanel,
@@ -1446,5 +1494,5 @@ Use package imports available to inline_ui plus relative imports for local helpe
       chatTools.toolApprovalValue,
     ]
   );
-  return { contextValue, inputContextValue: core.inputContextValue };
+  return { contextValue, inputContextValue };
 }

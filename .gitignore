@@ -30,6 +30,7 @@ firebase-service-account.json
 # IDE
 .vscode/settings.json
 .idea
+.claude/
 *.swp
 *.swo
 *~

@@ -8,11 +8,26 @@
  */
 
 export const MODEL_SETTINGS_SERVICE_PROTOCOL = "natstack.models.v1";
-export const WORKSPACE_DEFAULT_MODEL_FIELD = "defaultAgentModel";
+/** Workspace config field holding the full default agent config (model + behavior). */
+export const WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD = "defaultAgentConfig";
 export const DEFAULT_AGENT_MODEL_REF = "openai-codex:gpt-5.5";
 
 /** Effort levels the agent harness accepts (subset of pi's ModelThinkingLevel). */
 export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high";
+
+/**
+ * Workspace-wide defaults applied to NEW agents — model plus behavior. Persisted
+ * as a single workspace config field, written ONLY via an explicit "Save as
+ * defaults" action (never as a side-effect of adding/spawning an agent).
+ */
+export interface DefaultAgentConfig {
+  /** Default model ref ("provider:modelId"). */
+  model: string;
+  /** Default reasoning effort (reasoning models only). */
+  thinkingLevel?: AgentThinkingLevel;
+  /** Default autonomy (0 = Manual, 1 = Auto-safe, 2 = Full-auto). */
+  approvalLevel?: 0 | 1 | 2;
+}
 
 export interface ModelCatalogProvider {
   id: string;
@@ -57,7 +72,10 @@ export interface ModelCatalog {
 
 export interface ModelSettingsSnapshot {
   catalog: ModelCatalog;
+  /** Resolved/validated default model (equals `defaultAgentConfig.model`). */
   defaultModel: string;
   defaultModelSource: "workspace" | "fallback";
   invalidDefaultModel?: string;
+  /** Full default agent config (model + behavior) applied to new agents. */
+  defaultAgentConfig: DefaultAgentConfig;
 }

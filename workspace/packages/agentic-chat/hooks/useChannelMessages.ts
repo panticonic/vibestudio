@@ -41,6 +41,11 @@ export interface UseChannelMessagesResult {
   hasOpenTurn: boolean;
   loadEarlierMessages: () => Promise<void>;
   backfillAfterLocalPublish: (pubsubId: number | undefined) => Promise<void>;
+  /** True once the initial replay is complete, so `messages` reliably reflects
+   *  prior history (a reliable "is this a brand-new chat?" signal). Fires even
+   *  for an empty channel; sourced from the client's replay-complete signal
+   *  (`onReady` / `connected = !closed && replayComplete`), NOT socket connect. */
+  replaySettled: boolean;
 }
 
 /**
@@ -57,6 +62,7 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasOpenTurn, setHasOpenTurn] = useState(false);
   const hasOpenTurnRef = useRef(false);
+  const [replaySettled, setReplaySettled] = useState(false);
 
   // Refs for internal state shared between the event consumer and pagination.
   const byIdRef = useRef(new Map<string, ChatMessage>());
@@ -315,6 +321,33 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     };
   }, [client, rebuildFromChannelState, scheduleDeltaRebuild]);
 
+  // --- Replay-settled signal ---
+  // Flips true once the channel's initial replay completes (so `messages`
+  // reflects the full prior history). The client reports this via `onReady`,
+  // which fires after the server's replay-complete marker — even for an empty
+  // channel — and is exactly when `client.connected` flips true
+  // (`!closed && replayComplete`). A warm/resubscribed client may already be
+  // past replay, so seed from `connected` too.
+  useEffect(() => {
+    if (!client) {
+      setReplaySettled(false);
+      return;
+    }
+    if (client.connected) {
+      setReplaySettled(true);
+      return;
+    }
+    setReplaySettled(false);
+    let cancelled = false;
+    const off = client.onReady(() => {
+      if (!cancelled) setReplaySettled(true);
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [client]);
+
   // --- Pagination: load earlier messages ---
   const loadEarlierMessages = useCallback(async () => {
     const c = clientRef.current;
@@ -417,7 +450,7 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     }
   }, [rebuildFromChannelState]);
 
-  return { messages, actionBar, messageTypes, hasMoreHistory, loadingMore, hasOpenTurn, loadEarlierMessages, backfillAfterLocalPublish };
+  return { messages, actionBar, messageTypes, hasMoreHistory, loadingMore, hasOpenTurn, loadEarlierMessages, backfillAfterLocalPublish, replaySettled };
 }
 
 type WireAttachment = {

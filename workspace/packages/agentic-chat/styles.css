@@ -981,3 +981,48 @@
 .ack-avatar-stack-item .ack-avatar {
   box-shadow: 0 0 0 2px var(--color-panel-solid, var(--gray-1));
 }
+
+/* --- First-agent setup + pre-send delivery queue ---------------------------*/
+/* Inline armed-config card shown in the message canvas before the first agent
+   exists. The accent glyph signals "this is going to do something on send". */
+.agent-setup-card {
+  border: 1px solid var(--surface-border);
+}
+.agent-setup-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin: 0 auto var(--space-1);
+  border-radius: 9999px;
+  color: var(--accent-11);
+  background: var(--accent-a3);
+}
+
+/* Pre-send queue: messages held until the spawned agent joins. Left-railed like
+   the outbox (it's "your" pending content), with an amber "launching" header. */
+.pending-delivery-root {
+  min-width: 0;
+}
+.pending-delivery-card {
+  border: 1px solid var(--surface-border);
+  border-left: 2px solid var(--you-rail);
+}
+.pending-delivery-card-failed {
+  border-left-color: var(--red-7);
+}
+.pending-delivery-header {
+  color: var(--gray-11);
+}
+.pending-delivery-list {
+  min-width: 0;
+}
+.pending-delivery-item {
+  border-radius: var(--radius-2);
+  background: var(--you-surface);
+  padding: var(--space-1) var(--space-2);
+}
+.pending-delivery-text {
+  min-width: 0;
+}

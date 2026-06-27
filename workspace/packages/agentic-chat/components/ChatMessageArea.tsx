@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import type { ReactNode } from "react";
-import { Flex } from "@radix-ui/themes";
+import { Flex, Text } from "@radix-ui/themes";
 import { useChatContext } from "../context/ChatContext";
 import { useChatInputContext } from "../context/ChatInputContext";
+import { AgentSetupInline } from "./AgentSetupInline";
 import { MessageList } from "./MessageList";
 import { deriveActiveOutbox } from "./Outbox";
 import { SignalPills } from "./SignalPills";
@@ -37,6 +38,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     chat,
     browserHandoffCaller,
     clientRef,
+    deferredAgent,
   } = useChatContext();
   const { setReplyTo } = useChatInputContext();
 
@@ -62,10 +64,37 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     return hiddenIds.size > 0 ? messages.filter((m) => !hiddenIds.has(m.id)) : messages;
   }, [connected, messages, selfId, participants]);
 
+  // While the spawned agent is starting, replace the "send a message" hint with
+  // an accurate status (the pre-send queue below the composer shows the spinner
+  // + the queued messages themselves).
+  const launchingEmptyState = useMemo<ReactNode>(
+    () =>
+      deferredAgent?.launching ? (
+        <Flex role="status" aria-live="polite" align="center" justify="center" style={{ height: "100%" }}>
+          <Text color="gray" size="2">
+            Preparing your agent…
+          </Text>
+        </Flex>
+      ) : undefined,
+    [deferredAgent?.launching]
+  );
+
+  // Before the first agent exists, the message canvas hosts the inline setup
+  // (armed config) instead of an empty transcript.
+  if (deferredAgent?.setupActive) {
+    return (
+      <Flex direction="column" gap="1" style={{ minHeight: 0, flexGrow: 1 }}>
+        <SignalPills client={clientRef.current} />
+        <AgentSetupInline />
+      </Flex>
+    );
+  }
+
   return (
     <Flex direction="column" gap="1" style={{ minHeight: 0, flexGrow: 1 }}>
       <SignalPills client={clientRef.current} />
       <MessageList
+        emptyState={launchingEmptyState}
         messages={transcriptMessages}
         participants={participants}
         selfId={selfId}

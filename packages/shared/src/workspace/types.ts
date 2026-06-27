@@ -321,8 +321,13 @@ export interface WorkspaceConfig {
    * - "none": restore tree state only; views load when selected.
    */
   panelRestorePolicy?: PanelRestorePolicy;
-  /** Workspace-wide default agent model ref ("provider:modelId"). */
-  defaultAgentModel?: string;
+  /** Workspace-wide default agent config (model + behavior) for new agents.
+   *  Stored as one field; written only via an explicit "Save as defaults". */
+  defaultAgentConfig?: {
+    model?: string;
+    thinkingLevel?: string;
+    approvalLevel?: number;
+  };
   /**
    * Stable DO singletons. Any `services[]` / `routes[]` entry referencing a
    * `durableObject.className` MUST have a matching `(source, className)` row

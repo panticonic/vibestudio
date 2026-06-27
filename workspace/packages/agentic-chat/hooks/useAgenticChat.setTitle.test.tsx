@@ -36,7 +36,9 @@ function createClient(): PubSubClient & {
   return {
     clientId: "panel:chat",
     channelConfig: {},
+    connected: false,
     ready: vi.fn(async () => undefined),
+    onReady: vi.fn(() => () => undefined),
     close: vi.fn(),
     events: vi.fn(async function* () {}),
     onRoster: vi.fn(() => () => undefined),

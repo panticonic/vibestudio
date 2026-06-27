@@ -34,7 +34,7 @@ import {
   type DisconnectedAgentInfo,
   type InvocationCardPayload,
 } from "@workspace/agentic-core";
-import type { MessageBlockInput } from "@workspace/agentic-protocol";
+import type { MessageBlockInput, MessageTier } from "@workspace/agentic-protocol";
 import { cleanupPendingImages, type PendingImage } from "../../utils/imageUtils";
 import type {
   ChatInputContextValue,
@@ -149,6 +149,8 @@ export interface ChatCoreState {
 
   // Connection
   connected: boolean;
+  /** True once the initial replay has settled (messages reflects prior history). */
+  replaySettled: boolean;
   status: string;
   /** Last connection-layer error (subscribe failure, event-stream rejection).
    *  Surfaced via `ConnectionManager.onError`. Cleared by `dismissConnectionError`. */
@@ -187,6 +189,22 @@ export interface ChatCoreState {
     attachments?: AttachmentInput[],
     options?: { mentions?: string[]; replyTo?: string; metadata?: Record<string, unknown> }
   ) => Promise<void>;
+  /** Publish arbitrary text to the channel with optimistic backfill (used by the
+   *  deferred-delivery flush to replay queued messages once an agent joins). */
+  publishText: (
+    text: string,
+    opts?: {
+      attachments?: AttachmentInput[];
+      mentions?: string[];
+      replyTo?: string;
+      metadata?: Record<string, unknown>;
+      tier?: MessageTier;
+      idempotencyKey?: string;
+    }
+  ) => Promise<void>;
+  /** Set the channel's default (non-explicit) title from the first user message,
+   *  once. Used by the deferred-delivery flush (which bypasses sendMessage). */
+  maybeSetDefaultTitle: (text: string) => void;
   handleInterruptAgent: (
     agentId: string,
     messageId?: string,
@@ -426,6 +444,7 @@ export function useChatCore({
     hasOpenTurn,
     loadEarlierMessages: channelLoadEarlier,
     backfillAfterLocalPublish,
+    replaySettled,
   } = useChannelMessages(client);
 
   // --- Disconnect system messages (injected from roster changes) ---
@@ -734,6 +753,56 @@ export function useChatCore({
     },
     [backfillAfterLocalPublish, stopTyping]
   );
+
+  // --- Publish arbitrary text to the channel (optimistically backfilled) ---
+  // Shares the send+backfill core with sendMessage but takes the text explicitly
+  // instead of reading the composer, so the deferred-delivery flush can replay
+  // queued messages once an agent joins without touching composer/input state.
+  const publishText = useCallback(
+    async (
+      text: string,
+      opts?: {
+        attachments?: AttachmentInput[];
+        mentions?: string[];
+        replyTo?: string;
+        metadata?: Record<string, unknown>;
+        tier?: MessageTier;
+        idempotencyKey?: string;
+      }
+    ): Promise<void> => {
+      const c = clientRef.current;
+      if (!c) return;
+      const hasAttachments = !!opts?.attachments?.length;
+      if (!text.trim() && !hasAttachments) return;
+      const { pubsubId } = await c.send(text, {
+        attachments: hasAttachments ? opts?.attachments : undefined,
+        mentions: opts?.mentions && opts.mentions.length > 0 ? opts.mentions : undefined,
+        replyTo: opts?.replyTo,
+        metadata: opts?.metadata,
+        ...(opts?.tier ? { tier: opts.tier } : {}),
+        ...(opts?.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
+      });
+      await backfillAfterLocalPublish(pubsubId);
+    },
+    [backfillAfterLocalPublish]
+  );
+
+  // Set the channel's default (non-explicit) title from the first user message,
+  // exactly once. Shared so a first message that goes out via the deferred
+  // pre-send queue (flushed by publishText, which bypasses sendMessage's own
+  // title logic) still titles the chat. Callers gate on "no prior history".
+  const maybeSetDefaultTitle = useCallback((text: string): void => {
+    if (defaultTitleSetRef.current) return;
+    const title = titleFromFirstUserMessage(text);
+    if (!title) return;
+    defaultTitleSetRef.current = true;
+    document.title = title;
+    void clientRef.current
+      ?.updateChannelConfig({ title, titleExplicit: false })
+      .catch((err) => {
+        console.warn("[useChatCore] Failed to persist default channel title:", err);
+      });
+  }, []);
 
   // --- Auto-send initial prompt once connected ---
   const initialPromptSentRef = useRef(false);
@@ -1093,6 +1162,7 @@ export function useChatCore({
   return {
     messages,
     connected,
+    replaySettled,
     status,
     connectionError,
     dismissConnectionError,
@@ -1113,6 +1183,8 @@ export function useChatCore({
     canonicalActionBar: channelActionBar,
     messageTypes,
     sendMessage,
+    publishText,
+    maybeSetDefaultTitle,
     handleInterruptAgent,
     handleCancelInvocation,
     handleCallMethod,

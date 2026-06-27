@@ -22,7 +22,7 @@ import type { RecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordin
 import type { SandboxOptions, SandboxResult } from "@workspace/eval";
 import type { ChatMethodResult } from "./invocation-result.js";
 import type { AgentSubscriptionConfig } from "./agent-subscription-config.js";
-import type { ModelCatalog } from "@workspace/model-catalog/catalog";
+import type { DefaultAgentConfig, ModelCatalog } from "@workspace/model-catalog/catalog";
 
 // The canonical participant metadata shape lives in @workspace/pubsub so that
 // lower-level packages (like @workspace/agentic-do, which can't depend on
@@ -99,11 +99,17 @@ export interface AgenticChatActions {
     participantId: string,
     model: string
   ) => Promise<void>;
+  /** Explicitly save the full default agent config (model + behavior) as the
+   *  workspace default — the ONLY path that writes it. Wired to a "Save as
+   *  defaults" control in the agent config UI. */
+  onSaveDefaults?: (config: DefaultAgentConfig) => Promise<void>;
   availableAgents?: AvailableAgent[];
   /** Static pi model catalog; connection status is merged panel-side. */
   modelCatalog?: ModelCatalog | null;
   /** Workspace default model ref ("provider:modelId") for new agents. */
   defaultModelRef?: string | null;
+  /** Full workspace default agent config (model + behavior) for new agents. */
+  defaultAgentConfig?: DefaultAgentConfig | null;
   /** Model refs ("provider:modelId") the panel has a usable credential for. */
   connectedModelRefs?: string[];
   onFocusPanel?: (panelId: string) => void;

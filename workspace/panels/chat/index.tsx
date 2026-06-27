@@ -21,12 +21,18 @@ import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect"
 import {
   DEFAULT_AGENT_MODEL_REF,
   MODEL_SETTINGS_SERVICE_PROTOCOL,
+  type DefaultAgentConfig,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
 import { findMatchingUrlAudience } from "@natstack/shared/credentials/urlAudience";
 import type { UrlAudience } from "@natstack/shared/credentials/urlAudience";
 import type { DurableObjectServiceClient } from "@workspace/runtime";
-import { appendInstalledAgent, resolveChatContextId } from "./bootstrap.js";
+import {
+  appendInstalledAgent,
+  buildAgentSubscriptionConfig,
+  resolveChatContextId,
+  sanitizeHandle,
+} from "./bootstrap.js";
 import { createAndSubscribeAgent } from "./agentLifecycle.js";
 
 function detectHostPlatform(): "mobile" | "electron" {
@@ -195,6 +201,8 @@ export default function ChatPanel() {
   const modelSettingsServiceRef = useRef<DurableObjectServiceClient | null>(null);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog | null>(null);
   const [workspaceDefaultModelRef, setWorkspaceDefaultModelRef] = useState<string | null>(null);
+  const [workspaceDefaultAgentConfig, setWorkspaceDefaultAgentConfig] =
+    useState<DefaultAgentConfig | null>(null);
   const [connectedModelRefs, setConnectedModelRefs] = useState<string[]>([]);
   const catalogRef = useRef<ModelCatalog | null>(null);
 
@@ -210,21 +218,23 @@ export default function ChatPanel() {
     catalogRef.current = settings.catalog;
     setModelCatalog(settings.catalog);
     setWorkspaceDefaultModelRef(settings.defaultModel);
+    setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
     return settings;
   }, [getModelSettingsService]);
 
-  const resolveWorkspaceDefaultModel = useCallback(async (): Promise<string> => {
+  const resolveWorkspaceDefaultAgentConfig = useCallback(async (): Promise<DefaultAgentConfig> => {
     try {
-      return (await loadModelSettings()).defaultModel || DEFAULT_AGENT_MODEL_REF;
+      const settings = await loadModelSettings();
+      return settings.defaultAgentConfig ?? { model: settings.defaultModel || DEFAULT_AGENT_MODEL_REF };
     } catch (err) {
       console.warn("[ChatPanel] Failed to load workspace model default:", err);
-      return DEFAULT_AGENT_MODEL_REF;
+      return { model: DEFAULT_AGENT_MODEL_REF };
     }
   }, [loadModelSettings]);
 
-  // Auto-bootstrap: when no channelName, generate one and spawn the default agent
+  // Auto-bootstrap: when no channelName, mint one (channel only). The agent is
+  // created lazily by the chat surface on the first message / initialPrompt.
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
-  const [bootstrapInstalled, setBootstrapInstalled] = useState<InstalledAgent[] | null>(null);
   const bootstrapAttempted = useRef(false);
 
   useEffect(() => {
@@ -232,62 +242,18 @@ export default function ChatPanel() {
     bootstrapAttempted.current = true;
 
     void (async () => {
-      const workerSource = stateArgs.agentSource ?? DEFAULT_WORKER_SOURCE;
-      const className = stateArgs.agentClass ?? DEFAULT_CLASS_NAME;
-      const baseHandle = className === DEFAULT_CLASS_NAME
-        ? DEFAULT_HANDLE
-        : className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-      const defaultModel = await resolveWorkspaceDefaultModel();
-
+      // Channel-only bootstrap. Agent creation is deferred to the chat surface
+      // for BOTH a typed first message AND an injected initialPrompt: the message
+      // is held in the pre-send queue (AgenticChat → useDeferredAgent), which
+      // spawns the agent with the chosen/default options and flushes it LIVE once
+      // the agent joins — so the first message lands as a normal turn to a present
+      // agent rather than backlog replay. Creating the channel here just lets the
+      // composer connect; nothing else is persisted until an agent is added.
       const channelName = `chat-${crypto.randomUUID().slice(0, 8)}`;
-      // Mint `key` once and persist; rehydration must reuse it.
-      const agentKey = `${baseHandle}-${crypto.randomUUID().slice(0, 8)}`;
-      const perAgentConfig: Record<string, unknown> = {
-        model: (stateArgs.agentConfig?.["model"] as string | undefined) ?? defaultModel,
-      };
-      const installed: InstalledAgent[] = [{
-        agentId: className,
-        handle: baseHandle,
-        key: agentKey,
-        source: workerSource,
-        className,
-        config: perAgentConfig,
-      }];
-
-      void panel.stateArgs.set({ channelName, contextId: resolvedContextId, installedAgents: installed });
-
-      const subscribeConfig: Record<string, unknown> = {
-        model: defaultModel,
-        ...(stateArgs.agentConfig ?? {}),
-        handle: baseHandle,
-      };
-      if (stateArgs.systemPrompt) subscribeConfig["systemPrompt"] = stateArgs.systemPrompt;
-      if (stateArgs.systemPromptMode) subscribeConfig["systemPromptMode"] = stateArgs.systemPromptMode;
-      createAndSubscribeAgent({
-        source: workerSource,
-        className,
-        key: agentKey,
-        channelId: channelName,
-        channelContextId: resolvedContextId,
-        config: subscribeConfig,
-        replay: true,
-      }).catch((err: unknown) => {
-        console.warn(`[ChatPanel] Failed to subscribe agent DO:`, err);
-      });
-
+      void panel.stateArgs.set({ channelName, contextId: resolvedContextId });
       setBootstrapChannel(channelName);
-      setBootstrapInstalled(installed);
     })();
-  }, [
-    resolvedContextId,
-    resolveWorkspaceDefaultModel,
-    stateArgs.agentClass,
-    stateArgs.agentSource,
-    stateArgs.agentConfig,
-    stateArgs.channelName,
-    stateArgs.systemPrompt,
-    stateArgs.systemPromptMode,
-  ]);
+  }, [resolvedContextId, stateArgs.channelName]);
 
   // Agent subscription recovery: when a panel has a channel but no DO
   // participants, re-create+subscribe each persisted agent using its stable
@@ -313,19 +279,19 @@ export default function ChatPanel() {
 
           const installedList = stateArgs.installedAgents ?? [];
           if (installedList.length === 0) return;
-          const defaultModel = await resolveWorkspaceDefaultModel();
+          const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
 
           for (const agent of installedList) {
             // Layer the per-agent persisted config over the global default so a
             // switched/added agent comes back on its own model after reload.
-            const subscribeConfig: Record<string, unknown> = {
-              model: defaultModel,
-              ...(stateArgs.agentConfig ?? {}),
-              ...(agent.config ?? {}),
+            const { subscribeConfig } = buildAgentSubscriptionConfig({
               handle: agent.handle,
-            };
-            if (stateArgs.systemPrompt && subscribeConfig["systemPrompt"] === undefined) subscribeConfig["systemPrompt"] = stateArgs.systemPrompt;
-            if (stateArgs.systemPromptMode && subscribeConfig["systemPromptMode"] === undefined) subscribeConfig["systemPromptMode"] = stateArgs.systemPromptMode;
+              workspaceDefaultAgentConfig: defaultAgentConfig,
+              globalConfig: stateArgs.agentConfig,
+              perAgentConfig: agent.config,
+              systemPrompt: stateArgs.systemPrompt,
+              systemPromptMode: stateArgs.systemPromptMode,
+            });
             await createAndSubscribeAgent({
               source: agent.source,
               className: agent.className,
@@ -357,7 +323,7 @@ export default function ChatPanel() {
     stateArgs.systemPrompt,
     stateArgs.systemPromptMode,
     resolvedContextId,
-    resolveWorkspaceDefaultModel,
+    resolveWorkspaceDefaultAgentConfig,
   ]);
 
   // Build ConnectionConfig from runtime
@@ -449,39 +415,33 @@ export default function ChatPanel() {
     })();
   }, [loadModelSettings, refreshConnectedRefs]);
 
-  /** Build the subscription config for a new agent: global agentConfig, then the
-   *  per-agent config, with the resolved handle last. Returns both the wire
-   *  config and the per-agent config to persist (handle stored separately). */
-  const buildSubscribeConfig = useCallback((handle: string, config?: AgentSubscriptionConfig) => {
-    const perAgent: Record<string, unknown> = { ...(config ?? {}) };
-    delete perAgent["handle"];
-    const globalConfig = panel.stateArgs.get<ChatStateArgs>().agentConfig ?? {};
-    const subscribeConfig: Record<string, unknown> = {
-      model: workspaceDefaultModelRef ?? DEFAULT_AGENT_MODEL_REF,
-      ...globalConfig,
-      ...perAgent,
-      handle,
-    };
-    if (typeof perAgent["model"] !== "string" && typeof subscribeConfig["model"] === "string") {
-      perAgent["model"] = subscribeConfig["model"];
-    }
-    if (stateArgs.systemPrompt && subscribeConfig["systemPrompt"] === undefined) {
-      subscribeConfig["systemPrompt"] = stateArgs.systemPrompt;
-    }
-    if (stateArgs.systemPromptMode && subscribeConfig["systemPromptMode"] === undefined) {
-      subscribeConfig["systemPromptMode"] = stateArgs.systemPromptMode;
-    }
-    return { subscribeConfig, perAgent };
-  }, [stateArgs.systemPrompt, stateArgs.systemPromptMode, workspaceDefaultModelRef]);
+  /** Build the subscription config for a new agent: workspace defaults, global
+   *  agentConfig, then the per-agent config, with the resolved handle last.
+   *  Returns both the wire config and the per-agent config to persist. */
+  const buildSubscribeConfig = useCallback((
+    handle: string,
+    config: AgentSubscriptionConfig | undefined,
+    defaultAgentConfig: DefaultAgentConfig,
+  ) => buildAgentSubscriptionConfig({
+    handle,
+    workspaceDefaultAgentConfig: defaultAgentConfig,
+    globalConfig: panel.stateArgs.get<ChatStateArgs>().agentConfig,
+    perAgentConfig: config,
+    systemPrompt: stateArgs.systemPrompt,
+    systemPromptMode: stateArgs.systemPromptMode,
+  }), [stateArgs.systemPrompt, stateArgs.systemPromptMode]);
 
-  const persistWorkspaceDefaultModel = useCallback(async (model: string): Promise<void> => {
+  // The ONLY path that writes the workspace default agent config (model +
+  // behavior). Driven by the explicit "Save as defaults" control.
+  const saveDefaultAgentConfig = useCallback(async (config: DefaultAgentConfig): Promise<void> => {
     const settings = await getModelSettingsService().call<ModelSettingsSnapshot>(
-      "setDefaultModel",
-      model
+      "setDefaultAgentConfig",
+      config
     );
     catalogRef.current = settings.catalog;
     setModelCatalog(settings.catalog);
     setWorkspaceDefaultModelRef(settings.defaultModel);
+    setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
   }, [getModelSettingsService]);
 
   const handleAddAgent = useCallback(async (channelName: string, channelContextId?: string, agentId?: string, config?: AgentSubscriptionConfig) => {
@@ -489,17 +449,34 @@ export default function ChatPanel() {
     if (!activeContextId) {
       throw new Error("Cannot add an agent without a context ID");
     }
-    const agent = agentId
+    // Resolve the agent type. An explicit agentId wins; otherwise honor a
+    // caller-pinned stateArgs.agentSource/agentClass (programmatic opens — e.g.
+    // the test-agent harness, or the onboarding chat — where the agent may not
+    // be in the manifest gallery). Fall back to the DEFAULT chat agent, NOT
+    // availableAgents[0] (whose identity + handle are non-deterministic).
+    const matched = agentId
       ? availableAgents.find(a => a.id === agentId || a.className === agentId)
-      : availableAgents[0];
-    const className = agent?.className ?? DEFAULT_CLASS_NAME;
-    const source = agent?.id ?? DEFAULT_WORKER_SOURCE;
+      : undefined;
+    const pinned = panel.stateArgs.get<ChatStateArgs>();
+    const pinnedSource = !agentId ? pinned.agentSource : undefined;
+    const pinnedClass = !agentId ? pinned.agentClass : undefined;
+    const source = matched?.id ?? pinnedSource ?? DEFAULT_WORKER_SOURCE;
+    const className = matched?.className ?? pinnedClass ?? DEFAULT_CLASS_NAME;
+    // Derive the handle from the RESOLVED agent, then sanitize to the channel's
+    // participant-handle rule so a manifest handle with spaces/punctuation (or a
+    // stale handle leaked from a different agent's draft) can never produce an
+    // invalid subscription.
+    const handleFromClass = className === DEFAULT_CLASS_NAME
+      ? DEFAULT_HANDLE
+      : className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
     const configHandle = typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
-    const requestedHandle = configHandle.trim() || agent?.proposedHandle || DEFAULT_HANDLE;
-    const handle = `${requestedHandle}-${crypto.randomUUID().slice(0, 4)}`;
+    const requestedHandle =
+      configHandle.trim() || matched?.proposedHandle || handleFromClass || DEFAULT_HANDLE;
+    const handle = `${sanitizeHandle(requestedHandle)}-${crypto.randomUUID().slice(0, 4)}`;
     // Mint key once and persist into installedAgents so rehydration reuses it.
     const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
-    const { subscribeConfig, perAgent } = buildSubscribeConfig(handle, config);
+    const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
+    const { subscribeConfig, perAgent } = buildSubscribeConfig(handle, config, defaultAgentConfig);
     await createAndSubscribeAgent({
       source,
       className,
@@ -509,12 +486,9 @@ export default function ChatPanel() {
       config: subscribeConfig,
       replay: true,
     });
-    const selectedModel = typeof perAgent["model"] === "string" ? perAgent["model"] : null;
-    if (selectedModel) {
-      void persistWorkspaceDefaultModel(selectedModel).catch((err: unknown) => {
-        console.warn("[ChatPanel] Failed to persist workspace default model:", err);
-      });
-    }
+    // The workspace default model is written ONLY via the explicit "Save as
+    // default" control (onSaveDefaultModel) — never as a side-effect of adding an
+    // agent, so a deferred/auto spawn (e.g. onboarding) can't silently change it.
     // Persist into stateArgs.installedAgents so the agent rehydrates on reload.
     // Read the latest snapshot (rather than the captured `stateArgs`) to avoid
     // clobbering concurrent additions.
@@ -529,7 +503,7 @@ export default function ChatPanel() {
     });
     await panel.stateArgs.set({ installedAgents: nextInstalled });
     return { agentId: source, handle };
-  }, [availableAgents, buildSubscribeConfig, persistWorkspaceDefaultModel]);
+  }, [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]);
 
   const handleReplaceAgent = useCallback(async (channelName: string, participantId: string, agentId?: string, config?: AgentSubscriptionConfig) => {
     const activeContextId = resolveChatContextId(stateArgs.contextId, contextId);
@@ -551,7 +525,8 @@ export default function ChatPanel() {
     const configHandle = typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
     const handle = configHandle.trim() || agent?.proposedHandle || DEFAULT_HANDLE;
     const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
-    const { subscribeConfig, perAgent } = buildSubscribeConfig(handle, config);
+    const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
+    const { subscribeConfig, perAgent } = buildSubscribeConfig(handle, config, defaultAgentConfig);
 
     // Kick the exact DO, then invite the replacement (replay restores history).
     await unsubscribeDOFromChannel(target.source, target.className, target.objectKey, channelName);
@@ -564,13 +539,8 @@ export default function ChatPanel() {
       config: subscribeConfig,
       replay: true,
     });
-    const selectedModel = typeof perAgent["model"] === "string" ? perAgent["model"] : null;
-    if (selectedModel) {
-      void persistWorkspaceDefaultModel(selectedModel).catch((err: unknown) => {
-        console.warn("[ChatPanel] Failed to persist workspace default model:", err);
-      });
-    }
-
+    // Workspace default is written only via the explicit "Save as default"
+    // control — switching an agent never changes it.
     // Rewrite the matching persisted record (matched by old objectKey) so reload
     // rehydrates the new model rather than the old one.
     const currentArgs = panel.stateArgs.get<ChatStateArgs>();
@@ -589,7 +559,7 @@ export default function ChatPanel() {
       : [...existing, newRecord];
     await panel.stateArgs.set({ installedAgents: nextInstalled });
     return { agentId: source, handle };
-  }, [availableAgents, buildSubscribeConfig, persistWorkspaceDefaultModel]);
+  }, [availableAgents, buildSubscribeConfig, resolveWorkspaceDefaultAgentConfig]);
 
   const handleConnectProvider = useCallback(async (
     providerId: string,
@@ -634,10 +604,9 @@ export default function ChatPanel() {
       throw new Error(`No persisted agent record found for ${participantId}`);
     }
     await panel.stateArgs.set({ installedAgents: nextInstalled });
-    void persistWorkspaceDefaultModel(model).catch((err: unknown) => {
-      console.warn("[ChatPanel] Failed to persist workspace default model:", err);
-    });
-  }, [persistWorkspaceDefaultModel]);
+    // Per-agent model only — the workspace default is changed solely via the
+    // explicit "Save as default" control.
+  }, []);
 
   const handleRemoveAgent = useCallback(async (channelName: string, handle: string) => {
     const channelWorkers = await getChannelDOParticipants(channelName);
@@ -663,14 +632,16 @@ export default function ChatPanel() {
     onReplaceAgent: handleReplaceAgent,
     onConnectProvider: handleConnectProvider,
     onPersistAgentModel: handlePersistAgentModel,
+    onSaveDefaults: saveDefaultAgentConfig,
     onRemoveAgent: handleRemoveAgent,
     availableAgents,
     modelCatalog,
     defaultModelRef: workspaceDefaultModelRef,
+    defaultAgentConfig: workspaceDefaultAgentConfig,
     connectedModelRefs,
     onFocusPanel: handleFocusPanel,
     onReloadPanel: handleReloadPanel,
-  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, connectedModelRefs, handleFocusPanel, handleReloadPanel]);
+  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, workspaceDefaultAgentConfig, connectedModelRefs, handleFocusPanel, handleReloadPanel]);
 
   // Sandbox config — provides RPC and import loading to agentic-chat.
   const sandboxConfig = useMemo(() => createPanelSandboxConfig(rpc), []);
@@ -682,7 +653,7 @@ export default function ChatPanel() {
 
   // Resolve channel name: from stateArgs (existing chat) or bootstrap (new chat)
   const channelName = stateArgs.channelName ?? bootstrapChannel;
-  const installedAgents = stateArgs.installedAgents ?? bootstrapInstalled ?? undefined;
+  const installedAgents = stateArgs.installedAgents ?? undefined;
 
   // Still bootstrapping — show a brief loading indicator
   if (!channelName) {

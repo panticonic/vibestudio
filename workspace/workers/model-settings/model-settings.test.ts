@@ -78,23 +78,32 @@ class TestModelSettingsDO extends ModelSettingsDO {
 }
 
 describe("ModelSettingsDO", () => {
-  it("reads the configured workspace default model", async () => {
+  it("reads the configured workspace default agent config (model + behavior)", async () => {
     TestModelSettingsDO.config = {
       id: "test",
-      defaultAgentModel: "anthropic:claude-opus-4-1",
+      defaultAgentConfig: {
+        model: "anthropic:claude-opus-4-1",
+        thinkingLevel: "high",
+        approvalLevel: 1,
+      },
     };
     const { call } = await createTestDO(TestModelSettingsDO);
 
     await expect(call("getSettings")).resolves.toMatchObject({
       defaultModel: "anthropic:claude-opus-4-1",
       defaultModelSource: "workspace",
+      defaultAgentConfig: {
+        model: "anthropic:claude-opus-4-1",
+        thinkingLevel: "high",
+        approvalLevel: 1,
+      },
     });
   });
 
-  it("falls back when the configured default is missing from the catalog", async () => {
+  it("falls back when the configured model is missing, keeping valid behavior", async () => {
     TestModelSettingsDO.config = {
       id: "test",
-      defaultAgentModel: "missing:model",
+      defaultAgentConfig: { model: "missing:model", thinkingLevel: "low" },
     };
     const { call } = await createTestDO(TestModelSettingsDO);
 
@@ -102,20 +111,50 @@ describe("ModelSettingsDO", () => {
       defaultModel: "openai:gpt-5",
       defaultModelSource: "fallback",
       invalidDefaultModel: "missing:model",
+      defaultAgentConfig: { model: "openai:gpt-5", thinkingLevel: "low" },
     });
   });
 
-  it("persists a validated default model to workspace config", async () => {
+  it("persists a validated default agent config to workspace config", async () => {
     TestModelSettingsDO.config = { id: "test" };
     TestModelSettingsDO.writes = [];
     const { call } = await createTestDO(TestModelSettingsDO);
 
-    await expect(call("setDefaultModel", "anthropic:claude-opus-4-1")).resolves.toMatchObject({
+    await expect(
+      call("setDefaultAgentConfig", {
+        model: "anthropic:claude-opus-4-1",
+        thinkingLevel: "high",
+        approvalLevel: 2,
+      })
+    ).resolves.toMatchObject({
       defaultModel: "anthropic:claude-opus-4-1",
       defaultModelSource: "workspace",
+      defaultAgentConfig: {
+        model: "anthropic:claude-opus-4-1",
+        thinkingLevel: "high",
+        approvalLevel: 2,
+      },
     });
     expect(TestModelSettingsDO.writes).toEqual([
-      { key: "defaultAgentModel", value: "anthropic:claude-opus-4-1" },
+      {
+        key: "defaultAgentConfig",
+        value: { model: "anthropic:claude-opus-4-1", thinkingLevel: "high", approvalLevel: 2 },
+      },
+    ]);
+  });
+
+  it("drops invalid behavior fields when persisting", async () => {
+    TestModelSettingsDO.config = { id: "test" };
+    TestModelSettingsDO.writes = [];
+    const { call } = await createTestDO(TestModelSettingsDO);
+
+    await call("setDefaultAgentConfig", {
+      model: "openai:gpt-5",
+      thinkingLevel: "bogus",
+      approvalLevel: 9,
+    });
+    expect(TestModelSettingsDO.writes).toEqual([
+      { key: "defaultAgentConfig", value: { model: "openai:gpt-5" } },
     ]);
   });
 
@@ -123,7 +162,7 @@ describe("ModelSettingsDO", () => {
     TestModelSettingsDO.config = { id: "test" };
     const { call } = await createTestDO(TestModelSettingsDO);
 
-    await expect(call("setDefaultModel", "missing:model")).rejects.toThrow(
+    await expect(call("setDefaultAgentConfig", { model: "missing:model" })).rejects.toThrow(
       "Unknown model ref: missing:model"
     );
   });

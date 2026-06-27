@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Badge,
   Box,
+  Button,
   Checkbox,
   Flex,
   SegmentedControl,
@@ -9,12 +10,14 @@ import {
   TextArea,
   TextField,
 } from "@radix-ui/themes";
+import { CheckIcon } from "@radix-ui/react-icons";
 import type {
   AgentApprovalLevel,
   AgentRespondPolicy,
   AgentThinkingLevel,
   ModelCatalog,
 } from "@workspace/agentic-core";
+import type { DefaultAgentConfig } from "@workspace/model-catalog/catalog";
 import { ModelPicker } from "./ModelPicker";
 
 export interface AgentConfigDraft {
@@ -34,6 +37,11 @@ export interface AgentConfigFormProps {
   onChange: (next: AgentConfigDraft) => void;
   /** False in edit mode — model is read-only (switching model needs a restart). */
   modelEditable?: boolean;
+  /** Current workspace default agent config — drives the "Save as defaults" state. */
+  defaultAgentConfig?: DefaultAgentConfig | null;
+  /** Explicitly persist the full config (model + behavior) as the workspace
+   *  default. When absent, the "Save as defaults" control is hidden. */
+  onSaveAsDefault?: (config: DefaultAgentConfig) => void | Promise<void>;
   /** Show the reactiveness control (only meaningful with >1 agent in channel). */
   showReactiveness?: boolean;
   /** Show the @-mention handle field (matters in multi-agent channels). */
@@ -76,12 +84,32 @@ export function AgentConfigForm({
   value,
   onChange,
   modelEditable = true,
+  defaultAgentConfig,
+  onSaveAsDefault,
   showReactiveness = false,
   showHandle = false,
   participants = [],
 }: AgentConfigFormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [savingDefault, setSavingDefault] = useState(false);
   const set = (patch: Partial<AgentConfigDraft>) => onChange({ ...value, ...patch });
+
+  const handleSaveAsDefault = useCallback(async () => {
+    if (!onSaveAsDefault || !value.model) return;
+    const config: DefaultAgentConfig = {
+      model: value.model,
+      ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel } : {}),
+      approvalLevel: value.approvalLevel ?? 2,
+    };
+    setSavingDefault(true);
+    try {
+      await onSaveAsDefault(config);
+    } catch (err) {
+      console.warn("[AgentConfigForm] Failed to save default agent config:", err);
+    } finally {
+      setSavingDefault(false);
+    }
+  }, [onSaveAsDefault, value.model, value.thinkingLevel, value.approvalLevel]);
 
   const selectedModel = useMemo(
     () => catalog?.models.find((m) => m.ref === value.model) ?? null,
@@ -95,6 +123,14 @@ export function AgentConfigForm({
       : thinkingLevels[0] ?? "medium";
 
   const policy: AgentRespondPolicy = value.respondPolicy ?? "all";
+
+  // Does the current draft match the saved workspace defaults (model + the
+  // behavior fields we persist)? Drives the "Save as defaults" footer.
+  const savedDefaultsMatch =
+    !!defaultAgentConfig &&
+    value.model === defaultAgentConfig.model &&
+    (value.thinkingLevel ?? null) === (defaultAgentConfig.thinkingLevel ?? null) &&
+    (value.approvalLevel ?? 2) === (defaultAgentConfig.approvalLevel ?? 2);
 
   return (
     <Flex direction="column" gap="4">
@@ -250,6 +286,33 @@ export function AgentConfigForm({
           </Box>
         )}
       </Box>
+
+      {/* Save-as-defaults — the ONLY path that writes the workspace default agent
+          config (model + behavior). The button appears only when the draft
+          differs from the saved defaults; when it matches, a quiet indicator
+          shows instead. Hidden entirely when the host doesn't support it. */}
+      {modelEditable && onSaveAsDefault && value.model && defaultAgentConfig && (
+        <Box pt="1">
+          {savedDefaultsMatch ? (
+            <Flex align="center" gap="1">
+              <CheckIcon style={{ color: "var(--green-9)" }} />
+              <Text size="1" color="gray">
+                These are your workspace defaults
+              </Text>
+            </Flex>
+          ) : (
+            <Button
+              size="1"
+              variant="soft"
+              color="gray"
+              loading={savingDefault}
+              onClick={() => void handleSaveAsDefault()}
+            >
+              Save as workspace defaults
+            </Button>
+          )}
+        </Box>
+      )}
     </Flex>
   );
 }

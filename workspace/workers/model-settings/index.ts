@@ -2,8 +2,9 @@ import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 import type { WorkspaceConfig } from "@workspace/runtime/worker";
 import {
   DEFAULT_AGENT_MODEL_REF,
-  WORKSPACE_DEFAULT_MODEL_FIELD,
+  WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD,
   type AgentThinkingLevel,
+  type DefaultAgentConfig,
   type ModelCatalog,
   type ModelCatalogEntry,
   type ModelCatalogProvider,
@@ -112,17 +113,27 @@ export class ModelSettingsDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "server"] })
-  async setDefaultModel(modelRef: string): Promise<ModelSettingsSnapshot> {
+  async setDefaultAgentConfig(input: DefaultAgentConfig): Promise<ModelSettingsSnapshot> {
     const catalog = await this.getCatalog();
-    const model = catalog.models.find((entry) => entry.ref === modelRef);
+    const model = catalog.models.find((entry) => entry.ref === input.model);
     if (!model) {
-      throw new Error(`Unknown model ref: ${modelRef}`);
+      throw new Error(`Unknown model ref: ${input.model}`);
     }
-    await this.setWorkspaceConfigField(WORKSPACE_DEFAULT_MODEL_FIELD, model.ref);
+    const config: DefaultAgentConfig = {
+      model: model.ref,
+      ...(input.thinkingLevel && AGENT_THINKING_LEVELS.has(input.thinkingLevel)
+        ? { thinkingLevel: input.thinkingLevel }
+        : {}),
+      ...(input.approvalLevel === 0 || input.approvalLevel === 1 || input.approvalLevel === 2
+        ? { approvalLevel: input.approvalLevel }
+        : {}),
+    };
+    await this.setWorkspaceConfigField(WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD, config);
     return {
       catalog,
       defaultModel: model.ref,
       defaultModelSource: "workspace",
+      defaultAgentConfig: config,
     };
   }
 
@@ -139,25 +150,54 @@ export class ModelSettingsDO extends DurableObjectBase {
   }
 
   private resolveSettings(catalog: ModelCatalog, config: WorkspaceConfig): ModelSettingsSnapshot {
-    const configured = normalizeModelRef(config.defaultAgentModel);
-    if (configured && catalog.models.some((model) => model.ref === configured)) {
+    const stored = parseDefaultAgentConfig(config.defaultAgentConfig);
+    const behavior = {
+      ...(stored.thinkingLevel ? { thinkingLevel: stored.thinkingLevel } : {}),
+      ...(stored.approvalLevel !== undefined ? { approvalLevel: stored.approvalLevel } : {}),
+    };
+    const configuredModel =
+      stored.model && catalog.models.some((model) => model.ref === stored.model) ? stored.model : null;
+    if (configuredModel) {
       return {
         catalog,
-        defaultModel: configured,
+        defaultModel: configuredModel,
         defaultModelSource: "workspace",
+        defaultAgentConfig: { model: configuredModel, ...behavior },
       };
     }
+    const fallback = pickFallbackModel(catalog);
     return {
       catalog,
-      defaultModel: pickFallbackModel(catalog),
+      defaultModel: fallback,
       defaultModelSource: "fallback",
-      ...(configured ? { invalidDefaultModel: configured } : {}),
+      ...(stored.model ? { invalidDefaultModel: stored.model } : {}),
+      defaultAgentConfig: { model: fallback, ...behavior },
     };
   }
 }
 
-function normalizeModelRef(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+/** Parse + validate the stored defaultAgentConfig (tolerates legacy/garbage). */
+function parseDefaultAgentConfig(value: unknown): {
+  model: string | null;
+  thinkingLevel?: AgentThinkingLevel;
+  approvalLevel?: 0 | 1 | 2;
+} {
+  if (!value || typeof value !== "object") return { model: null };
+  const v = value as Record<string, unknown>;
+  const rawModel = v["model"];
+  const model = typeof rawModel === "string" && rawModel.trim().length > 0 ? rawModel.trim() : null;
+  const rawThinking = v["thinkingLevel"];
+  const thinkingLevel = AGENT_THINKING_LEVELS.has(rawThinking as string)
+    ? (rawThinking as AgentThinkingLevel)
+    : undefined;
+  const rawApproval = v["approvalLevel"];
+  const approvalLevel =
+    rawApproval === 0 || rawApproval === 1 || rawApproval === 2 ? rawApproval : undefined;
+  return {
+    model,
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(approvalLevel !== undefined ? { approvalLevel } : {}),
+  };
 }
 
 function pickFallbackModel(catalog: ModelCatalog): string {
@@ -170,7 +210,7 @@ function pickFallbackModel(catalog: ModelCatalog): string {
 export default {
   async fetch() {
     return new Response(
-      "Model Settings service.\nMethods: listCatalog, getSettings, getDefaultModel, setDefaultModel.\n",
+      "Model Settings service.\nMethods: listCatalog, getSettings, getDefaultModel, setDefaultAgentConfig.\n",
       { headers: { "Content-Type": "text/plain" } },
     );
   },
