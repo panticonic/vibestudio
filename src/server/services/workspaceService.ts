@@ -28,7 +28,7 @@ import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispa
 import type { AppCapability } from "@natstack/shared/unitManifest";
 import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
 import { normalizeWorkspaceRepoPath } from "@natstack/shared/workspace/remotes";
-import type { ApprovalPrincipal } from "@natstack/shared/approvals";
+import type { ApprovalDetailFormat, ApprovalPrincipal } from "@natstack/shared/approvals";
 import type {
   HostTarget,
   HostTargetCandidate,
@@ -321,11 +321,13 @@ function safeSubjectSegment(value: string): string {
 
 function describeJson(value: unknown): string {
   try {
-    return truncateApprovalValue(JSON.stringify(value));
+    return `\`\`\`json\n${truncateApprovalValue(JSON.stringify(value, null, 2), 900).replace(/```/g, "'''")}\n\`\`\``;
   } catch {
-    return "[unserializable value]";
+    return "```text\n[unserializable value]\n```";
   }
 }
+
+type WorkspaceApprovalDetail = { label: string; value: string; format?: ApprovalDetailFormat };
 
 function resolveWorkspacePrincipal(
   deps: WorkspaceServiceDeps,
@@ -387,7 +389,7 @@ async function requireWorkspaceApproval(
     title: string;
     summary: string;
     warning?: string;
-    details?: Array<{ label: string; value: string }>;
+    details?: WorkspaceApprovalDetail[];
   }
 ): Promise<void> {
   if (isTrustedWorkspaceCaller(ctx, deps)) return;
@@ -414,7 +416,10 @@ async function requireWorkspaceApproval(
       { label: "Caller", value: principal.callerId },
       { label: "Workspace", value: deps.getConfig().id },
       { label: "Target", value: truncateApprovalValue(approval.target) },
-      ...(approval.details ?? []),
+      ...(approval.details ?? []).map((detail) => ({
+        ...detail,
+        value: truncateApprovalValue(detail.value, 1000),
+      })),
     ].slice(0, 8),
     promptOptions: "choices",
     options: [
@@ -566,7 +571,9 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             target: deps.getConfig().id,
             title: "Change initial workspace panels?",
             summary: "This panel or worker wants to change the panels opened for this workspace.",
-            details: [{ label: "Init panels", value: describeJson(initPanels) }],
+            details: [
+              { label: "Init panels", value: describeJson(initPanels), format: "markdown" },
+            ],
           });
           deps.setConfigField("initPanels", initPanels);
           return;
@@ -581,7 +588,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             warning: "Changing workspace config can affect how the workspace starts and runs.",
             details: [
               { label: "Config key", value: key },
-              { label: "New value", value: describeJson(value) },
+              { label: "New value", value: describeJson(value), format: "markdown" },
             ],
           });
           deps.setConfigField(key, value);

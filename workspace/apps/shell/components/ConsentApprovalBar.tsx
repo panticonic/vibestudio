@@ -189,6 +189,14 @@ export function ConsentApprovalBar() {
         console.error("[ConsentApprovalBar] submitCredentialInput failed:", err)
       );
   };
+  const submitSecretInput = (values: Record<string, string>) => {
+    if (current?.kind !== "secret-input") return;
+    void shellApproval
+      .submitSecretInput(current.approvalId, values)
+      .catch((err: unknown) =>
+        console.error("[ConsentApprovalBar] submitSecretInput failed:", err)
+      );
+  };
   const resolveUserland = (choice: string) => {
     if (current?.kind !== "userland") return;
     void shellApproval
@@ -225,6 +233,9 @@ export function ConsentApprovalBar() {
         return;
       case "submit-credential-input":
         submitCredentialInput(intent.values);
+        return;
+      case "submit-secret-input":
+        submitSecretInput(intent.values);
         return;
       case "resolve-userland":
         resolveUserland(intent.choice);
