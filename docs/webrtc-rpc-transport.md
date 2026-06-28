@@ -19,8 +19,9 @@ This proposal collapses that to **one peer-to-peer pipe**:
 - A **minimal, auth-free signaling service** (Cloudflare Durable Object,
   UUID-addressed rooms) brokers the WebRTC handshake. Security lives in the QR /
   pairing key, not in the signaling box.
-- Panels load from a **client-local `natstack://` origin**; the scheme handler
-  pulls bytes over the same data channel. No remote HTTP origin.
+- Panels load from a **client-local loopback origin** (`http://127.0.0.1`); a
+  small local server pulls bytes over the same data channel. No remote HTTP
+  origin.
 - A **constrained public relay** handles the one class that can never be P2P:
   inbound OAuth callbacks and webhooks from third parties.
 
@@ -96,8 +97,8 @@ the public-TLS-endpoint and pinning ceremony.
 │   Client     │◀═══════════▶│  Home server │
 │ shell/mobile │             │  (behind NAT)│
 │              │             │              │
-│ natstack://  │             │  PanelHttp + │
-│ scheme ─────────bytes──────▶  services +  │
+│ 127.0.0.1    │             │  PanelHttp + │
+│ loopback ───────bytes──────▶  services +  │
 │ webview      │             │  workerd     │
 └──────────────┘             └──────────────┘
         ▲
@@ -211,59 +212,69 @@ truly peer-to-peer. This is the most commonly forgotten requirement.
   where even TURN is blocked or where the data channel is degraded. This also
   de-risks rollout: ship WebRTC behind the proven WS path.
 
-### 4. Panel local origin — custom `natstack://` scheme (chosen)
+### 4. Panel local origin — loopback everywhere
 
-Panels load their document from a **client-local custom scheme** instead of a
-remote HTTP origin. The scheme handler resolves panel/asset requests by pulling
-bytes over the data channel (bulk channel) from the server's existing
-`PanelHttpServer` logic — which becomes a byte source rather than an HTTP server.
+Panels load from a **client-local loopback HTTP origin** (`http://127.0.0.1:<port>`)
+on every platform. A small local server — essentially the existing
+`PanelHttpServer` relocated to the client — answers panel/asset requests by
+pulling bytes over the data channel's bulk channel. This is uniform across
+desktop and mobile and reuses the most existing code.
 
-**Desktop (Electron).** Register the scheme privileged at startup, before
-`app.ready`:
+**Why loopback rather than a custom `natstack://` scheme.** A custom
+`WKURLSchemeHandler` scheme does **not** reliably get a secure context on iOS
+WKWebView, which rules out a uniform custom-scheme approach outright. The real
+choice is therefore *uniform loopback* vs *three different per-platform handlers*
+(desktop `protocol.handle`, iOS loopback, Android `WebViewAssetLoader`). Loopback
+wins on:
 
-```ts
-protocol.registerSchemesAsPrivileged([{
-  scheme: "natstack",
-  privileges: {
-    standard: true,        // real origin → storage, partitions
-    secure: true,          // secure context APIs
-    supportFetchAPI: true,
-    stream: true,          // stream large assets
-    corsEnabled: true,
-  },
-}]);
-// then, per session:
-session.protocol.handle("natstack", (req) => fetchPanelBytesOverChannel(req));
-```
+- **Secure context on all three platforms.** `localhost` / `127.0.0.0/8` are
+  "potentially trustworthy" origins, so Electron, iOS WKWebView, and Android
+  WebView all grant secure-context APIs (crypto.subtle, etc.).
+- **Reusing the existing server.** `PanelHttpServer` is already an HTTP server;
+  loopback keeps it nearly intact, swapping its byte source from disk to the
+  channel. The trustworthy-origin checks (`connect.ts:isTrustedCleartextHost`
+  already whitelists loopback) and session-partition isolation
+  (`contextIdToPartition` → `persist:panel:${contextId}`, assigned at the webview
+  level and independent of origin) carry over unchanged.
 
 Panel URLs shift from `${protocol}://${externalHost}:${port}/${source}/?contextId=…`
 (`packages/shared/src/panelFactory.ts`, mobile
 `workspace/apps/mobile/src/services/panelUrls.ts`) to
-`natstack://panel/${source}/?contextId=…`. Session partitioning by `contextId`
-(`packages/shared/src/contextIdToPartition.ts`) is unaffected — a `standard`
-scheme yields real origins, so `persist:panel:${contextId}` isolation still
-holds.
+`http://127.0.0.1:<port>/${source}/?contextId=…`.
 
-**Mobile (React Native WebView).** iOS WKWebView via `WKURLSchemeHandler`;
-Android WebView via `shouldInterceptRequest`. The native module reads bytes off
-the channel and returns them. The bridge bootstrap
-(`workspace/apps/mobile/src/components/PanelWebView.tsx`) and managed-origin
-checks (`isManagedHost`) update to recognize the `natstack://` origin.
+Per-platform notes:
 
-**Open risk — secure context on custom schemes.** Electron honors `secure: true`
-for registered schemes. **WKWebView does not reliably treat custom-scheme origins
-as secure contexts**, which would break panels relying on secure-context-only
-web APIs (crypto.subtle, etc.). Mitigation / fallback: where a platform won't
-grant a custom scheme a secure context, fall back to a **loopback origin**
-(`http://127.0.0.1:<port>`, already a trustworthy origin under
-`connect.ts:isTrustedCleartextHost`) backed by the same channel byte source. The
-abstraction is "local byte source for the webview"; the scheme is the desktop
-realization, loopback the mobile fallback if needed. **Validate the WKWebView
-secure-context behavior in a spike before committing mobile to the scheme.**
+- **Desktop (Electron):** loads loopback as-is. *Optional later optimization:*
+  swap to `protocol.handle` on a privileged `natstack://` scheme to drop the
+  socket entirely (in-process, no port, no cross-process exposure). Not required
+  for v1 — keep it as a clean-up once the loopback model is proven.
+- **iOS (WKWebView):** embedded loopback server (GCDWebServer-style). Set
+  `NSAllowsLocalNetworking` in `Info.plist` for cleartext-to-loopback under ATS.
+  Pure loopback does **not** trigger the iOS 14 local-network permission prompt
+  (that prompt is for LAN/Bonjour, not loopback). Foreground-only — fine for
+  panel rendering. The bridge bootstrap
+  (`workspace/apps/mobile/src/components/PanelWebView.tsx`) and managed-origin
+  checks (`isManagedHost`) update to recognize the loopback origin.
+- **Android (WebView):** a loopback server works (cleartext-to-loopback is
+  allowed by default network-security config); alternatively `WebViewAssetLoader`
+  gives a virtual `https://…/` secure origin with no socket. Either is fine;
+  loopback keeps the model uniform with iOS/desktop.
+
+**The one real cost — local socket exposure.** A listening socket on
+`127.0.0.1:<port>` is reachable by *any* local process (and, on multi-user hosts,
+potentially other users) — the in-process `protocol.handle` would have avoided
+this. Neutralize it the same way `PanelHttpServer` already guards its management
+API (`validateManagementAuth` — default-deny, constant-time token): require the
+per-session capability token (`__natstackGatewayToken` / connectionId, already
+injected into panels) on **every** request and serve nothing without it. Inject
+it via per-partition header rewriting (`session.webRequest.onBeforeSendHeaders`
+on desktop; initial-load headers on mobile) rather than a URL query param, so it
+never leaks into referers/logs. Bind `127.0.0.1` only — never `0.0.0.0` — on a
+random high port.
 
 Bootstrap (`/__loader.js`, `/__transport.js`) is delivered the same way — as the
-first bytes the scheme handler serves — but note the transport code it bootstraps
-now establishes the data channel rather than a WS to a remote origin.
+first bytes the loopback server serves — but note the transport code it
+bootstraps now establishes the data channel rather than a WS to a remote origin.
 
 ### 5. Callback relay — the unavoidable public island
 
@@ -295,9 +306,9 @@ matching logic on the server is unchanged; only the ingress path differs.
 | --- | --- | --- |
 | Service calls (fs/git/ai/channels/build/tokens) | RPC over WS | RPC over data channel |
 | `credentials.proxyFetch` streaming | RPC `/rpc/stream` | RPC stream over data channel |
-| Panel HTML + bundles + assets | Remote HTTP origin `/*` | Bytes over channel → `natstack://` (or loopback) |
+| Panel HTML + bundles + assets | Remote HTTP origin `/*` | Bytes over channel → local loopback origin (`127.0.0.1`) |
 | Blobstore bytes, app artifacts | HTTP routes | Bytes over channel |
-| Bootstrap loader/transport | HTTP `/__*.js` | First bytes from scheme handler |
+| Bootstrap loader/transport | HTTP `/__*.js` | First bytes from local loopback server |
 | **OAuth callbacks, webhooks** | Server's public HTTP routes | **Public relay → backhaul to server** |
 | CDP / inspector (dev only) | WS | Unchanged |
 
@@ -312,9 +323,10 @@ Everything except the third-party callbacks rides the single RPC pipe.
 2. **Signaling DO + pairing.** Cloudflare DO rendezvous; extend the QR/connect
    link with `room` + `fp`; reuse fingerprint pinning. Land TURN config + WS
    fallback.
-3. **Local panel origin.** Desktop `natstack://` scheme handler sourcing bytes
-   over the channel. **Spike WKWebView secure-context first**; choose scheme vs
-   loopback per platform.
+3. **Local panel origin.** Relocate `PanelHttpServer` to the client as a loopback
+   server (`127.0.0.1`) sourcing bytes over the channel; gate every request on
+   the per-session capability token via injected headers. Uniform across
+   desktop/iOS/Android. (Desktop may later swap to socket-free `protocol.handle`.)
 4. **Callback relay.** Public DO relay + server-side registration/backhaul;
    repoint `publicUrl` for OAuth/webhooks only.
 5. **Decommission remote ingress.** Once the above is proven, the home server no
@@ -325,8 +337,12 @@ Each phase is independently shippable behind the WS fallback.
 
 ## Open questions / risks
 
-- **WKWebView secure context for custom schemes** — gating decision for mobile
-  (scheme vs loopback). Spike before phase 3.
+- **Loopback token bootstrap** — the *initial* document navigation must carry the
+  capability token via injected request headers (not a URL param); verify
+  per-platform header injection on first load (`onBeforeSendHeaders` desktop;
+  initial-load headers on mobile). This is the main loopback wrinkle.
+- **iOS embedded server** — adds a native dependency (GCDWebServer-style) and is
+  foreground-only; confirm acceptable for panel lifecycle and App Store review.
 - **Reconnect/ICE-restart parity** — most underestimated effort; needs to match
   the WS transport's recovery semantics (cold-recover vs resubscribe).
 - **TURN dependency & cost** — pure P2P is not guaranteed; budget for a relay.
@@ -344,11 +360,15 @@ Each phase is independently shippable behind the WS fallback.
   `wsClient.ts`).
 - `packages/rpc/src/transports/compose.ts` — already supports fallback routing.
 - `packages/rpc/src/protocol/streamCodec.ts` — reused for channel streaming.
-- `src/main/serverClient.ts` — desktop transport selection + scheme registration.
-- `src/main/` (new) — `natstack://` `protocol.handle` byte source.
+- `src/main/serverClient.ts` — desktop transport selection.
+- `src/server/panelHttpServer.ts` — reused as a client-local loopback server
+  (byte source = data channel); add capability-token gate on all requests.
+- `src/main/` — bind the loopback server + inject the token via
+  `session.webRequest.onBeforeSendHeaders` per panel partition. (Optional later:
+  socket-free `protocol.handle` byte source.)
 - `workspace/apps/mobile/src/services/mobileTransport.ts`,
   `components/PanelWebView.tsx`, `services/panelUrls.ts` — mobile transport +
-  local origin.
+  loopback origin (embedded server / `WebViewAssetLoader`).
 - `packages/shared/src/connect.ts`, `scripts/cli/lib/connect-utils.mjs` —
   extended pairing link (`room`, `fp`).
 - `src/server/publicUrl.ts`, `services/credentialService.ts`,
