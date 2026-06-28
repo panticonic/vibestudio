@@ -41,6 +41,7 @@ export type ApprovalCardIntentBody =
   | { type: "decide"; decision: ApprovalDecision }
   | { type: "submit-client-config"; values: Record<string, string> }
   | { type: "submit-credential-input"; values: Record<string, string> }
+  | { type: "submit-secret-input"; values: Record<string, string> }
   | { type: "resolve-userland"; choice: string }
   | { type: "device-cancel" }
   | { type: "minimize" }

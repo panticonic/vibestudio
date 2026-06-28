@@ -36,6 +36,7 @@ import {
   PersonIcon,
 } from "@radix-ui/react-icons";
 import type {
+  ApprovalDetailFormat,
   PendingApproval,
   PendingCapabilityApproval,
   PendingCredentialApproval,
@@ -59,6 +60,10 @@ import {
   shouldOpenApprovalDetails,
 } from "@natstack/shared/approvalCopy";
 import type { ApprovalDecision } from "@natstack/shared/approvals";
+import {
+  parseApprovalMarkdown,
+  type ApprovalMarkdownInline,
+} from "@natstack/shared/approvalMarkdown";
 import {
   approvalAccent,
   prettifyId,
@@ -124,25 +129,15 @@ export function ApprovalCard({ approval, caller, queue, decisionError, emit }: A
         decide={(decision) => emitForApproval({ type: "decide", decision })}
       />
     ) : approval.kind === "secret-input" ? (
-      <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
-        <DecisionButton
-          label="Deny"
-          description="Do not provide this input."
-          color="red"
-          icon={<CrossCircledIcon />}
-          onClick={() => emitForApproval({ type: "decide", decision: "deny" })}
-        />
-        <Tooltip content="Dismiss">
-          <IconButton
-            size="1"
-            variant="ghost"
-            color="gray"
-            onClick={() => emitForApproval({ type: "decide", decision: "dismiss" })}
-          >
-            <Cross2Icon />
-          </IconButton>
-        </Tooltip>
-      </Flex>
+      <SecretInputActions
+        approval={approval}
+        values={secretConfigValues}
+        onSubmit={() =>
+          emitForApproval({ type: "submit-secret-input", values: secretConfigValues })
+        }
+        onDeny={() => emitForApproval({ type: "decide", decision: "deny" })}
+        onDismiss={() => emitForApproval({ type: "decide", decision: "dismiss" })}
+      />
     ) : (
       <StandardApprovalActions
         approval={approval}
@@ -210,11 +205,11 @@ export function ApprovalCard({ approval, caller, queue, decisionError, emit }: A
             ) : null}
 
             {copy.warning ? (
-              <Flex align="center" gap="1" style={{ color: "var(--red-11)" }}>
-                <ExclamationTriangleIcon width={13} height={13} />
-                <Text size="1" style={{ lineHeight: 1.35 }}>
-                  {copy.warning}
-                </Text>
+              <Flex align="start" gap="1" style={{ color: "var(--red-11)" }}>
+                <Box style={{ flexShrink: 0, paddingTop: 2 }}>
+                  <ExclamationTriangleIcon width={13} height={13} />
+                </Box>
+                <ApprovalMarkdown source={copy.warning} tone="danger" compact />
               </Flex>
             ) : null}
             {decisionError ? (
@@ -232,7 +227,9 @@ export function ApprovalCard({ approval, caller, queue, decisionError, emit }: A
               defaultOpen={shouldOpenApprovalDetails(approval)}
             />
             {approval.kind === "device-code" ? <DeviceCodeBody approval={approval} /> : null}
-            {approval.kind === "client-config" || approval.kind === "credential-input" ? (
+            {approval.kind === "client-config" ||
+            approval.kind === "credential-input" ||
+            approval.kind === "secret-input" ? (
               <SecretConfigFields
                 approval={approval}
                 values={secretConfigValues}
@@ -524,6 +521,48 @@ function ClientConfigActions({
       <DecisionButton
         label="Deny"
         description="Do not save this connected service."
+        color="red"
+        icon={<CrossCircledIcon />}
+        onClick={onDeny}
+      />
+      <Tooltip content="Dismiss">
+        <IconButton size="1" variant="ghost" color="gray" onClick={onDismiss}>
+          <Cross2Icon />
+        </IconButton>
+      </Tooltip>
+    </Flex>
+  );
+}
+
+function SecretInputActions({
+  approval,
+  values,
+  onSubmit,
+  onDeny,
+  onDismiss,
+}: {
+  approval: PendingSecretInputApproval;
+  values: Record<string, string>;
+  onSubmit: () => void;
+  onDeny: () => void;
+  onDismiss: () => void;
+}) {
+  const missingRequired = approval.fields.some(
+    (field) => field.required && !values[field.name]?.trim()
+  );
+  return (
+    <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
+      <Tooltip
+        content={missingRequired ? "Enter the required values first." : "Submit and continue."}
+      >
+        <Button size="1" variant="solid" color="sky" disabled={missingRequired} onClick={onSubmit}>
+          <CheckCircledIcon />
+          Submit
+        </Button>
+      </Tooltip>
+      <DecisionButton
+        label="Deny"
+        description="Do not provide this input."
         color="red"
         icon={<CrossCircledIcon />}
         onClick={onDeny}
@@ -873,7 +912,10 @@ function SecretConfigFields({
   values,
   onChange,
 }: {
-  approval: PendingClientConfigApproval | PendingCredentialInputApproval;
+  approval:
+    | PendingClientConfigApproval
+    | PendingCredentialInputApproval
+    | PendingSecretInputApproval;
   values: Record<string, string>;
   onChange: (name: string, value: string) => void;
 }) {
@@ -993,21 +1035,24 @@ function SecretInputDetails({ approval }: { approval: PendingSecretInputApproval
   return (
     <>
       {approval.description ? (
-        <Detail icon={<LockClosedIcon />} label="Request" value={approval.description} />
+        <Detail
+          icon={<LockClosedIcon />}
+          label="Request"
+          value={
+            <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+              {approval.description}
+            </Text>
+          }
+        />
       ) : null}
-      <Detail
-        icon={<LockClosedIcon />}
-        label="Fields"
-        value={
-          <Flex align="center" gap="1" wrap="wrap">
-            {approval.fields.map((field) => (
-              <Badge key={field.name} color={field.type === "secret" ? "amber" : "gray"}>
-                {field.label}
-              </Badge>
-            ))}
-          </Flex>
-        }
-      />
+      {(approval.details ?? []).map((detail) => (
+        <Detail
+          key={detail.label}
+          icon={<LockClosedIcon />}
+          label={detail.label}
+          value={<FormattedDetailValue value={detail.value} format={detail.format} />}
+        />
+      ))}
     </>
   );
 }
@@ -1387,11 +1432,123 @@ function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
           key={detail.label}
           icon={<LockClosedIcon />}
           label={detail.label}
-          value={<InlineCode>{detail.value}</InlineCode>}
+          value={<FormattedDetailValue value={detail.value} format={detail.format} />}
+        />
+      ))}
+      {(approval.positiveEvidence ?? []).map((detail) => (
+        <Detail
+          key={`evidence:${detail.label}`}
+          icon={<CheckCircledIcon />}
+          label={detail.label}
+          value={<FormattedDetailValue value={detail.value} format={detail.format} />}
         />
       ))}
     </>
   );
+}
+
+function ApprovalMarkdown({
+  source,
+  tone = "default",
+  compact = false,
+}: {
+  source: string;
+  tone?: "default" | "muted" | "danger";
+  compact?: boolean;
+}) {
+  const blocks = parseApprovalMarkdown(source);
+  if (blocks.length === 0) return null;
+  const color = tone === "danger" ? "var(--red-11)" : tone === "muted" ? "var(--gray-11)" : undefined;
+  return (
+    <Flex
+      direction="column"
+      gap={compact ? "1" : "2"}
+      style={{ color, lineHeight: 1.4, minWidth: 0 }}
+    >
+      {blocks.map((block, index) => {
+        if (block.kind === "code-block") {
+          return (
+            <pre
+              key={index}
+              style={{
+                margin: 0,
+                maxWidth: "100%",
+                overflowX: "auto",
+                borderRadius: 6,
+                padding: "6px 8px",
+                background: "var(--gray-a3)",
+                fontSize: 12,
+              }}
+            >
+              <code>{block.text}</code>
+            </pre>
+          );
+        }
+        if (block.kind === "bullet-list" || block.kind === "ordered-list") {
+          const Tag = block.kind === "bullet-list" ? "ul" : "ol";
+          return (
+            <Tag key={index} style={{ margin: 0, paddingLeft: 18 }}>
+              {block.items.map((item, itemIndex) => (
+                <li key={itemIndex}>
+                  <Text as="span" size="1" style={{ lineHeight: 1.4 }}>
+                    <ApprovalMarkdownInlineNodes nodes={item} />
+                  </Text>
+                </li>
+              ))}
+            </Tag>
+          );
+        }
+        return (
+          <Text key={index} size="1" style={{ lineHeight: 1.4, overflowWrap: "anywhere" }}>
+            <ApprovalMarkdownInlineNodes nodes={block.children} />
+          </Text>
+        );
+      })}
+    </Flex>
+  );
+}
+
+function ApprovalMarkdownInlineNodes({ nodes }: { nodes: ApprovalMarkdownInline[] }) {
+  return (
+    <>
+      {nodes.map((node, index) => {
+        if (node.kind === "code") {
+          return (
+            <Code key={index} size="1" variant="soft">
+              {node.text}
+            </Code>
+          );
+        }
+        if (node.kind === "strong") {
+          return (
+            <strong key={index}>
+              <ApprovalMarkdownInlineNodes nodes={node.children} />
+            </strong>
+          );
+        }
+        if (node.kind === "emphasis") {
+          return (
+            <em key={index}>
+              <ApprovalMarkdownInlineNodes nodes={node.children} />
+            </em>
+          );
+        }
+        return <span key={index}>{node.text}</span>;
+      })}
+    </>
+  );
+}
+
+function FormattedDetailValue({ value, format }: { value: string; format?: ApprovalDetailFormat }) {
+  if (format === "markdown") return <ApprovalMarkdown source={value} compact />;
+  if (format === "plain") {
+    return (
+      <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+        {value}
+      </Text>
+    );
+  }
+  return <InlineCode>{value}</InlineCode>;
 }
 
 function InlineCode({ children }: { children: ReactNode }) {
