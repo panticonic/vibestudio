@@ -84,11 +84,12 @@ the public-TLS-endpoint and pinning ceremony.
 ## Architecture
 
 ```
-                 ┌─────────────────────────┐
-                 │  Cloudflare (minimal)    │
-   QR / key      │  • Signaling DO (rooms)  │
-  ┌─────────────▶│  • Callback relay (DO)   │◀── OAuth redirect / webhook POST
-  │              └───────────┬──────────────┘        (the public island)
+                 ┌──────────────────────────────┐
+                 │  Cloudflare (one global box) │
+   QR / key      │  • Signaling DO (UUID rooms) │
+  ┌─────────────▶│  • Callback relay (multi-    │◀── OAuth redirect / webhook POST
+  │              │    tenant: id→server)        │      (the public island, shared)
+  │              └───────────┬──────────────────┘
   │                          │ SDP/ICE exchange
   │                          │ + callback backhaul
   │     WebRTC DataChannel   │
@@ -276,29 +277,78 @@ Bootstrap (`/__loader.js`, `/__transport.js`) is delivered the same way — as t
 first bytes the loopback server serves — but note the transport code it
 bootstraps now establishes the data channel rather than a WS to a remote origin.
 
-### 5. Callback relay — the unavoidable public island
+### 5. Callback relay — one global, multi-tenant public island
 
 OAuth callbacks and webhooks (bucket 2) need a public HTTPS URL a third party can
-reach. The home server is now behind NAT, so the relay must forward inbound
-payloads to it. The relay is *not* a stateless passthrough — it is a
-**relay-with-registration**:
+reach. This is the one piece that can never be P2P. **Decision: a single global,
+NatStack-operated relay shared by all users**, faceting inbound callbacks to the
+right home server by the routing keys the server already uses.
 
-- **Routing table** keyed by the values the server already matches on: OAuth
-  `state` (`src/server/services/credentialService.ts`) and webhook
-  `subscriptionId` (`src/server/services/webhookIngressService.ts`). Each maps to
-  a home server.
-- **Backhaul** to deliver the payload: the home server holds an outbound channel
-  to the relay DO (or registers "deliver `state=X` / `subscription=Y` to me").
-  When the IdP/GitHub POSTs, the relay forwards the opaque payload down that
-  channel.
-- **Constrained.** It forwards opaque callback bodies keyed by UUID/state — no
-  auth, no inspection, no business logic. A Cloudflare Worker + DO implements
-  this in a few hundred lines.
+**Faceting works on existing keys — no server-side rework.** The server already
+matches callbacks by globally-unique keys:
+
+- webhook `subscriptionId` = `crypto.randomUUID()`
+  (`src/server/services/webhookIngressService.ts:183`)
+- OAuth `state` = 128-bit `randomBytes(16)`
+  (`src/server/services/credentialService.ts:2197`)
+
+Both are collision-free across tenants, so they are sound *global* routing keys.
+The server's matching logic (`handleOAuthCallback`, webhook ingress) is unchanged;
+only the ingress topology changes.
+
+**What already exists.** `apps/webhook-relay/` is a thin Cloudflare Worker that
+forwards `POST /i/:subscriptionId` to a server, and the webhook service already
+has a first-class `delivery.mode: "relay"` (`webhookIngressService.ts:98`), a
+`relayPublicBaseUrl`, `/i/{subscriptionId}` paths, and relay-envelope
+verification (`verifyRelayEnvelope`, line 419). The data model is already
+relay-ready.
+
+**What needs rework — and it's all in the relay, not the server.** Today's relay
+makes two assumptions the global + WebRTC model breaks:
+
+1. **Single-tenant → faceted.** The worker forwards to one hard-coded
+   `NATSTACK_SERVER_BASE_URL` (`apps/webhook-relay/src/index.ts:59,91`). Replace
+   that static target with a **lookup** (`subscriptionId → server`,
+   `state → server`) in CF KV/DO, populated by a **registration** call: the
+   server registers "this id is mine" when it creates the subscription / starts
+   the OAuth flow.
+2. **Public-HTTP delivery → backhaul.** The worker `fetch()`es the server's
+   public URL — but in this design the server has *no* public endpoint. Delivery
+   moves to a **persistent backhaul**: the server holds a connection open to a CF
+   Durable Object; the relay pushes the payload down it. Because webhooks fire
+   whenever the provider decides, the relay DO needs **durable offline buffering**
+   (queue + TTL + provider-retry semantics) for when the backhaul is down. OAuth
+   is interactive (server online, user waiting), so ephemeral `state` suffices.
+3. **OAuth relay parity.** Webhooks have a relay mode + worker; OAuth does not yet.
+   Build the analogous path (callback → global relay → backhaul → server, keyed by
+   `state`). The hook points already exist — `redirect.callbackUri` override and
+   the pluggable `"public" | "loopback"` callback mode
+   (`credentialService.ts:296,2214`).
+
+**Tenant safety of registration.** Ids are unguessable UUIDs, so the only attack
+on a shared relay is registering *someone else's* id. Close it by binding
+registration to the **authenticated backhaul identity** (first-writer-wins). The
+current globally-shared `NATSTACK_RELAY_SIGNING_SECRET` proves "from the relay"
+but is weak for multi-tenant isolation (one compromised server learns it); prefer
+the authenticated per-server connection as the trust anchor.
+
+**Accepted trust posture.** A single global relay necessarily sees callback
+plaintext in transit:
+
+- **OAuth `code`** — protected. PKCE is implemented (`codeVerifier =
+  randomBytes(32)`, `credentialService.ts:742`); the verifier never leaves the
+  home server, so an intercepted code is useless to the relay.
+- **Webhook payloads** — exposed. HMAC/OIDC verifiers give the home server
+  integrity/authenticity but not confidentiality *from the relay operator*. The
+  global box can read every tenant's webhook bodies, and is a shared SPOF / DoS
+  chokepoint.
+
+This is accepted as the price of one global box (vs per-user relays). Document the
+caveat and PKCE mitigation; keep retention/logging at the relay minimal.
 
 Public-URL construction (`src/server/publicUrl.ts`,
-`buildPublicUrl(PUBLIC_OAUTH_CALLBACK_PATH)`) repoints at the relay's hostname
-instead of the server's own. The OAuth `state` / webhook `subscriptionId`
-matching logic on the server is unchanged; only the ingress path differs.
+`buildPublicUrl(PUBLIC_OAUTH_CALLBACK_PATH)`) and `relayPublicBaseUrl` point at
+the global relay hostname instead of the server's own.
 
 ## What moves where
 
@@ -346,11 +396,16 @@ Each phase is independently shippable behind the WS fallback.
 - **Reconnect/ICE-restart parity** — most underestimated effort; needs to match
   the WS transport's recovery semantics (cold-recover vs resubscribe).
 - **TURN dependency & cost** — pure P2P is not guaranteed; budget for a relay.
-- **Backhaul liveness for callbacks** — if the server's outbound channel to the
-  relay is down when an OAuth code arrives, the flow fails. Needs buffering/retry
-  or a short-lived hold in the relay DO.
-- **Multi-tenant signaling/relay** — routing-table isolation by UUID; confirm no
-  cross-tenant leakage in the DO design.
+- **Webhook offline buffering** — webhooks fire whenever the provider decides, so
+  the global relay DO must durably queue per-subscription and deliver on backhaul
+  reconnect (TTL + provider-retry semantics). OAuth is interactive, so ephemeral
+  `state` is fine.
+- **Registration auth & tenant binding** — id→server registration must be bound to
+  the authenticated backhaul identity (first-writer-wins) so one tenant cannot
+  claim another's `subscriptionId`/`state`. Replace the shared relay HMAC with the
+  per-server connection as trust anchor.
+- **Relay as SPOF/DoS chokepoint** — one global box for all users; needs rate
+  limiting, abuse controls, and minimal retention given it sees webhook plaintext.
 - **Observability** — ICE state, channel `bufferedAmount`, relay delivery
   need surfacing equivalent to today's `server-health` badge.
 
@@ -372,5 +427,9 @@ Each phase is independently shippable behind the WS fallback.
 - `packages/shared/src/connect.ts`, `scripts/cli/lib/connect-utils.mjs` —
   extended pairing link (`room`, `fp`).
 - `src/server/publicUrl.ts`, `services/credentialService.ts`,
-  `services/webhookIngressService.ts` — repoint callbacks at the relay.
-- New: `apps/` Cloudflare signaling DO + callback relay DO.
+  `services/webhookIngressService.ts` — repoint callbacks at the global relay;
+  register `state`/`subscriptionId` → self over the backhaul.
+- `apps/webhook-relay/` — rework from single-target (`NATSTACK_SERVER_BASE_URL`)
+  to multi-tenant `id → server` lookup + DO-held backhaul delivery + offline
+  buffer; add the OAuth-callback relay path.
+- New: `apps/` Cloudflare signaling DO (UUID rooms).
