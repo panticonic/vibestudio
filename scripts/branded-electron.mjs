@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const APP_NAME = "NatStack";
 const APP_BUNDLE_IDENTIFIER = "com.natstack.app.dev";
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -41,7 +41,11 @@ function ensureBrandedMacElectronApp(electronExecutable) {
   if (!isCurrentBrandedApp(brandedApp, markerPath, marker)) {
     fs.rmSync(brandedApp, { recursive: true, force: true });
     fs.mkdirSync(cacheRoot, { recursive: true });
-    fs.cpSync(sourceApp, brandedApp, { recursive: true, preserveTimestamps: true });
+    fs.cpSync(sourceApp, brandedApp, {
+      recursive: true,
+      preserveTimestamps: true,
+      verbatimSymlinks: true,
+    });
     patchBundleMetadata(brandedApp);
     fs.writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, "utf8");
   }
