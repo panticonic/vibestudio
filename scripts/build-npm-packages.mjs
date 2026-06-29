@@ -92,15 +92,16 @@ function stageServer() {
   copyFile("scripts/natstack-launcher.mjs", path.join(root, "scripts/natstack-launcher.mjs"));
   copyFile("scripts/natstack-server-shim.mjs", path.join(root, "scripts/natstack-server-shim.mjs"));
 
-  // Vendor the host's @natstack/* packages into node_modules. The runtime build
-  // system seeds esbuild nodePaths from the app's node_modules
-  // (getExistingAppNodeModulesRoots → builder.ts initBuilder), so panel/worker
-  // builds resolve the @natstack API surface from here even though the host
-  // bundles inline @natstack for their own code. extension-host ships
-  // self-contained; @workspace/* are NOT host deps (workspace's own build).
-  const natstackDeps = vendorNatstackPackages(root);
+  // Vendor the host's @natstack/* packages under vendor/ (NOT node_modules). A
+  // partial node_modules shipped in the tarball perturbs npm's reify ordering —
+  // it runs dependency postinstall scripts (e.g. electron's) against an
+  // incomplete tree. The package's own postinstall copies vendor/@natstack →
+  // node_modules/@natstack AFTER install, where the runtime build resolves them
+  // (getExistingAppNodeModulesRoots → builder.ts initBuilder). extension-host
+  // ships self-contained; @workspace/* are NOT host deps (workspace's own build).
+  vendorNatstackPackages(root);
   vendorExtensionHost(root);
-  const bundled = { ...natstackDeps, "@natstack/extension-host": VERSION };
+  copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
     name: "@natstack/server",
@@ -113,11 +114,10 @@ function stageServer() {
       natstack: "scripts/natstack-launcher.mjs",
     },
     engines: { node: ">=20" },
-    files: ["dist", "workspace-template", "scripts"],
-    // Full host build-dependency surface (app minus electron). Bundled @natstack
-    // packages are in both dependencies and bundledDependencies so npm packs them.
-    dependencies: computeHostDependencies(bundled, { electron: false }),
-    bundledDependencies: Object.keys(bundled).sort(),
+    files: ["dist", "vendor", "workspace-template", "scripts"],
+    scripts: { postinstall: "node scripts/vendor-install.mjs" },
+    // Full host build-dependency surface (app minus electron).
+    dependencies: computeHostDependencies({ electron: false }),
     publishConfig: { access: "public" },
   });
 }
@@ -143,14 +143,13 @@ function stageApp() {
     copyTree(path.join(repoRoot, "build-resources"), path.join(root, "build-resources"), defaultSkip);
   }
 
-  // Vendor the host's @natstack/* packages into node_modules for the runtime
-  // build system (same mechanism as the server). The managed workspace's
-  // @workspace/* packages are NOT host deps — they have their own build system
-  // and ship only as first-run template content under workspace/ (above).
-  const natstackDeps = vendorNatstackPackages(root);
+  // Vendor the host's @natstack/* packages under vendor/ (copied into node_modules
+  // by the postinstall — see the server staging note). The managed workspace's
+  // @workspace/* packages are NOT host deps; they ship only as first-run template
+  // content under workspace/ (above).
+  vendorNatstackPackages(root);
   vendorExtensionHost(root);
-  const bundled = { ...natstackDeps, "@natstack/extension-host": VERSION };
-  const dependencies = computeHostDependencies(bundled, { electron: true });
+  copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
     name: "@natstack/app",
@@ -165,9 +164,9 @@ function stageApp() {
       "natstack-server": "scripts/natstack-server-shim.mjs",
     },
     engines: { node: ">=20" },
-    files: ["dist", "workspace", "scripts", "build-resources"],
-    dependencies,
-    bundledDependencies: Object.keys(bundled).sort(),
+    files: ["dist", "vendor", "workspace", "scripts", "build-resources"],
+    scripts: { postinstall: "node scripts/vendor-install.mjs" },
+    dependencies: computeHostDependencies({ electron: true }),
     publishConfig: { access: "public" },
   });
 }
@@ -180,7 +179,7 @@ function vendorExtensionHost(pkgRoot) {
   if (!fs.existsSync(distPublish)) {
     throw new Error("extension-host dist-publish/ missing — self-contained build did not run");
   }
-  const dest = path.join(pkgRoot, "node_modules/@natstack/extension-host");
+  const dest = path.join(pkgRoot, "vendor/@natstack/extension-host");
   rmrf(dest);
   copyTree(distPublish, path.join(dest, "dist"), () => false);
   writeJson(path.join(dest, "package.json"), {
@@ -195,13 +194,12 @@ function vendorExtensionHost(pkgRoot) {
   });
 }
 
-// Vendor the host's own @natstack/* packages (from packages/) into the staged
-// package's node_modules, so the runtime build system resolves the @natstack API
-// surface that panels/workers import. Returns { name: version }. Excludes
-// extension-host (vendored self-contained). @workspace/* are intentionally NOT
-// vendored — they belong to the managed workspace's own build system.
+// Vendor the host's own @natstack/* packages (from packages/) under vendor/, so
+// the package's postinstall can copy them into node_modules where the runtime
+// build system resolves the @natstack API surface that panels/workers import.
+// Excludes extension-host (vendored self-contained). @workspace/* are
+// intentionally NOT vendored — they belong to the managed workspace's own build.
 function vendorNatstackPackages(pkgRoot) {
-  const vendored = {};
   const packagesDir = path.join(repoRoot, "packages");
   for (const entry of fs.readdirSync(packagesDir)) {
     const manifest = path.join(packagesDir, entry, "package.json");
@@ -210,11 +208,10 @@ function vendorNatstackPackages(pkgRoot) {
     if (!name || !name.startsWith("@natstack/")) continue;
     if (name === "@natstack/extension-host") continue; // self-contained, vendored separately
     const base = name.slice("@natstack/".length);
-    const dest = path.join(pkgRoot, "node_modules", "@natstack", base);
+    const dest = path.join(pkgRoot, "vendor", "@natstack", base);
     copyTree(path.join(packagesDir, entry), dest, defaultSkip);
-    vendored[name] = normalizeVendoredManifest(path.join(dest, "package.json"));
+    normalizeVendoredManifest(path.join(dest, "package.json"));
   }
-  return vendored;
 }
 
 // Normalize a vendored @natstack manifest. Critically, KEEP its workspace:*
@@ -308,11 +305,12 @@ function resolveVersion(name) {
 
 // The dependency surface a host package needs to build the default template at
 // runtime: all public root.dependencies + the build-relevant root devDeps +
-// headless extras + the vendored @natstack packages (passed in). The server
-// omits electron; the app includes it. (Building panels needs the full host dep
-// surface, so the headless server is really "app minus electron", not slim.)
-function computeHostDependencies(bundled, { electron }) {
-  const deps = { ...bundled };
+// headless extras. The vendored @natstack packages are NOT listed here — they
+// ship under vendor/ and are copied into node_modules by the postinstall. The
+// server omits electron; the app includes it. (Building panels needs the full
+// host dep surface, so the headless server is really "app minus electron".)
+function computeHostDependencies({ electron }) {
+  const deps = {};
   for (const [name, range] of Object.entries(rootPkg.dependencies ?? {})) {
     if (typeof range === "string" && range.startsWith("workspace:")) continue;
     deps[name] = range;
