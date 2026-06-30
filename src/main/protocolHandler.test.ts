@@ -43,6 +43,17 @@ describe("protocolHandler", () => {
     expect(mod.getPendingConnectLink()).toBeNull();
   });
 
+  it("can peek a buffered link without draining it", async () => {
+    const mod = await import("./protocolHandler.js");
+    mod.enqueueConnectLink(link);
+
+    const expected = expectedPairing("room-1111-2222", "A".repeat(24));
+    expect(mod.peekPendingConnectLink()).toEqual(expected);
+    expect(mod.peekPendingConnectLink()).toEqual(expected);
+    expect(mod.getPendingConnectLink()).toEqual(expected);
+    expect(mod.peekPendingConnectLink()).toBeNull();
+  });
+
   it("dispatches fresh links to live listeners", async () => {
     const mod = await import("./protocolHandler.js");
     const listener = vi.fn();

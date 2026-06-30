@@ -180,8 +180,7 @@ describe("MobileRpcClient WebRTC transport", () => {
     expect(rpc.call).toHaveBeenCalledWith(
       "main",
       "auth.grantConnection",
-      ["panel:runtime-1"],
-      undefined
+      ["panel:runtime-1"]
     );
     expect(tokenSeenByReady).toBe("panel-grant-123");
   });

@@ -18,6 +18,8 @@ import type {
 import type { RecoveryKind } from "@natstack/rpc/protocol/recoveryCoordinator";
 import type { WebRtcSession } from "@natstack/rpc/transports/webrtcClient";
 import type { PanelEntityId } from "@natstack/shared/panel/ids";
+import { authMethods } from "@natstack/shared/serviceSchemas/auth";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 import {
   loadShellCredential,
   reconnectViaWebRtc,
@@ -158,9 +160,12 @@ export class MobileRpcClient
    * so `getToken` refetches a fresh one on every (re)open.
    */
   async openPanelSession(runtimeEntityId: PanelEntityId, connectionId: string): Promise<WebRtcSession> {
-    await this.ensureRpc();
+    const rpc = await this.ensureRpc();
     const connection = this.connection;
     if (!connection) throw new Error("WebRTC connection not established");
+    const authClient = createTypedServiceClient("auth", authMethods, (service, method, args) =>
+      rpc.call("main", `${service}.${method}`, args)
+    );
     const session = connection.transport.openSession({
       // Reuse the lease's connectionId and grant for the runtime ENTITY id (not
       // the slot id) so the server's authorizePanelConnection(callerId,
@@ -172,9 +177,7 @@ export class MobileRpcClient
       callerKind: "panel",
       clientPlatform: "mobile",
       getToken: async () => {
-        const grant = await this.call<{ token: string }>("main", "auth.grantConnection", [
-          runtimeEntityId,
-        ]);
+        const grant = await authClient.grantConnection(runtimeEntityId);
         return grant.token;
       },
     });

@@ -26,6 +26,7 @@ import {
   getPendingConnectLink,
   installEarlyOpenUrlBuffer,
   onConnectLink,
+  peekPendingConnectLink,
   registerProtocol,
 } from "./protocolHandler.js";
 
@@ -1262,7 +1263,7 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
         : "starting";
   // The deep link the app was opened with (room/fp/code/sig) — rebuilt so the
   // chooser can auto-pair. Peeked (non-draining) so a getState poll is idempotent.
-  const pending = getPendingConnectLink();
+  const pending = peekPendingConnectLink();
   const pendingPairLink = pending ? createConnectDeepLink(pending) : null;
   // Only the chooser reads localWorkspaces. The renderer polls getState every 500ms
   // while "starting", so computing the workspace scan on every tick is pure waste —

@@ -46,6 +46,10 @@ export function getPendingConnectLink(): PendingConnectLink | null {
   return link;
 }
 
+export function peekPendingConnectLink(): PendingConnectLink | null {
+  return pending;
+}
+
 export function onConnectLink(listener: (link: PendingConnectLink) => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
