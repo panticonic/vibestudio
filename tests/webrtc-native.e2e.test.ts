@@ -4,7 +4,7 @@
  * runs the full transport + protocol stack over REAL DTLS:
  *
  *   createWebRtcTransport (offerer)  ⇄  createWebRtcAnswererPipe (answerer)
- *                                        + createServerSessionMultiplexer
+ *                                        + RpcServer.attachWebRtcPipe
  *
  * It proves, against the live native module: ICE/DTLS connect, the fingerprint
  * pin (accept on match, FAIL CLOSED on mismatch), the session handshake, an RPC
@@ -23,9 +23,12 @@ import { afterAll, describe, expect, it } from "vitest";
 import type { RpcEnvelope } from "@natstack/rpc";
 import { createWebRtcTransport, FINGERPRINT_MISMATCH_CODE } from "@natstack/rpc/transports/webrtcClient";
 import { createWebRtcAnswererPipe } from "@natstack/rpc/transports/webrtcAnswerer";
-import { createServerSessionMultiplexer } from "@natstack/rpc/transports/serverSessionTransport";
 import type { RtcIceCandidate, RtcSessionDescription } from "@natstack/rpc/transports/webrtcPeer";
 import type { SignalingClient } from "@natstack/rpc/transports/webrtcSignaling";
+import type { CallerKind, ServiceContext, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import { TokenManager } from "@natstack/shared/tokenManager";
+import { EntityCache } from "@natstack/shared/runtime/entityCache";
+import { RpcServer } from "../src/server/rpcServer.js";
 import { createNodeDatachannelProvider } from "../src/main/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
 
@@ -76,13 +79,51 @@ function signalingPair(): { offerer: SignalingClient; answerer: SignalingClient 
 interface Harness {
   client: ReturnType<typeof createWebRtcTransport>;
   pipe: ReturnType<typeof createWebRtcAnswererPipe>;
+  shellToken: string;
+  dispatched: Array<{ service: string; method: string; args: unknown[] }>;
   close: () => Promise<void>;
+}
+
+function makeServer(): {
+  server: RpcServer;
+  shellToken: string;
+  dispatched: Array<{ service: string; method: string; args: unknown[] }>;
+} {
+  const tokenManager = new TokenManager();
+  const dispatched: Array<{ service: string; method: string; args: unknown[] }> = [];
+  const dispatcher = {
+    initialized: true,
+    dispatch: async (_ctx: ServiceContext, service: string, method: string, args: unknown[]) => {
+      dispatched.push({ service, method, args });
+      if (service === "demo" && method === "stream") {
+        return new Response("real-dtls-bytes", {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        });
+      }
+      return { pong: true, method: `${service}.${method}`, args };
+    },
+    getPolicy: (service: string) =>
+      service === "demo" ? { allowed: ["shell", "panel", "worker", "server"] as CallerKind[] } : undefined,
+    getMethodPolicy: () => undefined,
+  } as unknown as ServiceDispatcher;
+
+  return {
+    server: new RpcServer({
+      tokenManager,
+      dispatcher,
+      entityCache: new EntityCache(),
+    }),
+    shellToken: tokenManager.ensureToken("shell:e2e", "shell"),
+    dispatched,
+  };
 }
 
 async function connect(opts: { pinnedFp: string; certFile: string; keyFile: string }): Promise<Harness> {
   const sig = signalingPair();
   const serverProvider = createNodeDatachannelProvider({ peerName: "server" });
   const clientProvider = createNodeDatachannelProvider({ peerName: "client" });
+  const { server, shellToken, dispatched } = makeServer();
 
   const pipe = createWebRtcAnswererPipe({
     provider: serverProvider,
@@ -90,42 +131,7 @@ async function connect(opts: { pinnedFp: string; certFile: string; keyFile: stri
     pairing: { iceServers: [], certificatePemFile: opts.certFile, keyPemFile: opts.keyFile },
   });
 
-  // Minimal server: accept any token as a shell principal; echo rpc; stream bulk.
-  const mux = createServerSessionMultiplexer({
-    serverBootId: "boot-e2e",
-    negotiator: {
-      authenticate: (frame) => ({
-        ok: true,
-        callerId: "shell:e2e",
-        callerKind: "shell",
-        connectionId: frame.connectionId,
-        sessionDirty: false,
-      }),
-    },
-    writeControl: (d) => pipe.writeControl(d),
-    writeBulk: (d) => pipe.writeBulk(d),
-    dispatch: {
-      onRpc: (session, envelope) => {
-        const msg = envelope.message as { type: string; requestId: string; method: string };
-        if (msg.type === "request") {
-          session.send({
-            from: "main",
-            target: session.callerId,
-            delivery: { caller: { callerId: "main", callerKind: "server" } },
-            provenance: [{ callerId: "main", callerKind: "server" }],
-            message: { type: "response", requestId: msg.requestId, result: { pong: true, method: msg.method } },
-          });
-        }
-      },
-      onStreamOpen: (session, streamId) => {
-        session.writeStreamHead(streamId, { status: 200, statusText: "OK", headerPairs: [["content-type", "text/plain"]], finalUrl: "rtc://x" });
-        session.writeStreamData(streamId, new TextEncoder().encode("real-"));
-        session.writeStreamData(streamId, new TextEncoder().encode("dtls-bytes"));
-        session.writeStreamEnd(streamId, { bytesIn: 14 });
-      },
-    },
-  });
-  pipe.onControl((d) => mux.handleControlData(d));
+  server.attachWebRtcPipe(pipe);
 
   const client = createWebRtcTransport({
     provider: clientProvider,
@@ -139,11 +145,20 @@ async function connect(opts: { pinnedFp: string; certFile: string; keyFile: stri
   const answering = pipe.connect();
   await new Promise((r) => setTimeout(r, 50));
   const connecting = client.connect();
-  await Promise.all([answering, connecting]);
+  try {
+    await Promise.all([answering, connecting]);
+  } catch (error) {
+    await client.close().catch(() => {});
+    await pipe.close().catch(() => {});
+    await answering.catch(() => {});
+    throw error;
+  }
 
   return {
     client,
     pipe,
+    shellToken,
+    dispatched,
     close: async () => {
       await client.close();
       await pipe.close();
@@ -171,7 +186,7 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel)", () => {
     // The selected candidate type is observable (host on loopback).
     expect(["host", "srflx", "prflx", "relay", null]).toContain(h.client.candidateType());
 
-    const session = h.client.openSession({ connectionId: "cli-1", callerKind: "shell", getToken: () => "shell-token" });
+    const session = h.client.openSession({ connectionId: "cli-1", callerKind: "shell", getToken: () => h.shellToken });
     await session.ready!();
     expect(session.callerId()).toBe("shell:e2e");
 
@@ -182,25 +197,31 @@ describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel)", () => {
       target: "main",
       delivery: { caller: { callerId: "shell:e2e", callerKind: "shell" } },
       provenance: [{ callerId: "shell:e2e", callerKind: "shell" }],
-      message: { type: "request", requestId: "r1", fromId: "shell:e2e", method: "healthz", args: [] },
+      message: { type: "request", requestId: "r1", fromId: "shell:e2e", method: "demo.healthz", args: [] },
     });
     await waitFor(() => received.length > 0);
-    expect((received[0]!.message as { result: { pong: boolean; method: string } }).result).toEqual({ pong: true, method: "healthz" });
+    expect((received[0]!.message as { result: { pong: boolean; method: string; args: unknown[] } }).result).toEqual({
+      pong: true,
+      method: "demo.healthz",
+      args: [],
+    });
+    expect(h.dispatched).toContainEqual({ service: "demo", method: "healthz", args: [] });
   }, 20_000);
 
   it("streams a bulk body over the real bulk DataChannel", async () => {
     const h = harnesses[0]!;
-    const session = h.client.openSession({ connectionId: "cli-2", callerKind: "shell", getToken: () => "t" });
+    const session = h.client.openSession({ connectionId: "cli-2", callerKind: "shell", getToken: () => h.shellToken });
     await session.ready!();
     const resp = await session.stream!({
       from: "shell:e2e",
       target: "main",
       delivery: { caller: { callerId: "shell:e2e", callerKind: "shell" } },
       provenance: [{ callerId: "shell:e2e", callerKind: "shell" }],
-      message: { type: "stream-request", requestId: "s1", fromId: "shell:e2e", method: "credentials.proxyFetch", args: ["rtc://x"] },
+      message: { type: "stream-request", requestId: "s1", fromId: "shell:e2e", method: "demo.stream", args: ["rtc://x"] },
     });
     expect(resp.status).toBe(200);
     expect(await resp.text()).toBe("real-dtls-bytes");
+    expect(h.dispatched).toContainEqual({ service: "demo", method: "stream", args: ["rtc://x"] });
   }, 20_000);
 
   it("FAILS CLOSED when the pinned fingerprint does not match the server cert (negative)", async () => {

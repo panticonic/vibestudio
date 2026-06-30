@@ -73,15 +73,15 @@ The entire transport protocol layer is implemented and green (36 new tests).
   `DefaultRecoveryCoordinator` from the transport's recovery signal. No second
   transport stacked as a backstop (fail-loud rule). Tests:
   `transportManager.test.ts` (3).
-- **`transports/serverSessionTransport.ts`** — the **per-logical-session SERVER
-  transport** (the plan's "biggest under-counted piece"). Lifts `handleAuth` +
-  `createWsServerTransport` from per-socket to per-session: each session runs its
-  own handshake and gets its own bridge with **independent close-time
-  `CONNECTION_LOST` synthesis** — one panel dropping fails only ITS in-flight
-  server→client calls; `closeAll` fans pipe-loss to every session. Transport-
-  neutral (injected channel writers) so it slots onto the pipe answerer and is
-  unit-tested directly. Tests: `serverSessionTransport.test.ts` (9, incl.
-  per-session independence + closeAll).
+- **`src/server/webrtcSessionShim.ts` + `RpcServer.attachWebRtcPipe`** — the
+  **per-logical-session SERVER adapter**. Each WebRTC `open` frame stands up a
+  `SessionWebSocketShim`, then drives the existing `handleConnection`/`handleAuth`
+  and `createWsServerTransport` bridge. That keeps one server RPC implementation:
+  session auth, lease gates, routed frames, reconnect handling, and close-time
+  `CONNECTION_LOST` synthesis all remain on the live WebSocket server path. The
+  adapter only translates `ws:*` messages to session control frames and re-encodes
+  streaming bodies onto the binary bulk channel. Tests: `webrtcSessionShim.test.ts`,
+  `rpcServer.test.ts`, and the native/system WebRTC e2e tests.
 
 Deleted: `transports/compose.ts`, `transports/electronIpc.ts` (both verified
 zero importers). Export map updated in `packages/rpc/package.json`.
@@ -101,14 +101,11 @@ rewrite, which is entangled with the Tailscale CLI deletion in §8a).
 
 This is the work that makes the repo build green end-to-end. Ordered:
 
-### 1. Wire the per-session server transport into `src/server/rpcServer.ts`
-- Replace the per-socket `handleConnection`/`handleAuth` (rpcServer.ts:633-853)
-  with `createServerSessionMultiplexer` fed by the WebRTC pipe's answerer side.
-- Implement the `SessionNegotiator.authenticate` against the existing ordered
-  steps: admin-token reject → `connectionGrants.redeem` (rpcServer.ts:698) →
-  `connectionId` → `runtimeCoordinator.authorizePanelConnection` (the lease gate)
-  → `sessions.markConnected` (sessionDirty). Run inbox replay + event-session
-  registration in `dispatch.onOpened`; arm reconnect waiters in `dispatch.onClosed`.
+### 1. Wire WebRTC sessions into `src/server/rpcServer.ts`
+- Done through `RpcServer.attachWebRtcPipe`: each logical WebRTC session gets a
+  `SessionWebSocketShim` that feeds the existing per-connection server machinery.
+  The deleted `serverSessionTransport` parallel implementation is intentionally
+  not part of the production or test path.
 - `SessionRegistry` (rpcServer/sessionRegistry.ts) carries over almost verbatim;
   only `liveConnectionCount` shifts meaning sockets→sessions. `ConnectionRegistry`
   rekeys its socket-keyed `clients` map onto session ids.

@@ -68,10 +68,6 @@
     "./transports/transportManager": {
       "types": "./dist/transports/transportManager.d.ts",
       "default": "./dist/transports/transportManager.js"
-    },
-    "./transports/serverSessionTransport": {
-      "types": "./dist/transports/serverSessionTransport.d.ts",
-      "default": "./dist/transports/serverSessionTransport.js"
     }
   },
   "files": [
