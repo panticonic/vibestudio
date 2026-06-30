@@ -444,10 +444,7 @@ class MobilePanels implements PanelHost {
       })
     );
     if (result.acquired) {
-      this.runtimeConnectionBySlot.set(panelId, {
-        runtimeEntityId,
-        connectionId: opts.connectionId,
-      });
+      this.setTrackedRuntimeLease(panelId, runtimeEntityId, opts.connectionId);
     }
     return result;
   }
@@ -465,20 +462,19 @@ class MobilePanels implements PanelHost {
       })
     );
     if (result.acquired) {
-      this.runtimeConnectionBySlot.set(panelId, {
-        runtimeEntityId,
-        connectionId: opts.connectionId,
-      });
+      this.setTrackedRuntimeLease(panelId, runtimeEntityId, opts.connectionId);
     }
     return result;
   }
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
     this.registry.applyRuntimeLeaseChanged(event);
-    if (event.previous?.clientSessionId === this.deps.clientSessionId) {
-      this.runtimeConnectionBySlot.delete(String(event.previous.slotId));
-    }
     if (event.next?.clientSessionId === this.deps.clientSessionId) {
       this.trackRuntimeLease(event.next);
+    } else if (
+      event.previous?.clientSessionId === this.deps.clientSessionId ||
+      this.runtimeConnectionBySlot.has(String(event.slotId))
+    ) {
+      this.clearTrackedRuntimeLease(String(event.slotId));
     }
     this.deps.onTreeUpdated?.(this.getTree());
   }
@@ -501,10 +497,28 @@ class MobilePanels implements PanelHost {
     return this.panelManager;
   }
   private trackRuntimeLease(lease: PanelRuntimeLease): void {
-    this.runtimeConnectionBySlot.set(String(lease.slotId), {
-      runtimeEntityId: asPanelEntityId(String(lease.runtimeEntityId)),
-      connectionId: lease.connectionId,
-    });
+    this.setTrackedRuntimeLease(
+      String(lease.slotId),
+      asPanelEntityId(String(lease.runtimeEntityId)),
+      lease.connectionId
+    );
+  }
+  private setTrackedRuntimeLease(
+    panelId: string,
+    runtimeEntityId: PanelEntityId,
+    connectionId: string
+  ): void {
+    const existing = this.runtimeConnectionBySlot.get(panelId);
+    const changed =
+      !existing ||
+      existing.runtimeEntityId !== runtimeEntityId ||
+      existing.connectionId !== connectionId;
+    this.runtimeConnectionBySlot.set(panelId, { runtimeEntityId, connectionId });
+    if (changed) this.bridgeAdapterInstance?.closePanelSession(panelId);
+  }
+  private clearTrackedRuntimeLease(panelId: string): void {
+    const tracked = this.runtimeConnectionBySlot.delete(panelId);
+    if (tracked) this.bridgeAdapterInstance?.closePanelSession(panelId);
   }
   private syncTrackedRuntimeLeases(snapshot: RuntimeLeaseSnapshot): void {
     const activeSlots = new Set<string>();
@@ -513,8 +527,8 @@ class MobilePanels implements PanelHost {
       activeSlots.add(String(lease.slotId));
       this.trackRuntimeLease(lease);
     }
-    for (const slotId of this.runtimeConnectionBySlot.keys()) {
-      if (!activeSlots.has(slotId)) this.runtimeConnectionBySlot.delete(slotId);
+    for (const slotId of Array.from(this.runtimeConnectionBySlot.keys())) {
+      if (!activeSlots.has(slotId)) this.clearTrackedRuntimeLease(slotId);
     }
   }
 }

@@ -11,6 +11,13 @@ export interface BridgeAdapterCallbacks {
   navigateToPanel(panelId: string): void;
 }
 
+type PanelLease = { runtimeEntityId: PanelEntityId; connectionId: string };
+
+type PanelSessionEntry = {
+  session: WebRtcSession;
+  leaseKey: string;
+};
+
 export function createBridgeAdapter(deps: {
   panelManager: PanelManager;
   transport: MobileRpcClient;
@@ -24,9 +31,7 @@ export function createBridgeAdapter(deps: {
    * the entity id and open on that exact connectionId so authorizePanelConnection
    * matches; undefined until the panel has been materialized (lease acquired).
    */
-  getPanelLease: (
-    panelId: string
-  ) => { runtimeEntityId: PanelEntityId; connectionId: string } | undefined;
+  getPanelLease: (panelId: string) => PanelLease | undefined;
 }) {
   // Tree mutations from hosted webviews route through the single server
   // authority (panelTree); the mirror updates reactively via the broadcast.
@@ -43,38 +48,59 @@ export function createBridgeAdapter(deps: {
   // require — NOT "shell". Because the session is dedicated to this panel, replies,
   // events and stream frames demux straight back to it with no shared-session
   // ambiguity, and all RpcMessage types relay without per-type handling.
-  const panelSessions = new Map<string, Promise<WebRtcSession>>();
+  const panelSessions = new Map<string, Promise<PanelSessionEntry>>();
 
   function ensurePanelSession(panelId: string): Promise<WebRtcSession> {
-    let pending = panelSessions.get(panelId);
-    if (!pending) {
-      pending = (async () => {
-        const lease = deps.getPanelLease(panelId);
-        if (!lease) {
-          throw new Error(`Panel ${panelId} has no runtime lease yet — cannot open panel session`);
-        }
-        const session = await deps.transport.openPanelSession(
-          lease.runtimeEntityId,
-          lease.connectionId
-        );
-        session.onMessage((envelope) => deps.deliverToPanel(panelId, envelope));
-        return session;
-      })();
-      panelSessions.set(panelId, pending);
-      // Drop a failed open so a later postEnvelope retries instead of reusing the
-      // cached rejection.
-      pending.catch(() => {
-        if (panelSessions.get(panelId) === pending) panelSessions.delete(panelId);
-      });
+    const lease = deps.getPanelLease(panelId);
+    if (!lease) {
+      closePanelSession(panelId);
+      return Promise.reject(
+        new Error(`Panel ${panelId} has no runtime lease yet — cannot open panel session`)
+      );
     }
-    return pending;
+    const expectedLeaseKey = panelLeaseKey(lease);
+    const existing = panelSessions.get(panelId);
+    if (existing) {
+      return existing.then(
+        (entry) => {
+          if (entry.leaseKey === expectedLeaseKey && isPanelSessionLive(entry.session)) {
+            return entry.session;
+          }
+          if (panelSessions.get(panelId) === existing) panelSessions.delete(panelId);
+          entry.session.close();
+          return ensurePanelSession(panelId);
+        },
+        (error) => {
+          if (panelSessions.get(panelId) === existing) panelSessions.delete(panelId);
+          throw error;
+        }
+      );
+    }
+
+    const pending = openPanelSessionEntry(panelId, lease);
+    panelSessions.set(panelId, pending);
+    // Drop a failed open so a later postEnvelope retries instead of reusing the
+    // cached rejection.
+    pending.catch(() => {
+      if (panelSessions.get(panelId) === pending) panelSessions.delete(panelId);
+    });
+    return pending.then((entry) => entry.session);
+  }
+
+  async function openPanelSessionEntry(
+    panelId: string,
+    lease: PanelLease
+  ): Promise<PanelSessionEntry> {
+    const session = await deps.transport.openPanelSession(lease.runtimeEntityId, lease.connectionId);
+    session.onMessage((envelope) => deps.deliverToPanel(panelId, envelope));
+    return { session, leaseKey: panelLeaseKey(lease) };
   }
 
   function closePanelSession(panelId: string): void {
     const pending = panelSessions.get(panelId);
     if (!pending) return;
     panelSessions.delete(panelId);
-    void pending.then((session) => session.close()).catch(() => {});
+    void pending.then((entry) => entry.session.close()).catch(() => {});
   }
 
   return {
@@ -151,4 +177,13 @@ export function createBridgeAdapter(deps: {
       }
     },
   };
+}
+
+function panelLeaseKey(lease: PanelLease): string {
+  return `${lease.runtimeEntityId}\u0000${lease.connectionId}`;
+}
+
+function isPanelSessionLive(session: WebRtcSession): boolean {
+  if (session.isClosed()) return false;
+  return (session.status?.() ?? "connected") === "connected";
 }

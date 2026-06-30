@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { printConnectBanner } from "./connect-utils.mjs";
+import { parseSignalingEndpoint, printConnectBanner } from "./connect-utils.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -11,6 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 // Loopback host the co-located server binds. Remote reach is WebRTC (the QR
 // carries room/fp/sig); there is no LAN/Tailscale/public-URL origin anymore.
 const LOOPBACK_HOST = "127.0.0.1";
+const DEFAULT_SIGNAL_ENV = ["NATSTACK_WEBRTC_SIGNAL_URL"];
 
 function parsePort(value, label) {
   const port = Number(value);
@@ -21,6 +22,8 @@ function parsePort(value, label) {
 }
 
 export function parsePairArgs(argv, config) {
+  const signalEnv = signalEnvFor(config);
+  const configuredSignalUrl = firstDefined(signalEnv.map((key) => process.env[key]));
   const options = {
     port: parsePort(
       firstDefined(config.portEnv.map((key) => process.env[key])) ?? "3030",
@@ -29,6 +32,7 @@ export function parsePairArgs(argv, config) {
     appRoot: null,
     dev: process.env[config.devEnv] === "1",
     help: false,
+    signalUrl: configuredSignalUrl ?? null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -45,6 +49,8 @@ export function parsePairArgs(argv, config) {
       throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
     } else if (arg === "--app-root") {
       options.appRoot = argv[++i] ?? "";
+    } else if (arg === "--signal-url" || arg === "--signaling-url") {
+      options.signalUrl = argv[++i] ?? "";
     } else if (arg === "--dev" || arg === "--ephemeral") {
       options.dev = true;
     } else if (arg === "--no-init") {
@@ -56,6 +62,9 @@ export function parsePairArgs(argv, config) {
     }
   }
 
+  if (!options.help) {
+    options.signalUrl = resolveSignalingEndpoint(options.signalUrl, signalEnv);
+  }
   return options;
 }
 
@@ -75,6 +84,10 @@ Options:
       Stable gateway port for the loopback server. Defaults through ${config.portEnv.join(", ")} or 3030.
   --app-root <path>
       Application root passed to the server.
+  --signal-url, --signaling-url <url>
+      WebRTC signaling endpoint. Defaults through ${signalEnvFor(config).join(", ")}.
+      Use wss:// or https:// for remote endpoints; ws:// and http:// are only
+      accepted for loopback development.
   --dev, --ephemeral
       Use a disposable dev workspace copied fresh from the template and deleted
       when the server exits.
@@ -109,6 +122,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
   console.log(`[${config.logPrefix}] Loopback host: ${LOOPBACK_HOST}`);
   console.log(`[${config.logPrefix}] Gateway port: ${options.port}`);
+  console.log(`[${config.logPrefix}] Signaling: ${options.signalUrl}`);
   if (options.dev) {
     console.log(`[${config.logPrefix}] Dev workspace: fresh template copy, deleted on exit`);
   }
@@ -124,6 +138,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     ...process.env,
     NATSTACK_HOST: LOOPBACK_HOST,
     NATSTACK_GATEWAY_PORT: String(options.port),
+    NATSTACK_WEBRTC_SIGNAL_URL: options.signalUrl,
     ...(options.dev ? { NODE_ENV: "development", NATSTACK_WORKSPACE_EPHEMERAL: "1" } : {}),
   };
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
@@ -379,4 +394,25 @@ function readyFileFromServerArgs(args) {
 
 function firstDefined(values) {
   return values.find((value) => value !== undefined && value !== "");
+}
+
+function signalEnvFor(config) {
+  return Array.isArray(config.signalEnv) && config.signalEnv.length > 0
+    ? config.signalEnv
+    : DEFAULT_SIGNAL_ENV;
+}
+
+function resolveSignalingEndpoint(raw, signalEnv) {
+  if (!raw) {
+    throw new Error(
+      `Missing WebRTC signaling endpoint. Set ${signalEnv.join(
+        " or "
+      )} or pass --signal-url <wss://...>. Pairing cannot start without signaling because the server would not start its WebRTC answerer.`
+    );
+  }
+  const parsed = parseSignalingEndpoint(raw);
+  if (parsed.kind === "error") {
+    throw new Error(`Invalid WebRTC signaling endpoint: ${parsed.reason}`);
+  }
+  return parsed.url;
 }

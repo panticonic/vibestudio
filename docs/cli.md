@@ -93,6 +93,7 @@ pnpm cli mobile install --launch
 Start the phone pairing server (pairing is over WebRTC — no Tailscale/HTTPS setup):
 
 ```sh
+export NATSTACK_WEBRTC_SIGNAL_URL=wss://natstack-signaling.<account>.workers.dev
 natstack mobile pair --port 3030
 ```
 
@@ -114,6 +115,8 @@ Useful flags:
 
 - `--device <adb-serial>` targets a specific Android device.
 - `--port <port>` chooses the local pairing server port.
+- `--signal-url <url>` chooses the WebRTC signaling endpoint; otherwise
+  `NATSTACK_WEBRTC_SIGNAL_URL` is required.
 - `--dev` on `natstack mobile pair` offers a disposable template workspace named
   `dev` after pairing.
 

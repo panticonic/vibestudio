@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -37,6 +37,10 @@ afterEach(() => {
 });
 
 describe("pair-server runner", () => {
+  beforeEach(() => {
+    vi.stubEnv("NATSTACK_WEBRTC_SIGNAL_URL", "wss://signal.test");
+  });
+
   it("prints the WebRTC pairing banner from the structured ready file", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -198,6 +202,59 @@ describe("pair-server runner", () => {
         },
       })
     ).toThrow(/Forwarding raw server flags is no longer supported/);
+  });
+
+  it("fails before spawning when the WebRTC signaling endpoint is missing", () => {
+    vi.stubEnv("NATSTACK_WEBRTC_SIGNAL_URL", "");
+    const spawnServer = vi.fn(() => new FakeChild());
+
+    expect(() => runPairServer(config, ["--port", "3456"], { spawnServer })).toThrow(
+      /Missing WebRTC signaling endpoint.*NATSTACK_WEBRTC_SIGNAL_URL.*--signal-url/
+    );
+    expect(spawnServer).not.toHaveBeenCalled();
+  });
+
+  it("passes the validated signaling endpoint through to the server env", () => {
+    vi.stubEnv("NATSTACK_WEBRTC_SIGNAL_URL", "wss://configured.signal.test");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const child = new FakeChild();
+
+    runPairServer(config, ["--port", "3456"], {
+      spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
+        expect(env.NATSTACK_WEBRTC_SIGNAL_URL).toBe("wss://configured.signal.test/");
+        setTimeout(() => child.emit("exit", 0, null), 10);
+        return child;
+      },
+      onChildExit: () => true,
+    });
+  });
+
+  it("lets --signal-url override the signaling env and validates cleartext loopback use", () => {
+    vi.stubEnv("NATSTACK_WEBRTC_SIGNAL_URL", "wss://env.signal.test");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const child = new FakeChild();
+
+    runPairServer(config, ["--port", "3456", "--signal-url", "ws://127.0.0.1:8787"], {
+      spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
+        expect(env.NATSTACK_WEBRTC_SIGNAL_URL).toBe("ws://127.0.0.1:8787/");
+        setTimeout(() => child.emit("exit", 0, null), 10);
+        return child;
+      },
+      onChildExit: () => true,
+    });
+  });
+
+  it("rejects non-loopback cleartext signaling before spawning", () => {
+    const spawnServer = vi.fn(() => new FakeChild());
+
+    expect(() =>
+      runPairServer(config, ["--port", "3456", "--signal-url", "http://example.org"], {
+        spawnServer,
+      })
+    ).toThrow(/Cleartext signaling is only allowed for loopback/);
+    expect(spawnServer).not.toHaveBeenCalled();
   });
 
   it("reads pairing material and a distinct QR pairing code from stdout", async () => {
