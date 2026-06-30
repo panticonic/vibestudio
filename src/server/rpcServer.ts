@@ -28,6 +28,7 @@ import {
   encodeControlFrame,
   type SessionControlFrame,
 } from "@natstack/rpc/protocol/sessionNegotiation";
+import { encodeStreamErrorFrameV2 } from "@natstack/rpc/protocol/streamCodec";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
 import type { ToolExecutionResult } from "@natstack/shared/types";
@@ -2879,6 +2880,33 @@ export class RpcServer {
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     const shims = new Map<string, SessionWebSocketShim>();
+    const writeControlFrame = (frame: SessionControlFrame): void => {
+      pipe.writeControl(encoder.encode(encodeControlFrame(frame)));
+    };
+    const writeUnknownSessionResponse = (sid: string, envelope: RpcEnvelope): void => {
+      const message = envelope.message;
+      if (message.type !== "request" && message.type !== "stream-request") return;
+      const response: RpcMessage = {
+        type: "response",
+        requestId: message.requestId,
+        error: "WebRTC session is not open",
+        errorCode: "SESSION_NOT_OPEN",
+      };
+      writeControlFrame({
+        t: "rpc",
+        sid,
+        envelope: responseEnvelopeFor(
+          envelope,
+          { callerId: "main", callerKind: "server" },
+          response
+        ),
+      });
+    };
+    const getShim = (sid: string, frameType: string): SessionWebSocketShim | undefined => {
+      const shim = shims.get(sid);
+      if (!shim) log.warn(`WebRTC pipe: dropping ${frameType} for unknown session ${sid}`);
+      return shim;
+    };
 
     pipe.onDown?.((reason) => {
       for (const [sid, shim] of [...shims]) {
@@ -2897,7 +2925,7 @@ export class RpcServer {
       }
       switch (frame.t) {
         case "ping":
-          pipe.writeControl(encoder.encode(encodeControlFrame({ t: "pong", ts: frame.ts })));
+          writeControlFrame({ t: "pong", ts: frame.ts });
           return;
         case "open": {
           // A re-sent SESSION_OPEN on reconnect means the prior pipe generation's
@@ -2926,26 +2954,47 @@ export class RpcServer {
           });
           return;
         }
-        case "rpc":
-          shims.get(frame.sid)?.deliverInbound({ type: "ws:rpc", envelope: frame.envelope });
+        case "rpc": {
+          const shim = getShim(frame.sid, frame.t);
+          if (!shim) {
+            writeUnknownSessionResponse(frame.sid, frame.envelope);
+            return;
+          }
+          shim.deliverInbound({ type: "ws:rpc", envelope: frame.envelope });
           return;
-        case "route":
-          shims.get(frame.sid)?.deliverInbound({
+        }
+        case "route": {
+          const shim = getShim(frame.sid, frame.t);
+          if (!shim) {
+            writeUnknownSessionResponse(frame.sid, frame.envelope);
+            return;
+          }
+          shim.deliverInbound({
             type: "ws:route",
             envelope: frame.envelope,
             targetConnectionId: frame.targetConnectionId,
           });
           return;
+        }
         case "stream-open": {
-          const shim = shims.get(frame.sid);
-          if (!shim) return;
+          const shim = getShim(frame.sid, frame.t);
+          if (!shim) {
+            pipe.writeBulk(
+              encodeStreamErrorFrameV2(frame.streamId, {
+                status: 409,
+                message: "WebRTC session is not open",
+                code: "SESSION_NOT_OPEN",
+              })
+            );
+            return;
+          }
           const requestId = (frame.envelope.message as { requestId?: string }).requestId;
           if (requestId) shim.registerStream(requestId, frame.streamId);
           shim.deliverInbound({ type: "ws:rpc", envelope: frame.envelope });
           return;
         }
         case "stream-cancel":
-          shims.get(frame.sid)?.cancelStream(frame.streamId);
+          getShim(frame.sid, frame.t)?.cancelStream(frame.streamId);
           return;
         case "close": {
           const shim = shims.get(frame.sid);

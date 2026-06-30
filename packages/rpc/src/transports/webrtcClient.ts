@@ -447,14 +447,14 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       pinVerified = true;
     }
     if (control.readyState !== "open" || bulk.readyState !== "open") return; // wait for channel-open
-    setStatus("connected");
     lastPongAt = Date.now();
     reconnectAttempt = 0;
     startKeepalive();
-    resolveConnect?.();
-    connectResolved = true;
     // (Re)open every live session over the (re)established pipe.
     for (const session of sessions.values()) reopenSession(session);
+    resolveConnect?.();
+    connectResolved = true;
+    setStatus("connected");
   }
 
   function onPipeDown(reason: string): void {
@@ -782,11 +782,18 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       this.deliverEnvelope(envelope);
     }
 
+    private async ensureReadyForOutbound(): Promise<void> {
+      if (this.sessionClosed) throw errorWithCode("Session is closed", "SESSION_AUTH_FAILED");
+      if (status !== "connected") throw errorWithCode("Not connected to server", PIPE_CLOSED_CODE);
+      if (this.openPromise) await this.openPromise;
+      if (this.sessionClosed) throw errorWithCode("Session is closed", "SESSION_AUTH_FAILED");
+      if (status !== "connected") throw errorWithCode("Not connected to server", PIPE_CLOSED_CODE);
+    }
+
     // -- EnvelopeRpcTransport surface --------------------------------------
 
     async send(envelope: RpcEnvelope): Promise<void> {
-      if (this.sessionClosed) throw errorWithCode("Session is closed", "SESSION_AUTH_FAILED");
-      if (status !== "connected") throw errorWithCode("Not connected to server", PIPE_CLOSED_CODE);
+      await this.ensureReadyForOutbound();
       // target 'main'/'server' → rpc frame; otherwise caller-to-caller route.
       const frame: SessionControlFrame =
         envelope.target === "main" || envelope.target === "server"
@@ -818,7 +825,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
 
     async stream(envelope: RpcEnvelope, signal?: AbortSignal | null): Promise<Response> {
-      if (status !== "connected") throw errorWithCode("Not connected to server", PIPE_CLOSED_CODE);
+      await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`stream() requires a stream-request envelope, got ${message.type}`);
@@ -830,7 +837,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       envelope: RpcEnvelope,
       signal?: AbortSignal | null
     ): Promise<DecodedFramedStream> {
-      if (status !== "connected") throw errorWithCode("Not connected to server", PIPE_CLOSED_CODE);
+      await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`streamReadable() requires a stream-request envelope, got ${message.type}`);

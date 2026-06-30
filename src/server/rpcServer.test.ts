@@ -9,7 +9,12 @@ import { EntityCache } from "@natstack/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@natstack/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@natstack/shared/connectionGrants";
 import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@natstack/rpc";
-import { encodeControlFrame } from "@natstack/rpc/protocol/sessionNegotiation";
+import { StreamFrameDecoderV2 } from "@natstack/rpc/protocol/streamCodec";
+import {
+  decodeControlFrame,
+  encodeControlFrame,
+  type SessionControlFrame,
+} from "@natstack/rpc/protocol/sessionNegotiation";
 
 function makeRecord(
   id: string,
@@ -275,6 +280,72 @@ describe("RpcServer relay behavior", () => {
 
     downHandler!("late duplicate");
     expect(closeArgs).toHaveLength(1);
+  });
+
+  it("fails unknown WebRTC session frames instead of silently dropping them", async () => {
+    const { server } = createServer();
+    const controlFrames: SessionControlFrame[] = [];
+    const bulkFrames: Array<{ streamId: number; type: number; payload: Uint8Array }> = [];
+    const bulkDecoder = new StreamFrameDecoderV2((streamId, type, payload) => {
+      bulkFrames.push({ streamId, type, payload });
+    });
+    let controlHandler: ((data: Uint8Array) => void) | null = null;
+    server.attachWebRtcPipe({
+      writeControl: (data) => {
+        controlFrames.push(decodeControlFrame(new TextDecoder().decode(data)));
+      },
+      writeBulk: (data) => void bulkDecoder.push(data),
+      controlBufferedAmount: () => 0,
+      onControl: (handler) => {
+        controlHandler = handler;
+      },
+    });
+
+    controlHandler!(
+      new TextEncoder().encode(
+        encodeControlFrame({
+          t: "rpc",
+          sid: "missing",
+          envelope: makeEnvelope("panel:c1", "main", "panel", {
+            type: "request",
+            requestId: "req-1",
+            fromId: "panel:c1",
+            method: "fs.read",
+            args: [],
+          }),
+        })
+      )
+    );
+    expect(controlFrames[0]).toMatchObject({
+      t: "rpc",
+      sid: "missing",
+      envelope: {
+        message: { type: "response", requestId: "req-1", errorCode: "SESSION_NOT_OPEN" },
+      },
+    });
+
+    controlHandler!(
+      new TextEncoder().encode(
+        encodeControlFrame({
+          t: "stream-open",
+          sid: "missing",
+          streamId: 42,
+          envelope: makeEnvelope("panel:c1", "main", "panel", {
+            type: "stream-request",
+            requestId: "stream-1",
+            fromId: "panel:c1",
+            method: "credentials.proxyFetch",
+            args: [],
+          }),
+        })
+      )
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(bulkFrames).toHaveLength(1);
+    expect(bulkFrames[0]).toMatchObject({ streamId: 42, type: 0x04 });
+    expect(JSON.parse(new TextDecoder().decode(bulkFrames[0]!.payload))).toMatchObject({
+      code: "SESSION_NOT_OPEN",
+    });
   });
 
   it("allows authenticated panels to relay to panel, DO, and worker targets", () => {

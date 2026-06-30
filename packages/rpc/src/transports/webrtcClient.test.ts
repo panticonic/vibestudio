@@ -209,6 +209,7 @@ function startFakeServer(
     serverBootId?: string;
     sessionDirty?: boolean;
     deviceCredential?: { deviceId: string; refreshToken: string };
+    onFrame?: (frame: SessionControlFrame) => void;
     onRpc?: (frame: SessionControlFrame & { t: "rpc" }) => SessionControlFrame | null;
     onStreamOpen?: (frame: SessionControlFrame & { t: "stream-open" }, bulk: RtcDataChannelLike) => void;
   } = {},
@@ -239,6 +240,7 @@ function startFakeServer(
     const full = defrag.accept(data);
     if (!full) return;
     const frame = decodeControlFrame(new TextDecoder().decode(full));
+    opts.onFrame?.(frame);
     if (frame.t === "open") {
       send({
         t: "open-result",
@@ -396,6 +398,40 @@ describe("WebRTC transport — pin + session multiplex", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(received).toHaveLength(1);
     expect((received[0]!.message as { result: unknown }).result).toEqual({ ok: true });
+    await transport.close();
+  });
+
+  it("waits for session re-open before status-driven sends", async () => {
+    const fabric = new FakeFabric("FP-A", "AA:BB:CC");
+    const frames: string[] = [];
+    startFakeServer(fabric, {
+      onFrame: (frame) => frames.push(frame.t),
+    });
+    const transport = createWebRtcTransport({ provider: fabric.providerFor("A"), createSignaling: () => fabric.sigA, pairing: PAIR });
+    let releaseToken!: () => void;
+    const tokenReady = new Promise<void>((resolve) => {
+      releaseToken = resolve;
+    });
+    const session = transport.openSession({
+      connectionId: "c1",
+      getToken: async () => {
+        await tokenReady;
+        return "g";
+      },
+    });
+    let sent: Promise<void> | null = null;
+    transport.onStatusChange((status) => {
+      if (status === "connected") sent = session.send(requestEnvelope("fs.read", "req-status"));
+    });
+    const connecting = transport.connect();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(frames).toEqual([]);
+    releaseToken();
+    await connecting;
+    await session.ready!();
+    await sent;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(frames.slice(0, 2)).toEqual(["open", "rpc"]);
     await transport.close();
   });
 
