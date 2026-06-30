@@ -8,8 +8,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 
-import type { WorkspaceNode, WorkspaceTree } from "@natstack/shared/types";
-import { WORKSPACE_SOURCE_DIRS } from "@natstack/shared/workspace/sourceDirs";
+import type { WorkspaceNode, WorkspaceTree } from "@vibez1/shared/types";
+import { WORKSPACE_SOURCE_DIRS } from "@vibez1/shared/workspace/sourceDirs";
 import { discoverPackageGraph, type GraphNode } from "../buildV2/packageGraph.js";
 
 interface ScanCache {
@@ -93,12 +93,12 @@ export class WorkspaceTreeScanner {
         const pkg = JSON.parse(await fs.readFile(path.join(abs, "package.json"), "utf8")) as {
           name?: string;
           version?: string;
-          natstack?: { title?: string; hiddenInLauncher?: boolean; shell?: unknown };
+          vibez1?: { title?: string; hiddenInLauncher?: boolean; shell?: unknown };
         };
         if (pkg.name) {
           node.packageInfo = { name: pkg.name, ...(pkg.version ? { version: pkg.version } : {}) };
         }
-        this.applyManifestMetadata(node, unitRel, name, pkg.natstack);
+        this.applyManifestMetadata(node, unitRel, name, pkg.vibez1);
       } catch {
         // no package.json — may still be a skill
       }

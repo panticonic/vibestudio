@@ -4,12 +4,12 @@
  * (src/main/cdpHostProvider.ts) without the webContents specifics.
  *
  * Connects to ws(s)://server[/_workspace/name]/api/cdp-host?hostConnectionId=..., authenticates
- * with {"type":"natstack:cdp-auth", token}, re-registers all targets on every
+ * with {"type":"vibez1:cdp-auth", token}, re-registers all targets on every
  * auth-ok (reconnects), and dispatches server commands to injected handlers.
  */
 import { WebSocket } from "ws";
-import { createDevLogger } from "@natstack/dev-log";
-import { serverCdpHostWsUrl } from "@natstack/shared/connect";
+import { createDevLogger } from "@vibez1/dev-log";
+import { serverCdpHostWsUrl } from "@vibez1/shared/connect";
 
 const log = createDevLogger("HeadlessHost:bridge");
 
@@ -105,7 +105,7 @@ export class CdpHostBridgeClient {
       void (async () => {
         try {
           const token = await this.opts.getToken();
-          ws.send(JSON.stringify({ type: "natstack:cdp-auth", token }));
+          ws.send(JSON.stringify({ type: "vibez1:cdp-auth", token }));
         } catch (error) {
           log.warn(`failed to get bridge token: ${String(error)}`);
           ws.close();
@@ -146,7 +146,7 @@ export class CdpHostBridgeClient {
       return;
     }
     switch (message.type) {
-      case "natstack:cdp-auth-ok": {
+      case "vibez1:cdp-auth-ok": {
         this.authenticated = true;
         // Re-register every hosted target (initial connect and reconnects).
         for (const [targetId, tabId] of this.targets) {

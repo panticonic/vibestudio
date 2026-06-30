@@ -1,61 +1,61 @@
-import type { PanelRegistry } from "@natstack/shared/panelRegistry";
-import type { Panel, ThemeAppearance } from "@natstack/shared/types";
-import type { WorkspaceConfig } from "@natstack/shared/workspace/types";
+import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import type { Panel, ThemeAppearance } from "@vibez1/shared/types";
+import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
 import { Appearance } from "react-native";
-import { WorkspaceClient } from "@natstack/shared/shell/workspaceClient";
-import { SettingsClient } from "@natstack/shared/shell/settingsClient";
-import { EventsClient } from "@natstack/shared/shell/eventsClient";
-import { createRecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordinator";
-import type { RecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordinator";
-import type { PanelManager } from "@natstack/shared/shell/panelManager";
+import { WorkspaceClient } from "@vibez1/shared/shell/workspaceClient";
+import { SettingsClient } from "@vibez1/shared/shell/settingsClient";
+import { EventsClient } from "@vibez1/shared/shell/eventsClient";
+import { createRecoveryCoordinator } from "@vibez1/shared/shell/recoveryCoordinator";
+import type { RecoveryCoordinator } from "@vibez1/shared/shell/recoveryCoordinator";
+import type { PanelManager } from "@vibez1/shared/shell/panelManager";
 import type {
   PanelHost,
   PanelHostRegistration,
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
-} from "@natstack/shared/panel/panelLease";
+} from "@vibez1/shared/panel/panelLease";
 import {
   createPanelHostRegistration,
   createPanelRuntimeLeaseRequest,
-} from "@natstack/shared/panel/panelLease";
-import { asPanelSlotId, asPanelEntityId, type PanelEntityId } from "@natstack/shared/panel/ids";
+} from "@vibez1/shared/panel/panelLease";
+import { asPanelSlotId, asPanelEntityId, type PanelEntityId } from "@vibez1/shared/panel/ids";
 import {
   getSharedBrowserAddressOptions,
   getSharedPanelAddressOptions,
   type BrowserAddressOptions,
   type PanelAddressOptions,
   type PanelRepoState,
-} from "@natstack/shared/panelChrome";
+} from "@vibez1/shared/panelChrome";
 import {
   createBrowserDataRpcClient,
   type BrowserDataClient,
   type RecordHistoryVisitRequest,
   type UpdateHistoryTitleRequest,
-} from "@natstack/browser-data/client";
+} from "@vibez1/browser-data/client";
 import { createBridgeAdapter } from "./bridgeAdapter";
 import { MobileRpcClient, type ConnectionStatus } from "./mobileTransport";
 import { createMobileShellCore } from "../shellCore/createMobileShellCore";
 import { startPanelAssetFacade, type PanelAssetFacade } from "./panelAssetFacade";
 import type { Credentials } from "./auth";
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
-import { panelRuntimeMethods } from "@natstack/shared/serviceSchemas/panelRuntime";
-import { credentialsMethods } from "@natstack/shared/serviceSchemas/credentials";
-import { pushMethods } from "@natstack/shared/serviceSchemas/push";
-import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
-import { vcsMethods } from "@natstack/shared/serviceSchemas/vcs";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
+import { panelRuntimeMethods } from "@vibez1/shared/serviceSchemas/panelRuntime";
+import { credentialsMethods } from "@vibez1/shared/serviceSchemas/credentials";
+import { pushMethods } from "@vibez1/shared/serviceSchemas/push";
+import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { vcsMethods } from "@vibez1/shared/serviceSchemas/vcs";
 import {
   HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
   isLaunchSessionEventFor,
-} from "@natstack/shared/hostTargetLaunchGate";
-import type { HostTargetLaunchSessionSnapshot } from "@natstack/shared/hostTargets";
-import type { PendingUnitBatchApproval } from "@natstack/shared/approvals";
+} from "@vibez1/shared/hostTargetLaunchGate";
+import type { HostTargetLaunchSessionSnapshot } from "@vibez1/shared/hostTargets";
+import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
-  console.log(`[NatStackMobileSmoke] phase=${phase}${suffix}`);
+  console.log(`[Vibez1MobileSmoke] phase=${phase}${suffix}`);
 }
 
 export interface ShellClientConfig {

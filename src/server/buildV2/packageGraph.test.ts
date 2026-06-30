@@ -193,7 +193,7 @@ describe("PackageGraph", () => {
 
 describe("discoverPackageGraph extension units", () => {
   it("rejects per-dependency refs for internal workspace packages", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-dep-ref-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-dep-ref-"));
     try {
       const runtimeDir = path.join(root, "packages", "runtime");
       const panelDir = path.join(root, "panels", "chat");
@@ -204,7 +204,7 @@ describe("discoverPackageGraph extension units", () => {
         JSON.stringify({
           name: "@workspace/runtime",
           version: "0.0.0",
-          natstack: {},
+          vibez1: {},
         })
       );
       fs.writeFileSync(
@@ -215,7 +215,7 @@ describe("discoverPackageGraph extension units", () => {
           dependencies: {
             "@workspace/runtime": "workspace:main",
           },
-          natstack: {
+          vibez1: {
             entry: "index.tsx",
             panel: {},
           },
@@ -232,7 +232,7 @@ describe("discoverPackageGraph extension units", () => {
   });
 
   it("discovers extension packages under flat workspace/extensions paths", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-ext-graph-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-ext-graph-"));
     try {
       const runtimeDir = path.join(root, "packages", "runtime");
       const extensionDir = path.join(root, "extensions", "git-tools");
@@ -243,7 +243,7 @@ describe("discoverPackageGraph extension units", () => {
         JSON.stringify({
           name: "@workspace/runtime",
           version: "0.0.0",
-          natstack: {},
+          vibez1: {},
         })
       );
       fs.writeFileSync(
@@ -254,7 +254,7 @@ describe("discoverPackageGraph extension units", () => {
           dependencies: {
             "@workspace/runtime": "workspace:*",
           },
-          natstack: {
+          vibez1: {
             entry: "index.ts",
             extension: { activationEvents: ["*"] },
           },
@@ -274,7 +274,7 @@ describe("discoverPackageGraph extension units", () => {
 
 describe("discoverPackageGraph app units", () => {
   it("discovers app packages under flat workspace/apps paths", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-app-graph-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-app-graph-"));
     try {
       const runtimeDir = path.join(root, "packages", "runtime");
       const appDir = path.join(root, "apps", "shell");
@@ -285,7 +285,7 @@ describe("discoverPackageGraph app units", () => {
         JSON.stringify({
           name: "@workspace/runtime",
           version: "0.0.0",
-          natstack: {},
+          vibez1: {},
         })
       );
       fs.writeFileSync(
@@ -296,7 +296,7 @@ describe("discoverPackageGraph app units", () => {
           dependencies: {
             "@workspace/runtime": "workspace:*",
           },
-          natstack: {
+          vibez1: {
             app: {
               target: "electron",
               renderer: "index.tsx",

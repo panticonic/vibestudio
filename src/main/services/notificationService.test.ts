@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
 import { createNotificationService } from "./notificationService.js";
 
 function createHarness(capabilities: string[] = []) {

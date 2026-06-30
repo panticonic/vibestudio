@@ -1,8 +1,8 @@
 import { app, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
-import type { EventService } from "@natstack/shared/eventsService";
+import type { EventService } from "@vibez1/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
-import type { BridgePanelLifecycle } from "@natstack/shared/panelInterfaces";
-import type { PanelRegistry } from "@natstack/shared/panelRegistry";
+import type { BridgePanelLifecycle } from "@vibez1/shared/panelInterfaces";
+import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
 import { assertPresent } from "../lintHelpers";
 
 // Set during initialization — always non-null after startup
@@ -496,7 +496,7 @@ export function setupMenu(
           },
         },
         {
-          label: "About NatStack",
+          label: "About Vibez1",
           click: () => {
             eventService().emit("navigate-about", { page: "about" });
           },

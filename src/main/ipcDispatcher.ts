@@ -14,19 +14,19 @@ import {
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
-} from "@natstack/rpc";
+} from "@vibez1/rpc";
 import {
   createVerifiedCaller,
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
-} from "@natstack/shared/serviceDispatcher";
+} from "@vibez1/shared/serviceDispatcher";
 import type { PanelSession, ServerClient } from "./serverClient.js";
-import type { EventService, Subscriber } from "@natstack/shared/eventsService";
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
+import type { EventService, Subscriber } from "@vibez1/shared/eventsService";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
 import type { WebSocket } from "ws";
 import { assertPresent } from "../lintHelpers";
 
-/** Electron-main services that are not owned by the NatStack server process. */
+/** Electron-main services that are not owned by the Vibez1 server process. */
 const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
@@ -138,7 +138,7 @@ class IpcSubscriber implements Subscriber {
     const wc = assertPresent(this.getWebContents());
     // Deliver as an RPC event message that the shell transport understands
     wc.send(
-      "natstack:rpc:message",
+      "vibez1:rpc:message",
       envelopeFor(this.callerId, "main", {
         type: "event",
         fromId: "main",
@@ -180,11 +180,11 @@ export class IpcDispatcher {
     const shellSubscriber = new IpcSubscriber(deps.getShellWebContents, "shell", "shell");
     deps.eventService.registerSubscriber("shell", shellSubscriber);
 
-    ipcMain.on("natstack:rpc:send", (event, envelope: RpcEnvelope) => {
+    ipcMain.on("vibez1:rpc:send", (event, envelope: RpcEnvelope) => {
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller) {
         console.warn(
-          `[IpcDispatcher] Rejecting natstack:rpc:send from unresolved sender ` +
+          `[IpcDispatcher] Rejecting vibez1:rpc:send from unresolved sender ` +
             `(webContentsId=${event.sender.id})`
         );
         return;
@@ -198,7 +198,7 @@ export class IpcDispatcher {
       }
       if (caller.callerKind !== "shell" && caller.callerKind !== "app") {
         console.warn(
-          `[IpcDispatcher] Rejecting natstack:rpc:send from unauthorized sender ` +
+          `[IpcDispatcher] Rejecting vibez1:rpc:send from unauthorized sender ` +
             `(webContentsId=${event.sender.id}, kind=${caller.callerKind})`
         );
         return;
@@ -217,7 +217,7 @@ export class IpcDispatcher {
   sendToShell(fromId: string, message: RpcMessage): void {
     const wc = this.deps.getShellWebContents();
     if (wc && !wc.isDestroyed()) {
-      wc.send("natstack:rpc:message", envelopeFor("shell", fromId, message));
+      wc.send("vibez1:rpc:message", envelopeFor("shell", fromId, message));
     }
   }
 
@@ -334,7 +334,7 @@ export class IpcDispatcher {
   ): void {
     if (!sender.isDestroyed()) {
       sender.send(
-        "natstack:rpc:message",
+        "vibez1:rpc:message",
         responseEnvelopeFor(requestEnvelope, MAIN_CALLER, response)
       );
     }
@@ -405,7 +405,7 @@ export class IpcDispatcher {
         // panel's current webContents.
         session.onMessage((env) => {
           const wc = this.deps.getWebContentsForCaller(callerId);
-          if (wc && !wc.isDestroyed()) wc.send("natstack:rpc:message", env);
+          if (wc && !wc.isDestroyed()) wc.send("vibez1:rpc:message", env);
         });
         return session;
       })
@@ -424,7 +424,7 @@ export class IpcDispatcher {
       (envelope) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
         if (!wc || wc.isDestroyed()) return;
-        wc.send("natstack:rpc:message", envelope);
+        wc.send("vibez1:rpc:message", envelope);
       }
     );
     this.appMessageBridges.set(callerId, unsubscribe);

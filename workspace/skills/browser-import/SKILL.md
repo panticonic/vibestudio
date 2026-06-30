@@ -27,7 +27,7 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
 
 All browser data operations go through `@workspace/panel-browser`, which wraps RPC calls to `@workspace-extensions/browser-data` through `extensions.invoke`. The extension reads browser profile databases directly (SQLite for Chrome/Firefox, plist for Safari) and stores imported data in `BrowserDataDO`.
 
-History is unified: imported Chrome/Firefox/Safari visits and NatStack browser-panel navigations both write visit events into `BrowserDataDO`. The address bar autocomplete reads the materialized `history` summary alongside open panels, bookmarks, and search engines. See [HISTORY.md](HISTORY.md).
+History is unified: imported Chrome/Firefox/Safari visits and Vibez1 browser-panel navigations both write visit events into `BrowserDataDO`. The address bar autocomplete reads the materialized `history` summary alongside open panels, bookmarks, and search engines. See [HISTORY.md](HISTORY.md).
 
 Data imports are incremental for a given browser/profile: source-keyed records
 upsert, aggregate source counts such as autofill do not inflate on repeat runs,

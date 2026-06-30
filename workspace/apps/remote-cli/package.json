@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
-    "displayName": "NatStack Remote CLI",
+  "vibez1": {
+    "displayName": "Vibez1 Remote CLI",
     "app": {
       "target": "terminal",
       "entry": "index.ts",
@@ -14,8 +14,8 @@
     }
   },
   "dependencies": {
-    "@natstack/rpc": "workspace:*",
+    "@vibez1/rpc": "workspace:*",
     "ws": "^8.18.3",
-    "@natstack/shared": "workspace:*"
+    "@vibez1/shared": "workspace:*"
   }
 }

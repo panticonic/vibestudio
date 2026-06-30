@@ -2,8 +2,8 @@
  * Tests for service access policy checking.
  */
 
-import { checkServiceAccess, type PolicyRegistry } from "@natstack/shared/servicePolicy";
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
+import { checkServiceAccess, type PolicyRegistry } from "@vibez1/shared/servicePolicy";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
 
 function makeRegistry(policies: Record<string, { allowed: CallerKind[] }>): PolicyRegistry {
   return {

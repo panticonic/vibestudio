@@ -1,10 +1,10 @@
-import type { PanelManager } from "@natstack/shared/shell/panelManager";
-import { asPanelSlotId, type PanelEntityId } from "@natstack/shared/panel/ids";
-import type { OpenExternalOptions } from "@natstack/shared/externalOpen";
-import { externalOpenMethods } from "@natstack/shared/serviceSchemas/externalOpen";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import type { RpcEnvelope } from "@natstack/rpc";
-import type { WebRtcSession } from "@natstack/rpc/transports/webrtcClient";
+import type { PanelManager } from "@vibez1/shared/shell/panelManager";
+import { asPanelSlotId, type PanelEntityId } from "@vibez1/shared/panel/ids";
+import type { OpenExternalOptions } from "@vibez1/shared/externalOpen";
+import { externalOpenMethods } from "@vibez1/shared/serviceSchemas/externalOpen";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import type { RpcEnvelope } from "@vibez1/rpc";
+import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
 import type { MobileRpcClient } from "./mobileTransport";
 
 export interface BridgeAdapterCallbacks {

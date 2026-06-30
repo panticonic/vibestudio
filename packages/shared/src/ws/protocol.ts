@@ -13,4 +13,4 @@ export type {
   WsRoutedEventErrorMessage,
   WsRoutedResponseErrorMessage,
   WsServerMessage,
-} from "@natstack/rpc/protocol/wsProtocol";
+} from "@vibez1/rpc/protocol/wsProtocol";

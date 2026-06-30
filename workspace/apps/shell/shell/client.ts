@@ -10,24 +10,24 @@ import {
   type RpcClient,
   type RpcEnvelope,
   type RpcEventContext,
-} from "@natstack/rpc";
-import { RPC_METHODS } from "@natstack/shared/approvalContract";
-import { appMethods } from "@natstack/shared/serviceSchemas/app";
-import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
-import { menuMethods } from "@natstack/shared/serviceSchemas/menu";
-import { notificationMethods } from "@natstack/shared/serviceSchemas/notification";
-import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
-import { panelTreeMethods } from "@natstack/shared/serviceSchemas/panelTree";
-import { paletteMethods } from "@natstack/shared/serviceSchemas/palette";
-import { remoteCredMethods } from "@natstack/shared/serviceSchemas/remoteCred";
-import { settingsMethods } from "@natstack/shared/serviceSchemas/settings";
-import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
-import { autofillMethods } from "@natstack/shared/serviceSchemas/autofill";
-import { tokensMethods } from "@natstack/shared/serviceSchemas/tokens";
-import { viewMethods } from "@natstack/shared/serviceSchemas/view";
-import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import type { ConnectPairing } from "@natstack/shared/connect";
+} from "@vibez1/rpc";
+import { RPC_METHODS } from "@vibez1/shared/approvalContract";
+import { appMethods } from "@vibez1/shared/serviceSchemas/app";
+import { eventsMethods } from "@vibez1/shared/serviceSchemas/events";
+import { menuMethods } from "@vibez1/shared/serviceSchemas/menu";
+import { notificationMethods } from "@vibez1/shared/serviceSchemas/notification";
+import { panelMethods } from "@vibez1/shared/serviceSchemas/panel";
+import { panelTreeMethods } from "@vibez1/shared/serviceSchemas/panelTree";
+import { paletteMethods } from "@vibez1/shared/serviceSchemas/palette";
+import { remoteCredMethods } from "@vibez1/shared/serviceSchemas/remoteCred";
+import { settingsMethods } from "@vibez1/shared/serviceSchemas/settings";
+import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
+import { autofillMethods } from "@vibez1/shared/serviceSchemas/autofill";
+import { tokensMethods } from "@vibez1/shared/serviceSchemas/tokens";
+import { viewMethods } from "@vibez1/shared/serviceSchemas/view";
+import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import type { ConnectPairing } from "@vibez1/shared/connect";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -38,13 +38,13 @@ type IncomingPairLinkBridge = {
   onLink: (handler: (link: ConnectPairing) => void) => () => void;
 };
 const g = globalThis as unknown as {
-  __natstackTransport?: ShellTransportBridge;
-  __natstackIncomingPairLink?: IncomingPairLinkBridge;
+  __vibez1Transport?: ShellTransportBridge;
+  __vibez1IncomingPairLink?: IncomingPairLinkBridge;
 };
-if (!g.__natstackTransport) throw new Error("Shell transport not available");
+if (!g.__vibez1Transport) throw new Error("Shell transport not available");
 const transport: EnvelopeRpcTransport = {
-  send: (envelope) => assertPresent(g.__natstackTransport).send(envelope),
-  onMessage: (handler) => assertPresent(g.__natstackTransport).onMessage(handler),
+  send: (envelope) => assertPresent(g.__vibez1Transport).send(envelope),
+  onMessage: (handler) => assertPresent(g.__vibez1Transport).onMessage(handler),
   status: () => "connected",
   ready: () => Promise.resolve(),
   onStatusChange: () => () => {},
@@ -116,14 +116,14 @@ import type {
   ThemeConfig,
   MovePanelRequest,
   PaletteCommand,
-} from "@natstack/shared/types";
-import type { BrowserNavigationIntent } from "@natstack/shared/panelCommands";
+} from "@vibez1/shared/types";
+import type { BrowserNavigationIntent } from "@vibez1/shared/panelCommands";
 import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetSelection,
   HostTargetSelectionInput,
-} from "@natstack/shared/hostTargets";
+} from "@vibez1/shared/hostTargets";
 // =============================================================================
 // App Service
 // =============================================================================
@@ -341,9 +341,9 @@ export const nativeShellOverlay = {
   on: (handler: (event: NativeShellOverlayEvent) => void) => {
     const bridge = (
       globalThis as unknown as {
-        __natstackShellOverlay?: NativeShellOverlayBridge;
+        __vibez1ShellOverlay?: NativeShellOverlayBridge;
       }
-    ).__natstackShellOverlay;
+    ).__vibez1ShellOverlay;
     if (!bridge) return () => {};
     return bridge.on(handler);
   },
@@ -360,17 +360,17 @@ export const contentOverlay = {
   on: (handler: (payload: unknown) => void) => {
     const bridge = (
       globalThis as unknown as {
-        __natstackContentOverlayHost?: ContentOverlayHostBridge;
+        __vibez1ContentOverlayHost?: ContentOverlayHostBridge;
       }
-    ).__natstackContentOverlayHost;
+    ).__vibez1ContentOverlayHost;
     if (!bridge) return () => {};
     return bridge.on(handler);
   },
 };
 export const incomingPairLink = {
-  getPending: () => g.__natstackIncomingPairLink?.getPending() ?? Promise.resolve(null),
+  getPending: () => g.__vibez1IncomingPairLink?.getPending() ?? Promise.resolve(null),
   onLink: (handler: (link: ConnectPairing) => void) =>
-    g.__natstackIncomingPairLink?.onLink(handler) ?? (() => {}),
+    g.__vibez1IncomingPairLink?.onLink(handler) ?? (() => {}),
 };
 // =============================================================================
 // Menu Service
@@ -451,7 +451,7 @@ export interface TestConnectionResult {
   serverVersion?: string;
 }
 export interface ExchangePairingCodeArgs {
-  /** A `natstack://connect?...` pairing link carrying the WebRTC pairing material. */
+  /** A `vibez1://connect?...` pairing link carrying the WebRTC pairing material. */
   link: string;
   label?: string;
 }
@@ -503,8 +503,8 @@ export const autofill = {
 // Events Service
 // =============================================================================
 // Re-export event types from shared module
-export type { EventName, EventPayloads } from "@natstack/shared/events";
-import type { EventName } from "@natstack/shared/events";
+export type { EventName, EventPayloads } from "@vibez1/shared/events";
+import type { EventName } from "@vibez1/shared/events";
 export const events = {
   subscribe: (event: EventName) => eventsClient.subscribe(event),
   unsubscribe: (event: EventName) => eventsClient.unsubscribe(event),
@@ -513,7 +513,7 @@ export const events = {
 // =============================================================================
 // Notification Service
 // =============================================================================
-import type { NotificationPayload } from "@natstack/shared/events";
+import type { NotificationPayload } from "@vibez1/shared/events";
 export const notification = {
   show: (
     opts: Omit<NotificationPayload, "id"> & {
@@ -550,7 +550,7 @@ export const workspaceUnits = {
 // =============================================================================
 // Shell Approval Service (consent approval queue)
 // =============================================================================
-import type { ApprovalDecision } from "@natstack/shared/approvals";
+import type { ApprovalDecision } from "@vibez1/shared/approvals";
 import { assertPresent } from "../utils/assertPresent";
 export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>

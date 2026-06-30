@@ -1,6 +1,6 @@
 ---
 name: gad-review
-description: Review code provenance using NatStack's canonical trajectory log, channel envelopes, worktree state graph, file mutation projections, and blame hunks.
+description: Review code provenance using Vibez1's canonical trajectory log, channel envelopes, worktree state graph, file mutation projections, and blame hunks.
 ---
 
 # GAD Review

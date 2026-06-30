@@ -1,6 +1,6 @@
 # Trusted Workspace Units And Client Auth
 
-NatStack treats trusted workspace units as declared, approved source units with
+Vibez1 treats trusted workspace units as declared, approved source units with
 stable package identity. Trust is not derived from a special filesystem segment:
 
 - `@workspace-apps/foo` lives at `workspace/apps/foo`

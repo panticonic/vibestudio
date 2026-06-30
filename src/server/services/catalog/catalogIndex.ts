@@ -10,13 +10,9 @@
  * Filtering reuses `isCatalogEntryVisible` so discovery never advertises what
  * the caller cannot invoke (mirrors the dispatcher's static gate).
  */
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
-import type { RuntimeSurface } from "@natstack/shared/runtimeSurface";
-import type {
-  CatalogEntry,
-  CatalogHit,
-  CatalogSurface,
-} from "@natstack/shared/serviceSchemas/docs";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { RuntimeSurface } from "@vibez1/shared/runtimeSurface";
+import type { CatalogEntry, CatalogHit, CatalogSurface } from "@vibez1/shared/serviceSchemas/docs";
 import { buildCatalog, isCatalogEntryVisible, type BuildCatalogDeps } from "./buildCatalog.js";
 
 export interface CatalogSearchOpts {

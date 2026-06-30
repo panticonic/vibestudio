@@ -8,7 +8,7 @@
 
 import { app } from "electron";
 import * as path from "node:path";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { getAppRoot } from "./paths.js";
 import { ServerProcessManager, type ServerPorts } from "./serverProcessManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
@@ -21,14 +21,14 @@ import {
   saveStoredRemote,
 } from "./services/remoteCredService.js";
 import type { StoredRemote } from "./services/remoteCredStore.js";
-import type { PanelHttpServerLike } from "@natstack/shared/panelInterfaces";
+import type { PanelHttpServerLike } from "@vibez1/shared/panelInterfaces";
 import type { ServerInfo } from "./serverInfo.js";
-import type { WorkspaceConfig } from "@natstack/shared/workspace/types";
-import type { CentralDataManager } from "@natstack/shared/centralData";
+import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import type { CentralDataManager } from "@vibez1/shared/centralData";
 import { workspaceRelaunchArgs, type ConnectedStartupMode } from "./startupMode.js";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
-import { serverRpcWsUrl, type ConnectPairing } from "@natstack/shared/connect";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { serverRpcWsUrl, type ConnectPairing } from "@vibez1/shared/connect";
 
 const log = createDevLogger("ServerSession");
 

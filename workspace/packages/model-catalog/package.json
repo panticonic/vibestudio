@@ -10,7 +10,7 @@
     "./providerConnect": "./src/providerConnect.ts"
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*"
+    "@vibez1/shared": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.2.4"

@@ -73,7 +73,7 @@ jest.mock(
 );
 
 const { NativeModules } = jest.requireActual("react-native");
-NativeModules.NatStackMobileHost = {
+NativeModules.Vibez1MobileHost = {
   firebaseConfigured: true,
   clearCredentials: jest.fn(async () => undefined),
   resetToNativeBootstrap: jest.fn(async () => ({ reloading: true })),
@@ -114,7 +114,7 @@ NativeModules.NatStackMobileHost = {
     platform: "ios",
     url: "https://server.example/_a/rn-key/index.ios.bundle",
     path: "index.ios.bundle",
-    localPath: "/cache/natstack-rn/rn-key/index.ios.bundle",
+    localPath: "/cache/vibez1-rn/rn-key/index.ios.bundle",
   })),
   activatePreparedAppBundle: jest.fn(async () => ({ activated: false })),
 };

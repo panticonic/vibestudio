@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { FieldDefinition, FieldValue } from "@natstack/types";
+import type { FieldDefinition, FieldValue } from "@vibez1/types";
 
 const SandboxSourceSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("code"), code: z.string() }).strict(),

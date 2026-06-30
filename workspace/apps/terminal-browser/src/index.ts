@@ -1,16 +1,16 @@
 import React from "react";
 import { render } from "ink";
-import { createRpcClient, type RpcClient } from "@natstack/rpc";
-import { NodeWsLike } from "@natstack/shared/shell/transport/nodeWsLike";
-import { createServerWsTransport } from "@natstack/shared/shell/transport/serverWsTransport";
+import { createRpcClient, type RpcClient } from "@vibez1/rpc";
+import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
+import { createServerWsTransport } from "@vibez1/shared/shell/transport/serverWsTransport";
 import WebSocket from "ws";
 import { SessionManager } from "./host/SessionManager.js";
 import { registerHostService } from "./host/HostService.js";
 import { createApprovalsClient } from "./approvals/approvalsClient.js";
 import { TerminalBrowser } from "./host/TerminalBrowser.js";
 import type { LogLine } from "./ui/LogsView.js";
-import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -42,16 +42,16 @@ function createLogSink(): LogSink {
 }
 
 async function connect(appId: string, logSink: LogSink) {
-  const token = requiredEnv("NATSTACK_TERMINAL_APP_RPC_TOKEN");
-  const connectionId = requiredEnv("NATSTACK_TERMINAL_APP_CONNECTION_ID");
+  const token = requiredEnv("VIBEZ1_TERMINAL_APP_RPC_TOKEN");
+  const connectionId = requiredEnv("VIBEZ1_TERMINAL_APP_CONNECTION_ID");
   const transport = createServerWsTransport({
     selfId: appId,
-    serverUrl: requiredEnv("NATSTACK_TERMINAL_APP_GATEWAY_URL"),
+    serverUrl: requiredEnv("VIBEZ1_TERMINAL_APP_GATEWAY_URL"),
     connectionId,
     logPrefix: "TerminalBrowser",
     getAuthMessageFields: () => ({
       connectionId,
-      clientLabel: "NatStack Terminal",
+      clientLabel: "Vibez1 Terminal",
       clientPlatform: "desktop",
     }),
     translateEvent: (event, payload, deliver) => {
@@ -102,7 +102,7 @@ export async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const appId = requiredEnv("NATSTACK_TERMINAL_APP_ID");
+  const appId = requiredEnv("VIBEZ1_TERMINAL_APP_ID");
   const logSink = createLogSink();
   const { rpc, close } = await connect(appId, logSink);
   const workspaceClient = createTypedServiceClient(
@@ -171,7 +171,7 @@ export async function main(): Promise<void> {
   close();
 }
 
-if (process.env["NATSTACK_TERMINAL_APP_GATEWAY_URL"]) {
+if (process.env["VIBEZ1_TERMINAL_APP_GATEWAY_URL"]) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.stack || error.message : String(error));
     process.exit(1);

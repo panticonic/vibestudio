@@ -11,7 +11,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { ids } from "@workspace/agent-loop";
-import type { DeferrableRpcClient } from "@natstack/rpc";
+import type { DeferrableRpcClient } from "@vibez1/rpc";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   sha256Hex,
@@ -197,13 +197,13 @@ async function makePromptProbe(): Promise<PromptEventProbe> {
  *  expects: sha256(`${agentRuntimeId}\0${channelId}`) hex, first 40. */
 async function expectedEvalCaller(): Promise<string> {
   const key = (await sha256Hex(`${AGENT_ID}\0${CHANNEL}`)).slice(0, 40);
-  return `do:natstack/internal:EvalDO:${key}`;
+  return `do:vibez1/internal:EvalDO:${key}`;
 }
 
 describe("AgentVesselBase.chatOp", () => {
   it("rejects a caller that is not this agent's own EvalDO", async () => {
     const vessel = await makeVessel();
-    vessel.callerIdForTest = "do:natstack/internal:EvalDO:someoneelse";
+    vessel.callerIdForTest = "do:vibez1/internal:EvalDO:someoneelse";
     await expect(vessel.chatOp(CHANNEL, "getMessageTypes", [])).rejects.toThrow(
       /only this agent's own EvalDO/
     );
@@ -728,7 +728,7 @@ describe("AgentVesselBase.onEvalProgress (live eval console streaming)", () => {
 
   it("refuses a caller that is not the agent's own EvalDO (same gate as chatOp)", async () => {
     const vessel = await makeVessel();
-    vessel.callerIdForTest = "do:natstack/internal:EvalDO:someoneelse";
+    vessel.callerIdForTest = "do:vibez1/internal:EvalDO:someoneelse";
     await expect(
       vessel.onEvalProgress({ runId: "inv-6", channelId: CHANNEL, output: "x" })
     ).rejects.toThrow(/only this agent's own EvalDO/);

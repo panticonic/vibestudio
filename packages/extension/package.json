@@ -1,7 +1,7 @@
 {
-  "name": "@natstack/extension",
+  "name": "@vibez1/extension",
   "version": "0.1.0",
-  "description": "NatStack extension authoring types",
+  "description": "Vibez1 extension authoring types",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,8 +15,8 @@
     "build": "tsc --project tsconfig.build.json"
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*",
-    "@natstack/unit-host": "workspace:*"
+    "@vibez1/shared": "workspace:*",
+    "@vibez1/unit-host": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

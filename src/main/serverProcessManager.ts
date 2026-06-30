@@ -1,13 +1,13 @@
 /**
- * ServerProcessManager — spawns and manages the natstack-server child process.
+ * ServerProcessManager — spawns and manages the vibez1-server child process.
  *
  * Uses Electron utilityProcess.fork().
  * Communicates via IPC messages (ready, shutdown, error).
  */
 
-import { type ProcessAdapter } from "@natstack/process-adapter";
+import { type ProcessAdapter } from "@vibez1/process-adapter";
 import { shell, utilityProcess } from "electron";
-import { serverRpcWsUrl } from "@natstack/shared/connect";
+import { serverRpcWsUrl } from "@vibez1/shared/connect";
 import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
 
 const SERVER_SHUTDOWN_TIMEOUT_MS = 12_000;
@@ -223,26 +223,26 @@ export class ServerProcessManager {
     const esbuildBinaryPath = getEsbuildBinaryPath();
     const env: Record<string, string | undefined> = {
       ...process.env,
-      NATSTACK_WORKSPACE_DIR: this.config.wsDir,
-      NATSTACK_APP_ROOT: this.config.appRoot,
+      VIBEZ1_WORKSPACE_DIR: this.config.wsDir,
+      VIBEZ1_APP_ROOT: this.config.appRoot,
       ...(esbuildBinaryPath ? { ESBUILD_BINARY_PATH: esbuildBinaryPath } : {}),
-      NATSTACK_WORKSPACE_EPHEMERAL: this.config.isEphemeral ? "1" : undefined,
-      NATSTACK_AUTO_APPROVE_STARTUP_UNITS: this.config.autoApproveStartupUnits ? "1" : undefined,
-      ...(this.config.logLevel ? { NATSTACK_LOG_LEVEL: this.config.logLevel } : {}),
+      VIBEZ1_WORKSPACE_EPHEMERAL: this.config.isEphemeral ? "1" : undefined,
+      VIBEZ1_AUTO_APPROVE_STARTUP_UNITS: this.config.autoApproveStartupUnits ? "1" : undefined,
+      ...(this.config.logLevel ? { VIBEZ1_LOG_LEVEL: this.config.logLevel } : {}),
     };
-    if (!this.config.isEphemeral) delete env["NATSTACK_WORKSPACE_EPHEMERAL"];
+    if (!this.config.isEphemeral) delete env["VIBEZ1_WORKSPACE_EPHEMERAL"];
     if (!this.config.autoApproveStartupUnits) {
-      delete env["NATSTACK_AUTO_APPROVE_STARTUP_UNITS"];
+      delete env["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"];
     }
 
     // Heap headroom for the server child. It is a single Node process that runs
     // builds (esbuild), git, and the DO relay hub, so V8's default ~2 GB old-space
     // limit is tight under load. This is headroom, not a crash fix — the relay/
     // restart fixes prevent unbounded growth; this just avoids starving legit work.
-    // Override with NATSTACK_SERVER_MAX_OLD_SPACE_MB.
-    const maxOldSpaceMb = Number(process.env["NATSTACK_SERVER_MAX_OLD_SPACE_MB"]) || 4096;
+    // Override with VIBEZ1_SERVER_MAX_OLD_SPACE_MB.
+    const maxOldSpaceMb = Number(process.env["VIBEZ1_SERVER_MAX_OLD_SPACE_MB"]) || 4096;
     return utilityProcess.fork(bundlePath, [], {
-      serviceName: "natstack-server",
+      serviceName: "vibez1-server",
       stdio: "pipe",
       env,
       execArgv: [`--max-old-space-size=${maxOldSpaceMb}`],

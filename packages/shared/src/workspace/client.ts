@@ -6,7 +6,7 @@
  * are hand-written here.
  */
 
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcCaller } from "@vibez1/rpc";
 import { createTypedServiceClient, type TypedServiceClient } from "../typedServiceClient.js";
 import { eventsMethods } from "../serviceSchemas/events.js";
 import { workspaceMethods, type WorkspaceUnitStatus } from "../serviceSchemas/workspace.js";

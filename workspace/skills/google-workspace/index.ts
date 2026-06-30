@@ -82,7 +82,7 @@ function getCredentialRuntime(): RuntimeCredentials {
   const api = credentials as Partial<RuntimeCredentials> | undefined;
   if (!api) {
     throw new Error(
-      "NatStack credential runtime is unavailable: @workspace/runtime did not export credentials."
+      "Vibez1 credential runtime is unavailable: @workspace/runtime did not export credentials."
     );
   }
   for (const method of [
@@ -95,7 +95,7 @@ function getCredentialRuntime(): RuntimeCredentials {
   ] as const) {
     if (typeof api[method] !== "function") {
       throw new Error(
-        `NatStack credential runtime is unavailable: credentials.${method} is missing.`
+        `Vibez1 credential runtime is unavailable: credentials.${method} is missing.`
       );
     }
   }
@@ -107,15 +107,15 @@ function normalizeCredentialRuntimeError(error: unknown): Error {
   const runtimeUnavailable =
     message.includes("undefined (reading 'call')") ||
     message.includes("Panel credentials have not been initialized") ||
-    message.includes("NatStack transport bridge is not available") ||
-    message.includes("__natstackTransport") ||
+    message.includes("Vibez1 transport bridge is not available") ||
+    message.includes("__vibez1Transport") ||
     message.includes("credential runtime is unavailable");
   if (!runtimeUnavailable) {
     return error instanceof Error ? error : new Error(message);
   }
   return new Error(
-    "NatStack credential runtime is unavailable in this context. " +
-      "Google Workspace helpers must run in a NatStack panel/eval/worker runtime with credentials initialized. " +
+    "Vibez1 credential runtime is unavailable in this context. " +
+      "Google Workspace helpers must run in a Vibez1 panel/eval/worker runtime with credentials initialized. " +
       `Original error: ${message}`
   );
 }
@@ -159,7 +159,7 @@ function explainGoogleCredentialError(error: unknown): string {
   if (message.includes("credential-expired")) {
     return (
       "credential-expired: the stored Google credential is expired and cannot be refreshed. " +
-      "Reconnect Google Workspace so NatStack can store a durable offline refresh token."
+      "Reconnect Google Workspace so Vibez1 can store a durable offline refresh token."
     );
   }
   if (message.includes("client_not_authorized") || message.includes("oauth-refresh-failed")) {

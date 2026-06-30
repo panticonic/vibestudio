@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 import { cleanupRuntimeEntity } from "./runtimeEntityCleanup.js";
 
 function record(kind: EntityRecord["kind"], id = `${kind}:one`): EntityRecord {

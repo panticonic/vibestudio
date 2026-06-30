@@ -1,4 +1,4 @@
-// Bundle the headless host with esbuild: workspace packages (@natstack/*)
+// Bundle the headless host with esbuild: workspace packages (@vibez1/*)
 // are TS-source exports, so they get bundled; real npm deps stay external.
 import * as esbuild from "esbuild";
 
@@ -11,7 +11,7 @@ const shared = {
   external: ["ws", "@puppeteer/browsers", "zod"],
   banner: {
     // Some transitive CJS deps probe require(); provide it under ESM output.
-    js: "import { createRequire as __natstackCreateRequire } from 'node:module'; const require = __natstackCreateRequire(import.meta.url);",
+    js: "import { createRequire as __vibez1CreateRequire } from 'node:module'; const require = __vibez1CreateRequire(import.meta.url);",
   },
 };
 

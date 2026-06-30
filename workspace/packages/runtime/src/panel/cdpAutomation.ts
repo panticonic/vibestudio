@@ -1,4 +1,4 @@
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 import type {
   CdpAutomation,
   CdpEndpoint,
@@ -29,7 +29,7 @@ async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
     const message = error instanceof Error ? error.message : String(error);
     loadErrors.push(`${source}: ${message}`);
   };
-  const runtimeRequire = (globalThis as Record<string, unknown>)["__natstackRequire__"] as
+  const runtimeRequire = (globalThis as Record<string, unknown>)["__vibez1Require__"] as
     | ((id: string) => unknown)
     | undefined;
   if (runtimeRequire) {
@@ -37,13 +37,13 @@ async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
       const loaded = runtimeRequire(LIGHTWEIGHT_CDP_MODULE);
       if (isLightweightCdpClientModule(loaded)) return loaded;
     } catch (error) {
-      rememberLoadError("__natstackRequire__", error);
-      // Panels can lazily import npm packages via __natstackRequireAsync__ below.
+      rememberLoadError("__vibez1Require__", error);
+      // Panels can lazily import npm packages via __vibez1RequireAsync__ below.
       // Workers only have the sync module map, so a missing map entry should
       // fall through to the clearest environment-specific loader/error.
     }
   }
-  const runtimeLoadImport = (globalThis as Record<string, unknown>)["__natstackLoadImport__"] as
+  const runtimeLoadImport = (globalThis as Record<string, unknown>)["__vibez1LoadImport__"] as
     | ((id: string, ref?: string) => Promise<unknown>)
     | undefined;
   if (runtimeLoadImport) {
@@ -51,19 +51,19 @@ async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
       const loaded = await runtimeLoadImport(LIGHTWEIGHT_CDP_MODULE, "latest");
       if (isLightweightCdpClientModule(loaded)) return loaded;
     } catch (error) {
-      rememberLoadError("__natstackLoadImport__", error);
+      rememberLoadError("__vibez1LoadImport__", error);
       // Fall through to the legacy async loader/dynamic import paths.
     }
   }
   const runtimeRequireAsync = (globalThis as Record<string, unknown>)[
-    "__natstackRequireAsync__"
+    "__vibez1RequireAsync__"
   ] as ((id: string) => Promise<unknown>) | undefined;
   if (runtimeRequireAsync) {
     try {
       const loaded = await runtimeRequireAsync(LIGHTWEIGHT_CDP_MODULE);
       if (isLightweightCdpClientModule(loaded)) return loaded;
     } catch (error) {
-      rememberLoadError("__natstackRequireAsync__", error);
+      rememberLoadError("__vibez1RequireAsync__", error);
       // Fall through to dynamic import for non-runtime test/node environments.
     }
   }

@@ -4,9 +4,9 @@ import {
   type LifecyclePrepareInput,
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
-} from "@natstack/durable";
-import { docsMethods } from "@natstack/shared/serviceSchemas/docs";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+} from "@vibez1/durable";
+import { docsMethods } from "@vibez1/shared/serviceSchemas/docs";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
 
 export class LifecycleProbeDO extends DurableObjectBase {
   protected createTables(): void {

@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { createDevLogger } from "@natstack/dev-log";
-import { parseWorkspaceConfigContentWithId } from "@natstack/shared/workspace/configParser";
+import { createDevLogger } from "@vibez1/dev-log";
+import { parseWorkspaceConfigContentWithId } from "@vibez1/shared/workspace/configParser";
 import type {
   WorkspaceHeartbeatDecl,
   WorkspaceRecurringDecl,
-} from "@natstack/shared/workspace/types";
-import type { UnitBatchEntry } from "@natstack/shared/approvals";
-import type { UnitMetaChangeApprovalProvider } from "@natstack/unit-host";
+} from "@vibez1/shared/workspace/types";
+import type { UnitBatchEntry } from "@vibez1/shared/approvals";
+import type { UnitMetaChangeApprovalProvider } from "@vibez1/unit-host";
 import type { DODispatch, DORef } from "../doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { RecurringJobRow } from "../internalDOs/workspaceDO.js";
@@ -174,7 +174,7 @@ export interface RecurringRegistryDeps {
 
 /**
  * Server-driven declarative scheduled jobs ("cron"). Declarations live in
- * meta/natstack.yml `recurring:` (approval-gated via meta push); durable
+ * meta/vibez1.yml `recurring:` (approval-gated via meta push); durable
  * next-run state lives in WorkspaceDO `recurring_jobs` so restarts neither
  * lose schedules nor re-fire missed runs as bursts. One timer tracks the
  * soonest pending run, mirroring AlarmDriver.
@@ -543,7 +543,7 @@ async function readRecurringAtCommit(
   commit: string
 ): Promise<WorkspaceRecurringDecl[]> {
   try {
-    const out = await deps.readWorkspaceFileAtCommit(commit, "meta/natstack.yml");
+    const out = await deps.readWorkspaceFileAtCommit(commit, "meta/vibez1.yml");
     if (!out) return [];
     return parseWorkspaceConfigContentWithId(out, deps.workspaceId).recurring ?? [];
   } catch {
@@ -556,7 +556,7 @@ async function readHeartbeatsAtCommit(
   commit: string
 ): Promise<WorkspaceHeartbeatDecl[]> {
   try {
-    const out = await deps.readWorkspaceFileAtCommit(commit, "meta/natstack.yml");
+    const out = await deps.readWorkspaceFileAtCommit(commit, "meta/vibez1.yml");
     if (!out) return [];
     return parseWorkspaceConfigContentWithId(out, deps.workspaceId).heartbeats ?? [];
   } catch {

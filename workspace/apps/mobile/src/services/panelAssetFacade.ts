@@ -11,7 +11,7 @@
  * Panel bundles are multiple MB. Requesting `gzip` on the wire + chunked transfer
  * keeps each payload inside react-native-webrtc's serialized-receive throughput
  * (the same constraint that forced gzip on the Part A native bundle stream). The
- * gateway marks a gzipped body with `x-natstack-content-gzip` (NOT
+ * gateway marks a gzipped body with `x-vibez1-content-gzip` (NOT
  * `Content-Encoding`, so the pipe's fetch never auto-inflates it); we translate
  * that to a real `Content-Encoding: gzip` and the webview inflates natively — the
  * façade never touches the bytes.
@@ -27,7 +27,7 @@ import {
   FORWARD_REQUEST_HEADERS,
   STRIP_RESPONSE_HEADERS,
   GZIP_MARKER_HEADER,
-} from "@natstack/shared/panel/assetHeaders";
+} from "@vibez1/shared/panel/assetHeaders";
 import type { MobileRpcClient } from "./mobileTransport";
 
 // The connected-socket type — `Socket` is a member of the default export's
@@ -60,7 +60,7 @@ export function startPanelAssetFacade(transport: MobileRpcClient): Promise<Panel
         return;
       }
       const { port } = address;
-      console.log(`[NatStackMobileSmoke] phase=workspace-panel-facade-listening ${JSON.stringify({ port })}`);
+      console.log(`[Vibez1MobileSmoke] phase=workspace-panel-facade-listening ${JSON.stringify({ port })}`);
       resolve({
         port,
         close: () =>

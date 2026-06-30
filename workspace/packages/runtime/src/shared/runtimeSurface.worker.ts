@@ -1,1 +1,1 @@
-export { workerRuntimeSurface } from "@natstack/shared/runtimeSurface.worker";
+export { workerRuntimeSurface } from "@vibez1/shared/runtimeSurface.worker";

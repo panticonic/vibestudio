@@ -5,7 +5,7 @@
  * surface instead of re-binding the functions per barrel.
  */
 
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcCaller } from "@vibez1/rpc";
 import {
   listUserlandApprovals,
   requestUserlandApproval,

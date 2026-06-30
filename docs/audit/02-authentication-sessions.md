@@ -1,8 +1,8 @@
-# NatStack Security Audit — Authentication, Sessions & Authorization
+# Vibez1 Security Audit — Authentication, Sessions & Authorization
 
 **Audit date:** 2026-04-23
 **Branch:** `audit`
-**Scope:** Authentication, session management, and authorization across the NatStack
+**Scope:** Authentication, session management, and authorization across the Vibez1
 main Electron app, backing server, mobile shell, webhook relay, auth-flow package,
 RPC/gateway transport, and OAuth flows.
 **Methodology:** read-only static review. No dynamic testing performed.
@@ -11,13 +11,13 @@ RPC/gateway transport, and OAuth flows.
 
 ## 1. Executive Summary
 
-NatStack's auth model is built around a two-tier bearer-token system: a single
-**admin token** (32-byte hex, persisted at `~/.config/natstack/admin-token` with
+Vibez1's auth model is built around a two-tier bearer-token system: a single
+**admin token** (32-byte hex, persisted at `~/.config/vibez1/admin-token` with
 mode `0o600`) that grants `callerKind: "server"`, and per-caller **panel/shell/worker
 tokens** (also 32-byte hex, held only in memory by `TokenManager`). A `ServicePolicy`
 gates each service-method by `callerKind`. OAuth flows for AI providers
 (`openai-codex`) run client-side in Electron main or mobile; the server persists
-the resulting credentials at `~/.config/natstack/oauth-tokens.json` (`0o600`).
+the resulting credentials at `~/.config/vibez1/oauth-tokens.json` (`0o600`).
 
 **The fundamentals are largely correct.** Tokens are minted with `crypto.randomBytes`,
 stored with sensible file permissions, and PKCE + state are implemented on the
@@ -36,7 +36,7 @@ The most impactful are:
 2. **[Critical] Path traversal in `CredentialStore`.** `providerId` and
    `connectionId` are untrusted user input joined straight into filesystem
    paths, allowing write/read/delete outside the credentials root. A malicious
-   panel with access to `credentials.*` methods can escape `~/.config/natstack/credentials/`.
+   panel with access to `credentials.*` methods can escape `~/.config/vibez1/credentials/`.
 3. **[High] Intra-server relay RPC is effectively unauthenticated for
    non-panel callers.** `RpcServer.checkRelayAuth` short-circuits to `ok` when
    `callerKind !== "panel"`. Any compromised worker (or any shell caller on a
@@ -44,7 +44,7 @@ The most impactful are:
    any other target, bypassing the panel-tree ACL entirely.
 4. **[High] Egress proxy trusts caller-supplied attribution headers.** The
    egress proxy identifies the calling worker only via two HTTP headers
-   (`x-natstack-worker-id`, `x-natstack-proxy-auth`) that it never validates
+   (`x-vibez1-worker-id`, `x-vibez1-proxy-auth`) that it never validates
    against any token store. Any local process that can reach the loopback
    proxy can impersonate any worker, pick up that worker's consent grants,
    and have its requests signed with the provider's bearer token.
@@ -53,8 +53,8 @@ The most impactful are:
    token is null, opening `/api/panels` to anyone who can reach the server.
 6. **[High] Mobile OAuth callback deep-link registry is never consumed.**
    `consumePendingFlow` is declared in `authCallbackRegistry.ts` but has no
-   call sites — `LoginScreen.tsx` only consumes `natstack://connect` links,
-   leaving `natstack://auth/callback` deep-links ignored. Beyond the
+   call sites — `LoginScreen.tsx` only consumes `vibez1://connect` links,
+   leaving `vibez1://auth/callback` deep-links ignored. Beyond the
    functional bug (mobile Codex login cannot complete), the pending-flow
    table has no other reaper and grows/leaks on every started flow.
 7. **[Medium] `credentialService.completeConsent` has no state check and no
@@ -113,7 +113,7 @@ The service policy allows `panel` and `worker` callers to invoke every method,
 including:
 
 - `persist(providerId, credentials)` — writes attacker-controlled OAuth
-  credentials to `~/.config/natstack/oauth-tokens.json` (`0o600`) under any
+  credentials to `~/.config/vibez1/oauth-tokens.json` (`0o600`) under any
   existing provider id.
 - `getProviderToken(providerId)` — returns the plaintext `access` token,
   silently refreshing via the stored `refresh` token if expired.
@@ -180,7 +180,7 @@ panel — see §2.1 and the service's `policy: { allowed: ["shell", "panel",
 crafted provider id. The `save(credential)` call in
 `completeConsent` (line 252) writes attacker content to any file path
 writable by the server process — including overwriting
-`~/.config/natstack/admin-token`, `oauth-tokens.json`, the user's shell
+`~/.config/vibez1/admin-token`, `oauth-tokens.json`, the user's shell
 rc files, or SSH keys. The same primitive enables read-back (`list` does
 not enumerate with user input, but `load` does) and deletion.
 
@@ -275,8 +275,8 @@ In containerized or multi-tenant deployments where several unrelated
 workloads share a host namespace, that boundary is meaningless.
 
 **Attack scenario.** Any local process (or any panel that can make
-outgoing HTTP via `fetch`) sets `X-NatStack-Worker-Id: <target-worker-id>`
-and `X-NatStack-Proxy-Auth: anything` and gets outbound calls signed
+outgoing HTTP via `fetch`) sets `X-Vibez1-Worker-Id: <target-worker-id>`
+and `X-Vibez1-Proxy-Auth: anything` and gets outbound calls signed
 with that worker's bearer tokens, charged to that worker's rate-limit
 bucket, and logged to audit with the spoofed identity.
 
@@ -348,8 +348,8 @@ publicly (remote-panel mode), this leaks per-context panel topology.
 `authCallbackRegistry.consumePendingFlow` (line 28) is exported but has
 **zero call sites**. The only `Linking.addEventListener("url", …)`
 subscriber in the app lives in `LoginScreen` and consumes only
-`natstack://connect` deep-links. The Codex OAuth redirect URI is
-`natstack://auth/callback` (`codexAuthFlow.ts:17`), so when the OS
+`vibez1://connect` deep-links. The Codex OAuth redirect URI is
+`vibez1://auth/callback` (`codexAuthFlow.ts:17`), so when the OS
 delivers the authorize-code callback, no handler reads the registry,
 no pending flow ever resolves, and the `Promise<string>` created in
 `runOpenaiCodexFlow` hangs until `FLOW_TIMEOUT_MS` (10 minutes).
@@ -360,12 +360,12 @@ no pending flow ever resolves, and the `Promise<string>` created in
    flow never completes successfully — every attempt times out. If a user
    has a mechanism to retry, the pending-flow table accumulates entries
    (each with a `setTimeout`) until the app is restarted.
-2. *Timing/DoS.* An attacker that can fire `natstack://` intents on
+2. *Timing/DoS.* An attacker that can fire `vibez1://` intents on
    Android (any installed app can) can spam URLs with crafted `state`
    values; while they won't be consumed by *this* registry, the fact
    that `LoginScreen` is the only handler means every inbound URL flows
    through its filter, and the `Alert.alert("Can't open connect link",
-   …)` branch is fired on any `natstack://connect` URL — cooperative
+   …)` branch is fired on any `vibez1://connect` URL — cooperative
    UX abuse rather than a direct auth bypass, but indicative of the
    missing router.
 3. *If a handler is added later* without auditing the code path, it is
@@ -386,13 +386,13 @@ no pending flow ever resolves, and the `Promise<string>` created in
   currently does — by then the timer is already cleared and the
   registry entry removed, so a mismatch just fails the flow rather
   than ignoring the spoofed URL).
-- Because any installed app can fire `natstack://auth/callback`,
+- Because any installed app can fire `vibez1://auth/callback`,
   consider requiring the authorize-URL to have been opened in the
   immediate past (e.g. by storing the state in module scope with a
   short TTL and refusing to resolve a state whose TTL has not been
   bumped by a recent `buildAuthorizeUrl`).
 - Add universal links (`https://`) so the redirect is OS-verified to
-  the NatStack app rather than racy custom-scheme delivery.
+  the Vibez1 app rather than racy custom-scheme delivery.
 
 ---
 
@@ -527,7 +527,7 @@ switch (params.redirect) {
     redirectUri = "http://127.0.0.1/oauth/callback";
     break;
   case "mobile-universal":
-    redirectUri = "natstack://oauth/callback";
+    redirectUri = "vibez1://oauth/callback";
     break;
 }
 ```
@@ -540,7 +540,7 @@ switch (params.redirect) {
   accepts loose matching might accept it with any port, which is itself
   a weaker security posture than RFC 8252 §7.3.
 - `mobile-universal` uses a custom URL scheme
-  (`natstack://oauth/callback`) — OK only if universal links (verified
+  (`vibez1://oauth/callback`) — OK only if universal links (verified
   app-link on Android, associated-domains on iOS) are *not* required.
   The docstring calls it "universal" but the URL is a custom scheme.
   Any installed Android app can intercept this with equal priority
@@ -649,15 +649,15 @@ nonetheless worth flagging as:
 
 - A *ToS surface.* OpenAI may change their allow-list at any time, and
   the behavior is contingent on a specific client's ID. If OpenAI
-  revokes the client, all NatStack Codex users lose access. More
+  revokes the client, all Vibez1 Codex users lose access. More
   importantly, if OpenAI considers this impersonation a ToS violation,
   users could be penalized.
-- A *supply-chain data-point.* NatStack traffic to OpenAI is
+- A *supply-chain data-point.* Vibez1 traffic to OpenAI is
   indistinguishable from `codex` CLI traffic on the wire. Users may
   not realize this is how the flow works.
 
 **Remediation.** Register a dedicated OpenAI OAuth client for
-NatStack and use its id + allowlisted `originator`.
+Vibez1 and use its id + allowlisted `originator`.
 
 ---
 
@@ -784,14 +784,14 @@ in before this worker ships.
   runs before any app-layer bytes are sent.
 - **Admin token redaction** in WS client error logs
   (`serverClient.ts:162, 240`) prevents accidental leakage to logs.
-- **Admin token header form** (`X-NatStack-Token`) is preferred over
+- **Admin token header form** (`X-Vibez1-Token`) is preferred over
   query-string for the health poller (`remoteHealthPoll.ts:110-112`)
   to keep the token out of URLs / referers.
 - **Timing-safe HMAC comparison** for webhook signatures
   (`packages/shared/src/webhooks/verifier.ts` uses
   `crypto.timingSafeEqual` throughout), even though freshness checks
   are missing (§2.9).
-- **Deep-link validation** for `natstack://connect` on mobile
+- **Deep-link validation** for `vibez1://connect` on mobile
   (`deepLinkConnect.ts`) rejects cleartext HTTP except for loopback,
   RFC1918, and Tailscale hosts, and requires user confirmation before
   applying any credential replacement (`LoginScreen.tsx:30-45, 123`).
@@ -833,7 +833,7 @@ in before this worker ships.
     re-registration (§2.15), and deepen redirect-URI parity checks
     (§2.16).
 13. **Low priority:** register a first-class OpenAI OAuth client for
-    NatStack rather than impersonating Codex CLI (§2.13).
+    Vibez1 rather than impersonating Codex CLI (§2.13).
 14. **Before shipping webhook-relay:** wire the verifier library and
     add authentication (§2.17).
 

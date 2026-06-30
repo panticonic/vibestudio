@@ -1,5 +1,5 @@
 // `fs` stub for mobile bundles. Code paths that reach these functions (e.g.
-// `loadPanelManifest` in @natstack/shared/panelTypes) are server-only and
+// `loadPanelManifest` in @vibez1/shared/panelTypes) are server-only and
 // should never execute on mobile. Throwing makes that contract explicit rather
 // than silently returning wrong results.
 

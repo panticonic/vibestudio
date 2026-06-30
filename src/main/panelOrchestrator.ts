@@ -6,7 +6,7 @@
  * only: server RPC → registry update → view management.
  */
 
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { randomUUID } from "crypto";
 import type {
   Panel,
@@ -18,55 +18,55 @@ import type {
   PanelTreeSnapshot,
   PaletteCommand,
   ThemeConfig,
-} from "@natstack/shared/types";
-import type { PanelRegistry } from "@natstack/shared/panelRegistry";
-import type { EventService } from "@natstack/shared/eventsService";
+} from "@vibez1/shared/types";
+import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import type { EventService } from "@vibez1/shared/eventsService";
 import type { ScopedServerCaller, ServerClient } from "./serverClient.js";
-import type { PanelManager } from "@natstack/shared/shell/panelManager";
+import type { PanelManager } from "@vibez1/shared/shell/panelManager";
 import type {
   PanelHost,
   PanelHostRegistration,
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
-} from "@natstack/shared/panel/panelLease";
+} from "@vibez1/shared/panel/panelLease";
 import {
   createPanelHostRegistration,
   createPanelRuntimeLeaseRequest,
   formatPanelRuntimeLeaseDeniedMessage,
-} from "@natstack/shared/panel/panelLease";
-import { classifyRuntimeLeaseChange } from "@natstack/shared/panel/leaseTracker";
+} from "@vibez1/shared/panel/panelLease";
+import { classifyRuntimeLeaseChange } from "@vibez1/shared/panel/leaseTracker";
 import type {
   BridgePanelLifecycle,
   PanelViewLike,
   PanelHttpServerLike,
   PanelCreateOptions,
-} from "@natstack/shared/panelInterfaces";
-import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
-import { contextIdToPartition } from "@natstack/shared/contextIdToPartition.js";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { panelRuntimeMethods } from "@natstack/shared/serviceSchemas/panelRuntime";
-import type { WorkspaceConfig } from "@natstack/shared/workspace/types";
-import type { PanelRestorePolicy } from "@natstack/shared/workspace/types";
-import { buildPanelUrl } from "@natstack/shared/panelFactory";
+} from "@vibez1/shared/panelInterfaces";
+import { BROWSER_SESSION_PARTITION } from "@vibez1/shared/panelInterfaces";
+import { contextIdToPartition } from "@vibez1/shared/contextIdToPartition.js";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { panelRuntimeMethods } from "@vibez1/shared/serviceSchemas/panelRuntime";
+import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import type { PanelRestorePolicy } from "@vibez1/shared/workspace/types";
+import { buildPanelUrl } from "@vibez1/shared/panelFactory";
 import {
   selectCapEvictionVictims,
   selectIdlePanelVictims,
   type LoadedPanelSnapshot,
-} from "@natstack/shared/panel/panelGc";
+} from "@vibez1/shared/panel/panelGc";
 import {
   PANEL_UI_IDLE_SWEEP_MS,
   PANEL_UI_IDLE_SWEEP_MS_HEADLESS,
   PANEL_UI_IDLE_UNLOAD_MS_HEADLESS,
   PANEL_UI_MAX_LOADED_HEADLESS,
-} from "@natstack/shared/constants";
-import { asPanelSlotId } from "@natstack/shared/panel/ids";
+} from "@vibez1/shared/constants";
+import { asPanelSlotId } from "@vibez1/shared/panel/ids";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
 import {
   getCurrentSnapshot,
   getPanelSource,
   getPanelContextId,
   getPanelRef,
-} from "@natstack/shared/panel/accessors";
+} from "@vibez1/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("PanelOrchestrator");
@@ -92,7 +92,7 @@ export interface PanelOrchestratorDeps {
 
   /**
    * Send an event to a panel. In IPC mode, this calls
-   * webContents.send("natstack:event", event, payload).
+   * webContents.send("vibez1:event", event, payload).
    */
   sendPanelEvent: (panelId: string, event: string, payload: unknown) => void;
   workspaceConfig?: WorkspaceConfig;

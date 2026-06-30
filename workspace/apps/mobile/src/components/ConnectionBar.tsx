@@ -138,7 +138,7 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
     Alert.alert(
       networkReachable ? "Connection lost" : "No network",
       networkReachable
-        ? "NatStack isn't connected to your server."
+        ? "Vibez1 isn't connected to your server."
         : "Your device appears to be offline. Reconnect once your network is back.",
       buttons,
       { cancelable: true },

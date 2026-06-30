@@ -1,7 +1,7 @@
 {
-  "name": "@natstack/dev-log",
+  "name": "@vibez1/dev-log",
   "version": "0.1.0",
-  "description": "Development logging utility for NatStack",
+  "description": "Development logging utility for Vibez1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -12,7 +12,7 @@
  * at the fork point (`postClone`) and binding replacement agents (`subscribeChannel`).
  */
 
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcCaller } from "@vibez1/rpc";
 
 export interface DORef {
   source: string;
@@ -85,7 +85,7 @@ async function callDoTarget<T = unknown>(
 
 // ─── Fork orchestration ─────────────────────────────────────────────────────
 
-const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
+const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
 
 async function channelRef(runtime: ForkRuntime, key: string): Promise<DORef> {
   const service = await runtime.callMain<DORef & { targetId?: string }>(

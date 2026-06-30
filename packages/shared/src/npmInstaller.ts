@@ -10,7 +10,7 @@ function createRequireFromRoot(root: string): NodeRequire {
   return createRequire(pathToFileURL(requireBase).href);
 }
 
-export function resolveBundledNpmCliPath(appRoot = process.env["NATSTACK_APP_ROOT"]): string {
+export function resolveBundledNpmCliPath(appRoot = process.env["VIBEZ1_APP_ROOT"]): string {
   const roots = [appRoot, process.cwd()].filter((p): p is string => !!p);
   for (const root of roots) {
     try {

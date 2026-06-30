@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "title": "News",
     "entry": "index.tsx",
     "exposeModules": [
@@ -17,7 +17,7 @@
     ]
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*",
+    "@vibez1/shared": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@workspace/agentic-core": "workspace:*",

@@ -1,5 +1,5 @@
-# NatStack Central Configuration Example
-# Location: ~/.config/natstack/config.yml (or equivalent on Windows/Mac)
+# Vibez1 Central Configuration Example
+# Location: ~/.config/vibez1/config.yml (or equivalent on Windows/Mac)
 # This configuration is shared across all workspaces
 
 # ============================================================================
@@ -35,8 +35,8 @@ cache:
 # ============================================================================
 # Remote reach is WebRTC. Start pairing commands with a signaling endpoint:
 #
-#   NATSTACK_WEBRTC_SIGNAL_URL=wss://natstack-signaling.<account>.workers.dev \
-#     natstack remote serve
+#   VIBEZ1_WEBRTC_SIGNAL_URL=wss://vibez1-signaling.<account>.workers.dev \
+#     vibez1 remote serve
 #
 # The signaling service only brokers the WebRTC rendezvous; workspace data moves
 # over the pinned DTLS pipe, not through a public HTTP remote URL.

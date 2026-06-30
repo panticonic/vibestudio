@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
-import type { ExtensionContext } from "@natstack/extension";
+import type { ExtensionContext } from "@vibez1/extension";
 import { buildExecApproval, buildOpenApproval, buildUrlOpenApproval } from "./approvals.js";
 import { runExec } from "./exec.js";
 import { SessionManager } from "./sessionManager.js";
@@ -92,7 +92,7 @@ async function requireApproval(
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@natstack/extension" {
+declare module "@vibez1/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/shell": Api;
   }

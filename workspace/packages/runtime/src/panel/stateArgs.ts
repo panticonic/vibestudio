@@ -1,10 +1,10 @@
-import { applyStateArgsSnapshot } from "@natstack/shared/panel/applyStateArgsSnapshot";
-import type { PanelSlotId } from "@natstack/shared/panel/ids";
+import { applyStateArgsSnapshot } from "@vibez1/shared/panel/applyStateArgsSnapshot";
+import type { PanelSlotId } from "@vibez1/shared/panel/ids";
 
-// Global injected by preload via --natstack-state-args command line arg
+// Global injected by preload via --vibez1-state-args command line arg
 declare global {
   interface Window {
-    __natstackStateArgs?: Record<string, unknown>;
+    __vibez1StateArgs?: Record<string, unknown>;
   }
 }
 
@@ -24,7 +24,7 @@ export function _initStateArgsRuntime(
  * Returns the stateArgs that were passed when the panel was created.
  */
 export function getStateArgs<T = Record<string, unknown>>(): T {
-  return (window.__natstackStateArgs ?? {}) as T;
+  return (window.__vibez1StateArgs ?? {}) as T;
 }
 
 /**

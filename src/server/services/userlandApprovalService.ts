@@ -10,15 +10,15 @@ import type {
   UserlandApprovalIssuer,
   UserlandApprovalOption,
   UserlandApprovalRequest,
-} from "@natstack/shared/approvals";
+} from "@vibez1/shared/approvals";
 import {
   approvalPrincipalSchema,
   secretInputRequestSchema,
   userlandApprovalRequestSchema,
   userlandApprovalSubjectIdSchema,
-} from "@natstack/shared/approvals";
-import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+} from "@vibez1/shared/approvals";
+import { ServiceError, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
 
@@ -31,7 +31,7 @@ const BINARY_OPTIONS: UserlandApprovalOption[] = [
 function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOption[] {
   const identityScoped =
     principal.effectiveVersion === "internal" ||
-    principal.repoPath === "natstack/internal" ||
+    principal.repoPath === "vibez1/internal" ||
     principal.requesterCategory === "eval" ||
     principal.requesterCategory === "internal-service" ||
     principal.requester?.category === "eval" ||
@@ -46,7 +46,7 @@ function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOptio
     {
       value: "session",
       label: "Allow this session",
-      description: "Remember for this caller until NatStack restarts.",
+      description: "Remember for this caller until Vibez1 restarts.",
       tone: "neutral",
     },
     {

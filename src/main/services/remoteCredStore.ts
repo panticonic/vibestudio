@@ -15,7 +15,7 @@
  * so it is never written in plaintext.
  */
 
-import type { ConnectPairing } from "@natstack/shared/connect";
+import type { ConnectPairing } from "@vibez1/shared/connect";
 
 /** The pairing material persisted for reconnect (no one-time `code`). */
 export type StoredPairing = Omit<ConnectPairing, "code">;

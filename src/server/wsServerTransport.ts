@@ -1,7 +1,7 @@
 /**
  * Server-side WebSocket transport for RPC bridges to connected clients.
  *
- * Implements the RpcTransport interface from @natstack/rpc, wrapping a
+ * Implements the RpcTransport interface from @vibez1/rpc, wrapping a
  * server-held WebSocket connection to a specific authenticated client.
  * The RpcServer creates one of these per client after authentication,
  * then wraps it in an RpcClient so the server can call methods exposed
@@ -14,8 +14,8 @@
  */
 
 import type { WebSocket } from "ws";
-import type { RpcEnvelope, RpcMessage, RpcTransport } from "@natstack/rpc";
-import { createHandlerRegistry, envelopeFromMessage } from "@natstack/rpc";
+import type { RpcEnvelope, RpcMessage, RpcTransport } from "@vibez1/rpc";
+import { createHandlerRegistry, envelopeFromMessage } from "@vibez1/rpc";
 
 /** Error code stamped on rejections caused by the underlying WS closing. */
 export const CONNECTION_LOST_CODE = "CONNECTION_LOST";

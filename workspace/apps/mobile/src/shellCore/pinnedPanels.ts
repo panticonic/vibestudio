@@ -29,7 +29,7 @@ interface PinnedPanelsFile {
 }
 
 function storageKey(workspaceId: string): string {
-  return `natstack:workspace:${workspaceId}:pinned-panels`;
+  return `vibez1:workspace:${workspaceId}:pinned-panels`;
 }
 
 export async function loadPinnedPanelIds(workspaceId: string): Promise<string[]> {

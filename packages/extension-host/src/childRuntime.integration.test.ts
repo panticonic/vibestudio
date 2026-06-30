@@ -6,22 +6,22 @@ import { randomUUID } from "node:crypto";
 import * as esbuild from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { createNodeProcessAdapter, type ProcessAdapter } from "@natstack/process-adapter";
+import { createNodeProcessAdapter, type ProcessAdapter } from "@vibez1/process-adapter";
 import {
   envelopeFromMessage,
   type RpcEnvelope,
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
-} from "@natstack/rpc";
+} from "@vibez1/rpc";
 import type {
   WsClientMessage,
   WsServerMessage,
   WsRpcResponseMessage,
-} from "@natstack/shared/ws/protocol";
+} from "@vibez1/shared/ws/protocol";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extension-runtime-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extension-runtime-"));
 }
 
 function waitForMessage<T>(
@@ -95,7 +95,7 @@ describe("extension child runtime process", () => {
       target: "node20",
       format: "esm",
       outfile: childRuntimePath,
-      external: ["@natstack/process-adapter"],
+      external: ["@vibez1/process-adapter"],
       logLevel: "silent",
     });
 
@@ -172,12 +172,12 @@ describe("extension child runtime process", () => {
 
     proc = createNodeProcessAdapter(childRuntimePath, {
       ...process.env,
-      NATSTACK_EXTENSION_NAME: "@workspace-extensions/process-test",
-      NATSTACK_EXTENSION_VERSION: "0.0.0",
-      NATSTACK_EXTENSION_BUNDLE_PATH: bundlePath,
-      NATSTACK_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
-      NATSTACK_EXTENSION_GATEWAY_URL: gatewayUrl,
-      NATSTACK_EXTENSION_RPC_TOKEN: "test-token",
+      VIBEZ1_EXTENSION_NAME: "@workspace-extensions/process-test",
+      VIBEZ1_EXTENSION_VERSION: "0.0.0",
+      VIBEZ1_EXTENSION_BUNDLE_PATH: bundlePath,
+      VIBEZ1_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
+      VIBEZ1_EXTENSION_GATEWAY_URL: gatewayUrl,
+      VIBEZ1_EXTENSION_RPC_TOKEN: "test-token",
     });
 
     const ready = await readyPromise;

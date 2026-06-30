@@ -1,9 +1,9 @@
 import React from "react";
 import { fireEvent, render } from "@testing-library/react-native";
 import { AppBar } from "./AppBar";
-import type { AddressAutocompleteItem } from "@natstack/shared/panelChrome";
+import type { AddressAutocompleteItem } from "@vibez1/shared/panelChrome";
 
-jest.mock("@natstack/shared/panelChrome", () => ({
+jest.mock("@vibez1/shared/panelChrome", () => ({
   splitTextByMatchRanges: (text: string, ranges?: Array<{ start: number; end: number }>) => {
     if (!ranges?.length) return [{ text, highlighted: false }];
     const [range] = ranges;

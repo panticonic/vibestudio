@@ -13,9 +13,9 @@
  */
 import { useCallback, useMemo, useReducer, useRef, useEffect, useState } from "react";
 import { z } from "zod";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
-import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { runtimeMethods } from "@vibez1/shared/serviceSchemas/runtime";
+import { fsMethods } from "@vibez1/shared/serviceSchemas/fs";
 import type { ChannelConfig, MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
 import { executeSandbox, ScopeManager } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, ScopeBlobBackend } from "@workspace/eval";
@@ -1115,14 +1115,14 @@ Use package imports available to inline_ui plus relative imports for local helpe
               return loadActionBarFromFile({ path, imports, props, maxHeight });
             },
           },
-          // ui_prompt — serves NatStackExtensionUIContext (select/confirm/input/editor)
+          // ui_prompt — serves Vibez1ExtensionUIContext (select/confirm/input/editor)
           // from workspace/packages/harness. The agent worker forwards extension UI calls
           // via ui_prompt { kind, ...params }; we render them through the
           // existing feedback_form (ActiveFeedbackSchema) machinery and return
           // primitive results (string | boolean | undefined) directly.
           ui_prompt: {
             description:
-              "Prompt the panel user for a select/confirm/input/editor response (used by NatStack extension UI bridge).",
+              "Prompt the panel user for a select/confirm/input/editor response (used by Vibez1 extension UI bridge).",
             parameters: z
               .object({
                 kind: z.enum(["select", "confirm", "input", "editor"]),

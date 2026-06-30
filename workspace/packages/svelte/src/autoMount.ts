@@ -69,13 +69,13 @@ export function shouldAutoMount(userModule: any): boolean {
 function setupConnectionErrorOverlay(): void {
   panel.onConnectionError((err) => {
     // Remove any existing overlay
-    const existing = document.getElementById("__natstack-conn-error");
+    const existing = document.getElementById("__vibez1-conn-error");
     if (existing) existing.remove();
 
     if (err.source === "server") {
       // Non-blocking banner
       const banner = document.createElement("div");
-      banner.id = "__natstack-conn-error";
+      banner.id = "__vibez1-conn-error";
       Object.assign(banner.style, {
         padding: "8px 16px",
         background: "#fef3cd",
@@ -94,7 +94,7 @@ function setupConnectionErrorOverlay(): void {
     } else {
       // Full-screen overlay
       const overlay = document.createElement("div");
-      overlay.id = "__natstack-conn-error";
+      overlay.id = "__vibez1-conn-error";
       Object.assign(overlay.style, {
         position: "fixed",
         inset: "0",

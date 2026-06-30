@@ -20,12 +20,12 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createRpcClient, type RpcClient, type RpcCallOptions } from "@natstack/rpc";
-import { type WebRtcSession, type WebRtcTransport } from "@natstack/rpc/transports/webrtcClient";
-import { createOffererTransport } from "@natstack/rpc/transports/offererTransport";
-import { authMethods } from "@natstack/shared/serviceSchemas/auth";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import type { ConnectPairing } from "@natstack/shared/connect";
+import { createRpcClient, type RpcClient, type RpcCallOptions } from "@vibez1/rpc";
+import { type WebRtcSession, type WebRtcTransport } from "@vibez1/rpc/transports/webrtcClient";
+import { createOffererTransport } from "@vibez1/rpc/transports/offererTransport";
+import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import type { ConnectPairing } from "@vibez1/shared/connect";
 import type {
   ConnectionStatus,
   PanelSession,

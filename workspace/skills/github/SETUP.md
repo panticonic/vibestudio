@@ -1,10 +1,10 @@
 # GitHub Setup Workflow
 
 Use this when the user wants guided help choosing repository access and
-permissions. The default NatStack-friendly path is broad upstream access:
+permissions. The default Vibez1-friendly path is broad upstream access:
 open a fine-grained PAT page prefilled for Broad, choose All repositories when
 the user wants seamless future repository access, save the token with
-`requestGitHubTokenCredential()`, and verify it. NatStack then stages access
+`requestGitHubTokenCredential()`, and verify it. Vibez1 then stages access
 internally with separate user API, repository API, release upload, and git
 HTTPS bindings.
 
@@ -33,7 +33,7 @@ Always let the user choose the token style before opening GitHub:
 ## Steps
 
 1. Open the chosen GitHub token page.
-2. Set a token name such as `NatStack`.
+2. Set a token name such as `Vibez1`.
 3. Choose an expiration that matches the user's tolerance for rotation.
 4. Select repository access. Prefer All repositories for the seamless broad
    workspace model; choose selected repositories only when the user explicitly
@@ -94,7 +94,7 @@ friendly access levels:
 - API and Git: both of the above.
   Shared workspace remotes can be declared later with
   `git.setSharedRemote("panels/name", { name: "origin", url, branch })`; that
-  commits `meta/natstack.yml`, propagates the remote into workspace contexts,
+  commits `meta/vibez1.yml`, propagates the remote into workspace contexts,
   and lets missing configured repos auto-import on startup.
 
 ## Example Eval
@@ -132,7 +132,7 @@ PAT; the helper delegates that to the privileged shell prompt.
 
 For every GitHub settings link, offer both:
 
-- **Internal** opens a NatStack browser panel with
+- **Internal** opens a Vibez1 browser panel with
   `openPanel(url, { focus: true })`. Prefer this when the user wants
   to keep setup inside the workspace or may want the agent to inspect page
   state.
@@ -208,7 +208,7 @@ export default function GitHubSetup({ onSubmit, onCancel }) {
         <Box>
           <Heading size="4">GitHub access</Heading>
           <Text size="2" color="gray">
-            Choose a token style and access level, then save the generated token in NatStack's
+            Choose a token style and access level, then save the generated token in Vibez1's
             trusted prompt.
           </Text>
         </Box>

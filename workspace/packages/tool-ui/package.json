@@ -9,7 +9,7 @@
     "./utils/trackAsyncErrors": "./src/utils/trackAsyncErrors.ts"
   },
   "dependencies": {
-    "@natstack/types": "workspace:*",
+    "@vibez1/types": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",

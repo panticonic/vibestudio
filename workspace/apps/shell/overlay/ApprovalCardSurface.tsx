@@ -4,7 +4,7 @@
  * forwards card intents up to the chrome via `emitIntent`. No RPC — the chrome
  * coordinator (`ConsentApprovalBar`) performs the actual `shellApproval.*` calls.
  */
-import type { PendingApproval } from "@natstack/shared/approvals";
+import type { PendingApproval } from "@vibez1/shared/approvals";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { resolveCallerInfo, type ApprovalQueueInfo } from "../components/approvalCardModel";
 import type { OverlaySurfaceComponentProps } from "./types";

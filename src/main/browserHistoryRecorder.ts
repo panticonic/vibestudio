@@ -1,9 +1,9 @@
-import { createDevLogger } from "@natstack/dev-log";
-import { createBrowserDataRpcClient, type BrowserDataClient } from "@natstack/browser-data";
+import { createDevLogger } from "@vibez1/dev-log";
+import { createBrowserDataRpcClient, type BrowserDataClient } from "@vibez1/browser-data";
 import {
   canonicalizeBrowserHistoryUrl,
   type BrowserNavigationIntent,
-} from "@natstack/shared/panelCommands";
+} from "@vibez1/shared/panelCommands";
 import type { ServerClient } from "./serverClient.js";
 
 const log = createDevLogger("BrowserHistoryRecorder");

@@ -4,7 +4,7 @@
  *
  * This is the curated client behind `services.blobstore` / `import { blobstore }
  * from "@workspace/runtime"`. It is a thin typed wrapper over the `blobstore`
- * RPC service (`@natstack/shared/serviceSchemas/blobstore`) — every method
+ * RPC service (`@vibez1/shared/serviceSchemas/blobstore`) — every method
  * forwards to `rpc.call("main", "blobstore.<method>", args)`.
  *
  * Read/write methods (`putText`/`putBase64`/`getText`/`getRange`/`grep`/…) admit
@@ -15,9 +15,9 @@
  * method.
  */
 
-import type { RpcCaller } from "@natstack/rpc";
-import { createTypedServiceClient, type TypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { blobstoreMethods } from "@natstack/shared/serviceSchemas/blobstore";
+import type { RpcCaller } from "@vibez1/rpc";
+import { createTypedServiceClient, type TypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { blobstoreMethods } from "@vibez1/shared/serviceSchemas/blobstore";
 
 export type BlobstoreClient = TypedServiceClient<typeof blobstoreMethods>;
 

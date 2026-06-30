@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createConnectDeepLink } from "@natstack/shared/connect";
+import { createConnectDeepLink } from "@vibez1/shared/connect";
 import { clearShellTokenCache } from "./rpcClient.js";
 
 const FP = "AA".repeat(32);
@@ -38,11 +38,11 @@ function rpcRequestMethod(body: unknown): string | undefined {
   return typeof method === "string" ? method : undefined;
 }
 
-describe("natstack CLI", () => {
+describe("vibez1 CLI", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-cli-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-cli-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -84,7 +84,7 @@ describe("natstack CLI", () => {
         platform: "desktop",
       },
     ]);
-    const filePath = path.join(tmpDir, ".config", "natstack", "cli-credentials.json");
+    const filePath = path.join(tmpDir, ".config", "vibez1", "cli-credentials.json");
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({
       schemaVersion: 1,
       kind: "device",
@@ -98,7 +98,7 @@ describe("natstack CLI", () => {
     }
   });
 
-  it("rejects a natstack://connect link for CLI pairing (WebRTC links are app-only)", async () => {
+  it("rejects a vibez1://connect link for CLI pairing (WebRTC links are app-only)", async () => {
     const { main } = await import("./client.js");
     await expect(
       main(["remote", "pair", createConnectDeepLink(pairing("A".repeat(24)))])
@@ -112,7 +112,7 @@ describe("natstack CLI", () => {
 
   it("tightens an existing CLI credential file to 0600 when pairing", async () => {
     if (process.platform === "win32") return;
-    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    const credentialDir = path.join(tmpDir, ".config", "vibez1");
     const filePath = path.join(credentialDir, "cli-credentials.json");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(filePath, "{}", { mode: 0o644 });
@@ -139,7 +139,7 @@ describe("natstack CLI", () => {
   });
 
   it("logs out by removing the CLI credential file", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    const credentialDir = path.join(tmpDir, ".config", "vibez1");
     const filePath = path.join(credentialDir, "cli-credentials.json");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(filePath, "{}");
@@ -153,13 +153,13 @@ describe("natstack CLI", () => {
     const { main } = await import("./client.js");
     await expect(main(["--help"])).resolves.toBe(0);
 
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("natstack remote pair"));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("natstack mobile install"));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("natstack mobile smoke"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibez1 remote pair"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibez1 mobile install"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibez1 mobile smoke"));
     expect(console.log).not.toHaveBeenCalledWith(
-      expect.stringContaining(["natstack", "remote", "start"].join(" "))
+      expect.stringContaining(["vibez1", "remote", "start"].join(" "))
     );
-    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("natstack-client"));
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("vibez1-client"));
   });
 
   it("keeps remote pairing available under the unified command", async () => {
@@ -212,7 +212,7 @@ describe("natstack CLI", () => {
   });
 
   it("checks the stored device refresh credential for status", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    const credentialDir = path.join(tmpDir, ".config", "vibez1");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -240,7 +240,7 @@ describe("natstack CLI", () => {
             })
           );
         }
-        return new Response(JSON.stringify({ ok: true, product: "natstack", discoveryVersion: 1 }));
+        return new Response(JSON.stringify({ ok: true, product: "vibez1", discoveryVersion: 1 }));
       })
     );
 
@@ -254,7 +254,7 @@ describe("natstack CLI", () => {
   });
 
   it("requires workspace selection before checking remote status", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    const credentialDir = path.join(tmpDir, ".config", "vibez1");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -274,7 +274,7 @@ describe("natstack CLI", () => {
       .mocked(console.error)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("natstack remote select <workspace>");
+    expect(output).toContain("vibez1 remote select <workspace>");
   });
 
   it("reports missing credentials for status as an auth error (exit 3)", async () => {
@@ -289,7 +289,7 @@ describe("natstack CLI", () => {
   });
 
   it("creates a pairing invite using the stored device credential", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    const credentialDir = path.join(tmpDir, ".config", "vibez1");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -355,7 +355,7 @@ describe("natstack CLI", () => {
   });
 
   it("requires a hub credential before creating pairing invites", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    const credentialDir = path.join(tmpDir, ".config", "vibez1");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -502,7 +502,7 @@ describe("natstack CLI", () => {
       "workspace.hostTargets.beginLaunch",
       "workspace.hostTargets.resolveLaunchSessionApproval",
     ]);
-    const filePath = path.join(tmpDir, ".config", "natstack", "cli-credentials.json");
+    const filePath = path.join(tmpDir, ".config", "vibez1", "cli-credentials.json");
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({
       schemaVersion: 1,
       kind: "device",
@@ -526,11 +526,11 @@ describe("natstack CLI", () => {
       .mocked(console.error)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("natstack terminal start --pair");
+    expect(output).toContain("vibez1 terminal start --pair");
   });
 
   function writeCredentials(content?: string): void {
-    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    const credentialDir = path.join(tmpDir, ".config", "vibez1");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -556,7 +556,7 @@ describe("natstack CLI", () => {
       .mocked(console.log)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("natstack remote invite [--ttl-ms <milliseconds>]");
+    expect(output).toContain("vibez1 remote invite [--ttl-ms <milliseconds>]");
     expect(output).toContain("--ttl-ms <value>");
     expect(output).toContain("--json");
     expect(output).toContain("Emit JSON");

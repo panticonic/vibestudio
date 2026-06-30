@@ -61,14 +61,14 @@ export interface SandboxOptions {
   bindings?: Record<string, unknown>;
   /**
    * Per-execution module registry. When provided, loaded imports/requires are stored
-   * here instead of the per-isolate global `__natstackModuleMap__`. This isolates module
+   * here instead of the per-isolate global `__vibez1ModuleMap__`. This isolates module
    * state between callers that share one isolate (e.g. multi-tenant EvalDO owners). When
    * absent, falls back to the global map for byte-identical panel behavior.
    */
   moduleMap?: Record<string, unknown>;
   /**
    * Require function paired with `moduleMap`. When provided, the engine resolves `require`
-   * calls and CJS bundle loads through this instead of the global `__natstackRequire__`.
+   * calls and CJS bundle loads through this instead of the global `__vibez1Require__`.
    * When absent, falls back to `getDefaultRequire()` (the global require).
    */
   require?: (id: string) => unknown;
@@ -125,7 +125,7 @@ export interface CompileComponentOptions {
 function getModuleMap(override?: Record<string, unknown>): Record<string, unknown> {
   return (
     override ??
-    (((globalThis as Record<string, unknown>)["__natstackModuleMap__"] ??= {}) as Record<
+    (((globalThis as Record<string, unknown>)["__vibez1ModuleMap__"] ??= {}) as Record<
       string,
       unknown
     >)
@@ -151,10 +151,10 @@ function loadLibraryBundle(
 
   const resolvedRequire =
     requireFn ??
-    ((globalThis as Record<string, unknown>)["__natstackRequire__"] as
+    ((globalThis as Record<string, unknown>)["__vibez1Require__"] as
       | ((id: string) => unknown)
       | undefined);
-  if (!resolvedRequire) throw new Error("__natstackRequire__ not available");
+  if (!resolvedRequire) throw new Error("__vibez1Require__ not available");
 
   const exports: Record<string, unknown> = {};
   const module = { exports };
@@ -195,15 +195,15 @@ function installLazyImportLoader(
 ): (() => void) | null {
   if (!loadImport) return null;
   const globals = globalThis as Record<string, unknown>;
-  const previous = globals["__natstackLoadImport__"];
-  // NOTE: __natstackLoadImport__ is a per-isolate global, but it is NOT eval's import path:
+  const previous = globals["__vibez1LoadImport__"];
+  // NOTE: __vibez1LoadImport__ is a per-isolate global, but it is NOT eval's import path:
   // eval'd `await import(x)` is compiled by sucrase to `require(x)`, which resolves through
   // the per-object `require`/moduleMap above (and its specifier auto-loads into that map) —
   // fully isolated. This global is only read by the runtime's CDP-client lazy loader
   // (`cdpAutomation.ts`). The closure captures this run's moduleMap/requireFn; the shared slot
   // means two concurrent cross-object runs could clobber it, but it only loads the stateless
   // CDP-client module, so there is no cross-owner data leak.
-  globals["__natstackLoadImport__"] = async (specifier: string, refValue?: string) => {
+  globals["__vibez1LoadImport__"] = async (specifier: string, refValue?: string) => {
     const moduleMap = getModuleMap(moduleMapOverride);
     if (moduleMap[specifier]) return moduleMap[specifier];
     const ref = refValue === "latest" ? undefined : refValue;
@@ -212,8 +212,8 @@ function installLazyImportLoader(
     return moduleMap[specifier];
   };
   return () => {
-    if (previous === undefined) delete globals["__natstackLoadImport__"];
-    else globals["__natstackLoadImport__"] = previous;
+    if (previous === undefined) delete globals["__vibez1LoadImport__"];
+    else globals["__vibez1LoadImport__"] = previous;
   };
 }
 
@@ -235,7 +235,7 @@ async function ensureRequires(
 ): Promise<void> {
   if (requires.length === 0) return;
   const requireFn = options.require ?? getDefaultRequire();
-  if (!requireFn) throw new Error("__natstackRequire__ not available. Build may be outdated.");
+  if (!requireFn) throw new Error("__vibez1Require__ not available. Build may be outdated.");
 
   let validation = validateRequires(requires, requireFn);
   if (!validation.valid && options.loadImport) {
@@ -469,7 +469,7 @@ export async function executeSandbox(
       return {
         success: false,
         consoleOutput: "",
-        error: "__natstackRequire__ not available. Build may be outdated.",
+        error: "__vibez1Require__ not available. Build may be outdated.",
       };
     }
 
@@ -512,7 +512,7 @@ export async function executeSandbox(
       const suggestedImports = Object.fromEntries(
         missingModules.map((m) => [
           m,
-          m.startsWith("@workspace") || m.startsWith("@natstack/") ? "latest" : "npm:latest",
+          m.startsWith("@workspace") || m.startsWith("@vibez1/") ? "latest" : "npm:latest",
         ])
       );
       const missingDeclarations = await withAbort(

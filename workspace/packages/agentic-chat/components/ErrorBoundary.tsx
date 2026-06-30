@@ -22,7 +22,7 @@ type PanelErrorDiagnosticLauncher = (
 ) => Promise<PanelErrorDiagnosticChatResult>;
 
 interface PanelErrorDiagnosticLauncherGlobal {
-  __natstackPanelErrorDiagnostics?: PanelErrorDiagnosticLauncher;
+  __vibez1PanelErrorDiagnostics?: PanelErrorDiagnosticLauncher;
 }
 
 interface ErrorBoundaryProps {
@@ -43,7 +43,7 @@ interface ErrorBoundaryState {
 }
 
 const TRANSIENT_IMPORT_ERROR_RE = /failed to fetch dynamically imported module|error loading dynamically imported module|loading chunk \d+ failed|importing a module script failed/i;
-const AUTO_RELOAD_STORAGE_KEY = "__natstackTransientImportReload";
+const AUTO_RELOAD_STORAGE_KEY = "__vibez1TransientImportReload";
 const AUTO_RELOAD_WINDOW_MS = 30_000;
 
 function isTransientImportError(error: Error): boolean {
@@ -53,8 +53,8 @@ function isTransientImportError(error: Error): boolean {
 
 function getPanelErrorDiagnosticLauncher(): PanelErrorDiagnosticLauncher | null {
   const g = globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal;
-  return typeof g.__natstackPanelErrorDiagnostics === "function"
-    ? g.__natstackPanelErrorDiagnostics
+  return typeof g.__vibez1PanelErrorDiagnostics === "function"
+    ? g.__vibez1PanelErrorDiagnostics
     : null;
 }
 

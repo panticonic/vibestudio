@@ -27,7 +27,7 @@ describe("sessionStore", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-sessions-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-sessions-"));
     vi.stubEnv("HOME", tmpDir);
   });
 
@@ -40,7 +40,7 @@ describe("sessionStore", () => {
     const session = makeSession("alpha");
     saveAgentSession(session);
 
-    const filePath = path.join(tmpDir, ".config", "natstack", "agent-sessions", "alpha.json");
+    const filePath = path.join(tmpDir, ".config", "vibez1", "agent-sessions", "alpha.json");
     expect(sessionPath("alpha")).toBe(filePath);
     expect(loadAgentSession("alpha")).toEqual(session);
     if (process.platform !== "win32") {
@@ -50,9 +50,9 @@ describe("sessionStore", () => {
 
   it("returns null for missing or malformed session files", () => {
     expect(loadAgentSession("missing")).toBeNull();
-    fs.mkdirSync(path.join(tmpDir, ".config", "natstack", "agent-sessions"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, ".config", "vibez1", "agent-sessions"), { recursive: true });
     fs.writeFileSync(
-      path.join(tmpDir, ".config", "natstack", "agent-sessions", "broken.json"),
+      path.join(tmpDir, ".config", "vibez1", "agent-sessions", "broken.json"),
       "{not json"
     );
     expect(loadAgentSession("broken")).toBeNull();

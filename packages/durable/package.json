@@ -1,14 +1,14 @@
 {
-  "name": "@natstack/durable",
+  "name": "@vibez1/durable",
   "version": "0.1.0",
-  "description": "Neutral Durable Object primitives for NatStack host and workspace workers",
+  "description": "Neutral Durable Object primitives for Vibez1 host and workspace workers",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./test-utils": "./src/test-utils.ts"
   },
   "dependencies": {
-    "@natstack/rpc": "workspace:*"
+    "@vibez1/rpc": "workspace:*"
   },
   "devDependencies": {
     "sql.js": "^1.14.0",

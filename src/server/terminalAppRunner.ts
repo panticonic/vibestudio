@@ -1,5 +1,5 @@
-import { createProcessAdapter, type ProcessAdapter } from "@natstack/process-adapter";
-import type { ConnectionGrantService } from "@natstack/shared/connectionGrants";
+import { createProcessAdapter, type ProcessAdapter } from "@vibez1/process-adapter";
+import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
 import { artifactFilePath } from "./buildV2/buildStore.js";
 
 export interface TerminalAppBuild {
@@ -78,13 +78,13 @@ export class TerminalAppRunner {
       entryPath,
       {
         ...process.env,
-        NATSTACK_TERMINAL_APP_ID: launch.appId,
-        NATSTACK_TERMINAL_APP_SOURCE: launch.source,
-        NATSTACK_TERMINAL_APP_BUILD_KEY: launch.buildKey,
-        NATSTACK_TERMINAL_APP_EFFECTIVE_VERSION: launch.effectiveVersion ?? "",
-        NATSTACK_TERMINAL_APP_GATEWAY_URL: launch.gatewayUrl,
-        NATSTACK_TERMINAL_APP_RPC_TOKEN: rpcGrant.token,
-        NATSTACK_TERMINAL_APP_CONNECTION_ID: connectionId,
+        VIBEZ1_TERMINAL_APP_ID: launch.appId,
+        VIBEZ1_TERMINAL_APP_SOURCE: launch.source,
+        VIBEZ1_TERMINAL_APP_BUILD_KEY: launch.buildKey,
+        VIBEZ1_TERMINAL_APP_EFFECTIVE_VERSION: launch.effectiveVersion ?? "",
+        VIBEZ1_TERMINAL_APP_GATEWAY_URL: launch.gatewayUrl,
+        VIBEZ1_TERMINAL_APP_RPC_TOKEN: rpcGrant.token,
+        VIBEZ1_TERMINAL_APP_CONNECTION_ID: connectionId,
       },
       { preferNode: true, stdio: launch.interactive ? "inherit" : "pipe" }
     );

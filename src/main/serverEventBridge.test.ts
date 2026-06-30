@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { asPanelEntityId, asPanelSlotId } from "@natstack/shared/panel/ids";
+import { asPanelEntityId, asPanelSlotId } from "@vibez1/shared/panel/ids";
 import { createServerEventBridge } from "./serverEventBridge.js";
 
 function createHarness(opts: { resolveAppAvailableEvent?: (payload: unknown) => unknown } = {}) {

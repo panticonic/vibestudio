@@ -14,7 +14,7 @@ const tempRoots: string[] = [];
 
 function writeConfig(sourceRoot: string, content: string): void {
   fs.mkdirSync(path.join(sourceRoot, "meta"), { recursive: true });
-  fs.writeFileSync(path.join(sourceRoot, "meta", "natstack.yml"), content, "utf-8");
+  fs.writeFileSync(path.join(sourceRoot, "meta", "vibez1.yml"), content, "utf-8");
 }
 
 afterEach(() => {
@@ -32,13 +32,13 @@ describe("loadWorkspaceConfig", () => {
   (process.platform === "linux" ? it : it.skip)(
     "derives the workspace id from the managed workspace folder name",
     () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
       tempRoots.push(root);
       process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
 
       const sourceRoot = path.join(
         process.env["XDG_CONFIG_HOME"],
-        "natstack",
+        "vibez1",
         "workspaces",
         "cloned-ws",
         "source"
@@ -50,7 +50,7 @@ describe("loadWorkspaceConfig", () => {
   );
 
   it("derives the workspace id from the absolute workspace root for unmanaged paths", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const workspaceRoot = path.join(root, "external-workspace");
     const sourceRoot = path.join(workspaceRoot, "source");
@@ -60,7 +60,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("ignores an explicit workspace id when one is configured", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const workspaceRoot = path.join(root, "workspace");
     const sourceRoot = path.join(workspaceRoot, "source");
@@ -70,7 +70,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects .git-suffixed extension declarations", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, "extensions:\n  - source: extensions/a.git\n");
@@ -79,7 +79,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects duplicate extension declarations across source-root and package-name forms", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(
@@ -91,7 +91,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects extension declarations outside the extension source root", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, "extensions:\n  - source: apps/shell\n");
@@ -102,7 +102,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects nested extension source paths", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, "extensions:\n  - source: extensions/react-native/nested\n");
@@ -113,7 +113,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects extension declarations without a source", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, "extensions:\n  - ref: main\n");
@@ -122,7 +122,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects .git-suffixed app declarations", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, "apps:\n  - source: apps/shell.git\n");
@@ -131,7 +131,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects duplicate app declarations across source-root and package-name forms", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, 'apps:\n  - source: apps/shell\n  - source: "@workspace-apps/shell"\n');
@@ -140,7 +140,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects app declarations outside the app source root", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, "apps:\n  - source: extensions/react-native\n");
@@ -149,7 +149,7 @@ describe("loadWorkspaceConfig", () => {
   });
 
   it("rejects unscoped app package names", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
     writeConfig(sourceRoot, "apps:\n  - source: shell\n");
@@ -213,7 +213,7 @@ describe("initWorkspace", () => {
   (process.platform === "linux" ? it : it.skip)(
     "copies canonical app units from the workspace template",
     () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
       tempRoots.push(root);
       process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
       const templateRoot = path.join(root, "workspace-template");
@@ -235,7 +235,7 @@ describe("initWorkspace", () => {
         JSON.stringify({
           name: "@workspace-apps/shell",
           version: "0.1.0",
-          natstack: {
+          vibez1: {
             app: {
               target: "electron",
               renderer: "index.tsx",
@@ -254,11 +254,11 @@ describe("initWorkspace", () => {
         JSON.stringify({
           name: "@workspace-apps/mobile",
           version: "0.1.0",
-          natstack: {
+          vibez1: {
             app: {
               target: "react-native",
               renderer: "App.tsx",
-              rnComponentName: "NatStack",
+              rnComponentName: "Vibez1",
               rnHostAbi: "rn-host-1",
               capabilities: ["notifications", "camera", "keychain", "clipboard", "open-external"],
             },
@@ -275,7 +275,7 @@ describe("initWorkspace", () => {
         JSON.stringify({
           name: "@workspace-extensions/react-native",
           version: "0.1.0",
-          natstack: {
+          vibez1: {
             extension: {
               activationEvents: ["*"],
               streamingMethods: ["buildArtifact"],
@@ -293,7 +293,7 @@ describe("initWorkspace", () => {
 
       const sourceRoot = path.join(
         process.env["XDG_CONFIG_HOME"],
-        "natstack",
+        "vibez1",
         "workspaces",
         "fresh-app-ws",
         "source"
@@ -317,7 +317,7 @@ describe("initWorkspace", () => {
         JSON.parse(fs.readFileSync(path.join(sourceRoot, "apps", "shell", "package.json"), "utf-8"))
       ).toMatchObject({
         name: "@workspace-apps/shell",
-        natstack: {
+        vibez1: {
           app: {
             target: "electron",
             renderer: "index.tsx",
@@ -335,11 +335,11 @@ describe("initWorkspace", () => {
         )
       ).toMatchObject({
         name: "@workspace-apps/mobile",
-        natstack: {
+        vibez1: {
           app: {
             target: "react-native",
             renderer: "App.tsx",
-            rnComponentName: "NatStack",
+            rnComponentName: "Vibez1",
             rnHostAbi: "rn-host-1",
             capabilities: expect.arrayContaining([
               "notifications",
@@ -366,7 +366,7 @@ describe("initWorkspace", () => {
         )
       ).toMatchObject({
         name: "@workspace-extensions/react-native",
-        natstack: {
+        vibez1: {
           extension: {
             streamingMethods: ["buildArtifact"],
             contributes: { buildTargets: ["react-native"] },
@@ -382,13 +382,13 @@ describe("initWorkspace", () => {
   );
 
   (process.platform === "linux" ? it : it.skip)("requires a template or fork", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-loader-"));
     tempRoots.push(root);
     process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
 
     expect(() => initWorkspace("missing-template")).toThrow(/requires a templateDir or forkFrom/);
   });
 
-  // The `.natstack-template-source.json` provenance marker was write-only (no
+  // The `.vibez1-template-source.json` provenance marker was write-only (no
   // reader) and is removed by the per-repo reshape's cleanup; its test is gone.
 });

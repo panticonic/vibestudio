@@ -7,10 +7,10 @@
  *
  * Pure function of its inputs → deterministic and trivially testable.
  */
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { RuntimeSurface, RuntimeSurfaceTarget } from "@natstack/shared/runtimeSurface";
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
-import type { CatalogEntry } from "@natstack/shared/serviceSchemas/docs";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { RuntimeSurface, RuntimeSurfaceTarget } from "@vibez1/shared/runtimeSurface";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { CatalogEntry } from "@vibez1/shared/serviceSchemas/docs";
 import { serializeMethod } from "./serialize.js";
 
 export interface BuildCatalogDeps {

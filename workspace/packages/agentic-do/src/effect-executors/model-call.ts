@@ -165,12 +165,12 @@ function traceModelCallStage(
   const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
     .process?.env;
   const traceEnabled =
-    env?.["NATSTACK_MODEL_CALL_TRACE"] === "1" ||
-    env?.["NATSTACK_MODEL_CALL_TRACE"] === true ||
-    processEnv?.["NATSTACK_MODEL_CALL_TRACE"] === "1" ||
-    processEnv?.["NATSTACK_MODEL_CALL_TRACE"] === "true" ||
-    env?.["NATSTACK_LOG_LEVEL"] === "verbose" ||
-    processEnv?.["NATSTACK_LOG_LEVEL"] === "verbose";
+    env?.["VIBEZ1_MODEL_CALL_TRACE"] === "1" ||
+    env?.["VIBEZ1_MODEL_CALL_TRACE"] === true ||
+    processEnv?.["VIBEZ1_MODEL_CALL_TRACE"] === "1" ||
+    processEnv?.["VIBEZ1_MODEL_CALL_TRACE"] === "true" ||
+    env?.["VIBEZ1_LOG_LEVEL"] === "verbose" ||
+    processEnv?.["VIBEZ1_LOG_LEVEL"] === "verbose";
   if (!traceEnabled) return;
   console.info("[model-call] trace:", {
     stage,
@@ -366,10 +366,10 @@ function deterministicTestModeModelOutcome(
   descriptor: ModelCallEffect,
   env?: Record<string, unknown>
 ): EffectOutcome | null {
-  const testMode = env?.["NATSTACK_TEST_MODE"];
+  const testMode = env?.["VIBEZ1_TEST_MODE"];
   const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
     .process?.env;
-  if (testMode !== "1" && processEnv?.["NATSTACK_TEST_MODE"] !== "1") return null;
+  if (testMode !== "1" && processEnv?.["VIBEZ1_TEST_MODE"] !== "1") return null;
   if (descriptor.request.provider !== "openai-codex") return null;
   return {
     kind: "model",
@@ -475,7 +475,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
 
     // Storage boundary, model-input side: fold entries keep spilled fields
     // (tool results, large user content) as blob refs — the model must see
-    // the actual bytes, never `natstack.blob-ref.v1` pointers (a model that
+    // the actual bytes, never `vibez1.blob-ref.v1` pointers (a model that
     // reads pointer JSON emits garbage tool args and pointer-shaped paths).
     const hydratedMessages = (await hydrateStoredValueRefs(
       modelContextForPolicy(state, request.contextThroughSeq, request.turnMetadata?.contextPolicy),

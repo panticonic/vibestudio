@@ -1,5 +1,5 @@
-import { extensionsMethods } from "@natstack/shared/serviceSchemas/extensions";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { extensionsMethods } from "@vibez1/shared/serviceSchemas/extensions";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
 import type { ImportedPassword } from "../types.js";
 import type { RecordHistoryVisitRequest, UpdateHistoryTitleRequest } from "../types.js";
 import type { StoredBookmark, StoredCookie, StoredHistory, StoredPassword, StoredSearchEngine } from "../storage/types.js";

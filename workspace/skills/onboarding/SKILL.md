@@ -1,17 +1,17 @@
 ---
 name: onboarding
-description: New user onboarding — what NatStack is, first-time setup, API provider integrations, browser data import, workspace configuration, and pointers to other skills.
+description: New user onboarding — what Vibez1 is, first-time setup, API provider integrations, browser data import, workspace configuration, and pointers to other skills.
 ---
 
 # Onboarding Skill
 
-Guide new users through understanding NatStack and getting their workspace set up.
+Guide new users through understanding Vibez1 and getting their workspace set up.
 
 ## Files
 
 | Document                                             | Content                                                                                                        |
 | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [OVERVIEW.md](OVERVIEW.md)                           | What NatStack is, key concepts, architecture at a glance                                                       |
+| [OVERVIEW.md](OVERVIEW.md)                           | What Vibez1 is, key concepts, architecture at a glance                                                       |
 | [WORKSPACE_STRUCTURE.md](WORKSPACE_STRUCTURE.md)     | Workspace directory layout, meta/, context folders, template vs live                                           |
 | [EXTERNAL_GIT_PROJECTS.md](EXTERNAL_GIT_PROJECTS.md) | External Git project declarations, import APIs, branch config, startup auto-import, private repo retries       |
 | [GETTING_STARTED.md](GETTING_STARTED.md)             | First-time setup: API provider integrations, incremental browser import/open tabs, workspace setup, first panel |
@@ -73,18 +73,18 @@ eval snippets. For standard onboarding probes, import the documented workspace
 packages directly. Only split a probe into a separate small eval if you are
 checking an optional or custom package that may not be installed in a particular
 workspace; tolerate that eval failing. Do not use `await import(...)` to probe
-`@workspace/*`, `@workspace-skills/*`, or `@natstack/*` packages. `fs` paths are
+`@workspace/*`, `@workspace-skills/*`, or `@vibez1/*` packages. `fs` paths are
 rooted at the current context folder; `panels` and `/panels` refer to the same
 context-root directory, but onboarding examples prefer `panels` to avoid
 confusing this with a host absolute path.
 
-- **New user** (`workspaceCount <= 1`, or `workspaceCount === 0` with an active workspace) — give the full walkthrough with explanations of key concepts. These users need context on what NatStack is and what it can do. Note: in some runtime modes `workspace.list()` may return an empty array even when an active workspace exists — treat this as a new user.
+- **New user** (`workspaceCount <= 1`, or `workspaceCount === 0` with an active workspace) — give the full walkthrough with explanations of key concepts. These users need context on what Vibez1 is and what it can do. Note: in some runtime modes `workspace.list()` may return an empty array even when an active workspace exists — treat this as a new user.
 - **Returning user** (`workspaceCount > 1`) — skip the overview, be succinct, and ask what they need help with. They already know the basics.
 
 ## Typical Onboarding Flow
 
 The template onboarding chat panel loads `skills/onboarding/ActionBar.tsx` through
-`actionBarFile` in `meta/natstack.yml`, so the first setup actions are available
+`actionBarFile` in `meta/vibez1.yml`, so the first setup actions are available
 before the agent sends its first message. Treat action bar clicks as the user's
 chosen setup path.
 

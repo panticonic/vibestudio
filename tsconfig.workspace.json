@@ -28,34 +28,34 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@natstack/browser-data": [
+      "@vibez1/browser-data": [
         "packages/browser-data/src/index.ts"
       ],
-      "@natstack/browser-data/client": [
+      "@vibez1/browser-data/client": [
         "packages/browser-data/src/client.ts"
       ],
-      "@natstack/dev-log": [
+      "@vibez1/dev-log": [
         "packages/dev-log/src/index.ts"
       ],
-      "@natstack/durable": [
+      "@vibez1/durable": [
         "packages/durable/src/index.ts"
       ],
-      "@natstack/durable/test-utils": [
+      "@vibez1/durable/test-utils": [
         "packages/durable/src/test-utils.ts"
       ],
-      "@natstack/env-paths": [
+      "@vibez1/env-paths": [
         "packages/env-paths/src/index.ts"
       ],
-      "@natstack/extension": [
+      "@vibez1/extension": [
         "packages/extension/src/index.ts"
       ],
-      "@natstack/extension-host": [
+      "@vibez1/extension-host": [
         "packages/extension-host/src/index.ts"
       ],
-      "@natstack/extension-host/child-runtime": [
+      "@vibez1/extension-host/child-runtime": [
         "packages/extension-host/src/childRuntime.ts"
       ],
-      "@natstack/git": [
+      "@vibez1/git": [
         "packages/git/src/index.ts"
       ],
       "@workspace/*": [
@@ -67,28 +67,28 @@
       "@workspace/*/types": [
         "workspace/packages/*/src/types.ts"
       ],
-      "@natstack/port-utils": [
+      "@vibez1/port-utils": [
         "packages/port-utils/src/index.ts"
       ],
-      "@natstack/process-adapter": [
+      "@vibez1/process-adapter": [
         "packages/process-adapter/src/index.ts"
       ],
-      "@natstack/rpc": [
+      "@vibez1/rpc": [
         "packages/rpc/src/index.ts"
       ],
-      "@natstack/rpc/*": [
+      "@vibez1/rpc/*": [
         "packages/rpc/src/*"
       ],
-      "@natstack/shared/*": [
+      "@vibez1/shared/*": [
         "packages/shared/src/*"
       ],
-      "@natstack/typecheck": [
+      "@vibez1/typecheck": [
         "packages/typecheck/src/index.ts"
       ],
-      "@natstack/unit-host": [
+      "@vibez1/unit-host": [
         "packages/unit-host/src/index.ts"
       ],
-      "@natstack/types": [
+      "@vibez1/types": [
         "packages/types/src/index.ts"
       ],
       "@workspace-about/about": [

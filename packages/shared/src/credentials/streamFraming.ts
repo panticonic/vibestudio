@@ -13,11 +13,11 @@ export {
   parseEndFrame,
   parseErrorFrame,
   decodeFramedResponseToStreaming,
-} from "@natstack/rpc/protocol/streamCodec";
+} from "@vibez1/rpc/protocol/streamCodec";
 
 export type {
   FrameType,
   HeadFramePayload,
   EndFramePayload,
   ErrorFramePayload,
-} from "@natstack/rpc/protocol/streamCodec";
+} from "@vibez1/rpc/protocol/streamCodec";

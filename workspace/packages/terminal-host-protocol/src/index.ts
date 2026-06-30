@@ -3,7 +3,7 @@
  *
  * Typed protocol between the trusted terminal-browser host app and sandboxed
  * terminal session workers (DOs). Transport is the existing bidirectional RPC
- * (`@natstack/rpc`): the host exposes the `HOST_METHODS` and the worker exposes
+ * (`@vibez1/rpc`): the host exposes the `HOST_METHODS` and the worker exposes
  * the `SESSION_METHODS`; each calls the other by target id. Workers cannot
  * expose *streaming* RPC, so terminal output is delivered as ordered discrete
  * `terminal.onFrame` calls (frames are small — Ink only redraws changed lines).

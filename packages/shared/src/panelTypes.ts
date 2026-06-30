@@ -23,7 +23,7 @@ export type LoadedPanelManifest = PackageManifest & { title: string };
  *
  * The TypeScript type (`PackageManifest`) is shared with workers, so all fields
  * are optional. This loader enforces panel-specific runtime requirements: a
- * `natstack` block must exist and `title` must be set. It also merges top-level
+ * `vibez1` block must exist and `title` must be set. It also merges top-level
  * `dependencies` into the manifest for the panel runtime's downstream use.
  */
 export function loadPanelManifest(panelPath: string): LoadedPanelManifest {
@@ -39,17 +39,17 @@ export function loadPanelManifest(panelPath: string): LoadedPanelManifest {
   const packageContent = fs.readFileSync(packageJsonPath, "utf-8");
   const packageJson = JSON.parse(packageContent) as Record<string, unknown>;
 
-  if (!packageJson["natstack"]) {
-    throw new Error(`package.json in ${panelPath} must include a 'natstack' field`);
+  if (!packageJson["vibez1"]) {
+    throw new Error(`package.json in ${panelPath} must include a 'vibez1' field`);
   }
 
-  const manifest = packageJson["natstack"] as PackageManifest;
+  const manifest = packageJson["vibez1"] as PackageManifest;
 
   if (!manifest.title) {
-    throw new Error("natstack.title must be specified in package.json");
+    throw new Error("vibez1.title must be specified in package.json");
   }
 
-  // Merge package.json dependencies with natstack.dependencies
+  // Merge package.json dependencies with vibez1.dependencies
   const pkgDeps = packageJson["dependencies"] as Record<string, string> | undefined;
   if (pkgDeps) {
     manifest.dependencies = {

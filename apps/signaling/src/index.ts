@@ -1,5 +1,5 @@
 /**
- * NatStack signaling server (Cloudflare Worker + Durable Object).
+ * Vibez1 signaling server (Cloudflare Worker + Durable Object).
  *
  * A deliberately dumb, UUID-addressed WebRTC rendezvous: it blind-relays SDP/ICE
  * between two peers and mints short-lived TURN credentials per session. Security

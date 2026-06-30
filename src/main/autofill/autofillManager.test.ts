@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 
 // Mock Electron before importing AutofillManager
 vi.mock("electron", () => ({
@@ -39,7 +39,7 @@ vi.mock("./autofillOverlay.js", () => ({
 }));
 
 // Mock dev logger
-vi.mock("@natstack/dev-log", () => ({
+vi.mock("@vibez1/dev-log", () => ({
   createDevLogger: () => ({
     verbose: vi.fn(),
     info: vi.fn(),
@@ -49,8 +49,8 @@ vi.mock("@natstack/dev-log", () => ({
 }));
 
 import { AutofillManager } from "./autofillManager.js";
-import type { StoredPassword } from "@natstack/browser-data";
-import type { EventService } from "@natstack/shared/eventsService";
+import type { StoredPassword } from "@vibez1/browser-data";
+import type { EventService } from "@vibez1/shared/eventsService";
 import type { ViewManager } from "../viewManager.js";
 import type { WebContents } from "electron";
 

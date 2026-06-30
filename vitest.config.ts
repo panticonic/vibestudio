@@ -4,7 +4,7 @@ import { readFileSync } from "fs";
 import type { Alias } from "vite";
 
 // Read workspace tsconfig paths and convert to vitest aliases.
-// This is the single source of truth for resolving workspace/natstack
+// This is the single source of truth for resolving workspace/vibez1
 // package imports to source .ts files — no dist needed.
 const workspaceTsconfig = JSON.parse(
   readFileSync(path.resolve(__dirname, "tsconfig.workspace.json"), "utf-8"),

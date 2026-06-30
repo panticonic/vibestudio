@@ -4,7 +4,7 @@ import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EventName, EventPayloads, NotificationPayload } from "@natstack/shared/events";
+import type { EventName, EventPayloads, NotificationPayload } from "@vibez1/shared/events";
 
 const shellClient = vi.hoisted(() => ({
   applyUpdate: vi.fn(() => Promise.resolve({ applied: true })),

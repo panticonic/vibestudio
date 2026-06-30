@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AuthenticatedCaller } from "@natstack/rpc";
+import type { AuthenticatedCaller } from "@vibez1/rpc";
 import { isBrowserDataDirectCaller } from "./browserDataDO.js";
 
 /**

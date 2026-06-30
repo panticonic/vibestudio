@@ -21,9 +21,9 @@ function normalizeSignalContent(contentType: string | undefined, content: string
   if (contentType === "inline_ui") return null;
   // Agentic transcript events (streaming deltas) ride the signal channel but
   // belong to the transcript reducer; thinking pills arrive separately as
-  // `natstack-ext-working` signals from the agent vessel.
+  // `vibez1-ext-working` signals from the agent vessel.
   if (contentType === "agentic.trajectory.v1/event") return null;
-  if (contentType !== "natstack-ext-working") return content;
+  if (contentType !== "vibez1-ext-working") return content;
   try {
     const parsed = JSON.parse(content) as { message?: unknown };
     if (parsed.message == null || parsed.message === "") return null;

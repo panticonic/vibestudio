@@ -21,10 +21,10 @@ import { themeColorsAtom } from "../state/themeAtoms";
 import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms";
 import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PanelTreeItem, type FlatPanelItem } from "./PanelTreeItem";
-import type { Panel } from "@natstack/shared/types";
-import { buildPanelChromeState, isBrowserPanelSource } from "@natstack/shared/panelChrome";
-import { getAvailablePanelCommands, type PanelCommandId } from "@natstack/shared/panelCommands";
-import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
+import type { Panel } from "@vibez1/shared/types";
+import { buildPanelChromeState, isBrowserPanelSource } from "@vibez1/shared/panelChrome";
+import { getAvailablePanelCommands, type PanelCommandId } from "@vibez1/shared/panelCommands";
+import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
 
 interface PanelDrawerProps {

@@ -9,7 +9,7 @@ as a **real WebRTC answerer**, and a **CLI-shaped client** dials it over a real
 
 ```bash
 pnpm rebuild node-datachannel   # one-time: build the native N-API binary
-pnpm test:webrtc-e2e            # NATSTACK_RUN_WEBRTC_E2E=1 vitest run tests/webrtc-*.e2e.test.ts
+pnpm test:webrtc-e2e            # VIBEZ1_RUN_WEBRTC_E2E=1 vitest run tests/webrtc-*.e2e.test.ts
 ```
 
 Two suites run:
@@ -46,11 +46,11 @@ Both complete in a few seconds after `wrangler dev` boots (~3 s, Miniflare).
 | Piece | Where |
 | --- | --- |
 | Signaling DO + `wrangler dev` | `apps/signaling/` (Miniflare-local) |
-| Signaling client | `@natstack/rpc/transports/webrtcSignalingClient` (`ws` in Node) |
+| Signaling client | `@vibez1/rpc/transports/webrtcSignalingClient` (`ws` in Node) |
 | Native peer adapter | `src/main/webrtc/nodeDatachannelPeer.ts` (lazy-loads `node-datachannel`) |
 | Persistent DTLS cert | `src/main/webrtc/cert.ts` (`ensurePersistentCert` → stable QR `fp`) |
-| Client transport | `@natstack/rpc/transports/webrtcClient` |
-| Server answerer pipe | `@natstack/rpc/transports/webrtcAnswerer` |
+| Client transport | `@vibez1/rpc/transports/webrtcClient` |
+| Server answerer pipe | `@vibez1/rpc/transports/webrtcAnswerer` |
 | Server attach | `RpcServer.attachWebRtcPipe` + `src/server/webrtcSessionShim.ts` |
 | CLI WebRTC client | `src/cli/webrtcClient.ts` (`WebRtcRpcClient`, same API as the HTTP client) |
 | Server bootstrap | `src/server/webrtcAnswererBootstrap.ts` (wired env-gated in `index.ts`) |
@@ -58,22 +58,22 @@ Both complete in a few seconds after `wrangler dev` boots (~3 s, Miniflare).
 ## Running the REAL server as a WebRTC answerer
 
 The server answerer is **off by default** (loopback co-located mode is unchanged).
-Activate it by setting `NATSTACK_WEBRTC_SIGNAL_URL`:
+Activate it by setting `VIBEZ1_WEBRTC_SIGNAL_URL`:
 
 ```bash
 # 1. local signaling (Cloudflare local runtime)
 cd apps/signaling && wrangler dev --port 8787 --local &
 
 # 2. the server, as an answerer
-NATSTACK_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 \
-NATSTACK_WEBRTC_ROOM=$(uuidgen) \
-NATSTACK_PAIRING_CODE=$(openssl rand -base64 18 | tr -d '=+/' | head -c 24) \
+VIBEZ1_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 \
+VIBEZ1_WEBRTC_ROOM=$(uuidgen) \
+VIBEZ1_PAIRING_CODE=$(openssl rand -base64 18 | tr -d '=+/' | head -c 24) \
   pnpm server
-# → logs:  [webrtc-answerer] pairing link: natstack://connect?room=…&fp=…&code=…&sig=…
+# → logs:  [webrtc-answerer] pairing link: vibez1://connect?room=…&fp=…&code=…&sig=…
 ```
 
-Optional env: `NATSTACK_WEBRTC_CERT` / `NATSTACK_WEBRTC_KEY` (cert paths, default
-`<appRoot>/.natstack/webrtc/server.{pem,key}`), `NATSTACK_WEBRTC_ICE=relay` (force
+Optional env: `VIBEZ1_WEBRTC_CERT` / `VIBEZ1_WEBRTC_KEY` (cert paths, default
+`<appRoot>/.vibez1/webrtc/server.{pem,key}`), `VIBEZ1_WEBRTC_ICE=relay` (force
 TURN). The server presents the persistent cert; its SHA-256 is the published `fp`.
 
 ## Running the desktop app through local WebRTC
@@ -88,7 +88,7 @@ pnpm dev:webrtc
 
 The wrapper builds like `pnpm dev`, starts `wrangler dev apps/signaling`, starts a
 local workspace server as the WebRTC answerer, then launches Electron with the
-fresh `natstack://connect` link. It passes `--skip-remote-pairing` so saved remote
+fresh `vibez1://connect` link. It passes `--skip-remote-pairing` so saved remote
 credentials cannot steal the launch, and disables persistence for the fresh dev
 pairing so the next normal `pnpm dev` remains local.
 
@@ -100,7 +100,7 @@ the HTTP `RpcClient`, so existing `typedClient(...)` commands work unchanged:
 
 ```ts
 import { WebRtcRpcClient } from "./webrtcClient.js";
-import { parseConnectLink } from "@natstack/shared/connect";
+import { parseConnectLink } from "@vibez1/shared/connect";
 
 const parsed = parseConnectLink(pairingLink);            // room/fp/sig/code
 if (parsed.kind !== "ok") throw new Error(parsed.reason);

@@ -20,12 +20,9 @@
 
 import * as http from "node:http";
 import { Readable } from "node:stream";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import type { ServerClient } from "./serverClient.js";
-import {
-  FORWARD_REQUEST_HEADERS,
-  STRIP_RESPONSE_HEADERS,
-} from "@natstack/shared/panel/assetHeaders";
+import { FORWARD_REQUEST_HEADERS, STRIP_RESPONSE_HEADERS } from "@vibez1/shared/panel/assetHeaders";
 
 const log = createDevLogger("PanelAssetFacade");
 

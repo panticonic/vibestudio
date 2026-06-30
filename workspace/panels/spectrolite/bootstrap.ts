@@ -9,7 +9,7 @@
 import { rpc } from "@workspace/runtime";
 import { parseDoTargetId } from "@workspace/runtime/workerd-client";
 
-const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
+const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
 
 export interface InstalledAgentRecord {
   agentId: string;

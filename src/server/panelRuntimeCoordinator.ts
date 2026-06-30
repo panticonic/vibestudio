@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { EventService } from "@natstack/shared/eventsService";
+import type { EventService } from "@vibez1/shared/eventsService";
 import type {
   ClientSession,
   PanelHostRegistration,
@@ -9,14 +9,14 @@ import type {
   PanelRuntimeLeaseChangedReason,
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
-} from "@natstack/shared/panel/panelLease";
+} from "@vibez1/shared/panel/panelLease";
 import {
   asPanelEntityId,
   asPanelSlotId,
   isPanelEntityId,
   isPanelSlotId,
-} from "@natstack/shared/panel/ids";
-import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
+} from "@vibez1/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibez1/shared/panel/ids";
 
 const LEASE_RECONNECT_GRACE_MS = 3000;
 

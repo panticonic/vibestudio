@@ -1,4 +1,4 @@
-import type { AppCapability } from "@natstack/shared/unitManifest";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 
 let approvedCapabilities = new Set<AppCapability>();
 

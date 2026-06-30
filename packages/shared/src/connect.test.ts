@@ -51,13 +51,13 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     }
   });
 
-  it("does not rely on URL support for the natstack custom scheme (RN/Hermes)", () => {
-    // The parser must NOT call new URL() on a natstack: link. Simulate a runtime
+  it("does not rely on URL support for the vibez1 custom scheme (RN/Hermes)", () => {
+    // The parser must NOT call new URL() on a vibez1: link. Simulate a runtime
     // where URL throws for the custom scheme; parsing must still succeed (it only
-    // URL-parses the real `sig` endpoint, never the natstack: link itself).
+    // URL-parses the real `sig` endpoint, never the vibez1: link itself).
     const RealURL = URL;
     function StubURL(this: unknown, input: string | URL, base?: string | URL): URL {
-      if (String(input).startsWith("natstack:")) throw new Error("URL protocol not implemented");
+      if (String(input).startsWith("vibez1:")) throw new Error("URL protocol not implemented");
       return base === undefined ? new RealURL(input) : new RealURL(input, base);
     }
     const original = globalThis.URL;
@@ -70,8 +70,8 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
   });
 
   it("rejects a link missing required params", () => {
-    expect(parseConnectLink("natstack://connect?room=abcdefgh&fp=" + FP).kind).toBe("error");
-    expect(parseConnectLink("natstack://connect?room=abcdefgh").kind).toBe("error");
+    expect(parseConnectLink("vibez1://connect?room=abcdefgh&fp=" + FP).kind).toBe("error");
+    expect(parseConnectLink("vibez1://connect?room=abcdefgh").kind).toBe("error");
   });
 
   it("rejects a fingerprint that is not a SHA-256", () => {
@@ -160,7 +160,7 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     it("rejects the same malformed links the shared parser rejects", async () => {
       const mirror = await loadMirror();
       for (const bad of [
-        "natstack://connect?room=abcdefgh&fp=" + FP,
+        "vibez1://connect?room=abcdefgh&fp=" + FP,
         createConnectDeepLink({ ...PAIR, fp: "DE:AD:BE:EF" }),
         createConnectDeepLink({ ...PAIR, code: "short" }),
         createConnectDeepLink({ ...PAIR, sig: "ws://signal.example/" }),

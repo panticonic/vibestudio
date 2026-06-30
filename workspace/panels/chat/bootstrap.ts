@@ -46,7 +46,7 @@ export interface BuildAgentSubscriptionConfigOptions {
   globalConfig?: Record<string, unknown>;
   perAgentConfig?: Record<string, unknown>;
   systemPrompt?: string;
-  systemPromptMode?: "append" | "replace-natstack" | "replace";
+  systemPromptMode?: "append" | "replace-vibez1" | "replace";
 }
 
 /**

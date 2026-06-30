@@ -14,7 +14,7 @@ make — all mechanical, none semantic:
 2. `harness/types.ts`: barrel import `../index.ts` → `../types.ts` (the
    upstream barrel re-exports excluded runtime modules), and the
    `AgentHarness` re-export removed (agent-harness.ts not vendored). Both
-   patch sites carry `NatStack vendoring patch` comments.
+   patch sites carry `Vibez1 vendoring patch` comments.
 3. A `// @ts-nocheck` banner per file: upstream compiles under its own
    tsconfig (ES2022 lib, without this repo's `noUncheckedIndexedAccess` /
    `noPropertyAccessFromIndexSignature`); the pinned sources are typechecked

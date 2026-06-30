@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EventService } from "@natstack/shared/eventsService";
+import type { EventService } from "@vibez1/shared/eventsService";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 
 describe("PanelRuntimeCoordinator", () => {

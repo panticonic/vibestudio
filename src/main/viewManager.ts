@@ -29,15 +29,15 @@ import {
   webContents as electronWebContents,
 } from "electron";
 
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { ShellOverlayView, type ShellOverlayOptions } from "./shellOverlayView.js";
 import {
   ShellContentOverlayView,
   type ContentOverlayShowOptions,
   type ContentOverlayUpdateOptions,
 } from "./shellContentOverlayView.js";
-import type { AppCapability } from "@natstack/shared/unitManifest";
-import { isAuthorizedChromeAppCaller } from "@natstack/shared/chromeTrust";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
+import { isAuthorizedChromeAppCaller } from "@vibez1/shared/chromeTrust";
 
 const log = createDevLogger("ViewManager");
 
@@ -289,7 +289,7 @@ export class ViewManager {
         // the address bar — the hosted shell app view when ready, otherwise the
         // bootstrap shell. Sending only to the bootstrap shell meant clicks were
         // silently dropped while the hosted shell was active.
-        this.getShellChromeWebContents()?.send("natstack:shell-overlay:event", event);
+        this.getShellChromeWebContents()?.send("vibez1:shell-overlay:event", event);
       }
     );
     this.nativeShellOverlay.setWindow(this.window);
@@ -300,7 +300,7 @@ export class ViewManager {
         return wc && !wc.isDestroyed() ? wc.getURL() : null;
       },
       (payload) => {
-        this.getShellChromeWebContents()?.send("natstack:content-overlay:forward", payload);
+        this.getShellChromeWebContents()?.send("vibez1:content-overlay:forward", payload);
       }
     );
     this.shellContentOverlay.setWindow(this.window);

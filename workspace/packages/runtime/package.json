@@ -1,11 +1,11 @@
 {
   "name": "@workspace/runtime",
   "version": "0.1.0-git.dfc926d-dirty.2482fc2becd1",
-  "description": "Unified runtime for NatStack panels and workers",
+  "description": "Unified runtime for Vibez1 panels and workers",
   "type": "module",
   "exports": {
     ".": {
-      "natstack-panel": "./src/panel/index.ts",
+      "vibez1-panel": "./src/panel/index.ts",
       "worker": "./src/worker/index.ts",
       "workerd": "./src/worker/index.ts",
       "default": "./src/panel/index.ts"
@@ -26,12 +26,12 @@
     "./internal/diagnostics": "./src/internal/diagnostics.ts"
   },
   "dependencies": {
-    "@natstack/extension": "workspace:*",
-    "@natstack/git": "workspace:*",
+    "@vibez1/extension": "workspace:*",
+    "@vibez1/git": "workspace:*",
     "@workspace/harness": "workspace:*",
-    "@natstack/rpc": "workspace:*",
-    "@natstack/shared": "workspace:*",
-    "@natstack/types": "workspace:*",
+    "@vibez1/rpc": "workspace:*",
+    "@vibez1/shared": "workspace:*",
+    "@vibez1/types": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/cdp-client": "workspace:*",
     "buffer": "^6.0.3",

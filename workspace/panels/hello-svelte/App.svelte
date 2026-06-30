@@ -16,7 +16,7 @@
   <header>
     <h1>Hello, Svelte 5 👋</h1>
     <p class="subtitle">
-      A NatStack panel rendered with the neutral <code>@workspace/runtime</code>
+      A Vibez1 panel rendered with the neutral <code>@workspace/runtime</code>
       under Svelte — bundled by the <code>esbuild-svelte</code> framework adapter.
     </p>
   </header>

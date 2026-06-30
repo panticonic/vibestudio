@@ -6,21 +6,21 @@ import { isManagedHost, parsePanelUrl } from "./urlParsing.js";
 // ---------------------------------------------------------------------------
 
 describe("isManagedHost()", () => {
-  const host = "natstack.example.com";
+  const host = "vibez1.example.com";
 
   it("returns true for exact host match", () => {
-    expect(isManagedHost("https://natstack.example.com/path", host)).toBe(true);
+    expect(isManagedHost("https://vibez1.example.com/path", host)).toBe(true);
   });
 
   it("matches exact host regardless of port", () => {
     expect(
-      isManagedHost("https://natstack.example.com:8080/path", host)
+      isManagedHost("https://vibez1.example.com:8080/path", host)
     ).toBe(true);
   });
 
   it("returns false for subdomains", () => {
     expect(
-      isManagedHost("https://sub.natstack.example.com:3000/path", host)
+      isManagedHost("https://sub.vibez1.example.com:3000/path", host)
     ).toBe(false);
   });
 
@@ -30,7 +30,7 @@ describe("isManagedHost()", () => {
 
   it("returns false for partial hostname match that is not a subdomain", () => {
     expect(
-      isManagedHost("https://evilnatstack.example.com/path", host)
+      isManagedHost("https://evilvibez1.example.com/path", host)
     ).toBe(false);
   });
 
@@ -43,16 +43,16 @@ describe("isManagedHost()", () => {
   });
 
   it("works with http scheme", () => {
-    expect(isManagedHost("http://natstack.example.com/", host)).toBe(true);
+    expect(isManagedHost("http://vibez1.example.com/", host)).toBe(true);
   });
 });
 
 describe("parsePanelUrl()", () => {
-  const host = "natstack.example.com";
+  const host = "vibez1.example.com";
 
   it("parses a basic panel URL with source path", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat",
+      "https://vibez1.example.com/panels/chat",
       host
     );
 
@@ -66,7 +66,7 @@ describe("parsePanelUrl()", () => {
 
   it("parses URL with contextId query param", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?contextId=ctx-123",
+      "https://vibez1.example.com/panels/chat?contextId=ctx-123",
       host
     );
 
@@ -78,7 +78,7 @@ describe("parsePanelUrl()", () => {
 
   it("parses URL with name query param", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?name=My%20Panel",
+      "https://vibez1.example.com/panels/chat?name=My%20Panel",
       host
     );
 
@@ -88,7 +88,7 @@ describe("parsePanelUrl()", () => {
 
   it("parses URL with focus=true query param", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?focus=true",
+      "https://vibez1.example.com/panels/chat?focus=true",
       host
     );
 
@@ -98,7 +98,7 @@ describe("parsePanelUrl()", () => {
 
   it("does not set focus for focus=false", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?focus=false",
+      "https://vibez1.example.com/panels/chat?focus=false",
       host
     );
 
@@ -109,7 +109,7 @@ describe("parsePanelUrl()", () => {
   it("parses URL with valid stateArgs JSON", () => {
     const stateArgs = JSON.stringify({ key: "value", count: 42 });
     const result = parsePanelUrl(
-      `https://natstack.example.com/panels/chat?stateArgs=${encodeURIComponent(stateArgs)}`,
+      `https://vibez1.example.com/panels/chat?stateArgs=${encodeURIComponent(stateArgs)}`,
       host
     );
 
@@ -119,7 +119,7 @@ describe("parsePanelUrl()", () => {
 
   it("handles invalid stateArgs JSON gracefully", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?stateArgs=not-json",
+      "https://vibez1.example.com/panels/chat?stateArgs=not-json",
       host
     );
 
@@ -133,18 +133,18 @@ describe("parsePanelUrl()", () => {
   });
 
   it("returns null for URL without two-segment path", () => {
-    const result = parsePanelUrl("https://natstack.example.com/single", host);
+    const result = parsePanelUrl("https://vibez1.example.com/single", host);
     expect(result).toBeNull();
   });
 
   it("returns null for root path", () => {
-    const result = parsePanelUrl("https://natstack.example.com/", host);
+    const result = parsePanelUrl("https://vibez1.example.com/", host);
     expect(result).toBeNull();
   });
 
   it("returns null for URL with trailing path segments", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat/extra/segment",
+      "https://vibez1.example.com/panels/chat/extra/segment",
       host
     );
     expect(result).toBeNull();
@@ -152,7 +152,7 @@ describe("parsePanelUrl()", () => {
 
   it("returns null when _bk param is present", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?_bk=true",
+      "https://vibez1.example.com/panels/chat?_bk=true",
       host
     );
     expect(result).toBeNull();
@@ -160,7 +160,7 @@ describe("parsePanelUrl()", () => {
 
   it("returns null when pid param is present", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?pid=abc",
+      "https://vibez1.example.com/panels/chat?pid=abc",
       host
     );
     expect(result).toBeNull();
@@ -168,7 +168,7 @@ describe("parsePanelUrl()", () => {
 
   it("returns null when _fresh param is present", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?_fresh=1",
+      "https://vibez1.example.com/panels/chat?_fresh=1",
       host
     );
     expect(result).toBeNull();
@@ -181,7 +181,7 @@ describe("parsePanelUrl()", () => {
 
   it("returns null for subdomain URLs", () => {
     const result = parsePanelUrl(
-      "https://sub.natstack.example.com/panels/chat",
+      "https://sub.vibez1.example.com/panels/chat",
       host
     );
 
@@ -190,7 +190,7 @@ describe("parsePanelUrl()", () => {
 
   it("parses URL with multiple query params", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat?contextId=ctx-1&name=Test&focus=true",
+      "https://vibez1.example.com/panels/chat?contextId=ctx-1&name=Test&focus=true",
       host
     );
 
@@ -202,7 +202,7 @@ describe("parsePanelUrl()", () => {
 
   it("returns null for URL with trailing slash on a 3-segment path", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat/extra/",
+      "https://vibez1.example.com/panels/chat/extra/",
       host
     );
     expect(result).toBeNull();
@@ -210,7 +210,7 @@ describe("parsePanelUrl()", () => {
 
   it("accepts URL with trailing slash on two-segment path", () => {
     const result = parsePanelUrl(
-      "https://natstack.example.com/panels/chat/",
+      "https://vibez1.example.com/panels/chat/",
       host
     );
 

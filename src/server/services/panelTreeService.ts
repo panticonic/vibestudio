@@ -1,7 +1,7 @@
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
-import type { PanelAccessOperation } from "@natstack/shared/panelAccessPolicy";
-import { panelTreeMethods } from "@natstack/shared/serviceSchemas/panelTree";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import type { PanelAccessOperation } from "@vibez1/shared/panelAccessPolicy";
+import { panelTreeMethods } from "@vibez1/shared/serviceSchemas/panelTree";
 import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,

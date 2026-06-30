@@ -84,7 +84,7 @@ export function TerminalChatApp({ vm }: TerminalChatAppProps): React.ReactElemen
   return (
     <Box flexDirection="column">
       <Box>
-        <Text bold>NatStack Chat</Text>
+        <Text bold>Vibez1 Chat</Text>
         <Text dimColor>{`  (agent: ${status})`}</Text>
         {scrolledUp ? (
           <Text color="yellow">{`   ↑ history (${effectiveEnd}/${len}) · PgDn to latest`}</Text>

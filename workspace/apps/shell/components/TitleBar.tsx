@@ -48,7 +48,7 @@ import type {
   PanelAncestor,
   DescendantSiblingGroup,
 } from "./navigationTypes";
-import type { PanelContextMenuAction } from "@natstack/shared/types";
+import type { PanelContextMenuAction } from "@vibez1/shared/types";
 import {
   buildAddressAutocompleteItems,
   type AddressAutocompleteItem,
@@ -57,8 +57,8 @@ import {
   type PanelAddressOptions,
   type PanelChromeState,
   type PanelSourceSuggestion,
-} from "@natstack/shared/panelChrome";
-import { getAddressNavigationModeFromModifiers } from "@natstack/shared/panelCommands";
+} from "@vibez1/shared/panelChrome";
+import { getAddressNavigationModeFromModifiers } from "@vibez1/shared/panelCommands";
 import {
   menu,
   panel,

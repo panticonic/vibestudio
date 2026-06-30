@@ -1,5 +1,5 @@
 /**
- * Type definition loader for NatStack type checking.
+ * Type definition loader for Vibez1 type checking.
  *
  * This module loads .d.ts files from node_modules directories, resolving
  * package entry points via package.json "types" fields and following imports.

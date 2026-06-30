@@ -19,7 +19,7 @@ import {
   CONTENT_SECTIONS,
   FLAT_SECTIONS,
   isFlatSection,
-} from "@natstack/shared/runtime/entitySpec";
+} from "@vibez1/shared/runtime/entitySpec";
 
 export type RepoKind = "build-unit" | "content" | "meta";
 
@@ -54,6 +54,6 @@ export function discoverRepos(filePaths: string[]): DiscoveredRepo[] {
   return [...repos.values()].sort((a, b) => a.repoPath.localeCompare(b.repoPath));
 }
 
-// Re-export the canonical taxonomy (defined in @natstack/shared/runtime/entitySpec)
+// Re-export the canonical taxonomy (defined in @vibez1/shared/runtime/entitySpec)
 // so existing `./repoDiscovery.js` importers keep working unchanged.
 export { CONTAINER_SECTIONS, CONTENT_SECTIONS, FLAT_SECTIONS, isFlatSection };

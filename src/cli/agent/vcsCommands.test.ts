@@ -63,7 +63,7 @@ function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequ
 }
 
 function writeCredentials(tmpDir: string): void {
-  const dir = path.join(tmpDir, ".config", "natstack");
+  const dir = path.join(tmpDir, ".config", "vibez1");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
@@ -79,7 +79,7 @@ function writeCredentials(tmpDir: string): void {
 }
 
 function writeSession(tmpDir: string, name = "default"): void {
-  const dir = path.join(tmpDir, ".config", "natstack", "agent-sessions");
+  const dir = path.join(tmpDir, ".config", "vibez1", "agent-sessions");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `${name}.json`),
@@ -112,11 +112,11 @@ function withTtyStdout<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
-describe("natstack vcs commands", () => {
+describe("vibez1 vcs commands", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-vcs-cli-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-vcs-cli-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -354,7 +354,7 @@ describe("natstack vcs commands", () => {
     expect(
       errors.some((line) =>
         line.includes(
-          "Reconcile with `natstack vcs merge --repo REPOPATH`, then push. " +
+          "Reconcile with `vibez1 vcs merge --repo REPOPATH`, then push. " +
             "If the merge conflicts, resolve markers and commit before pushing."
         )
       )

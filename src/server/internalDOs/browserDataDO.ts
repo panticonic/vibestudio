@@ -1,6 +1,6 @@
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@natstack/durable";
-import type { AuthenticatedCaller } from "@natstack/rpc";
-import { BROWSER_DATA_SCHEMA } from "@natstack/browser-data";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibez1/durable";
+import type { AuthenticatedCaller } from "@vibez1/rpc";
+import { BROWSER_DATA_SCHEMA } from "@vibez1/browser-data";
 import type {
   ImportedAutofillEntry,
   ImportedBookmark,
@@ -15,12 +15,12 @@ import type {
   ImportedSearchEngine,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,
-} from "@natstack/browser-data";
+} from "@vibez1/browser-data";
 import { assertPresent } from "../../lintHelpers";
 
 const BATCH_SIZE = 1000;
 
-type HistoryVisitSource = "natstack" | "import";
+type HistoryVisitSource = "vibez1" | "import";
 
 interface HistoryVisitWrite {
   visitTime: number;
@@ -308,7 +308,7 @@ export class BrowserDataDO extends DurableObjectBase {
       visitTime,
       transition: request.transition ?? "link",
       typed: Boolean(request.typed),
-      source: request.source ?? "natstack",
+      source: request.source ?? "vibez1",
       panelId: request.panelId,
       title: request.title,
     });

@@ -6,7 +6,7 @@
  *
  * Features:
  * - Left: hamburger menu button to open the panel drawer
- * - Center: current panel title (or "NatStack" if no panel selected)
+ * - Center: current panel title (or "Vibez1" if no panel selected)
  * - Right: "+" button to create a new panel
  * - Uses safe area insets for status bar spacing
  */
@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
-import { splitTextByMatchRanges, type AddressAutocompleteItem, type TextMatchRange } from "@natstack/shared/panelChrome";
+import { splitTextByMatchRanges, type AddressAutocompleteItem, type TextMatchRange } from "@vibez1/shared/panelChrome";
 
 interface AppBarProps {
   /** Title to display in the center */

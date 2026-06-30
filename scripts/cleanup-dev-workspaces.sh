@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Remove ephemeral dev workspaces (dev-*) from the NatStack workspaces directory.
+# Remove ephemeral dev workspaces (dev-*) from the Vibez1 workspaces directory.
 # Usage: ./scripts/cleanup-dev-workspaces.sh [--dry-run]
 
 set -euo pipefail
 
-WORKSPACES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/natstack/workspaces"
+WORKSPACES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vibez1/workspaces"
 
 if [ ! -d "$WORKSPACES_DIR" ]; then
   echo "No workspaces directory found at $WORKSPACES_DIR"

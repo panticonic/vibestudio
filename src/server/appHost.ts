@@ -25,49 +25,49 @@ import {
   type UnitReconcileOptions,
   type UnitReconcileTrigger,
   type UnitRegistryEntryBase,
-} from "@natstack/unit-host";
-import type { EventService } from "@natstack/shared/eventsService";
-import type { EventName } from "@natstack/shared/events";
+} from "@vibez1/unit-host";
+import type { EventService } from "@vibez1/shared/eventsService";
+import type { EventName } from "@vibez1/shared/events";
 import {
   isAuthorizedChromeAppSource,
   isAuthorizedConnectionManagementAppSource,
   normalizeAppSourcePath,
-} from "@natstack/shared/chromeTrust";
+} from "@vibez1/shared/chromeTrust";
 import type {
   PendingApproval,
   PendingUnitBatchApproval,
   UnitBatchEntry,
-} from "@natstack/shared/approvals";
-import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import { filterBootstrapApprovalsForTarget } from "@natstack/shared/bootstrapApprovals";
+} from "@vibez1/shared/approvals";
+import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { filterBootstrapApprovalsForTarget } from "@vibez1/shared/bootstrapApprovals";
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredApps,
-} from "@natstack/shared/workspace/configParser";
+} from "@vibez1/shared/workspace/configParser";
 import {
   UnitManifestError,
   appUnitManifestDescriptor,
   readAndValidateUnitManifest,
   type AppCapability,
   type WorkspaceAppTarget,
-} from "@natstack/shared/unitManifest";
+} from "@vibez1/shared/unitManifest";
 import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetLaunchResult,
   HostTargetSelection,
   HostTargetSelectionInput,
-} from "@natstack/shared/hostTargets";
-import { appArtifactRoute, appArtifactUrl } from "@natstack/shared/appArtifacts";
-import type { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
+} from "@vibez1/shared/hostTargets";
+import { appArtifactRoute, appArtifactUrl } from "@vibez1/shared/appArtifacts";
+import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
 import type { BuildArtifactManifestEntry, BuildMetadata } from "./buildV2/buildStore.js";
 import {
   createCapabilityAuthorizer,
   type CapabilityAuthorizer,
 } from "./services/capabilityAuthorizer.js";
-import type { ConnectionGrantService } from "@natstack/shared/connectionGrants";
+import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
 import { TerminalAppRunner } from "./terminalAppRunner.js";
 
 const APP_UNIT_DESCRIPTOR: UnitDescriptor<"app"> = {
@@ -436,7 +436,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
           id: `apps-unresolved-${encodeURIComponent(sources.join(","))}`,
           type: "error",
           title: "Unknown apps declared",
-          message: `meta/natstack.yml declares apps that don't exist: ${sources.join(", ")}.`,
+          message: `meta/vibez1.yml declares apps that don't exist: ${sources.join(", ")}.`,
         });
       },
       validateBeforeApproval: (node) => this.validateAppManifestAtPath(node.path, node.name),
@@ -933,7 +933,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     if (!declared) {
       return {
         ready: false,
-        reason: "Terminal app is not declared in meta/natstack.yml",
+        reason: "Terminal app is not declared in meta/vibez1.yml",
         details: [`Declare ${candidate.source} under apps: before terminal clients can launch.`],
       };
     }
@@ -1298,7 +1298,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         ready: false,
         source: candidate.source,
         appId: candidate.name,
-        reason: "React Native app is not declared in meta/natstack.yml",
+        reason: "React Native app is not declared in meta/vibez1.yml",
         details: [`Declare ${candidate.source} under apps: before mobile clients can pair.`],
       };
     }
@@ -1412,7 +1412,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         ready: false,
         source: candidate.source,
         appId: candidate.name,
-        reason: "Electron app is not declared in meta/natstack.yml",
+        reason: "Electron app is not declared in meta/vibez1.yml",
         details: [`Declare ${candidate.source} under apps: before desktop clients can pair.`],
       };
     }
@@ -1439,7 +1439,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
                       : ""
                   }`
               )
-            : ["No apps with natstack.app.target: electron were found."],
+            : ["No apps with vibez1.app.target: electron were found."],
       };
     }
 
@@ -1520,7 +1520,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
                       : ""
                   }`
               )
-            : ["No apps with natstack.app.target: react-native were found."],
+            : ["No apps with vibez1.app.target: react-native were found."],
       };
     }
     const normalizedSource = normalizeRepoPath(resolvedSource);
@@ -2536,7 +2536,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
 
   private async readDeclaredAppsFromCommit(commit: string): Promise<WorkspaceAppDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/natstack.yml");
+      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibez1.yml");
       if (!content) return [];
       return resolveDeclaredApps(parseWorkspaceConfigContentWithId(content, this.deps.workspaceId));
     } catch {
@@ -2565,7 +2565,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const manifestTarget = node.manifest.app?.target;
     if (!manifestTarget) {
       throw new UnitManifestError(
-        `App ${node.name} manifest must declare natstack.app.target`,
+        `App ${node.name} manifest must declare vibez1.app.target`,
         "MANIFEST_APP_TARGET"
       );
     }
@@ -2991,7 +2991,7 @@ function readPackageVersion(nodePath: string): string {
 }
 
 function appDevDiagnosticsEnabled(): boolean {
-  const override = process.env["NATSTACK_APP_DEV_STATUS"];
+  const override = process.env["VIBEZ1_APP_DEV_STATUS"];
   if (override === "0" || override === "false") return false;
   if (override === "1" || override === "true") return true;
   return process.env["NODE_ENV"] === "development";

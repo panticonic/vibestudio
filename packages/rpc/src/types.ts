@@ -91,7 +91,7 @@ export interface RpcStreamRequest {
 
 /**
  * One frame of a streaming RPC response. `frameType` is one of the
- * codes from `@natstack/shared/credentials/streamFraming`
+ * codes from `@vibez1/shared/credentials/streamFraming`
  * (0x01 HEAD, 0x02 DATA, 0x03 END, 0x04 ERROR). DATA payloads are
  * base64-encoded so binary content survives JSON-over-WS / IPC
  * transport. HEAD/END/ERROR payloads are JSON strings.
@@ -207,7 +207,7 @@ export type CallerKind =
 
 /**
  * Frame yielded by a streaming method handler. Mirrors the wire frame
- * format defined in `@natstack/rpc/protocol/streamCodec` but
+ * format defined in `@vibez1/rpc/protocol/streamCodec` but
  * uses runtime types (Uint8Array for DATA, structured objects for
  * HEAD/END/ERROR) — the client serializes them when sending across
  * the wire.
@@ -466,7 +466,7 @@ export interface RpcClient {
 // =============================================================================
 
 /**
- * Services that are owned by Electron main instead of the NatStack server.
+ * Services that are owned by Electron main instead of the Vibez1 server.
  *
  * Unknown service names intentionally default to the server path. This keeps
  * userland and workerd-backed services callable without touching a central RPC

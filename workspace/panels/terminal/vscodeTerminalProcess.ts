@@ -51,7 +51,7 @@ export type VscodeTerminalProcessBridgeOptions = {
 };
 
 /**
- * Natstack connectivity adapter for VS Code's terminal process-manager role.
+ * vibez1 connectivity adapter for VS Code's terminal process-manager role.
  *
  * VS Code's `TerminalProcessManager` cannot be imported unchanged without its backend registry,
  * profile resolver, environment collections, remote authority services, telemetry, and workspace

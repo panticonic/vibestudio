@@ -9,8 +9,8 @@
  * spreads, so output is byte-identical for methods that don't declare them.
  */
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { MethodSchema } from "@natstack/shared/typedServiceClient";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { MethodSchema } from "@vibez1/shared/typedServiceClient";
 
 export function serializeMethod(method: MethodSchema) {
   return {

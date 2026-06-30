@@ -8,9 +8,9 @@ describe("CONFIG_LOADER_JS", () => {
   });
 
   it("publishes runtime lease fields before loading the WebSocket transport", () => {
-    expect(CONFIG_LOADER_JS.indexOf("__natstackConnectionId")).toBeGreaterThan(-1);
+    expect(CONFIG_LOADER_JS.indexOf("__vibez1ConnectionId")).toBeGreaterThan(-1);
     expect(CONFIG_LOADER_JS.indexOf('new URL("__transport.js"')).toBeGreaterThan(-1);
-    expect(CONFIG_LOADER_JS.indexOf("__natstackConnectionId")).toBeLessThan(
+    expect(CONFIG_LOADER_JS.indexOf("__vibez1ConnectionId")).toBeLessThan(
       CONFIG_LOADER_JS.indexOf('new URL("__transport.js"')
     );
   });
@@ -19,16 +19,16 @@ describe("CONFIG_LOADER_JS", () => {
     expect(CONFIG_LOADER_JS).not.toContain('url.searchParams.get("connectionId")');
     expect(CONFIG_LOADER_JS).toContain('typeof cfg?.connectionId === "string"');
     expect(CONFIG_LOADER_JS).toContain("delete stored.connectionId");
-    expect(CONFIG_LOADER_JS).toContain("delete globalThis.__natstackConnectionId");
+    expect(CONFIG_LOADER_JS).toContain("delete globalThis.__vibez1ConnectionId");
   });
 
   it("keys persisted panel init by document URL instead of one shared session key", () => {
     expect(CONFIG_LOADER_JS).toContain(
-      'const storageKey = () => "__natstackPanelInit:" + location.href;'
+      'const storageKey = () => "__vibez1PanelInit:" + location.href;'
     );
     expect(CONFIG_LOADER_JS).toContain("sessionStorage.getItem(storageKey())");
     expect(CONFIG_LOADER_JS).toContain("sessionStorage.setItem(storageKey()");
-    expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.getItem("__natstackPanelInit")');
-    expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.setItem("__natstackPanelInit"');
+    expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.getItem("__vibez1PanelInit")');
+    expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.setItem("__vibez1PanelInit"');
   });
 });

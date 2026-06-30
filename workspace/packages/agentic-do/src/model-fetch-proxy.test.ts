@@ -4,10 +4,10 @@ import {
   installUrlBoundModelFetchProxy,
 } from "./model-fetch-proxy.js";
 
-type NatStackModelFetchProxyGlobals = typeof globalThis & {
-  __natstackModelFetchProxyState?: unknown;
-  __natstackModelFetchProxyInstalled?: boolean;
-  __natstackPrepareModelWebSocket?: (
+type Vibez1ModelFetchProxyGlobals = typeof globalThis & {
+  __vibez1ModelFetchProxyState?: unknown;
+  __vibez1ModelFetchProxyInstalled?: boolean;
+  __vibez1PrepareModelWebSocket?: (
     url: string,
     headers: Headers | Record<string, string>
   ) => { url: string } | null;
@@ -16,15 +16,15 @@ type NatStackModelFetchProxyGlobals = typeof globalThis & {
 const originalFetch = globalThis.fetch;
 
 function resetModelFetchProxyGlobals(): void {
-  const globals = globalThis as NatStackModelFetchProxyGlobals;
+  const globals = globalThis as Vibez1ModelFetchProxyGlobals;
   globalThis.fetch = originalFetch;
-  delete globals.__natstackModelFetchProxyState;
-  delete globals.__natstackModelFetchProxyInstalled;
-  delete globals.__natstackPrepareModelWebSocket;
+  delete globals.__vibez1ModelFetchProxyState;
+  delete globals.__vibez1ModelFetchProxyInstalled;
+  delete globals.__vibez1PrepareModelWebSocket;
 }
 
 function decodeWebSocketMetadata(url: string): Record<string, string> {
-  const encoded = new URL(url).searchParams.get("__natstack_ws_headers");
+  const encoded = new URL(url).searchParams.get("__vibez1_ws_headers");
   expect(encoded).toBeTruthy();
   const normalized = encoded!.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
@@ -41,8 +41,8 @@ describe("model fetch proxy websocket preparation", () => {
     globalThis.fetch = vi.fn(async () => new Response("ok")) as unknown as typeof fetch;
     installUrlBoundModelFetchProxy("https://chatgpt.com/backend-api", vi.fn());
 
-    const globals = globalThis as NatStackModelFetchProxyGlobals;
-    const prepared = globals.__natstackPrepareModelWebSocket?.(
+    const globals = globalThis as Vibez1ModelFetchProxyGlobals;
+    const prepared = globals.__vibez1PrepareModelWebSocket?.(
       "wss://chatgpt.com/backend-api/codex/responses",
       {
         Authorization: `Bearer ${createModelCredentialSentinel()}`,
@@ -52,7 +52,7 @@ describe("model fetch proxy websocket preparation", () => {
       }
     );
 
-    expect(prepared?.url).toContain("__natstack_ws_headers=");
+    expect(prepared?.url).toContain("__vibez1_ws_headers=");
     const metadata = decodeWebSocketMetadata(prepared!.url);
     expect(metadata).toMatchObject({
       "openai-beta": "responses_websockets=2026-02-06",
@@ -82,7 +82,7 @@ describe("model fetch proxy websocket preparation", () => {
     expect(routeFetcher).not.toHaveBeenCalled();
     expect(originalFetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = originalFetchMock.mock.calls[0]!;
-    expect(String(url)).toContain("__natstack_ws_headers=");
+    expect(String(url)).toContain("__vibez1_ws_headers=");
     const metadata = decodeWebSocketMetadata(String(url));
     expect(metadata).toMatchObject({
       "openai-beta": "responses_websockets=2026-02-06",

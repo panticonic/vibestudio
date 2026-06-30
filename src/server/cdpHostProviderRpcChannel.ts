@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import type { CdpBridge, CdpHostProviderConnection } from "./cdpBridge.js";
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
 
 const log = createDevLogger("CdpHostProviderRpcChannel");
 

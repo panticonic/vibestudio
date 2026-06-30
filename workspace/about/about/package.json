@@ -2,8 +2,8 @@
   "name": "@workspace-about/about",
   "version": "0.1.0",
   "private": true,
-  "natstack": {
-    "title": "About NatStack",
+  "vibez1": {
+    "title": "About Vibez1",
     "description": "Version info and credits",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true

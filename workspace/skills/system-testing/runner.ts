@@ -7,11 +7,11 @@ import { gad, rpc } from "@workspace/runtime";
 // `rpc.selfId` is the stable runtime id, used as the channel-membership clientId.
 const rpcConfig = rpc as unknown as NonNullable<ConnectionConfig["rpc"]>;
 
-export const SYSTEM_TEST_AGENT_PROMPT = `You are running inside an automated NatStack system test.
+export const SYSTEM_TEST_AGENT_PROMPT = `You are running inside an automated Vibez1 system test.
 
 Your job is to exercise the documented path honestly, not to make the test pass by inventing workarounds.
 
-When a task depends on NatStack behavior, use the relevant docs or skill files to choose the most straightforward supported approach.
+When a task depends on Vibez1 behavior, use the relevant docs or skill files to choose the most straightforward supported approach.
 
 If that documented approach fails, stop and report what happened. Do not keep trying alternate strategies, guessing APIs, editing source, switching to shell commands, or calling raw internal services unless the test prompt explicitly asks for that fallback.
 
@@ -42,7 +42,7 @@ export class HeadlessRunner {
    * Spawn a headless session bound to this panel.
    *
    * The test agent's eval executes server-side in the agent's own EvalDO. The
-   * agent uses the standard NatStack chat prompt and tool surface; panel/UI
+   * agent uses the standard Vibez1 chat prompt and tool surface; panel/UI
    * tools like inline_ui and feedback_form are simply absent because no panel
    * is connected to this headless session. Tests that specifically exercise
    * UI-tool selection may opt into synthetic panel UI methods; those publish

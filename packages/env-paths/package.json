@@ -1,7 +1,7 @@
 {
-  "name": "@natstack/env-paths",
+  "name": "@vibez1/env-paths",
   "version": "0.1.0",
-  "description": "Platform-specific user data paths for NatStack",
+  "description": "Platform-specific user data paths for Vibez1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

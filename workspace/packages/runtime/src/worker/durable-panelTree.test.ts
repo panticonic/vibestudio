@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { rpc } from "@natstack/rpc";
+import { rpc } from "@vibez1/rpc";
 
 // Envelope-native /rpc: the mock receives an RpcEnvelope and must reply with a
 // response envelope echoing the requestId (else the connectionless client never
@@ -399,7 +399,7 @@ describe("DurableObjectBase panelTree handles", () => {
     });
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
     // Converged inbound dispatch: caller attribution rides in the envelope's
-    // delivery.caller (POSTed to __rpc), not X-Natstack-Rpc-Caller-* headers.
+    // delivery.caller (POSTed to __rpc), not X-vibez1-Rpc-Caller-* headers.
     const caller = {
       callerId: "panel:parent-entity",
       callerKind: "panel",

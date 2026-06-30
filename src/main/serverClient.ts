@@ -9,13 +9,13 @@ import {
   type RpcCallOptions,
   type RpcConnectionStatus,
   type RpcEnvelope,
-} from "@natstack/rpc";
-import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
-import { NodeWsLike } from "@natstack/shared/shell/transport/nodeWsLike";
-import { authMethods } from "@natstack/shared/serviceSchemas/auth";
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { serverRpcWsUrl } from "@natstack/shared/connect";
+} from "@vibez1/rpc";
+import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
+import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
+import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { serverRpcWsUrl } from "@vibez1/shared/connect";
 
 export type ConnectionStatus = RpcConnectionStatus;
 

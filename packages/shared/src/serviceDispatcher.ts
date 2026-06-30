@@ -12,7 +12,7 @@ import type { MethodSchema } from "./typedServiceClient.js";
 import type { ServicePolicy } from "./servicePolicy.js";
 import { checkServiceAccess } from "./servicePolicy.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
-import type { AuthenticatedCaller } from "@natstack/rpc";
+import type { AuthenticatedCaller } from "@vibez1/rpc";
 export type { CallerKind } from "./principalKinds.js";
 
 /**
@@ -140,7 +140,7 @@ function formatAccessHint(methodDef: MethodSchema | undefined): string {
 }
 
 function shouldValidateServiceReturns(): boolean {
-  const override = process.env["NATSTACK_VALIDATE_SERVICE_RETURNS"];
+  const override = process.env["VIBEZ1_VALIDATE_SERVICE_RETURNS"];
   if (override === "0" || override === "false") return false;
   if (override === "1" || override === "true") return true;
   return process.env["NODE_ENV"] !== "production";
@@ -215,7 +215,7 @@ export interface WsClientInfo {
  * caller through `onDeferredResult`. Used for human-gated calls (approvals,
  * credential use) so a hibernatable DO caller need not hold an inbound request open.
  */
-export const DEFERRED_RESULT: unique symbol = Symbol.for("natstack.rpc.deferredResult");
+export const DEFERRED_RESULT: unique symbol = Symbol.for("vibez1.rpc.deferredResult");
 
 export interface DeferredResult {
   readonly [DEFERRED_RESULT]: true;

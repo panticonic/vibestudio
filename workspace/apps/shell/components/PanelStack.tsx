@@ -5,11 +5,11 @@ import { Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/th
 import { useIsMobile } from "@workspace/react/responsive";
 
 import type { LazyTitleNavigationData, LazyStatusNavigationData } from "./navigationTypes";
-import type { PanelContextMenuAction } from "@natstack/shared/types";
+import type { PanelContextMenuAction } from "@vibez1/shared/types";
 import type {
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
-} from "@natstack/shared/panel/panelLease";
+} from "@vibez1/shared/panel/panelLease";
 import {
   DEFAULT_SEARCH_TEMPLATE,
   applySearchTemplate,
@@ -17,14 +17,14 @@ import {
   getBrowserNavigationIntentForCommand,
   type AddressNavigationMode,
   type PanelCommandId,
-} from "@natstack/shared/panelCommands";
+} from "@vibez1/shared/panelCommands";
 import {
   buildPanelChromeState,
   isBrowserPanelSource,
   parseAddressInput,
   type AddressAction,
   type PanelChromeState,
-} from "@natstack/shared/panelChrome";
+} from "@vibez1/shared/panelChrome";
 import {
   useRootPanels,
   useFullPanel,
@@ -35,7 +35,7 @@ import {
 } from "../shell/hooks/PanelTreeContext";
 import { app, panel as panelService, view } from "../shell/client";
 import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../state/appModeAtoms";
-import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
+import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
 import { useNavigation } from "./NavigationContext";
 import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";

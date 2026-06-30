@@ -338,7 +338,7 @@ describe("@workspace/agentic-protocol schemas", () => {
         kind: "turn.closed",
         actor: agent,
         payload: {
-          protocol: "natstack.blob-ref.v1",
+          protocol: "vibez1.blob-ref.v1",
           digest: "payload-digest",
           size: 64,
           encoding: "json",
@@ -438,14 +438,14 @@ describe("@workspace/agentic-protocol schemas", () => {
   it("hydrates refs nested inside hydrated json blobs", async () => {
     const blobs = new Map<string, string>();
     const innerRef = {
-      protocol: "natstack.blob-ref.v1" as const,
+      protocol: "vibez1.blob-ref.v1" as const,
       digest: "inner",
       size: 14,
       encoding: "json" as const,
       originalBytes: 14,
     };
     const outerRef = {
-      protocol: "natstack.blob-ref.v1" as const,
+      protocol: "vibez1.blob-ref.v1" as const,
       digest: "outer",
       size: 32,
       encoding: "json" as const,
@@ -530,7 +530,7 @@ describe("@workspace/agentic-protocol stored values", () => {
     const stored = {
       outer: {
         value: {
-          protocol: "natstack.blob-ref.v1" as const,
+          protocol: "vibez1.blob-ref.v1" as const,
           digest: "json-digest",
           size: 12,
           encoding: "json" as const,
@@ -568,7 +568,7 @@ describe("@workspace/agentic-protocol stored values", () => {
             {
               type: "text",
               text: {
-                protocol: "natstack.blob-ref.v1",
+                protocol: "vibez1.blob-ref.v1",
                 digest: "digest-1",
                 size: 10,
                 encoding: "json",

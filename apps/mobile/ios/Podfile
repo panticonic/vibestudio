@@ -1,4 +1,4 @@
-# NatStack iOS CocoaPods configuration
+# Vibez1 iOS CocoaPods configuration
 # Requires CocoaPods 1.15+ and Xcode 16+
 
 platform :ios, '15.0'
@@ -7,7 +7,7 @@ platform :ios, '15.0'
 require_relative '../node_modules/react-native/scripts/react_native_pods'
 require_relative '../node_modules/@react-native-community/cli-platform-ios/native_modules'
 
-target 'NatStack' do
+target 'Vibez1' do
   config = use_native_modules!
 
   use_react_native!(
@@ -20,7 +20,7 @@ target 'NatStack' do
     :app_path => "#{Pod::Config.instance.installation_root}/.."
   )
 
-  target 'NatStackTests' do
+  target 'Vibez1Tests' do
     inherit! :complete
     # Pods for testing
   end

@@ -93,7 +93,7 @@ not enumerated in the gateway):
   configured `serverUrl`. Dropped from the motivation.
 - The original leaned on a TLS-pinning "trust-on-first-use" analogy.
   `tlsPinning.ts` actually **enforces a pre-configured fingerprint**
-  (`NATSTACK_REMOTE_FINGERPRINT`), not TOFU. The QR-fingerprint model below is a
+  (`VIBEZ1_REMOTE_FINGERPRINT`), not TOFU. The QR-fingerprint model below is a
   *pre-configured pin delivered out-of-band*, which is the stronger posture; TOFU
   is offered only with explicit out-of-band confirmation.
 - "Reuse `composeTransports` for fallback" / "reuse the stream codec unchanged" /
@@ -231,7 +231,7 @@ with remote mode (§8), and the parser is **rewritten to accept only the new for
 (no versioned shim, no old-link handling, nothing to fall back to). New link: 
 
 ```
-natstack://connect?room=<uuid>&fp=<dtls-sha256>&code=<pairing-secret>
+vibez1://connect?room=<uuid>&fp=<dtls-sha256>&code=<pairing-secret>
    &sig=<signaling-endpoint>&v=<proto-version>&ice=<turn-policy>&srv=<server/workspace-id>
 ```
 
@@ -250,7 +250,7 @@ logical authenticated sessions**.
 **Design — the panel↔host hop is the shell bridge, not a socket.** A panel lives
 in a webview and cannot touch the host's `RTCPeerConnection` directly, so its RPC
 crosses the webview boundary over the **shell bridge that already exists and
-already delivers the grant token** (`__natstackShell` — Electron `contextBridge`
+already delivers the grant token** (`__vibez1Shell` — Electron `contextBridge`
 IPC on desktop, the React-Native `postMessage` bridge on mobile;
 `configLoader.ts:75`). The panel's `EnvelopeRpcTransport` posts envelopes over
 that bridge to the host; the host runs each panel's transport-agnostic
@@ -283,7 +283,7 @@ channel** and caching results. Panel RPC never touches it (§3).
   exactly today's posture, where assets are unauthenticated and only `/api/*` is
   gated (`panelHttpServer.ts:648`). No façade HTTP response carries a secret: the
   grant token reaches the panel **out-of-band via the shell bridge**
-  (`__natstackShell.getPanelInit()` → `globalThis.__natstackGatewayToken`,
+  (`__vibez1Shell.getPanelInit()` → `globalThis.__vibez1GatewayToken`,
   `configLoader.ts:77,109`), never in an HTTP body, and panel **RPC also rides the
   shell bridge** (§3), not a loopback socket. So there is no `/rpc` port to reach,
   no cookie, no Service Worker, no host-isolation, and no per-asset token — the
@@ -416,13 +416,13 @@ bypassing per-caller binding. PKCE still makes an intercepted `code` useless.
 client possibly offline, so this profile keeps everything OAuth drops: durable
 per-subscription buffering, TTL, provider-retry semantics, response handling,
 replay controls, rate limiting. Multi-tenant routing replaces the single
-hard-coded `NATSTACK_SERVER_BASE_URL` (`apps/webhook-relay/src/index.ts:59`) with
+hard-coded `VIBEZ1_SERVER_BASE_URL` (`apps/webhook-relay/src/index.ts:59`) with
 `subscriptionId → server`. It sees webhook plaintext (HMAC/OIDC give integrity,
 not confidentiality) — decidedly *not* "dumb."
 
 **Shared by both:** the authenticated **persistent backhaul** (server → relay DO)
 and **first-writer-wins registration** bound to that backhaul identity (the shared
-`NATSTACK_RELAY_SIGNING_SECRET` is one un-versioned key — too weak for tenant
+`VIBEZ1_RELAY_SIGNING_SECRET` is one un-versioned key — too weak for tenant
 isolation; the per-server connection is the trust anchor). Repoint
 `relayPublicBaseUrl` / `buildPublicUrl` at the relay hostname.
 
@@ -446,8 +446,8 @@ against the tree, in three groups.
   `buildPublicUrl(PUBLIC_OAUTH_CALLBACK_PATH)` (~2211,2214,2359,2362) and the
   `"public"|"loopback"` decision (~296) → the **callback-relay hostname** (§7).
   The path constant stays.
-- **Env deleted:** `NATSTACK_PUBLIC_URL`, `NATSTACK_PROTOCOL`,
-  `NATSTACK_NO_VPN_DETECT`, `NATSTACK_REQUIRE_PUBLIC_URL`, `--tls-cert/--tls-key`.
+- **Env deleted:** `VIBEZ1_PUBLIC_URL`, `VIBEZ1_PROTOCOL`,
+  `VIBEZ1_NO_VPN_DETECT`, `VIBEZ1_REQUIRE_PUBLIC_URL`, `--tls-cert/--tls-key`.
 - **Docs/scripts:** rewrite/delete the TLS-HTTPS, TLS-pin, callback-reachability,
   `--no-vpn-detect` sections of `docs/remote-server.md`; the Tailscale-serve setup
   in `docs/mobile-vpn.md`; the external-URL section of `docs/routes.md`;
@@ -481,7 +481,7 @@ against the tree, in three groups.
   `parseConnectServerUrl` with one `isLoopbackHost()` (127.0.0.0/8, `::1`,
   `localhost`, `10.0.2.2` for the dev emulator).
 - **`src/main/startupMode.ts` — strip:** `isTrustworthyRemoteOrigin`,
-  `RemoteTlsOptions`, and the `NATSTACK_REMOTE_FINGERPRINT`/`NATSTACK_REMOTE_CA`
+  `RemoteTlsOptions`, and the `VIBEZ1_REMOTE_FINGERPRINT`/`VIBEZ1_REMOTE_CA`
   loads (env vars deleted).
 
 ### 8c. Client/mobile remote-server config → loopback + pipe
@@ -501,7 +501,7 @@ against the tree, in three groups.
   Device credentials/grants are **kept**.
 
 **Reconciliations:**
-- `NATSTACK_REMOTE_URL` (point the shell at a remote https server) is **deleted**,
+- `VIBEZ1_REMOTE_URL` (point the shell at a remote https server) is **deleted**,
   not repointed — the shell reaches its server over WebRTC, paired by QR. The
   relay hostname (§7) is separate config used only for callback construction; the
   data plane never flows through it.

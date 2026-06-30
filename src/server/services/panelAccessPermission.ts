@@ -1,10 +1,10 @@
-import type { PanelAccessOperation, PanelAccessTarget } from "@natstack/shared/panelAccessPolicy";
+import type { PanelAccessOperation, PanelAccessTarget } from "@vibez1/shared/panelAccessPolicy";
 import {
   isOpenPanelOperation,
   panelAccessSeverityForTarget,
-} from "@natstack/shared/panelAccessPolicy";
-import type { ServiceContext, VerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+} from "@vibez1/shared/panelAccessPolicy";
+import type { ServiceContext, VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 import { requireContextBoundaryPermission, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {

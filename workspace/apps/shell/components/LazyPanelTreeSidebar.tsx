@@ -38,7 +38,7 @@ import {
   END_DROP_ZONE_ID,
   type FlattenedPanel,
 } from "../shell/hooks/index.js";
-import type { PanelContextMenuAction } from "@natstack/shared/types";
+import type { PanelContextMenuAction } from "@vibez1/shared/types";
 import { menu, panel } from "../shell/client.js";
 import {
   activeWorkspaceNameAtom,

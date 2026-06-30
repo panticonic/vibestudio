@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { setUserDataPath } from "@natstack/env-paths";
+import { setUserDataPath } from "@vibez1/env-paths";
 
 import {
   artifactFilePath,
@@ -106,7 +106,7 @@ describe("build artifact helpers", () => {
   });
 
   it("computes artifact integrity from stored bytes instead of trusting caller input", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-store-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-build-store-"));
     try {
       setUserDataPath(root);
       const metadata = build().metadata;
@@ -136,7 +136,7 @@ describe("build artifact helpers", () => {
   });
 
   it("computes app build integrity from the stored artifact manifest", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-store-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-build-store-"));
     try {
       setUserDataPath(root);
       const metadata = {
@@ -184,7 +184,7 @@ describe("build artifact helpers", () => {
   });
 
   it("rejects build directories without an artifact manifest", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-store-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-build-store-"));
     try {
       setUserDataPath(root);
       const dir = path.join(root, "builds", "legacy-key");

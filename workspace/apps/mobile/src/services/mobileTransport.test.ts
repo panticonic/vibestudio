@@ -1,15 +1,15 @@
-import type { RpcClient, RpcConnectionStatus, RpcEventContext } from "@natstack/rpc";
-import type { RecoveryKind } from "@natstack/rpc/protocol/recoveryCoordinator";
-import type { WebRtcSession } from "@natstack/rpc/transports/webrtcClient";
+import type { RpcClient, RpcConnectionStatus, RpcEventContext } from "@vibez1/rpc";
+import type { RecoveryKind } from "@vibez1/rpc/protocol/recoveryCoordinator";
+import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
 import {
   loadShellCredential,
   reconnectViaWebRtc,
   type StoredShellCredential,
   type WebRtcConnection,
-} from "@natstack/mobile-webrtc";
+} from "@vibez1/mobile-webrtc";
 import { MobileRpcClient } from "./mobileTransport";
 
-jest.mock("@natstack/mobile-webrtc", () => ({
+jest.mock("@vibez1/mobile-webrtc", () => ({
   loadShellCredential: jest.fn(),
   reconnectViaWebRtc: jest.fn(),
 }));

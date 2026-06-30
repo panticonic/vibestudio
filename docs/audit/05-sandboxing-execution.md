@@ -25,7 +25,7 @@ Below, findings are severity-ordered with file:line, concrete attack paths, and 
 
 ## Threat model (what the sandbox is defending)
 
-NatStack runs agent-authored TypeScript on three rails:
+Vibez1 runs agent-authored TypeScript on three rails:
 
 1. **Panels** — bundled to browser ESM by esbuild, served by an in-process HTTP server, run in an Electron BrowserView or standalone browser. Isolated at the V8 page level, talking RPC back to the server over WebSocket (with per-panel TokenManager tokens).
 2. **Workers / Durable Objects** — bundled for the `workerd` runtime, spawned as one child `workerd` process with one Cap'n-Proto config encoding every worker + DO namespace. Each service is a V8 isolate inside workerd, talking to the server via an HTTP RPC back-channel, and to the outside world via a per-worker `network: …` service.
@@ -288,7 +288,7 @@ Severity: **High** — exposed to worker code today.
 **Files**: `src/main/cdpServer.ts`, `src/server/cdpBridge.ts`
 
 - Electron CDP now binds to loopback explicitly (`127.0.0.1`).
-- CDP authentication no longer uses URL query strings. `getCdpEndpoint` returns `{ wsEndpoint, token }`; browser WebSocket clients open the token-free URL and send a first-frame `{ type: "natstack:cdp-auth", token }` message. This is intentional because browser `WebSocket` cannot set `Authorization: Bearer` headers.
+- CDP authentication no longer uses URL query strings. `getCdpEndpoint` returns `{ wsEndpoint, token }`; browser WebSocket clients open the token-free URL and send a first-frame `{ type: "vibez1:cdp-auth", token }` message. This is intentional because browser `WebSocket` cannot set `Authorization: Bearer` headers.
 - After auth, `contents.debugger.sendCommand(msg.method, msg.params, sessionId)` is called with the raw method name and params. There is no allow-list. `Runtime.evaluate`, `Page.navigate`, `Page.downloadFile`, `Network.emulateNetworkConditions`, `Fetch.fulfillRequest`, `Browser.setDownloadBehavior` with arbitrary `downloadPath`, `Page.captureScreenshot`, etc. are all reachable.
 - `CdpServer.canAccessBrowser` authorises both the **direct owner** and any **tree ancestor** panel of the browser. That policy is documented (`cdpServer.ts:132-161`), but the "tree ancestor" clause means any ancestor panel compromise yields automation of every descendant browser (including navigation / XSS / cookie theft). Combined with S1 this means an agent worker can reach the CDP WebSocket directly.
 - `CdpBridge` mirrors the same raw CDP command surface for remote / extension-backed CDP, but it also uses the first-frame auth protocol instead of query tokens.
@@ -410,7 +410,7 @@ This applies to every route, including the clone/push endpoints. Browsers refuse
 - An attacker-controlled page on any origin can issue fetch POSTs to `http://localhost:<port>/<repo>.git/git-upload-pack` without credentials (which will 401) but the CORS headers teach them port availability (DNS rebinding precursor) and enumerate authentication requirements.
 - If any consumer of git ever sets `Authorization` via a script that also enables `credentials: "include"`, the server — having `Access-Control-Allow-Origin: *` — would fail the browser's preflight, but if the response is only opaque the attacker still gets the side-effect of a push/clone.
 
-**Remediation**: set `Access-Control-Allow-Origin` to the known NatStack origin(s) (the panelHttpServer origin), not `*`. Drop the CORS headers entirely for unsafe methods.
+**Remediation**: set `Access-Control-Allow-Origin` to the known Vibez1 origin(s) (the panelHttpServer origin), not `*`. Drop the CORS headers entirely for unsafe methods.
 
 Severity: **Medium**.
 
@@ -538,10 +538,10 @@ Total: no code runs in the main server process, no token was leaked externally, 
 
 A second chain, targeting the UI host:
 
-1. User opens `https://bank.com` in a NatStack browser panel. Autofill stores `user@bank` / `hunter2`.
+1. User opens `https://bank.com` in a Vibez1 browser panel. Autofill stores `user@bank` / `hunter2`.
 2. `bank.com/transactions` legitimately embeds `<iframe src="https://analytics.example.com/embed">`.
 3. `analytics.example.com` happens to ship a form with `<input type=password>` (or is compromised later to).
-4. NatStack's AutofillManager (S3) injects bank creds into the iframe's main-world DOM.
+4. Vibez1's AutofillManager (S3) injects bank creds into the iframe's main-world DOM.
 5. `analytics.example.com` JS reads the password from DOM and sends it to `https://evil.example/`.
 
 ---

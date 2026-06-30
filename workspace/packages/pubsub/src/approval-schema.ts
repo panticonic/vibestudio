@@ -7,7 +7,7 @@
 
 import { hasRichPreview } from "./tool-types.js";
 import { normalizeToolName, getCanonicalToolName } from "./tool-name-utils.js";
-import type { FieldDefinition } from "@natstack/types";
+import type { FieldDefinition } from "@vibez1/types";
 
 // ============================================================================
 // Unified Approval Schema

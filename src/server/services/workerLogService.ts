@@ -15,9 +15,9 @@
  *   [server] [workerLog] [do:workers/example-store:ExampleStoreDO:ctx-...] warn: <message>
  */
 
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { workerLogMethods } from "@natstack/shared/serviceSchemas/workerLog";
-import { createDevLogger } from "@natstack/dev-log";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { workerLogMethods } from "@vibez1/shared/serviceSchemas/workerLog";
+import { createDevLogger } from "@vibez1/dev-log";
 
 const log = createDevLogger("workerLog");
 

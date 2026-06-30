@@ -7,29 +7,29 @@ describe("resolveChromiumProfileDir", () => {
     expect(
       resolveChromiumProfileDir({
         executablePath: "/usr/bin/chromium",
-        profileDir: "/home/alice/.local/state/natstack/headless-host",
+        profileDir: "/home/alice/.local/state/vibez1/headless-host",
         homeDir: "/home/alice",
       })
-    ).toBe("/home/alice/.local/state/natstack/headless-host");
+    ).toBe("/home/alice/.local/state/vibez1/headless-host");
   });
 
   it("keeps a visible profile dir for snap chromium", () => {
     expect(
       resolveChromiumProfileDir({
         executablePath: "/snap/bin/chromium",
-        profileDir: "/home/alice/NatStack/headless-host",
+        profileDir: "/home/alice/Vibez1/headless-host",
         homeDir: "/home/alice",
       })
-    ).toBe("/home/alice/NatStack/headless-host");
+    ).toBe("/home/alice/Vibez1/headless-host");
   });
 
   it("moves hidden home profile dirs under snap common storage", () => {
     expect(
       resolveChromiumProfileDir({
         executablePath: "/snap/bin/chromium",
-        profileDir: "/home/alice/.local/state/natstack/headless-host",
+        profileDir: "/home/alice/.local/state/vibez1/headless-host",
         homeDir: "/home/alice",
       })
-    ).toBe(path.join("/home/alice", "snap", "chromium", "common", "natstack", "headless-host"));
+    ).toBe(path.join("/home/alice", "snap", "chromium", "common", "vibez1", "headless-host"));
   });
 });

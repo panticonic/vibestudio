@@ -5,7 +5,7 @@ import type { AgentTool } from "@workspace/pi-core";
 import { defaultPolicies } from "@workspace/agent-loop";
 import type { RespondPolicy, StepPolicy } from "@workspace/agent-loop";
 import { rpc } from "@workspace/runtime/worker";
-import { taxonomyRepoForPath } from "@natstack/shared/runtime/entitySpec";
+import { taxonomyRepoForPath } from "@vibez1/shared/runtime/entitySpec";
 import { EXPLORER_SYSTEM_PROMPT, SCHEDULED_SWEEP_PROMPT } from "./prompts.js";
 import {
   buildCardState,
@@ -66,7 +66,7 @@ function repoScopeForPath(filePath: string): { repoPath: string; repoRelPath: st
  * own capability surface. It inherits silence + the `say` tool from
  * `SilentAgentWorker`, and adds (a) the explorer system prompt (the oracle loop —
  * full methodology in `skills/explorer/SKILL.md`), (b) a recurring autonomous sweep
- * driven by the `natstack.yml recurring:` registry, and (c) a `report_finding` tool
+ * driven by the `vibez1.yml recurring:` registry, and (c) a `report_finding` tool
  * that durably logs findings (commit + push) and aggregates them into a findings
  * card in the connected chat panel.
  *
@@ -134,7 +134,7 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
   /**
    * Recurring autonomous sweep: kick a self-initiated turn in every subscribed
    * channel so the agent runs its loop without a user message. Wired via the
-   * `natstack.yml recurring:` registry (server/harness caller only).
+   * `vibez1.yml recurring:` registry (server/harness caller only).
    */
   @rpc({ callers: ["server"] })
   async runScheduledJob(_args: unknown): Promise<{ ok: boolean; channels: number }> {

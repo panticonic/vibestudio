@@ -1,4 +1,4 @@
-import type { ExtensionsClientRpc } from "@natstack/extension";
+import type { ExtensionsClientRpc } from "@vibez1/extension";
 import type { Api as ImageServiceApi } from "@workspace-extensions/image-service";
 import type { Api as ShellApi } from "@workspace-extensions/shell";
 import { createExtensionsClient } from "./extensions.js";

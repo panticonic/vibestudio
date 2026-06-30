@@ -16,20 +16,20 @@ import { createRequire } from "module";
 import * as path from "path";
 import * as os from "os";
 import { pathToFileURL } from "url";
-import type { TokenManager } from "@natstack/shared/tokenManager";
-import { createVerifiedCaller, type VerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import type { FsService } from "@natstack/shared/fsService";
-import { canonicalEntityId } from "@natstack/shared/runtime/entitySpec";
+import type { TokenManager } from "@vibez1/shared/tokenManager";
+import { createVerifiedCaller, type VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { FsService } from "@vibez1/shared/fsService";
+import { canonicalEntityId } from "@vibez1/shared/runtime/entitySpec";
 import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildStore.js";
 import type { RuntimeImageBinding, StateAdvancedEvent } from "./buildV2/index.js";
 import { validateBuildRef } from "./buildV2/refs.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
-import type { SingletonRegistry } from "@natstack/shared/workspace/singletonRegistry";
-import { createDevLogger } from "@natstack/dev-log";
+import type { SingletonRegistry } from "@vibez1/shared/workspace/singletonRegistry";
+import { createDevLogger } from "@vibez1/dev-log";
 import {
   getPhysicalPathForAsarPath,
   getPlatformPackageBinaryPath,
-} from "@natstack/shared/runtimePaths";
+} from "@vibez1/shared/runtimePaths";
 import { getInternalDOBundle, isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { assertPresent } from "../lintHelpers";
@@ -38,7 +38,7 @@ import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.
 const log = createDevLogger("WorkerdManager");
 /** uniqueKey of the single static namespace that hosts all userland DO facets.
  *  workerd stores its facet SQLite under `<disk>/<this>/<hostHash>.*`. */
-const UNIVERSAL_DO_UNIQUE_KEY = "natstack:universal-do";
+const UNIVERSAL_DO_UNIQUE_KEY = "vibez1:universal-do";
 const DEFAULT_WORKERD_STARTUP_READY_TIMEOUT_MS = 15_000;
 const WORKERD_STARTUP_OUTPUT_LINES = 40;
 declare const __filename: string | undefined;
@@ -226,7 +226,7 @@ export interface WorkerdManagerDeps {
   singletonRegistry?: SingletonRegistry;
   getProxyPort: (caller: VerifiedCaller) => Promise<number | null> | number | null;
   /** Shared attributed-by-header egress listener port for the dynamic worker
-   *  host. Identity travels in the `X-NatStack-Egress-Caller` header (stamped
+   *  host. Identity travels in the `X-Vibez1-Egress-Caller` header (stamped
    *  by the host's EgressGateway from non-forgeable props), gated by
    *  `egressSecret`. Distinct from `getProxyPort` (per-caller ports, still used
    *  by static DO services). */
@@ -264,11 +264,11 @@ function canonicalInstanceNameForSource(source: string): string {
 }
 
 function workerdInspectorEnabled(): boolean {
-  // Always on by default: NatStack is a continuous-development system, and
+  // Always on by default: Vibez1 is a continuous-development system, and
   // userland profiling (workerdInspector service) depends on the inspector.
   // The socket binds 127.0.0.1 and is only reachable from userland through
   // the token-authenticated, approval-gated inspector bridge.
-  return process.env["NATSTACK_DISABLE_WORKERD_INSPECTOR"] !== "1";
+  return process.env["VIBEZ1_DISABLE_WORKERD_INSPECTOR"] !== "1";
 }
 
 const EXPECTED_EVAL_IDLE_EVICTION_ABORT =
@@ -331,7 +331,7 @@ export class WorkerdManager {
    *  panel/worker credentials. */
   private readonly loaderSecret = crypto.randomBytes(32).toString("hex");
   /** Per-process secret the host's EgressGateway stamps on forwarded egress so
-   *  the shared egress listener trusts the `X-NatStack-Egress-Caller` header. */
+   *  the shared egress listener trusts the `X-Vibez1-Egress-Caller` header. */
   private readonly egressSecret = crypto.randomBytes(32).toString("hex");
   /** Resolved shared egress listener port (memoized after first start). */
   private sharedEgressPort: number | null = null;
@@ -339,7 +339,7 @@ export class WorkerdManager {
   constructor(deps: WorkerdManagerDeps) {
     this.deps = deps;
     this.runtimeImages = new RuntimeImageStore(deps.statePath);
-    this.configDir = path.join(os.tmpdir(), `natstack-workerd-${process.pid}`);
+    this.configDir = path.join(os.tmpdir(), `vibez1-workerd-${process.pid}`);
     fs.mkdirSync(this.configDir, { recursive: true });
     this.bootGenerationFile = path.join(this.deps.statePath, ".boot-generation");
     this.bootGeneration = this.readBootGeneration();
@@ -452,7 +452,7 @@ export class WorkerdManager {
     };
     const platformKey = `${process.platform} ${os.arch()} ${os.endianness()}`;
     const platformPackage = platformPackages[platformKey];
-    const appRoot = process.env["NATSTACK_APP_ROOT"];
+    const appRoot = process.env["VIBEZ1_APP_ROOT"];
 
     if (platformPackage && appRoot) {
       const packagedCandidate = getPlatformPackageBinaryPath(
@@ -975,7 +975,7 @@ export class WorkerdManager {
   }
 
   /** Secret gating `/_workercode` + `/_workerversion`. The gateway validates
-   *  the inbound `X-NatStack-Loader-Secret` header against this. */
+   *  the inbound `X-Vibez1-Loader-Secret` header against this. */
   getLoaderSecret(): string {
     return this.loaderSecret;
   }
@@ -1035,8 +1035,8 @@ export class WorkerdManager {
       GATEWAY_URL: this.deps.getServerUrl(),
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
     };
-    if (process.env["NATSTACK_TEST_MODE"]) {
-      env["NATSTACK_TEST_MODE"] = process.env["NATSTACK_TEST_MODE"];
+    if (process.env["VIBEZ1_TEST_MODE"]) {
+      env["VIBEZ1_TEST_MODE"] = process.env["VIBEZ1_TEST_MODE"];
     }
     if (instance.parentId) env["PARENT_ID"] = instance.parentId;
     if (instance.parentEntityId) env["PARENT_ENTITY_ID"] = instance.parentEntityId;
@@ -1175,8 +1175,8 @@ export class WorkerdManager {
       WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
       GATEWAY_URL: this.deps.getServerUrl(),
     };
-    if (process.env["NATSTACK_TEST_MODE"]) {
-      env["NATSTACK_TEST_MODE"] = process.env["NATSTACK_TEST_MODE"];
+    if (process.env["VIBEZ1_TEST_MODE"]) {
+      env["VIBEZ1_TEST_MODE"] = process.env["VIBEZ1_TEST_MODE"];
     }
     if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;
     const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
@@ -1452,7 +1452,7 @@ export class WorkerdManager {
 
     // Find a port
     if (!this.port) {
-      const { findServicePort } = await import("@natstack/port-utils");
+      const { findServicePort } = await import("@vibez1/port-utils");
       this.port = await findServicePort("workerd");
     }
 
@@ -1560,10 +1560,10 @@ ${doLookupEntries.join(",\n")}
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     const prefix = parts[0] || "";
-    if (prefix === "__natstack_workerd_ready") {
+    if (prefix === "__vibez1_workerd_ready") {
       return new Response(null, { status: 204 });
     }
-    if ((prefix === "_w" || prefix === "_u") && request.headers.get("X-NatStack-Dispatch-Secret") !== env.WORKERD_DISPATCH_SECRET) {
+    if ((prefix === "_w" || prefix === "_u") && request.headers.get("X-Vibez1-Dispatch-Secret") !== env.WORKERD_DISPATCH_SECRET) {
       return new Response("Forbidden", { status: 403 });
     }
 ${doBlock}${universalBlock}
@@ -1598,8 +1598,8 @@ export class EgressGateway extends WorkerEntrypoint {
   async fetch(request) {
     const id = (this.ctx.props && this.ctx.props.id) || "";
     const headers = new Headers(request.headers);
-    headers.set("X-NatStack-Egress-Caller", id);
-    headers.set("X-NatStack-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
+    headers.set("X-Vibez1-Egress-Caller", id);
+    headers.set("X-Vibez1-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
     return this.env.EGRESS.fetch(new Request(request, { headers }));
   }
 }
@@ -1611,7 +1611,7 @@ export default {
     const name = parts[0] ? decodeURIComponent(parts[0]) : "";
     if (!name) return new Response("worker-host: missing instance name", { status: 400 });
 
-    const loaderHeaders = { "X-NatStack-Loader-Secret": env.WORKERD_LOADER_SECRET };
+    const loaderHeaders = { "X-Vibez1-Loader-Secret": env.WORKERD_LOADER_SECRET };
 
     // Current loader-cache version (tiny). 404 → no such worker (destroyed or
     // never created); a stale isolate, if any, is simply never re-addressed.
@@ -1673,8 +1673,8 @@ export class EgressGateway extends WorkerEntrypoint {
   async fetch(request) {
     const id = (this.ctx.props && this.ctx.props.id) || "";
     const headers = new Headers(request.headers);
-    headers.set("X-NatStack-Egress-Caller", id);
-    headers.set("X-NatStack-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
+    headers.set("X-Vibez1-Egress-Caller", id);
+    headers.set("X-Vibez1-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
     return this.env.EGRESS.fetch(new Request(request, { headers }));
   }
 }
@@ -1702,7 +1702,7 @@ export class UniversalDO extends DurableObject {
     const ctx = this.ctx;
     const env = this.env;
     const identity = source + ":" + className;
-    const loaderHeaders = { "X-NatStack-Loader-Secret": env.WORKERD_LOADER_SECRET };
+    const loaderHeaders = { "X-Vibez1-Loader-Secret": env.WORKERD_LOADER_SECRET };
 
     const vres = await env.GATEWAY.fetch(new Request(
       "http://gateway/_doversion/" + encodeURIComponent(source) + "/" + encodeURIComponent(className) +
@@ -1986,7 +1986,7 @@ export default { fetch() { return new Response("universal-do host"); } };
 
     const binary = this.findWorkerdBinary();
     if (!this.inspectorPort && workerdInspectorEnabled()) {
-      const { findServicePort } = await import("@natstack/port-utils");
+      const { findServicePort } = await import("@vibez1/port-utils");
       this.inspectorPort = await findServicePort("workerdInspector");
     }
     const args = [
@@ -2238,12 +2238,12 @@ export default { fetch() { return new Response("universal-do host"); } };
     // findServicePort skips EADDRINUSE ports, which sidesteps the race where
     // the kernel has not finished releasing our previous bind yet.
     if (this.port) {
-      const { releaseServicePort } = await import("@natstack/port-utils");
+      const { releaseServicePort } = await import("@vibez1/port-utils");
       releaseServicePort("workerd", this.port);
     }
     this.port = null;
     if (this.inspectorPort) {
-      const { releaseServicePort } = await import("@natstack/port-utils");
+      const { releaseServicePort } = await import("@vibez1/port-utils");
       releaseServicePort("workerdInspector", this.inspectorPort);
     }
     this.inspectorPort = null;
@@ -2420,7 +2420,7 @@ export default { fetch() { return new Response("universal-do host"); } };
     let lastError: unknown;
     while (Date.now() < deadline) {
       try {
-        const response = await fetch(`http://127.0.0.1:${this.port}/__natstack_workerd_ready`, {
+        const response = await fetch(`http://127.0.0.1:${this.port}/__vibez1_workerd_ready`, {
           method: "GET",
           headers: {
             Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,

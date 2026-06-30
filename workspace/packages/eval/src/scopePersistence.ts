@@ -1,1 +1,1 @@
-export type { ScopeEntry, ScopeListEntry, ScopePersistence } from "@natstack/shared/scopePersistence";
+export type { ScopeEntry, ScopeListEntry, ScopePersistence } from "@vibez1/shared/scopePersistence";

@@ -28,7 +28,7 @@ export interface BuildPanelLinkOptions {
  *
  * - Same-context (no contextId): returns a relative URL (e.g., "/panels/chat/")
  * - Cross-context (with contextId): returns an absolute URL on the current host
- *   (e.g., "https://natstack.example.com/panels/chat/?contextId=ctx-abc")
+ *   (e.g., "https://vibez1.example.com/panels/chat/?contextId=ctx-abc")
  *
  * @param source - Workspace-relative source path (e.g., "panels/editor")
  * @param options - Optional navigation options
@@ -42,7 +42,7 @@ export interface BuildPanelLinkOptions {
  *
  * // Cross-context navigation (absolute URL)
  * buildPanelLink("panels/chat", { contextId: "abc-123", stateArgs: { foo: 1 } })
- * // => "https://natstack.example.com/panels/chat/?contextId=abc-123&stateArgs=..."
+ * // => "https://vibez1.example.com/panels/chat/?contextId=abc-123&stateArgs=..."
  * ```
  */
 export function buildPanelLink(source: string, options?: BuildPanelLinkOptions): string {

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RpcEnvelope, RpcMessage } from "@natstack/rpc";
+import type { RpcEnvelope, RpcMessage } from "@vibez1/rpc";
 import { createPanelTransport } from "./transport.js";
 
 const g = globalThis as typeof globalThis & {
-  __natstackShell?: {
+  __vibez1Shell?: {
     postEnvelope: ReturnType<typeof vi.fn>;
     onEnvelope: ReturnType<typeof vi.fn>;
     onRecovery?: ReturnType<typeof vi.fn>;
@@ -11,7 +11,7 @@ const g = globalThis as typeof globalThis & {
   };
 };
 
-function makeShell(overrides: Partial<NonNullable<typeof g.__natstackShell>> = {}) {
+function makeShell(overrides: Partial<NonNullable<typeof g.__vibez1Shell>> = {}) {
   return {
     postEnvelope: vi.fn(async () => {}),
     onEnvelope: vi.fn(() => vi.fn()),
@@ -32,12 +32,12 @@ function envelope(target: string, message: RpcMessage): RpcEnvelope {
 
 describe("createPanelTransport", () => {
   afterEach(() => {
-    delete g.__natstackShell;
+    delete g.__vibez1Shell;
   });
 
   it("posts canonical envelopes over the shell bridge unchanged", async () => {
     const shell = makeShell();
-    g.__natstackShell = shell;
+    g.__vibez1Shell = shell;
     const transport = createPanelTransport();
     const message: RpcMessage = {
       type: "event",
@@ -54,7 +54,7 @@ describe("createPanelTransport", () => {
 
   it("delivers incoming envelopes unchanged", () => {
     let incoming!: (envelope: RpcEnvelope) => void;
-    g.__natstackShell = makeShell({
+    g.__vibez1Shell = makeShell({
       onEnvelope: vi.fn((handler) => {
         incoming = handler;
         return vi.fn();
@@ -79,7 +79,7 @@ describe("createPanelTransport", () => {
   it("sends panel event subscriptions over the shell bridge", async () => {
     const serviceCall = vi.fn(async () => {});
     const shell = makeShell({ serviceCall });
-    g.__natstackShell = shell;
+    g.__vibez1Shell = shell;
     const transport = createPanelTransport();
     const message: RpcMessage = {
       type: "request",
@@ -99,7 +99,7 @@ describe("createPanelTransport", () => {
   it("sends panel CDP requests over the shell bridge", async () => {
     const serviceCall = vi.fn(async () => {});
     const shell = makeShell({ serviceCall });
-    g.__natstackShell = shell;
+    g.__vibez1Shell = shell;
     const transport = createPanelTransport();
     const message: RpcMessage = {
       type: "request",
@@ -119,7 +119,7 @@ describe("createPanelTransport", () => {
   it("routes Electron-local panel host helpers through serviceCall", async () => {
     const serviceCall = vi.fn(async () => "ok");
     const shell = makeShell({ serviceCall });
-    g.__natstackShell = shell;
+    g.__vibez1Shell = shell;
     const transport = createPanelTransport();
     const handler = vi.fn();
     transport.onMessage(handler);

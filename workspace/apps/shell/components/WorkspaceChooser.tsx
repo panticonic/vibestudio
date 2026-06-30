@@ -27,7 +27,7 @@ import {
   wizardFormDataAtom,
   workspaceErrorAtom,
 } from "../state/appModeAtoms";
-import type { WorkspaceEntry } from "@natstack/shared/types";
+import type { WorkspaceEntry } from "@vibez1/shared/types";
 import { HostTargetsSection } from "./HostTargetsSection";
 
 function formatRelativeTime(timestamp: number): string {
@@ -108,7 +108,7 @@ export function WorkspaceChooser() {
       {/* Header */}
       <Flex direction="column" align="center" gap="2" mb="5">
         <Heading size="7" weight="bold">
-          NatStack
+          Vibez1
         </Heading>
         <Text size="2" color="gray">
           Select a workspace to get started

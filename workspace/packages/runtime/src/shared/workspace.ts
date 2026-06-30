@@ -9,5 +9,5 @@ export type {
   WorkspaceUnitLogRecord,
   WorkspaceUnitsClient,
   WorkspaceUnitStatus,
-} from "@natstack/shared/workspace/client";
-export { createWorkspaceClient } from "@natstack/shared/workspace/client";
+} from "@vibez1/shared/workspace/client";
+export { createWorkspaceClient } from "@vibez1/shared/workspace/client";

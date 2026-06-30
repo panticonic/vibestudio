@@ -34,7 +34,7 @@ describe("startPanelAssetFacade", () => {
         status: 200,
         headers: {
           "content-type": "text/html; charset=utf-8",
-          "x-natstack-build-revision": "7",
+          "x-vibez1-build-revision": "7",
           // A stale hop header that must NOT be echoed (body is re-framed + re-sent).
           "content-encoding": "gzip",
         },
@@ -48,7 +48,7 @@ describe("startPanelAssetFacade", () => {
       });
       expect(res.status).toBe(200);
       expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
-      expect(res.headers.get("x-natstack-build-revision")).toBe("7");
+      expect(res.headers.get("x-vibez1-build-revision")).toBe("7");
       // content-encoding stripped → the outer fetch reads plain bytes.
       expect(res.headers.get("content-encoding")).toBeNull();
       expect(await res.text()).toBe(body);

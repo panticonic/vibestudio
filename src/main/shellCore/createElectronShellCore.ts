@@ -1,5 +1,5 @@
-import type { PanelRegistry } from "@natstack/shared/panelRegistry";
-import { PanelManager } from "@natstack/shared/shell/panelManager";
+import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import { PanelManager } from "@vibez1/shared/shell/panelManager";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -7,17 +7,17 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@natstack/shared/shell/workspaceStateClient";
+} from "@vibez1/shared/shell/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-} from "@natstack/shared/runtime/entitySpec";
+} from "@vibez1/shared/runtime/entitySpec";
 import type {
   IndexablePanel,
   PanelSearchIndex,
   PanelSearchResult,
-} from "@natstack/shared/panelSearchTypes";
+} from "@vibez1/shared/panelSearchTypes";
 import type { ServerClient } from "../serverClient.js";
 import { createElectronLocalViewStateStore } from "./localViewState.js";
 
@@ -29,7 +29,7 @@ export function createElectronShellCore(deps: {
   registry: PanelRegistry;
   serverClient: ServerClient;
   gatewayConfig: { serverUrl: string };
-  workspaceConfig?: import("@natstack/shared/workspace/types").WorkspaceConfig;
+  workspaceConfig?: import("@vibez1/shared/workspace/types").WorkspaceConfig;
 }) {
   const call = <T>(service: string, method: string, args: unknown[]) =>
     deps.serverClient.call(service, method, args) as Promise<T>;

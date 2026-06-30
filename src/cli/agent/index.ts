@@ -1,7 +1,7 @@
-import type { RuntimeEntityHandle } from "@natstack/shared/runtime/entitySpec";
-import { docsMethods } from "@natstack/shared/serviceSchemas/docs";
-import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
-import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
+import type { RuntimeEntityHandle } from "@vibez1/shared/runtime/entitySpec";
+import { docsMethods } from "@vibez1/shared/serviceSchemas/docs";
+import { runtimeMethods } from "@vibez1/shared/serviceSchemas/runtime";
+import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { loadCliCredentials, saveCliCredentials, type CliCredentials } from "../credentialStore.js";
 import { pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";
@@ -27,8 +27,8 @@ import { typedClient } from "../typedClients.js";
 import { skillCommand } from "./skillCommand.js";
 
 /**
- * `natstack agent ...` — durable agent sessions backed by `session` runtime
- * entities on a paired NatStack server, plus generic RPC access (call,
+ * `vibez1 agent ...` — durable agent sessions backed by `session` runtime
+ * entities on a paired Vibez1 server, plus generic RPC access (call,
  * services, skills, logs) scoped to the paired device credential.
  */
 
@@ -37,10 +37,10 @@ const DEFAULT_SESSION = "default";
 function requireWorkspaceCredentials(): CliCredentials {
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError('not paired — run `natstack remote pair "natstack://connect?..."` first');
+    throw new AuthError('not paired — run `vibez1 remote pair "vibez1://connect?..."` first');
   }
   if (!creds.workspaceName) {
-    throw new AuthError("no remote workspace selected — run `natstack remote select <workspace>`");
+    throw new AuthError("no remote workspace selected — run `vibez1 remote select <workspace>`");
   }
   return creds;
 }
@@ -71,19 +71,19 @@ async function sessionEntityExists(client: RpcClient, entityId: string): Promise
 async function attach(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const link = inv.positionals.find((arg) => arg.startsWith("natstack://"));
+    const link = inv.positionals.find((arg) => arg.startsWith("vibez1://"));
     const workspace =
       typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : "";
     const name = sessionName({
       ...inv,
-      positionals: inv.positionals.filter((arg) => !arg.startsWith("natstack://")),
+      positionals: inv.positionals.filter((arg) => !arg.startsWith("vibez1://")),
     });
     let creds = loadCliCredentials();
     const url = typeof inv.flags["url"] === "string" ? inv.flags["url"] : undefined;
     const code = typeof inv.flags["code"] === "string" ? inv.flags["code"] : undefined;
     if (creds && (link || url || code)) {
       throw new UsageError(
-        "already paired — run `natstack remote logout` to re-pair, or attach without --url/--code"
+        "already paired — run `vibez1 remote logout` to re-pair, or attach without --url/--code"
       );
     }
     if (!creds) {
@@ -92,7 +92,7 @@ async function attach(inv: ParsedInvocation): Promise<number> {
         saveCliCredentials(creds);
       } else if (process.stdin.isTTY) {
         throw new AuthError(
-          "not paired — pass --url and --code (or a natstack:// link) to pair while attaching"
+          "not paired — pass --url and --code (or a vibez1:// link) to pair while attaching"
         );
       } else {
         throw new AuthError("not paired and no pairing options given");
@@ -104,7 +104,7 @@ async function attach(inv: ParsedInvocation): Promise<number> {
     }
     if (!creds.workspaceName) {
       throw new AuthError(
-        "no remote workspace selected — pass --workspace <name> or run `natstack remote select <workspace>`"
+        "no remote workspace selected — pass --workspace <name> or run `vibez1 remote select <workspace>`"
       );
     }
     const client = new RpcClient(creds);
@@ -169,7 +169,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
   try {
     const name = sessionName(inv);
     const session = loadAgentSession(name);
-    if (!session) throw new CliError(`no session named ${name} — run \`natstack agent attach\``);
+    if (!session) throw new CliError(`no session named ${name} — run \`vibez1 agent attach\``);
     const creds = requireWorkspaceCredentials();
     const client = new RpcClient(creds);
     const live = await sessionEntityExists(client, session.entityId);
@@ -285,7 +285,7 @@ async function call(inv: ParsedInvocation): Promise<number> {
     // names; only direct server calls require the SERVICE.METHOD form.
     if (!method || (!target && !method.includes("."))) {
       throw new UsageError(
-        "usage: natstack agent call SERVICE.METHOD [ARGS_JSON] [--target ID] (plain METHOD with --target)"
+        "usage: vibez1 agent call SERVICE.METHOD [ARGS_JSON] [--target ID] (plain METHOD with --target)"
       );
     }
     let args: unknown[] = [];
@@ -370,7 +370,7 @@ async function logs(inv: ParsedInvocation): Promise<number> {
   try {
     const unit = inv.positionals[0];
     if (!unit) {
-      throw new UsageError("usage: natstack agent logs UNIT [--since MS] [--level L] [--limit N]");
+      throw new UsageError("usage: vibez1 agent logs UNIT [--since MS] [--level L] [--limit N]");
     }
     const options: {
       since?: number;
@@ -414,7 +414,7 @@ async function diag(inv: ParsedInvocation): Promise<number> {
   try {
     const unit = inv.positionals[0];
     if (!unit) {
-      throw new UsageError("usage: natstack agent diag UNIT [--since MS] [--limit N]");
+      throw new UsageError("usage: vibez1 agent diag UNIT [--since MS] [--limit N]");
     }
     const options: { since?: number; limit?: number } = {};
     if (typeof inv.flags["since"] === "string") {
@@ -480,7 +480,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "attach",
     summary: "Attach (create or reuse) a durable agent session entity",
-    usage: "natstack agent attach [NAME] [--url U --code C] [--workspace NAME]",
+    usage: "vibez1 agent attach [NAME] [--url U --code C] [--workspace NAME]",
     flags: [
       { name: "url", takesValue: true, description: "Server URL (pairs first when not paired)" },
       { name: "code", takesValue: true, description: "Pairing code (with --url)" },
@@ -493,7 +493,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "status",
     summary: "Show a session and verify its entity is still live",
-    usage: "natstack agent status [NAME]",
+    usage: "vibez1 agent status [NAME]",
     flags: [JSON_FLAG],
     run: status,
   },
@@ -501,7 +501,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "detach",
     summary: "Retire a session entity and delete the local session file",
-    usage: "natstack agent detach [NAME] [--rm]",
+    usage: "vibez1 agent detach [NAME] [--rm]",
     flags: [
       { name: "rm", takesValue: false, description: "Also remove the session's context folder" },
       JSON_FLAG,
@@ -512,7 +512,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "sessions",
     summary: "List local sessions reconciled against live entities",
-    usage: "natstack agent sessions",
+    usage: "vibez1 agent sessions",
     flags: [JSON_FLAG],
     run: sessions,
   },
@@ -521,7 +521,7 @@ export const agentCommands: CliCommand[] = [
     name: "call",
     summary: "Invoke an RPC method (optionally relayed to a runtime target)",
     usage:
-      "natstack agent call SERVICE.METHOD [ARGS_JSON] [--target ID] (plain METHOD with --target)",
+      "vibez1 agent call SERVICE.METHOD [ARGS_JSON] [--target ID] (plain METHOD with --target)",
     flags: [{ name: "target", takesValue: true, description: "Relay target id" }, JSON_FLAG],
     run: call,
   },
@@ -529,7 +529,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "services",
     summary: "List registered RPC services, or describe one",
-    usage: "natstack agent services [NAME]",
+    usage: "vibez1 agent services [NAME]",
     flags: [JSON_FLAG],
     run: services,
   },
@@ -537,7 +537,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "skills",
     summary: "List workspace skills, or print one SKILL.md",
-    usage: "natstack agent skills [NAME]",
+    usage: "vibez1 agent skills [NAME]",
     flags: [JSON_FLAG],
     run: skills,
   },
@@ -545,7 +545,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "logs",
     summary: "Read workspace unit logs",
-    usage: "natstack agent logs UNIT [--since MS] [--level L] [--limit N]",
+    usage: "vibez1 agent logs UNIT [--since MS] [--level L] [--limit N]",
     flags: [
       { name: "since", takesValue: true, description: "Epoch ms lower bound" },
       { name: "level", takesValue: true, description: "Minimum level (debug|info|warn|error)" },
@@ -558,7 +558,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "diag",
     summary: "Unit health: status, last error, recent build events, error/log tail",
-    usage: "natstack agent diag UNIT [--since MS] [--limit N]",
+    usage: "vibez1 agent diag UNIT [--since MS] [--limit N]",
     flags: [
       { name: "since", takesValue: true, description: "Epoch ms lower bound" },
       { name: "limit", takesValue: true, description: "Max log records (<=1000)" },

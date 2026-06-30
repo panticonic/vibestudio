@@ -6,7 +6,7 @@
  *
  * Does NOT include: stateArgs, panel handles, panel-specific features.
  */
-import { createRpcClient, type EnvelopeRpcTransport } from "@natstack/rpc";
+import { createRpcClient, type EnvelopeRpcTransport } from "@vibez1/rpc";
 import { createWorkerdClient } from "../shared/workerd.js";
 import type { GatewayConfig } from "../shared/globals.js";
 import { createMainCaller } from "../shared/mainRpc.js";
@@ -95,7 +95,7 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
   };
 
   // Theme events come from:
-  // - Electron: via __natstackElectron.addEventListener
+  // - Electron: via __vibez1Electron.addEventListener
   // - Server WS: via rpc.on (for both Electron and standalone)
   const themeUnsubscribers = [rpc.on("runtime:theme", (event) => onThemeEvent(event.payload))];
 
@@ -146,8 +146,8 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     rpc.on("runtime:palette-run", (event) => onPaletteRunEvent(event.payload)),
   ];
 
-  // Wire __natstackElectron events if available (Electron mode)
-  const electron = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
+  // Wire __vibez1Electron events if available (Electron mode)
+  const electron = (globalThis as any).__vibez1Shell ?? (globalThis as any).__vibez1Electron;
   let electronListenerId: number | undefined;
   if (electron?.addEventListener) {
     electronListenerId = electron.addEventListener((event: string, payload: unknown) => {

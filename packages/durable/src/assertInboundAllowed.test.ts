@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AuthenticatedCaller } from "@natstack/rpc";
+import type { AuthenticatedCaller } from "@vibez1/rpc";
 import { DurableObjectBase, rpc } from "./index.js";
 import { createTestDO } from "./test-utils.js";
 

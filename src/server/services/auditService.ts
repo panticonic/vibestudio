@@ -1,7 +1,7 @@
 import z from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { AuditLog } from "@natstack/shared/credentials/audit";
-import type { AuditEntry, CredentialAuditEvent } from "@natstack/shared/credentials/types";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { AuditLog } from "@vibez1/shared/credentials/audit";
+import type { AuditEntry, CredentialAuditEvent } from "@vibez1/shared/credentials/types";
 
 const auditQuerySchema = z.object({
   filter: z

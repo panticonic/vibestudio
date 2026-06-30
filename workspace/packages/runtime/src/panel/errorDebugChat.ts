@@ -23,7 +23,7 @@ export type PanelErrorDiagnosticLauncher = (
 ) => Promise<PanelErrorDiagnosticChatResult>;
 
 interface PanelErrorDiagnosticLauncherGlobal {
-  __natstackPanelErrorDiagnostics?: PanelErrorDiagnosticLauncher;
+  __vibez1PanelErrorDiagnostics?: PanelErrorDiagnosticLauncher;
 }
 
 interface CaptureOk<T> {
@@ -51,7 +51,7 @@ export function installPanelErrorDiagnosticLauncher(options: {
   contextId?: string | null;
 }): void {
   const g = globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal;
-  g.__natstackPanelErrorDiagnostics = (request) =>
+  g.__vibez1PanelErrorDiagnostics = (request) =>
     openPanelErrorDiagnosticChat(request, options);
 }
 
@@ -120,7 +120,7 @@ export function buildPanelRenderErrorPrompt(input: {
     .filter(Boolean)
     .join("\n\n");
   const prompt = [
-    `A NatStack ${surfaceName} hit a React render error and opened this child chat for debugging.`,
+    `A Vibez1 ${surfaceName} hit a React render error and opened this child chat for debugging.`,
     "",
     "Your task:",
     "1. Inspect the failing panel source and the recent local changes.",

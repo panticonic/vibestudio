@@ -71,7 +71,7 @@ entity and can change after a panel navigation or reopen.
 ## Path Conventions
 
 - `eval`, `inline_ui`, `load_action_bar`, and `feedback_custom` `path`
-  parameters are context-relative file paths such as `.natstack/eval/audit.ts`;
+  parameters are context-relative file paths such as `.vibez1/eval/audit.ts`;
   do not prefix these with `/`.
 - Runtime `fs.*` methods are rooted at the caller's current context folder. A
   leading slash in `fs.readFile("/panels/chat/package.json")` means
@@ -122,10 +122,10 @@ These are built on first use. Pass them in the tool's `imports` parameter:
 | ----------------------- | -------------------------------- | ------------------------------------- |
 | `@workspace-skills/*`   | auto-resolved                    | Just `import` — built on first use    |
 | `@workspace/*` packages | auto-resolved                    | Just `import` — built on first use    |
-| `@natstack/*` packages  | auto-resolved                    | Just `import` — built on first use    |
+| `@vibez1/*` packages  | auto-resolved                    | Just `import` — built on first use    |
 | npm packages            | `imports: { "lodash": "npm:^4.17.21" }` | Requires explicit `imports` parameter |
 
-Workspace packages (`@workspace*`, `@natstack/*`) are **auto-resolved** — just write the `import` statement in your code and they're built on-demand. No `imports` parameter needed.
+Workspace packages (`@workspace*`, `@vibez1/*`) are **auto-resolved** — just write the `import` statement in your code and they're built on-demand. No `imports` parameter needed.
 
 npm packages require the `imports` parameter with `"npm:<version>"` for raw inline code, using registry semver/range values such as `"npm:1"`, `"npm:1.3.0"`, or `"npm:^4.17.21"`. File-loaded code can infer dependency versions from the nearest `package.json`.
 

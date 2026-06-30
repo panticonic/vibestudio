@@ -1,5 +1,5 @@
-import type { UnitApprovalCoordinator, UnitApprovalDecision } from "@natstack/unit-host";
-import type { PendingUnitBatchApproval, UnitBatchEntry } from "@natstack/shared/approvals";
+import type { UnitApprovalCoordinator, UnitApprovalDecision } from "@vibez1/unit-host";
+import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibez1/shared/approvals";
 
 export interface UnitApprovalQueueLike {
   request(req: {

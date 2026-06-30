@@ -6,7 +6,7 @@
  */
 
 import { ipcRenderer } from "electron";
-import type { RpcEnvelope } from "@natstack/rpc";
+import type { RpcEnvelope } from "@vibez1/rpc";
 import type { TransportBridge } from "./wsTransport.js";
 
 type EnvelopeHandler = (envelope: RpcEnvelope) => void;
@@ -14,14 +14,14 @@ type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 /**
  * Create an IPC-based transport bridge for the shell.
  *
- * Messages are sent via ipcRenderer.send("natstack:rpc:send", envelope)
- * and received via ipcRenderer.on("natstack:rpc:message", (event, envelope)).
+ * Messages are sent via ipcRenderer.send("vibez1:rpc:send", envelope)
+ * and received via ipcRenderer.on("vibez1:rpc:message", (event, envelope)).
  */
 export function createIpcTransport(): TransportBridge {
   const listeners = new Set<EnvelopeHandler>();
 
   // Receive messages from main process
-  ipcRenderer.on("natstack:rpc:message", (_event, envelope: RpcEnvelope) => {
+  ipcRenderer.on("vibez1:rpc:message", (_event, envelope: RpcEnvelope) => {
     for (const listener of listeners) {
       try {
         listener(envelope);
@@ -33,7 +33,7 @@ export function createIpcTransport(): TransportBridge {
 
   return {
     async send(envelope: RpcEnvelope): Promise<void> {
-      ipcRenderer.send("natstack:rpc:send", envelope);
+      ipcRenderer.send("vibez1:rpc:send", envelope);
     },
 
     onMessage(handler: EnvelopeHandler): () => void {

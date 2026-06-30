@@ -13,8 +13,8 @@
  * Extracted from `src/server/index.ts` so both the boot path and tests can
  * call it without standing up the full container.
  */
-import type { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 
 export type StartupReconciliationDispatcher = <T>(method: string, ...args: unknown[]) => Promise<T>;
 

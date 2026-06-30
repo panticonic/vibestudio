@@ -8,18 +8,18 @@
  * operate on the main workspace head.
  */
 
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
-import type { AppCapability } from "@natstack/shared/unitManifest";
-import type { EntityCache } from "@natstack/shared/runtime/entityCache";
-import { splitRepoPath } from "@natstack/shared/runtime/entitySpec";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
+import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import { splitRepoPath } from "@vibez1/shared/runtime/entitySpec";
 import {
   vcsMethods,
   vcsApplyEditsInputSchema,
   type VcsRecallInput,
   type VcsPushInput,
-} from "@natstack/shared/serviceSchemas/vcs";
-import { normalizeWorkspaceRepoPath } from "@natstack/shared/workspace/remotes";
+} from "@vibez1/shared/serviceSchemas/vcs";
+import { normalizeWorkspaceRepoPath } from "@vibez1/shared/workspace/remotes";
 import type { WorkspaceVcs } from "../gadVcs/workspaceVcs.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../gadVcs/store.js";
@@ -305,7 +305,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           };
         }
         case "commit": {
-          const [input] = args as [import("@natstack/shared/serviceSchemas/vcs").VcsCommitInput];
+          const [input] = args as [import("@vibez1/shared/serviceSchemas/vcs").VcsCommitInput];
           if (!input.message || !input.message.trim()) {
             throw new Error("vcs.commit requires a message");
           }

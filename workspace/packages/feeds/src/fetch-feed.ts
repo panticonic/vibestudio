@@ -22,7 +22,7 @@ export type FetchFeedResult =
   | { status: "error"; error: string; httpStatus?: number };
 
 const DEFAULT_TIMEOUT_MS = 20_000;
-const DEFAULT_USER_AGENT = "NatStack-Feeds/0.1 (+https://natstack.dev)";
+const DEFAULT_USER_AGENT = "Vibez1-Feeds/0.1 (+https://vibez1.dev)";
 
 export async function fetchFeed(url: string, options: FetchFeedOptions = {}): Promise<FetchFeedResult> {
   const fetcher = options.fetcher ?? fetch;

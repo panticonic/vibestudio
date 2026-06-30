@@ -39,7 +39,7 @@ import {
   type WebViewEntry,
 } from "./webViewStack";
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
-import { PANEL_UI_IDLE_SWEEP_MS } from "@natstack/shared/constants";
+import { PANEL_UI_IDLE_SWEEP_MS } from "@vibez1/shared/constants";
 import { parseHostConfig, getExternalHost } from "../services/panelUrls";
 import { materializeMobilePanel } from "../services/panelMaterializer";
 import { handleExternalOpen, type ExternalOpenPayload } from "../services/oauthLoopback";
@@ -59,7 +59,7 @@ import {
   type AddressAutocompleteItem,
   type PanelAddressOptions,
   type PanelRepoState,
-} from "@natstack/shared/panelChrome";
+} from "@vibez1/shared/panelChrome";
 import {
   applySearchTemplate,
   canonicalizeBrowserHistoryUrl,
@@ -69,17 +69,17 @@ import {
   type BrowserNavigationIntent,
   type AddressNavigationMode,
   type PanelCommandId,
-} from "@natstack/shared/panelCommands";
-import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
-import { filterRuntimeApprovals } from "@natstack/shared/bootstrapApprovals";
+} from "@vibez1/shared/panelCommands";
+import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
+import { filterRuntimeApprovals } from "@vibez1/shared/bootstrapApprovals";
 import {
   createApprovalStateController,
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
   type ApprovalStateController,
-} from "@natstack/shared/shell/approvalState";
+} from "@vibez1/shared/shell/approvalState";
 import type { HostConfig } from "../services/panelUrls";
-import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
+import type { ApprovalDecision, PendingApproval } from "@vibez1/shared/approvals";
 const PANEL_MATERIALIZE_TIMEOUT_MS = 45_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -93,7 +93,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 }
 
 function smokePhase(phase: string, extra?: Record<string, unknown>): void {
-  console.log(`[NatStackMobileSmoke] phase=${phase}`, extra ?? "");
+  console.log(`[Vibez1MobileSmoke] phase=${phase}`, extra ?? "");
 }
 
 export function MainScreen() {
@@ -705,7 +705,7 @@ export function MainScreen() {
         });
       } else {
         pushToast({
-          title: notif.title ?? "NatStack",
+          title: notif.title ?? "Vibez1",
           message: notif.message ?? "",
           tone: "info",
         });

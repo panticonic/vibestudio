@@ -1,5 +1,5 @@
 {
-  "name": "@natstack/shared",
+  "name": "@vibez1/shared",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,9 +12,9 @@
     "build": "echo 'source-only package, no build needed'"
   },
   "dependencies": {
-    "@natstack/dev-log": "workspace:*",
-    "@natstack/env-paths": "workspace:*",
-    "@natstack/rpc": "workspace:*",
-    "@natstack/types": "workspace:*"
+    "@vibez1/dev-log": "workspace:*",
+    "@vibez1/env-paths": "workspace:*",
+    "@vibez1/rpc": "workspace:*",
+    "@vibez1/types": "workspace:*"
   }
 }

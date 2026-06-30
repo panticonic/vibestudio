@@ -8,47 +8,47 @@ import {
 } from "./asyncTracking";
 
 describe("getAsyncTracking", () => {
-  const originalTracking = (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+  const originalTracking = (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
 
   afterEach(() => {
     // Restore original state
     if (originalTracking !== undefined) {
-      (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"] = originalTracking;
+      (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"] = originalTracking;
     } else {
-      delete (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+      delete (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
     }
   });
 
-  it("returns undefined when __natstackAsyncTracking__ is not set", () => {
-    delete (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+  it("returns undefined when __vibez1AsyncTracking__ is not set", () => {
+    delete (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
     expect(getAsyncTracking()).toBeUndefined();
   });
 
   it("returns the tracking API when set", () => {
     const mockAPI = { start: () => ({ id: 1, promises: new Set(), pauseCount: 0 }) };
-    (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"] = mockAPI;
+    (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"] = mockAPI;
     expect(getAsyncTracking()).toBe(mockAPI);
   });
 });
 
 describe("hasAsyncTracking", () => {
-  const originalTracking = (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+  const originalTracking = (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
 
   afterEach(() => {
     if (originalTracking !== undefined) {
-      (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"] = originalTracking;
+      (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"] = originalTracking;
     } else {
-      delete (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+      delete (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
     }
   });
 
   it("returns false when not available", () => {
-    delete (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+    delete (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
     expect(hasAsyncTracking()).toBe(false);
   });
 
   it("returns true when available", () => {
-    (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"] = {};
+    (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"] = {};
     expect(hasAsyncTracking()).toBe(true);
   });
 });
@@ -210,13 +210,13 @@ describe("createFallbackAsyncTracking", () => {
 });
 
 describe("getAsyncTrackingOrFallback", () => {
-  const originalTracking = (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+  const originalTracking = (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
 
   afterEach(() => {
     if (originalTracking !== undefined) {
-      (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"] = originalTracking;
+      (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"] = originalTracking;
     } else {
-      delete (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+      delete (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
     }
   });
 
@@ -233,7 +233,7 @@ describe("getAsyncTrackingOrFallback", () => {
       pending: () => 0,
       activeContexts: () => [],
     };
-    (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"] = mockAPI;
+    (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"] = mockAPI;
 
     const tracking = getAsyncTrackingOrFallback();
     const ctx = tracking.start();
@@ -241,7 +241,7 @@ describe("getAsyncTrackingOrFallback", () => {
   });
 
   it("returns fallback when native not available", () => {
-    delete (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+    delete (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
 
     const tracking = getAsyncTrackingOrFallback();
     expect(tracking).toBeDefined();
@@ -250,7 +250,7 @@ describe("getAsyncTrackingOrFallback", () => {
   });
 
   it("fallback provides complete API", () => {
-    delete (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"];
+    delete (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"];
 
     const tracking = getAsyncTrackingOrFallback();
     expect(typeof tracking.start).toBe("function");

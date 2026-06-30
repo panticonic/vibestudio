@@ -60,9 +60,9 @@ import { base64ToUint8Array } from "./image-utils.js";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 import { z } from "zod";
 import type { PubSubClient } from "./client.js";
-import type { RecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordinator";
+import type { RecoveryCoordinator } from "@vibez1/shared/shell/recoveryCoordinator";
 
-const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
+const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
 /** Wire attachment shape — base64 data string, not Uint8Array. */
 interface WireAttachment {
   id: string;

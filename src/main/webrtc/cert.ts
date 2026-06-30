@@ -107,7 +107,7 @@ export function ensurePersistentRoom(roomFile: string): string {
  * (DER X.509 wrapped in `BEGIN CERTIFICATE`) and the PKCS#8 private key — both in
  * the shapes `node-datachannel`'s `certificatePemFile`/`keyPemFile` expect.
  */
-export function generateSelfSignedEcCert(commonName = "natstack-webrtc"): {
+export function generateSelfSignedEcCert(commonName = "vibez1-webrtc"): {
   certPem: string;
   keyPem: string;
 } {

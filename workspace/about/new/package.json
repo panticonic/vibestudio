@@ -2,7 +2,7 @@
   "name": "@workspace-about/new",
   "version": "0.1.0",
   "private": true,
-  "natstack": {
+  "vibez1": {
     "title": "New Panel",
     "hiddenInLauncher": true,
     "autoArchiveWhenEmpty": true

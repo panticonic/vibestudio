@@ -10,13 +10,13 @@ const nativeCompileFunction: CompileFunction = (argNames, body) =>
   new Function(...argNames, body) as (...args: unknown[]) => unknown;
 
 /**
- * Resolves the realm's compile function: a global `__natstackCompileFunction__` override
+ * Resolves the realm's compile function: a global `__vibez1CompileFunction__` override
  * (installed by realms where `new Function` is blocked — e.g. the workerd EvalDO kernel,
  * backed by an UnsafeEval binding) — else native `new Function`. Mirrors how the realm
- * provides `__natstackRequire__`.
+ * provides `__vibez1Require__`.
  */
 export const defaultCompileFunction: CompileFunction = (argNames, body) => {
-  const override = (globalThis as Record<string, unknown>)["__natstackCompileFunction__"] as
+  const override = (globalThis as Record<string, unknown>)["__vibez1CompileFunction__"] as
     | CompileFunction
     | undefined;
   return (override ?? nativeCompileFunction)(argNames, body);
@@ -30,7 +30,7 @@ export interface ExecuteOptions {
   bindings?: Record<string, unknown>;
   /** Console proxy for capturing output */
   console?: Console;
-  /** Custom require function. If not provided, uses globalThis.__natstackRequire__ */
+  /** Custom require function. If not provided, uses globalThis.__vibez1Require__ */
   require?: (id: string) => unknown;
   /** Function constructor. If not provided, uses `new Function` (`defaultCompileFunction`). */
   compileFunction?: CompileFunction;
@@ -48,7 +48,7 @@ export interface ExecuteResult {
  * Returns undefined if not available.
  */
 export function getDefaultRequire(): ((id: string) => unknown) | undefined {
-  return (globalThis as Record<string, unknown>)["__natstackRequire__"] as
+  return (globalThis as Record<string, unknown>)["__vibez1Require__"] as
     | ((id: string) => unknown)
     | undefined;
 }
@@ -58,7 +58,7 @@ export function getDefaultRequire(): ((id: string) => unknown) | undefined {
  * Returns undefined if not available.
  */
 export function getAsyncRequire(): ((id: string) => Promise<unknown>) | undefined {
-  return (globalThis as Record<string, unknown>)["__natstackRequireAsync__"] as
+  return (globalThis as Record<string, unknown>)["__vibez1RequireAsync__"] as
     | ((id: string) => Promise<unknown>)
     | undefined;
 }
@@ -68,7 +68,7 @@ export function getAsyncRequire(): ((id: string) => Promise<unknown>) | undefine
  * Returns undefined if not available.
  */
 export function getPreloadModules(): ((ids: string[]) => Promise<unknown[]>) | undefined {
-  return (globalThis as Record<string, unknown>)["__natstackPreloadModules__"] as
+  return (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"] as
     | ((ids: string[]) => Promise<unknown[]>)
     | undefined;
 }
@@ -96,7 +96,7 @@ export function unavailableModuleMessage(spec: string): string {
  * This allows early failure with a descriptive error instead of runtime crashes.
  *
  * @param requires - Array of module specifiers to validate
- * @param requireFn - Optional custom require function (defaults to __natstackRequire__)
+ * @param requireFn - Optional custom require function (defaults to __vibez1Require__)
  * @returns Validation result with error details if invalid
  */
 export function validateRequires(
@@ -109,7 +109,7 @@ export function validateRequires(
     return {
       valid: false,
       error:
-        "__natstackRequire__ not available. Provide a custom require function or ensure the runtime is initialized.",
+        "__vibez1Require__ not available. Provide a custom require function or ensure the runtime is initialized.",
     };
   }
 
@@ -141,7 +141,7 @@ export interface PreloadRequiresResult {
 
 /**
  * Preload all required modules asynchronously before execution.
- * Uses __natstackRequireAsync__ to load modules from CDN if not pre-bundled.
+ * Uses __vibez1RequireAsync__ to load modules from CDN if not pre-bundled.
  *
  * @param requires - Array of module specifiers to preload
  * @returns Promise that resolves when all modules are loaded
@@ -201,13 +201,13 @@ export function execute(code: string, options: ExecuteOptions = {}): ExecuteResu
 
   const require =
     options.require ??
-    ((globalThis as Record<string, unknown>)["__natstackRequire__"] as
+    ((globalThis as Record<string, unknown>)["__vibez1Require__"] as
       | ((id: string) => unknown)
       | undefined);
 
   if (!require) {
     throw new Error(
-      "__natstackRequire__ not available. Provide a custom require function or ensure the runtime is initialized."
+      "__vibez1Require__ not available. Provide a custom require function or ensure the runtime is initialized."
     );
   }
 

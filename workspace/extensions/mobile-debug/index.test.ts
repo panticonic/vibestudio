@@ -2,7 +2,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "@natstack/extension";
+import type { ExtensionContext } from "@vibez1/extension";
 import { activate, pidScopedLogcatArgs } from "./index.js";
 
 describe("@workspace-extensions/mobile-debug", () => {
@@ -13,20 +13,20 @@ describe("@workspace-extensions/mobile-debug", () => {
       "-v",
       "time",
     ]);
-    expect(pidScopedLogcatArgs(["logcat", "-v", "time", "NatStack:D"], "1234")).toEqual([
+    expect(pidScopedLogcatArgs(["logcat", "-v", "time", "Vibez1:D"], "1234")).toEqual([
       "logcat",
       "--pid=1234",
       "-v",
       "time",
-      "NatStack:D",
+      "Vibez1:D",
     ]);
   });
 
   it("activates without a repo root and reports missing repo-dependent capabilities", async () => {
-    const root = await mkdtemp(join(tmpdir(), "natstack-mobile-debug-test-"));
-    const previousRepoRoot = process.env["NATSTACK_REPO_ROOT"];
+    const root = await mkdtemp(join(tmpdir(), "vibez1-mobile-debug-test-"));
+    const previousRepoRoot = process.env["VIBEZ1_REPO_ROOT"];
     const previousPath = process.env["PATH"];
-    process.env["NATSTACK_REPO_ROOT"] = root;
+    process.env["VIBEZ1_REPO_ROOT"] = root;
     process.env["PATH"] = "";
     const degraded = vi.fn();
     try {
@@ -46,7 +46,7 @@ describe("@workspace-extensions/mobile-debug", () => {
 
       expect(degraded).toHaveBeenCalledWith(
         expect.objectContaining({
-          summary: "Mobile debug activated without a NatStack repo root",
+          summary: "Mobile debug activated without a Vibez1 repo root",
         })
       );
       await expect(api.buildAndroid()).rejects.toMatchObject({ code: "EBUILD" });
@@ -54,13 +54,13 @@ describe("@workspace-extensions/mobile-debug", () => {
         adb: false,
         apkSigned: false,
         issues: expect.arrayContaining([
-          "Could not locate NatStack repo root containing apps/mobile/android",
+          "Could not locate Vibez1 repo root containing apps/mobile/android",
           "adb is not on PATH",
         ]),
       });
     } finally {
-      if (previousRepoRoot === undefined) delete process.env["NATSTACK_REPO_ROOT"];
-      else process.env["NATSTACK_REPO_ROOT"] = previousRepoRoot;
+      if (previousRepoRoot === undefined) delete process.env["VIBEZ1_REPO_ROOT"];
+      else process.env["VIBEZ1_REPO_ROOT"] = previousRepoRoot;
       if (previousPath === undefined) delete process.env["PATH"];
       else process.env["PATH"] = previousPath;
     }

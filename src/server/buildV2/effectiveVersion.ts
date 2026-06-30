@@ -18,7 +18,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import type { PackageGraph } from "./packageGraph.js";
-import { getUserDataPath } from "@natstack/env-paths";
+import { getUserDataPath } from "@vibez1/env-paths";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -209,7 +209,7 @@ const ROOT_DEPENDENCY_FINGERPRINT_FILES = ["package.json", "pnpm-lock.yaml", "pn
 let rootDependencyFingerprintCache: { root: string; value: string } | null = null;
 
 function rootDependencyFingerprint(): string {
-  const root = process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
+  const root = process.env["VIBEZ1_APP_ROOT"] ?? process.cwd();
   if (rootDependencyFingerprintCache?.root === root) {
     return rootDependencyFingerprintCache.value;
   }

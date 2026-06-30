@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Dialog, Flex, Text, TextField, Callout, Box } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { AppDialog } from "@workspace/ui";
-import { createConnectDeepLink, parseConnectLink, type ConnectPairing } from "@natstack/shared/connect";
+import { createConnectDeepLink, parseConnectLink, type ConnectPairing } from "@vibez1/shared/connect";
 import {
   incomingPairLink,
   remoteCred,
@@ -28,7 +28,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
 
   useEffect(() => {
-    // A `natstack://connect` link carries the full WebRTC pairing material
+    // A `vibez1://connect` link carries the full WebRTC pairing material
     // (room/fp/code/sig). The bridge hands us the parsed pairing; re-serialize it
     // into the link the exchange consumes.
     const apply = (pairing: ConnectPairing) => {
@@ -67,7 +67,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   }
 
   const onPasteLink = () => {
-    const raw = window.prompt("Paste natstack:// pairing link");
+    const raw = window.prompt("Paste vibez1:// pairing link");
     if (!raw) return;
     const parsed = parseConnectLink(raw);
     if (parsed.kind === "error") {
@@ -120,7 +120,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
       onOpenChange={onOpenChange}
       maxWidth="680px"
       title="Remote server"
-      description="Pair this app with a NatStack server running elsewhere."
+      description="Pair this app with a Vibez1 server running elsewhere."
     >
       <Box mt="3">
         {current?.isActive ? (
@@ -154,7 +154,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
               </Button>
             </Flex>
             <TextField.Root
-              placeholder="natstack://connect?room=…"
+              placeholder="vibez1://connect?room=…"
               value={pairLink}
               onChange={(e) => setPairLink(e.target.value)}
             />

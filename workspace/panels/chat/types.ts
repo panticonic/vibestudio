@@ -22,7 +22,7 @@ export interface ChatStateArgs {
   /** Send initialPrompt even if the channel already has history (e.g. a fork). */
   forceInitialPrompt?: boolean;
   systemPrompt?: string;
-  systemPromptMode?: "append" | "replace-natstack" | "replace";
+  systemPromptMode?: "append" | "replace-vibez1" | "replace";
   actionBarFile?: string | null;
   actionBarProps?: Record<string, unknown> | null;
   actionBarMaxHeight?: number | null;

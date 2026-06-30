@@ -1,6 +1,6 @@
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
-import { TokenManager } from "@natstack/shared/tokenManager";
+import { TokenManager } from "@vibez1/shared/tokenManager";
 import { createTokensService } from "./tokensService.js";
 
 function createService(tokenManager = new TokenManager()) {

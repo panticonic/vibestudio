@@ -37,7 +37,7 @@ export type {
   SameSiteValue,
   SourceScheme,
   ImportPhase,
-} from "@natstack/browser-data";
+} from "@vibez1/browser-data";
 
 export {
   BrowserNameSchema,
@@ -58,4 +58,4 @@ export {
   HISTORY_VISIT_SOURCES,
   IMPORT_DATA_TYPES,
   resolveProfilePath,
-} from "@natstack/browser-data";
+} from "@vibez1/browser-data";

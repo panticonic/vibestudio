@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { RuntimeSurface } from "@natstack/shared/runtimeSurface";
-import type { CatalogEntry } from "@natstack/shared/serviceSchemas/docs";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { RuntimeSurface } from "@vibez1/shared/runtimeSurface";
+import type { CatalogEntry } from "@vibez1/shared/serviceSchemas/docs";
 import { buildCatalog, isCatalogEntryVisible } from "./buildCatalog.js";
 
 const demo: ServiceDefinition = {

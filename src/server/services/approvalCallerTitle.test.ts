@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { EntityKind, EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityKind, EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 import { resolveApprovalCallerTitle, resolveApprovalRequester } from "./approvalCallerTitle.js";
 
 function record(
@@ -30,22 +30,22 @@ describe("resolveApprovalCallerTitle", () => {
     entityCache._onActivate(record("do:workers/agent:Agent:session", "do", "panel:nav-chat"));
     entityCache._onActivate(
       record(
-        "do:natstack/internal:EvalDO:run-1",
+        "do:vibez1/internal:EvalDO:run-1",
         "do",
         "do:workers/agent:Agent:session",
-        "natstack/internal",
+        "vibez1/internal",
         "internal"
       )
     );
     const titles = new Map([
       ["panel:nav-chat", "Agentic Chat"],
-      ["do:natstack/internal:EvalDO:run-1", "EvalDO run-1"],
+      ["do:vibez1/internal:EvalDO:run-1", "EvalDO run-1"],
     ]);
 
     expect(
       resolveApprovalCallerTitle(
         { entityCache, getTitle: (id) => titles.get(id) },
-        "do:natstack/internal:EvalDO:run-1"
+        "do:vibez1/internal:EvalDO:run-1"
       )
     ).toBe("Agentic Chat");
   });
@@ -74,10 +74,10 @@ describe("resolveApprovalCallerTitle", () => {
     });
     entityCache._onActivate({
       ...record(
-        "do:natstack/internal:EvalDO:run-1",
+        "do:vibez1/internal:EvalDO:run-1",
         "do",
         "do:workers/agent:AgentDO:session",
-        "natstack/internal",
+        "vibez1/internal",
         "internal"
       ),
       className: "EvalDO",
@@ -91,9 +91,9 @@ describe("resolveApprovalCallerTitle", () => {
     const requester = resolveApprovalRequester(
       { entityCache, getTitle: (id) => titles.get(id) },
       {
-        callerId: "do:natstack/internal:EvalDO:run-1",
+        callerId: "do:vibez1/internal:EvalDO:run-1",
         callerKind: "do",
-        repoPath: "natstack/internal",
+        repoPath: "vibez1/internal",
         effectiveVersion: "internal",
       }
     );
@@ -102,7 +102,7 @@ describe("resolveApprovalCallerTitle", () => {
       category: "eval",
       title: "Agentic Chat",
       panel: { id: "panel:nav-chat", title: "Agentic Chat" },
-      stableIdentityKey: "do:natstack/internal:EvalDO:run-1",
+      stableIdentityKey: "do:vibez1/internal:EvalDO:run-1",
       eval: {
         ownerId: "do:workers/agent:AgentDO:session",
         subKey: "turn-17",

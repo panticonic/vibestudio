@@ -63,7 +63,7 @@ const SECTION_UNIT_KIND: Record<string, GraphNode["kind"]> = {
 };
 import { diagnosticsFromError, hasErrors, type BuildDiagnostic } from "./diagnostics.js";
 import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
-import type { LibraryBuildTarget } from "@natstack/shared/serviceSchemas/build";
+import type { LibraryBuildTarget } from "@vibez1/shared/serviceSchemas/build";
 import {
   StateTransitionTrigger,
   unitsForChangedPaths,
@@ -79,7 +79,7 @@ import {
   collectTransitiveExternalDeps,
   ensureExternalDeps,
 } from "./externalDeps.js";
-import { EXTENSION_RUNTIME_ABI_VERSION } from "@natstack/shared/extensionRuntimeAbi";
+import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibez1/shared/extensionRuntimeAbi";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
 
@@ -368,7 +368,7 @@ export async function initBuildSystemV2(
   console.log("[BuildV2] Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
 
-  // Declare where @natstack/* platform packages live (workspace:* deps).
+  // Declare where @vibez1/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots);
   setBuildSourceProvider(source);
 
@@ -842,7 +842,7 @@ export async function initBuildSystemV2(
                         column: 1,
                         message:
                           `No buildable unit resolved at ${repoPath}. A ${section}/ unit needs a ` +
-                          `package.json with a "name" (and a natstack manifest). Create/fix it, then re-push.`,
+                          `package.json with a "name" (and a vibez1 manifest). Create/fix it, then re-push.`,
                       },
                     ],
                   },
@@ -999,7 +999,7 @@ export async function initBuildSystemV2(
       const resolved = resolvePinnedUnit();
       const node = resolved.node;
       if (!node) {
-        if (unitPath.startsWith("@natstack/") && options?.library) {
+        if (unitPath.startsWith("@vibez1/") && options?.library) {
           const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
           return { bundle };
         }
@@ -1048,10 +1048,10 @@ export async function initBuildSystemV2(
       resolved = resolveRequestedUnit();
       node = resolved.node;
       if (!node) {
-        // @natstack/* packages aren't in the workspace graph — they're compiled
+        // @vibez1/* packages aren't in the workspace graph — they're compiled
         // platform packages in node_modules. Build them as library bundles
         // so eval can import them.
-        if (unitPath.startsWith("@natstack/") && options?.library) {
+        if (unitPath.startsWith("@vibez1/") && options?.library) {
           const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
           return { bundle };
         }
@@ -1535,7 +1535,7 @@ async function prewarmInitialBuilds(opts: InitialBuildPrewarmOptions): Promise<v
 }
 
 function initialBuildPrewarmConcurrency(): number {
-  const raw = Number.parseInt(process.env["NATSTACK_INITIAL_BUILD_CONCURRENCY"] ?? "", 10);
+  const raw = Number.parseInt(process.env["VIBEZ1_INITIAL_BUILD_CONCURRENCY"] ?? "", 10);
   if (Number.isInteger(raw) && raw > 0) return raw;
   return 4;
 }

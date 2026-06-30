@@ -1,5 +1,5 @@
-appId: com.natstack.app
-productName: NatStack
+appId: com.vibez1.app
+productName: Vibez1
 
 directories:
   output: release
@@ -21,7 +21,7 @@ asarUnpack:
   # node_modules on the real filesystem so package resolution and native
   # executables do not cross ASAR virtual paths.
   - "node_modules/**/*"
-  # @natstack packages need to be unpacked for panel builds.
+  # @vibez1 packages need to be unpacked for panel builds.
   - "packages/**/*"
 
 extraResources:
@@ -118,5 +118,5 @@ linux:
 publish:
   provider: github
   owner: werg
-  repo: natstack
+  repo: vibez1
   releaseType: release

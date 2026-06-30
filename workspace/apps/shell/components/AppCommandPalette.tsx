@@ -50,8 +50,8 @@ export function AppCommandPalette() {
 
   useEffect(() => {
     const electron =
-      (globalThis as { __natstackShell?: unknown; __natstackElectron?: unknown }).__natstackShell ??
-      (globalThis as { __natstackElectron?: unknown }).__natstackElectron;
+      (globalThis as { __vibez1Shell?: unknown; __vibez1Electron?: unknown }).__vibez1Shell ??
+      (globalThis as { __vibez1Electron?: unknown }).__vibez1Electron;
     if (electron) return; // menu accelerator handles it
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "K")) {

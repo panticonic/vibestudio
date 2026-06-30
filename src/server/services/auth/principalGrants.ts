@@ -1,4 +1,4 @@
-import type { ConnectionGrantService } from "@natstack/shared/connectionGrants";
+import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
 import type { DeviceAuthStore } from "../deviceAuthStore.js";
 import { authError } from "./errors.js";
 

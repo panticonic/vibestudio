@@ -15,7 +15,7 @@ const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
 const mobileDir = path.join(repoRoot, "apps", "mobile");
 const androidDir = path.join(mobileDir, "android");
-const appPackage = "com.natstack.mobile";
+const appPackage = "com.vibez1.mobile";
 const appActivity = `${appPackage}/.MainActivity`;
 const metroPort = 8081;
 const apkPath = path.join(androidDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
@@ -77,10 +77,10 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`natstack mobile dev
+  console.log(`vibez1 mobile dev
 
 Usage:
-  natstack mobile dev [options]
+  vibez1 mobile dev [options]
 
 Runner options:
   --avd <name>      Start this AVD if no device is connected
@@ -239,14 +239,14 @@ async function startSignaling(port) {
 }
 
 // Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
-// natstack://connect?...` line. Attach this BEFORE the link can be printed so no
+// vibez1://connect?...` line. Attach this BEFORE the link can be printed so no
 // chunk is missed.
 function waitForPairingLink(serverChild, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buffer = "";
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const match = buffer.match(/natstack:\/\/connect\?\S+/);
+      const match = buffer.match(/vibez1:\/\/connect\?\S+/);
       if (match) {
         cleanup();
         resolve(match[0]);
@@ -386,7 +386,7 @@ async function main() {
   process.on("SIGINT", () => void cleanup(0));
   process.on("SIGTERM", () => void cleanup(0));
 
-  const readyFilePath = path.join(os.tmpdir(), `natstack-mobile-ready-${process.pid}.json`);
+  const readyFilePath = path.join(os.tmpdir(), `vibez1-mobile-ready-${process.pid}.json`);
 
   try {
     if (!await hasAdbDevice(options.device)) {
@@ -436,7 +436,7 @@ async function main() {
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
     // The server runs as a WebRTC answerer. We pick the room + pairing code; the
-    // server presents its persistent DTLS cert and logs the natstack://connect
+    // server presents its persistent DTLS cert and logs the vibez1://connect
     // link whose `fp` pins that cert.
     const room = randomUUID();
     const pairingCode = randomBytes(18).toString("base64url");
@@ -454,9 +454,9 @@ async function main() {
       env: {
         ...process.env,
         NODE_ENV: process.env.NODE_ENV ?? "development",
-        NATSTACK_WEBRTC_SIGNAL_URL: signalUrl,
-        NATSTACK_WEBRTC_ROOM: room,
-        NATSTACK_PAIRING_CODE: pairingCode,
+        VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
+        VIBEZ1_WEBRTC_ROOM: room,
+        VIBEZ1_PAIRING_CODE: pairingCode,
       },
       label: "server",
     });

@@ -2,7 +2,7 @@ import { UsageError } from "./output.js";
 
 /**
  * Declarative CLI command table. Each command belongs to a group
- * (`natstack <group> <name> ...`) and declares its flags up front so a
+ * (`vibez1 <group> <name> ...`) and declares its flags up front so a
  * single parser drives dispatch, help text, and unknown-flag rejection.
  *
  * Extension point: later command groups (fs, git, eval, ...) export a
@@ -136,7 +136,7 @@ export function parseInvocation(command: CliCommand, argv: string[]): ParsedInvo
 
 /** Render per-command help: usage line plus declared flags. */
 export function renderCommandHelp(command: CliCommand): string {
-  const usage = command.usage ?? `natstack ${command.group} ${command.name}`;
+  const usage = command.usage ?? `vibez1 ${command.group} ${command.name}`;
   const lines = [`${command.summary}`, "", `Usage: ${usage}`];
   const flags = command.flags ?? [];
   if (flags.length > 0) {
@@ -157,7 +157,7 @@ export function renderCommandHelp(command: CliCommand): string {
 /** Render usage lines for one group's commands. */
 export function renderGroupHelp(commands: CliCommand[], group: string): string {
   const lines = groupCommands(commands, group).map((cmd) => {
-    const usage = cmd.usage ?? `natstack ${cmd.group} ${cmd.name}`;
+    const usage = cmd.usage ?? `vibez1 ${cmd.group} ${cmd.name}`;
     return `  ${usage.padEnd(52)} ${cmd.summary}`;
   });
   return lines.join("\n");

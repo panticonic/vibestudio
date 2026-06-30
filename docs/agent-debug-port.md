@@ -1,6 +1,6 @@
 # Agent Debug Port
 
-NatStack agents expose a read-only debug method named `getDebugState`.
+Vibez1 agents expose a read-only debug method named `getDebugState`.
 
 Call it through the agent participant:
 

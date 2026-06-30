@@ -1,6 +1,6 @@
 # Panel Development Guide
 
-Practical guide to building NatStack panels. For API reference, see [PANEL_SYSTEM.md](PANEL_SYSTEM.md).
+Practical guide to building Vibez1 panels. For API reference, see [PANEL_SYSTEM.md](PANEL_SYSTEM.md).
 
 ## Quick Start
 
@@ -15,7 +15,7 @@ export default function MyApp() {
 // panels/my-app/package.json
 {
   "name": "@workspace-panels/my-app",
-  "natstack": { "title": "My App" },
+  "vibez1": { "title": "My App" },
   "dependencies": {
     "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*"
@@ -23,7 +23,7 @@ export default function MyApp() {
 }
 ```
 
-That's it. NatStack auto-mounts your default export.
+That's it. Vibez1 auto-mounts your default export.
 
 ---
 
@@ -157,7 +157,7 @@ main/default build.
 ## Non-React panels / Choosing a framework
 
 React is the default, but a panel can opt into another UI framework with
-`natstack.template`. The template's `template.json` decides which esbuild adapter
+`vibez1.template`. The template's `template.json` decides which esbuild adapter
 compiles the panel: `"default"` ⇒ React + Radix, `"svelte"` ⇒ Svelte, `"vanilla"`
 ⇒ no framework (plain DOM). See
 [PANEL_SYSTEM.md](PANEL_SYSTEM.md) for the full resolution order.
@@ -175,7 +175,7 @@ Set the template to `"svelte"` and depend on `@workspace/svelte`:
 // panels/hello-svelte/package.json
 {
   "name": "@workspace-panels/hello-svelte",
-  "natstack": { "title": "Hello Svelte", "template": "svelte" },
+  "vibez1": { "title": "Hello Svelte", "template": "svelte" },
   "dependencies": {
     "@workspace/runtime": "workspace:*",
     "@workspace/svelte": "workspace:*"
@@ -209,7 +209,7 @@ No UI binding package — set the template to `"vanilla"` and depend only on
 // panels/hello-vanilla/package.json
 {
   "name": "@workspace-panels/hello-vanilla",
-  "natstack": { "title": "Hello Vanilla", "template": "vanilla" },
+  "vibez1": { "title": "Hello Vanilla", "template": "vanilla" },
   "dependencies": {
     "@workspace/runtime": "workspace:*"
   }
@@ -394,8 +394,8 @@ Pass several repos (`vcs.push({ repoPaths: ["packages/ui", "panels/notes"] })`)
 for an **atomic group push** — every listed repo advances or none does — when a
 change spans repos or breaks a dependent. Content-only repos
 (`projects/<vault>`, `meta`) push ungated. The CLI mirrors this:
-`natstack vcs push --repo <p>` (repeat `--repo` for a group),
-`natstack vcs status/log --repo <p>`.
+`vibez1 vcs push --repo <p>` (repeat `--repo` for a group),
+`vibez1 vcs status/log --repo <p>`.
 
 ---
 
@@ -406,7 +406,7 @@ Access environment variables passed to your panel via `env` from the runtime:
 ```typescript
 import { env } from "@workspace/runtime";
 
-const workspace = env["NATSTACK_WORKSPACE"] || "/workspace";
+const workspace = env["VIBEZ1_WORKSPACE"] || "/workspace";
 ```
 
 ---
@@ -425,7 +425,7 @@ import { openPanel, openExternal, panelTree } from "@workspace/runtime";
 const handle = await openPanel("https://example.com", { focus: true });
 const page = await handle.cdp.lightweightPage();
 
-await page.fill("input[name=query]", "NatStack");
+await page.fill("input[name=query]", "Vibez1");
 await page.click(".search-button");
 const text = await page.textContent(".results .first");
 const currentUrl = page.url(); // string, synchronous like Playwright
@@ -567,7 +567,7 @@ REPL.
 ## Userland Approval Prompts
 
 Use `requestApproval()` when a panel owns a domain-specific decision and wants
-NatStack's trusted shell UI to ask the user. The verified panel is shown as the
+Vibez1's trusted shell UI to ask the user. The verified panel is shown as the
 issuer, and every non-dismiss choice is remembered for that issuer and
 `subject.id`.
 

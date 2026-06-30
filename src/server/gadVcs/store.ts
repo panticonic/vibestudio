@@ -98,7 +98,7 @@ const ALWAYS_IGNORED_DIRS = new Set([
   ".cache",
   ".parcel-cache",
   ".pnpm-store",
-  ".natstack",
+  ".vibez1",
   ".turbo",
   ".vite",
   ".tmp",
@@ -160,7 +160,7 @@ export async function assertWritableVcsPath(p: string): Promise<void> {
   // callers to a concrete writable location rather than just naming the rejected one.
   const hint =
     "VCS tracks workspace source — write to a non-ignored path (e.g. projects/…, panels/…, packages/…), " +
-    "not a platform-ignored dir (.natstack, .git, .gad, .tmp, node_modules, dist) or ignored file (.env, *.log).";
+    "not a platform-ignored dir (.vibez1, .git, .gad, .tmp, node_modules, dist) or ignored file (.env, *.log).";
   const segs = p.split("/");
   for (const seg of segs.slice(0, -1)) {
     if (ALWAYS_IGNORED_DIRS.has(seg)) {

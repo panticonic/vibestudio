@@ -8,7 +8,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { WebSocketServer } from "ws";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import type {
   BuildArtifactManifestEntry,
   BuildResult,
@@ -44,7 +44,7 @@ function loadBrowserTransport(): string {
   }
 
   log.info(`[PanelHttpServer] Browser transport not found, using inline stub`);
-  return `console.warn("[NatStack] Browser transport not available — panel RPC will not work.");`;
+  return `console.warn("[Vibez1] Browser transport not available — panel RPC will not work.");`;
 }
 
 const BROWSER_TRANSPORT_JS = loadBrowserTransport();
@@ -104,9 +104,9 @@ function extractSourcePath(pathname: string): { source: string; resource: string
 }
 
 function shouldLogPanelResourceRequests(): boolean {
-  if (process.env["NATSTACK_PANEL_RESOURCE_LOG"] === "0") return false;
+  if (process.env["VIBEZ1_PANEL_RESOURCE_LOG"] === "0") return false;
   return (
-    process.env["NATSTACK_PANEL_RESOURCE_LOG"] === "1" || process.env["NODE_ENV"] === "development"
+    process.env["VIBEZ1_PANEL_RESOURCE_LOG"] === "1" || process.env["NODE_ENV"] === "development"
   );
 }
 
@@ -393,7 +393,7 @@ export class PanelHttpServer {
     res.once("finish", () => {
       const durationMs = Date.now() - startedAt;
       const client =
-        typeof userAgent === "string" && userAgent.includes("NatStack-Mobile") ? "mobile" : "web";
+        typeof userAgent === "string" && userAgent.includes("Vibez1-Mobile") ? "mobile" : "web";
       log.info(
         `Panel resource ${method} ${source}${resource} route=${routeLabel} ` +
           `status=${res.statusCode} durationMs=${durationMs} client=${client}`
@@ -543,7 +543,7 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Building — NatStack</title>
+  <title>Building — Vibez1</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     body { font-family: system-ui, sans-serif; max-width: 500px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #e0e0e0; background: #1a1a2e; }
@@ -579,7 +579,7 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Build Error — NatStack</title>
+  <title>Build Error — Vibez1</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     body { font-family: system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #e0e0e0; background: #1a1a2e; }
@@ -628,7 +628,7 @@ export class PanelHttpServer {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "X-NatStack-Build-Revision": String(build.revision),
+      "X-Vibez1-Build-Revision": String(build.revision),
     });
     res.end(build.htmlArtifact.content);
   }
@@ -657,7 +657,7 @@ export class PanelHttpServer {
         "Content-Type": artifact.contentType,
         "Content-Length": body.length,
         "Cache-Control": cacheControl,
-        "X-NatStack-Build-Revision": String(revision),
+        "X-Vibez1-Build-Revision": String(revision),
       });
       res.end(body);
       return;
@@ -665,7 +665,7 @@ export class PanelHttpServer {
     res.writeHead(200, {
       "Content-Type": artifact.contentType,
       "Cache-Control": cacheControl,
-      "X-NatStack-Build-Revision": String(revision),
+      "X-Vibez1-Build-Revision": String(revision),
     });
     res.end(artifact.content);
   }
@@ -689,7 +689,7 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NatStack Panels</title>
+  <title>Vibez1 Panels</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>
     body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #e0e0e0; background: #1a1a2e; }
@@ -706,7 +706,7 @@ export class PanelHttpServer {
   </style>
 </head>
 <body>
-  <h1>NatStack Panels</h1>
+  <h1>Vibez1 Panels</h1>
   ${
     allEntries.length > 0
       ? `<ul>${allEntries.join("\n")}</ul>`

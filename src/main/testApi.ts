@@ -2,13 +2,13 @@
  * Test API for E2E testing.
  *
  * Exposes PanelOrchestrator + PanelRegistry methods to Playwright tests via Electron's evaluate().
- * Only loaded when NATSTACK_TEST_MODE=1 environment variable is set.
+ * Only loaded when VIBEZ1_TEST_MODE=1 environment variable is set.
  */
 
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
-import type { PanelRegistry } from "@natstack/shared/panelRegistry";
+import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
 import type { PanelView } from "./panelView.js";
-import type { Panel, PanelLifecycleResult } from "@natstack/shared/types";
+import type { Panel, PanelLifecycleResult } from "@vibez1/shared/types";
 import { webContents as electronWebContents } from "electron";
 
 export type PanelDiagnostic = {
@@ -155,14 +155,14 @@ declare global {
 
 /**
  * Set up the test API on the global object.
- * This is only called when NATSTACK_TEST_MODE=1.
+ * This is only called when VIBEZ1_TEST_MODE=1.
  */
 export function setupTestApi(
   panelOrchestrator: PanelOrchestrator,
   panelRegistry: PanelRegistry,
   panelView: PanelView | null
 ): void {
-  if (process.env["NATSTACK_TEST_MODE"] !== "1") {
+  if (process.env["VIBEZ1_TEST_MODE"] !== "1") {
     return;
   }
 
@@ -529,22 +529,22 @@ export function setupTestApi(
       const result = (await wc.executeJavaScript(
         `
           (() => {
-            const api = window.__natstackTerminalTestApi;
+            const api = window.__vibez1TerminalTestApi;
             if (!api) {
-              return { __natstackOk: false, error: "terminal test API not found" };
+              return { __vibez1Ok: false, error: "terminal test API not found" };
             }
             const fn = api[${JSON.stringify(method)}];
             if (typeof fn !== "function") {
-              return { __natstackOk: false, error: "terminal test API method not found: ${method.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" };
+              return { __vibez1Ok: false, error: "terminal test API method not found: ${method.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" };
             }
             return Promise.resolve(fn.call(api, ${JSON.stringify(args)}))
-              .then((value) => ({ __natstackOk: true, value }))
-              .catch((err) => ({ __natstackOk: false, error: err instanceof Error ? err.message : String(err) }));
+              .then((value) => ({ __vibez1Ok: true, value }))
+              .catch((err) => ({ __vibez1Ok: false, error: err instanceof Error ? err.message : String(err) }));
           })()
         `,
         true
-      )) as { __natstackOk: true; value: unknown } | { __natstackOk: false; error: string };
-      if (!result.__natstackOk) throw new Error(result.error);
+      )) as { __vibez1Ok: true; value: unknown } | { __vibez1Ok: false; error: string };
+      if (!result.__vibez1Ok) throw new Error(result.error);
       return result.value;
     },
 

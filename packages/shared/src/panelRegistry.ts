@@ -12,7 +12,7 @@
  * - State-arg validation against manifests
  */
 
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import type { Panel, PanelArtifacts, PanelInfo, PanelSummary, PanelTreeSnapshot } from "./types.js";
 import type {
   PanelRuntimeLease,

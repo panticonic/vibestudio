@@ -20,7 +20,7 @@ import {
   DEFERRED_RESULT,
   type DeferralApi,
   type DeferredResult,
-} from "@natstack/shared/serviceDispatcher";
+} from "@vibez1/shared/serviceDispatcher";
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
 

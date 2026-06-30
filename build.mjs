@@ -34,7 +34,7 @@ const serverElectronConfig = {
     "esbuild",
     "@npmcli/arborist",
     "node-datachannel",
-    "@natstack/extension-host",
+    "@vibez1/extension-host",
     "vitest",
     "vitest/node",
     "vite",
@@ -117,7 +117,7 @@ const serverConfig = {
   external: [
     "esbuild",
     "@npmcli/arborist",
-    "@natstack/extension-host",
+    "@vibez1/extension-host",
     "vitest",
     "vitest/node",
     "vite",
@@ -421,9 +421,9 @@ function copyAssets() {
     "workspace/extensions/shell/vscode-shell-integration",
     "dist/vscode-shell-integration"
   );
-  // Bundled agent skill consumed by `natstack agent skill install|print`
+  // Bundled agent skill consumed by `vibez1 agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
-  copyDirectoryRecursive("skills/natstack-agent", "dist/cli/skills/natstack-agent");
+  copyDirectoryRecursive("skills/vibez1-agent", "dist/cli/skills/vibez1-agent");
 }
 
 function copyDirectoryRecursive(srcDir, destDir) {
@@ -439,15 +439,15 @@ function copyDirectoryRecursive(srcDir, destDir) {
   }
 }
 
-async function buildNatstackPackages() {
-  console.log("Building @natstack/* infrastructure packages...");
+async function buildvibez1Packages() {
+  console.log("Building @vibez1/* infrastructure packages...");
   try {
-    execSync('pnpm --filter "!@natstack/headless-host" --filter "@natstack/*" build', {
+    execSync('pnpm --filter "!@vibez1/headless-host" --filter "@vibez1/*" build', {
       stdio: "inherit",
     });
-    console.log("@natstack/* packages built successfully!");
+    console.log("@vibez1/* packages built successfully!");
   } catch (error) {
-    console.error("Failed to build @natstack/* packages:", error);
+    console.error("Failed to build @vibez1/* packages:", error);
     throw error;
   }
 }
@@ -469,14 +469,14 @@ async function buildWorkspacePackages() {
 }
 
 async function buildHeadlessHost() {
-  console.log("Building @natstack/headless-host...");
+  console.log("Building @vibez1/headless-host...");
   try {
-    execSync('pnpm --filter "@natstack/headless-host" build', { stdio: "inherit" });
+    execSync('pnpm --filter "@vibez1/headless-host" build', { stdio: "inherit" });
     fs.rmSync("dist/headless-host", { recursive: true, force: true });
     copyDirectoryRecursive("apps/headless-host/dist", "dist/headless-host");
-    console.log("@natstack/headless-host built successfully!");
+    console.log("@vibez1/headless-host built successfully!");
   } catch (error) {
-    console.error("Failed to build @natstack/headless-host:", error);
+    console.error("Failed to build @vibez1/headless-host:", error);
     throw error;
   }
 }
@@ -492,7 +492,7 @@ async function checkBuildArtifacts() {
 }
 
 /**
- * Build web workers declared by dependencies via natstack.workers in package.json.
+ * Build web workers declared by dependencies via vibez1.workers in package.json.
  * Scans node_modules for worker declarations and bundles them.
  */
 async function buildDependencyWorkers() {
@@ -556,17 +556,17 @@ async function build() {
     fs.mkdirSync("dist", { recursive: true });
 
     // ========================================================================
-    // STEP 0.75: Build @natstack/* infrastructure packages
+    // STEP 0.75: Build @vibez1/* infrastructure packages
     // ========================================================================
-    // Must be built before @workspace/* packages since they depend on @natstack/*
+    // Must be built before @workspace/* packages since they depend on @vibez1/*
     // Dependencies: none
-    await buildNatstackPackages();
+    await buildvibez1Packages();
 
     // ========================================================================
     // STEP 1: Build @workspace/* packages
     // ========================================================================
     // These must be built as they are consumed by later steps
-    // Dependencies: buildNatstackPackages
+    // Dependencies: buildvibez1Packages
     await buildWorkspacePackages();
 
     // ========================================================================
@@ -574,7 +574,7 @@ async function build() {
     // ========================================================================
     // The server auto-spawns this bundle as a child process when no desktop
     // CDP host is connected; copy it under dist/ so packaged CLIs can find it.
-    // Dependencies: buildNatstackPackages, buildWorkspacePackages
+    // Dependencies: buildvibez1Packages, buildWorkspacePackages
     await buildHeadlessHost();
 
     // ========================================================================
@@ -601,7 +601,7 @@ async function build() {
     // lookup if the define is absent (test/dev paths run from source).
     const internalDoBundleContent = fs.readFileSync("dist/internal-do.bundle.mjs", "utf8");
     const internalDoBundleDefine = {
-      "globalThis.__NATSTACK_INTERNAL_DO_BUNDLE__": JSON.stringify(internalDoBundleContent),
+      "globalThis.__VIBEZ1_INTERNAL_DO_BUNDLE__": JSON.stringify(internalDoBundleContent),
     };
     const serverElectronWithBundle = {
       ...serverElectronConfig,

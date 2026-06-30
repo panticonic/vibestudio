@@ -21,7 +21,7 @@ const MAX_DROPPED_ENTRIES = 200;
  * Marker for a spilled top-level value: `{ [SCOPE_BLOB_REF]: <digest>, bytes }`. On hydrate, the
  * blob's content replaces it inline. Distinctive to avoid colliding with user data.
  */
-export const SCOPE_BLOB_REF = "__natstackScopeBlob__";
+export const SCOPE_BLOB_REF = "__vibez1ScopeBlob__";
 
 /** A top-level value too large to inline — its serialized JSON is stored in the blob store and the
  *  placeholder (embedded in `serialized`) gets the content digest stamped in by `persist`. */

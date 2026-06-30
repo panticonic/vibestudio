@@ -40,7 +40,7 @@ export function normalizeWorkspaceRepoPath(repoPath: string): string {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
   }
   // Single-segment paths are only valid for the designated flat-section repos
-  // (today only `meta`, which holds `natstack.yml`/`AGENTS.md` directly).
+  // (today only `meta`, which holds `vibez1.yml`/`AGENTS.md` directly).
   if (segments.length < 2 && !FLAT_SECTIONS.has(normalized)) {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
   }
@@ -281,7 +281,7 @@ async function upsertRemote(repoDir: string, remote: ResolvedWorkspaceGitRemote)
   } else {
     await gitConfig(repoDir, ["remote", "add", remote.name, remote.url]);
   }
-  await gitConfig(repoDir, ["config", `remote.${remote.name}.natstack-managed`, "true"], true);
+  await gitConfig(repoDir, ["config", `remote.${remote.name}.vibez1-managed`, "true"], true);
 }
 
 async function removeRemote(repoDir: string, name: string): Promise<void> {
@@ -292,12 +292,12 @@ async function listManagedRemoteNames(repoDir: string): Promise<string[]> {
   const result = await gitConfig(repoDir, [
     "config",
     "--get-regexp",
-    "^remote\\..*\\.natstack-managed$",
+    "^remote\\..*\\.vibez1-managed$",
   ]);
   if (!result.ok) return [];
   const names = new Set<string>();
   for (const line of result.stdout.split(/\r?\n/)) {
-    const match = line.match(/^remote\.(.+)\.natstack-managed\s+true$/);
+    const match = line.match(/^remote\.(.+)\.vibez1-managed\s+true$/);
     if (match?.[1]) names.add(match[1]);
   }
   return [...names];

@@ -63,7 +63,7 @@ const usagePayloadSchema = z
 
 const blobRefSchema = z
   .object({
-    protocol: z.literal("natstack.blob-ref.v1"),
+    protocol: z.literal("vibez1.blob-ref.v1"),
     digest: z.string().min(1),
     size: z.number().int().nonnegative(),
     encoding: z.enum(["json", "text"]),

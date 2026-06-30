@@ -10,7 +10,7 @@ describe("live CLI smoke", () => {
       timeout: 10_000,
     });
 
-    expect(stdout).toContain("natstack remote serve");
+    expect(stdout).toContain("vibez1 remote serve");
     expect(stdout).toContain("src/server/index.ts");
   });
 });

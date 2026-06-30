@@ -46,7 +46,7 @@ function makePanel(name: string, ownHtml: boolean): string {
 }
 
 beforeEach(() => {
-  sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-template-resolver-"));
+  sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-template-resolver-"));
   // Standard fixture: default ⇒ react, svelte ⇒ svelte, vanilla ⇒ vanilla.
   writeTemplate("default", "react");
   writeTemplate("svelte", "svelte");

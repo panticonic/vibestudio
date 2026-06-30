@@ -12,8 +12,8 @@ import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { Buffer } from "node:buffer";
 import type { RuntimeFs } from "./runtime-fs.js";
-import type { RpcCaller } from "@natstack/rpc";
-import { createExtensionProxy } from "@natstack/extension";
+import type { RpcCaller } from "@vibez1/rpc";
+import { createExtensionProxy } from "@vibez1/extension";
 import { resolveReadPath } from "./path-utils.js";
 import {
   DEFAULT_MAX_BYTES,

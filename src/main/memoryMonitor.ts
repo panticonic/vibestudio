@@ -1,6 +1,6 @@
 import { app } from "electron";
 import type { ViewManager } from "./viewManager.js";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("MemoryMonitor");
@@ -87,9 +87,9 @@ export function startMemoryMonitor(): void {
   if (monitorStarted) return;
   monitorStarted = true;
 
-  const intervalMs = parsePositiveInt(process.env["NATSTACK_MEMORY_LOG_MS"]) ?? 0;
-  const logOnce = process.env["NATSTACK_MEMORY_LOG_ONCE"] === "1";
-  const thresholdMb = parsePositiveInt(process.env["NATSTACK_MEMORY_LOG_THRESHOLD_MB"]) ?? 0;
+  const intervalMs = parsePositiveInt(process.env["VIBEZ1_MEMORY_LOG_MS"]) ?? 0;
+  const logOnce = process.env["VIBEZ1_MEMORY_LOG_ONCE"] === "1";
+  const thresholdMb = parsePositiveInt(process.env["VIBEZ1_MEMORY_LOG_THRESHOLD_MB"]) ?? 0;
 
   if (intervalMs <= 0 && !logOnce) return;
 

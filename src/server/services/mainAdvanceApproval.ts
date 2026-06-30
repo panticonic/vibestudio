@@ -1,12 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-  unitChangeSessionGrantKey,
-  type UnitMetaChangeApprovalProvider,
-} from "@natstack/unit-host";
-import type { UnitBatchEntry } from "@natstack/shared/approvals";
-import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+import { unitChangeSessionGrantKey, type UnitMetaChangeApprovalProvider } from "@vibez1/unit-host";
+import type { UnitBatchEntry } from "@vibez1/shared/approvals";
+import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 import type { StateAdvancedEvent } from "../buildV2/stateTrigger.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";

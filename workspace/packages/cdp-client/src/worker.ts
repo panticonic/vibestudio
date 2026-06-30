@@ -154,10 +154,10 @@ export class CdpConnection {
     const ws = new WebSocketImpl(wsEndpoint);
     await once(ws, "open");
     if (authToken) {
-      ws.send(JSON.stringify({ type: "natstack:cdp-auth", token: authToken }));
+      ws.send(JSON.stringify({ type: "vibez1:cdp-auth", token: authToken }));
       const event = (await once(ws, "message")) as MessageEvent;
       const parsed = JSON.parse(await messageText(event.data)) as { type?: string };
-      if (parsed.type !== "natstack:cdp-auth-ok") {
+      if (parsed.type !== "vibez1:cdp-auth-ok") {
         throw new Error("CDP authentication failed");
       }
     }

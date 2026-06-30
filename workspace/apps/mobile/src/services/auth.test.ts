@@ -12,7 +12,7 @@ import {
   StoredCredentialsNeedRepairError,
 } from "./auth";
 
-const nativeHost = NativeModules["NatStackMobileHost"] as {
+const nativeHost = NativeModules["Vibez1MobileHost"] as {
   clearCredentials: jest.Mock;
   getCredentials: jest.Mock;
   issueConnectionGrant: jest.Mock;
@@ -66,7 +66,7 @@ describe("native-held mobile credentials", () => {
       platform: "ios",
       url: "https://server.example/_a/rn-key/index.ios.bundle",
       path: "index.ios.bundle",
-      localPath: "/cache/natstack-rn/rn-key/index.ios.bundle",
+      localPath: "/cache/vibez1-rn/rn-key/index.ios.bundle",
     });
     nativeHost.activatePreparedAppBundle.mockReset().mockResolvedValue({ activated: false });
   });
@@ -187,7 +187,7 @@ describe("native-held mobile credentials", () => {
       capabilities: ["notifications", "keychain"],
       rnHostAbi: "rn-host-1",
       integrity: "sha256-mobile",
-      localPath: "/cache/natstack-rn/rn-key/index.ios.bundle",
+      localPath: "/cache/vibez1-rn/rn-key/index.ios.bundle",
     });
     expect(nativeHost.prepareAppBundle).toHaveBeenCalledWith("rn-host-1", "ios", null);
   });
@@ -207,11 +207,11 @@ describe("native-held mobile credentials", () => {
       activatePreparedAppBundle({
         buildKey: "rn-key",
         integrity: "sha256-mobile",
-        localPath: "/cache/natstack-rn/rn-key/index.ios.bundle",
+        localPath: "/cache/vibez1-rn/rn-key/index.ios.bundle",
       })
     ).resolves.toEqual({ activated: false });
     expect(nativeHost.activatePreparedAppBundle).toHaveBeenCalledWith(
-      "/cache/natstack-rn/rn-key/index.ios.bundle",
+      "/cache/vibez1-rn/rn-key/index.ios.bundle",
       "rn-key",
       "sha256-mobile"
     );
@@ -224,7 +224,7 @@ describe("native-held mobile credentials", () => {
       activatePreparedAppBundle({
         buildKey: "rn-key",
         integrity: "sha256-mobile",
-        localPath: "/cache/natstack-rn/rn-key/index.ios.bundle",
+        localPath: "/cache/vibez1-rn/rn-key/index.ios.bundle",
       })
     ).rejects.toThrow(/invalid app bundle activation result/);
   });

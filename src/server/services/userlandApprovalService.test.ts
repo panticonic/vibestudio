@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@vibez1/rpc";
 import {
   createVerifiedCaller,
   ServiceAccessError,
   ServiceDispatcher,
   ServiceError,
-} from "@natstack/shared/serviceDispatcher";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+} from "@vibez1/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
 import { createUserlandApprovalService } from "./userlandApprovalService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import type { UserlandApprovalGrant } from "@natstack/shared/approvals";
+import type { UserlandApprovalGrant } from "@vibez1/shared/approvals";
 
 function createDeps() {
   const queued = vi.fn<ApprovalQueue["requestUserland"]>(async () => ({

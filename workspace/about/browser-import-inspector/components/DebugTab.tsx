@@ -57,7 +57,7 @@ function AutocompleteDebugger() {
       </Heading>
       <Text size="1" color="gray" mb="2" as="div">
         Shows the ranked suggestions for a query, with the reasons each one scores where it does
-        (imported history + NatStack-local visits, bookmarks, search engines).
+        (imported history + Vibez1-local visits, bookmarks, search engines).
       </Text>
       <form
         onSubmit={(e) => {

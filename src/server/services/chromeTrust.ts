@@ -1,5 +1,5 @@
-import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 
 export interface CapabilityTrustDeps {
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;

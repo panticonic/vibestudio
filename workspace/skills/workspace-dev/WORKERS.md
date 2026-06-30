@@ -19,7 +19,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `getParentWithContract` | value |  | Get the parent handle typed by a panel contract, or null. |
 | `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
-| `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
+| `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibez1 service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `openExternal` | value |  |  |
 | `workers` | namespace | `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` |  |
@@ -54,9 +54,9 @@ panel with context-branch code.
 
 ## Userland Services
 
-Worker package.json only carries `natstack.durable.classes` (workerd binding).
+Worker package.json only carries `vibez1.durable.classes` (workerd binding).
 Workspace-level singletons, services, and HTTP routes live in
-`workspace/meta/natstack.yml`. Resolve services by name/protocol through
+`workspace/meta/vibez1.yml`. Resolve services by name/protocol through
 `workers.resolveService(...)`; do not hardcode `workers/foo`, DO class names,
 or `/_r/w/...` paths in callers.
 
@@ -66,7 +66,7 @@ packages, into generated external-deps installs. Prefer package-local overrides
 for broken or missing transitive npm versions; changing an override invalidates
 the dependency cache.
 
-**Durable Object-backed service** — add to `workspace/meta/natstack.yml`:
+**Durable Object-backed service** — add to `workspace/meta/vibez1.yml`:
 
 ```yaml
 singletonObjects:
@@ -89,7 +89,7 @@ if (svc.kind !== "durable-object") throw new Error("Expected DO service");
 await rpc.call(svc.targetId, "methodName", [arg]);
 ```
 
-**Stateless worker service** — add to `workspace/meta/natstack.yml`:
+**Stateless worker service** — add to `workspace/meta/vibez1.yml`:
 
 ```yaml
 routes:
@@ -227,7 +227,7 @@ asks the user. For a *userland-useful but sensitive* action, require a user
 decision:
 - **Built-in host actions** (credentials, external opens, git writes, project
   imports, webhooks, publishing main, spawning workers): call the existing
-  runtime API and let NatStack's built-in capability-permission flow prompt — do
+  runtime API and let Vibez1's built-in capability-permission flow prompt — do
   NOT re-implement approval.
 - **Custom shared resources** your worker exposes to other userland callers: use
   `runtime.approvals.request(...)` (see "Userland Approval Prompts" below).
@@ -299,13 +299,13 @@ await credentials.fetch("https://api.example.com/v1/items", undefined, {
 
 Workers can ask the user for provider-defined decisions through the runtime's
 approval helpers. Use this when a worker exposes its own security-gated service
-to other userland callers and needs a human decision that NatStack cannot model
+to other userland callers and needs a human decision that Vibez1 cannot model
 as a built-in credential or capability permission.
 
 Do not call `approvals.request()` before actions the worker or agent can already
 take through normal runtime APIs. Context filesystem work, eval work, panel
 operations, browser automation, git/runtime APIs, external opens, and credential
-use are protected by the outer NatStack permission model where approval is
+use are protected by the outer Vibez1 permission model where approval is
 required.
 
 ```ts
@@ -358,7 +358,7 @@ or `@`. Options must have unique values; `dismiss` is reserved. Treat
 `approvals.request()` as a userland policy gate for custom shared resources only.
 For host-mediated actions such as external browser opens, credentials, git
 writes, project imports, or webhooks, call the existing runtime API and let
-NatStack's built-in permission flow handle the prompt and trust scope. For
+Vibez1's built-in permission flow handle the prompt and trust scope. For
 ordinary context file edits and test temp directories, do not prompt.
 
 ## Agent Debug Port

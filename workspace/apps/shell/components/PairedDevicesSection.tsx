@@ -114,7 +114,7 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
             <ExclamationTriangleIcon />
           </Callout.Icon>
           <Callout.Text>
-            Revoking this device will sign you out and relaunch NatStack in local mode.
+            Revoking this device will sign you out and relaunch Vibez1 in local mode.
           </Callout.Text>
         </Callout.Root>
       ) : null}

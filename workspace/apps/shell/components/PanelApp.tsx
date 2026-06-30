@@ -12,8 +12,8 @@ import type { ChromeCommand } from "./PanelStack";
 import { TitleBar } from "./TitleBar";
 import { NotificationBar } from "./NotificationBar";
 import { ConsentApprovalBar, APPROVAL_OVERLAY_HOST_ID } from "./ConsentApprovalBar";
-import type { PanelContextMenuAction } from "@natstack/shared/types";
-import type { PanelChromeState } from "@natstack/shared/panelChrome";
+import type { PanelContextMenuAction } from "@vibez1/shared/types";
+import type { PanelChromeState } from "@vibez1/shared/panelChrome";
 
 export function PanelApp() {
   return (
@@ -29,7 +29,7 @@ export function PanelApp() {
 
 function PanelAppContent() {
   const effectiveTheme = useThemeSynchronizer();
-  const [currentTitle, setCurrentTitle] = useState("NatStack");
+  const [currentTitle, setCurrentTitle] = useState("Vibez1");
   const [chromeState, setChromeState] = useState<PanelChromeState | null>(null);
 
   // Convert panel initialization errors into notifications

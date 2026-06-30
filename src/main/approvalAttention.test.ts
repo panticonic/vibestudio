@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { PendingApproval } from "@natstack/shared/approvals";
+import type { PendingApproval } from "@vibez1/shared/approvals";
 
 const electronMocks = vi.hoisted(() => {
   const notificationInstances: Array<{
@@ -40,7 +40,7 @@ vi.mock("electron", () => ({
   Notification: electronMocks.FakeNotification,
 }));
 
-import { getApprovalCopy } from "@natstack/shared/approvalCopy";
+import { getApprovalCopy } from "@vibez1/shared/approvalCopy";
 import { createApprovalAttention } from "./approvalAttention.js";
 
 function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {

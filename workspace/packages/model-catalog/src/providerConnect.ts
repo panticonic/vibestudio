@@ -1,1 +1,1 @@
-export * from "@natstack/shared/providerConnect";
+export * from "@vibez1/shared/providerConnect";

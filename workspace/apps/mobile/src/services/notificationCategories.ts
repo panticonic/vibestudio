@@ -3,7 +3,7 @@ import {
   APPROVAL_CATEGORY_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_STANDARD,
-} from "@natstack/shared/approvalContract";
+} from "@vibez1/shared/approvalContract";
 import { Platform } from "react-native";
 import { requireApprovedAppCapability } from "./appCapabilities";
 import { isNativeFirebaseConfigured } from "./nativeFirebase";

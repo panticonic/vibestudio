@@ -1,5 +1,5 @@
 {
-  "name": "@natstack/webhook-relay",
+  "name": "@vibez1/webhook-relay",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",

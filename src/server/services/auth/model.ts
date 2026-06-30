@@ -1,5 +1,5 @@
-import type { TokenManager } from "@natstack/shared/tokenManager";
-import { type ConnectPairing, createConnectDeepLink } from "@natstack/shared/connect";
+import type { TokenManager } from "@vibez1/shared/tokenManager";
+import { type ConnectPairing, createConnectDeepLink } from "@vibez1/shared/connect";
 import { DEFAULT_PAIRING_CODE_TTL_MS, type DeviceAuthStore } from "../deviceAuthStore.js";
 
 /**

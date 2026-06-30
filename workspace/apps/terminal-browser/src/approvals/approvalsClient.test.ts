@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RpcClient } from "@natstack/rpc";
-import type { PendingApproval } from "@natstack/shared/approvals";
+import type { RpcClient } from "@vibez1/rpc";
+import type { PendingApproval } from "@vibez1/shared/approvals";
 import { createApprovalsClient } from "./approvalsClient.js";
 
 function startupUnitApproval(): PendingApproval {

@@ -15,10 +15,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createRpcClient, type RpcClient as RpcCore, type RpcEnvelope } from "@natstack/rpc";
-import { type WebRtcSession, type WebRtcTransport } from "@natstack/rpc/transports/webrtcClient";
-import { createOffererTransport } from "@natstack/rpc/transports/offererTransport";
-import type { ConnectPairing } from "@natstack/shared/connect";
+import { createRpcClient, type RpcClient as RpcCore, type RpcEnvelope } from "@vibez1/rpc";
+import { type WebRtcSession, type WebRtcTransport } from "@vibez1/rpc/transports/webrtcClient";
+import { createOffererTransport } from "@vibez1/rpc/transports/offererTransport";
+import type { ConnectPairing } from "@vibez1/shared/connect";
 import { RpcError } from "./rpcClient.js";
 
 export interface WebRtcClientConfig {

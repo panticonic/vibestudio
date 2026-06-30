@@ -1,4 +1,4 @@
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import type { DODispatch, DORef } from "../doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { LifecycleKey, LifecycleOp } from "../internalDOs/workspaceDO.js";

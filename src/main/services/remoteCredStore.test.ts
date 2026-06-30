@@ -18,7 +18,7 @@ const xorCipher: StoreCipher = {
 };
 
 function makeStore(cipher: StoreCipher) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-remote-cred-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-remote-cred-"));
   const filePath = path.join(dir, "nested", "webrtc-remote.json");
   return {
     store: createRemoteCredStore({ filePath, cipher, fs, dirname: path.dirname }),

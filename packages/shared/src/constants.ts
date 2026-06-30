@@ -1,5 +1,5 @@
 /**
- * Shared constants for the NatStack application.
+ * Shared constants for the Vibez1 application.
  * Centralized to avoid magic numbers and ensure consistency.
  */
 

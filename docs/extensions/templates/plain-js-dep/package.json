@@ -6,7 +6,7 @@
   "dependencies": {
     "tldts": "^7.0.19"
   },
-  "natstack": {
+  "vibez1": {
     "displayName": "Plain JS Dependency Example",
     "entry": "index.ts",
     "sourcemap": true,

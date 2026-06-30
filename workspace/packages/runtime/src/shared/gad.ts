@@ -1,7 +1,7 @@
-import type { RpcCaller } from "@natstack/rpc";
-import { createGadServiceClient } from "@natstack/shared/userlandServiceRpc";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { blobstoreMethods } from "@natstack/shared/serviceSchemas/blobstore";
+import type { RpcCaller } from "@vibez1/rpc";
+import { createGadServiceClient } from "@vibez1/shared/userlandServiceRpc";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { blobstoreMethods } from "@vibez1/shared/serviceSchemas/blobstore";
 import {
   hydrateStoredValueRefs,
   type AgenticEvent,
@@ -9,7 +9,7 @@ import {
   type TrajectoryEvent,
 } from "@workspace/agentic-protocol";
 
-export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@natstack/shared/userlandServiceRpc";
+export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibez1/shared/userlandServiceRpc";
 
 export type GadSqlBinding = null | string | number | boolean | Uint8Array;
 export type GadJsonRecord = Record<string, unknown>;

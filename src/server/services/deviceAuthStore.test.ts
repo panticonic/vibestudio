@@ -7,7 +7,7 @@ import { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } from "./deviceAuthStore.
 
 function tempFile(): string {
   return path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), "natstack-device-auth-")),
+    fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-device-auth-")),
     "auth",
     "devices.json"
   );

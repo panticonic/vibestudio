@@ -5,8 +5,8 @@
  * development app and tests still run before Firebase/Notifee are installed.
  */
 import { AppState, Platform, type AppStateStatus } from "react-native";
-import { APPROVAL_CATEGORY_DECIDE, type PushApprovalDataPayload, } from "@natstack/shared/approvalContract";
-import { filterRuntimeApprovals } from "@natstack/shared/bootstrapApprovals";
+import { APPROVAL_CATEGORY_DECIDE, type PushApprovalDataPayload, } from "@vibez1/shared/approvalContract";
+import { filterRuntimeApprovals } from "@vibez1/shared/bootstrapApprovals";
 import type { ShellClient } from "./shellClient";
 import { requireApprovedAppCapability } from "./appCapabilities";
 import { APPROVAL_NOTIFICATION_CHANNEL_ID, getAndroidNotificationActions, } from "./notificationCategories";
@@ -14,7 +14,7 @@ import { drainBackgroundActionQueue, enqueueDeepLink, queueBackgroundAction, tak
 import { isBackgroundDecision } from "./backgroundActionQueueCore";
 import { isNativeFirebaseConfigured } from "./nativeFirebase";
 declare const require: (moduleName: string) => unknown;
-const PERMISSION_DENIED_TOAST_KEY = "natstack:push:permission-denied-toast-at";
+const PERMISSION_DENIED_TOAST_KEY = "vibez1:push:permission-denied-toast-at";
 const PERMISSION_DENIED_TOAST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 interface FirebaseMessagingModule {
     (): FirebaseMessagingInstance;
@@ -112,7 +112,7 @@ async function getDeviceClientId(): Promise<string> {
                 accessible?: string;
             }): Promise<unknown>;
         };
-        const existing = await Keychain.getGenericPassword({ service: "natstack-push-device-id" });
+        const existing = await Keychain.getGenericPassword({ service: "vibez1-push-device-id" });
         if (existing && existing.password) {
             cachedDeviceId = existing.password;
             return existing.password;
@@ -133,7 +133,7 @@ async function getDeviceClientId(): Promise<string> {
             }): Promise<unknown>;
         };
         await Keychain.setGenericPassword("push-device-id", cachedDeviceId, {
-            service: "natstack-push-device-id",
+            service: "vibez1-push-device-id",
             accessible: Keychain.ACCESSIBLE?.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
         });
     }

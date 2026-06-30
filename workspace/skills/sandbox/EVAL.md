@@ -19,7 +19,7 @@ eval({ code: `console.log("hello")` })
 For multi-file code, put the entry point in a context-relative file and use `path`:
 
 ```
-eval({ path: ".natstack/eval/check-project.ts" })
+eval({ path: ".vibez1/eval/check-project.ts" })
 ```
 
 File-loaded eval reads the entry file from the current context, supports static
@@ -233,7 +233,7 @@ eval({ code: `
 
 ### Workspace packages — auto-resolved
 
-Workspace packages (`@workspace/*`, `@workspace-skills/*`, `@natstack/*`) are
+Workspace packages (`@workspace/*`, `@workspace-skills/*`, `@vibez1/*`) are
 **automatically built and loaded** when you import them. Just write the import —
 no `imports` parameter needed:
 
@@ -336,7 +336,7 @@ eval({
 ## Path Conventions
 
 The `path` parameter for file-loaded eval is always context-relative, for
-example `.natstack/eval/check-project.ts`.
+example `.vibez1/eval/check-project.ts`.
 
 Runtime `fs.*` calls are also scoped to the current context folder. In `fs`
 calls, both `src/index.ts` and `/src/index.ts` refer to files under the context
@@ -516,7 +516,7 @@ VCS tracks workspace **source**: every path must live under a tracked directory
 (`projects/`, `panels/`, `packages/`, `apps/`, `workers/`, `skills/`,
 `extensions/`). A *temporary* file you write still goes under one of those (e.g.
 `projects/tmp-foo/note.txt`) — `vcs.edit` rejects platform-ignored paths
-(`.natstack`, `.tmp`, `.git`, `.gad`, `node_modules`, `dist`, `.env`, `*.log`),
+(`.vibez1`, `.tmp`, `.git`, `.gad`, `node_modules`, `dist`, `.env`, `*.log`),
 so never use an `fs.mktemp()` path here. In container sections such as
 `projects/`, `section/name` is the repo root; write `section/name/file`, not the
 repo root itself. `vcs.readFile("", path)` returns

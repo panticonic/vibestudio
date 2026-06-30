@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { PanelArtifacts } from "@natstack/shared/types";
-import { asPanelSlotId } from "@natstack/shared/panel/ids";
+import type { PanelArtifacts } from "@vibez1/shared/types";
+import { asPanelSlotId } from "@vibez1/shared/panel/ids";
 import { leasedElsewhereInfo, shouldShowPanelView } from "./PanelStackVisibility";
 
 describe("shouldShowPanelView", () => {

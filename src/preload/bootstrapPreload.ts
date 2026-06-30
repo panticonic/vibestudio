@@ -8,7 +8,7 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron";
-import type { RpcEnvelope } from "@natstack/rpc";
+import type { RpcEnvelope } from "@vibez1/rpc";
 import type { TransportBridge } from "./wsTransport.js";
 import { assertBootstrapRpcMessageAllowed } from "./bootstrapTransportPolicy.js";
 
@@ -24,7 +24,7 @@ type BootstrapBridge = {
 const bootstrapTransport: TransportBridge = (() => {
   const listeners = new Set<EnvelopeHandler>();
 
-  ipcRenderer.on("natstack:rpc:message", (_event, envelope: RpcEnvelope) => {
+  ipcRenderer.on("vibez1:rpc:message", (_event, envelope: RpcEnvelope) => {
     for (const listener of listeners) {
       try {
         listener(envelope);
@@ -37,7 +37,7 @@ const bootstrapTransport: TransportBridge = (() => {
   return {
     async send(envelope: RpcEnvelope): Promise<void> {
       assertBootstrapRpcMessageAllowed(envelope.target, envelope.message);
-      ipcRenderer.send("natstack:rpc:send", envelope);
+      ipcRenderer.send("vibez1:rpc:send", envelope);
     },
 
     onMessage(handler: EnvelopeHandler): () => void {
@@ -52,13 +52,12 @@ const bootstrapTransport: TransportBridge = (() => {
 })();
 
 const bootstrapBridge: BootstrapBridge = {
-  getState: () => ipcRenderer.invoke("natstack:bootstrap:get-state"),
+  getState: () => ipcRenderer.invoke("vibez1:bootstrap:get-state"),
   launchLocalWorkspace: (workspaceName) =>
-    ipcRenderer.invoke("natstack:bootstrap:launch-local-workspace", workspaceName),
-  launchEphemeralWorkspace: () =>
-    ipcRenderer.invoke("natstack:bootstrap:launch-ephemeral-workspace"),
-  pairRemote: (payload) => ipcRenderer.invoke("natstack:bootstrap:pair-remote", payload),
+    ipcRenderer.invoke("vibez1:bootstrap:launch-local-workspace", workspaceName),
+  launchEphemeralWorkspace: () => ipcRenderer.invoke("vibez1:bootstrap:launch-ephemeral-workspace"),
+  pairRemote: (payload) => ipcRenderer.invoke("vibez1:bootstrap:pair-remote", payload),
 };
 
-contextBridge.exposeInMainWorld("__natstackTransport", bootstrapTransport);
-contextBridge.exposeInMainWorld("__natstackBootstrap", bootstrapBridge);
+contextBridge.exposeInMainWorld("__vibez1Transport", bootstrapTransport);
+contextBridge.exposeInMainWorld("__vibez1Bootstrap", bootstrapBridge);

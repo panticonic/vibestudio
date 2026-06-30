@@ -178,7 +178,7 @@ describe("forkProject", () => {
       "workers/source/package.json",
       JSON.stringify({
         name: "@workspace-workers/source",
-        natstack: {
+        vibez1: {
           type: "worker",
           entry: "source-worker.ts",
           durable: { classes: [{ className: "SourceWorker" }] },
@@ -207,7 +207,7 @@ describe("forkProject", () => {
     // The fork wrote its files through one edit-first GAD transition.
     expect(JSON.parse(mocks.files.get("workers/new/package.json") as string)).toMatchObject({
       name: "@workspace-workers/new",
-      natstack: {
+      vibez1: {
         title: "New Worker",
         entry: "new-worker.ts",
         durable: { classes: [{ className: "NewWorker" }] },

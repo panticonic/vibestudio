@@ -1,5 +1,5 @@
-import type { RpcEnvelope, RpcResponse } from "@natstack/rpc";
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
+import type { RpcEnvelope, RpcResponse } from "@vibez1/rpc";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
 
 export type RelayInboxMessage = {
   envelope: RpcEnvelope;

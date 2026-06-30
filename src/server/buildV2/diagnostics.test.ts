@@ -4,7 +4,7 @@ import { diagnosticsFromError, workspaceDiagnosticPath } from "./diagnostics.js"
 
 describe("build diagnostics path normalization", () => {
   it("maps esbuild materialized source paths back to workspace-relative files", () => {
-    const sourceRoot = path.join(path.sep, "tmp", "natstack-build", "abc123");
+    const sourceRoot = path.join(path.sep, "tmp", "vibez1-build", "abc123");
     const failure = {
       errors: [
         {
@@ -36,7 +36,7 @@ describe("build diagnostics path normalization", () => {
   it("prefixes unit-relative diagnostic files with the workspace unit path", () => {
     expect(
       workspaceDiagnosticPath("src/index.ts", {
-        sourceRoot: path.join(path.sep, "tmp", "natstack-build", "abc123"),
+        sourceRoot: path.join(path.sep, "tmp", "vibez1-build", "abc123"),
         unitRelativePath: "panels/hello",
       })
     ).toBe("panels/hello/src/index.ts");

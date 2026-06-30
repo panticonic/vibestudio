@@ -3,19 +3,19 @@
  *
  * Extracted from MainScreen.tsx so the pin-aware cap and the idle sweep are
  * unit-testable in isolation. Both reuse the shared GC selectors
- * (`@natstack/shared/panel/panelGc`); predicates are passed in to keep these
+ * (`@vibez1/shared/panel/panelGc`); predicates are passed in to keep these
  * functions pure.
  */
 
 import {
   PANEL_UI_IDLE_UNLOAD_MS,
   PANEL_UI_MAX_LOADED_MOBILE,
-} from "@natstack/shared/constants";
+} from "@vibez1/shared/constants";
 import {
   selectCapEvictionVictims,
   selectIdlePanelVictims,
   type LoadedPanelSnapshot,
-} from "@natstack/shared/panel/panelGc";
+} from "@vibez1/shared/panel/panelGc";
 
 export interface WebViewEntry {
   panelId: string;

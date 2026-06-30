@@ -6,7 +6,7 @@ import {
   createVerifiedCaller,
   type ServiceContext,
   type VerifiedCaller,
-} from "@natstack/shared/serviceDispatcher";
+} from "@vibez1/shared/serviceDispatcher";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import {
@@ -16,7 +16,7 @@ import {
 import type { ApprovalQueue } from "./approvalQueue.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-access-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-access-"));
 }
 
 function approvalQueueMock(

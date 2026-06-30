@@ -37,7 +37,7 @@ export class GitAuthError extends Error {
 
 /**
  * Minimal fs/promises interface expected by GitClient.
- * Compatible with Node's fs/promises and @natstack/runtime's RuntimeFs.
+ * Compatible with Node's fs/promises and @vibez1/runtime's RuntimeFs.
  */
 export interface FsPromisesLike {
   readFile(path: string, encoding?: BufferEncoding): Promise<Uint8Array | string>;
@@ -745,8 +745,8 @@ export class GitClient {
     this.fsPromises = fs;
     this.http = options.http;
     this.author = options.author ?? {
-      name: "NatStack Panel",
-      email: "panel@natstack.local",
+      name: "Vibez1 Panel",
+      email: "panel@vibez1.local",
     };
     this.methods = Object.getOwnPropertyNames(GitClient.prototype).filter(
       (name) => name !== "constructor" && typeof (this as unknown as Record<string, unknown>)[name] === "function"

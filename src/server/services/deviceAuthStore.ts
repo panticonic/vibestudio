@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { constantTimeStringEqual } from "@natstack/shared/tokenManager";
+import { constantTimeStringEqual } from "@vibez1/shared/tokenManager";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 import { authError } from "./auth/errors.js";
 
@@ -85,7 +85,7 @@ export class DeviceAuthStore {
     }
     this.pairingCodes.delete(codeHash);
     return this.issueDevice({
-      label: input.label ?? "NatStack client",
+      label: input.label ?? "Vibez1 client",
       platform: input.platform,
     });
   }

@@ -3,12 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
-    "displayName": "NatStack Mobile",
+  "vibez1": {
+    "displayName": "Vibez1 Mobile",
     "app": {
       "target": "react-native",
       "renderer": "App.tsx",
-      "rnComponentName": "NatStack",
+      "rnComponentName": "Vibez1",
       "rnHostAbi": "rn-host-1",
       "capabilities": [
         "notifications",
@@ -20,10 +20,10 @@
     }
   },
   "dependencies": {
-    "@natstack/browser-data": "workspace:*",
-    "@natstack/mobile-webrtc": "workspace:*",
-    "@natstack/rpc": "workspace:*",
-    "@natstack/shared": "workspace:*",
+    "@vibez1/browser-data": "workspace:*",
+    "@vibez1/mobile-webrtc": "workspace:*",
+    "@vibez1/rpc": "workspace:*",
+    "@vibez1/shared": "workspace:*",
     "@notifee/react-native": "^9.1.8",
     "@react-native-community/netinfo": "^11.4.1",
     "@react-native-async-storage/async-storage": "^2.2.0",

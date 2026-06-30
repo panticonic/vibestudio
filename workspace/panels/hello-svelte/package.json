@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "title": "Hello Svelte",
     "entry": "index.ts",
     "template": "svelte"

@@ -11,28 +11,28 @@
  * round-trip, and a bulk stream. This is the bedrock the wrangler-dev harness
  * builds on (it only swaps the in-process signaling for the real signaling DO).
  *
- * Gated behind NATSTACK_RUN_WEBRTC_E2E=1 (opens real UDP sockets + loads the
+ * Gated behind VIBEZ1_RUN_WEBRTC_E2E=1 (opens real UDP sockets + loads the
  * native binary), like the other integration tests.
  *
- *   NATSTACK_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-native.e2e.test.ts
+ *   VIBEZ1_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-native.e2e.test.ts
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { RpcEnvelope } from "@natstack/rpc";
-import { createWebRtcTransport, FINGERPRINT_MISMATCH_CODE } from "@natstack/rpc/transports/webrtcClient";
-import { createWebRtcAnswererPipe } from "@natstack/rpc/transports/webrtcAnswerer";
-import type { RtcIceCandidate, RtcSessionDescription } from "@natstack/rpc/transports/webrtcPeer";
-import type { SignalingClient } from "@natstack/rpc/transports/webrtcSignaling";
-import type { CallerKind, ServiceContext, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
-import { TokenManager } from "@natstack/shared/tokenManager";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
+import type { RpcEnvelope } from "@vibez1/rpc";
+import { createWebRtcTransport, FINGERPRINT_MISMATCH_CODE } from "@vibez1/rpc/transports/webrtcClient";
+import { createWebRtcAnswererPipe } from "@vibez1/rpc/transports/webrtcAnswerer";
+import type { RtcIceCandidate, RtcSessionDescription } from "@vibez1/rpc/transports/webrtcPeer";
+import type { SignalingClient } from "@vibez1/rpc/transports/webrtcSignaling";
+import type { CallerKind, ServiceContext, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+import { TokenManager } from "@vibez1/shared/tokenManager";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { createNodeDatachannelProvider } from "../src/main/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
 
-const RUN = process.env["NATSTACK_RUN_WEBRTC_E2E"] === "1";
+const RUN = process.env["VIBEZ1_RUN_WEBRTC_E2E"] === "1";
 
 /** In-process signaling relay: each peer's send reaches the other's handlers. */
 function signalingPair(): { offerer: SignalingClient; answerer: SignalingClient } {
@@ -167,7 +167,7 @@ async function connect(opts: { pinnedFp: string; certFile: string; keyFile: stri
 }
 
 describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel)", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-rtc-e2e-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-rtc-e2e-"));
   const cert = ensurePersistentCert({
     certificatePemFile: path.join(tmp, "server.pem"),
     keyPemFile: path.join(tmp, "server.key"),

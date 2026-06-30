@@ -2,7 +2,7 @@
  * Typecheck fold-in for the push build gate.
  *
  * esbuild bundles, it does not type-check. The push gate runs the TypeScript
- * language service (via `@natstack/typecheck`, the same engine the typecheck
+ * language service (via `@vibez1/typecheck`, the same engine the typecheck
  * service extension wraps) over each pushed/affected unit's materialized source
  * and merges its diagnostics (`source:"tsc"`) into the build report — so a push
  * surfaces compile AND type errors in one actionable list.
@@ -21,7 +21,7 @@ import {
   type TypeCheckDiagnostic,
   type WorkspaceContext,
   type WorkspacePackageInfo,
-} from "@natstack/typecheck";
+} from "@vibez1/typecheck";
 import { workspaceDiagnosticPath, type BuildDiagnostic } from "./diagnostics.js";
 
 /** A materialized internal-dep unit — package name + workspace-relative path,

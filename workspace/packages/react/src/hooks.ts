@@ -1,5 +1,5 @@
 /**
- * React hooks for NatStack panel development.
+ * React hooks for Vibez1 panel development.
  * Provides declarative, idiomatic React APIs for panel features.
  */
 
@@ -366,8 +366,8 @@ export function useAgentState(key: string, value: unknown): void {
  * Reactively read this panel's state args, re-rendering whenever they change.
  *
  * Initializes from the synchronous snapshot (`runtime.panel.stateArgs.get()`,
- * which reads `window.__natstackStateArgs`) and then subscribes to the
- * host-published `"natstack:stateArgsChanged"` window event, whose `detail`
+ * which reads `window.__vibez1StateArgs`) and then subscribes to the
+ * host-published `"vibez1:stateArgsChanged"` window event, whose `detail`
  * carries the new args. Use this React hook in place of the one-shot
  * `runtime.panel.stateArgs.get()` when the panel must follow live updates made
  * via `runtime.panel.stateArgs.set()` (or by another panel).
@@ -392,8 +392,8 @@ export function useStateArgs<T = Record<string, unknown>>(): T {
     const handler = (event: CustomEvent<Record<string, unknown>>) => {
       setArgs(event.detail as T);
     };
-    window.addEventListener("natstack:stateArgsChanged", handler as EventListener);
-    return () => window.removeEventListener("natstack:stateArgsChanged", handler as EventListener);
+    window.addEventListener("vibez1:stateArgsChanged", handler as EventListener);
+    return () => window.removeEventListener("vibez1:stateArgsChanged", handler as EventListener);
   }, []);
 
   return args;

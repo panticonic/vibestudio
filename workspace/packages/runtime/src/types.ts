@@ -4,7 +4,7 @@ export type ThemeAppearance = "light" | "dark";
 
 /** App-wide theme identity (accent/radius/scaling/surface), pushed live from
  *  the shell over the runtime bridge. Structurally identical to
- *  `@natstack/shared`'s ThemeConfig. */
+ *  `@vibez1/shared`'s ThemeConfig. */
 export interface ThemeConfig {
   accentColor: string;
   grayColor: string;
@@ -97,7 +97,7 @@ export interface ReaddirOptions {
 
 /**
  * Filesystem interface for panels and workers.
- * Compatible with Node's fs/promises and @natstack/git's FsPromisesLike.
+ * Compatible with Node's fs/promises and @vibez1/git's FsPromisesLike.
  */
 export interface RuntimeFs {
   /**

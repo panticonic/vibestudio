@@ -24,8 +24,8 @@ import {
   type DefaultAgentConfig,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
-import { findMatchingUrlAudience } from "@natstack/shared/credentials/urlAudience";
-import type { UrlAudience } from "@natstack/shared/credentials/urlAudience";
+import { findMatchingUrlAudience } from "@vibez1/shared/credentials/urlAudience";
+import type { UrlAudience } from "@vibez1/shared/credentials/urlAudience";
 import type { DurableObjectServiceClient } from "@workspace/runtime";
 import {
   appendInstalledAgent,
@@ -36,11 +36,11 @@ import {
 import { createAndSubscribeAgent } from "./agentLifecycle.js";
 
 function detectHostPlatform(): "mobile" | "electron" {
-  const explicitPlatform = (globalThis as { __natstackHostPlatform?: unknown }).__natstackHostPlatform;
+  const explicitPlatform = (globalThis as { __vibez1HostPlatform?: unknown }).__vibez1HostPlatform;
   if (explicitPlatform === "mobile") {
     return "mobile";
   }
-  if (typeof navigator !== "undefined" && /\bNatStack-Mobile\//.test(navigator.userAgent)) {
+  if (typeof navigator !== "undefined" && /\bVibez1-Mobile\//.test(navigator.userAgent)) {
     return "mobile";
   }
   return "electron";
@@ -68,7 +68,7 @@ const PANEL_METADATA = {
 const DEFAULT_WORKER_SOURCE = "workers/agent-worker";
 const DEFAULT_CLASS_NAME = "AiChatWorker";
 const DEFAULT_HANDLE = "ai-chat";
-const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
+const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
 const AGENT_SUBSCRIPTION_RETRY_DELAY_MS = 1_000;
 const AGENT_SUBSCRIPTION_MAX_ATTEMPTS = 60;
 
@@ -165,8 +165,8 @@ interface ChatStateArgs {
   forceInitialPrompt?: boolean;
   /** System prompt for the agent harness */
   systemPrompt?: string;
-  /** How systemPrompt interacts with NatStack base, workspace prompt, and skills */
-  systemPromptMode?: "append" | "replace-natstack" | "replace";
+  /** How systemPrompt interacts with Vibez1 base, workspace prompt, and skills */
+  systemPromptMode?: "append" | "replace-vibez1" | "replace";
   /** Extra subscription config for custom/test agents */
   agentConfig?: Record<string, unknown>;
   /** Context-relative TSX file to load into the panel-local action bar */

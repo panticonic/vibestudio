@@ -1,7 +1,7 @@
 {
-  "name": "@natstack/typecheck",
+  "name": "@vibez1/typecheck",
   "version": "0.1.0",
-  "description": "TypeScript type checking for NatStack panels and workers",
+  "description": "TypeScript type checking for Vibez1 panels and workers",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

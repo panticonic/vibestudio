@@ -29,8 +29,8 @@ type ApprovalChoice =
   | { kind: "uncallable"; reason: "no-user-context" };
 
 function makeWorkspace() {
-  const source = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-test-runner-source-"));
-  const contexts = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-test-runner-contexts-"));
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-test-runner-source-"));
+  const contexts = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-test-runner-contexts-"));
   return { source, contexts };
 }
 

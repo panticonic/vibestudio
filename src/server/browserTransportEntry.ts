@@ -3,7 +3,7 @@
  * served as `__transport.js` under each panel route.
  *
  * Panels no longer open a direct `ws://…/rpc` WebSocket. Panel RPC rides the
- * **shell bridge** (`__natstackShell` — Electron `contextBridge` on desktop, the
+ * **shell bridge** (`__vibez1Shell` — Electron `contextBridge` on desktop, the
  * React-Native `postMessage` bridge on mobile), which the host muxes onto its
  * single WebRTC control channel as the panel's own logical session. The panel
  * runtime's `createPanelTransport()` consumes that bridge directly, so this
@@ -13,12 +13,12 @@
  * over the bridge before the panel bundle's runtime is up.
  *
  * Timing: configLoader runs as a blocking <script> and sets the panel globals
- * (and `__natstackShell` is exposed by the host preload/injection) before
+ * (and `__vibez1Shell` is exposed by the host preload/injection) before
  * dynamically loading this script.
  */
 
-import { applyStateArgsSnapshot } from "@natstack/shared/panel/applyStateArgsSnapshot";
-import type { RpcEnvelope } from "@natstack/rpc";
+import { applyStateArgsSnapshot } from "@vibez1/shared/panel/applyStateArgsSnapshot";
+import type { RpcEnvelope } from "@vibez1/rpc";
 
 type ShellEnvelopeBridge = {
   onEnvelope?: (handler: (envelope: RpcEnvelope) => void) => () => void;
@@ -48,12 +48,12 @@ function isRuntimeEventMessage(message: unknown): message is RuntimeEventMessage
 
 const shell = ((
   globalThis as typeof globalThis & {
-    __natstackShell?: ShellEnvelopeBridge;
-    __natstackElectron?: ShellEnvelopeBridge;
+    __vibez1Shell?: ShellEnvelopeBridge;
+    __vibez1Electron?: ShellEnvelopeBridge;
   }
-).__natstackShell ??
-  (globalThis as typeof globalThis & { __natstackElectron?: ShellEnvelopeBridge })
-    .__natstackElectron) as ShellEnvelopeBridge | undefined;
+).__vibez1Shell ??
+  (globalThis as typeof globalThis & { __vibez1Electron?: ShellEnvelopeBridge })
+    .__vibez1Electron) as ShellEnvelopeBridge | undefined;
 
 shell?.onEnvelope?.((envelope) => {
   const message = envelope.message;

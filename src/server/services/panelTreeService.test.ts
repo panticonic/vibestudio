@@ -2,14 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createVerifiedCaller, type VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, type VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import { createPanelTreeService, type PanelTreeServiceDeps } from "./panelTreeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-tree-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-tree-"));
 }
 
 function approvalQueueMock(

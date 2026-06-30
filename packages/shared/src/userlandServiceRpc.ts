@@ -32,7 +32,7 @@ export interface DurableObjectServiceClient {
   call<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
 }
 
-export const GAD_WORKSPACE_SERVICE_PROTOCOL = "natstack.gad.workspace.v1";
+export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibez1.gad.workspace.v1";
 
 export function doTargetId(ref: DORefParam): string {
   return `do:${ref.source}:${ref.className}:${ref.objectKey}`;

@@ -1,9 +1,9 @@
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
 import type {
   ExtensionInvocation,
   ExtensionSource,
   RegistryEntry,
-} from "@natstack/extension";
+} from "@vibez1/extension";
 
 export type {
   ExtensionInvocation,

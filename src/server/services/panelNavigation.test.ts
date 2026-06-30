@@ -11,21 +11,21 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { createTestDO } from "@natstack/durable/test-utils";
+import { createTestDO } from "@vibez1/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { createRuntimeService } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import { canonicalEntityId, type EntityRecord } from "@natstack/shared/runtime/entitySpec";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { canonicalEntityId, type EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import type { DODispatch, DORef } from "../doDispatch.js";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-nav-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-nav-"));
 }
 
 function approvalQueueMock(

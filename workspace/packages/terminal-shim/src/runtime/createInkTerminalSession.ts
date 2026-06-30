@@ -1,5 +1,5 @@
-import { NatStackWritableTTY } from "../streams/NatStackWritableTTY.js";
-import { NatStackReadableTTY } from "../streams/NatStackReadableTTY.js";
+import { Vibez1WritableTTY } from "../streams/Vibez1WritableTTY.js";
+import { Vibez1ReadableTTY } from "../streams/Vibez1ReadableTTY.js";
 import { __setTerminalSize } from "../node/terminal-size.js";
 import { __runExitHandlers } from "../node/signal-exit.js";
 
@@ -28,9 +28,9 @@ export interface CreateInkTerminalSessionOptions {
 
 export interface InkTerminalSession {
   /** Pass these into Ink's `render(node, { stdin, stdout, stderr })`. */
-  stdin: NatStackReadableTTY;
-  stdout: NatStackWritableTTY;
-  stderr: NatStackWritableTTY;
+  stdin: Vibez1ReadableTTY;
+  stdout: Vibez1WritableTTY;
+  stderr: Vibez1WritableTTY;
   /** Deliver host-forwarded input bytes to Ink's `useInput`. */
   emitInput(data: Uint8Array): void;
   /** Apply a host resize: updates streams + the terminal-size shim. */
@@ -51,17 +51,17 @@ export function createInkTerminalSession(
   const size = options.initialSize ?? { columns: 80, rows: 24 };
   __setTerminalSize(size);
 
-  const stdout = new NatStackWritableTTY(
+  const stdout = new Vibez1WritableTTY(
     (data) => options.sink.write("stdout", data),
     size.columns,
     size.rows,
   );
-  const stderr = new NatStackWritableTTY(
+  const stderr = new Vibez1WritableTTY(
     (data) => options.sink.write("stderr", data),
     size.columns,
     size.rows,
   );
-  const stdin = new NatStackReadableTTY((enabled) => options.sink.setRawMode?.(enabled));
+  const stdin = new Vibez1ReadableTTY((enabled) => options.sink.setRawMode?.(enabled));
 
   let disposed = false;
 

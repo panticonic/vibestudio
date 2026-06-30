@@ -69,7 +69,7 @@ function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequ
 }
 
 function writeCredentials(tmpDir: string): void {
-  const dir = path.join(tmpDir, ".config", "natstack");
+  const dir = path.join(tmpDir, ".config", "vibez1");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
@@ -85,7 +85,7 @@ function writeCredentials(tmpDir: string): void {
 }
 
 function sessionFile(tmpDir: string, name: string): string {
-  return path.join(tmpDir, ".config", "natstack", "agent-sessions", `${name}.json`);
+  return path.join(tmpDir, ".config", "vibez1", "agent-sessions", `${name}.json`);
 }
 
 function jsonOutput(): unknown {
@@ -101,11 +101,11 @@ const SESSION_HANDLE = {
   targetId: "session:work",
 };
 
-describe("natstack agent commands", () => {
+describe("vibez1 agent commands", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-agent-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-agent-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -201,7 +201,7 @@ describe("natstack agent commands", () => {
 
   it("attach warns on stderr before overwriting a session from another server", async () => {
     writeCredentials(tmpDir);
-    const dir = path.join(tmpDir, ".config", "natstack", "agent-sessions");
+    const dir = path.join(tmpDir, ".config", "vibez1", "agent-sessions");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       sessionFile(tmpDir, "work"),
@@ -324,7 +324,7 @@ describe("natstack agent commands", () => {
   });
 
   it("sessions lists local files with unknown liveness when not paired", async () => {
-    const dir = path.join(tmpDir, ".config", "natstack", "agent-sessions");
+    const dir = path.join(tmpDir, ".config", "vibez1", "agent-sessions");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       sessionFile(tmpDir, "work"),

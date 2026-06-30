@@ -17,9 +17,9 @@
 import {
   createWebRtcAnswererPipe,
   type WebRtcAnswererPipe,
-} from "@natstack/rpc/transports/webrtcAnswerer";
-import { createSignalingClient } from "@natstack/rpc/transports/webrtcSignalingClient";
-import { createConnectDeepLink, type TurnPolicy } from "@natstack/shared/connect";
+} from "@vibez1/rpc/transports/webrtcAnswerer";
+import { createSignalingClient } from "@vibez1/rpc/transports/webrtcSignalingClient";
+import { createConnectDeepLink, type TurnPolicy } from "@vibez1/shared/connect";
 
 /** Minimal surface of RpcServer this bootstrap needs (avoids a hard type dep). */
 export interface WebRtcAttachable {
@@ -52,7 +52,7 @@ export interface WebRtcAnswererOptions {
 export interface WebRtcAnswererHandle {
   /** The server's DTLS SHA-256 fingerprint (the published pin). */
   fingerprint: string;
-  /** The `natstack://connect?...` pairing link a client scans/pastes. */
+  /** The `vibez1://connect?...` pairing link a client scans/pastes. */
   pairingLink: string;
   pipe: WebRtcAnswererPipe;
   close(): Promise<void>;
@@ -71,7 +71,7 @@ export async function startWebRtcAnswerer(
     default: new (url: string) => unknown;
   };
 
-  const provider = createNodeDatachannelProvider({ peerName: "natstack-server" });
+  const provider = createNodeDatachannelProvider({ peerName: "vibez1-server" });
   const fingerprint =
     provider.localFingerprint?.({ certificatePemFile: options.certificatePemFile }) ??
     certFileFingerprint(options.certificatePemFile);

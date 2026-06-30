@@ -9,11 +9,11 @@
  * transport caller kind as the source label.
  */
 
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { ApprovalDecision } from "@natstack/shared/approvals";
-import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
-import { isBootstrapUnitApproval } from "@natstack/shared/bootstrapApprovals";
-import { ServiceError } from "@natstack/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ApprovalDecision } from "@vibez1/shared/approvals";
+import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
+import { isBootstrapUnitApproval } from "@vibez1/shared/bootstrapApprovals";
+import { ServiceError } from "@vibez1/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 

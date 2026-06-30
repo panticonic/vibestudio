@@ -1,11 +1,11 @@
 import * as crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
-import { doTargetId, type RpcCallerLike } from "@natstack/shared/userlandServiceRpc";
+import { doTargetId, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import {
   getHeader,
@@ -377,12 +377,12 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
 
   function verifyRelayEnvelope(req: IncomingMessage, rawBody: Buffer): boolean {
     if (!deps.relaySigningSecret) return false;
-    const method = getHeader(req.headers, "x-natstack-relay-method");
-    const path = getHeader(req.headers, "x-natstack-relay-path");
-    const query = getHeader(req.headers, "x-natstack-relay-query") ?? "";
-    const timestamp = getHeader(req.headers, "x-natstack-relay-timestamp");
-    const bodySha256 = getHeader(req.headers, "x-natstack-relay-body-sha256");
-    const signature = getHeader(req.headers, "x-natstack-relay-signature");
+    const method = getHeader(req.headers, "x-vibez1-relay-method");
+    const path = getHeader(req.headers, "x-vibez1-relay-path");
+    const query = getHeader(req.headers, "x-vibez1-relay-query") ?? "";
+    const timestamp = getHeader(req.headers, "x-vibez1-relay-timestamp");
+    const bodySha256 = getHeader(req.headers, "x-vibez1-relay-body-sha256");
+    const signature = getHeader(req.headers, "x-vibez1-relay-signature");
     if (!method || !path || !timestamp || !bodySha256 || !signature) {
       return false;
     }

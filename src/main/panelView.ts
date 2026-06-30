@@ -6,27 +6,27 @@
  * PanelOrchestrator can drive view creation without Electron imports.
  */
 
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import type { ViewManager } from "./viewManager.js";
-import type { PanelRegistry } from "@natstack/shared/panelRegistry";
-import type { PanelViewLike, ServerInfoLike } from "@natstack/shared/panelInterfaces";
-import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import type { PanelViewLike, ServerInfoLike } from "@vibez1/shared/panelInterfaces";
+import { BROWSER_SESSION_PARTITION } from "@vibez1/shared/panelInterfaces";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 import {
   getCurrentSnapshot,
   getPanelSource,
   getPanelContextId,
   getPanelRef,
   updatePanelNavigationState,
-} from "@natstack/shared/panelTypes";
-import { contextIdToPartition } from "@natstack/shared/contextIdToPartition.js";
+} from "@vibez1/shared/panelTypes";
+import { contextIdToPartition } from "@vibez1/shared/contextIdToPartition.js";
 import {
   isManagedHost,
   parsePanelUrl,
   type ParsedPanelUrl,
-} from "@natstack/shared/shell/urlParsing.js";
-import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@natstack/shared/panelChrome";
-import type { PanelNavigationState } from "@natstack/shared/types";
+} from "@vibez1/shared/shell/urlParsing.js";
+import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@vibez1/shared/panelChrome";
+import type { PanelNavigationState } from "@vibez1/shared/types";
 import { logMemorySnapshot } from "./memoryMonitor.js";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
 // Persistence removed — server panel service handles all persistence

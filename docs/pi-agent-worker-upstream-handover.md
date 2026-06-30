@@ -5,18 +5,18 @@ Date: 2026-05-16
 ## Purpose
 
 This note captures a focused upstream review of the Pi-derived logic in
-NatStack's chat agent Durable Object implementation. It is intended as handover
+Vibez1's chat agent Durable Object implementation. It is intended as handover
 context for another agent or engineer who will turn the findings into scoped
-NatStack changes.
+Vibez1 changes.
 
 The important distinction: this is not a review of the generic
 `workspace/packages/harness` file tools alone. The target is the agent worker DO flow that
-forks, embeds, and adapts Pi's chat/agent loop behavior for NatStack's channel,
+forks, embeds, and adapts Pi's chat/agent loop behavior for Vibez1's channel,
 Durable Object, credential, hibernation, and method-dispatch model.
 
 ## Local branch and dependency state
 
-The review was performed in `/home/werg/natstack2` on branch
+The review was performed in `/home/werg/vibez12` on branch
 `worktree-update-deprecated-deps`.
 
 That branch currently uses the new Pi package scope:
@@ -67,17 +67,17 @@ Primary local files:
     fork support, and routing of channel events into Pi user messages.
 - `workspace/packages/agentic-do/src/turn-dispatcher.ts`
   - Local per-channel user-message queue/steering state machine. This is a
-    NatStack-specific adaptation around Pi's `Agent.prompt()`/`Agent.steer()`
+    Vibez1-specific adaptation around Pi's `Agent.prompt()`/`Agent.steer()`
     APIs.
 - `workspace/packages/agentic-do/src/content-block-projector.ts`
-  - Projects Pi `AgentEvent`s into NatStack channel messages and tool-call UI
+  - Projects Pi `AgentEvent`s into Vibez1 channel messages and tool-call UI
     payloads.
 - `workspace/packages/agentic-do/src/dispatched-call-store.ts`
   - Durable breadcrumb table for interactive tool dispatches that must survive
     hibernation/restart.
 - `workspace/packages/harness/src/pi-runner.ts`
   - Thin in-process wrapper around `@earendil-works/pi-agent-core` `Agent`.
-    It adapts Pi to NatStack resources, channel tools, approval gates, ask-user,
+    It adapts Pi to Vibez1 resources, channel tools, approval gates, ask-user,
     GAD logging, persistence, and DO callbacks.
 - `workspace/workers/agent-worker/ai-chat-worker.ts`
   - Default concrete chat agent worker that extends `AgentWorkerBase`.
@@ -88,12 +88,12 @@ Key local behavior to preserve:
 - Channel history is persisted in DO SQLite `pi_messages`, not in Pi's native
   file/session store.
 - Channel participant method calls are exposed to Pi as dynamic tools through
-  NatStack's channel-tools extension.
+  Vibez1's channel-tools extension.
 - Interactive tool dispatches abort the current Pi turn and write durable
   placeholders so method results can be applied after hibernation/restart.
 - User-submitted messages during active runs go through `TurnDispatcher`, which
   decides between fresh turn and Pi steering.
-- Message projection is one NatStack channel message per Pi text/thinking/tool
+- Message projection is one Vibez1 channel message per Pi text/thinking/tool
   content block.
 
 ## Upstream changes worth knowing
@@ -116,7 +116,7 @@ The upstream harness owns:
 - per-turn resource/system-prompt/model/thinking snapshots
 - stream option hooks and provider request hooks
 
-Assessment: do not port wholesale. NatStack has different durability and UI
+Assessment: do not port wholesale. Vibez1 has different durability and UI
 boundaries: DO SQLite, channels, method-result recovery, URL-bound credentials,
 forking, and hibernation. The upstream harness is still useful as a design
 reference for specific mechanics, especially per-turn context snapshots and
@@ -152,8 +152,8 @@ Local relevance:
   user/channel event caused `ensureChannelContext()` first.
 
 Recommendation: when a Pi release includes `prepareNextTurn`, port a
-NatStack-specific version into `PiRunner`/`AgentWorkerBase` rather than
-adopting upstream `AgentHarness`. The NatStack version should likely:
+Vibez1-specific version into `PiRunner`/`AgentWorkerBase` rather than
+adopting upstream `AgentHarness`. The Vibez1 version should likely:
 
 - ask `AgentWorkerBase` for a fresh roster/config snapshot for the channel
   between Pi turns
@@ -310,10 +310,10 @@ This change is small, local, and directly aligned with upstream semantics.
    - Avoid changing behavior without tests around credential-required,
      provider-thrown, user-aborted, and dispatched-method-aborted turns.
 
-6. Design a NatStack `prepareNextTurn` equivalent.
+6. Design a Vibez1 `prepareNextTurn` equivalent.
    - Use upstream as a pattern, not a direct import.
    - It should refresh channel-derived tool roster/config/model state between
-     Pi turns while preserving NatStack DO persistence and recovery semantics.
+     Pi turns while preserving Vibez1 DO persistence and recovery semantics.
 
 ## Risks and open questions
 
@@ -322,14 +322,14 @@ This change is small, local, and directly aligned with upstream semantics.
   ensure it does not deadlock if the channel DO is slow or unavailable.
 - It is not yet clear whether downstream listener failures should be swallowed,
   converted to visible channel errors, or allowed to fail the Pi run. Current
-  NatStack behavior logs and continues; changing that would be a product
+  Vibez1 behavior logs and continues; changing that would be a product
   decision.
 - `prepareNextTurn` may require a new async boundary between `PiRunner` and
   `AgentWorkerBase`. The existing channel-tools extension uses synchronous
   cached roster reads, so a naive direct async channel call inside the extension
   would not fit the current shape.
 - Upstream `AgentHarness` has its own session abstraction and compaction model.
-  Porting it directly could conflict with NatStack's channel transcript and DO
+  Porting it directly could conflict with Vibez1's channel transcript and DO
   fork semantics.
 
 ## Verification commands used locally

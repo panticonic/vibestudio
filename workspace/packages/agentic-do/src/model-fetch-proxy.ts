@@ -18,9 +18,9 @@
  * injects the real credential during the upgrade.
  */
 
-export const URL_BOUND_MODEL_CREDENTIAL_SENTINEL = "natstack-url-bound-model-credential";
+export const URL_BOUND_MODEL_CREDENTIAL_SENTINEL = "vibez1-url-bound-model-credential";
 const URL_BOUND_MODEL_CREDENTIAL_SENTINEL_CLAIM =
-  "https://natstack.local/url-bound-model-credential";
+  "https://vibez1.local/url-bound-model-credential";
 
 export type CredentialedFetcher = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -30,8 +30,8 @@ interface ProxyState {
 }
 
 type ProxyGlobals = typeof globalThis & {
-  __natstackModelFetchProxyState?: ProxyState;
-  __natstackModelFetchProxyInstalled?: boolean;
+  __vibez1ModelFetchProxyState?: ProxyState;
+  __vibez1ModelFetchProxyInstalled?: boolean;
 };
 
 function base64UrlJson(value: unknown): string {
@@ -49,7 +49,7 @@ export function createModelCredentialSentinel(
     return URL_BOUND_MODEL_CREDENTIAL_SENTINEL;
   }
   return [
-    "natstack",
+    "vibez1",
     base64UrlJson({
       [URL_BOUND_MODEL_CREDENTIAL_SENTINEL_CLAIM]: true,
       ...providerClaims,
@@ -159,7 +159,7 @@ function prepareModelWebSocketHeaders(target: URL, headers: Headers): void {
 
 function prepareModelWebSocketUrl(url: URL, headers: Headers): URL {
   const proxyUrl = new URL(url.toString());
-  proxyUrl.searchParams.set("__natstack_ws_headers", encodeWebSocketHeaderPairs(headers));
+  proxyUrl.searchParams.set("__vibez1_ws_headers", encodeWebSocketHeaderPairs(headers));
   return proxyUrl;
 }
 
@@ -168,25 +168,25 @@ export function installUrlBoundModelFetchProxy(
   fetcher: CredentialedFetcher
 ): void {
   const globals = globalThis as ProxyGlobals & {
-    __natstackPrepareModelWebSocket?: (
+    __vibez1PrepareModelWebSocket?: (
       url: string,
       headers: Headers | Record<string, string>
     ) => { url: string } | null;
   };
-  let state = globals.__natstackModelFetchProxyState;
+  let state = globals.__vibez1ModelFetchProxyState;
   if (!state) {
     state = { originalFetch: globalThis.fetch.bind(globalThis), routes: new Map() };
-    globals.__natstackModelFetchProxyState = state;
+    globals.__vibez1ModelFetchProxyState = state;
   }
   state.routes.set(modelBaseUrl, fetcher);
   const proxyRoutes = state.routes;
   // Codex realtime transport: pi-ai consults this hook before opening the
   // model WebSocket. Strip the sentinel bearer and pack the remaining headers
-  // into `__natstack_ws_headers` — the server egress proxy injects the real
+  // into `__vibez1_ws_headers` — the server egress proxy injects the real
   // credential on upgrade. Without this hook the WS attempt fails auth and
   // pi-ai silently falls back to SSE (no raw reasoning deltas, extra latency
   // on every call).
-  globals.__natstackPrepareModelWebSocket = (url, headersInput) => {
+  globals.__vibez1PrepareModelWebSocket = (url, headersInput) => {
     const target = wsMatchUrl(new URL(url));
     if (!target || !findRoute(target, proxyRoutes)) return null;
     const headers = new Headers(headersInput);
@@ -199,8 +199,8 @@ export function installUrlBoundModelFetchProxy(
     const proxyUrl = new URL(url);
     return { url: prepareModelWebSocketUrl(proxyUrl, headers).toString() };
   };
-  if (globals.__natstackModelFetchProxyInstalled) return;
-  globals.__natstackModelFetchProxyInstalled = true;
+  if (globals.__vibez1ModelFetchProxyInstalled) return;
+  globals.__vibez1ModelFetchProxyInstalled = true;
 
   const proxyState = state;
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {

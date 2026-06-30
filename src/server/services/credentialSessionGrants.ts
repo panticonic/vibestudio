@@ -1,4 +1,4 @@
-import type { CredentialGrantAction } from "@natstack/shared/credentials/types";
+import type { CredentialGrantAction } from "@vibez1/shared/credentials/types";
 
 export interface CredentialSessionGrantScope {
   callerId: string;

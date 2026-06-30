@@ -11,7 +11,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.78.0':
-    hash: 367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb
+    hash: 05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce
     path: workspace/packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch
   re2@1.24.0:
     hash: a4a166273fe3817fd493cfc042f1d966f4ada60f1234330cd306e798259b549b
@@ -32,52 +32,13 @@ importers:
         version: 3.2.2(react@19.0.0)
       '@earendil-works/pi-ai':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@ghostery/adblocker':
         specifier: ^2.13.4
         version: 2.13.4
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.1
         version: 1.25.3(hono@4.11.7)(zod@3.25.76)
-      '@natstack/browser-data':
-        specifier: workspace:*
-        version: link:packages/browser-data
-      '@natstack/dev-log':
-        specifier: workspace:*
-        version: link:packages/dev-log
-      '@natstack/durable':
-        specifier: workspace:*
-        version: link:packages/durable
-      '@natstack/env-paths':
-        specifier: workspace:*
-        version: link:packages/env-paths
-      '@natstack/extension':
-        specifier: workspace:*
-        version: link:packages/extension
-      '@natstack/extension-host':
-        specifier: workspace:*
-        version: link:packages/extension-host
-      '@natstack/git':
-        specifier: workspace:*
-        version: link:packages/git
-      '@natstack/port-utils':
-        specifier: workspace:*
-        version: link:packages/port-utils
-      '@natstack/process-adapter':
-        specifier: workspace:*
-        version: link:packages/process-adapter
-      '@natstack/rpc':
-        specifier: workspace:*
-        version: link:packages/rpc
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:packages/shared
-      '@natstack/typecheck':
-        specifier: workspace:*
-        version: link:packages/typecheck
-      '@natstack/types':
-        specifier: workspace:*
-        version: link:packages/types
       '@npmcli/arborist':
         specifier: ^7.4.0
         version: 7.5.4
@@ -99,6 +60,45 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      '@vibez1/browser-data':
+        specifier: workspace:*
+        version: link:packages/browser-data
+      '@vibez1/dev-log':
+        specifier: workspace:*
+        version: link:packages/dev-log
+      '@vibez1/durable':
+        specifier: workspace:*
+        version: link:packages/durable
+      '@vibez1/env-paths':
+        specifier: workspace:*
+        version: link:packages/env-paths
+      '@vibez1/extension':
+        specifier: workspace:*
+        version: link:packages/extension
+      '@vibez1/extension-host':
+        specifier: workspace:*
+        version: link:packages/extension-host
+      '@vibez1/git':
+        specifier: workspace:*
+        version: link:packages/git
+      '@vibez1/port-utils':
+        specifier: workspace:*
+        version: link:packages/port-utils
+      '@vibez1/process-adapter':
+        specifier: workspace:*
+        version: link:packages/process-adapter
+      '@vibez1/rpc':
+        specifier: workspace:*
+        version: link:packages/rpc
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:packages/shared
+      '@vibez1/typecheck':
+        specifier: workspace:*
+        version: link:packages/typecheck
+      '@vibez1/types':
+        specifier: workspace:*
+        version: link:packages/types
       '@xterm/addon-clipboard':
         specifier: ^0.2.0
         version: 0.2.0
@@ -313,18 +313,18 @@ importers:
 
   apps/headless-host:
     dependencies:
-      '@natstack/dev-log':
-        specifier: workspace:*
-        version: link:../../packages/dev-log
-      '@natstack/rpc':
-        specifier: workspace:*
-        version: link:../../packages/rpc
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@puppeteer/browsers':
         specifier: ^2.6.1
         version: 2.13.2
+      '@vibez1/dev-log':
+        specifier: workspace:*
+        version: link:../../packages/dev-log
+      '@vibez1/rpc':
+        specifier: workspace:*
+        version: link:../../packages/rpc
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       ws:
         specifier: ^8.18.0
         version: 8.19.0
@@ -347,18 +347,6 @@ importers:
       '@babel/runtime':
         specifier: ^7.29.2
         version: 7.29.2
-      '@natstack/browser-data':
-        specifier: workspace:*
-        version: link:../../packages/browser-data
-      '@natstack/mobile-webrtc':
-        specifier: workspace:*
-        version: link:../../packages/mobile-webrtc
-      '@natstack/rpc':
-        specifier: workspace:*
-        version: link:../../packages/rpc
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@notifee/react-native':
         specifier: ^9.1.8
         version: 9.1.8(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))
@@ -386,6 +374,18 @@ importers:
       '@react-navigation/stack':
         specifier: ^7.2.6
         version: 7.8.9(@react-navigation/native@7.2.2(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-gesture-handler@2.30.1(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-safe-area-context@5.7.0(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-screens@4.10.0(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
+      '@vibez1/browser-data':
+        specifier: workspace:*
+        version: link:../../packages/browser-data
+      '@vibez1/mobile-webrtc':
+        specifier: workspace:*
+        version: link:../../packages/mobile-webrtc
+      '@vibez1/rpc':
+        specifier: workspace:*
+        version: link:../../packages/rpc
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       jotai:
         specifier: ^2.15.1
         version: 2.17.0(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.0.0)
@@ -513,7 +513,7 @@ importers:
 
   packages/browser-data:
     dependencies:
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -538,7 +538,7 @@ importers:
 
   packages/durable:
     dependencies:
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../rpc
     devDependencies:
@@ -560,10 +560,10 @@ importers:
 
   packages/extension:
     dependencies:
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../shared
-      '@natstack/unit-host':
+      '@vibez1/unit-host':
         specifier: workspace:*
         version: link:../unit-host
     devDependencies:
@@ -573,19 +573,19 @@ importers:
 
   packages/extension-host:
     dependencies:
-      '@natstack/extension':
+      '@vibez1/extension':
         specifier: workspace:*
         version: link:../extension
-      '@natstack/process-adapter':
+      '@vibez1/process-adapter':
         specifier: workspace:*
         version: link:../process-adapter
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../shared
-      '@natstack/unit-host':
+      '@vibez1/unit-host':
         specifier: workspace:*
         version: link:../unit-host
       yaml:
@@ -604,7 +604,7 @@ importers:
 
   packages/git:
     dependencies:
-      '@natstack/types':
+      '@vibez1/types':
         specifier: workspace:*
         version: link:../types
       diff:
@@ -626,12 +626,12 @@ importers:
 
   packages/mobile-webrtc:
     dependencies:
-      '@natstack/rpc':
-        specifier: workspace:*
-        version: link:../rpc
       '@react-native-async-storage/async-storage':
         specifier: ^2.2.0
         version: 2.2.0(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.2.4))
+      '@vibez1/rpc':
+        specifier: workspace:*
+        version: link:../rpc
       react-native-keychain:
         specifier: ^9.2.2
         version: 9.2.3
@@ -666,7 +666,7 @@ importers:
 
   packages/rpc:
     dependencies:
-      '@natstack/types':
+      '@vibez1/types':
         specifier: workspace:*
         version: link:../types
     devDependencies:
@@ -676,16 +676,16 @@ importers:
 
   packages/shared:
     dependencies:
-      '@natstack/dev-log':
+      '@vibez1/dev-log':
         specifier: workspace:*
         version: link:../dev-log
-      '@natstack/env-paths':
+      '@vibez1/env-paths':
         specifier: workspace:*
         version: link:../env-paths
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@natstack/types':
+      '@vibez1/types':
         specifier: workspace:*
         version: link:../types
 
@@ -809,18 +809,6 @@ importers:
 
   workspace/apps/mobile:
     dependencies:
-      '@natstack/browser-data':
-        specifier: workspace:*
-        version: link:../../../packages/browser-data
-      '@natstack/mobile-webrtc':
-        specifier: workspace:*
-        version: link:../../../packages/mobile-webrtc
-      '@natstack/rpc':
-        specifier: workspace:*
-        version: link:../../../packages/rpc
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
       '@notifee/react-native':
         specifier: ^9.1.8
         version: 9.1.8(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))
@@ -848,6 +836,18 @@ importers:
       '@react-navigation/stack':
         specifier: ^7.2.6
         version: 7.8.9(@react-navigation/native@7.2.2(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-gesture-handler@2.30.1(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-safe-area-context@5.7.0(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-screens@4.10.0(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
+      '@vibez1/browser-data':
+        specifier: workspace:*
+        version: link:../../../packages/browser-data
+      '@vibez1/mobile-webrtc':
+        specifier: workspace:*
+        version: link:../../../packages/mobile-webrtc
+      '@vibez1/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       jotai:
         specifier: ^2.15.1
         version: 2.17.0(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.10)(react@19.0.0)
@@ -899,10 +899,10 @@ importers:
 
   workspace/apps/remote-cli:
     dependencies:
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       ws:
@@ -920,12 +920,6 @@ importers:
       '@dnd-kit/utilities':
         specifier: ^3.2.2
         version: 3.2.2(react@19.0.0)
-      '@natstack/rpc':
-        specifier: workspace:*
-        version: link:../../../packages/rpc
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.0.0)
@@ -935,6 +929,12 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.0
         version: 3.13.18(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibez1/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -956,10 +956,10 @@ importers:
 
   workspace/apps/terminal-browser:
     dependencies:
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/terminal-host-protocol':
@@ -984,7 +984,7 @@ importers:
 
   workspace/extensions/browser-data:
     dependencies:
-      '@natstack/browser-data':
+      '@vibez1/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
       '@workspace/browser-data':
@@ -1007,7 +1007,7 @@ importers:
 
   workspace/extensions/react-native:
     dependencies:
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
 
@@ -1028,13 +1028,13 @@ importers:
 
   workspace/extensions/typecheck-service:
     dependencies:
-      '@natstack/env-paths':
+      '@vibez1/env-paths':
         specifier: workspace:*
         version: link:../../../packages/env-paths
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@natstack/typecheck':
+      '@vibez1/typecheck':
         specifier: workspace:*
         version: link:../../../packages/typecheck
 
@@ -1070,15 +1070,15 @@ importers:
       '@mdx-js/mdx':
         specifier: ^3.1.0
         version: 3.1.1
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.2.4)
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../agentic-core
@@ -1109,7 +1109,7 @@ importers:
 
   workspace/packages/agentic-core:
     dependencies:
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-protocol':
@@ -1129,8 +1129,8 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
-      '@natstack/shared':
+        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agent-loop':
@@ -1170,7 +1170,7 @@ importers:
 
   workspace/packages/agentic-session:
     dependencies:
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-core':
@@ -1188,7 +1188,7 @@ importers:
 
   workspace/packages/browser-data:
     dependencies:
-      '@natstack/browser-data':
+      '@vibez1/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
       bplist-parser:
@@ -1212,7 +1212,7 @@ importers:
 
   workspace/packages/channel-fork:
     dependencies:
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
     devDependencies:
@@ -1228,7 +1228,7 @@ importers:
 
   workspace/packages/core:
     dependencies:
-      '@natstack/types':
+      '@vibez1/types':
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
@@ -1238,7 +1238,7 @@ importers:
 
   workspace/packages/eval:
     dependencies:
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       sucrase:
@@ -1279,19 +1279,19 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
-      '@natstack/extension':
-        specifier: workspace:*
-        version: link:../../../packages/extension
-      '@natstack/rpc':
-        specifier: workspace:*
-        version: link:../../../packages/rpc
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
+      '@vibez1/extension':
+        specifier: workspace:*
+        version: link:../../../packages/extension
+      '@vibez1/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       '@workspace/pi-core':
         specifier: workspace:*
         version: link:../pi-core
@@ -1421,7 +1421,7 @@ importers:
 
   workspace/packages/model-catalog:
     dependencies:
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
     devDependencies:
@@ -1435,7 +1435,7 @@ importers:
         specifier: workspace:*
         version: link:../runtime
     devDependencies:
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
       typescript:
@@ -1446,7 +1446,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1463,7 +1463,7 @@ importers:
 
   workspace/packages/pubsub:
     dependencies:
-      '@natstack/types':
+      '@vibez1/types':
         specifier: workspace:*
         version: link:../../../packages/types
       '@workspace/agentic-protocol':
@@ -1491,15 +1491,15 @@ importers:
 
   workspace/packages/react:
     dependencies:
-      '@natstack/types':
-        specifier: workspace:*
-        version: link:../../../packages/types
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.0.0)
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibez1/types':
+        specifier: workspace:*
+        version: link:../../../packages/types
       '@workspace/core':
         specifier: workspace:*
         version: link:../core
@@ -1528,19 +1528,19 @@ importers:
 
   workspace/packages/runtime:
     dependencies:
-      '@natstack/extension':
+      '@vibez1/extension':
         specifier: workspace:*
         version: link:../../../packages/extension
-      '@natstack/git':
+      '@vibez1/git':
         specifier: workspace:*
         version: link:../../../packages/git
-      '@natstack/rpc':
+      '@vibez1/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@natstack/shared':
+      '@vibez1/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@natstack/types':
+      '@vibez1/types':
         specifier: workspace:*
         version: link:../../../packages/types
       '@workspace/agentic-protocol':
@@ -1609,15 +1609,15 @@ importers:
 
   workspace/packages/tool-ui:
     dependencies:
-      '@natstack/types':
-        specifier: workspace:*
-        version: link:../../../packages/types
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.0.0)
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibez1/types':
+        specifier: workspace:*
+        version: link:../../../packages/types
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../pubsub
@@ -1664,15 +1664,15 @@ importers:
 
   workspace/panels/chat:
     dependencies:
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.2.4)
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/agentic-chat':
         specifier: workspace:*
         version: link:../../packages/agentic-chat
@@ -1740,15 +1740,15 @@ importers:
 
   workspace/panels/news:
     dependencies:
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.2.4)
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@vibez1/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/agentic-chat':
         specifier: workspace:*
         version: link:../../packages/agentic-chat
@@ -2010,7 +2010,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
@@ -2046,7 +2046,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
@@ -12236,7 +12236,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.78.0(patch_hash=367203b290408f63f8cbe00450609aeb78788095d27d45d7f626c1f5b6be53eb)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

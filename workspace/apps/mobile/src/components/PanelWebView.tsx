@@ -38,7 +38,7 @@ export interface PanelWebViewHandle {
   dispatchHostEvent: (event: string, payload: unknown) => void;
   /**
    * Deliver one inbound RPC envelope the host demuxed for this panel's logical
-   * session (host → panel). Pairs with the injected `__natstackShell.onEnvelope`.
+   * session (host → panel). Pairs with the injected `__vibez1Shell.onEnvelope`.
    * (Host seam: the mobile shell must call this with envelopes it receives for
    * this panel off the pipe.)
    */
@@ -77,7 +77,7 @@ export interface PanelWebViewProps {
   };
 }
 
-const NATSTACK_USER_AGENT = `NatStack-Mobile/1.0 (${Platform.OS}; ${Platform.Version})`;
+const VIBEZ1_USER_AGENT = `Vibez1-Mobile/1.0 (${Platform.OS}; ${Platform.Version})`;
 const MANAGED_PANEL_STALLED_TIMEOUT_MS = 45_000;
 const MANAGED_PANEL_MAX_LOAD_TIMEOUT_MS = 120_000;
 const MANAGED_PANEL_TIMEOUT_CHECK_MS = 5_000;
@@ -118,7 +118,7 @@ const RANDOM_UUID_POLYFILL_SCRIPT = `
 `;
 
 function smokePhase(phase: string, extra?: Record<string, unknown>): void {
-  console.log(`[NatStackMobileSmoke] phase=${phase}`, extra ?? "");
+  console.log(`[Vibez1MobileSmoke] phase=${phase}`, extra ?? "");
 }
 
 function serializeForInjection(value: unknown): string {
@@ -154,7 +154,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         if (!enableDebug) return;
         try {
           window.ReactNativeWebView.postMessage(JSON.stringify({
-            __natstackDebug: true,
+            __vibez1Debug: true,
             level,
             args: Array.isArray(args) ? args.map(function (value) {
               if (value instanceof Error) {
@@ -188,7 +188,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
           lastDocumentTitle = title;
           if (!shouldForwardTitle(title)) return;
           window.ReactNativeWebView.postMessage(JSON.stringify({
-            __natstackTitle: true,
+            __vibez1Title: true,
             title,
           }));
         } catch (_) {}
@@ -281,7 +281,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
           const id = "bridge-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
           pending.set(id, { resolve, reject });
           window.ReactNativeWebView.postMessage(JSON.stringify({
-            __natstackBridge: true,
+            __vibez1Bridge: true,
             id,
             method,
             args: Array.isArray(args) ? args : [],
@@ -290,11 +290,11 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
       }
 
       try {
-        globalThis.__natstackPanelInit = panelInit;
-        globalThis.__natstackHostPlatform = "mobile";
+        globalThis.__vibez1PanelInit = panelInit;
+        globalThis.__vibez1HostPlatform = "mobile";
         if (panelInit !== null) {
-          sessionStorage.setItem("__natstackPanelInit", JSON.stringify(panelInit));
-          sessionStorage.setItem("__natstackPanelInit:" + location.href, JSON.stringify(panelInit));
+          sessionStorage.setItem("__vibez1PanelInit", JSON.stringify(panelInit));
+          sessionStorage.setItem("__vibez1PanelInit:" + location.href, JSON.stringify(panelInit));
         }
       } catch (_) {}
 
@@ -337,13 +337,13 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         },
       };
 
-      globalThis.__natstackMobileHost = {
+      globalThis.__vibez1MobileHost = {
         resolvePending,
         dispatchEventToListeners,
         deliverEnvelope,
       };
-      globalThis.__natstackShell = shell;
-      globalThis.__natstackElectron = shell;
+      globalThis.__vibez1Shell = shell;
+      globalThis.__vibez1Electron = shell;
     })();
     true;
   `;
@@ -396,14 +396,14 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
     const dispatchHostEvent = useCallback((event: string, payload: unknown) => {
       if (!managed) return;
       webViewRef.current?.injectJavaScript(
-        `window.__natstackMobileHost&&window.__natstackMobileHost.dispatchEventToListeners(${JSON.stringify(event)}, ${serializeForInjection(payload)}); true;`,
+        `window.__vibez1MobileHost&&window.__vibez1MobileHost.dispatchEventToListeners(${JSON.stringify(event)}, ${serializeForInjection(payload)}); true;`,
       );
     }, [managed]);
 
     const deliverEnvelope = useCallback((envelope: unknown) => {
       if (!managed) return;
       webViewRef.current?.injectJavaScript(
-        `window.__natstackMobileHost&&window.__natstackMobileHost.deliverEnvelope(${serializeForInjection(envelope)}); true;`,
+        `window.__vibez1MobileHost&&window.__vibez1MobileHost.deliverEnvelope(${serializeForInjection(envelope)}); true;`,
       );
     }, [managed]);
 
@@ -466,7 +466,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
         setHasError(true);
         setErrorMessage(
           `Timed out loading the panel after ${seconds}s.\n\n` +
-          `Check that the phone can reach the NatStack server and retry.\n\n${stalledUrl}`,
+          `Check that the phone can reach the Vibez1 server and retry.\n\n${stalledUrl}`,
         );
       }, MANAGED_PANEL_TIMEOUT_CHECK_MS);
 
@@ -553,10 +553,10 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
 
       try {
         const message = JSON.parse(event.nativeEvent.data) as {
-          __natstackBridge?: boolean;
-          __natstackDebug?: boolean;
-          __natstackDomSnapshot?: boolean;
-          __natstackTitle?: boolean;
+          __vibez1Bridge?: boolean;
+          __vibez1Debug?: boolean;
+          __vibez1DomSnapshot?: boolean;
+          __vibez1Title?: boolean;
           id?: string;
           method?: string;
           args?: unknown[];
@@ -565,7 +565,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           childCount?: number;
           title?: string;
         };
-        if (message.__natstackDebug) {
+        if (message.__vibez1Debug) {
           if (!diagnosticsEnabled && !__DEV__) return;
           const level = message.level ?? "log";
           const parts = Array.isArray(message.args) ? message.args : [];
@@ -573,14 +573,14 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           console[level](`[PanelWebView:${panelId}] ${text}`);
           return;
         }
-        if (message.__natstackDomSnapshot) {
+        if (message.__vibez1DomSnapshot) {
           if (!diagnosticsEnabled && !__DEV__) return;
           console.log(
             `[PanelWebView:${panelId}] DOM title=${message.title ?? ""} childCount=${message.childCount ?? 0} text=${message.text ?? ""}`,
           );
           return;
         }
-        if (message.__natstackTitle) {
+        if (message.__vibez1Title) {
           const title = typeof message.title === "string" ? message.title.trim() : "";
           if (title.length > 0) {
             onTitleChange?.(panelId, title);
@@ -588,17 +588,17 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           return;
         }
         if (!onBridgeCall) return;
-        if (!message.__natstackBridge || !message.id || !message.method) return;
+        if (!message.__vibez1Bridge || !message.id || !message.method) return;
 
         try {
           const result = await onBridgeCall(panelId, message.method, message.args ?? []);
           webViewRef.current?.injectJavaScript(
-            `window.__natstackMobileHost&&window.__natstackMobileHost.resolvePending(${JSON.stringify(message.id)}, true, ${serializeForInjection(result)}); true;`,
+            `window.__vibez1MobileHost&&window.__vibez1MobileHost.resolvePending(${JSON.stringify(message.id)}, true, ${serializeForInjection(result)}); true;`,
           );
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           webViewRef.current?.injectJavaScript(
-            `window.__natstackMobileHost&&window.__natstackMobileHost.resolvePending(${JSON.stringify(message.id)}, false, ${serializeForInjection(errorMessage)}); true;`,
+            `window.__vibez1MobileHost&&window.__vibez1MobileHost.resolvePending(${JSON.stringify(message.id)}, false, ${serializeForInjection(errorMessage)}); true;`,
           );
         }
       } catch {
@@ -670,14 +670,14 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
               .slice(0, 500);
             const childCount = document.body ? document.body.children.length : 0;
             window.ReactNativeWebView.postMessage(JSON.stringify({
-              __natstackDomSnapshot: true,
+              __vibez1DomSnapshot: true,
               title: document.title || "",
               childCount,
               text,
             }));
           } catch (error) {
             window.ReactNativeWebView.postMessage(JSON.stringify({
-              __natstackDebug: true,
+              __vibez1Debug: true,
               level: "error",
               args: ["DOM snapshot failed", error instanceof Error ? error.message : String(error)],
             }));
@@ -758,7 +758,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           key={panelId}
           source={{ uri: url }}
           style={styles.webView}
-          userAgent={NATSTACK_USER_AGENT}
+          userAgent={VIBEZ1_USER_AGENT}
           cacheEnabled={!managed}
           cacheMode={managed ? "LOAD_NO_CACHE" : "LOAD_DEFAULT"}
           onShouldStartLoadWithRequest={handleShouldStartLoad}

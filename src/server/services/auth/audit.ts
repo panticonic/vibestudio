@@ -1,4 +1,4 @@
-import type { AuditLog } from "@natstack/shared/credentials/audit";
+import type { AuditLog } from "@vibez1/shared/credentials/audit";
 import type { DeviceAuthStore } from "../deviceAuthStore.js";
 
 export interface PairingAuditDeps {

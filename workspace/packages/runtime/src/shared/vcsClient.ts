@@ -8,11 +8,11 @@ import {
   vcsMethods,
   type VcsHeadAdvance,
   type VcsWorkingAdvance,
-} from "@natstack/shared/serviceSchemas/vcs";
+} from "@vibez1/shared/serviceSchemas/vcs";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
-} from "@natstack/shared/typedServiceClient";
+} from "@vibez1/shared/typedServiceClient";
 
 export type {
   VcsApplyEditsInput,
@@ -41,7 +41,7 @@ export type {
   VcsResolveHeadResult,
   VcsStatusResult,
   VcsWorkingAdvance,
-} from "@natstack/shared/serviceSchemas/vcs";
+} from "@vibez1/shared/serviceSchemas/vcs";
 
 /** Minimal event-capable rpc surface (method form -> param bivariance, so the
  * runtime rpc client is assignable). */

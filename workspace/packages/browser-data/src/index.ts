@@ -30,13 +30,13 @@ export type {
   CookieExportFormat,
   HistoryVisitSource,
   ImportPhase,
-} from "@natstack/browser-data";
+} from "@vibez1/browser-data";
 
 export {
   BrowserDataError,
   resolveProfilePath,
-} from "@natstack/browser-data";
-export type { BrowserDataErrorCode } from "@natstack/browser-data";
+} from "@vibez1/browser-data";
+export type { BrowserDataErrorCode } from "@vibez1/browser-data";
 
 export { detectBrowsers } from "./detection/index.js";
 export { getReader } from "./readers/index.js";

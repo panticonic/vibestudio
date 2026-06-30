@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import type { AdBlockManager, AdBlockListConfig } from "../adblock/index.js";
 
 export function createAdblockService(deps: { adBlockManager: AdBlockManager }): ServiceDefinition {

@@ -4,17 +4,17 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { RpcServer } from "./rpcServer.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WsClientState } from "./rpcServer.js";
-import { createVerifiedCaller, type ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { EntityKind, EntityRecord } from "@natstack/shared/runtime/entitySpec";
-import { ConnectionGrantService } from "@natstack/shared/connectionGrants";
-import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@natstack/rpc";
-import { StreamFrameDecoderV2 } from "@natstack/rpc/protocol/streamCodec";
+import { createVerifiedCaller, type ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityKind, EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+import { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
+import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@vibez1/rpc";
+import { StreamFrameDecoderV2 } from "@vibez1/rpc/protocol/streamCodec";
 import {
   decodeControlFrame,
   encodeControlFrame,
   type SessionControlFrame,
-} from "@natstack/rpc/protocol/sessionNegotiation";
+} from "@vibez1/rpc/protocol/sessionNegotiation";
 
 function makeRecord(
   id: string,
@@ -795,7 +795,7 @@ describe("RpcServer relay behavior", () => {
     // A connectionless DO participant (e.g. an EvalDO subscribed to a channel via
     // connectViaRpc) holds NO ws connection. Pre-fix, this event was silently dropped
     // (getCallerConnections empty → the WS loop no-ops), hanging the subscriber.
-    handleRoute(server, createClient(), "do:natstack/internal:EvalDO:k", {
+    handleRoute(server, createClient(), "do:vibez1/internal:EvalDO:k", {
       type: "event",
       fromId: "panel:nav-a",
       event: "channel:message",

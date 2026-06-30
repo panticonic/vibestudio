@@ -8,7 +8,7 @@ import {
   parseScheduleSpec,
   recurringSpecHash,
 } from "./recurringRegistry.js";
-import type { WorkspaceRecurringDecl } from "@natstack/shared/workspace/types";
+import type { WorkspaceRecurringDecl } from "@vibez1/shared/workspace/types";
 
 const MIN = 60_000;
 const HOUR = 3_600_000;

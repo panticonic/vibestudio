@@ -5,13 +5,13 @@ import * as path from "path";
 import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import type { IncomingMessage, ServerResponse } from "http";
-import { createDevLogger } from "@natstack/dev-log";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import { createDevLogger } from "@vibez1/dev-log";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import {
   BLOBSTORE_READ_POLICY as READ_POLICY,
   DIGEST_RE,
   blobstoreMethods,
-} from "@natstack/shared/serviceSchemas/blobstore";
+} from "@vibez1/shared/serviceSchemas/blobstore";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
 import { assertPresent } from "../../lintHelpers";

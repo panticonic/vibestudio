@@ -59,7 +59,7 @@ Per-channel cadence is DO-internal and automatic — each curator channel's
 `RecurringScheduler` drives its own `poll:` / `briefing:` jobs (configure via
 the setup card or `setSchedule`); a self-canceling `watchdog:` job flips a
 stalled briefing to error within minutes. Workspace-level standing jobs are
-**optional** and can be declared in `meta/natstack.yml` under `recurring:`
+**optional** and can be declared in `meta/vibez1.yml` under `recurring:`
 (approval-gated) to drive a specific pinned agent instance by objectKey; the
 agent exposes `runScheduledJob({ job: "poll" | "briefing" })` for that path
 (it skips analyst channels).

@@ -149,7 +149,7 @@ async function runChunk(
   chunk: BatchPart[]
 ): Promise<BatchPartResult[]> {
   batchCounter += 1;
-  const boundary = `batch_natstack_${batchCounter}`;
+  const boundary = `batch_vibez1_${batchCounter}`;
   const response = await fetchRaw(GMAIL_BATCH_URL, {
     method: "POST",
     headers: { "Content-Type": `multipart/mixed; boundary=${boundary}` },

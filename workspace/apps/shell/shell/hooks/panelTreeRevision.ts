@@ -1,4 +1,4 @@
-import type { PanelTreeSnapshot } from "@natstack/shared/types";
+import type { PanelTreeSnapshot } from "@vibez1/shared/types";
 
 export function coercePanelTreeUpdate(
   data: unknown,

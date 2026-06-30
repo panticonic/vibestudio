@@ -25,7 +25,7 @@ export function AboutThemeRoot({ children }: { children: ReactNode }) {
   );
 }
 
-/** The NatStack "N" mark on the brand gradient. */
+/** The Vibez1 "N" mark on the brand gradient. */
 export function BrandMark({ size = 48 }: { size?: number }) {
   return (
     <Flex

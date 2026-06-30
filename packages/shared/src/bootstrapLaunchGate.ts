@@ -39,7 +39,7 @@ export function launchCopy(approval: PendingUnitBatchApproval): LaunchGateCopy {
   }
   return {
     title: "Apps and extensions requesting trust",
-    summary: "Approving lets NatStack run the listed apps and extensions locally.",
+    summary: "Approving lets Vibez1 run the listed apps and extensions locally.",
   };
 }
 

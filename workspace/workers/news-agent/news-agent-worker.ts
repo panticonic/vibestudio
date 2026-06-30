@@ -467,7 +467,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     if (stillSummarizing.length === 0) this.scheduler.removeJob(`watchdog:${channelId}`);
   }
 
-  /** Entry point for workspace-level `recurring:` jobs (natstack.yml). */
+  /** Entry point for workspace-level `recurring:` jobs (vibez1.yml). */
   @rpc({ callers: ["server"] })
   async runScheduledJob(args: unknown): Promise<{ ok: boolean }> {
     const input = record(args);

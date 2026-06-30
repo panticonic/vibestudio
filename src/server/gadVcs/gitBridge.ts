@@ -24,7 +24,7 @@
 
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { GitClient } from "@natstack/git";
+import { GitClient } from "@vibez1/git";
 
 import type { WorkspaceVcs } from "./workspaceVcs.js";
 import {
@@ -238,7 +238,7 @@ export class GitBridge {
       const actorId =
         entry.actor && typeof entry.actor === "object" && "id" in entry.actor
           ? String((entry.actor as { id: unknown }).id)
-          : "natstack";
+          : "vibez1";
       const trailers = [`GAD-State: ${entry.outputStateHash}`, `GAD-Event: ${entry.envelopeId}`];
       if (repoPath) trailers.unshift(`GAD-Repo: ${repoPath}`);
       const message = `${entry.summary ?? "workspace transition"}\n\n${trailers.join("\n")}`;
@@ -247,7 +247,7 @@ export class GitBridge {
         message,
         author: {
           name: args.authorName ?? actorId,
-          email: args.authorEmail ?? "natstack@local",
+          email: args.authorEmail ?? "vibez1@local",
         },
       });
       lastSha = sha;

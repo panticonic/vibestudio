@@ -5,6 +5,6 @@
  * interop are exposed through typed service clients instead.
  */
 
-import type { ServerInfoLike } from "@natstack/shared/panelInterfaces";
+import type { ServerInfoLike } from "@vibez1/shared/panelInterfaces";
 
 export type ServerInfo = ServerInfoLike;

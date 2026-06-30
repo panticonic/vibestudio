@@ -27,7 +27,7 @@ describe("panelCommands", () => {
 
   it("centralizes browser history canonicalization and intent semantics", () => {
     expect(canonicalizeBrowserHistoryUrl("HTTPS://Example.COM:443/docs#section")).toBe("https://example.com/docs");
-    expect(canonicalizeBrowserHistoryUrl("natstack://panel")).toBeNull();
+    expect(canonicalizeBrowserHistoryUrl("vibez1://panel")).toBeNull();
 
     expect(getBrowserNavigationIntentForCommand("back")).toEqual({ transition: "back_forward", typed: false });
     expect(getBrowserNavigationIntentForCommand("force-reload-view")).toEqual({ transition: "reload", typed: false });

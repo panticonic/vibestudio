@@ -41,7 +41,7 @@ export type RemoteCredSaveArgs = z.infer<typeof RemoteCredSaveArgsSchema>;
 export const RemoteCredPairingCodeArgsSchema = z.object({
   link: z
     .string()
-    .describe("A `natstack://connect?...` pairing link carrying the WebRTC pairing material."),
+    .describe("A `vibez1://connect?...` pairing link carrying the WebRTC pairing material."),
   label: z.string().optional().describe("Human-readable label for the new device credential."),
 });
 export type RemoteCredPairingCodeArgs = z.infer<typeof RemoteCredPairingCodeArgsSchema>;
@@ -123,7 +123,7 @@ export const remoteCredMethods = defineServiceMethods({
   },
   exchangePairingCode: {
     description:
-      "Redeem a `natstack://connect` pairing link over WebRTC for a durable device credential and persist it locally for auto-reconnect.",
+      "Redeem a `vibez1://connect` pairing link over WebRTC for a durable device credential and persist it locally for auto-reconnect.",
     args: z.tuple([RemoteCredPairingCodeArgsSchema]),
     returns: RemoteCredTestConnectionResultSchema,
     access: REMOTE_CRED_PAIR_ACCESS,

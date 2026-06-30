@@ -1,6 +1,6 @@
 /**
  * React Native (Hermes) web-API polyfills the WebRTC pipe's codec depends on.
- * Imported FIRST by `connect.ts` (before any `@natstack/rpc` module loads) so
+ * Imported FIRST by `connect.ts` (before any `@vibez1/rpc` module loads) so
  * both bundles that use this package — the native host bootstrap and the
  * post-reload workspace shell app — get them. All guarded: a future Hermes that
  * ships a native implementation wins.
@@ -11,7 +11,7 @@
  *    decoded stream directly via `getReader()` (`rpc.streamReadable`).
  *  - `TextDecoder` — Hermes has `TextEncoder` but not `TextDecoder`; the control-
  *    frame codec decodes UTF-8 JSON via `new TextDecoder().decode(bytes)`
- *    (`@natstack/rpc` `streamCodec`), and the module throws on load without it.
+ *    (`@vibez1/rpc` `streamCodec`), and the module throws on load without it.
  */
 
 import { ReadableStream as PonyfillReadableStream } from "web-streams-polyfill/ponyfill";

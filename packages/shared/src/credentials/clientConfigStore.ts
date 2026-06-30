@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { getCentralDataPath } from "@natstack/env-paths";
+import { getCentralDataPath } from "@vibez1/env-paths";
 import {
   assertValidStoreIdentifier,
   EncryptedJsonStore,

@@ -7,7 +7,7 @@
  * Shared between panels and workers — no Node.js or browser-specific dependencies.
  */
 import { Buffer } from "buffer";
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 import type {
     RuntimeFs,
     FileStats,

@@ -12,7 +12,7 @@ export interface ProductSeedSourceRecord {
   sourceDigest: string;
   signatureKeyId: string;
   signature: string;
-  createdBy: "natstack";
+  createdBy: "vibez1";
 }
 
 export interface ProductSeedIdentity {
@@ -27,15 +27,15 @@ export interface ProductSeedVerification {
   sourceDigest: string;
 }
 
-const SEED_RECORD_FILE = ".natstack-seed.json";
-const DEV_SIGNATURE_KEY_ID = "natstack-dev-seed-v1";
-const DEV_SIGNATURE_PREFIX = "natstack-dev-seed-sha256:";
-const PRODUCT_SIGNATURE_PREFIX = "natstack-product-seed-ed25519:";
-const DIGEST_VERSION = "natstack-product-seed-source-v1";
-const SIGNATURE_VERSION = "natstack-product-seed-signature-v1";
-const PRODUCT_PRIVATE_KEY_ENV = "NATSTACK_PRODUCT_SEED_PRIVATE_KEY_PEM";
-const PRODUCT_PRIVATE_KEY_ID_ENV = "NATSTACK_PRODUCT_SEED_KEY_ID";
-const PRODUCT_PUBLIC_KEYS_ENV = "NATSTACK_PRODUCT_SEED_PUBLIC_KEYS_JSON";
+const SEED_RECORD_FILE = ".vibez1-seed.json";
+const DEV_SIGNATURE_KEY_ID = "vibez1-dev-seed-v1";
+const DEV_SIGNATURE_PREFIX = "vibez1-dev-seed-sha256:";
+const PRODUCT_SIGNATURE_PREFIX = "vibez1-product-seed-ed25519:";
+const DIGEST_VERSION = "vibez1-product-seed-source-v1";
+const SIGNATURE_VERSION = "vibez1-product-seed-signature-v1";
+const PRODUCT_PRIVATE_KEY_ENV = "VIBEZ1_PRODUCT_SEED_PRIVATE_KEY_PEM";
+const PRODUCT_PRIVATE_KEY_ID_ENV = "VIBEZ1_PRODUCT_SEED_KEY_ID";
+const PRODUCT_PUBLIC_KEYS_ENV = "VIBEZ1_PRODUCT_SEED_PUBLIC_KEYS_JSON";
 
 export function createProductSeedSourceRecord(opts: {
   unitDir: string;
@@ -57,7 +57,7 @@ export function createProductSeedSourceRecord(opts: {
       sourceRepo,
       sourceDigest,
     }),
-    createdBy: "natstack",
+    createdBy: "vibez1",
   };
 }
 
@@ -128,7 +128,7 @@ function isProductSeedSourceRecord(value: unknown): value is ProductSeedSourceRe
     && typeof record.sourceDigest === "string"
     && typeof record.signatureKeyId === "string"
     && typeof record.signature === "string"
-    && record.createdBy === "natstack"
+    && record.createdBy === "vibez1"
   );
 }
 
@@ -229,7 +229,7 @@ function trustedProductSeedPublicKeys(): Map<string, string> {
 }
 
 function isProductionSeedTrustMode(): boolean {
-  return process.env["NATSTACK_PROD"] === "1" || process.env["NODE_ENV"] === "production";
+  return process.env["VIBEZ1_PROD"] === "1" || process.env["NODE_ENV"] === "production";
 }
 
 function listSeedSourceFiles(root: string): string[] {

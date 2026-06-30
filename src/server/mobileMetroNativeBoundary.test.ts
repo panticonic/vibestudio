@@ -82,14 +82,14 @@ describe("mobile Metro native capability boundary", () => {
 
   it("does not affect normal JavaScript package resolution", () => {
     expect(() =>
-      boundary.guardNativeModuleImport("@natstack/shared", path.join(workspaceAppRoot, "App.tsx"))
+      boundary.guardNativeModuleImport("@vibez1/shared", path.join(workspaceAppRoot, "App.tsx"))
     ).not.toThrow();
   });
 
   it("keeps the shipped mobile entrypoint host-only", () => {
     const entrypoint = fs.readFileSync(path.resolve("apps/mobile/index.js"), "utf-8");
 
-    expect(entrypoint).toContain("NatStackMobileHost");
+    expect(entrypoint).toContain("Vibez1MobileHost");
     expect(entrypoint).toContain("prepareAppBundle");
     expect(entrypoint).not.toContain("workspace/apps/mobile");
     expect(entrypoint).not.toContain("../../workspace/apps");

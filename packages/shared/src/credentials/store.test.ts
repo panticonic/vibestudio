@@ -13,7 +13,7 @@ function makeCredential(overrides: Partial<Credential> = {}): Credential {
     accountIdentity: {
       email: "dev@example.com",
       username: "octocat",
-      workspaceName: "natstack",
+      workspaceName: "vibez1",
       providerUserId: "user-123",
     },
     accessToken: "access-token",
@@ -28,7 +28,7 @@ describe("CredentialStore", () => {
   let store: CredentialStore;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(path.join(tmpdir(), "natstack-credentials-store-"));
+    tempDir = await mkdtemp(path.join(tmpdir(), "vibez1-credentials-store-"));
     store = new CredentialStore({ basePath: tempDir });
   });
 

@@ -34,7 +34,7 @@ import {
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import { CredentialLifecycleError, type CredentialLifecycle } from "./credentialLifecycle.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
-import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { connect as netConnect, isIP } from "node:net";
@@ -55,9 +55,9 @@ const HOP_BY_HOP_REQUEST_HEADERS = new Set([
 /** Internal headers the dynamic-worker egress path uses for attribution. They
  *  are consumed by the shared listener and MUST be stripped before forwarding
  *  upstream so they never leak to the destination. */
-const EGRESS_CALLER_HEADER = "x-natstack-egress-caller";
-const EGRESS_SECRET_HEADER = "x-natstack-egress-secret";
-const NATSTACK_WS_HEADERS_PARAM = "__natstack_ws_headers";
+const EGRESS_CALLER_HEADER = "x-vibez1-egress-caller";
+const EGRESS_SECRET_HEADER = "x-vibez1-egress-secret";
+const VIBEZ1_WS_HEADERS_PARAM = "__vibez1_ws_headers";
 const INTERNAL_EGRESS_HEADERS = new Set([
   EGRESS_CALLER_HEADER,
   EGRESS_SECRET_HEADER,
@@ -66,7 +66,7 @@ const INTERNAL_EGRESS_HEADERS = new Set([
 
 const PASSTHROUGH_PROVIDER_ID = "passthrough";
 const PASSTHROUGH_CONNECTION_ID = "passthrough";
-const RPC_RUNTIME_ID_HEADER = "x-natstack-runtime-id";
+const RPC_RUNTIME_ID_HEADER = "x-vibez1-runtime-id";
 const RAW_EGRESS_CAPABILITY = "external-network-fetch";
 const DEFAULT_RETRY_ATTEMPTS = 2;
 const DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS = 2;
@@ -175,9 +175,9 @@ export class EgressProxy {
 
   /**
    * Start (once) the shared attributed-by-header egress listener for the
-   * dynamic worker host. Requests carry `X-NatStack-Egress-Caller` (the worker
+   * dynamic worker host. Requests carry `X-Vibez1-Egress-Caller` (the worker
    * identity, stamped non-forgeably by the host's EgressGateway) gated by
-   * `X-NatStack-Egress-Secret`. Returns the listener port (memoized).
+   * `X-Vibez1-Egress-Secret`. Returns the listener port (memoized).
    */
   async startShared(secret: string): Promise<number> {
     if (this.sharedServer) return this.sharedServer.port;
@@ -1417,10 +1417,9 @@ export class EgressProxy {
     const resolvedTargetUrl = this.resolveTargetUrl(req);
     let metadata: { targetUrl: URL; headerPairs: Array<[string, string]> } | null = null;
     try {
-      metadata = resolvedTargetUrl ? extractNatStackWebSocketMetadata(resolvedTargetUrl) : null;
+      metadata = resolvedTargetUrl ? extractVibez1WebSocketMetadata(resolvedTargetUrl) : null;
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Invalid NatStack WebSocket metadata";
+      const message = error instanceof Error ? error.message : "Invalid Vibez1 WebSocket metadata";
       this.logWebSocketUpgradeDiagnostic("reject", {
         reason: "invalid_metadata",
         statusCode: 400,
@@ -1871,20 +1870,20 @@ function websocketPolicyUrlFor(targetUrl: URL): URL | null {
   return policyUrl;
 }
 
-function extractNatStackWebSocketMetadata(targetUrl: URL): {
+function extractVibez1WebSocketMetadata(targetUrl: URL): {
   targetUrl: URL;
   headerPairs: Array<[string, string]>;
 } {
   const cleanUrl = new URL(targetUrl.toString());
-  const encodedHeaders = cleanUrl.searchParams.get(NATSTACK_WS_HEADERS_PARAM);
-  cleanUrl.searchParams.delete(NATSTACK_WS_HEADERS_PARAM);
+  const encodedHeaders = cleanUrl.searchParams.get(VIBEZ1_WS_HEADERS_PARAM);
+  cleanUrl.searchParams.delete(VIBEZ1_WS_HEADERS_PARAM);
   return {
     targetUrl: cleanUrl,
-    headerPairs: decodeNatStackWebSocketHeaderPairs(encodedHeaders),
+    headerPairs: decodeVibez1WebSocketHeaderPairs(encodedHeaders),
   };
 }
 
-function decodeNatStackWebSocketHeaderPairs(value: string | null): Array<[string, string]> {
+function decodeVibez1WebSocketHeaderPairs(value: string | null): Array<[string, string]> {
   if (!value) return [];
   try {
     const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -1897,12 +1896,12 @@ function decodeNatStackWebSocketHeaderPairs(value: string | null): Array<[string
       const [name, headerValue] = item;
       if (typeof name !== "string" || typeof headerValue !== "string") continue;
       const lower = name.toLowerCase();
-      if (isBlockedNatStackWebSocketMetadataHeader(lower)) continue;
+      if (isBlockedVibez1WebSocketMetadataHeader(lower)) continue;
       pairs.push([lower, headerValue]);
     }
     return pairs;
   } catch {
-    throw new Error("Invalid NatStack WebSocket metadata");
+    throw new Error("Invalid Vibez1 WebSocket metadata");
   }
 }
 
@@ -1917,13 +1916,13 @@ function mergeWebSocketMetadataHeaders(
   delete headers.origin;
   if (metadataHeaderPairs.length === 0) return headers;
   for (const [name, value] of metadataHeaderPairs) {
-    if (isBlockedNatStackWebSocketMetadataHeader(name)) continue;
+    if (isBlockedVibez1WebSocketMetadataHeader(name)) continue;
     headers[name] = value;
   }
   return headers;
 }
 
-function isBlockedNatStackWebSocketMetadataHeader(name: string): boolean {
+function isBlockedVibez1WebSocketMetadataHeader(name: string): boolean {
   return (
     HOP_BY_HOP_REQUEST_HEADERS.has(name) ||
     name === "authorization" ||

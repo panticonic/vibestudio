@@ -1,6 +1,6 @@
 // Shared types used across main, renderer, server, and preload
 
-import type { CreateChildOptions, ChildCreationResult, ChildSpec } from "@natstack/types";
+import type { CreateChildOptions, ChildCreationResult, ChildSpec } from "@vibez1/types";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 
 // Re-export types for consumers of this module
@@ -11,7 +11,7 @@ export type { CreateChildOptions, ChildCreationResult, ChildSpec, StateArgsSchem
 // =============================================================================
 
 /**
- * The `natstack` block of a workspace package's package.json.
+ * The `vibez1` block of a workspace package's package.json.
  *
  * One canonical shape for panels, about pages, and workers. The build pipeline
  * (`src/server/buildV2`) and the runtime panel loader (`panelTypes.ts`) both
@@ -67,7 +67,7 @@ export interface PackageManifest {
   /** Import-map externals (panels: produces `<script type="importmap">`). */
   externals?: Record<string, string>;
   /**
-   * Modules registered on `globalThis.__natstackModuleMap__` so eval'd code
+   * Modules registered on `globalThis.__vibez1ModuleMap__` so eval'd code
    * can `require()` them by canonical specifier without an explicit import.
    */
   exposeModules?: string[];
@@ -87,7 +87,7 @@ export interface PackageManifest {
    */
   agent?: { displayName?: string; description?: string; icon?: string };
   // Note: userland services and HTTP routes are no longer declared per worker.
-  // They live in `workspace/meta/natstack.yml` under `services:` and `routes:`,
+  // They live in `workspace/meta/vibez1.yml` under `services:` and `routes:`,
   // joined against `singletonObjects:` for DO singleton keys.
 }
 
@@ -476,7 +476,7 @@ export interface WorkspaceNode {
   /** True if this directory is a workspace unit root. */
   isUnit: boolean;
   /**
-   * If this is a launchable panel (has natstack config).
+   * If this is a launchable panel (has vibez1 config).
    * Note: We intentionally include entries even if some fields are missing
    * (e.g., no title) - better to show them in the UI and let the build system
    * report the real error than to silently hide repos with incomplete configs.

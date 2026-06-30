@@ -54,7 +54,7 @@ truth for ids wired into the runtime.
 ## Adding An OAuth Provider
 
 Add or update the provider preset in the shared provider-connect registry
-(`@workspace/model-catalog/providerConnect` in workspace code; the NatStack
+(`@workspace/model-catalog/providerConnect` in workspace code; the Vibez1
 source of truth is `packages/shared/src/providerConnect.ts`). Verify every
 URL/scope against the provider's current docs before enabling it. OAuth
 endpoints and scopes are product-specific and can drift.
@@ -66,7 +66,7 @@ claims it expects.
 ## Adding An API-Key Provider
 
 Add or update the provider preset in `@workspace/model-catalog/providerConnect`.
-For NatStack source changes, edit `packages/shared/src/providerConnect.ts`.
+For Vibez1 source changes, edit `packages/shared/src/providerConnect.ts`.
 
 Set:
 

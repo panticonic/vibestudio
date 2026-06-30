@@ -11,7 +11,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 // Loopback host the co-located server binds. Remote reach is WebRTC (the QR
 // carries room/fp/sig); there is no LAN/Tailscale/public-URL origin anymore.
 const LOOPBACK_HOST = "127.0.0.1";
-const DEFAULT_SIGNAL_ENV = ["NATSTACK_WEBRTC_SIGNAL_URL"];
+const DEFAULT_SIGNAL_ENV = ["VIBEZ1_WEBRTC_SIGNAL_URL"];
 
 function parsePort(value, label) {
   const port = Number(value);
@@ -27,7 +27,7 @@ export function parsePairArgs(argv, config) {
   const options = {
     port: parsePort(
       firstDefined(config.portEnv.map((key) => process.env[key])) ?? "3030",
-      config.portEnv[0] ?? "NATSTACK_PAIR_PORT"
+      config.portEnv[0] ?? "VIBEZ1_PAIR_PORT"
     ),
     appRoot: null,
     dev: process.env[config.devEnv] === "1",
@@ -71,7 +71,7 @@ export function parsePairArgs(argv, config) {
 export function printPairHelp(config) {
   console.log(`${config.commandName}
 
-Starts the co-located NatStack server (bound to loopback) and prints a pairing
+Starts the co-located Vibez1 server (bound to loopback) and prints a pairing
 QR/deep link. The device reaches the server over an encrypted WebRTC pipe — the
 link carries the signaling room, the server's DTLS fingerprint, and a one-time
 pairing code, not a server URL.
@@ -113,7 +113,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   let ownedReadyDir = null;
   let readyFile = readyFileFromServerArgs(serverArgs);
   if (!readyFile) {
-    ownedReadyDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-pair-"));
+    ownedReadyDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-pair-"));
     readyFile = path.join(ownedReadyDir, "ready.json");
     serverArgs = [...serverArgs, "--ready-file", readyFile];
   }
@@ -136,10 +136,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   let hasSpawned = false;
   const baseEnv = {
     ...process.env,
-    NATSTACK_HOST: LOOPBACK_HOST,
-    NATSTACK_GATEWAY_PORT: String(options.port),
-    NATSTACK_WEBRTC_SIGNAL_URL: options.signalUrl,
-    ...(options.dev ? { NODE_ENV: "development", NATSTACK_WORKSPACE_EPHEMERAL: "1" } : {}),
+    VIBEZ1_HOST: LOOPBACK_HOST,
+    VIBEZ1_GATEWAY_PORT: String(options.port),
+    VIBEZ1_WEBRTC_SIGNAL_URL: options.signalUrl,
+    ...(options.dev ? { NODE_ENV: "development", VIBEZ1_WORKSPACE_EPHEMERAL: "1" } : {}),
   };
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
 
@@ -305,16 +305,16 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     if (handled) return;
     if (hooks.onServerLine) process.stdout.write(`${line}\n`);
 
-    const roomMatch = line.match(/NATSTACK_PAIRING_ROOM=(\S+)/);
+    const roomMatch = line.match(/VIBEZ1_PAIRING_ROOM=(\S+)/);
     if (roomMatch) pairing.room = roomMatch[1];
-    const fpMatch = line.match(/NATSTACK_PAIRING_FP=(\S+)/);
+    const fpMatch = line.match(/VIBEZ1_PAIRING_FP=(\S+)/);
     if (fpMatch) pairing.fp = fpMatch[1];
-    const sigMatch = line.match(/NATSTACK_PAIRING_SIG=(\S+)/);
+    const sigMatch = line.match(/VIBEZ1_PAIRING_SIG=(\S+)/);
     if (sigMatch) pairing.sig = sigMatch[1];
-    const pairingMatch = line.match(/(?:NATSTACK_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/);
+    const pairingMatch = line.match(/(?:VIBEZ1_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/);
     if (pairingMatch) pairingCode = pairingMatch[1];
     const qrPairingMatch = line.match(
-      /(?:NATSTACK_QR_PAIRING_CODE=|QR pairing code:\s+)([A-Za-z0-9_-]+)/
+      /(?:VIBEZ1_QR_PAIRING_CODE=|QR pairing code:\s+)([A-Za-z0-9_-]+)/
     );
     if (qrPairingMatch) qrPairingCode = qrPairingMatch[1];
 

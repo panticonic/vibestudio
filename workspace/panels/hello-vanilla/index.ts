@@ -1,5 +1,5 @@
 /*
- * hello-vanilla — a NatStack panel with ZERO UI framework.
+ * hello-vanilla — a Vibez1 panel with ZERO UI framework.
  * ---------------------------------------------------------
  * This panel exists to prove the purest, most framework-agnostic path through
  * the panel build system:
@@ -110,7 +110,7 @@ const card = el(
   el("h1", { className: "hv-title", textContent: "Hello, Vanilla" }),
   el("p", {
     className: "hv-subtitle",
-    textContent: "A NatStack panel with no UI framework — just @workspace/runtime + DOM.",
+    textContent: "A Vibez1 panel with no UI framework — just @workspace/runtime + DOM.",
   }),
   el(
     "dl",

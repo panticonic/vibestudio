@@ -10,7 +10,7 @@ export interface SignalPillsProps {
 function formatSignalType(contentType: string | undefined): string {
   if (!contentType) return "signal";
   if (contentType.startsWith("notify:")) return contentType.slice("notify:".length);
-  if (contentType.startsWith("natstack-ext-")) return contentType.slice("natstack-ext-".length);
+  if (contentType.startsWith("vibez1-ext-")) return contentType.slice("vibez1-ext-".length);
   return contentType;
 }
 

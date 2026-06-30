@@ -1068,7 +1068,7 @@ describe("connectViaRpc", () => {
           {
             name: "compute",
             request: {
-              protocol: "natstack.blob-ref.v1",
+              protocol: "vibez1.blob-ref.v1",
               digest: "abc123",
               size: encodedRequest.length,
               encoding: "json",
@@ -1261,7 +1261,7 @@ describe("connectViaRpc", () => {
           handle.invocationId,
           {
             result: {
-              protocol: "natstack.blob-ref.v1",
+              protocol: "vibez1.blob-ref.v1",
               digest: "def456",
               size: encodedResult.length,
               encoding: "json",
@@ -1322,7 +1322,7 @@ describe("connectViaRpc", () => {
           handle.invocationId,
           {
             output: {
-              protocol: "natstack.blob-ref.v1",
+              protocol: "vibez1.blob-ref.v1",
               digest: "progress",
               size: encodedProgress.length,
               encoding: "json",

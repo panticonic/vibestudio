@@ -1,11 +1,11 @@
-import type { DORefParam } from "@natstack/shared/userlandServiceRpc";
+import type { DORefParam } from "@vibez1/shared/userlandServiceRpc";
 import {
   envelopeFromMessage,
   type AuthenticatedCaller,
   type CallerKind,
   type RpcEnvelope,
   type RpcResponse,
-} from "@natstack/rpc";
+} from "@vibez1/rpc";
 import { Agent } from "undici";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 
@@ -106,7 +106,7 @@ function describeFetchFailure(error: unknown): string {
 /**
  * POST an `RpcEnvelope` to a DO's single `__rpc` endpoint (the converged
  * inbound dispatch). Caller attribution rides in `envelope.delivery.caller` /
- * `provenance` — no `X-Natstack-Rpc-Caller-*` headers. The DO feeds the
+ * `provenance` — no `X-vibez1-Rpc-Caller-*` headers. The DO feeds the
  * envelope to its `createRpcClient` core (`respond`/`deliver` → `handleEnvelope`
  * → `exposeAll`'d method) and returns a response envelope.
  */
@@ -124,7 +124,7 @@ async function postEnvelopeToDO(
         "Content-Type": "application/json",
         Authorization: `Bearer ${deps.workerdGatewayToken}`,
         ...(deps.workerdDispatchSecret
-          ? { "X-NatStack-Dispatch-Secret": deps.workerdDispatchSecret }
+          ? { "X-Vibez1-Dispatch-Secret": deps.workerdDispatchSecret }
           : {}),
       },
       body: JSON.stringify(envelope),

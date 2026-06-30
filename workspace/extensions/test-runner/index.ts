@@ -78,11 +78,11 @@ const WORKSPACE_ROOTS = new Set([
 
 const PANEL_SETUP_SOURCE = `
 export {};
-globalThis.__natstackModuleMap__ = globalThis.__natstackModuleMap__ ?? {};
-globalThis.__natstackRequire__ = (id) => globalThis.__natstackModuleMap__[id];
-globalThis.__natstackRequireAsync__ = async (id) => globalThis.__natstackModuleMap__[id];
-globalThis.__natstackEntityId = "test-panel";
-globalThis.__natstackContextId = "ctx-test";
+globalThis.__vibez1ModuleMap__ = globalThis.__vibez1ModuleMap__ ?? {};
+globalThis.__vibez1Require__ = (id) => globalThis.__vibez1ModuleMap__[id];
+globalThis.__vibez1RequireAsync__ = async (id) => globalThis.__vibez1ModuleMap__[id];
+globalThis.__vibez1EntityId = "test-panel";
+globalThis.__vibez1ContextId = "ctx-test";
 `;
 
 function validateContextId(contextId: string): void {
@@ -139,7 +139,7 @@ function testPatternFor(targetPath: string, fileFilter?: string): string {
 }
 
 function ensurePanelSetupFile(): string {
-  const setupDir = path.join(os.tmpdir(), "natstack-workspace-test-runner");
+  const setupDir = path.join(os.tmpdir(), "vibez1-workspace-test-runner");
   fs.mkdirSync(setupDir, { recursive: true });
   const setupFile = path.join(setupDir, "panel-test-setup.mjs");
   fs.writeFileSync(setupFile, PANEL_SETUP_SOURCE);

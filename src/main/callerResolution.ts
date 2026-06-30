@@ -3,7 +3,7 @@ import {
   isPrincipalKind,
   type CallerKind,
   type PrincipalKind,
-} from "@natstack/shared/principalKinds";
+} from "@vibez1/shared/principalKinds";
 
 export type ElectronViewCallerKind = Extract<CallerKind, "shell" | "panel" | "app">;
 

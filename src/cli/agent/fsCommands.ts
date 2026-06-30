@@ -4,7 +4,7 @@ import {
   type FsBinaryEnvelope,
   type FsDirentWire,
   type FsGrepResult,
-} from "@natstack/shared/serviceSchemas/fs";
+} from "@vibez1/shared/serviceSchemas/fs";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
@@ -302,7 +302,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "ls",
     summary: "List a directory in the session context",
-    usage: "natstack fs ls [PATH] [-R]",
+    usage: "vibez1 fs ls [PATH] [-R]",
     flags: [
       {
         name: "recursive",
@@ -319,7 +319,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "read",
     summary: "Print a file (binary-safe) or save it locally",
-    usage: "natstack fs read PATH [--out FILE]",
+    usage: "vibez1 fs read PATH [--out FILE]",
     flags: [
       { name: "out", takesValue: true, description: "Write content to a local file" },
       SESSION_FLAG,
@@ -331,7 +331,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "write",
     summary: "Write a file from CONTENT, --content, --from-file, or stdin",
-    usage: "natstack fs write PATH [CONTENT] [--content TEXT | --from-file F] [--append]",
+    usage: "vibez1 fs write PATH [CONTENT] [--content TEXT | --from-file F] [--append]",
     flags: [
       { name: "from-file", takesValue: true, description: "Read content from a local file" },
       { name: "content", takesValue: true, description: "Literal content" },
@@ -345,7 +345,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "rm",
     summary: "Remove a file or directory",
-    usage: "natstack fs rm PATH [-r]",
+    usage: "vibez1 fs rm PATH [-r]",
     flags: [
       {
         name: "recursive",
@@ -362,7 +362,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "mv",
     summary: "Move/rename a file or directory",
-    usage: "natstack fs mv SRC DEST",
+    usage: "vibez1 fs mv SRC DEST",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: mv,
   },
@@ -370,7 +370,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "cp",
     summary: "Copy a file",
-    usage: "natstack fs cp SRC DEST",
+    usage: "vibez1 fs cp SRC DEST",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: cp,
   },
@@ -378,7 +378,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "mkdir",
     summary: "Create a directory",
-    usage: "natstack fs mkdir PATH [-p]",
+    usage: "vibez1 fs mkdir PATH [-p]",
     flags: [
       { name: "parents", short: "p", takesValue: false, description: "Create parent directories" },
       SESSION_FLAG,
@@ -390,7 +390,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "stat",
     summary: "Stat a file or directory",
-    usage: "natstack fs stat PATH",
+    usage: "vibez1 fs stat PATH",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: stat,
   },
@@ -398,7 +398,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "grep",
     summary: "Search file contents in the session context",
-    usage: "natstack fs grep PATTERN [PATH] [-i] [--glob G] [-C N] [--max N]",
+    usage: "vibez1 fs grep PATTERN [PATH] [-i] [--glob G] [-C N] [--max N]",
     flags: [
       {
         name: "ignore-case",
@@ -423,7 +423,7 @@ export const fsCommands: CliCommand[] = [
     group: "fs",
     name: "glob",
     summary: "Find files by glob pattern (mtime-sorted)",
-    usage: "natstack fs glob PATTERN [PATH]",
+    usage: "vibez1 fs glob PATTERN [PATH]",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: glob,
   },

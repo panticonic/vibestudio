@@ -25,7 +25,7 @@ const helpSections: HelpSection[] = [
     title: "Getting Started",
     icon: <RocketIcon />,
     content:
-      "NatStack is a composable desktop application framework that lets you build and run panels. " +
+      "Vibez1 is a composable desktop application framework that lets you build and run panels. " +
       "Panels are self-contained web applications that can communicate with each other and access system services.",
   },
   {
@@ -33,7 +33,7 @@ const helpSections: HelpSection[] = [
     icon: <CubeIcon />,
     content:
       "A workspace is a directory containing your panels and configuration. " +
-      "Each workspace has a meta/natstack.yml file that defines settings like initial panels and shared git remotes. " +
+      "Each workspace has a meta/vibez1.yml file that defines settings like initial panels and shared git remotes. " +
       "Use Cmd/Ctrl+Shift+O to switch between workspaces.",
   },
   {
@@ -48,7 +48,7 @@ const helpSections: HelpSection[] = [
     title: "AI Integration",
     icon: <MagicWandIcon />,
     content:
-      "NatStack supports multiple AI providers including Anthropic, OpenAI, Google, and more. " +
+      "Vibez1 supports multiple AI providers including Anthropic, OpenAI, Google, and more. " +
       "Open a chat panel (Cmd/Ctrl+T, then start a chat) to work with an AI agent inside your workspace.",
   },
   {

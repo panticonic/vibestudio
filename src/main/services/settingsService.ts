@@ -1,8 +1,8 @@
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { settingsMethods } from "@natstack/shared/serviceSchemas/settings";
-import type { SettingsData, ModelRoleConfig } from "@natstack/shared/types";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { settingsMethods } from "@vibez1/shared/serviceSchemas/settings";
+import type { SettingsData, ModelRoleConfig } from "@vibez1/shared/types";
 import type { ServerClient } from "../serverClient.js";
-import { loadCentralConfig } from "@natstack/shared/workspace/loader";
+import { loadCentralConfig } from "@vibez1/shared/workspace/loader";
 import type { ViewManager } from "../viewManager.js";
 import { requireAppCapability } from "./appCapabilities.js";
 

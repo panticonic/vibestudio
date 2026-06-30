@@ -56,7 +56,7 @@ describe("bootstrapLaunchGate", () => {
     expect(plural(2, "app")).toBe("2 apps");
     expect(launchCopy(approval)).toEqual({
       title: "Apps and extensions requesting trust",
-      summary: "Approving lets NatStack run the listed apps and extensions locally.",
+      summary: "Approving lets Vibez1 run the listed apps and extensions locally.",
     });
   });
 

@@ -74,5 +74,5 @@ export interface ContentOverlayBridge {
 
 declare global {
   // eslint-disable-next-line no-var
-  var __natstackContentOverlay: ContentOverlayBridge | undefined;
+  var __vibez1ContentOverlay: ContentOverlayBridge | undefined;
 }

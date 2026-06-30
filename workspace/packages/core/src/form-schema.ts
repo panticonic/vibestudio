@@ -1,10 +1,10 @@
 /**
  * Form Schema - Data-driven UI definition system
  *
- * Types are defined in @natstack/types. Runtime functions live here.
+ * Types are defined in @vibez1/types. Runtime functions live here.
  */
 
-import type { FieldCondition, FieldValue, FieldDefinition, FieldWarning, PrimitiveFieldValue } from "@natstack/types";
+import type { FieldCondition, FieldValue, FieldDefinition, FieldWarning, PrimitiveFieldValue } from "@vibez1/types";
 
 /**
  * Evaluate a single condition against current form values
