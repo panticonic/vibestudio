@@ -5,13 +5,6 @@
  * asks the room (`GET /room/:roomId/ice-servers`). The peer feeds them into its
  * `RTCPeerConnection.iceServers` so TURN-over-TLS:443 is reachable on networks
  * that only permit outbound HTTPS — the single NAT backstop (plan §2).
- *
- * ⚠️ FLAG (openIssues): the exact Cloudflare Realtime TURN request/response
- * shape below is written from documentation, NOT verified against a live key.
- * The endpoint and response envelope MUST be confirmed against current
- * Cloudflare docs before production deploy. See `TURN_API_BASE` /
- * `generate` path and the `{ iceServers: { urls, username, credential } }`
- * response parsing.
  */
 
 import type { RtcIceServer } from "./protocol";
@@ -85,7 +78,7 @@ export async function mintIceServers(
   }
 
   const res = await fetchImpl(
-    `${TURN_API_BASE}/${encodeURIComponent(keyId)}/credentials/generate`,
+    `${TURN_API_BASE}/${encodeURIComponent(keyId)}/credentials/generate-ice-servers`,
     {
       method: "POST",
       headers: {
@@ -103,9 +96,8 @@ export async function mintIceServers(
     );
   }
 
-  // Documented shape: { iceServers: { urls: string[], username, credential } }.
-  // We tolerate the field already being an array (forward-compat) but otherwise
-  // do not guess — a missing `iceServers` is a hard failure, not a STUN fallback.
+  // Cloudflare returns { iceServers: [...] }. Keep accepting a single object for
+  // compatibility with older/internal test doubles, but do not guess on absence.
   const data = (await res.json()) as { iceServers?: RtcIceServer | RtcIceServer[] };
   const minted = data.iceServers;
   if (!minted) {

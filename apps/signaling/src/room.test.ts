@@ -325,6 +325,46 @@ describe("SignalingRoom", () => {
     expect(body.iceServers).toEqual([{ urls: "stun:stun.cloudflare.com:3478" }]);
   });
 
+  it("mints Cloudflare TURN credentials with the generate-ice-servers endpoint", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        iceServers: [
+          {
+            urls: ["turn:turn.cloudflare.com:3478?transport=udp"],
+            username: "user",
+            credential: "pass",
+          },
+        ],
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { room } = makeRoom({
+      ENVIRONMENT: "test",
+      TURN_KEY_ID: "key-1",
+      TURN_KEY_API_TOKEN: "secret-1",
+    });
+    const res = await room.fetch(iceRequest());
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-signaling-turn")).toBe("minted");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://rtc.live.cloudflare.com/v1/turn/keys/key-1/credentials/generate-ice-servers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ ttl: 86400 }),
+      }),
+    );
+    const body = (await res.json()) as { iceServers: Array<{ urls: string[] }> };
+    expect(body.iceServers[0]).toMatchObject({
+      urls: ["turn:turn.cloudflare.com:3478?transport=udp"],
+      username: "user",
+      credential: "pass",
+    });
+  });
+
   it("FAILS LOUD (502) when TURN is provisioned but minting breaks — negative test", async () => {
     vi.stubGlobal(
       "fetch",
