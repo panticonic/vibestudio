@@ -6,6 +6,7 @@
     <title>NatStack Launch</title>
     <style>
       :root {
+        --macos-titlebar-control-reserve: 78px;
         color-scheme: dark;
         font-family:
           Inter,
@@ -37,7 +38,7 @@
         box-sizing: border-box;
         display: flex;
         align-items: center;
-        padding: 0 14px 0 78px;
+        padding: 0 14px 0 var(--macos-titlebar-control-reserve);
         border-bottom: 1px solid rgb(255 255 255 / 7%);
         background: rgb(33 35 38 / 80%);
         color: #7f8a90;
@@ -392,7 +393,7 @@
         }
         .bootstrap-titlebar {
           height: 34px;
-          padding-left: 72px;
+          padding-left: var(--macos-titlebar-control-reserve);
         }
         main,
         main[data-bootstrap-mode="connection"] {

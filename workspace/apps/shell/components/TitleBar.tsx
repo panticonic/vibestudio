@@ -31,7 +31,14 @@ import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
 import { ThemeSettings } from "./ThemeSettings";
 import { ConnectionSettingsDialog } from "./ConnectionSettingsDialog";
 
-const isMac = /\b(Mac|iPhone|iPad|iPod)\b/.test(globalThis.navigator?.platform ?? "");
+const isMac = /Mac|iPhone|iPad|iPod/i.test(
+  (globalThis.navigator as { userAgentData?: { platform?: string } } | undefined)?.userAgentData
+    ?.platform ??
+    globalThis.navigator?.platform ??
+    globalThis.navigator?.userAgent ??
+    ""
+);
+const MACOS_TITLEBAR_CONTROL_RESERVE_PX = 68;
 
 import type {
   NavigationMode,
@@ -257,8 +264,8 @@ export function TitleBar({
           gap="2"
           style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
         >
-          {/* macOS: spacer for traffic light buttons */}
-          {isMac && <Box style={{ width: "78px", flexShrink: 0 }} />}
+          {/* macOS: reserve the native traffic-light cluster and hover target. */}
+          {isMac && <Box style={{ width: MACOS_TITLEBAR_CONTROL_RESERVE_PX, flexShrink: 0 }} />}
 
           <IconButton variant="ghost" size="1" onClick={handleHamburgerClick}>
             <HamburgerMenuIcon />
