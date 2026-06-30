@@ -2251,8 +2251,10 @@ export default { fetch() { return new Response("universal-do host"); } };
 
   /**
    * Pre-register all DO classes discovered from the build graph.
-   * Builds each source, registers the service, and does a single workerd restart.
-   * Called at startup so all DO classes are available before any request arrives.
+   * Builds each source, registers the service, and does a single workerd restart
+   * only when internal static DO services were added. Userland classes load
+   * through the UniversalDO host, but startup still registers them before
+   * readiness so declared DO-backed HTTP routes are available immediately.
    */
   async registerAllDOClasses(
     doClasses: Array<{ source: string; className: string }>

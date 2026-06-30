@@ -485,4 +485,58 @@ describe("panelCdpService", () => {
     ).resolves.toEqual(endpoint);
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
+
+  it("routes internal host-provider transport without panel target approval", async () => {
+    const response = new Response("stream");
+    const hostProvider = {
+      open: vi.fn(() => response),
+      send: vi.fn(),
+      close: vi.fn(),
+    };
+    const getTarget = vi.fn(() => {
+      throw new Error("host-provider transport should not resolve panel targets");
+    });
+    const service = cdpService({
+      getTarget,
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
+      hostProvider,
+    });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "hostProvider.open", [
+        "provider-session",
+        "desktop-host",
+      ])
+    ).resolves.toBe(response);
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "hostProvider.send", [
+        "provider-session",
+        "{}",
+      ])
+    ).resolves.toBeUndefined();
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "hostProvider.close", [
+        "provider-session",
+      ])
+    ).resolves.toBeUndefined();
+
+    expect(hostProvider.open).toHaveBeenCalledWith("provider-session", "desktop-host", {
+      id: "shell",
+      kind: "shell",
+    });
+    expect(hostProvider.send).toHaveBeenCalledWith("provider-session", "{}", {
+      id: "shell",
+      kind: "shell",
+    });
+    expect(hostProvider.close).toHaveBeenCalledWith("provider-session", {
+      id: "shell",
+      kind: "shell",
+    });
+    expect(getTarget).not.toHaveBeenCalled();
+    expect(service.methods["hostProvider.open"]?.policy).toEqual({ allowed: ["shell", "server"] });
+    expect(service.methods["hostProvider.send"]?.policy).toEqual({ allowed: ["shell", "server"] });
+    expect(service.methods["hostProvider.close"]?.policy).toEqual({
+      allowed: ["shell", "server"],
+    });
+  });
 });

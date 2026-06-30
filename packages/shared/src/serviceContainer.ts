@@ -73,64 +73,112 @@ export class ServiceContainer {
     }
 
     const order = this.topologicalSort();
-    const started: string[] = [];
+    const levels = this.startLevels(order);
+    const started = new Set<string>();
+    const activeWatchdogs = new Set<ReturnType<typeof setInterval>>();
+    let startupAborted = false;
 
-    try {
-      for (const name of order) {
-        const service = this.services.get(name)!;
-        const resolve = <D>(depName: string, optional?: boolean): D | undefined => {
-          if (!this.instances.has(depName)) {
-            if (optional) return undefined;
-            throw new Error(`Service "${name}" depends on "${depName}" which is not started`);
-          }
-          return this.instances.get(depName) as D;
-        };
+    const stopStartedInstance = async (name: string, instance: unknown): Promise<void> => {
+      const service = this.services.get(name);
+      if (!service?.stop) return;
+      try {
+        await service.stop(instance);
+      } catch (e) {
+        console.error(`[ServiceContainer] Cleanup error for "${name}":`, e);
+      }
+    };
 
-        log.info(`[${name}] Starting`);
-        if (service.start) {
-          // Watchdog: a stuck service start hangs the whole boot with no
-          // further output — keep naming the offender until it resolves.
-          const startedAt = Date.now();
-          const watchdog = setInterval(() => {
-            log.warn(
-              `[${name}] still starting after ${Math.round((Date.now() - startedAt) / 1000)}s`
-            );
-          }, 15_000);
-          try {
-            const instance = await service.start(resolve);
-            this.instances.set(name, instance);
-          } finally {
-            clearInterval(watchdog);
-          }
-        } else {
-          this.instances.set(name, undefined);
+    const waitForLevel = (promises: Promise<void>[]): Promise<void> =>
+      new Promise((resolve, reject) => {
+        if (promises.length === 0) {
+          resolve();
+          return;
         }
-        started.push(name);
+        let remaining = promises.length;
+        let rejected = false;
+        for (const promise of promises) {
+          promise.then(
+            () => {
+              remaining -= 1;
+              if (!rejected && remaining === 0) resolve();
+            },
+            (error: unknown) => {
+              remaining -= 1;
+              if (!rejected) {
+                rejected = true;
+                reject(error);
+              }
+            }
+          );
+        }
+      });
 
-        // Auto-register RPC service definition if available
-        if (this.dispatcher && service.getServiceDefinition) {
-          const def = service.getServiceDefinition();
-          if (def) {
-            this.dispatcher.registerService(def);
-            log.info(`[${name}] Registered RPC service "${def.name}"`);
+    const startOne = async (name: string): Promise<void> => {
+      const service = this.services.get(name)!;
+      const resolve = <D>(depName: string, optional?: boolean): D | undefined => {
+        if (!this.instances.has(depName)) {
+          if (optional) return undefined;
+          throw new Error(`Service "${name}" depends on "${depName}" which is not started`);
+        }
+        return this.instances.get(depName) as D;
+      };
+
+      log.info(`[${name}] Starting`);
+      if (service.start) {
+        // Watchdog: a stuck service start hangs the whole boot with no
+        // further output — keep naming the offender until it resolves.
+        const startedAt = Date.now();
+        const watchdog = setInterval(() => {
+          log.warn(
+            `[${name}] still starting after ${Math.round((Date.now() - startedAt) / 1000)}s`
+          );
+        }, 15_000);
+        activeWatchdogs.add(watchdog);
+        try {
+          const instance = await service.start(resolve);
+          if (startupAborted) {
+            await stopStartedInstance(name, instance);
+            return;
           }
+          this.instances.set(name, instance);
+        } finally {
+          clearInterval(watchdog);
+          activeWatchdogs.delete(watchdog);
+        }
+      } else {
+        if (startupAborted) return;
+        this.instances.set(name, undefined);
+      }
+      started.add(name);
+
+      if (startupAborted) return;
+
+      // Auto-register RPC service definition if available.
+      if (this.dispatcher && service.getServiceDefinition) {
+        const def = service.getServiceDefinition();
+        if (def) {
+          this.dispatcher.registerService(def);
+          log.info(`[${name}] Registered RPC service "${def.name}"`);
         }
       }
+    };
 
-      this.startOrder = started;
+    try {
+      for (const level of levels) {
+        await waitForLevel(level.map((name) => startOne(name)));
+      }
+
+      this.startOrder = order;
       this.started = true;
-      log.info(`All ${started.length} services started`);
+      log.info(`All ${order.length} services started`);
     } catch (error) {
-      log.info(`Startup failed, cleaning up ${started.length} started services...`);
-      for (const name of started.reverse()) {
-        const service = this.services.get(name);
-        if (service?.stop) {
-          try {
-            await service.stop(this.instances.get(name));
-          } catch (e) {
-            console.error(`[ServiceContainer] Cleanup error for "${name}":`, e);
-          }
-        }
+      startupAborted = true;
+      for (const watchdog of activeWatchdogs) clearInterval(watchdog);
+      activeWatchdogs.clear();
+      const startedInOrder = order.filter((name) => started.has(name));
+      log.info(`Startup failed, cleaning up ${startedInOrder.length} started services...`);
+      for (const name of startedInOrder.reverse()) {
+        await stopStartedInstance(name, this.instances.get(name));
       }
       this.instances.clear();
       throw error;
@@ -219,5 +267,32 @@ export class ServiceContainer {
     }
 
     return result;
+  }
+
+  /**
+   * Group the topologically sorted services into dependency layers. Services in
+   * one layer have no dependencies on each other, so they can start in parallel.
+   */
+  private startLevels(order: string[]): string[][] {
+    const depthMemo = new Map<string, number>();
+    const depth = (name: string): number => {
+      const memo = depthMemo.get(name);
+      if (memo !== undefined) return memo;
+      const service = this.services.get(name)!;
+      const deps = [
+        ...(service.dependencies ?? []),
+        ...(service.optionalDependencies ?? []).filter((dep) => this.services.has(dep)),
+      ];
+      const value = deps.length === 0 ? 0 : Math.max(...deps.map((dep) => depth(dep) + 1));
+      depthMemo.set(name, value);
+      return value;
+    };
+
+    const levels: string[][] = [];
+    for (const name of order) {
+      const level = depth(name);
+      (levels[level] ??= []).push(name);
+    }
+    return levels;
   }
 }

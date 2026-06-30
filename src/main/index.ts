@@ -99,6 +99,7 @@ import { loadStoredRemotePairing, clearStoredRemotePairing } from "./services/re
 import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
+import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
 import { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
 import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@natstack/shared/hostTargetLaunchGate";
@@ -1730,8 +1731,7 @@ app.on("ready", async () => {
   if (startupMode.kind === "pending" && !remotePairedAtLaunch) {
     const devAutoPairing = shouldAutoPairPendingDevWebRtcLink() ? getPendingConnectLink() : null;
     if (devAutoPairing) {
-      chooserChoiceMade = true;
-      pendingRemotePairing = devAutoPairing;
+      resolveChooserChoice({ kind: "remote", pairing: devAutoPairing });
       log.info("[bootstrap] Dev WebRTC remote mode: auto-pairing launch deep link");
     } else if (shouldAutoPairPendingDevWebRtcLink()) {
       log.warn(
@@ -2121,11 +2121,20 @@ app.on("ready", async () => {
       }
     };
 
+    const cdpHostConnectionId = panelOrchestrator.getRuntimeClientSessionId();
     cdpHostProvider = new CdpHostProvider({
       serverUrl: conn.gatewayConfig.serverUrl,
       authToken: () => conn.shellToken || conn.adminToken,
-      hostConnectionId: panelOrchestrator.getRuntimeClientSessionId(),
+      hostConnectionId: cdpHostConnectionId,
       getViewManager: () => viewManager,
+      socketFactory:
+        conn.connectionMode === "remote"
+          ? () =>
+              new RemoteCdpHostProviderSocket({
+                serverClient: conn.serverClient,
+                hostConnectionId: cdpHostConnectionId,
+              })
+          : undefined,
       diagnosticsStore: new RuntimeDiagnosticsStore({
         statePath: serverSession.statePath,
       }),
@@ -2208,7 +2217,7 @@ app.on("ready", async () => {
         serverClient: sc,
         getViewManager,
         getAppOrchestrator: () => appOrchestrator,
-        connectionMode: "local",
+        connectionMode: conn.connectionMode,
         remoteHost: undefined,
       })
     );

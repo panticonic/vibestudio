@@ -33,6 +33,7 @@ import { serverRpcWsUrl, type ConnectPairing } from "@natstack/shared/connect";
 const log = createDevLogger("ServerSession");
 
 export interface SessionConnection {
+  connectionMode: "local" | "remote";
   protocol: "http" | "https";
   gatewayPort: number;
   externalHost: string;
@@ -255,6 +256,7 @@ export async function establishServerSession(args: {
   };
 
   return {
+    connectionMode: "local",
     protocol,
     gatewayPort,
     externalHost,
@@ -398,6 +400,7 @@ async function buildRemoteSessionConnection(
   const statePath = path.join(app.getPath("userData"), "remote-state");
 
   return {
+    connectionMode: "remote",
     protocol,
     gatewayPort: remotePorts.gatewayPort,
     externalHost,

@@ -167,6 +167,9 @@
       "getCdpEndpoint": null,
       "goBack": null,
       "goForward": null,
+      "hostProvider.close": ["server", "shell"],
+      "hostProvider.open": ["server", "shell"],
+      "hostProvider.send": ["server", "shell"],
       "navigate": null,
       "reload": null,
       "stop": null

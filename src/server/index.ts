@@ -2245,29 +2245,42 @@ async function main() {
             });
         });
 
-        // Pre-register all DO classes from the build graph so they're available
-        // before any panel connects or agent subscribes. Single workerd restart.
+        // Pre-register DO classes before startup continues. Internal classes
+        // are part of the bootstrap substrate; userland classes do not require a
+        // workerd restart, but they must be registered before readiness so
+        // declared DO-backed HTTP routes exist as soon as the gateway accepts
+        // traffic.
         {
           const { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } =
             await import("./internalDOs/internalDoLoader.js");
           const graph = buildSystemForWorkerd.getGraph();
-          const doClasses: Array<{ source: string; className: string }> = [];
+          const internalDoClasses: Array<{ source: string; className: string }> = [];
+          const userlandDoClasses: Array<{ source: string; className: string }> = [];
           for (const className of INTERNAL_DO_CLASSES) {
-            doClasses.push({ source: INTERNAL_DO_SOURCE, className });
+            internalDoClasses.push({ source: INTERNAL_DO_SOURCE, className });
           }
           for (const node of graph.allNodes()) {
             if (node.kind !== "worker") continue;
             if (!node.manifest.durable) continue;
             for (const cls of node.manifest.durable.classes) {
-              doClasses.push({ source: node.relativePath, className: cls.className });
+              userlandDoClasses.push({ source: node.relativePath, className: cls.className });
             }
           }
-          if (doClasses.length > 0) {
+          if (internalDoClasses.length > 0) {
             console.log(
-              `[WorkerdManager] Pre-registering DO classes:`,
-              doClasses.map((c) => `${c.source}:${c.className}`).join(", ")
+              `[WorkerdManager] Pre-registering internal DO classes:`,
+              internalDoClasses.map((c) => `${c.source}:${c.className}`).join(", ")
             );
-            await workerdManagerInstance.registerAllDOClasses(doClasses);
+            await workerdManagerInstance.registerAllDOClasses(internalDoClasses);
+          }
+          if (userlandDoClasses.length > 0) {
+            console.log(
+              `[WorkerdManager] Registering ${userlandDoClasses.length} userland DO class(es)...`
+            );
+            await workerdManagerInstance.registerAllDOClasses(userlandDoClasses);
+            console.log(
+              `[WorkerdManager] Userland DO class registration complete (${userlandDoClasses.length})`
+            );
           }
         }
 
@@ -3174,14 +3187,17 @@ async function main() {
 
   // ── Headless host auto-spawn (renderer of last resort) ──
   {
-    // Default ON but lazy: server-created browser panels may need a CDP host
+    // Default ON and lazy: server-created browser panels may need a CDP host
     // even when the Electron desktop is connected, because desktop clients are
-    // not lease-assignment defaults. Env/flag override both ways.
+    // not lease-assignment defaults. Env/flag override both ways. Keep-alive is
+    // opt-in so startup does not launch Chromium before the UI is connected.
     const envAutospawn = process.env["NATSTACK_HEADLESS_HOST_AUTOSPAWN"];
     const autospawnEnabled = resolveHeadlessHostAutospawn({
       cliValue: args.headlessHostAutospawn,
       envValue: envAutospawn,
     });
+    const envKeepAlive = process.env["NATSTACK_HEADLESS_HOST_KEEP_ALIVE"];
+    const keepAliveEnabled = envKeepAlive === "1" || envKeepAlive === "true";
     const spawnTimeoutEnv = process.env["NATSTACK_HEADLESS_HOST_SPAWN_TIMEOUT_MS"];
     const parsedSpawnTimeout = spawnTimeoutEnv ? Number.parseInt(spawnTimeoutEnv, 10) : Number.NaN;
     // Honor an explicit 0 (don't let `|| undefined` swallow it); only fall back on missing/garbage.
@@ -3200,15 +3216,10 @@ async function main() {
           coordinator: panelRuntimeCoordinator,
           isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId),
           getServerUrl: () => `http://127.0.0.1:${gatewayPort}`,
-          config: { enabled: autospawnEnabled, spawnTimeoutMs, keepAlive: autospawnEnabled },
+          config: { enabled: autospawnEnabled, spawnTimeoutMs, keepAlive: keepAliveEnabled },
         });
         headlessHostManager = manager;
-        // Always-on headless host: spawn one now and keep it alive so a
-        // programmatically-opened panel (agent/eval/worker — no UI host) always
-        // has a default CDP host to lease to. Non-blocking and crash-proof: a
-        // spawn failure degrades to the desktop fallback via the existing
-        // backoff; it must never wedge or crash boot.
-        manager.startKeepAlive();
+        if (keepAliveEnabled) manager.startKeepAlive();
         return manager;
       },
       async stop(instance: import("./headlessHostManager.js").HeadlessHostManager) {
@@ -3399,32 +3410,50 @@ async function main() {
   });
   cleanupReaper.start();
 
-  let syncDeclaredRemotesAfterStartupReload = false;
-  do {
-    if (pendingStartupMetaConfigReload) {
-      try {
-        replaceWorkspaceConfig(workspaceConfig, loadWorkspaceConfig(workspacePath));
-        syncDeclaredRemotesAfterStartupReload = true;
-      } catch (err) {
-        console.warn(
-          "[GitRemotes] Failed to reload workspace config before startup reconcile:",
-          err
+  const runStartupWorkspaceUnitReconcile = async (): Promise<void> => {
+    let syncDeclaredRemotesAfterStartupReload = false;
+    try {
+      do {
+        if (pendingStartupMetaConfigReload) {
+          try {
+            replaceWorkspaceConfig(workspaceConfig, loadWorkspaceConfig(workspacePath));
+            syncDeclaredRemotesAfterStartupReload = true;
+          } catch (err) {
+            console.warn(
+              "[GitRemotes] Failed to reload workspace config before startup reconcile:",
+              err
+            );
+          }
+          pendingStartupMetaConfigReload = false;
+        }
+        await completeConfiguredWorkspaceDependenciesAtStartup();
+        await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
+      } while (pendingStartupMetaConfigReload);
+      unitApprovalCoordinator.publishPending("startup");
+    } finally {
+      initialWorkspaceUnitReconcileComplete = true;
+      if (syncDeclaredRemotesAfterStartupReload) {
+        syncDeclaredRemotesForSource().catch((err: unknown) =>
+          console.warn(
+            "[GitRemotes] Failed to sync declared remotes after startup config reload:",
+            err
+          )
         );
       }
-      pendingStartupMetaConfigReload = false;
     }
-    await completeConfiguredWorkspaceDependenciesAtStartup();
-    await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
-  } while (pendingStartupMetaConfigReload);
-  unitApprovalCoordinator.publishPending("startup");
-  initialWorkspaceUnitReconcileComplete = true;
-  if (syncDeclaredRemotesAfterStartupReload) {
-    syncDeclaredRemotesForSource().catch((err: unknown) =>
-      console.warn("[GitRemotes] Failed to sync declared remotes after startup config reload:", err)
+  };
+  const startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
+  if (!requireMobileReady && !requireElectronReady) {
+    void startupWorkspaceUnitReconcile.catch((err: unknown) =>
+      console.warn(
+        "[Startup] Background workspace unit reconcile failed:",
+        err instanceof Error ? err.message : String(err)
+      )
     );
   }
 
   if (requireMobileReady) {
+    await startupWorkspaceUnitReconcile;
     const readiness = await hostTargetLaunchCoordinator.ensureMobileHostReadyForPairing();
     if (!readiness?.ready) {
       printReadinessActionBlock("React Native mobile app is not ready", [
@@ -3445,6 +3474,7 @@ async function main() {
     );
   }
   if (requireElectronReady) {
+    await startupWorkspaceUnitReconcile;
     const appHost = container.get<import("./appHost.js").AppHost>("appHost");
     const readiness = await appHost.ensureElectronReady();
     if (!readiness.ready) {

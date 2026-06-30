@@ -1168,8 +1168,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               )
             );
           },
-          canRegisterHostProvider: (hostConnectionId) =>
-            Boolean(deps.panelRuntimeCoordinator?.hasClientHostConnection(hostConnectionId)),
+          canRegisterHostProvider: (hostConnectionId, ownerCallerId) =>
+            Boolean(
+              deps.panelRuntimeCoordinator?.hasClientHostConnection(hostConnectionId, ownerCallerId)
+            ),
           resolveHostForTarget: (targetId) => {
             const resolved = deps.panelRuntimeCoordinator?.resolveHostForSlot(targetId);
             if (!resolved) return null;
@@ -1213,6 +1215,8 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           )
         );
         const { createPanelCdpService } = await import("./services/panelCdpService.js");
+        const { CdpHostProviderRpcChannel } = await import("./cdpHostProviderRpcChannel.js");
+        const hostProviderChannel = new CdpHostProviderRpcChannel(bridge);
         panelCdpDefinition = createPanelCdpService({
           ...panelGateDeps,
           approvalQueue: assertPresent(deps.approvalQueue),
@@ -1242,6 +1246,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               import("./services/panelCdpService.js").PanelConsoleHistoryResult
             >;
           },
+          hostProvider: hostProviderChannel,
           logAccess: (event) => {
             const message = event.denied ? "Panel CDP access denied" : "Panel CDP access";
             const payload = {
@@ -1324,6 +1329,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
           }
         }
+        return hostProviderChannel;
+      },
+      async stop(
+        instance: import("./cdpHostProviderRpcChannel.js").CdpHostProviderRpcChannel | undefined
+      ) {
+        instance?.stop();
       },
       getServiceDefinition() {
         if (!panelCdpDefinition) throw new Error("panelCdp service not initialized");
@@ -1336,7 +1347,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     let panelTreeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelTree",
-      dependencies: ["shellPresence", "buildSystem"],
+      dependencies: ["shellPresence", "buildSystem", "workspace-state", "runtime"],
       async start(resolve) {
         const shellPresence = assertPresent(
           resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(

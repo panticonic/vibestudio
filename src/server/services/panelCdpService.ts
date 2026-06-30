@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { assertHttpUrl } from "@natstack/shared/httpUrl";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { CallerKind } from "@natstack/shared/serviceDispatcher";
 import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,
@@ -42,6 +43,11 @@ export interface PanelConsoleHistoryResult {
   };
 }
 
+export interface PanelCdpHostProviderCaller {
+  id: string;
+  kind: CallerKind;
+}
+
 export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
   getTarget(
     panelId: string
@@ -63,6 +69,11 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
     requesterEntityId: string,
     options?: PanelConsoleHistoryOptions
   ): Promise<PanelConsoleHistoryResult>;
+  hostProvider?: {
+    open(sessionId: string, hostConnectionId: string, caller: PanelCdpHostProviderCaller): Response;
+    send(sessionId: string, data: string, caller: PanelCdpHostProviderCaller): void | Promise<void>;
+    close(sessionId: string, caller: PanelCdpHostProviderCaller): void | Promise<void>;
+  };
   logAccess?(event: PanelCdpAccessEvent): void;
 }
 
@@ -115,21 +126,84 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     description: "Approval-gated server CDP access for panel targets",
     policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
     methods: {
-      getCdpEndpoint: { args: z.tuple([z.string()]) },
-      navigate: { args: z.tuple([z.string(), z.string()]) },
-      reload: { args: z.tuple([z.string()]) },
-      goBack: { args: z.tuple([z.string()]) },
-      goForward: { args: z.tuple([z.string()]) },
-      stop: { args: z.tuple([z.string()]) },
-      consoleHistory: { args: z.tuple([z.string(), consoleHistoryOptionsSchema]) },
+      getCdpEndpoint: {
+        description: "Return a single-use CDP WebSocket endpoint for an approved panel target.",
+        args: z.tuple([z.string()]),
+      },
+      navigate: {
+        description: "Navigate an approved browser panel target through its active CDP host.",
+        args: z.tuple([z.string(), z.string()]),
+      },
+      reload: {
+        description: "Reload an approved panel target through its active CDP host.",
+        args: z.tuple([z.string()]),
+      },
+      goBack: {
+        description: "Drive browser history back on an approved panel target.",
+        args: z.tuple([z.string()]),
+      },
+      goForward: {
+        description: "Drive browser history forward on an approved panel target.",
+        args: z.tuple([z.string()]),
+      },
+      stop: {
+        description: "Stop loading an approved panel target through its active CDP host.",
+        args: z.tuple([z.string()]),
+      },
+      consoleHistory: {
+        description: "Read console history from an approved panel target's active CDP host.",
+        args: z.tuple([z.string(), consoleHistoryOptionsSchema]),
+      },
+      "hostProvider.open": {
+        description: "Internal shell/server transport: open a streamed CDP host-provider channel.",
+        args: z.tuple([z.string(), z.string()]),
+        returns: z.instanceof(Response),
+        policy: { allowed: ["shell", "server"] },
+        access: { sensitivity: "admin" },
+      },
+      "hostProvider.send": {
+        description:
+          "Internal shell/server transport: deliver a CDP host-provider frame to the bridge.",
+        args: z.tuple([z.string(), z.string()]),
+        returns: z.void(),
+        policy: { allowed: ["shell", "server"] },
+        access: { sensitivity: "admin" },
+      },
+      "hostProvider.close": {
+        description: "Internal shell/server transport: close a CDP host-provider channel.",
+        args: z.tuple([z.string()]),
+        returns: z.void(),
+        policy: { allowed: ["shell", "server"] },
+        access: { sensitivity: "admin" },
+      },
     },
     handler: async (ctx, method, args) => {
-      const panelId = args[0] as string;
-      const requesterEntityId = ctx.caller.runtime.id;
-      const target = await requireTarget(panelId);
-
+      const hostProviderCaller = {
+        id: ctx.caller.runtime.id,
+        kind: ctx.caller.runtime.kind,
+      };
       switch (method) {
+        case "hostProvider.open": {
+          if (!deps.hostProvider) throw new Error("CDP host provider transport is unavailable");
+          return deps.hostProvider.open(args[0] as string, args[1] as string, hostProviderCaller);
+        }
+
+        case "hostProvider.send": {
+          if (!deps.hostProvider) throw new Error("CDP host provider transport is unavailable");
+          await deps.hostProvider.send(args[0] as string, args[1] as string, hostProviderCaller);
+          return;
+        }
+
+        case "hostProvider.close": {
+          if (!deps.hostProvider) throw new Error("CDP host provider transport is unavailable");
+          await deps.hostProvider.close(args[0] as string, hostProviderCaller);
+          return;
+        }
+
         case "getCdpEndpoint": {
+          const panelId = args[0] as string;
+          const requesterEntityId = ctx.caller.runtime.id;
+          const target = await requireTarget(panelId);
           const permission = await requirePanelAccessPermission(deps, ctx, "cdp", target);
           if (!permission.allowed) {
             recordAccess(method, ctx, target, { reason: permission.reason ?? "CDP access denied" });
@@ -140,6 +214,9 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         }
 
         case "consoleHistory": {
+          const panelId = args[0] as string;
+          const requesterEntityId = ctx.caller.runtime.id;
+          const target = await requireTarget(panelId);
           const permission = await requirePanelAccessPermission(deps, ctx, "cdp", target);
           if (!permission.allowed) {
             recordAccess(method, ctx, target, { reason: permission.reason ?? "CDP access denied" });
@@ -161,6 +238,9 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         case "goBack":
         case "goForward":
         case "stop": {
+          const panelId = args[0] as string;
+          const requesterEntityId = ctx.caller.runtime.id;
+          const target = await requireTarget(panelId);
           const op = method === "navigate" ? "navigate" : method;
           if (method === "navigate") {
             assertHttpUrl(args[1]);
