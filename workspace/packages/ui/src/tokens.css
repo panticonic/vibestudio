@@ -36,6 +36,21 @@
   --intent-consent-surface: var(--iris-a3);
   --intent-consent-border: var(--iris-a6);
 
+  /* Vibez1 brand language: monochrome mark, cool neutral surfaces, warm spark. */
+  --brand-ink: var(--gray-12);
+  --brand-ink-contrast: var(--gray-1);
+  --brand-surface: var(--gray-12);
+  --brand-surface-raised: var(--gray-10);
+  --brand-spark: var(--amber-9);
+  --brand-spark-soft: var(--amber-a4);
+  --brand-glow: var(--gray-a4);
+  --brand-gradient: linear-gradient(
+    135deg,
+    var(--brand-surface) 0%,
+    var(--brand-surface-raised) 68%,
+    var(--brand-spark) 100%
+  );
+
   /* Approval tones (sky / amber / red) share the semantic vocabulary. */
   --approval-info: var(--sky-9);
   --approval-info-surface: var(--sky-a3);
@@ -70,6 +85,66 @@
   --z-dialog: 200;
   --z-toast: 300;
   --z-tooltip: 400;
+}
+
+.radix-themes:where(.dark, .dark-theme),
+:root {
+  --brand-tile-border: var(--gray-a6);
+  --brand-tile-shadow: 0 8px 24px var(--black-a6), 0 2px 8px var(--black-a4);
+}
+
+.radix-themes:where(.light, .light-theme) {
+  --brand-tile-border: var(--gray-a7);
+  --brand-tile-shadow: 0 8px 24px var(--gray-a4), 0 2px 8px var(--gray-a3);
+}
+
+.vibez1-logo {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.vibez1-logo-tile {
+  border: 1px solid var(--brand-tile-border);
+  border-radius: 22%;
+  background: var(--surface-raised);
+  box-shadow: var(--brand-tile-shadow);
+}
+
+.vibez1-logo-mark {
+  background: transparent;
+}
+
+.vibez1-logo-img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.vibez1-logo-tile .vibez1-logo-img {
+  object-fit: cover;
+}
+
+.radix-themes:where(.light, .light-theme) .vibez1-logo-img-dark,
+.radix-themes:where(.dark, .dark-theme) .vibez1-logo-img-light {
+  display: none;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not(.dark):not(.dark-theme) .vibez1-logo-img-dark {
+    display: none;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.light-theme) .vibez1-logo-img-light {
+    display: none;
+  }
 }
 
 /* Centralized keyframes */

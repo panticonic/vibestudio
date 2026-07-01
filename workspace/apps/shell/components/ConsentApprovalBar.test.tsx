@@ -55,7 +55,7 @@ vi.mock("../state/themeAtoms", async () => {
   return {
     effectiveThemeAtom: atom("light"),
     themeConfigAtom: atom({
-      accentColor: "iris",
+      accentColor: "amber",
       grayColor: "slate",
       radius: "medium",
       scaling: "100%",

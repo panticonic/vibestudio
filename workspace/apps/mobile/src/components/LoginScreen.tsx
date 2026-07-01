@@ -1,12 +1,5 @@
 import React from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
 import type { StackNavigationProp } from "@react-navigation/stack";
 import { useAtomValue, useSetAtom } from "jotai";
 import type { RootStackParamList } from "../navigation/RootNavigator";
@@ -26,6 +19,7 @@ import {
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
+import { Vibez1Logo } from "./Vibez1Logo";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
@@ -175,6 +169,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.content}>
+        <Vibez1Logo size={84} variant="tile" style={styles.brandMark} />
         <Text style={[styles.title, { color: colors.text }]}>Vibez1</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           Opening the selected workspace
@@ -225,6 +220,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     padding: 24,
+  },
+  brandMark: {
+    marginBottom: 18,
   },
   title: {
     fontSize: 32,

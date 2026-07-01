@@ -28,10 +28,7 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-export class ErrorBoundary extends React.Component<
-  ErrorBoundaryProps,
-  ErrorBoundaryState
-> {
+export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -45,7 +42,7 @@ export class ErrorBoundary extends React.Component<
     console.error(
       `[ErrorBoundary${this.props.label ? `:${this.props.label}` : ""}] Uncaught error:`,
       error,
-      errorInfo.componentStack,
+      errorInfo.componentStack
     );
   }
 
@@ -60,18 +57,41 @@ export class ErrorBoundary extends React.Component<
       const colors = this.props.colors;
 
       return (
-        <View style={[styles.container, colors?.background != null && { backgroundColor: colors.background }]}>
+        <View
+          style={[
+            styles.container,
+            colors?.background != null && { backgroundColor: colors.background },
+          ]}
+        >
           <View style={styles.content}>
-            <Text style={[styles.title, colors?.text != null && { color: colors.text }]}>Something went wrong</Text>
-            <Text style={[styles.message, colors?.textSecondary != null && { color: colors.textSecondary }]}>
+            <Text style={[styles.title, colors?.text != null && { color: colors.text }]}>
+              Something went wrong
+            </Text>
+            <Text
+              style={[
+                styles.message,
+                colors?.textSecondary != null && { color: colors.textSecondary },
+              ]}
+            >
               {label} encountered an unexpected error.
             </Text>
-            {error?.message ? (
-              <Text style={styles.errorMessage}>{error.message}</Text>
-            ) : null}
+            {error?.message ? <Text style={styles.errorMessage}>{error.message}</Text> : null}
 
-            <Pressable style={[styles.retryButton, colors?.accent != null && { backgroundColor: colors.accent }]} onPress={this.handleRetry}>
-              <Text style={[styles.retryText, colors?.accentText != null && { color: colors.accentText }]}>Retry</Text>
+            <Pressable
+              style={[
+                styles.retryButton,
+                colors?.accent != null && { backgroundColor: colors.accent },
+              ]}
+              onPress={this.handleRetry}
+            >
+              <Text
+                style={[
+                  styles.retryText,
+                  colors?.accentText != null && { color: colors.accentText },
+                ]}
+              >
+                Retry
+              </Text>
             </Pressable>
 
             {__DEV__ && error?.stack ? (
@@ -91,7 +111,7 @@ export class ErrorBoundary extends React.Component<
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "#0a0b0c",
     justifyContent: "center",
     alignItems: "center",
   },

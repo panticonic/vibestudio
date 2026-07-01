@@ -19,6 +19,7 @@ import { PanelWebView } from "./PanelWebView";
 import { WebViewErrorBoundary } from "./WebViewErrorBoundary";
 import { ApprovalSheet } from "./ApprovalSheet";
 import { Toast } from "./Toast";
+import { Vibez1Logo } from "./Vibez1Logo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
 import type { WebViewNavigation } from "react-native-webview/lib/WebViewTypes";
@@ -33,11 +34,7 @@ import {
   pinnedPanelIdsAtom,
   pinsHydratedAtom,
 } from "../state/navigationAtoms";
-import {
-  addWebViewEntry,
-  sweepIdleWebViews,
-  type WebViewEntry,
-} from "./webViewStack";
+import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webViewStack";
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PANEL_UI_IDLE_SWEEP_MS } from "@vibez1/shared/constants";
 import { parseHostConfig, getExternalHost } from "../services/panelUrls";
@@ -340,8 +337,7 @@ export function MainScreen() {
   const buildStackPredicates = useCallback(
     () => ({
       isPinned: (id: string) => pinnedPanelIdsRef.current.has(id),
-      isKeepLoaded: (id: string) =>
-        !!shellClient?.panels.registry.getRuntimeLease(id)?.keepLoaded,
+      isKeepLoaded: (id: string) => !!shellClient?.panels.registry.getRuntimeLease(id)?.keepLoaded,
     }),
     [shellClient]
   );
@@ -524,8 +520,7 @@ export function MainScreen() {
             {
               activePanelId: activePanelIdRef.current,
               isPinned: (id) => pinnedPanelIdsRef.current.has(id),
-              isKeepLoaded: (id) =>
-                !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
+              isKeepLoaded: (id) => !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
             }
           )
         );
@@ -581,8 +576,7 @@ export function MainScreen() {
             {
               activePanelId: activePanelIdRef.current,
               isPinned: (id) => pinnedPanelIdsRef.current.has(id),
-              isKeepLoaded: (id) =>
-                !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
+              isKeepLoaded: (id) => !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
             }
           )
         );
@@ -1337,6 +1331,7 @@ export function MainScreen() {
       <View style={styles.contentArea}>
         {!activePanelId && (
           <View style={styles.placeholderContainer}>
+            <Vibez1Logo size={76} variant="mark" style={styles.placeholderLogo} />
             <Text style={[styles.placeholderText, { color: colors.textSecondary }]}>
               Select a panel from the drawer
             </Text>
@@ -1351,6 +1346,7 @@ export function MainScreen() {
           !activePanelLoadError &&
           !webViewStack.some((entry) => entry.panelId === loadingPanelId) && (
             <View style={styles.loadingContainer}>
+              <Vibez1Logo size={64} variant="mark" style={styles.placeholderLogo} />
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
                 Loading panel...
@@ -1363,6 +1359,7 @@ export function MainScreen() {
           !activePanelLeasedElsewhere &&
           !webViewStack.some((entry) => entry.panelId === activePanelId) && (
             <View style={styles.placeholderContainer}>
+              <Vibez1Logo size={72} variant="mark" style={styles.placeholderLogo} />
               <Text style={[styles.placeholderText, { color: colors.text }]}>
                 Panel failed to load
               </Text>
@@ -1387,6 +1384,7 @@ export function MainScreen() {
 
         {activePanelId && activePanelLeasedElsewhere && (
           <View style={styles.placeholderContainer}>
+            <Vibez1Logo size={72} variant="mark" style={styles.placeholderLogo} />
             <Text style={[styles.placeholderText, { color: colors.text }]}>
               Running on {activeRuntimeLease?.holderLabel ?? "another client"}
             </Text>
@@ -1526,6 +1524,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
     marginTop: 12,
+  },
+  placeholderLogo: {
+    marginBottom: 18,
   },
   takeOverButton: {
     marginTop: 12,

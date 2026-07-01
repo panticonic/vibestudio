@@ -81,6 +81,8 @@ mac:
 
 # DMG configuration
 dmg:
+  background: build-resources/dmg-background.png
+  iconSize: 96
   contents:
     - x: 130
       y: 220
@@ -101,9 +103,15 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   deleteAppDataOnUninstall: false
+  installerIcon: build-resources/icon.ico
+  uninstallerIcon: build-resources/icon.ico
+  installerHeaderIcon: build-resources/icon.ico
+  shortcutName: Vibez1
 
 # Linux configuration
 linux:
+  synopsis: Stacked panel workspace for agentic workflows
+  description: Vibez1 is a branded desktop and mobile workspace for horizontally stacked panels, local runtime surfaces, and secure paired workspace access.
   target:
     - target: AppImage
       arch:

@@ -12,7 +12,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
   const setCurrentThemeConfig = vi.fn();
   const broadcastThemeConfig = vi.fn();
   const themeConfig = {
-    accentColor: "iris",
+    accentColor: "amber",
     grayColor: "slate",
     radius: "medium" as const,
     scaling: "100%" as const,

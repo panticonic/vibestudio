@@ -1444,6 +1444,7 @@ function createWindow(): void {
     width: 1200,
     height: 600,
     show: false,
+    icon: path.join(__dirname, "assets", "brand", "vibez1-icon-512.png"),
     skipTaskbar: IS_HEADLESS_HOST,
     // Paint the window's native backdrop in the greyed chrome base so any
     // pre-paint gap shows calm grey rather than a white/black flash.

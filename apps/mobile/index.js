@@ -50,6 +50,7 @@ import {
   isLaunchSessionEventForTarget,
 } from "@vibez1/shared/hostTargetLaunchGate";
 import { name as appName } from "./app.json";
+import { Vibez1Logo } from "./Vibez1Logo";
 
 const RN_HOST_ABI = "rn-host-1";
 const CONSUMED_CONNECT_LINK_KEY = "vibez1:connect:consumed-url";
@@ -66,7 +67,6 @@ function platformName() {
 function missingNativeHostError() {
   return new Error("Vibez1MobileHost native module is unavailable");
 }
-
 
 function parseConnectDeepLink(rawUrl) {
   if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibez1://connect")) return null;
@@ -547,7 +547,12 @@ function Vibez1MobileHostBootstrap() {
       }
       let session =
         initialSession ??
-        (await launchGateRpc(grant, "workspace.hostTargets.beginLaunch", ["react-native"], deadline));
+        (await launchGateRpc(
+          grant,
+          "workspace.hostTargets.beginLaunch",
+          ["react-native"],
+          deadline
+        ));
       for (;;) {
         if (!isCurrent()) return;
         setLaunchSession(session);
@@ -788,9 +793,7 @@ function Vibez1MobileHostBootstrap() {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.panel}>
           <View style={styles.brandRow}>
-            <View style={styles.brandMark}>
-              <Text style={styles.brandMarkText}>N</Text>
-            </View>
+            <Vibez1Logo size={44} variant="tile" />
             <View style={styles.brandText}>
               <Text style={styles.eyebrow}>Vibez1</Text>
               <Text style={styles.title}>Mobile Host</Text>
@@ -953,19 +956,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 12,
-  },
-  brandMark: {
-    alignItems: "center",
-    backgroundColor: "#78d4ff",
-    borderRadius: 8,
-    height: 44,
-    justifyContent: "center",
-    width: 44,
-  },
-  brandMarkText: {
-    color: "#071522",
-    fontSize: 20,
-    fontWeight: "800",
   },
   brandText: {
     flex: 1,

@@ -121,7 +121,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   private currentTheme: "light" | "dark" = "dark";
   /** App-wide theme identity, broadcast to panels alongside appearance. */
   private currentThemeConfig: ThemeConfig = {
-    accentColor: "iris",
+    accentColor: "amber",
     grayColor: "slate",
     radius: "medium",
     scaling: "100%",

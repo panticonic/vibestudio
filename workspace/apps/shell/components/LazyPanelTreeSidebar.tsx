@@ -23,10 +23,10 @@ import {
   Cross2Icon,
   CubeIcon,
   DrawingPinFilledIcon,
-  LayersIcon,
   PlusIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
+import { Vibez1Logo } from "@workspace/ui";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -814,19 +814,7 @@ export function LazyPanelTreeSidebar({
           px="4"
           style={{ flex: 1, textAlign: "center" }}
         >
-          <Flex
-            align="center"
-            justify="center"
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: "var(--radius-4)",
-              backgroundColor: "var(--gray-a3)",
-              color: "var(--gray-9)",
-            }}
-          >
-            <LayersIcon width={22} height={22} />
-          </Flex>
+          <Vibez1Logo size={48} variant="mark" />
           <Text size="2" weight="medium" style={{ color: "var(--gray-12)" }}>
             No panels yet
           </Text>

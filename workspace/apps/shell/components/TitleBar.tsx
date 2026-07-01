@@ -13,6 +13,7 @@ import {
   StopIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
+import { Vibez1Logo } from "@workspace/ui";
 import {
   useCallback,
   useEffect,
@@ -30,16 +31,6 @@ import type { ChromeCommand } from "./PanelStack";
 import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
 import { ThemeSettings } from "./ThemeSettings";
 import { ConnectionSettingsDialog } from "./ConnectionSettingsDialog";
-
-const isMac = /Mac|iPhone|iPad|iPod/i.test(
-  (globalThis.navigator as { userAgentData?: { platform?: string } } | undefined)?.userAgentData
-    ?.platform ??
-    globalThis.navigator?.platform ??
-    globalThis.navigator?.userAgent ??
-    ""
-);
-const MACOS_TITLEBAR_CONTROL_RESERVE_PX = 68;
-
 import type {
   NavigationMode,
   LazyTitleNavigationData,
@@ -67,6 +58,15 @@ import {
   type ShellOverlayRow,
 } from "../shell/client";
 import { useNativeShellOverlay } from "../shell/useNativeShellOverlay";
+
+const isMac = /Mac|iPhone|iPad|iPod/i.test(
+  (globalThis.navigator as { userAgentData?: { platform?: string } } | undefined)?.userAgentData
+    ?.platform ??
+    globalThis.navigator?.platform ??
+    globalThis.navigator?.userAgent ??
+    ""
+);
+const MACOS_TITLEBAR_CONTROL_RESERVE_PX = 68;
 
 interface TitleBarProps {
   title: string;
@@ -144,6 +144,8 @@ export function TitleBar({
             >
               <HamburgerMenuIcon />
             </IconButton>
+
+            <Vibez1Logo size={26} variant="mark" className="app-titlebar-brand" />
 
             <Tooltip content={navigationMode === "tree" ? "Close panel tree" : "Open panel tree"}>
               <IconButton
@@ -266,6 +268,8 @@ export function TitleBar({
         >
           {/* macOS: reserve the native traffic-light cluster and hover target. */}
           {isMac && <Box style={{ width: MACOS_TITLEBAR_CONTROL_RESERVE_PX, flexShrink: 0 }} />}
+
+          <Vibez1Logo size={20} variant="mark" className="app-titlebar-brand" />
 
           <IconButton variant="ghost" size="1" onClick={handleHamburgerClick}>
             <HamburgerMenuIcon />

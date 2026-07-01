@@ -416,6 +416,7 @@ const bootstrapConfig = {
 
 function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
+  copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
   fs.mkdirSync("dist/baked-app", { recursive: true });
   copyDirectoryRecursive(
     "workspace/extensions/shell/vscode-shell-integration",

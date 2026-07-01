@@ -12,7 +12,17 @@
  */
 
 import React, { useCallback, useMemo, useState } from "react";
-import { View, Text, StyleSheet, FlatList, RefreshControl, Pressable, Alert, ActionSheetIOS, Platform } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  RefreshControl,
+  Pressable,
+  Alert,
+  ActionSheetIOS,
+  Platform,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import { useAtomValue, useSetAtom } from "jotai";
@@ -21,6 +31,7 @@ import { themeColorsAtom } from "../state/themeAtoms";
 import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms";
 import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PanelTreeItem, type FlatPanelItem } from "./PanelTreeItem";
+import { Vibez1Logo } from "./Vibez1Logo";
 import type { Panel } from "@vibez1/shared/types";
 import { buildPanelChromeState, isBrowserPanelSource } from "@vibez1/shared/panelChrome";
 import { getAvailablePanelCommands, type PanelCommandId } from "@vibez1/shared/panelCommands";
@@ -36,11 +47,7 @@ interface PanelDrawerProps {
  * Flatten the panel tree into a list respecting collapsed state.
  * Collapsed panels' children are hidden from the list.
  */
-function flattenTree(
-  panels: Panel[],
-  collapsedIds: Set<string>,
-  depth = 0,
-): FlatPanelItem[] {
+function flattenTree(panels: Panel[], collapsedIds: Set<string>, depth = 0): FlatPanelItem[] {
   const result: FlatPanelItem[] = [];
   for (const panel of panels) {
     const isCollapsed = collapsedIds.has(panel.id);
@@ -87,10 +94,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   }, [shellClient, panelTree]); // panelTree dependency triggers re-compute on tree changes
 
   // Flatten tree with collapse awareness
-  const flatItems = useMemo(
-    () => flattenTree(panelTree, collapsedIds),
-    [panelTree, collapsedIds],
-  );
+  const flatItems = useMemo(() => flattenTree(panelTree, collapsedIds), [panelTree, collapsedIds]);
 
   const handleRefresh = useCallback(async () => {
     if (!shellClient) return;
@@ -110,7 +114,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     (panelId: string) => {
       onSelectPanel(panelId);
     },
-    [onSelectPanel],
+    [onSelectPanel]
   );
 
   const handleToggleCollapse = useCallback(
@@ -118,7 +122,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       if (!shellClient) return;
       void shellClient.panels.setCollapsed(panelId, collapsed);
     },
-    [shellClient],
+    [shellClient]
   );
 
   const handleArchive = useCallback(
@@ -126,7 +130,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       if (!shellClient) return;
       void shellClient.panels.archive(panelId);
     },
-    [shellClient],
+    [shellClient]
   );
 
   const togglePanelPin = useCallback(
@@ -140,78 +144,92 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
         return next;
       });
     },
-    [setPinnedPanelIds, shellClient],
+    [setPinnedPanelIds, shellClient]
   );
 
-  const performPanelCommand = useCallback((command: PanelCommandId, panelId: string) => {
-    if (!shellClient) return;
-    const panel = findPanelById(panelTree, panelId);
-    if (!panel) return;
-    const snapshot = getCurrentSnapshot(panel);
+  const performPanelCommand = useCallback(
+    (command: PanelCommandId, panelId: string) => {
+      if (!shellClient) return;
+      const panel = findPanelById(panelTree, panelId);
+      if (!panel) return;
+      const snapshot = getCurrentSnapshot(panel);
 
-    switch (command) {
-      case "toggle-pin":
-        togglePanelPin(panelId);
-        return;
-      case "copy-address":
-        copyToClipboard(snapshot.source);
-        return;
-      case "open-external": {
-        const url = snapshot.resolvedUrl ?? (isBrowserPanelSource(snapshot.source) ? snapshot.source.slice("browser:".length) : null);
-        if (url && /^https?:\/\//i.test(url)) void openExternalUrl(url);
+      switch (command) {
+        case "toggle-pin":
+          togglePanelPin(panelId);
+          return;
+        case "copy-address":
+          copyToClipboard(snapshot.source);
+          return;
+        case "open-external": {
+          const url =
+            snapshot.resolvedUrl ??
+            (isBrowserPanelSource(snapshot.source)
+              ? snapshot.source.slice("browser:".length)
+              : null);
+          if (url && /^https?:\/\//i.test(url)) void openExternalUrl(url);
+          return;
+        }
+        case "duplicate":
+          if (isBrowserPanelSource(snapshot.source)) {
+            void shellClient.panels
+              .createBrowserUrlPanel(null, snapshot.source.slice("browser:".length), {
+                focus: true,
+              })
+              .then((result) => onSelectPanel(result.id));
+          } else {
+            void shellClient.panels
+              .createRootPanel(snapshot.source)
+              .then((result) => onSelectPanel(result.id));
+          }
+          return;
+        case "archive":
+          void shellClient.panels.archive(panelId).then(() => {
+            setPanelTree(shellClient.panels.getTree());
+          });
+          return;
+        default:
+          onSelectPanel(panelId);
+      }
+    },
+    [onSelectPanel, panelTree, setPanelTree, shellClient, togglePanelPin]
+  );
+
+  const handlePanelLongPress = useCallback(
+    (panelId: string) => {
+      const panel = findPanelById(panelTree, panelId);
+      if (!panel) return;
+      const commands = getAvailablePanelCommands(
+        { chrome: buildPanelChromeState({ panel }), isPinned: pinnedPanelIds.has(panelId) },
+        ["copy-address", "open-external", "duplicate", "toggle-pin", "archive"]
+      );
+      const labels = commands.map((command) => command.label);
+      if (Platform.OS === "ios") {
+        const destructiveIndex = commands.findIndex((command) => command.id === "archive");
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options: [...labels, "Cancel"],
+            cancelButtonIndex: labels.length,
+            destructiveButtonIndex: destructiveIndex >= 0 ? destructiveIndex : undefined,
+          },
+          (buttonIndex) => {
+            const command = commands[buttonIndex];
+            if (command) performPanelCommand(command.id, panelId);
+          }
+        );
         return;
       }
-      case "duplicate":
-        if (isBrowserPanelSource(snapshot.source)) {
-          void shellClient.panels.createBrowserUrlPanel(null, snapshot.source.slice("browser:".length), { focus: true })
-            .then((result) => onSelectPanel(result.id));
-        } else {
-          void shellClient.panels.createRootPanel(snapshot.source)
-            .then((result) => onSelectPanel(result.id));
-        }
-        return;
-      case "archive":
-        void shellClient.panels.archive(panelId).then(() => {
-          setPanelTree(shellClient.panels.getTree());
-        });
-        return;
-      default:
-        onSelectPanel(panelId);
-    }
-  }, [onSelectPanel, panelTree, setPanelTree, shellClient, togglePanelPin]);
-
-  const handlePanelLongPress = useCallback((panelId: string) => {
-    const panel = findPanelById(panelTree, panelId);
-    if (!panel) return;
-    const commands = getAvailablePanelCommands(
-      { chrome: buildPanelChromeState({ panel }), isPinned: pinnedPanelIds.has(panelId) },
-      ["copy-address", "open-external", "duplicate", "toggle-pin", "archive"],
-    );
-    const labels = commands.map((command) => command.label);
-    if (Platform.OS === "ios") {
-      const destructiveIndex = commands.findIndex((command) => command.id === "archive");
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: [...labels, "Cancel"],
-          cancelButtonIndex: labels.length,
-          destructiveButtonIndex: destructiveIndex >= 0 ? destructiveIndex : undefined,
-        },
-        (buttonIndex) => {
-          const command = commands[buttonIndex];
-          if (command) performPanelCommand(command.id, panelId);
-        },
-      );
-      return;
-    }
-    Alert.alert(panel.title, undefined, [
-      ...commands.map((command) => ({
-        text: command.label,
-        onPress: () => performPanelCommand(command.id, panelId),
-        style: command.id === "archive" ? "destructive" as const : "default" as const,
-      })),
-      { text: "Cancel", style: "cancel" },
-    ]);
-  }, [panelTree, performPanelCommand, pinnedPanelIds]);
+      Alert.alert(panel.title, undefined, [
+        ...commands.map((command) => ({
+          text: command.label,
+          onPress: () => performPanelCommand(command.id, panelId),
+          style: command.id === "archive" ? ("destructive" as const) : ("default" as const),
+        })),
+        { text: "Cancel", style: "cancel" },
+      ]);
+    },
+    [panelTree, performPanelCommand, pinnedPanelIds]
+  );
 
   const handleSettingsPress = useCallback(() => {
     navigation.getParent()?.navigate("Settings" as never);
@@ -238,23 +256,26 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       handlePanelLongPress,
       handleToggleCollapse,
       handleArchive,
-    ],
+    ]
   );
 
   const keyExtractor = useCallback((item: FlatPanelItem) => item.id, []);
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}>
+    <View
+      style={[styles.container, { backgroundColor: colors.background, paddingTop: insets.top }]}
+    >
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <Text style={[styles.headerTitle, { color: colors.text }]}>Panels</Text>
       </View>
 
       {flatItems.length === 0 ? (
         <View style={styles.emptyContainer}>
+          <Vibez1Logo size={72} variant="mark" style={styles.emptyLogo} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>No panels open yet</Text>
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-            Tap the address bar at the top of the screen and enter a URL or panel
-            source to open your first panel.
+            Tap the address bar at the top of the screen and enter a URL or panel source to open
+            your first panel.
           </Text>
         </View>
       ) : (
@@ -275,11 +296,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       )}
 
       <View style={[styles.footer, { borderTopColor: colors.border }]}>
-        <Pressable
-          onPress={handleSettingsPress}
-          style={styles.footerButton}
-          hitSlop={8}
-        >
+        <Pressable onPress={handleSettingsPress} style={styles.footerButton} hitSlop={8}>
           <Text style={[styles.footerIcon, { color: colors.textSecondary }]}>{"\u2699"}</Text>
           <Text style={[styles.footerText, { color: colors.textSecondary }]}>Settings</Text>
         </Pressable>
@@ -309,6 +326,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 32,
+  },
+  emptyLogo: {
+    marginBottom: 18,
   },
   emptyTitle: {
     fontSize: 16,

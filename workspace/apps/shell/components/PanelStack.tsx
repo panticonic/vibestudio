@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSetAtom } from "jotai";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import { Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { Vibez1Logo } from "@workspace/ui";
 import { useIsMobile } from "@workspace/react/responsive";
 
 import type { LazyTitleNavigationData, LazyStatusNavigationData } from "./navigationTypes";
@@ -873,17 +874,34 @@ export function PanelStack({
   // Show loading state while initializing
   if (rootLoading && rootPanels.length === 0) {
     return (
-      <Flex direction="column" align="center" justify="center" style={{ flex: 1, height: "100%" }}>
+      <Flex
+        direction="column"
+        align="center"
+        justify="center"
+        gap="3"
+        style={{ flex: 1, height: "100%" }}
+      >
+        <Vibez1Logo size={68} variant="mark" />
         <Spinner size="3" />
-        <Text mt="3">Initializing panels...</Text>
+        <Text>Initializing panels...</Text>
       </Flex>
     );
   }
 
   if (!visiblePanel && !panelLoading) {
     return (
-      <Flex direction="column" align="center" justify="center" style={{ flex: 1, height: "100%" }}>
-        <Text>No panels available.</Text>
+      <Flex
+        direction="column"
+        align="center"
+        justify="center"
+        gap="3"
+        style={{ flex: 1, height: "100%", textAlign: "center" }}
+      >
+        <Vibez1Logo size={72} variant="mark" />
+        <Text weight="medium">No panels available.</Text>
+        <Text size="2" color="gray">
+          Create a panel or choose another workspace to continue.
+        </Text>
       </Flex>
     );
   }
@@ -892,9 +910,10 @@ export function PanelStack({
   const renderPanelContent = () => {
     if (!visiblePanel) {
       return (
-        <Flex direction="column" align="center" justify="center" height="100%">
+        <Flex direction="column" align="center" justify="center" gap="3" height="100%">
+          <Vibez1Logo size={56} variant="mark" />
           <Spinner size="3" />
-          <Text mt="3">Loading panel...</Text>
+          <Text>Loading panel...</Text>
         </Flex>
       );
     }

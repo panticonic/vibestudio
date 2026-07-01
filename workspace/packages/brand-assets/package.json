@@ -1,0 +1,15 @@
+{
+  "name": "@workspace/brand-assets",
+  "version": "0.1.0-git.723f0d0",
+  "type": "module",
+  "exports": {
+    "./favicon.svg": "./src/favicon.svg",
+    "./vibez1-dark.png": "./src/vibez1-dark.png",
+    "./vibez1-light.png": "./src/vibez1-light.png",
+    "./vibez1-mark.svg": "./src/vibez1-mark.svg",
+    "./vibez1-mark-black.svg": "./src/vibez1-mark-black.svg",
+    "./vibez1-mark-on-dark.png": "./src/vibez1-mark-on-dark.png",
+    "./vibez1-mark-on-light.png": "./src/vibez1-mark-on-light.png",
+    "./vibez1-mark-white.svg": "./src/vibez1-mark-white.svg"
+  }
+}

@@ -120,6 +120,10 @@ const PANEL_ASSET_LOADERS: Record<string, esbuild.Loader> = {
   ".pdf": "file",
 };
 
+const LIBRARY_ASSET_LOADERS: Record<string, esbuild.Loader> = Object.fromEntries(
+  Object.keys(PANEL_ASSET_LOADERS).map((ext) => [ext, "dataurl" as esbuild.Loader])
+);
+
 const TEXT_EXTENSIONS = new Set([".js", ".css", ".json", ".map", ".svg", ".txt", ".md", ".html"]);
 
 const KNOWN_NATIVE_EXTERNALS = [
@@ -3082,6 +3086,7 @@ async function buildLibraryBundle(
         createPathShimPlugin(env.resolveDir),
       ],
       nodePaths: env.nodePaths,
+      loader: LIBRARY_ASSET_LOADERS,
       logLevel: "warning",
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
     });

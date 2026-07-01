@@ -71,6 +71,11 @@ body,
   background: var(--app-chrome-bg);
 }
 
+.app-titlebar-brand {
+  opacity: 0.9;
+  filter: drop-shadow(0 1px 1px var(--black-a3));
+}
+
 .app-shell-panel-card {
   background-color: var(--app-chrome-bg-strong);
   /* No frame: the sidebar and panel panes read as flush regions of the chrome,

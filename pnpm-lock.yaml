@@ -1186,6 +1186,8 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
+  workspace/packages/brand-assets: {}
+
   workspace/packages/browser-data:
     dependencies:
       '@vibez1/browser-data':
@@ -1655,6 +1657,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.2.4(react@19.0.0))(react@19.0.0)
+      '@workspace/brand-assets':
+        specifier: workspace:*
+        version: link:../brand-assets
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime

@@ -26,6 +26,7 @@
     "dist:mac": "pnpm build && electron-builder --mac",
     "dist:win": "pnpm build && electron-builder --win",
     "dist:linux": "pnpm build && electron-builder --linux",
+    "generate:brand-assets": "node scripts/generate-brand-assets.mjs",
     "generate:agent-docs": "node scripts/generate-agent-cli-docs.mjs",
     "check:agent-docs": "node scripts/generate-agent-cli-docs.mjs --check",
     "generate:runtime-docs": "node scripts/generate-runtime-docs.mjs",

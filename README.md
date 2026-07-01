@@ -80,6 +80,11 @@ Vibez1 is built as a hierarchical, tree-based browser where every "tab" is a sel
 - Node.js 20+
 - pnpm
 
+## Brand Assets
+
+Logo sources, generated icons, native launch assets, and regeneration commands
+are documented in [docs/brand.md](docs/brand.md).
+
 ## Installation
 
 Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
@@ -236,11 +241,11 @@ Pair a Vibez1 device
 
 ### CLI Flags
 
-| Flag                  | Description                                             |
-| --------------------- | ------------------------------------------------------- |
-| `--app-root=PATH`     | Application root (defaults to cwd)                      |
-| `--gateway-port=PORT` | Port for the hub HTTP/WS ingress (default: random)      |
-| `--log-level=LEVEL`   | Log level                                               |
+| Flag                  | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| `--app-root=PATH`     | Application root (defaults to cwd)                 |
+| `--gateway-port=PORT` | Port for the hub HTTP/WS ingress (default: random) |
+| `--log-level=LEVEL`   | Log level                                          |
 
 The gateway binds loopback only; remote clients reach it over WebRTC (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
