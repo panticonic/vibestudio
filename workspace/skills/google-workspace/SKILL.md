@@ -124,4 +124,5 @@ actions, warnings, and checklist state.
 
 | Skill | When to use |
 |-------|-------------|
+| `google-drive` | Browse, upload, share, export, or sync Google Drive files after Google Workspace is verified |
 | `gmail` | Set up the Gmail channel agent, custom message pills, action bar, and Gmail-specific workflows after Google Workspace is verified |
