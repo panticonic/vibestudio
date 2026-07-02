@@ -49,13 +49,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- natstack://connect onboarding links only. OAuth callbacks use the verified App Link below. -->
+            <!-- vibez1://connect onboarding links only. OAuth callbacks use the verified App Link below. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:scheme="natstack"
+                    android:scheme="vibez1"
                     android:host="connect" />
             </intent-filter>
 
@@ -70,7 +70,7 @@
                 docs/audit/08-mobile-supply-chain.md H-1 / H-2.
 
                 Verify post-install with:
-                  adb shell pm get-app-links com.natstack.mobile
+                  adb shell pm get-app-links com.vibez1.mobile
                 Expected state for auth.snugenv.com: `verified`.
             -->
             <intent-filter android:autoVerify="true">

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createConnectDeepLink } from "@natstack/shared/connect";
+import { createConnectDeepLink } from "@vibez1/shared/connect";
 
 const mocks = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => void>();
@@ -85,12 +85,12 @@ describe("protocolHandler", () => {
     const mod = await import("./protocolHandler.js");
     mocks.app.isPackaged = true;
     mod.registerProtocol();
-    expect(mocks.app.setAsDefaultProtocolClient).toHaveBeenLastCalledWith("natstack");
+    expect(mocks.app.setAsDefaultProtocolClient).toHaveBeenLastCalledWith("vibez1");
 
     mocks.app.isPackaged = false;
     mod.registerProtocol();
     expect(mocks.app.setAsDefaultProtocolClient).toHaveBeenLastCalledWith(
-      "natstack",
+      "vibez1",
       process.execPath,
       expect.any(Array)
     );

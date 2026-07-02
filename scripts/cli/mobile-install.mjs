@@ -10,7 +10,7 @@ import path from "node:path";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
 const defaultApkPath = path.join(androidDir, "app", "build", "outputs", "apk", "internal", "app-internal.apk");
-const defaultPackage = "com.natstack.mobile.internal";
+const defaultPackage = "com.vibez1.mobile.internal";
 
 function parseArgs(argv) {
   const options = {
@@ -53,17 +53,17 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`natstack mobile build/install
+  console.log(`vibez1 mobile build/install
 
 Usage:
-  natstack mobile build
-  natstack mobile install
-  natstack mobile install --device <adb-serial> --launch
+  vibez1 mobile build
+  vibez1 mobile install
+  vibez1 mobile install --device <adb-serial> --launch
 
 Options:
   --device <serial>    Target a specific adb device.
   --apk <path>         Install a specific APK path.
-  --package <id>       Package id to reset/launch. Defaults to com.natstack.mobile.internal.
+  --package <id>       Package id to reset/launch. Defaults to com.vibez1.mobile.internal.
   --no-build           Install the existing APK without rebuilding.
   --build-only         Build the APK and skip adb install.
   --launch             Launch the app after install.

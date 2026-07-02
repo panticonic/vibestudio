@@ -1,7 +1,7 @@
 /**
  * AgentState (WS1 §1.1) — derived by fold, never stored authoritatively
  * (the driver's fold_cache is a P1 cache). All fields JSON-serializable;
- * large payloads remain `natstack.blob-ref.v1` refs inside entries
+ * large payloads remain `vibez1.blob-ref.v1` refs inside entries
  * (hydration happens in executors, never in the fold).
  */
 

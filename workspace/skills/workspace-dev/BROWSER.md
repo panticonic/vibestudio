@@ -15,7 +15,7 @@ const page = await handle.cdp.lightweightPage();
 
 await page.goto("https://example.com");
 await page.getByRole("button", { name: "Sign in" }).click();
-await page.fill("input[name=query]", "NatStack");
+await page.fill("input[name=query]", "Vibez1");
 await page.click(".search-button");
 await handle.click(".search-button"); // same target, convenience wrapper
 

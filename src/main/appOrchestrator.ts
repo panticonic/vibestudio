@@ -1,9 +1,9 @@
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { PanelViewLike } from "@natstack/shared/panelInterfaces";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+import type { PanelViewLike } from "@vibez1/shared/panelInterfaces";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 
 const log = createDevLogger("AppOrchestrator");
 

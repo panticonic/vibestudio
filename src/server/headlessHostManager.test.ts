@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TokenManager } from "@natstack/shared/tokenManager";
+import type { TokenManager } from "@vibez1/shared/tokenManager";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { HeadlessHostManager } from "./headlessHostManager.js";
 

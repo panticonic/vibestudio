@@ -50,7 +50,7 @@ export const CONFIG_LOADER_JS = `(async () => {
   };
   installRandomUuidPolyfill();
 
-  const storageKey = () => "__natstackPanelInit:" + location.href;
+  const storageKey = () => "__vibez1PanelInit:" + location.href;
   const parseStoredInit = () => {
     try {
       const raw = sessionStorage.getItem(storageKey());
@@ -72,7 +72,7 @@ export const CONFIG_LOADER_JS = `(async () => {
   };
 
   let cfg = null;
-  const shell = globalThis.__natstackShell ?? globalThis.__natstackElectron;
+  const shell = globalThis.__vibez1Shell ?? globalThis.__vibez1Electron;
 
   if (shell && typeof shell.getPanelInit === "function") {
     try {
@@ -83,8 +83,8 @@ export const CONFIG_LOADER_JS = `(async () => {
       if (root) root.textContent = "Failed to load panel init: " + (err.message || err);
       return;
     }
-  } else if (globalThis.__natstackPanelInit) {
-    cfg = globalThis.__natstackPanelInit;
+  } else if (globalThis.__vibez1PanelInit) {
+    cfg = globalThis.__vibez1PanelInit;
     persistPanelInit(cfg);
   } else {
     cfg = parseStoredInit();
@@ -97,35 +97,35 @@ export const CONFIG_LOADER_JS = `(async () => {
 
   if (!cfg || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
     const root = document.getElementById("root");
-    if (root) root.innerHTML = "<p>Open this panel from NatStack.</p>";
+    if (root) root.innerHTML = "<p>Open this panel from Vibez1.</p>";
     return;
   }
 
-  globalThis.__natstackEntityId = entityId;
-  globalThis.__natstackSlotId = slotId;
+  globalThis.__vibez1EntityId = entityId;
+  globalThis.__vibez1SlotId = slotId;
   const gatewayConfig = cfg.gatewayConfig;
   // Panel RPC rides the shell bridge (host → WebRTC control channel), not a
   // direct /rpc WebSocket: no panel-side ws URL is built. The token still
   // arrives out-of-band here and is consumed by the bridge's SessionNegotiation.
-  globalThis.__natstackGatewayToken = gatewayConfig.token;
-  globalThis.__natstackKind = "panel";
+  globalThis.__vibez1GatewayToken = gatewayConfig.token;
+  globalThis.__vibez1Kind = "panel";
 
   let effectiveStateArgs = cfg.stateArgs;
   if (url.searchParams.has("stateArgs")) {
     try { effectiveStateArgs = JSON.parse(url.searchParams.get("stateArgs")); } catch { /* ignore */ }
   }
   Object.assign(globalThis, {
-    __natstackContextId: cfg.contextId,
-    __natstackParentId: cfg.parentId,
-    __natstackParentEntityId: cfg.parentEntityId,
-    __natstackInitialTheme: cfg.theme,
-    __natstackGatewayConfig: gatewayConfig,
-    __natstackSourceRepo: cfg.sourceRepo,
-    __natstackEffectiveVersion: cfg.effectiveVersion ?? cfg.env?.__NATSTACK_EFFECTIVE_VERSION ?? null,
-    __natstackEnv: cfg.env,
-    __natstackStateArgs: effectiveStateArgs,
-    __natstackConnectionId: connectionId,
-    __natstackClientLabel: cfg.clientLabel,
+    __vibez1ContextId: cfg.contextId,
+    __vibez1ParentId: cfg.parentId,
+    __vibez1ParentEntityId: cfg.parentEntityId,
+    __vibez1InitialTheme: cfg.theme,
+    __vibez1GatewayConfig: gatewayConfig,
+    __vibez1SourceRepo: cfg.sourceRepo,
+    __vibez1EffectiveVersion: cfg.effectiveVersion ?? cfg.env?.__VIBEZ1_EFFECTIVE_VERSION ?? null,
+    __vibez1Env: cfg.env,
+    __vibez1StateArgs: effectiveStateArgs,
+    __vibez1ConnectionId: connectionId,
+    __vibez1ClientLabel: cfg.clientLabel,
     process: { env: cfg.env },
   });
 
@@ -136,9 +136,9 @@ export const CONFIG_LOADER_JS = `(async () => {
     s.onerror = reject;
     document.head.appendChild(s);
   });
-  delete globalThis.__natstackConnectionId;
+  delete globalThis.__vibez1ConnectionId;
 
-  globalThis.__natstackContextReady = true;
+  globalThis.__vibez1ContextReady = true;
   const bundle = document.createElement("script");
   bundle.type = "module";
   bundle.src = configuredBundleSrc || "./bundle.js";

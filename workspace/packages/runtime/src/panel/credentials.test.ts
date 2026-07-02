@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcCaller } from "@vibez1/rpc";
 import type { StoredCredentialSummary } from "../shared/credentials.js";
 import { connect, initPanelCredentials } from "./credentials.js";
 

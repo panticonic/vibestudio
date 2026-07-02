@@ -1,12 +1,12 @@
 /**
- * @natstack/git - Git operations for external repositories
+ * @vibez1/git - Git operations for external repositories
  *
  * Provides git clone/pull/push operations using isomorphic-git,
  * designed to work with an injected filesystem implementation.
  *
  * Usage:
  * ```typescript
- * import { GitClient } from "@natstack/git";
+ * import { GitClient } from "@vibez1/git";
  * import { promises as fsPromises } from "fs"; // RPC-backed in panels
  *
  * // Use a host-mediated credential HTTP adapter for external remotes:

@@ -3,14 +3,14 @@ import { runPairServer } from "./lib/pair-server.mjs";
 
 try {
   runPairServer({
-    commandName: "natstack remote serve",
+    commandName: "vibez1 remote serve",
     logPrefix: "pair",
-    portEnv: ["NATSTACK_PAIR_PORT", "NATSTACK_MOBILE_PORT"],
-    devEnv: "NATSTACK_MOBILE_DEV",
-    usage: ["natstack remote serve", "natstack remote serve --dev", "natstack remote serve --port 3030"],
+    portEnv: ["VIBEZ1_PAIR_PORT", "VIBEZ1_MOBILE_PORT"],
+    devEnv: "VIBEZ1_MOBILE_DEV",
+    usage: ["vibez1 remote serve", "vibez1 remote serve --dev", "vibez1 remote serve --port 3030"],
     startupHint:
-      "[pair] Scan with the NatStack mobile app or paste the pairing code in Connection Settings.",
-    bannerTitle: "Pair a NatStack device",
+      "[pair] Scan with the Vibez1 mobile app or paste the pairing code in Connection Settings.",
+    bannerTitle: "Pair a Vibez1 device",
     deepLinkLabel: "Pair URL",
     instructions: "Scan with the mobile app, or paste the code in Connection Settings.",
   });

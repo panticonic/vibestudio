@@ -8,11 +8,12 @@ import type { ReactNode } from "react";
 import "@radix-ui/themes/styles.css";
 import "@workspace/ui/tokens.css";
 import { Theme, Flex, Box, Heading, Text, Card } from "@radix-ui/themes";
+import { Vibez1Logo } from "@workspace/ui";
 import { useAppTheme } from "@workspace/ui/panel";
 import { useIsMobile, usePanelTheme } from "@workspace/react";
 
 /** Brand gradient used for the app mark and page icons. Theme-aware via Radix color scales. */
-export const BRAND_GRADIENT = "linear-gradient(135deg, var(--iris-9) 0%, var(--violet-9) 100%)";
+export const BRAND_GRADIENT = "var(--brand-gradient)";
 
 /** Theme wrapper shared by all about panels. */
 export function AboutThemeRoot({ children }: { children: ReactNode }) {
@@ -25,29 +26,9 @@ export function AboutThemeRoot({ children }: { children: ReactNode }) {
   );
 }
 
-/** The NatStack "N" mark on the brand gradient. */
+/** Theme-aware Vibez1 logo mark. */
 export function BrandMark({ size = 48 }: { size?: number }) {
-  return (
-    <Flex
-      align="center"
-      justify="center"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 4.5,
-        background: BRAND_GRADIENT,
-        boxShadow: "0 4px 16px color-mix(in srgb, var(--iris-9) 35%, transparent)",
-        flexShrink: 0,
-      }}
-    >
-      <Text
-        weight="bold"
-        style={{ color: "white", fontSize: size * 0.5, lineHeight: 1, userSelect: "none" }}
-      >
-        N
-      </Text>
-    </Flex>
-  );
+  return <Vibez1Logo size={size} variant="tile" />;
 }
 
 /** Small gradient bubble wrapping a page icon. */
@@ -61,6 +42,7 @@ export function PageIcon({ children }: { children: ReactNode }) {
         height: 40,
         borderRadius: 10,
         background: BRAND_GRADIENT,
+        boxShadow: "0 3px 12px var(--brand-glow)",
         color: "white",
         flexShrink: 0,
       }}

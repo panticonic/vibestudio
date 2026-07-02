@@ -38,11 +38,11 @@ import type {
   PendingUnitBatchApproval,
   PendingUserlandApproval,
   UserlandApprovalOption,
-} from "@natstack/shared/approvals";
+} from "@vibez1/shared/approvals";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
-} from "@natstack/shared/approvalMarkdown";
+} from "@vibez1/shared/approvalMarkdown";
 import {
   type ApprovalAttribution,
   formatAccount,
@@ -57,7 +57,7 @@ import {
   getUnitBatchActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
-} from "@natstack/shared/approvalCopy";
+} from "@vibez1/shared/approvalCopy";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 
@@ -877,8 +877,8 @@ function SecretConfigFields({
     <View style={styles.fields}>
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
         {approval.kind === "secret-input"
-          ? "Secrets are entered in NatStack's shell UI, not exposed to panels or workers, and used once without being stored."
-          : "Secrets are entered in NatStack's shell UI, not exposed to panels or workers, and stored encrypted after submission."}
+          ? "Secrets are entered in Vibez1's shell UI, not exposed to panels or workers, and used once without being stored."
+          : "Secrets are entered in Vibez1's shell UI, not exposed to panels or workers, and stored encrypted after submission."}
       </Text>
       {approval.fields.map((field) => (
         <View key={field.name} style={styles.fieldBlock}>

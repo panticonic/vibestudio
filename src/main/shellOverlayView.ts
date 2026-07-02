@@ -1,5 +1,5 @@
 import { WebContentsView, ipcMain, type BaseWindow } from "electron";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 
 const log = createDevLogger("ShellOverlayView");
 const OVERLAY_CSP_META = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'none'">`;
@@ -111,8 +111,8 @@ export class ShellOverlayView {
     private readonly preloadPath: string,
     private readonly onOverlayEvent: (event: ShellOverlayEvent) => void
   ) {
-    ipcMain.on("natstack:shell-overlay:event", this.handleOverlayEvent);
-    ipcMain.on("natstack:shell-overlay:hide", this.handleHide);
+    ipcMain.on("vibez1:shell-overlay:event", this.handleOverlayEvent);
+    ipcMain.on("vibez1:shell-overlay:hide", this.handleHide);
   }
 
   setWindow(window: BaseWindow): void {
@@ -211,8 +211,8 @@ export class ShellOverlayView {
   }
 
   destroy(): void {
-    ipcMain.removeListener("natstack:shell-overlay:event", this.handleOverlayEvent);
-    ipcMain.removeListener("natstack:shell-overlay:hide", this.handleHide);
+    ipcMain.removeListener("vibez1:shell-overlay:event", this.handleOverlayEvent);
+    ipcMain.removeListener("vibez1:shell-overlay:hide", this.handleHide);
     if (this.view && !this.view.webContents.isDestroyed()) {
       if (this.window) this.window.contentView.removeChildView(this.view);
       this.view.webContents.close();
@@ -229,7 +229,7 @@ export class ShellOverlayView {
   /** Push the latest row payload to the (loaded) overlay document over IPC. */
   private flushPayload(view: WebContentsView): void {
     if (!this.pendingPayload || view.webContents.isDestroyed()) return;
-    view.webContents.send("natstack:shell-overlay:render", this.pendingPayload);
+    view.webContents.send("vibez1:shell-overlay:render", this.pendingPayload);
     this.pendingPayload = null;
   }
 

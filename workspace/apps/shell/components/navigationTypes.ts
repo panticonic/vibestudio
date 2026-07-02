@@ -1,4 +1,4 @@
-import type { PanelSummary, PanelAncestor, DescendantSiblingGroup } from "@natstack/shared/types";
+import type { PanelSummary, PanelAncestor, DescendantSiblingGroup } from "@vibez1/shared/types";
 
 export type NavigationMode = "stack" | "tree";
 

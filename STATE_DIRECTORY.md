@@ -1,16 +1,16 @@
-# NatStack State Directory
+# Vibez1 State Directory
 
 ## Location
 
-NatStack uses platform-specific directories for storing application state, following OS conventions:
+Vibez1 uses platform-specific directories for storing application state, following OS conventions:
 
 | Platform | Location |
 |----------|----------|
-| **Linux** | `~/.config/natstack/` |
-| **macOS** | `~/Library/Application Support/natstack/` |
-| **Windows** | `%APPDATA%\natstack\` |
+| **Linux** | `~/.config/vibez1/` |
+| **macOS** | `~/Library/Application Support/vibez1/` |
+| **Windows** | `%APPDATA%\vibez1\` |
 
-These paths are determined by `getUserDataPath()` from `@natstack/env-paths`.
+These paths are determined by `getUserDataPath()` from `@vibez1/env-paths`.
 
 ## Contents
 
@@ -72,18 +72,18 @@ Per-context filesystem scopes at `workspaces/{name}/state/.contexts/{contextId}/
 
 ### `.databases/workerd-do/`
 
-The only SQLite files NatStack owns are workerd Durable Object databases:
+The only SQLite files Vibez1 owns are workerd Durable Object databases:
 
 ```
 .databases/
   workerd-do/
-    natstack_internal:ScopeStoreDO/
+    vibez1_internal:ScopeStoreDO/
       <object-hash>.sqlite
-    natstack_internal:WebhookStoreDO/
+    vibez1_internal:WebhookStoreDO/
       <object-hash>.sqlite
-    natstack_internal:PanelStoreDO/
+    vibez1_internal:PanelStoreDO/
       <object-hash>.sqlite
-    natstack_internal:BrowserDataDO/
+    vibez1_internal:BrowserDataDO/
       <object-hash>.sqlite
     <workspace-source>:<WorkspaceDOClass>/
       <object-hash>.sqlite
@@ -97,7 +97,7 @@ The internal stores are:
 - `BrowserDataDO` (`objectKey: "global"`) for imported browser data.
 
 Legacy host-owned SQLite files are removed on server startup. There are no
-other NatStack-managed SQLite files outside `workerd-do/`.
+other Vibez1-managed SQLite files outside `workerd-do/`.
 
 ### `ev-map.json`
 
@@ -109,10 +109,10 @@ Per-unit commit SHAs used for cold-start diffing. Compared against current refs 
 
 ## Fallback Behavior
 
-If the platform-specific directory cannot be accessed (e.g., permissions issues), NatStack falls back to:
+If the platform-specific directory cannot be accessed (e.g., permissions issues), Vibez1 falls back to:
 
 ```
-<os-config-dir>/natstack/  (or ultimately a temp directory)
+<os-config-dir>/vibez1/  (or ultimately a temp directory)
 ```
 
 This ensures the app continues to work even in restricted environments.

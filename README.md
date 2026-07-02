@@ -1,10 +1,10 @@
-# NatStack
+# Vibez1
 
 A tree-based browser with hierarchical panel navigation built on Electron.
 
 ## Mission: The Fluid Application Runtime
 
-NatStack is designed to be a lightweight, agentic code execution environment that blurs the line between "using" software and "building" it.
+Vibez1 is designed to be a lightweight, agentic code execution environment that blurs the line between "using" software and "building" it.
 
 ### 1. Generative UI
 
@@ -12,7 +12,7 @@ We aim to enable **Generative UI**, where agents can modify, customize, and crea
 
 ### 2. Ongoing Agentic Presence
 
-In traditional development, the "builder" (developer or agent) leaves once the app is shipped. In NatStack, the agent remains a first-class citizen of the runtime. The "code part" becomes fluid, allowing the AI to continuously maintain, extend, and recompose the application while it is being used.
+In traditional development, the "builder" (developer or agent) leaves once the app is shipped. In Vibez1, the agent remains a first-class citizen of the runtime. The "code part" becomes fluid, allowing the AI to continuously maintain, extend, and recompose the application while it is being used.
 
 ### 3. Compositionality for AI
 
@@ -28,17 +28,17 @@ We believe that **file systems, files, and code execution** are the most robust 
 
 ### Git for State & Concurrency
 
-**Git** offers a powerful, distributed metaphor for managing state, history, and concurrency. NatStack uses git not just for version control, but as the fundamental synchronization mechanism for application state.
+**Git** offers a powerful, distributed metaphor for managing state, history, and concurrency. Vibez1 uses git not just for version control, but as the fundamental synchronization mechanism for application state.
 
 ### Lightweight Sandboxing
 
-Full containerization (like Docker or heavy VMs) is often overkill for UI-focused agentic tasks. NatStack hits the "sweet spot" by using **sandboxed browser processes** backed by **server-side per-context folders**. This provides security and isolation without the overhead of a full OS.
+Full containerization (like Docker or heavy VMs) is often overkill for UI-focused agentic tasks. Vibez1 hits the "sweet spot" by using **sandboxed browser processes** backed by **server-side per-context folders**. This provides security and isolation without the overhead of a full OS.
 
 ---
 
 ## High-Level Architecture
 
-NatStack is built as a hierarchical, tree-based browser where every "tab" is a self-contained application environment.
+Vibez1 is built as a hierarchical, tree-based browser where every "tab" is a self-contained application environment.
 
 ### 1. The Panel System (Electron + Webviews)
 
@@ -80,6 +80,11 @@ NatStack is built as a hierarchical, tree-based browser where every "tab" is a s
 - Node.js 20+
 - pnpm
 
+## Brand Assets
+
+Logo sources, generated icons, native launch assets, and regeneration commands
+are documented in [docs/brand.md](docs/brand.md).
+
 ## Installation
 
 Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
@@ -89,9 +94,9 @@ Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
 Installs the GUI and the bundled server:
 
 ```bash
-npm install -g @natstack/app
-natstack             # launch the desktop app
-natstack --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
+npm install -g @vibez1/app
+vibez1             # launch the desktop app
+vibez1 --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
 ```
 
 On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
@@ -100,11 +105,11 @@ DMG/AppImage/deb installers are published to GitHub Releases as they become avai
 ### Headless server (remote/home server; clients connect to it)
 
 ```bash
-npm install -g @natstack/server
-export NATSTACK_WEBRTC_SIGNAL_URL=wss://natstack-signaling.<account>.workers.dev
-natstack remote serve --port 3030
+npm install -g @vibez1/server
+export VIBEZ1_WEBRTC_SIGNAL_URL=wss://vibez1-signaling.<account>.workers.dev
+vibez1 remote serve --port 3030
 # quick one-off (no global install):
-npx -p @natstack/server natstack remote serve --signal-url wss://natstack-signaling.<account>.workers.dev --port 3030
+npx -p @vibez1/server vibez1 remote serve --signal-url wss://vibez1-signaling.<account>.workers.dev --port 3030
 ```
 
 The server installs with no compiler (workerd/esbuild ship prebuilt binaries) and
@@ -139,7 +144,7 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 
 ## How It Works
 
-Each panel in Natstack is a browser session that can have child panels. This creates a tree structure where you can:
+Each panel in vibez1 is a browser session that can have child panels. This creates a tree structure where you can:
 
 1. **Navigate down**: Click "Add Child Browser" to create a nested browser panel
 2. **Navigate up**: Use ancestor breadcrumbs to go back to parent panels
@@ -164,7 +169,7 @@ pnpm dev:webrtc
 ```
 
 `pnpm dev:webrtc` starts local signaling, starts a local workspace server as a
-WebRTC answerer, and launches Electron with a fresh `natstack://connect` link.
+WebRTC answerer, and launches Electron with a fresh `vibez1://connect` link.
 Use `pnpm dev:webrtc -- --ephemeral` for a disposable workspace, or
 `pnpm dev:webrtc -- --workspace <name>` to force a specific workspace.
 
@@ -174,19 +179,19 @@ You can enable lightweight memory logging to identify which panel/worker is grow
 
 ```bash
 # Log a snapshot every 60s
-NATSTACK_MEMORY_LOG_MS=60000 pnpm dev
+VIBEZ1_MEMORY_LOG_MS=60000 pnpm dev
 
 # Log only if any view exceeds the threshold (MB)
-NATSTACK_MEMORY_LOG_THRESHOLD_MB=1500 pnpm dev
+VIBEZ1_MEMORY_LOG_THRESHOLD_MB=1500 pnpm dev
 
 # Log a single snapshot at startup
-NATSTACK_MEMORY_LOG_ONCE=1 pnpm dev
+VIBEZ1_MEMORY_LOG_ONCE=1 pnpm dev
 ```
 
 To temporarily increase the renderer V8 heap limit in dev:
 
 ```bash
-NATSTACK_RENDERER_MAX_OLD_SPACE_MB=4096 pnpm dev
+VIBEZ1_RENDERER_MAX_OLD_SPACE_MB=4096 pnpm dev
 ```
 
 ## Building for Production
@@ -200,7 +205,7 @@ pnpm start
 
 ## Headless Server
 
-NatStack can run without Electron as a standalone Node.js server. All core
+Vibez1 can run without Electron as a standalone Node.js server. All core
 services — build, git, channels, AI, agents, tokens — are available over
 WebSocket RPC. Persistent storage lives inside workerd Durable Objects (each
 DO owns its own SQLite-backed `this.sql`); the server has no native module
@@ -210,7 +215,7 @@ HTTP.
 ### Prerequisites
 
 ```bash
-npm install -g @natstack/server
+npm install -g @vibez1/server
 ```
 
 For development from a source checkout instead: `pnpm install && pnpm build`.
@@ -218,34 +223,34 @@ For development from a source checkout instead: `pnpm install && pnpm build`.
 ### Running
 
 ```bash
-export NATSTACK_WEBRTC_SIGNAL_URL=wss://natstack-signaling.<account>.workers.dev
-natstack remote serve --port 3030
+export VIBEZ1_WEBRTC_SIGNAL_URL=wss://vibez1-signaling.<account>.workers.dev
+vibez1 remote serve --port 3030
 # from a source checkout:
-pnpm cli remote serve --signal-url wss://natstack-signaling.<account>.workers.dev --port 3030
+pnpm cli remote serve --signal-url wss://vibez1-signaling.<account>.workers.dev --port 3030
 ```
 
 The installed launcher pins the app root to the package, so it works from any
 directory. On startup the pairing server prints a QR/deep-link:
 
 ```
-Pair a NatStack device
+Pair a Vibez1 device
   Room:        ...
   Fingerprint: ...
-  Pair URL:    natstack://connect?room=...&fp=...&code=...&sig=...
+  Pair URL:    vibez1://connect?room=...&fp=...&code=...&sig=...
 ```
 
 ### CLI Flags
 
-| Flag                  | Description                                             |
-| --------------------- | ------------------------------------------------------- |
-| `--app-root=PATH`     | Application root (defaults to cwd)                      |
-| `--gateway-port=PORT` | Port for the hub HTTP/WS ingress (default: random)      |
-| `--log-level=LEVEL`   | Log level                                               |
+| Flag                  | Description                                        |
+| --------------------- | -------------------------------------------------- |
+| `--app-root=PATH`     | Application root (defaults to cwd)                 |
+| `--gateway-port=PORT` | Port for the hub HTTP/WS ingress (default: random) |
+| `--log-level=LEVEL`   | Log level                                          |
 
 The gateway binds loopback only; remote clients reach it over WebRTC (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
 decommissioned with remote-mode public ingress. OAuth/webhook routes resolve
-through the callback relay (`NATSTACK_RELAY_OAUTH_BASE_URL`).
+through the callback relay (`VIBEZ1_RELAY_OAUTH_BASE_URL`).
 
 The public server is always a hub. Clients pair with the hub, choose a
 workspace, and then connect to `/_workspace/<name>`. Workspace flags are
@@ -258,12 +263,12 @@ Pairing is over WebRTC (signaling room + DTLS fingerprint) — no Tailscale/VPN 
 HTTPS serve setup:
 
 ```bash
-natstack mobile install --launch
+vibez1 mobile install --launch
 pnpm build
-natstack mobile pair --port 3030
+vibez1 mobile pair --port 3030
 ```
 
-Scan the printed `natstack://connect?room=…&fp=…&code=…&sig=…` QR. See
+Scan the printed `vibez1://connect?room=…&fp=…&code=…&sig=…` QR. See
 [docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the WebRTC pairing +
 local setup. Use the desktop app's bootstrap screen to pair a laptop without
 copying an admin token. After one desktop client is connected, use **Remote

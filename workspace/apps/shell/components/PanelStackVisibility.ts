@@ -1,5 +1,5 @@
-import type { PanelArtifacts, PanelRuntimeStatus } from "@natstack/shared/types";
-import type { PanelRuntimeLease } from "@natstack/shared/panel/panelLease";
+import type { PanelArtifacts, PanelRuntimeStatus } from "@vibez1/shared/types";
+import type { PanelRuntimeLease } from "@vibez1/shared/panel/panelLease";
 
 export function shouldShowPanelView(artifacts: PanelArtifacts | undefined): boolean {
   return Boolean(

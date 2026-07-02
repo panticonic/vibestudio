@@ -1,9 +1,9 @@
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { APPROVAL_CATEGORY_DECIDE } from "@natstack/shared/approvalContract";
+import { APPROVAL_CATEGORY_DECIDE } from "@vibez1/shared/approvalContract";
 import { createPushMetrics } from "./pushMetrics.js";
 import { __private__, createPushService } from "./pushService.js";
 
@@ -14,7 +14,7 @@ const DECISION_ACTIONS_JSON = JSON.stringify([
 ]);
 
 function tempRegistrationsPath(): string {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "natstack-push-")), "registrations.json");
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-push-")), "registrations.json");
 }
 
 afterEach(() => {

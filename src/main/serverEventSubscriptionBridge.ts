@@ -1,4 +1,4 @@
-import type { EventName } from "@natstack/shared/events";
+import type { EventName } from "@vibez1/shared/events";
 import type { ServerClient } from "./serverClient.js";
 
 type ServerEventClient = Pick<ServerClient, "call">;

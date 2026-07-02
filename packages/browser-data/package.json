@@ -1,7 +1,7 @@
 {
-  "name": "@natstack/browser-data",
+  "name": "@vibez1/browser-data",
   "version": "0.1.0",
-  "description": "Shared browser data contracts, storage schema, and shell RPC client for NatStack",
+  "description": "Shared browser data contracts, storage schema, and shell RPC client for Vibez1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +25,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*",
+    "@vibez1/shared": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {

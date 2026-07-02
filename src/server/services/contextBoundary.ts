@@ -1,5 +1,5 @@
-import type { PendingCapabilityApproval } from "@natstack/shared/approvals";
-import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import type { PendingCapabilityApproval } from "@vibez1/shared/approvals";
+import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import {
   requestCapabilityPermission,
   type CapabilityPermissionDeps,

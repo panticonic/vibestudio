@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { canonicalKey } from "@natstack/shared/canonicalKey";
-import type { ApprovalResourceScope } from "@natstack/shared/approvals";
+import { canonicalKey } from "@vibez1/shared/canonicalKey";
+import type { ApprovalResourceScope } from "@vibez1/shared/approvals";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 
 export type CapabilityGrantDecision = "session" | "version" | "repo";
@@ -142,7 +142,7 @@ export function capabilityGrantKey(
 }
 
 export function versionGrantRequiresCaller(identity: CapabilityGrantIdentity): boolean {
-  return identity.effectiveVersion === "internal" || identity.repoPath === "natstack/internal";
+  return identity.effectiveVersion === "internal" || identity.repoPath === "vibez1/internal";
 }
 
 function grantMatches(

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcCaller } from "@vibez1/rpc";
 import { createExtensionsClient } from "./extensions.js";
 
 describe("createExtensionsClient", () => {

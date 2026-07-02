@@ -1,7 +1,7 @@
 {
   "name": "@workspace/pubsub",
   "version": "0.1.0",
-  "description": "WebSocket pub/sub client for NatStack",
+  "description": "WebSocket pub/sub client for Vibez1",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@workspace/agentic-protocol": "workspace:*",
-    "@natstack/types": "workspace:*",
+    "@vibez1/types": "workspace:*",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.24.5"
   },

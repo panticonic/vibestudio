@@ -26,7 +26,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   let trigger: StateTransitionTrigger | null = null;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-grouppush-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-grouppush-"));
     workspaceRoot = path.join(root, "workspace");
     for (const name of ["a", "b"]) {
       const dir = path.join(workspaceRoot, "packages", name);

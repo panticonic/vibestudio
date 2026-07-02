@@ -4,7 +4,7 @@ export type ThemeAppearance = "light" | "dark";
 
 /** App-wide theme identity (accent/radius/scaling/surface), pushed live from
  *  the shell over the runtime bridge. Structurally identical to
- *  `@natstack/shared`'s ThemeConfig. */
+ *  `@vibez1/shared`'s ThemeConfig. */
 export interface ThemeConfig {
   accentColor: string;
   grayColor: string;
@@ -15,7 +15,7 @@ export interface ThemeConfig {
 
 /** Default identity until the shell pushes the user's choice. */
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
-  accentColor: "iris",
+  accentColor: "amber",
   grayColor: "slate",
   radius: "medium",
   scaling: "100%",
@@ -70,9 +70,19 @@ export interface OpenOptions {
  */
 export interface FileHandle {
   fd: number;
-  read(buffer: Uint8Array, offset: number, length: number, position: number | null): Promise<{ bytesRead: number; buffer: Uint8Array }>;
+  read(
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number | null
+  ): Promise<{ bytesRead: number; buffer: Uint8Array }>;
   // A string is encoded (utf-8) and the 2nd arg is the file position (Node's `write(string[, position[, encoding]])`).
-  write(buffer: RuntimeBinaryData | string, offset?: number, length?: number, position?: number | null): Promise<{ bytesWritten: number; buffer: RuntimeBinaryData | string }>;
+  write(
+    buffer: RuntimeBinaryData | string,
+    offset?: number,
+    length?: number,
+    position?: number | null
+  ): Promise<{ bytesWritten: number; buffer: RuntimeBinaryData | string }>;
   close(): Promise<void>;
   stat(): Promise<FileStats>;
 }
@@ -97,7 +107,7 @@ export interface ReaddirOptions {
 
 /**
  * Filesystem interface for panels and workers.
- * Compatible with Node's fs/promises and @natstack/git's FsPromisesLike.
+ * Compatible with Node's fs/promises and @vibez1/git's FsPromisesLike.
  */
 export interface RuntimeFs {
   /**
@@ -117,7 +127,7 @@ export interface RuntimeFs {
    * itself is not created — callers use the returned path for atomic writes
    * (write to tmp → rename into place). Analogous to the pattern used around
    * `os.tmpdir()` in Node tools.
-  */
+   */
   mktemp(prefix?: string): Promise<string>;
   readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
   writeFile(path: string, data: string | RuntimeBinaryData): Promise<void>;

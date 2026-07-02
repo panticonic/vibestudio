@@ -7,7 +7,7 @@
  * stays scoped to that caller's identity.
  */
 
-export const MODEL_SETTINGS_SERVICE_PROTOCOL = "natstack.models.v1";
+export const MODEL_SETTINGS_SERVICE_PROTOCOL = "vibez1.models.v1";
 /** Workspace config field holding the full default agent config (model + behavior). */
 export const WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD = "defaultAgentConfig";
 export const DEFAULT_AGENT_MODEL_REF = "openai-codex:gpt-5.5";

@@ -1,7 +1,7 @@
-import type { FsService } from "@natstack/shared/fsService";
-import type { TokenManager } from "@natstack/shared/tokenManager";
-import type { ConnectionGrantService } from "@natstack/shared/connectionGrants";
-import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import type { FsService } from "@vibez1/shared/fsService";
+import type { TokenManager } from "@vibez1/shared/tokenManager";
+import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
+import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WorkerdManager } from "./workerdManager.js";
 import type { EgressProxy } from "./services/egressProxy.js";

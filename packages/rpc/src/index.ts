@@ -1,5 +1,5 @@
 /**
- * `@natstack/rpc` — stateless point-to-point RPC with fetch-shaped
+ * `@vibez1/rpc` — stateless point-to-point RPC with fetch-shaped
  * streaming. Stateful userland services can layer their own protocols
  * on top of the same runtime service-resolution path.
  */

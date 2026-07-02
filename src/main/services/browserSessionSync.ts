@@ -1,9 +1,9 @@
 import { session } from "electron";
-import { createDevLogger } from "@natstack/dev-log";
-import type { BrowserDataClient, StoredCookie } from "@natstack/browser-data";
-import type { ManagedService } from "@natstack/shared/managedService";
-import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
-import type { EventService, Subscriber } from "@natstack/shared/eventsService";
+import { createDevLogger } from "@vibez1/dev-log";
+import type { BrowserDataClient, StoredCookie } from "@vibez1/browser-data";
+import type { ManagedService } from "@vibez1/shared/managedService";
+import { BROWSER_SESSION_PARTITION } from "@vibez1/shared/panelInterfaces";
+import type { EventService, Subscriber } from "@vibez1/shared/eventsService";
 import type { ServerClient } from "../serverClient.js";
 
 const log = createDevLogger("BrowserSessionSync");

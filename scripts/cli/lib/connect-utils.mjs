@@ -30,13 +30,13 @@ export function createConnectDeepLink(pairing) {
     `ice=${encodeURIComponent(pairing.ice ?? "all")}`,
   ];
   if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
-  return `natstack://connect?${params.join("&")}`;
+  return `vibez1://connect?${params.join("&")}`;
 }
 
 export function parseConnectLink(rawUrl) {
   if (typeof rawUrl !== "string") return { kind: "error", reason: "Deep link must be a string" };
-  if (!rawUrl.startsWith("natstack://connect")) {
-    return { kind: "error", reason: "Not a natstack://connect link" };
+  if (!rawUrl.startsWith("vibez1://connect")) {
+    return { kind: "error", reason: "Not a vibez1://connect link" };
   }
   const queryStart = rawUrl.indexOf("?");
   if (queryStart < 0) {
@@ -183,7 +183,7 @@ export function printConnectBanner({
   pairing,
   qrPairingCode = null,
   deepLinkLabel = "Deep link",
-  instructions = "Open the QR code with the Android camera. NatStack will confirm and save the connection.",
+  instructions = "Open the QR code with the Android camera. Vibez1 will confirm and save the connection.",
 }) {
   const deepLink = createConnectDeepLink(pairing);
   const effectiveQrCode = qrPairingCode || pairing.code;

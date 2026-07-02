@@ -14,7 +14,7 @@ import { useState, useCallback, useMemo } from "react";
 import { Box, Button, Flex, Heading } from "@radix-ui/themes";
 import { InfoCircledIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { FormRenderer, type CustomFieldRendererProps } from "@workspace/react";
-import { FREE_TEXT_CHOICE_VALUE, type FieldDefinition, type FieldValue } from "@natstack/types";
+import { FREE_TEXT_CHOICE_VALUE, type FieldDefinition, type FieldValue } from "@vibez1/types";
 import type { FeedbackCallbacks } from "../types";
 import { ToolPreviewField } from "./ToolPreviewField";
 import { ApprovalHeaderField } from "./ApprovalHeaderField";

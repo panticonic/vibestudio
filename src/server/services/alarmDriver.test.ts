@@ -156,7 +156,7 @@ describe("AlarmDriver re-arm on dispatch failure", () => {
     vi.setSystemTime(0);
     const { driver, reArmed } = makeFailingHarness([
       {
-        source: "natstack/internal",
+        source: "vibez1/internal",
         className: "EvalDO",
         objectKey: "k",
         wakeAt: 1_000,

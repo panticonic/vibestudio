@@ -1,6 +1,6 @@
 # Approvals
 
-NatStack approval prompts use one server-owned queue and two shell surfaces:
+Vibez1 approval prompts use one server-owned queue and two shell surfaces:
 Electron and mobile. The queue is the source of truth; notifications are a
 delivery surface for pending queue entries.
 
@@ -56,15 +56,15 @@ Electron approval bar is present.
 2. Enable Firebase Cloud Messaging for the project.
 3. Generate a Firebase service account JSON file for the server.
 4. Set one of these on the server:
-   - `NATSTACK_FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/firebase-service-account.json`
-   - `NATSTACK_FIREBASE_SERVICE_ACCOUNT_JSON='<json>'`
+   - `VIBEZ1_FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/firebase-service-account.json`
+   - `VIBEZ1_FIREBASE_SERVICE_ACCOUNT_JSON='<json>'`
    - `GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json`
 5. For Android, copy `apps/mobile/android/app/google-services.template.json` to
    `apps/mobile/android/app/google-services.json` and replace it with the real
    project config. The Gradle plugin is applied only when this file exists.
 6. For iOS, add an APNs auth key or certificate in Firebase, then copy
-   `apps/mobile/ios/NatStack/GoogleService-Info.template.plist` to
-   `apps/mobile/ios/NatStack/GoogleService-Info.plist` and replace it with the
+   `apps/mobile/ios/Vibez1/GoogleService-Info.template.plist` to
+   `apps/mobile/ios/Vibez1/GoogleService-Info.plist` and replace it with the
    real project config.
 7. Build and run the mobile app once so it can register its FCM token through
    the `push.register` RPC.
@@ -144,7 +144,7 @@ entering or displaying secrets. Device lock, OS notification permissions, the
 existing shell authentication flow, and server-side idempotency form the
 security boundary.
 
-Biometric locking was removed as an explicit product decision. NatStack is not
+Biometric locking was removed as an explicit product decision. Vibez1 is not
 a banking app; the device lock screen plus the existing authenticated shell
 connection are considered sufficient. Re-adding biometric gating would require
 restoring the deleted biometric files and reintroducing the app-level gate in
@@ -154,7 +154,7 @@ restoring the deleted biometric files and reintroducing the app-level gate in
 
 - User force-quit suppresses background FCM handling on iOS and most Android
   builds until the app is opened again.
-- Aggressive Android battery savers can delay or drop FCM. Exempt NatStack from
+- Aggressive Android battery savers can delay or drop FCM. Exempt Vibez1 from
   battery optimization for reliable background approval delivery.
 - Mobile must foreground at least once for queued background actions to drain to
   the server. Until then, actioned notifications show a syncing state.

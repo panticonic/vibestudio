@@ -10,7 +10,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import type { PackageManifest } from "@natstack/shared/types";
+import type { PackageManifest } from "@vibez1/shared/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,7 +41,7 @@ export interface GraphNode {
    * for each declared export, not just the root entry.
    */
   exports?: string[];
-  /** natstack manifest from package.json */
+  /** vibez1 manifest from package.json */
   manifest: PackageManifest;
 }
 
@@ -186,7 +186,7 @@ interface PackageJson {
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
-  natstack?: PackageManifest;
+  vibez1?: PackageManifest;
   overrides?: unknown;
   pnpm?: { overrides?: unknown };
   exports?: Record<string, unknown>;
@@ -252,7 +252,7 @@ function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind
       internalDeps,
       ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
       ...(pkg.exports ? { exports: declaredExportSubpaths(pkg.exports) } : {}),
-      manifest: pkg.natstack ?? {},
+      manifest: pkg.vibez1 ?? {},
     });
   }
 

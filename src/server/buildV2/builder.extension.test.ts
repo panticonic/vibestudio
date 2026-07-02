@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@natstack/env-paths";
+import { setUserDataPath } from "@vibez1/env-paths";
 
 import { buildUnit } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
@@ -24,7 +24,7 @@ describe("buildUnit extension builds", () => {
   let workspaceRoot: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extension-build-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extension-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
   });
@@ -43,7 +43,7 @@ describe("buildUnit extension builds", () => {
         version: "0.1.0",
         type: "module",
         private: true,
-        natstack: {
+        vibez1: {
           displayName: "Hello Extension",
           entry: "index.ts",
           sourcemap: true,
@@ -66,7 +66,7 @@ describe("buildUnit extension builds", () => {
     git(extensionDir, ["add", "."]);
     git(extensionDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",
@@ -106,7 +106,7 @@ describe("buildUnit extension builds", () => {
         version: "0.1.0",
         type: "module",
         private: true,
-        natstack: {
+        vibez1: {
           displayName: "CJS Extension",
           entry: "index.ts",
           sourcemap: true,
@@ -138,7 +138,7 @@ describe("buildUnit extension builds", () => {
     git(extensionDir, ["add", "."]);
     git(extensionDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",

@@ -7,7 +7,7 @@ import { clearTypeCheckCache } from "./typecheckService.js";
 import { activate } from "./index.js";
 
 function tempPanel(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-extension-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-extension-"));
   fs.writeFileSync(
     path.join(dir, "package.json"),
     JSON.stringify({ name: "panel-under-test", version: "0.0.0" }),
@@ -22,7 +22,7 @@ async function api(
     contextId?: string;
     chainContextId?: string;
   },
-  contextsPath = path.join(os.tmpdir(), "natstack-contexts"),
+  contextsPath = path.join(os.tmpdir(), "vibez1-contexts"),
   workspaceRoot = process.cwd(),
 ) {
   const callerInfo = typeof caller === "string" ? { callerId: caller } : caller;
@@ -82,7 +82,7 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("resolves checkPanel against an explicit context", async () => {
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-contexts-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
     const panelPath = path.join(contextsPath, "ctx-1", "panels", "my-app");
     fs.mkdirSync(panelPath, { recursive: true });
     fs.writeFileSync(
@@ -102,7 +102,7 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("infers checkPanel context from the current extension invocation", async () => {
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-contexts-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
     const panelPath = path.join(contextsPath, "ctx-auto", "panels", "my-app");
     fs.mkdirSync(panelPath, { recursive: true });
     fs.writeFileSync(
@@ -122,8 +122,8 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("resolves workspace packages from the context tree", async () => {
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-source-"));
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-contexts-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-source-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
     const contextRoot = path.join(contextsPath, "ctx-workspace");
     const sourcePackage = path.join(workspaceRoot, "packages", "shared");
     const contextPackage = path.join(contextRoot, "packages", "shared");
@@ -197,8 +197,8 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("resolves workspace packages from source/state layout without a workspace manifest", async () => {
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-source-"));
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-contexts-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-source-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
     const contextRoot = path.join(contextsPath, "ctx-source-layout");
     const sourceRuntime = path.join(workspaceRoot, "packages", "runtime");
     const contextRuntime = path.join(contextRoot, "packages", "runtime");
@@ -287,7 +287,7 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("resolves relative source panel paths without an invocation context", async () => {
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-typecheck-source-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-source-"));
     const runtimePackage = path.join(workspaceRoot, "packages", "runtime");
     const panelPath = path.join(workspaceRoot, "panels", "my-app");
 

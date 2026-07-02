@@ -1,5 +1,5 @@
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { viewMethods } from "@natstack/shared/serviceSchemas/view";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { viewMethods } from "@vibez1/shared/serviceSchemas/view";
 import type { ViewManager } from "../viewManager.js";
 import { assertHttpUrl } from "../utils.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./appCapabilities.js";

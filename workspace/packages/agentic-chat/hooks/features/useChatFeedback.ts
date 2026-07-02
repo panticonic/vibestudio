@@ -13,8 +13,8 @@ import type { SandboxOptions } from "@workspace/eval";
 import type { FeedbackComponentProps } from "@workspace/tool-ui";
 import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
 import { type ChatSandboxValue } from "@workspace/agentic-core";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { fsMethods } from "@vibez1/shared/serviceSchemas/fs";
 interface UseChatFeedbackOptions {
     chat: ChatSandboxValue;
     loadImport?: SandboxOptions["loadImport"];

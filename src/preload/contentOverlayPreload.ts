@@ -16,31 +16,31 @@ const renderHandlers = new Set<(message: unknown) => void>();
 // replay it on subscribe so the surface never misses its initial props.
 let lastMessage: unknown = null;
 
-ipcRenderer.on("natstack:content-overlay:render", (_event: IpcRendererEvent, message: unknown) => {
+ipcRenderer.on("vibez1:content-overlay:render", (_event: IpcRendererEvent, message: unknown) => {
   lastMessage = message;
   for (const handler of renderHandlers) handler(message);
 });
 
 // Clear (the overlay was hidden): drop the buffer and unmount any live surface
 // so a reused overlay never flashes stale content on its next show.
-ipcRenderer.on("natstack:content-overlay:clear", () => {
+ipcRenderer.on("vibez1:content-overlay:clear", () => {
   lastMessage = null;
   for (const handler of renderHandlers) handler(null);
 });
 
-contextBridge.exposeInMainWorld("__natstackContentOverlay", {
+contextBridge.exposeInMainWorld("__vibez1ContentOverlay", {
   onRender(handler: (message: unknown) => void) {
     renderHandlers.add(handler);
     if (lastMessage !== null) handler(lastMessage);
     return () => renderHandlers.delete(handler);
   },
   reportSize(height: number) {
-    ipcRenderer.send("natstack:content-overlay:size", { height });
+    ipcRenderer.send("vibez1:content-overlay:size", { height });
   },
   emitIntent(payload: unknown) {
-    ipcRenderer.send("natstack:content-overlay:intent", { payload });
+    ipcRenderer.send("vibez1:content-overlay:intent", { payload });
   },
   reportDrag(phase: "start" | "move" | "end", screenX: number, screenY: number) {
-    ipcRenderer.send("natstack:content-overlay:drag", { phase, screenX, screenY });
+    ipcRenderer.send("vibez1:content-overlay:drag", { phase, screenX, screenY });
   },
 });

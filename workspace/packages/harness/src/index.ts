@@ -12,10 +12,10 @@ export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
 export { AgentWorkerError } from "./errors.js";
 export type { AgentWorkerErrorCode } from "./errors.js";
 
-export { NATSTACK_BASE_SYSTEM_PROMPT, composeSystemPrompt } from "./system-prompt.js";
+export { VIBEZ1_BASE_SYSTEM_PROMPT, composeSystemPrompt } from "./system-prompt.js";
 export type { ComposeSystemPromptOptions, SystemPromptMode } from "./system-prompt.js";
-export { loadNatStackResources, formatSkillIndex } from "./resource-loader.js";
-export type { NatStackResources, ResourceLoaderDeps, SkillEntry } from "./resource-loader.js";
+export { loadVibez1Resources, formatSkillIndex } from "./resource-loader.js";
+export type { Vibez1Resources, ResourceLoaderDeps, SkillEntry } from "./resource-loader.js";
 
 // The Pi extension layer (approval gate, channel tools, ask-user, web tools,
 // extension runtime/UI bridge) was replaced by pure step policies in

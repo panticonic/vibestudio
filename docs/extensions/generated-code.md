@@ -28,7 +28,7 @@ Minimal extension:
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
@@ -53,7 +53,7 @@ Plain JavaScript package:
 
 ```json
 {
-  "natstack": {
+  "vibez1": {
     "extension": {
       "activationEvents": ["*"]
     }
@@ -65,7 +65,7 @@ Native or WASM package:
 
 ```json
 {
-  "natstack": {
+  "vibez1": {
     "extension": {
       "activationEvents": ["*"],
       "dependencyMode": "auto"
@@ -78,7 +78,7 @@ Force runtime loading:
 
 ```json
 {
-  "natstack": {
+  "vibez1": {
     "extension": {
       "activationEvents": ["*"],
       "dependencyMode": "external"

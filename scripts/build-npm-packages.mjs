@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Stage the two publishable npm packages from a completed `pnpm build`:
 //
-//   dist-packages/server  → @natstack/server  (slim headless server, no electron)
-//   dist-packages/app     → @natstack/app     (full Electron desktop app)
+//   dist-packages/server  → @vibez1/server  (slim headless server, no electron)
+//   dist-packages/app     → @vibez1/app     (full Electron desktop app)
 //
 // The monorepo root stays private; this script synthesizes each package.json and
-// assembles its file tree. Workspace (@natstack/* + @workspace/*) packages are
+// assembles its file tree. Workspace (@vibez1/* + @workspace/*) packages are
 // not on npm, so they are vendored: the server bundle already inlines all of
-// them except @natstack/extension-host, which is vendored via a self-contained
+// them except @vibez1/extension-host, which is vendored via a self-contained
 // publish build (so it resolves on any Node >=20 with no workspace:* / .ts at
 // runtime); the app vendors the whole workspace graph.
 //
@@ -63,20 +63,20 @@ function assertBuilt() {
 }
 
 function buildSelfContainedExtensionHost() {
-  console.log("• Building self-contained @natstack/extension-host (publish)…");
-  execFileSync("pnpm", ["--filter", "@natstack/extension-host", "run", "build"], {
+  console.log("• Building self-contained @vibez1/extension-host (publish)…");
+  execFileSync("pnpm", ["--filter", "@vibez1/extension-host", "run", "build"], {
     cwd: repoRoot,
     stdio: "inherit",
-    env: { ...process.env, NATSTACK_EXTHOST_PUBLISH: "1" },
+    env: { ...process.env, VIBEZ1_EXTHOST_PUBLISH: "1" },
   });
 }
 
 // ---------------------------------------------------------------------------
-// @natstack/server
+// @vibez1/server
 // ---------------------------------------------------------------------------
 function stageServer() {
   const root = path.join(outRoot, "server");
-  console.log("• Staging @natstack/server…");
+  console.log("• Staging @vibez1/server…");
   mkdirp(root);
 
   // Server runtime files (see paths.ts / internalDoLoader.ts / headlessHostManager.ts).
@@ -89,29 +89,29 @@ function stageServer() {
   stageWorkspaceTemplate(path.join(root, "workspace-template"));
 
   // Bin shims.
-  copyFile("scripts/natstack-launcher.mjs", path.join(root, "scripts/natstack-launcher.mjs"));
-  copyFile("scripts/natstack-server-shim.mjs", path.join(root, "scripts/natstack-server-shim.mjs"));
+  copyFile("scripts/vibez1-launcher.mjs", path.join(root, "scripts/vibez1-launcher.mjs"));
+  copyFile("scripts/vibez1-server-shim.mjs", path.join(root, "scripts/vibez1-server-shim.mjs"));
 
-  // Vendor the host's @natstack/* packages under vendor/ (NOT node_modules). A
+  // Vendor the host's @vibez1/* packages under vendor/ (NOT node_modules). A
   // partial node_modules shipped in the tarball perturbs npm's reify ordering —
   // it runs dependency postinstall scripts (e.g. electron's) against an
-  // incomplete tree. The package's own postinstall copies vendor/@natstack →
-  // node_modules/@natstack AFTER install, where the runtime build resolves them
+  // incomplete tree. The package's own postinstall copies vendor/@vibez1 →
+  // node_modules/@vibez1 AFTER install, where the runtime build resolves them
   // (getExistingAppNodeModulesRoots → builder.ts initBuilder). extension-host
   // ships self-contained; @workspace/* are NOT host deps (workspace's own build).
-  vendorNatstackPackages(root);
+  vendorvibez1Packages(root);
   vendorExtensionHost(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
-    name: "@natstack/server",
+    name: "@vibez1/server",
     version: VERSION,
-    description: "NatStack headless server (build, git, channels, AI, agents) over WebSocket RPC.",
+    description: "Vibez1 headless server (build, git, channels, AI, agents) over WebSocket RPC.",
     type: "module",
     license: rootPkg.license ?? "MIT",
     bin: {
-      "natstack-server": "scripts/natstack-server-shim.mjs",
-      natstack: "scripts/natstack-launcher.mjs",
+      "vibez1-server": "scripts/vibez1-server-shim.mjs",
+      vibez1: "scripts/vibez1-launcher.mjs",
     },
     engines: { node: ">=20" },
     files: ["dist", "vendor", "workspace-template", "scripts"],
@@ -123,11 +123,11 @@ function stageServer() {
 }
 
 // ---------------------------------------------------------------------------
-// @natstack/app
+// @vibez1/app
 // ---------------------------------------------------------------------------
 function stageApp() {
   const root = path.join(outRoot, "app");
-  console.log("• Staging @natstack/app…");
+  console.log("• Staging @vibez1/app…");
   mkdirp(root);
 
   // Full host build (main + all preloads + server-electron + cli + headless-host).
@@ -136,32 +136,32 @@ function stageApp() {
   // The app runs unpackaged: it reads appRoot/workspace as the first-run template.
   stageWorkspaceTemplate(path.join(root, "workspace"));
 
-  copyFile("scripts/natstack-launcher.mjs", path.join(root, "scripts/natstack-launcher.mjs"));
-  copyFile("scripts/natstack-server-shim.mjs", path.join(root, "scripts/natstack-server-shim.mjs"));
+  copyFile("scripts/vibez1-launcher.mjs", path.join(root, "scripts/vibez1-launcher.mjs"));
+  copyFile("scripts/vibez1-server-shim.mjs", path.join(root, "scripts/vibez1-server-shim.mjs"));
   copyFile("scripts/branded-electron.mjs", path.join(root, "scripts/branded-electron.mjs"));
   if (fs.existsSync(path.join(repoRoot, "build-resources"))) {
     copyTree(path.join(repoRoot, "build-resources"), path.join(root, "build-resources"), defaultSkip);
   }
 
-  // Vendor the host's @natstack/* packages under vendor/ (copied into node_modules
+  // Vendor the host's @vibez1/* packages under vendor/ (copied into node_modules
   // by the postinstall — see the server staging note). The managed workspace's
   // @workspace/* packages are NOT host deps; they ship only as first-run template
   // content under workspace/ (above).
-  vendorNatstackPackages(root);
+  vendorvibez1Packages(root);
   vendorExtensionHost(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
-    name: "@natstack/app",
+    name: "@vibez1/app",
     version: VERSION,
-    productName: rootPkg.productName ?? "NatStack",
+    productName: rootPkg.productName ?? "Vibez1",
     description: rootPkg.description,
     type: "module",
     license: rootPkg.license ?? "MIT",
     main: "dist/main.cjs",
     bin: {
-      natstack: "scripts/natstack-launcher.mjs",
-      "natstack-server": "scripts/natstack-server-shim.mjs",
+      vibez1: "scripts/vibez1-launcher.mjs",
+      "vibez1-server": "scripts/vibez1-server-shim.mjs",
     },
     engines: { node: ">=20" },
     files: ["dist", "vendor", "workspace", "scripts", "build-resources"],
@@ -179,11 +179,11 @@ function vendorExtensionHost(pkgRoot) {
   if (!fs.existsSync(distPublish)) {
     throw new Error("extension-host dist-publish/ missing — self-contained build did not run");
   }
-  const dest = path.join(pkgRoot, "vendor/@natstack/extension-host");
+  const dest = path.join(pkgRoot, "vendor/@vibez1/extension-host");
   rmrf(dest);
   copyTree(distPublish, path.join(dest, "dist"), () => false);
   writeJson(path.join(dest, "package.json"), {
-    name: "@natstack/extension-host",
+    name: "@vibez1/extension-host",
     version: VERSION,
     type: "module",
     main: "./dist/index.js",
@@ -194,31 +194,31 @@ function vendorExtensionHost(pkgRoot) {
   });
 }
 
-// Vendor the host's own @natstack/* packages (from packages/) under vendor/, so
+// Vendor the host's own @vibez1/* packages (from packages/) under vendor/, so
 // the package's postinstall can copy them into node_modules where the runtime
-// build system resolves the @natstack API surface that panels/workers import.
+// build system resolves the @vibez1 API surface that panels/workers import.
 // Excludes extension-host (vendored self-contained). @workspace/* are
 // intentionally NOT vendored — they belong to the managed workspace's own build.
-function vendorNatstackPackages(pkgRoot) {
+function vendorvibez1Packages(pkgRoot) {
   const packagesDir = path.join(repoRoot, "packages");
   for (const entry of fs.readdirSync(packagesDir)) {
     const manifest = path.join(packagesDir, entry, "package.json");
     if (!fs.existsSync(manifest)) continue;
     const name = readJson(manifest).name;
-    if (!name || !name.startsWith("@natstack/")) continue;
-    if (name === "@natstack/extension-host") continue; // self-contained, vendored separately
-    const base = name.slice("@natstack/".length);
-    const dest = path.join(pkgRoot, "vendor", "@natstack", base);
+    if (!name || !name.startsWith("@vibez1/")) continue;
+    if (name === "@vibez1/extension-host") continue; // self-contained, vendored separately
+    const base = name.slice("@vibez1/".length);
+    const dest = path.join(pkgRoot, "vendor", "@vibez1", base);
     copyTree(path.join(packagesDir, entry), dest, defaultSkip);
     normalizeVendoredManifest(path.join(dest, "package.json"));
   }
 }
 
-// Normalize a vendored @natstack manifest. Critically, KEEP its workspace:*
-// specifiers for inter-@natstack/@workspace deps: the runtime build system skips
+// Normalize a vendored @vibez1 manifest. Critically, KEEP its workspace:*
+// specifiers for inter-@vibez1/@workspace deps: the runtime build system skips
 // workspace:* deps from its registry `npm install` and resolves them from the
 // app's node_modules (externalDeps.ts:47). Rewriting them to a concrete version
-// would make panel/worker builds try to fetch e.g. @natstack/dev-log@0.1.0 from
+// would make panel/worker builds try to fetch e.g. @vibez1/dev-log@0.1.0 from
 // the public registry (404). Drop dev-only fields that would otherwise trigger
 // lifecycle scripts or extra registry installs. (The package is listed at its
 // concrete version at the host package's top level for bundledDependencies.)
@@ -305,7 +305,7 @@ function resolveVersion(name) {
 
 // The dependency surface a host package needs to build the default template at
 // runtime: all public root.dependencies + the build-relevant root devDeps +
-// headless extras. The vendored @natstack packages are NOT listed here — they
+// headless extras. The vendored @vibez1 packages are NOT listed here — they
 // ship under vendor/ and are copied into node_modules by the postinstall. The
 // server omits electron; the app includes it. (Building panels needs the full
 // host dep surface, so the headless server is really "app minus electron".)

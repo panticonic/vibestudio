@@ -3,11 +3,11 @@ import {
   createVerifiedCaller,
   ServiceDispatcher,
   type ServiceContext,
-} from "@natstack/shared/serviceDispatcher";
+} from "@vibez1/shared/serviceDispatcher";
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
-} from "@natstack/shared/workspace/singletonRegistry";
+} from "@vibez1/shared/workspace/singletonRegistry";
 import { createWorkerService } from "./workerService.js";
 
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };

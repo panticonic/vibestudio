@@ -4,9 +4,9 @@
  * Allows callers to push notifications to the shell chrome area
  * (info toasts, errors, warnings, success confirmations).
  */
-import type { RpcCaller } from "@natstack/rpc";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
+import type { RpcCaller } from "@vibez1/rpc";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { eventsMethods } from "@vibez1/shared/serviceSchemas/events";
 
 type NotificationAction = {
     id?: string;

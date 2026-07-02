@@ -7,7 +7,7 @@
  * so each channel gets its own DO. Reusing a shared/standing key across channels makes
  * one instance fold multiple channels' turn state together and corrupts the channel log
  * (it can adopt another channel's in-flight turn → duplicate envelope ids → GAD
- * id-collision). `*-standing` keys are ONLY for scheduled instances in `natstack.yml`.
+ * id-collision). `*-standing` keys are ONLY for scheduled instances in `vibez1.yml`.
  */
 import { contextId as runtimeContextId, rpc } from "@workspace/runtime";
 import { toSubscriptionConfig } from "@workspace/agentic-core";

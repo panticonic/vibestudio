@@ -1,7 +1,7 @@
 import { createBridgeAdapter } from "./bridgeAdapter";
-import type { RpcConnectionStatus } from "@natstack/rpc";
-import type { WebRtcSession } from "@natstack/rpc/transports/webrtcClient";
-import type { PanelEntityId } from "@natstack/shared/panel/ids";
+import type { RpcConnectionStatus } from "@vibez1/rpc";
+import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
+import type { PanelEntityId } from "@vibez1/shared/panel/ids";
 
 function createAdapter(overrides?: Partial<Parameters<typeof createBridgeAdapter>[0]>) {
   return createBridgeAdapter({

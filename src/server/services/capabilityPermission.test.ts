@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parseCanonicalKey } from "@natstack/shared/canonicalKey";
+import { parseCanonicalKey } from "@vibez1/shared/canonicalKey";
 import { CapabilityGrantStore, capabilityGrantKey } from "./capabilityGrantStore.js";
 import {
   normalizeCallerKind,
@@ -10,10 +10,10 @@ import {
   requestCapabilityPermission,
 } from "./capabilityPermission.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-capability-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-capability-"));
 }
 
 function createApprovalQueueMock(
@@ -144,28 +144,28 @@ describe("capabilityPermission", () => {
 
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:natstack/internal:EvalDO:one", "do", {
-        callerId: "do:natstack/internal:EvalDO:one",
+      caller: createVerifiedCaller("do:vibez1/internal:EvalDO:one", "do", {
+        callerId: "do:vibez1/internal:EvalDO:one",
         callerKind: "do",
-        repoPath: "natstack/internal",
+        repoPath: "vibez1/internal",
         effectiveVersion: "internal",
       }),
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:natstack/internal:EvalDO:one", "do", {
-        callerId: "do:natstack/internal:EvalDO:one",
+      caller: createVerifiedCaller("do:vibez1/internal:EvalDO:one", "do", {
+        callerId: "do:vibez1/internal:EvalDO:one",
         callerKind: "do",
-        repoPath: "natstack/internal",
+        repoPath: "vibez1/internal",
         effectiveVersion: "internal",
       }),
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:natstack/internal:EvalDO:two", "do", {
-        callerId: "do:natstack/internal:EvalDO:two",
+      caller: createVerifiedCaller("do:vibez1/internal:EvalDO:two", "do", {
+        callerId: "do:vibez1/internal:EvalDO:two",
         callerKind: "do",
-        repoPath: "natstack/internal",
+        repoPath: "vibez1/internal",
         effectiveVersion: "internal",
       }),
     });
@@ -183,7 +183,7 @@ describe("capabilityPermission", () => {
             capability: "external-browser-open",
             resourceKey: "https://example.com",
             scope: "version",
-            repoPath: "natstack/internal",
+            repoPath: "vibez1/internal",
             effectiveVersion: "internal",
             grantedAt: 1,
           },
@@ -195,8 +195,8 @@ describe("capabilityPermission", () => {
 
     expect(
       grantStore.hasGrant("external-browser-open", "https://example.com", {
-        callerId: "do:natstack/internal:EvalDO:one",
-        repoPath: "natstack/internal",
+        callerId: "do:vibez1/internal:EvalDO:one",
+        repoPath: "vibez1/internal",
         effectiveVersion: "internal",
       })
     ).toBe(false);
@@ -336,7 +336,7 @@ describe("capabilityPermission", () => {
       createVerifiedCaller(id, "do", {
         callerId: id,
         callerKind: "do",
-        repoPath: "natstack/internal",
+        repoPath: "vibez1/internal",
         effectiveVersion: "internal",
       });
     const requestFor = (id: string, origin: string) => ({
@@ -355,15 +355,15 @@ describe("capabilityPermission", () => {
 
     await requestCapabilityPermission(
       deps,
-      requestFor("do:natstack/internal:EvalDO:one", "https://one.example")
+      requestFor("do:vibez1/internal:EvalDO:one", "https://one.example")
     );
     await requestCapabilityPermission(
       deps,
-      requestFor("do:natstack/internal:EvalDO:one", "https://two.example")
+      requestFor("do:vibez1/internal:EvalDO:one", "https://two.example")
     );
     await requestCapabilityPermission(
       deps,
-      requestFor("do:natstack/internal:EvalDO:two", "https://two.example")
+      requestFor("do:vibez1/internal:EvalDO:two", "https://two.example")
     );
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);

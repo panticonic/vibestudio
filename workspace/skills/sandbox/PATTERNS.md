@@ -117,11 +117,11 @@ imports), or avoid the dependency by embedding the small bit of logic directly.
 ```ts
 // Component lives in a file whose nearest package.json lists "lodash";
 // the panel resolves the import when it compiles the file.
-inline_ui({ path: ".natstack/ui/shuffler.tsx", props: { items: ["Apple", "Banana", "Cherry"] } })
+inline_ui({ path: ".vibez1/ui/shuffler.tsx", props: { items: ["Apple", "Banana", "Cherry"] } })
 ```
 
 ```tsx
-// .natstack/ui/shuffler.tsx
+// .vibez1/ui/shuffler.tsx
 import { useState } from "react";
 import { Button, Flex, Text } from "@radix-ui/themes";
 import _ from "lodash";
@@ -143,9 +143,9 @@ and bare package imports are inferred from the nearest `package.json` when
 possible:
 
 ```ts
-eval({ path: ".natstack/eval/audit.ts" })
-inline_ui({ path: ".natstack/ui/audit-panel.tsx", props: { runId } })
-feedback_custom({ path: ".natstack/ui/confirm-audit.tsx", title: "Confirm audit" })
+eval({ path: ".vibez1/eval/audit.ts" })
+inline_ui({ path: ".vibez1/ui/audit-panel.tsx", props: { runId } })
+feedback_custom({ path: ".vibez1/ui/confirm-audit.tsx", title: "Confirm audit" })
 ```
 
 ## Call an API with a URL-bound credential
@@ -188,7 +188,7 @@ available.
 ## Request Access to a Custom Userland Resource
 
 Use `approvals.request()` only when custom userland code owns a shared resource
-and needs to grant another panel, worker, DO, or extension access to it. NatStack
+and needs to grant another panel, worker, DO, or extension access to it. Vibez1
 verifies the issuer, shows the user a shell consent prompt, and manages any
 remembered decision for the same issuer and stable `subject.id`.
 
@@ -268,7 +268,7 @@ if (chrome) {
   });
   console.log("Import result:", result);
 
-  // Optional: recreate current source-browser HTTP(S) tabs as NatStack panels.
+  // Optional: recreate current source-browser HTTP(S) tabs as Vibez1 panels.
   const opened = await browserData.openTabsAsPanels({
     browser: "chrome",
     profile: defaultProfile,

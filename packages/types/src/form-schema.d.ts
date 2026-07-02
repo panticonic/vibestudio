@@ -20,7 +20,7 @@ export type FieldValue = PrimitiveFieldValue | string[];
  * Field types supported by the form renderer
  */
 export type FieldType = "string" | "number" | "boolean" | "select" | "slider" | "segmented" | "toggle" | "readonly" | "code" | "buttonGroup" | "multiSelect" | "diff" | "toolPreview" | "approvalHeader";
-export declare const FREE_TEXT_CHOICE_VALUE = "__natstack_free_text__";
+export declare const FREE_TEXT_CHOICE_VALUE = "__vibez1_free_text__";
 /**
  * Comparison operators for field conditions
  */

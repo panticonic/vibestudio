@@ -4,7 +4,7 @@ import { classifyChord, parseNavKey } from "./inputRouter.js";
 import { SessionManager, type RpcLike } from "./SessionManager.js";
 import { registerHostService } from "./HostService.js";
 import { encodeFrame, HOST_METHODS, SESSION_METHODS } from "@workspace/terminal-host-protocol";
-import type { RpcClient, RpcRequestContext } from "@natstack/rpc";
+import type { RpcClient, RpcRequestContext } from "@vibez1/rpc";
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 

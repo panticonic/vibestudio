@@ -1,5 +1,5 @@
 /**
- * Cross-platform path utilities for NatStack.
+ * Cross-platform path utilities for Vibez1.
  * Works in both Node.js and browser (via pathe shim) environments.
  */
 

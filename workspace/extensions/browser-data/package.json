@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "displayName": "Browser Data",
     "entry": "index.ts",
     "sourcemap": true,
@@ -12,7 +12,7 @@
     }
   },
   "dependencies": {
-    "@natstack/browser-data": "workspace:*",
+    "@vibez1/browser-data": "workspace:*",
     "@workspace/browser-data": "workspace:*"
   }
 }

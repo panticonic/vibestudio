@@ -46,9 +46,9 @@ describe("BuildSystemV2 startup", () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-startup-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-build-startup-"));
     workspaceRoot = path.join(root, "workspace");
-    const { setUserDataPath } = await import("@natstack/env-paths");
+    const { setUserDataPath } = await import("@vibez1/env-paths");
     setUserDataPath(path.join(root, "state"));
     buildSystem = null;
     releaseBuild = null;

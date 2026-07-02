@@ -1,8 +1,8 @@
 import { app } from "electron";
 import * as path from "path";
-import { type ConnectPairing, parseConnectLink } from "@natstack/shared/connect";
+import { type ConnectPairing, parseConnectLink } from "@vibez1/shared/connect";
 
-/** The WebRTC pairing material carried by a `natstack://connect` deep link. */
+/** The WebRTC pairing material carried by a `vibez1://connect` deep link. */
 export type PendingConnectLink = ConnectPairing;
 
 let pending: PendingConnectLink | null = null;
@@ -10,11 +10,11 @@ const listeners = new Set<(link: PendingConnectLink) => void>();
 
 export function registerProtocol(): void {
   if (app.isPackaged) {
-    app.setAsDefaultProtocolClient("natstack");
+    app.setAsDefaultProtocolClient("vibez1");
     return;
   }
   const entry = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
-  app.setAsDefaultProtocolClient("natstack", process.execPath, entry ? [entry] : []);
+  app.setAsDefaultProtocolClient("vibez1", process.execPath, entry ? [entry] : []);
 }
 
 export function installEarlyOpenUrlBuffer(): void {
@@ -28,7 +28,7 @@ export function installEarlyOpenUrlBuffer(): void {
 }
 
 export function enqueueFirstArgvLink(argv: readonly string[]): void {
-  const raw = argv.find((arg) => typeof arg === "string" && arg.startsWith("natstack://"));
+  const raw = argv.find((arg) => typeof arg === "string" && arg.startsWith("vibez1://"));
   if (raw) enqueueConnectLink(raw);
 }
 

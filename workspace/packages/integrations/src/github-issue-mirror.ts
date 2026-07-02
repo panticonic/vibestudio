@@ -232,7 +232,7 @@ function buildTargetIssuePayload(
 }
 
 function buildMirrorMarker(sourceOwner: string, sourceRepo: string, issueNumber: number): string {
-  return `<!-- natstack-mirror-source: ${sourceOwner}/${sourceRepo}#${issueNumber} -->`;
+  return `<!-- vibez1-mirror-source: ${sourceOwner}/${sourceRepo}#${issueNumber} -->`;
 }
 
 /**

@@ -1,4 +1,4 @@
-// Minimal POSIX-only `path` shim for code from @natstack/shared that assumes
+// Minimal POSIX-only `path` shim for code from @vibez1/shared that assumes
 // Node. Only the handful of APIs used by the mobile import graph are provided.
 // Keep this file in sync with usages as new shared code is pulled into mobile.
 

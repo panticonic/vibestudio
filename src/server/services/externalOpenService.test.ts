@@ -2,13 +2,13 @@ import {
   createVerifiedCaller,
   DEFERRED_RESULT,
   isDeferredResult,
-} from "@natstack/shared/serviceDispatcher";
+} from "@vibez1/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { EventService } from "@natstack/shared/eventsService";
-import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
+import { EventService } from "@vibez1/shared/eventsService";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@vibez1/rpc";
 import { createExternalOpenService } from "./externalOpenService.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
@@ -21,7 +21,7 @@ describe("externalOpenService", () => {
   });
 
   function tempStatePath(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-external-open-"));
+    return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-external-open-"));
   }
 
   function createApprovalQueueMock(): ApprovalQueue {

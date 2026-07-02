@@ -172,7 +172,7 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     }
     if (method === "runtime.resolveContext") return "ctx-1";
     if (method === "workers.resolveService") {
-      if (args?.[0] === "natstack.gad.workspace.v1") {
+      if (args?.[0] === "vibez1.gad.workspace.v1") {
         return {
           kind: "durable-object",
           source: "workers/gad-store",

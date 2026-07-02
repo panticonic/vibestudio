@@ -1,5 +1,5 @@
 {
-  "name": "@natstack/signaling",
+  "name": "@vibez1/signaling",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",

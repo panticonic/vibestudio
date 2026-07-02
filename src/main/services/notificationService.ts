@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { NotificationPayload } from "@natstack/shared/events";
-import type { EventService } from "@natstack/shared/eventsService";
-import { notificationMethods } from "@natstack/shared/serviceSchemas/notification";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { NotificationPayload } from "@vibez1/shared/events";
+import type { EventService } from "@vibez1/shared/eventsService";
+import { notificationMethods } from "@vibez1/shared/serviceSchemas/notification";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import type { ViewManager } from "../viewManager.js";
 import { requireAppCapability } from "./appCapabilities.js";
 

@@ -122,10 +122,10 @@ const wsParticipant = {
 // but NO receivesChannelEnvelopes — it is NOT an agent vessel and has no canFork/postClone, so fork
 // must skip it (cloning it would fail the preflight).
 const evalClientParticipant = {
-  participantId: "do:natstack/internal:EvalDO:eval-1",
+  participantId: "do:vibez1/internal:EvalDO:eval-1",
   metadata: { name: "Eval client" },
   transport: "do",
-  doRef: { source: "natstack/internal", className: "EvalDO", objectKey: "eval-1" },
+  doRef: { source: "vibez1/internal", className: "EvalDO", objectKey: "eval-1" },
 };
 
 const cloneContextCalls = (mainCalls: Array<{ method: string; args: unknown[] }>) =>

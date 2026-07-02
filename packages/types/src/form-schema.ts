@@ -40,7 +40,7 @@ export type FieldType =
   | "toolPreview" // Rich tool argument preview (Monaco diff, git previews, etc.)
   | "approvalHeader"; // Tool approval header (first-time grant or per-call)
 
-export const FREE_TEXT_CHOICE_VALUE = "__natstack_free_text__";
+export const FREE_TEXT_CHOICE_VALUE = "__vibez1_free_text__";
 
 /**
  * Comparison operators for field conditions

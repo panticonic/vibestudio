@@ -1,7 +1,7 @@
 {
-  "name": "@natstack/types",
+  "name": "@vibez1/types",
   "version": "0.1.0",
-  "description": "Shared type definitions for NatStack",
+  "description": "Shared type definitions for Vibez1",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

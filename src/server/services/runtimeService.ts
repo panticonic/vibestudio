@@ -11,14 +11,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import {
   runtimeMethods,
   type ClonedEntity,
   type CloneContextResult,
-} from "@natstack/shared/serviceSchemas/runtime";
-import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+} from "@vibez1/shared/serviceSchemas/runtime";
+import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 import {
   buildWorkspaceContext,
   canonicalEntityId,
@@ -26,7 +26,7 @@ import {
   type RuntimeEntityCreateSpec,
   type RuntimeEntityHandle,
   type WorkspaceContext,
-} from "@natstack/shared/runtime/entitySpec";
+} from "@vibez1/shared/runtime/entitySpec";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import {

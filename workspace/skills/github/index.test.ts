@@ -183,7 +183,7 @@ describe("github skill facade", () => {
     }));
 
     expect(url.origin + url.pathname).toBe("https://github.com/settings/personal-access-tokens/new");
-    expect(url.searchParams.get("name")).toBe("NatStack");
+    expect(url.searchParams.get("name")).toBe("Vibez1");
     expect(url.searchParams.get("target_name")).toBe("octo-org");
     expect(url.searchParams.get("expires_in")).toBe("30");
     expect(url.searchParams.get("contents")).toBe("write");

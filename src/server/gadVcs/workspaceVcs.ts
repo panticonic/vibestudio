@@ -15,7 +15,7 @@
  */
 
 import { EventEmitter } from "events";
-import { serializeByKey } from "@natstack/shared/keyedSerializer";
+import { serializeByKey } from "@vibez1/shared/keyedSerializer";
 import * as crypto from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -3176,7 +3176,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * Snapshot every present on-disk repo subtree onto that repo's `main` log.
    * Unlike {@link ensureRepoLogsFromDisk}, this does not skip repos that already
    * have `main`, so it captures out-of-band disk mutations such as Git import
-   * config writes in `meta/natstack.yml`.
+   * config writes in `meta/vibez1.yml`.
    */
   async snapshotRepoLogsFromDisk(
     opts: {

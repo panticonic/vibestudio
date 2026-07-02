@@ -13,8 +13,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { getCentralDataPath } from "@natstack/env-paths";
-import { runNpmInstall } from "@natstack/shared/npmInstaller";
+import { getCentralDataPath } from "@vibez1/env-paths";
+import { runNpmInstall } from "@vibez1/shared/npmInstaller";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
 import { assertPresent } from "../../lintHelpers";
 
@@ -35,7 +35,7 @@ export function collectTransitiveExternalDeps(
   const externals: Record<string, string> = {};
   const appProvidedPackages = new Set([
     ...readWorkspacePatchedDependencyNames(),
-    ...readWorkspacePatchedDependencyNames(process.env["NATSTACK_APP_ROOT"]),
+    ...readWorkspacePatchedDependencyNames(process.env["VIBEZ1_APP_ROOT"]),
   ]);
   const visited = new Set<string>();
   const visitedPackageJson = new Set<string>();
@@ -279,7 +279,7 @@ function hashDeps(deps: Record<string, string>, overrides: Record<string, string
 }
 
 function readWorkspaceNpmOverrides(): Record<string, string> {
-  const pkgPath = path.join(process.env["NATSTACK_APP_ROOT"] ?? process.cwd(), "package.json");
+  const pkgPath = path.join(process.env["VIBEZ1_APP_ROOT"] ?? process.cwd(), "package.json");
   if (!fs.existsSync(pkgPath)) return {};
 
   try {

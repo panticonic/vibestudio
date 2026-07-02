@@ -55,7 +55,7 @@ export class SingletonRegistry {
       const ref = context ? ` (referenced by ${context})` : "";
       throw new Error(
         `Missing singletonObjects declaration for source=${source} className=${className}${ref}. ` +
-          `Add an entry under singletonObjects: in workspace/meta/natstack.yml.`
+          `Add an entry under singletonObjects: in workspace/meta/vibez1.yml.`
       );
     }
     return found.key;

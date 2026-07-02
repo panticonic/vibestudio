@@ -10,12 +10,12 @@ const { testExtDepsRoot } = vi.hoisted(() => ({
   testExtDepsRoot: `/tmp/test-extdeps-${process.pid}`,
 }));
 
-vi.mock("@natstack/env-paths", () => ({
+vi.mock("@vibez1/env-paths", () => ({
   getUserDataPath: vi.fn().mockReturnValue("/tmp/test-extdeps"),
   getCentralDataPath: vi.fn().mockReturnValue(testExtDepsRoot),
 }));
 
-vi.mock("@natstack/shared/npmInstaller", () => ({
+vi.mock("@vibez1/shared/npmInstaller", () => ({
   runNpmInstall: vi.fn((cwd: string) => {
     fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
   }),
@@ -27,7 +27,7 @@ import {
   collectTransitiveExternalDeps,
   ensureExternalDeps,
 } from "./externalDeps.js";
-import { runNpmInstall } from "@natstack/shared/npmInstaller";
+import { runNpmInstall } from "@vibez1/shared/npmInstaller";
 
 /** Helper: create a minimal GraphNode. */
 function makeNode(
@@ -89,15 +89,15 @@ describe("collectTransitiveExternalDeps", () => {
     expect(deps).not.toHaveProperty("@workspace/middle");
   });
 
-  it("collects external runtime deps from @natstack internal packages", () => {
+  it("collects external runtime deps from @vibez1 internal packages", () => {
     const graph = new PackageGraph();
-    const shared = makeNode("@natstack/shared", {
+    const shared = makeNode("@vibez1/shared", {
       "@silvia-odwyer/photon-node": "^0.3.4",
     });
     const extension = makeNode(
       "@workspace-extensions/image-service",
-      { "@natstack/shared": "workspace:*" },
-      ["@natstack/shared"]
+      { "@vibez1/shared": "workspace:*" },
+      ["@vibez1/shared"]
     );
     graph.addNode(shared);
     graph.addNode(extension);
@@ -109,7 +109,7 @@ describe("collectTransitiveExternalDeps", () => {
   });
 
   it("walks repo-root workspace package manifests that are outside the workspace graph", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extdeps-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extdeps-"));
     try {
       const workspaceRoot = path.join(root, "workspace");
       const sharedDir = path.join(root, "packages", "shared");
@@ -118,7 +118,7 @@ describe("collectTransitiveExternalDeps", () => {
       fs.writeFileSync(
         path.join(sharedDir, "package.json"),
         JSON.stringify({
-          name: "@natstack/shared",
+          name: "@vibez1/shared",
           dependencies: {
             "@silvia-odwyer/photon-node": "^0.3.4",
           },
@@ -127,7 +127,7 @@ describe("collectTransitiveExternalDeps", () => {
 
       const graph = new PackageGraph();
       const extension = makeNode("@workspace-extensions/image-service", {
-        "@natstack/shared": "workspace:*",
+        "@vibez1/shared": "workspace:*",
       });
       graph.addNode(extension);
 
@@ -141,17 +141,17 @@ describe("collectTransitiveExternalDeps", () => {
   });
 
   it("walks scoped workspace package manifests resolved from app node_modules", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extdeps-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extdeps-"));
     try {
       const workspaceRoot = path.join(root, "fresh-dev-workspace", "source");
       const appNodeModules = path.join(root, "app", "node_modules");
-      const sharedDir = path.join(appNodeModules, "@natstack", "shared");
+      const sharedDir = path.join(appNodeModules, "@vibez1", "shared");
       fs.mkdirSync(workspaceRoot, { recursive: true });
       fs.mkdirSync(sharedDir, { recursive: true });
       fs.writeFileSync(
         path.join(sharedDir, "package.json"),
         JSON.stringify({
-          name: "@natstack/shared",
+          name: "@vibez1/shared",
           dependencies: {
             "@silvia-odwyer/photon-node": "^0.3.4",
           },
@@ -160,7 +160,7 @@ describe("collectTransitiveExternalDeps", () => {
 
       const graph = new PackageGraph();
       const extension = makeNode("@workspace-extensions/image-service", {
-        "@natstack/shared": "workspace:*",
+        "@vibez1/shared": "workspace:*",
       });
       graph.addNode(extension);
 
@@ -174,10 +174,10 @@ describe("collectTransitiveExternalDeps", () => {
   });
 
   it("does not install pnpm-patched app dependencies into npm external cache", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extdeps-"));
-    const previousAppRoot = process.env["NATSTACK_APP_ROOT"];
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extdeps-"));
+    const previousAppRoot = process.env["VIBEZ1_APP_ROOT"];
     try {
-      process.env["NATSTACK_APP_ROOT"] = root;
+      process.env["VIBEZ1_APP_ROOT"] = root;
       fs.writeFileSync(
         path.join(root, "package.json"),
         JSON.stringify({
@@ -200,9 +200,9 @@ describe("collectTransitiveExternalDeps", () => {
       expect(deps).toEqual({ zod: "^3.25.0" });
     } finally {
       if (previousAppRoot === undefined) {
-        delete process.env["NATSTACK_APP_ROOT"];
+        delete process.env["VIBEZ1_APP_ROOT"];
       } else {
-        process.env["NATSTACK_APP_ROOT"] = previousAppRoot;
+        process.env["VIBEZ1_APP_ROOT"] = previousAppRoot;
       }
       fs.rmSync(root, { recursive: true, force: true });
     }

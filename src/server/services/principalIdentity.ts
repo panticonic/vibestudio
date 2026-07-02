@@ -1,9 +1,9 @@
-import type { EntityCache } from "@natstack/shared/runtime/entityCache";
+import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
 import {
   callerKindForPrincipalKind,
   isCodeIdentityCallerKind,
   type CodeIdentityCallerKind,
-} from "@natstack/shared/principalKinds";
+} from "@vibez1/shared/principalKinds";
 
 export interface ResolvedCodeIdentity {
   callerId: string;

@@ -33,7 +33,7 @@ describe("resolveChromium", () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-acquire-test-"));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-acquire-test-"));
     mocks.execFileSync.mockImplementation(() => {
       throw new Error("not found");
     });

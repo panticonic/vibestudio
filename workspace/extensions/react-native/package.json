@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "displayName": "React Native Build Provider",
     "entry": "index.ts",
     "sourcemap": true,
@@ -17,6 +17,6 @@
     }
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*"
+    "@vibez1/shared": "workspace:*"
   }
 }

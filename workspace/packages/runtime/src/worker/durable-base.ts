@@ -11,10 +11,10 @@
 import {
   createTypedServiceClient,
   type TypedServiceClient,
-} from "@natstack/shared/typedServiceClient";
-import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
-import { workerLogMethods } from "@natstack/shared/serviceSchemas/workerLog";
-import { workspaceStateMethods } from "@natstack/shared/serviceSchemas/workspaceState";
+} from "@vibez1/shared/typedServiceClient";
+import { runtimeMethods } from "@vibez1/shared/serviceSchemas/runtime";
+import { workerLogMethods } from "@vibez1/shared/serviceSchemas/workerLog";
+import { workspaceStateMethods } from "@vibez1/shared/serviceSchemas/workspaceState";
 import {
   collectExposableMethods,
   createConnectionlessRpcClient,
@@ -25,7 +25,7 @@ import {
   type DeferrableRpcClient,
   type RpcEnvelope,
   type RpcRequest,
-} from "@natstack/rpc";
+} from "@vibez1/rpc";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
@@ -36,7 +36,7 @@ import {
   type PanelRuntimeApi,
   type PanelRuntimeTree,
 } from "../shared/panelRuntime.js";
-import type { AuthenticatedCaller, RpcClient } from "@natstack/rpc";
+import type { AuthenticatedCaller, RpcClient } from "@vibez1/rpc";
 import type { RuntimeFs } from "../types.js";
 import type { PanelHandle } from "../core/index.js";
 
@@ -421,7 +421,7 @@ export abstract class DurableObjectBase {
   /**
    * The authenticated caller of the in-flight method, in the canonical
    * `AuthenticatedCaller` shape shared with the bridge and server. Sourced from
-   * the signed `X-Natstack-Rpc-Caller-*` headers the server injects. Null when
+   * the signed `X-vibez1-Rpc-Caller-*` headers the server injects. Null when
    * there is no active RPC caller (e.g. alarm/lifecycle). Prefer this over the
    * raw `rpcCallerId`/`rpcCallerKind` pair for authorization checks.
    */

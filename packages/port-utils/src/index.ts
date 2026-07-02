@@ -22,7 +22,7 @@ function leaseKey(service: keyof typeof PORT_RANGES, port: number): string {
 }
 
 function lockDir(): string {
-  return process.env["NATSTACK_PORT_LOCK_DIR"] ?? path.join(os.tmpdir(), "natstack-port-locks");
+  return process.env["VIBEZ1_PORT_LOCK_DIR"] ?? path.join(os.tmpdir(), "vibez1-port-locks");
 }
 
 function lockPath(service: keyof typeof PORT_RANGES, port: number): string {

@@ -1,13 +1,13 @@
 # Unified History and Open Tabs
 
-Imported browser history, NatStack browser-panel history, and address-bar
+Imported browser history, Vibez1 browser-panel history, and address-bar
 suggestions share one storage path.
 
 ## Model
 
 - Imported Chrome/Firefox/Safari history is normalized into URL summaries plus
   per-visit events when the source browser exposes individual visits.
-- NatStack browser panels record their own HTTP(S) main-frame navigations into
+- Vibez1 browser panels record their own HTTP(S) main-frame navigations into
   the same visit table.
 - The `history` table is a materialized summary over visits: URL, title,
   visit count, typed count, first visit, and last visit.
@@ -25,9 +25,9 @@ The shell calls `getBrowserAddressOptions(query)`, which combines:
 
 Ranking favors exact/prefix/substring matches first, then open sessions,
 bookmarks/history, typed count, visit count, and recency. Imported history and
-NatStack-local panel history therefore affect autocomplete the same way.
+Vibez1-local panel history therefore affect autocomplete the same way.
 
-## Recording NatStack Browser History
+## Recording Vibez1 Browser History
 
 Browser-panel navigations are recorded automatically by the Electron host. Agents
 do not need to call a history API when opening panels. The recorder stores:
@@ -60,7 +60,7 @@ eval({ code: `
 ```
 
 Chrome, Firefox, and Safari readers preserve individual visit timestamps when
-available. If a source only exposes aggregate data for a URL, NatStack stores the
+available. If a source only exposes aggregate data for a URL, Vibez1 stores the
 best available first/last visit events.
 
 ## Incremental History Imports
@@ -74,7 +74,7 @@ are reflected in the summary.
 ## Open Current Browser Tabs
 
 Open tabs are not a `startImport` data type. They are a separate action because
-they create NatStack panels.
+they create Vibez1 panels.
 
 Preview tabs:
 
@@ -112,13 +112,13 @@ idempotent.
 
 ## Browser Life Migration
 
-For a full migration into NatStack:
+For a full migration into Vibez1:
 
 1. Detect browsers and choose a profile.
 2. Run `startImport` for persistent data:
    `["cookies", "passwords", "bookmarks", "history", "autofill", "searchEngines", "permissions", "favicons"]`.
 3. Run `openTabsAsPanels({ browser, profile })` to recreate current open tabs.
-4. Use the address bar normally. Imported history, NatStack-local history,
+4. Use the address bar normally. Imported history, Vibez1-local history,
    bookmarks, search engines, and open sessions all feed suggestions.
 5. Re-run `startImport` later for the same profile to pull new/changed source
    data without duplicating previous imports.

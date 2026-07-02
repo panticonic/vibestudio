@@ -1,8 +1,8 @@
-# Pi-Native NatStack: Deep Dive
+# Pi-Native Vibez1: Deep Dive
 
 ## Why Pi runs in-process
 
-Before this rearchitecture, NatStack used a 4-layer pipeline:
+Before this rearchitecture, Vibez1 used a 4-layer pipeline:
 
 1. Panel (browser)
 2. Channel DO (workerd, message routing)
@@ -36,7 +36,7 @@ per-context folders:
 workspace/
 ├── meta/
 │   ├── AGENTS.md    # System prompt (read via workspace RPC)
-│   └── natstack.yml # Workspace manifest
+│   └── vibez1.yml # Workspace manifest
 ├── skills/          # Workspace skills (read via workspace RPC)
 │   ├── sandbox/
 │   ├── workspace-dev/
@@ -48,7 +48,7 @@ workspace/
 Workers access these files through the workspace RPC client, not through
 a filesystem copy.
 
-## The three NatStack extensions
+## The three Vibez1 extensions
 
 All three live in `workspace/packages/harness/src/extensions/` as TypeScript modules
 that export factory functions. The worker supplies them inline via
@@ -110,22 +110,22 @@ Single `ask_user` tool that routes to a feedback_form on the channel via the
 worker's `askUser` callback. Used when the LLM needs free-text input from the
 user that's not available via any other tool.
 
-## NatStackExtensionUIContext
+## Vibez1ExtensionUIContext
 
 Pi's `ExtensionUIContext` interface has primitives like `select`, `confirm`,
-`input`, `notify`, `setStatus`, `setWidget` — designed for a TUI. NatStack
-implements them all (`workspace/packages/harness/src/natstack-extension-context.ts`)
+`input`, `notify`, `setStatus`, `setWidget` — designed for a TUI. Vibez1
+implements them all (`workspace/packages/harness/src/vibez1-extension-context.ts`)
 by routing to worker callbacks that send channel events:
 
-| Pi UI primitive             | NatStack channel mapping                               |
+| Pi UI primitive             | Vibez1 channel mapping                               |
 | --------------------------- | ------------------------------------------------------ |
 | `select(title, options)`    | `feedback_form` with segmented field, await result     |
 | `confirm(title, message)`   | `feedback_form` with yes/no buttons, await result      |
 | `input(title, placeholder)` | `feedback_form` with textarea, await result            |
 | `editor(title, prefill)`    | `feedback_form` with multi-line textarea, await result |
 | `notify(message, type)`     | Ephemeral message with `contentType: "notify:<type>"`  |
-| `setStatus(key, text)`      | Ephemeral with `contentType: "natstack-ext-status"`    |
-| `setWidget(key, content)`   | Ephemeral with `contentType: "natstack-ext-widget"`    |
+| `setStatus(key, text)`      | Ephemeral with `contentType: "vibez1-ext-status"`    |
+| `setWidget(key, content)`   | Ephemeral with `contentType: "vibez1-ext-widget"`    |
 | `setHeader/Footer/Title`    | No-op (TUI-only)                                       |
 | `custom(factory)`           | Throws (TUI-only)                                      |
 | Theme accessors             | Stub returns (TUI-only)                                |
@@ -176,7 +176,7 @@ The cloned worker:
    etc. to wire up your behavior
 4. Add an entry in `PiRunner.init()` constructing your factory with the
    appropriate worker callbacks
-5. If you need new UI primitives, add callbacks to `NatStackUIBridgeCallbacks`
+5. If you need new UI primitives, add callbacks to `Vibez1UIBridgeCallbacks`
    and wire them in `AgentWorkerBase.buildUICallbacks`
 
 ## How to add a new skill
@@ -207,7 +207,7 @@ via `runner.subscribe()`.
 ## Where State Lives
 
 Pi session state is owned by Pi's `AgentSession` and persisted by the worker
-DO. NatStack framework state uses internal Durable Objects:
+DO. Vibez1 framework state uses internal Durable Objects:
 
 - `EvalDO` for per-owner sandbox-eval REPL scopes (behind the `eval` service).
 - `WorkspaceDO` for panel tree and search (replaced the former `PanelStoreDO`).

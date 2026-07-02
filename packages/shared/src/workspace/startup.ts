@@ -90,7 +90,7 @@ export function resolveLocalWorkspaceStartup(
   }
 
   if (opts.requireExplicitSelection) {
-    throw new Error("No workspace specified (set NATSTACK_WORKSPACE_DIR or pass --workspace)");
+    throw new Error("No workspace specified (set VIBEZ1_WORKSPACE_DIR or pass --workspace)");
   }
 
   return {

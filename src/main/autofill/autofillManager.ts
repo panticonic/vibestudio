@@ -9,12 +9,12 @@
  */
 
 import { ipcMain } from "electron";
-import { autofillMethods } from "@natstack/shared/serviceSchemas/autofill";
+import { autofillMethods } from "@vibez1/shared/serviceSchemas/autofill";
 import type { WebContents } from "electron";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { EventService } from "@natstack/shared/eventsService";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { EventService } from "@vibez1/shared/eventsService";
 import type { ViewManager } from "../viewManager.js";
-import type { StoredPassword } from "@natstack/browser-data";
+import type { StoredPassword } from "@vibez1/browser-data";
 import {
   AUTOFILL_WORLD_ID,
   getContentScript,
@@ -24,7 +24,7 @@ import {
   getInjectKeyIconScript,
 } from "./contentScript.js";
 import { AutofillOverlay } from "./autofillOverlay.js";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("Autofill");
@@ -180,7 +180,7 @@ export class AutofillManager {
     // injection prior to deployment of this policy, or from a future
     // preload that ends up exposed in sub-frames) are dropped with a
     // single warn per (page-load, sub-frame-origin).
-    ipcMain.on("natstack:autofill:ping", (event) => {
+    ipcMain.on("vibez1:autofill:ping", (event) => {
       const wcId = event.sender.id;
       const state = this.panelState.get(wcId);
       if (!state) {
@@ -961,6 +961,6 @@ export class AutofillManager {
 
   destroy(): void {
     this.overlay.destroy();
-    ipcMain.removeAllListeners("natstack:autofill:ping");
+    ipcMain.removeAllListeners("vibez1:autofill:ping");
   }
 }

@@ -5,17 +5,17 @@ import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
-import { getCentralConfigPaths } from "@natstack/shared/workspace/loader";
-import { CentralDataManager } from "@natstack/shared/centralData";
-import { getWorkspaceDir } from "@natstack/env-paths";
-import { TokenManager, constantTimeStringEqual } from "@natstack/shared/tokenManager";
-import { resolveHostConfig } from "@natstack/shared/hostConfig";
-import { selectedWorkspaceUrl, WORKSPACE_ROUTE_PREFIX } from "@natstack/shared/connect";
+import { getCentralConfigPaths } from "@vibez1/shared/workspace/loader";
+import { CentralDataManager } from "@vibez1/shared/centralData";
+import { getWorkspaceDir } from "@vibez1/env-paths";
+import { TokenManager, constantTimeStringEqual } from "@vibez1/shared/tokenManager";
+import { resolveHostConfig } from "@vibez1/shared/hostConfig";
+import { selectedWorkspaceUrl, WORKSPACE_ROUTE_PREFIX } from "@vibez1/shared/connect";
 import {
   getAdminTokenPath,
   loadPersistedAdminToken,
   savePersistedAdminToken,
-} from "@natstack/shared/centralAuth";
+} from "@vibez1/shared/centralAuth";
 import { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } from "./services/deviceAuthStore.js";
 import { shellCallerId } from "./services/auth/model.js";
 import { authError } from "./services/auth/errors.js";
@@ -196,7 +196,7 @@ function isRuntimeRunning(state: HubRuntimeState, name: string): boolean {
 }
 
 function workspaceConfigExists(name: string): boolean {
-  return fs.existsSync(path.join(getWorkspaceDir(name), "source", "meta/natstack.yml"));
+  return fs.existsSync(path.join(getWorkspaceDir(name), "source", "meta/vibez1.yml"));
 }
 
 function normalizeWorkspaceName(raw: unknown): string {
@@ -266,7 +266,7 @@ async function handleAuthRoute(
         label:
           typeof body["label"] === "string" && body["label"].trim()
             ? body["label"].trim()
-            : "NatStack client",
+            : "Vibez1 client",
         platform: typeof body["platform"] === "string" ? body["platform"] : undefined,
       });
       sendJson(res, 200, responseForCredential(state, credential));
@@ -298,7 +298,7 @@ async function handleAuthRoute(
         label:
           typeof body["label"] === "string" && body["label"].trim()
             ? body["label"].trim()
-            : "NatStack client",
+            : "Vibez1 client",
         platform: typeof body["platform"] === "string" ? body["platform"] : undefined,
       });
       sendJson(res, 200, responseForCredential(state, credential));
@@ -635,7 +635,7 @@ async function startWorkspaceRuntime(
   const childWorkspaceName = isEphemeralDevWorkspace
     ? `dev-${randomBytes(4).toString("hex")}`
     : advertisedName;
-  const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), `natstack-workspace-${advertisedName}-`));
+  const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), `vibez1-workspace-${advertisedName}-`));
   const readyFile = path.join(readyDir, "ready.json");
   const publicUrl = workspaceEndpointUrl(state, advertisedName);
   const childArgs = [
@@ -661,29 +661,29 @@ async function startWorkspaceRuntime(
 
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
-    NATSTACK_APP_ROOT: state.appRoot,
-    NATSTACK_HOST: "127.0.0.1",
-    NATSTACK_BIND_HOST: "127.0.0.1",
-    NATSTACK_PROTOCOL: "http",
-    NATSTACK_NO_VPN_DETECT: "1",
-    NATSTACK_WORKSPACE: childWorkspaceName,
-    NATSTACK_AUTH_STORE_PATH: state.authStorePath,
-    NATSTACK_DISABLE_STARTUP_PAIRING: "1",
-    NATSTACK_FORCE_WORKSPACE_SERVER: "1",
-    NATSTACK_HUB_URL: state.connectUrl,
+    VIBEZ1_APP_ROOT: state.appRoot,
+    VIBEZ1_HOST: "127.0.0.1",
+    VIBEZ1_BIND_HOST: "127.0.0.1",
+    VIBEZ1_PROTOCOL: "http",
+    VIBEZ1_NO_VPN_DETECT: "1",
+    VIBEZ1_WORKSPACE: childWorkspaceName,
+    VIBEZ1_AUTH_STORE_PATH: state.authStorePath,
+    VIBEZ1_DISABLE_STARTUP_PAIRING: "1",
+    VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
+    VIBEZ1_HUB_URL: state.connectUrl,
   };
-  delete childEnv["NATSTACK_GATEWAY_PORT"];
-  delete childEnv["NATSTACK_WORKSPACE_DIR"];
-  delete childEnv["NATSTACK_REQUIRE_PUBLIC_URL"];
+  delete childEnv["VIBEZ1_GATEWAY_PORT"];
+  delete childEnv["VIBEZ1_WORKSPACE_DIR"];
+  delete childEnv["VIBEZ1_REQUIRE_PUBLIC_URL"];
   if (isEphemeralDevWorkspace) {
-    childEnv["NATSTACK_WORKSPACE_EPHEMERAL"] = "1";
+    childEnv["VIBEZ1_WORKSPACE_EPHEMERAL"] = "1";
   } else {
-    delete childEnv["NATSTACK_WORKSPACE_EPHEMERAL"];
+    delete childEnv["VIBEZ1_WORKSPACE_EPHEMERAL"];
   }
   if (shouldAutoApproveDefaultStartup) {
-    childEnv["NATSTACK_AUTO_APPROVE_STARTUP_UNITS"] = "1";
+    childEnv["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"] = "1";
   } else {
-    delete childEnv["NATSTACK_AUTO_APPROVE_STARTUP_UNITS"];
+    delete childEnv["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"];
   }
 
   const child = spawn(process.execPath, [...process.execArgv, ...childArgs], {
@@ -739,7 +739,7 @@ async function waitForReadyFile(
 }
 
 function resolveAdminToken(): { adminToken: string; tokenSource: HubRuntimeState["tokenSource"] } {
-  const envToken = process.env["NATSTACK_ADMIN_TOKEN"];
+  const envToken = process.env["VIBEZ1_ADMIN_TOKEN"];
   if (envToken) return { adminToken: envToken, tokenSource: "env" };
   const persisted = loadPersistedAdminToken();
   if (persisted) return { adminToken: persisted, tokenSource: "persisted" };
@@ -761,13 +761,13 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   tokenManager.setAdminToken(adminToken);
   const centralPaths = getCentralConfigPaths();
   const authStorePath =
-    process.env["NATSTACK_AUTH_STORE_PATH"] ??
+    process.env["VIBEZ1_AUTH_STORE_PATH"] ??
     path.join(centralPaths.configDir, "server-auth", "devices.json");
   const deviceAuthStore = new DeviceAuthStore(authStorePath);
   const startupPairingCode = deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS);
   const startupQrPairingCode = deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS);
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
-  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("NATSTACK_GATEWAY_PORT");
+  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBEZ1_GATEWAY_PORT");
   const hostConfig = resolveHostConfig({
     workerdPort: 0,
     gatewayPort: requestedGatewayPort ?? 0,
@@ -872,7 +872,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     shuttingDown: false,
   };
 
-  console.log("natstack-server hub ready:");
+  console.log("vibez1-server hub ready:");
   console.log(`  Gateway:     ${gatewayUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
   console.log(`  Pairing code: ${startupPairingCode}`);
@@ -904,9 +904,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   }
 
   if (args.printCredentials) {
-    console.log(`\nNATSTACK_ADMIN_TOKEN=${adminToken}`);
-    console.log(`NATSTACK_PAIRING_CODE=${startupPairingCode}`);
-    console.log(`NATSTACK_QR_PAIRING_CODE=${startupQrPairingCode}`);
+    console.log(`\nVIBEZ1_ADMIN_TOKEN=${adminToken}`);
+    console.log(`VIBEZ1_PAIRING_CODE=${startupPairingCode}`);
+    console.log(`VIBEZ1_QR_PAIRING_CODE=${startupQrPairingCode}`);
   }
 
   async function shutdown(): Promise<void> {

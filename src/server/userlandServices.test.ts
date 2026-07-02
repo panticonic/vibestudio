@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
-} from "@natstack/shared/workspace/singletonRegistry";
+} from "@vibez1/shared/workspace/singletonRegistry";
 import { resolveUserlandService } from "./userlandServices.js";
 
 function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {

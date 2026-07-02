@@ -2,17 +2,17 @@
  * Push Notification Service — manages push notification registrations
  * for mobile/remote shell clients and delivers approval pushes through FCM.
  *
- * Registrations are persisted to ~/.config/natstack/push-registrations.json
+ * Registrations are persisted to ~/.config/vibez1/push-registrations.json
  * so they survive server restarts. Delivery gracefully degrades to log-only
  * when Firebase credentials or firebase-admin are unavailable.
  */
 
 import * as fs from "fs";
 import * as path from "path";
-import { getCentralDataPath } from "@natstack/env-paths";
-import type { PushApprovalDataPayload } from "@natstack/shared/approvalContract";
-import { pushMethods } from "@natstack/shared/serviceSchemas/push";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import { getCentralDataPath } from "@vibez1/env-paths";
+import type { PushApprovalDataPayload } from "@vibez1/shared/approvalContract";
+import { pushMethods } from "@vibez1/shared/serviceSchemas/push";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 
 export interface PushRegistration {
@@ -115,13 +115,13 @@ function errorMessage(error: unknown): string {
 
 function readServiceAccount(env: NodeJS.ProcessEnv): Record<string, unknown> | null {
   const inlineJson =
-    env["NATSTACK_FIREBASE_SERVICE_ACCOUNT_JSON"] ?? env["FIREBASE_SERVICE_ACCOUNT_JSON"];
+    env["VIBEZ1_FIREBASE_SERVICE_ACCOUNT_JSON"] ?? env["FIREBASE_SERVICE_ACCOUNT_JSON"];
   if (inlineJson) {
     return JSON.parse(inlineJson) as Record<string, unknown>;
   }
 
   const candidatePaths = [
-    env["NATSTACK_FIREBASE_SERVICE_ACCOUNT_PATH"],
+    env["VIBEZ1_FIREBASE_SERVICE_ACCOUNT_PATH"],
     env["GOOGLE_APPLICATION_CREDENTIALS"],
     path.join(process.cwd(), "firebase-service-account.json"),
   ].filter((value): value is string => !!value);

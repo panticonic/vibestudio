@@ -4,7 +4,7 @@ import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { describe, expect, it, vi } from "vitest";
-import type { FieldDefinition, FieldValue } from "@natstack/types";
+import type { FieldDefinition, FieldValue } from "@vibez1/types";
 import { FormRenderer } from "../FormRenderer";
 
 function renderControlledForm(

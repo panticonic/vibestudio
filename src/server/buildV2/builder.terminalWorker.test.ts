@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@natstack/env-paths";
+import { setUserDataPath } from "@vibez1/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
@@ -22,7 +22,7 @@ function commit(dir: string, msg: string): void {
   git(dir, ["add", "."]);
   git(dir, [
     "-c",
-    "user.name=NatStack Test",
+    "user.name=Vibez1 Test",
     "-c",
     "user.email=test@example.invalid",
     "commit",
@@ -46,7 +46,7 @@ describe("buildUnit terminal worker builds", () => {
   let workspaceRoot: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-terminal-build-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-terminal-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
     // Resolve external npm deps (yoga-layout) from the repo's real node_modules.
@@ -74,7 +74,7 @@ describe("buildUnit terminal worker builds", () => {
         version: "0.1.0",
         private: true,
         type: "module",
-        natstack: {
+        vibez1: {
           entry: "worker.ts",
           durable: { classes: [{ className: "TerminalMin" }] },
           terminal: { renderer: "ink" },
@@ -158,7 +158,7 @@ describe("buildUnit terminal worker builds", () => {
         version: "0.1.0",
         private: true,
         type: "module",
-        natstack: {
+        vibez1: {
           entry: "worker.ts",
           durable: { classes: [{ className: "StaleDistWorker" }] },
         },

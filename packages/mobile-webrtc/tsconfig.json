@@ -13,8 +13,8 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
-      "@natstack/rpc": ["../rpc/src/index.ts"],
-      "@natstack/rpc/*": ["../rpc/src/*"]
+      "@vibez1/rpc": ["../rpc/src/index.ts"],
+      "@vibez1/rpc/*": ["../rpc/src/*"]
     }
   },
   "include": ["src/**/*.ts"],

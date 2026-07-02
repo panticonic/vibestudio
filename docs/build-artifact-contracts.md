@@ -1,6 +1,6 @@
 # Build Artifact Contracts
 
-NatStack builds several artifacts that look similar in source but run in different module systems. Build-system changes should preserve these contracts.
+Vibez1 builds several artifacts that look similar in source but run in different module systems. Build-system changes should preserve these contracts.
 
 | Artifact | Runtime | Format | Contract |
 | --- | --- | --- | --- |

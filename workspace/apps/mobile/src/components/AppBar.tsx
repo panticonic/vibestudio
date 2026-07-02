@@ -6,19 +6,33 @@
  *
  * Features:
  * - Left: hamburger menu button to open the panel drawer
- * - Center: current panel title (or "NatStack" if no panel selected)
+ * - Center: current panel title (or "Vibez1" if no panel selected)
  * - Right: "+" button to create a new panel
  * - Uses safe area insets for status bar spacing
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { View, Text, StyleSheet, Pressable, ActionSheetIOS, Platform, Alert, TextInput } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ActionSheetIOS,
+  Platform,
+  Alert,
+  TextInput,
+} from "react-native";
 import type { StyleProp, TextStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
-import { splitTextByMatchRanges, type AddressAutocompleteItem, type TextMatchRange } from "@natstack/shared/panelChrome";
+import {
+  splitTextByMatchRanges,
+  type AddressAutocompleteItem,
+  type TextMatchRange,
+} from "@vibez1/shared/panelChrome";
+import { Vibez1Logo } from "./Vibez1Logo";
 
 interface AppBarProps {
   /** Title to display in the center */
@@ -75,7 +89,10 @@ export function AppBar({
   const shellClient = useAtomValue(shellClientAtom);
   const [addressValue, setAddressValue] = useState(address);
   const [addressFocused, setAddressFocused] = useState(false);
-  const visibleSuggestions = useMemo(() => addressFocused ? addressSuggestions.slice(0, 8) : [], [addressFocused, addressSuggestions]);
+  const visibleSuggestions = useMemo(
+    () => (addressFocused ? addressSuggestions.slice(0, 8) : []),
+    [addressFocused, addressSuggestions]
+  );
 
   useEffect(() => {
     setAddressValue(address);
@@ -95,7 +112,7 @@ export function AppBar({
       } catch (error) {
         Alert.alert(
           "Panel Creation Failed",
-          error instanceof Error ? error.message : "Could not create panel.",
+          error instanceof Error ? error.message : "Could not create panel."
         );
       }
     };
@@ -109,7 +126,7 @@ export function AppBar({
         (buttonIndex) => {
           if (buttonIndex === 0) createPanel("new");
           else if (buttonIndex === 1) createPanel("browser");
-        },
+        }
       );
     } else {
       Alert.alert("Create Panel", undefined, [
@@ -146,6 +163,8 @@ export function AppBar({
             <View style={[styles.hamburgerLine, { backgroundColor: colors.text }]} />
           </View>
         </Pressable>
+
+        <Vibez1Logo size={30} variant="mark" style={styles.brandLogo} />
 
         {/* Panel title */}
         <Text
@@ -251,7 +270,9 @@ export function AppBar({
             accessibilityLabel={isLoading ? "Stop loading" : "Reload"}
             accessibilityRole="button"
           >
-            <Text style={[styles.navButtonText, { color: colors.text }]}>{isLoading ? "x" : "R"}</Text>
+            <Text style={[styles.navButtonText, { color: colors.text }]}>
+              {isLoading ? "x" : "R"}
+            </Text>
           </Pressable>
         </View>
       )}
@@ -280,7 +301,9 @@ export function AppBar({
               accessibilityLabel={item.label}
             >
               <View style={styles.suggestionContent}>
-                <Text style={[styles.suggestionIcon, { color: colors.textSecondary }]}>{iconText(item.iconKind)}</Text>
+                <Text style={[styles.suggestionIcon, { color: colors.textSecondary }]}>
+                  {iconText(item.iconKind)}
+                </Text>
                 <View style={styles.suggestionText}>
                   <HighlightedText
                     text={item.label}
@@ -305,7 +328,14 @@ export function AppBar({
 }
 
 function iconText(kind: AddressAutocompleteItem["iconKind"]): string {
-  return ({ globe: "go", history: "h", bookmark: "*", search: "?", session: "s", panel: "p" } as Record<string, string>)[kind] ?? "-";
+  return (
+    (
+      { globe: "go", history: "h", bookmark: "*", search: "?", session: "s", panel: "p" } as Record<
+        string,
+        string
+      >
+    )[kind] ?? "-"
+  );
 }
 
 function HighlightedText({
@@ -419,6 +449,9 @@ const styles = StyleSheet.create({
     height: 44,
     alignItems: "center",
     justifyContent: "center",
+  },
+  brandLogo: {
+    marginLeft: -4,
   },
   hamburger: {
     width: 22,

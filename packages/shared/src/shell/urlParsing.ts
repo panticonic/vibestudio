@@ -57,7 +57,7 @@ function parseUrlLike(url: string): ParsedUrlLike | null {
  * Check if a URL targets the managed host (with or without explicit port).
  *
  * @param url - The URL to check
- * @param externalHost - The managed host domain (e.g. "natstack.example.com")
+ * @param externalHost - The managed host domain (e.g. "vibez1.example.com")
  */
 export function isManagedHost(url: string, externalHost: string): boolean {
   const parsed = parseUrlLike(url);
@@ -70,7 +70,7 @@ export function isManagedHost(url: string, externalHost: string): boolean {
  * Returns null if the URL is not a valid panel URL.
  *
  * @param url - The URL to parse
- * @param externalHost - The managed host domain (e.g. "natstack.example.com")
+ * @param externalHost - The managed host domain (e.g. "vibez1.example.com")
  */
 export function parsePanelUrl(url: string, externalHost: string): ParsedPanelUrl | null {
   const parsed = parseUrlLike(url);

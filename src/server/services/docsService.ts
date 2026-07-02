@@ -7,14 +7,11 @@
  * while never advertising a method the caller cannot invoke — `index` applies
  * `isCatalogEntryVisible`, which mirrors the dispatcher's static gate.
  */
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { ServiceDispatcher, CallerKind } from "@natstack/shared/serviceDispatcher";
-import type { RuntimeSurface } from "@natstack/shared/runtimeSurface";
-import { checkServiceAccess } from "@natstack/shared/servicePolicy";
-import {
-  docsMethods,
-  type SerializedServiceDefinition,
-} from "@natstack/shared/serviceSchemas/docs";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceDispatcher, CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { RuntimeSurface } from "@vibez1/shared/runtimeSurface";
+import { checkServiceAccess } from "@vibez1/shared/servicePolicy";
+import { docsMethods, type SerializedServiceDefinition } from "@vibez1/shared/serviceSchemas/docs";
 import { createCatalogIndex, type CatalogSearchOpts } from "./catalog/catalogIndex.js";
 import { serializeDef } from "./catalog/serialize.js";
 

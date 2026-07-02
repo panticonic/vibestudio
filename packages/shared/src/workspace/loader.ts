@@ -1,19 +1,19 @@
 /**
- * Configuration loading for NatStack.
+ * Configuration loading for Vibez1.
  *
  * Two configuration sources:
- * 1. Central config (~/.config/natstack/): Models, secrets, env vars (shared)
- * 2. Workspace (~/.config/natstack/workspaces/{name}/): natstack.yml, panels, etc.
+ * 1. Central config (~/.config/vibez1/): Models, secrets, env vars (shared)
+ * 2. Workspace (~/.config/vibez1/workspaces/{name}/): vibez1.yml, panels, etc.
  *
- * Workspace resolution: CLI --workspace=name → NATSTACK_WORKSPACE env → null (show init UI)
+ * Workspace resolution: CLI --workspace=name → VIBEZ1_WORKSPACE env → null (show init UI)
  */
 
 import * as fs from "fs";
 import * as path from "path";
-import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@natstack/env-paths";
+import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@vibez1/env-paths";
 import YAML from "yaml";
 import dotenv from "dotenv";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { parseWorkspaceConfigContentWithId } from "./configParser.js";
 export { resolveDeclaredApps, resolveDeclaredExtensions } from "./configParser.js";
 
@@ -35,7 +35,7 @@ import {
   WORKSPACE_STATE_DIRS,
 } from "./sourceDirs.js";
 
-const WORKSPACE_CONFIG_FILE = "meta/natstack.yml";
+const WORKSPACE_CONFIG_FILE = "meta/vibez1.yml";
 const CENTRAL_CONFIG_FILE = "config.yml";
 const SECRETS_FILE = ".secrets.yml";
 const ENV_FILE = ".env";
@@ -48,9 +48,9 @@ const WORKSPACE_DELETE_RETRY_DELAY_MS = 100;
 
 /**
  * Get the central config directory path (shared across all workspaces).
- * - Linux: ~/.config/natstack
- * - macOS: ~/Library/Application Support/natstack
- * - Windows: %APPDATA%/natstack
+ * - Linux: ~/.config/vibez1
+ * - macOS: ~/Library/Application Support/vibez1
+ * - Windows: %APPDATA%/vibez1
  */
 export function getCentralConfigDir(): string {
   return getCentralDataPath();
@@ -112,7 +112,7 @@ function migrateClaudeAgentModelsConfig(parsed: CentralConfig): boolean {
     const migrated = migrateClaudeAgentModelValue(value);
     if (migrated !== null) {
       console.warn(
-        `[NatStack] Migrated old model role 'claude-agent:${(value as string).slice("claude-agent:".length)}' → '${migrated}' in models.${role}`
+        `[Vibez1] Migrated old model role 'claude-agent:${(value as string).slice("claude-agent:".length)}' → '${migrated}' in models.${role}`
       );
       (parsed.models as Record<string, unknown>)[role] = migrated;
       mutated = true;
@@ -122,7 +122,7 @@ function migrateClaudeAgentModelsConfig(parsed: CentralConfig): boolean {
 }
 
 /**
- * Load central config from ~/.config/natstack/config.yml
+ * Load central config from ~/.config/vibez1/config.yml
  */
 export function loadCentralConfig(): CentralConfig {
   const paths = getCentralConfigPaths();
@@ -202,7 +202,7 @@ export function loadCentralEnvFile(): void {
 }
 
 /**
- * Load central environment from ~/.config/natstack/.env into process.env
+ * Load central environment from ~/.config/vibez1/.env into process.env
  */
 export function loadCentralEnv(): void {
   loadCentralEnvFile();
@@ -239,7 +239,7 @@ export function saveSecretsToPath(secretsPath: string, secrets: Record<string, s
 }
 
 /**
- * Save central config to ~/.config/natstack/config.yml
+ * Save central config to ~/.config/vibez1/config.yml
  */
 export function saveCentralConfig(config: CentralConfig): void {
   const paths = getCentralConfigPaths();
@@ -270,7 +270,7 @@ const WORKSPACE_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 const WORKSPACE_NAME_MAX_LENGTH = 64;
 
 /**
- * Resolve workspace name from CLI --workspace=name or NATSTACK_WORKSPACE env var.
+ * Resolve workspace name from CLI --workspace=name or VIBEZ1_WORKSPACE env var.
  * Returns the validated name string or null if neither is set.
  * Throws if the name is present but invalid (prevents path traversal).
  */
@@ -296,7 +296,7 @@ export function resolveWorkspaceName(): string | null {
 
   // 2. Environment variable
   if (!raw) {
-    raw = process.env["NATSTACK_WORKSPACE"];
+    raw = process.env["VIBEZ1_WORKSPACE"];
   }
 
   if (!raw) return null;
@@ -330,7 +330,7 @@ function validateWorkspaceName(name: string): void {
  * Returns null if no template directory exists.
  */
 export function resolveWorkspaceTemplateDir(appRoot: string): string | null {
-  const debug = process.env["NATSTACK_DEBUG_PATHS"] === "1";
+  const debug = process.env["VIBEZ1_DEBUG_PATHS"] === "1";
   const templateDir = getExistingWorkspaceTemplateDir(appRoot, WORKSPACE_CONFIG_FILE);
   if (debug) {
     console.log(
@@ -452,7 +452,7 @@ export function deleteWorkspaceDir(name: string): void {
 }
 
 /**
- * Load and parse natstack.yml from a workspace directory
+ * Load and parse vibez1.yml from a workspace directory
  */
 export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
   const configPath = path.join(workspacePath, WORKSPACE_CONFIG_FILE);
@@ -618,7 +618,7 @@ function resolveWorkspaceCreationOpts(opts?: { templateDir?: string; forkFrom?: 
   forkFrom?: string;
 } {
   if (opts?.templateDir || opts?.forkFrom) return opts;
-  const appRoot = process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
+  const appRoot = process.env["VIBEZ1_APP_ROOT"] ?? process.cwd();
   const templateDir = resolveWorkspaceTemplateDir(appRoot);
   if (!templateDir) {
     throw new Error("Workspace creation requires a template, but no workspace template was found");
@@ -628,7 +628,7 @@ function resolveWorkspaceCreationOpts(opts?: { templateDir?: string; forkFrom?: 
 
 /**
  * Manages atomic reads/writes of workspace config fields.
- * Updates both the in-memory config and disk (natstack.yml).
+ * Updates both the in-memory config and disk (vibez1.yml).
  */
 export function createWorkspaceConfigManager(configPath: string, config: WorkspaceConfig) {
   return {

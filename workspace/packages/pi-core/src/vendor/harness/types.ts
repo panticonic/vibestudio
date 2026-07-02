@@ -1,6 +1,6 @@
 // @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.78.0; see PROVENANCE.md and vendor.sh
 import type { ImageContent, Model, SimpleStreamOptions, TextContent, Transport } from "@earendil-works/pi-ai";
-// NatStack vendoring patch: upstream barrel import rewritten to "../types.js" (the barrel
+// Vibez1 vendoring patch: upstream barrel import rewritten to "../types.js" (the barrel
 // re-exports excluded runtime modules and is not vendored).
 import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.js";
 import type { Session } from "./session/session.js";
@@ -833,4 +833,4 @@ export interface AgentHarnessOptions<
 	followUpMode?: QueueMode;
 }
 
-// NatStack vendoring patch: AgentHarness re-export removed (agent-harness.ts is intentionally not vendored).
+// Vibez1 vendoring patch: AgentHarness re-export removed (agent-harness.ts is intentionally not vendored).

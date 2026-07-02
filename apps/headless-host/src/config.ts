@@ -57,11 +57,11 @@ function parseOptionalNonNegativeInt(value: string | undefined): number | undefi
 
 export function resolveConfig(overrides: ConfigOverrides = {}, env = process.env): HeadlessHostConfig {
   const serverUrl =
-    overrides.serverUrl ?? overrides.deviceCredential?.serverUrl ?? env["NATSTACK_SERVER_URL"];
+    overrides.serverUrl ?? overrides.deviceCredential?.serverUrl ?? env["VIBEZ1_SERVER_URL"];
   if (!serverUrl) {
-    throw new Error("headless-host: serverUrl is required (--url or NATSTACK_SERVER_URL)");
+    throw new Error("headless-host: serverUrl is required (--url or VIBEZ1_SERVER_URL)");
   }
-  const token = overrides.token ?? env["NATSTACK_HEADLESS_TOKEN"];
+  const token = overrides.token ?? env["VIBEZ1_HEADLESS_TOKEN"];
   const auth: HeadlessHostConfig["auth"] = overrides.deviceCredential
     ? { kind: "device", ...overrides.deviceCredential }
     : token
@@ -70,7 +70,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}, env = process.env
           throw new Error("headless-host: auth is required (--token or a paired device credential)");
         })();
 
-  const idleExitEnv = env["NATSTACK_HEADLESS_IDLE_EXIT_MS"];
+  const idleExitEnv = env["VIBEZ1_HEADLESS_IDLE_EXIT_MS"];
   return {
     serverUrl: serverUrl.replace(/\/$/, ""),
     auth,
@@ -79,11 +79,11 @@ export function resolveConfig(overrides: ConfigOverrides = {}, env = process.env
     maxPanels: overrides.maxPanels ?? 8,
     idleUnloadMs: overrides.idleUnloadMs ?? 5 * 60_000,
     idleExitMs: overrides.idleExitMs ?? parseOptionalNonNegativeInt(idleExitEnv),
-    chromiumPath: overrides.chromiumPath ?? env["NATSTACK_CHROMIUM_PATH"],
-    cacheDir: overrides.cacheDir ?? path.join(os.homedir(), ".cache", "natstack", "chromium"),
+    chromiumPath: overrides.chromiumPath ?? env["VIBEZ1_CHROMIUM_PATH"],
+    cacheDir: overrides.cacheDir ?? path.join(os.homedir(), ".cache", "vibez1", "chromium"),
     profileDir:
       overrides.profileDir ??
-      path.join(os.homedir(), ".local", "state", "natstack", "headless-host"),
+      path.join(os.homedir(), ".local", "state", "vibez1", "headless-host"),
     leanBrowser: overrides.leanBrowser ?? false,
   };
 }

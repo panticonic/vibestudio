@@ -1,5 +1,5 @@
-import type { RpcClient, RpcEventContext } from "@natstack/rpc";
-import type { PanelLifecycleResult } from "@natstack/shared/types";
+import type { RpcClient, RpcEventContext } from "@vibez1/rpc";
+import type { PanelLifecycleResult } from "@vibez1/shared/types";
 import type {
   CdpAutomation,
   PanelContract,

@@ -46,7 +46,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     await fsp.mkdir(path.join(workspaceRoot, "packages/foo"), { recursive: true });
     await fsp.writeFile(path.join(workspaceRoot, "packages/foo/index.ts"), "export const x = 1;\n");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta/natstack.yml"), "name: test\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: test\n");
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     vcs = new WorkspaceVcs({
@@ -110,23 +110,23 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
 
   it("ensureFresh commits an EXISTING repo's out-of-band disk change (git-import case)", async () => {
     // `meta` already has a main from bootstrap.
-    expect((await vcs.readFile(VCS_MAIN_HEAD, "natstack.yml", "meta"))?.content).toMatchObject({
+    expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
       kind: "text",
       text: "name: test\n",
     });
 
-    // A git import rewrites meta/natstack.yml on disk.
-    await fsp.writeFile(path.join(workspaceRoot, "meta/natstack.yml"), "name: imported\n");
+    // A git import rewrites meta/vibez1.yml on disk.
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: imported\n");
 
     // ensureRepoLogsFromDisk SKIPS repos that already have a main → still stale.
     await vcs.ensureRepoLogsFromDisk();
-    expect((await vcs.readFile(VCS_MAIN_HEAD, "natstack.yml", "meta"))?.content).toMatchObject({
+    expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
       text: "name: test\n",
     });
 
     // ensureFresh re-snapshots every present repo → the change reaches vcs:repo:meta.
     await vcs.ensureFresh();
-    expect((await vcs.readFile(VCS_MAIN_HEAD, "natstack.yml", "meta"))?.content).toMatchObject({
+    expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
       kind: "text",
       text: "name: imported\n",
     });
@@ -211,7 +211,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
         .catch(() => null)
     ).toContain("ActionBar");
     expect(
-      await fsp.readFile(path.join(dir, "meta/natstack.yml"), "utf8").catch(() => null)
+      await fsp.readFile(path.join(dir, "meta/vibez1.yml"), "utf8").catch(() => null)
     ).toContain("test");
   });
 

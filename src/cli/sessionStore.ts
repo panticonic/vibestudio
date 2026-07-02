@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 /**
  * Local record of an agent CLI session: a durable `session` runtime entity
- * on a NatStack server plus the context it owns. Stored one file per
+ * on a Vibez1 server plus the context it owns. Stored one file per
  * session under the same config dir as the CLI device credential.
  */
 export interface AgentSession {
@@ -25,7 +25,7 @@ export function isValidSessionName(name: string): boolean {
 
 /** Same config-dir resolution as credentialStore.ts. */
 export function sessionDir(): string {
-  return path.join(os.homedir(), ".config", "natstack", "agent-sessions");
+  return path.join(os.homedir(), ".config", "vibez1", "agent-sessions");
 }
 
 export function sessionPath(name: string): string {

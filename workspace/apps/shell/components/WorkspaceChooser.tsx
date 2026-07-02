@@ -13,7 +13,7 @@ import {
   Text,
 } from "@radix-ui/themes";
 import { Cross2Icon, ExclamationTriangleIcon, PlusIcon } from "@radix-ui/react-icons";
-import { Surface } from "@workspace/ui";
+import { Surface, Vibez1Logo } from "@workspace/ui";
 
 import {
   recentWorkspacesAtom,
@@ -27,7 +27,7 @@ import {
   wizardFormDataAtom,
   workspaceErrorAtom,
 } from "../state/appModeAtoms";
-import type { WorkspaceEntry } from "@natstack/shared/types";
+import type { WorkspaceEntry } from "@vibez1/shared/types";
 import { HostTargetsSection } from "./HostTargetsSection";
 
 function formatRelativeTime(timestamp: number): string {
@@ -107,8 +107,9 @@ export function WorkspaceChooser() {
     >
       {/* Header */}
       <Flex direction="column" align="center" gap="2" mb="5">
+        <Vibez1Logo size={72} variant="tile" />
         <Heading size="7" weight="bold">
-          NatStack
+          Vibez1
         </Heading>
         <Text size="2" color="gray">
           Select a workspace to get started
@@ -116,7 +117,13 @@ export function WorkspaceChooser() {
       </Flex>
 
       {/* Workspaces */}
-      <Surface level="panel" bordered padding="4" flex={1} style={{ overflow: "hidden", minHeight: 0 }}>
+      <Surface
+        level="panel"
+        bordered
+        padding="4"
+        flex={1}
+        style={{ overflow: "hidden", minHeight: 0 }}
+      >
         <Flex direction="column" style={{ height: "100%" }}>
           <Flex justify="between" align="center" mb="3">
             <Text size="2" weight="medium" color="gray">
@@ -153,13 +160,28 @@ export function WorkspaceChooser() {
             }}
           >
             {recentWorkspaces.length === 0 ? (
-              <Flex align="center" justify="center" style={{ height: "100%", minHeight: "120px" }}>
+              <Flex
+                direction="column"
+                align="center"
+                justify="center"
+                gap="2"
+                style={{ height: "100%", minHeight: "160px", textAlign: "center" }}
+              >
                 {isLoading ? (
-                  <Spinner size="2" />
+                  <>
+                    <Vibez1Logo size={44} variant="mark" />
+                    <Spinner size="2" />
+                    <Text size="2" color="gray">
+                      Loading workspaces...
+                    </Text>
+                  </>
                 ) : (
-                  <Text size="2" color="gray">
-                    Could not load workspaces
-                  </Text>
+                  <>
+                    <Vibez1Logo size={44} variant="mark" />
+                    <Text size="2" color="gray">
+                      Could not load workspaces
+                    </Text>
+                  </>
                 )}
               </Flex>
             ) : (

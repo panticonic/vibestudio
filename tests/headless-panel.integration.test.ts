@@ -10,8 +10,8 @@ import {
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
-} from "@natstack/rpc";
-import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
+} from "@vibez1/rpc";
+import type { WsClientMessage, WsServerMessage } from "@vibez1/shared/ws/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -47,7 +47,7 @@ interface CdpEndpoint {
 }
 
 const RUN_HEADLESS_PANEL_INTEGRATION =
-  process.env["NATSTACK_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
+  process.env["VIBEZ1_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
 const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
 const headlessHostEntry = findHeadlessHostEntry();
 const maybeDescribe =
@@ -92,7 +92,7 @@ afterEach(async () => {
 
 maybeDescribe("headless browser panel integration", () => {
   it("opens a browser panel from a worker principal and drives it through the real headless host", async () => {
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-headless-panel-"));
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-headless-panel-"));
     const readyFile = path.join(tempRoot, "ready.json");
     const fixture = await startFixtureServer();
 
@@ -112,11 +112,11 @@ maybeDescribe("headless browser panel integration", () => {
         env: {
           ...process.env,
           NODE_ENV: "development",
-          NATSTACK_FORCE_WORKSPACE_SERVER: "1",
-          NATSTACK_HEADLESS_HOST_AUTOSPAWN: "1",
-          NATSTACK_HEADLESS_HOST_ENTRY: headlessHostEntry!,
-          NATSTACK_HEADLESS_HOST_SPAWN_TIMEOUT_MS: "180000",
-          NATSTACK_HEADLESS_IDLE_EXIT_MS: "1000",
+          VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
+          VIBEZ1_HEADLESS_HOST_AUTOSPAWN: "1",
+          VIBEZ1_HEADLESS_HOST_ENTRY: headlessHostEntry!,
+          VIBEZ1_HEADLESS_HOST_SPAWN_TIMEOUT_MS: "180000",
+          VIBEZ1_HEADLESS_IDLE_EXIT_MS: "1000",
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
@@ -196,7 +196,7 @@ maybeDescribe("headless browser panel integration", () => {
     ).resolves.toBe("first");
     await expect(
       cdpClient.evaluate(
-        "(() => { window.__natstackIntegration = 42; return window.__natstackIntegration; })()"
+        "(() => { window.__vibez1Integration = 42; return window.__vibez1Integration; })()"
       )
     ).resolves.toBe(42);
 
@@ -493,11 +493,11 @@ class CdpClient {
       };
       ws.once("error", fail);
       ws.once("open", () => {
-        ws.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
+        ws.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint.token }));
       });
       ws.on("message", function onAuth(data) {
         const message = parseJson<{ type?: string }>(data);
-        if (message?.type !== "natstack:cdp-auth-ok") return;
+        if (message?.type !== "vibez1:cdp-auth-ok") return;
         ws.off("message", onAuth);
         ws.off("error", fail);
         clearTimeout(timeout);

@@ -53,17 +53,17 @@ describe("execute", () => {
     it("throws when require is not available", () => {
       // Temporarily remove global require
       const original = (globalThis as Record<string, unknown>)[
-        "__natstackRequire__"
+        "__vibez1Require__"
       ];
-      delete (globalThis as Record<string, unknown>)["__natstackRequire__"];
+      delete (globalThis as Record<string, unknown>)["__vibez1Require__"];
 
       try {
         expect(() => execute(`exports.x = 1;`)).toThrow(
-          "__natstackRequire__ not available"
+          "__vibez1Require__ not available"
         );
       } finally {
         if (original) {
-          (globalThis as Record<string, unknown>)["__natstackRequire__"] =
+          (globalThis as Record<string, unknown>)["__vibez1Require__"] =
             original;
         }
       }
@@ -229,17 +229,17 @@ describe("validateRequires", () => {
 
   it("returns invalid when require function is not available", () => {
     // Don't provide a require function and ensure global isn't set
-    const original = (globalThis as Record<string, unknown>)["__natstackRequire__"];
-    delete (globalThis as Record<string, unknown>)["__natstackRequire__"];
+    const original = (globalThis as Record<string, unknown>)["__vibez1Require__"];
+    delete (globalThis as Record<string, unknown>)["__vibez1Require__"];
 
     try {
       const result = validateRequires(["react"]);
 
       expect(result.valid).toBe(false);
-      expect(result.error).toContain("__natstackRequire__");
+      expect(result.error).toContain("__vibez1Require__");
     } finally {
       if (original) {
-        (globalThis as Record<string, unknown>)["__natstackRequire__"] = original;
+        (globalThis as Record<string, unknown>)["__vibez1Require__"] = original;
       }
     }
   });
@@ -268,30 +268,30 @@ describe("validateRequires", () => {
 
 describe("getDefaultRequire", () => {
   it("returns undefined when global require is not set", () => {
-    const original = (globalThis as Record<string, unknown>)["__natstackRequire__"];
-    delete (globalThis as Record<string, unknown>)["__natstackRequire__"];
+    const original = (globalThis as Record<string, unknown>)["__vibez1Require__"];
+    delete (globalThis as Record<string, unknown>)["__vibez1Require__"];
 
     try {
       expect(getDefaultRequire()).toBeUndefined();
     } finally {
       if (original) {
-        (globalThis as Record<string, unknown>)["__natstackRequire__"] = original;
+        (globalThis as Record<string, unknown>)["__vibez1Require__"] = original;
       }
     }
   });
 
   it("returns the global require function when set", () => {
     const mockFn = () => ({});
-    const original = (globalThis as Record<string, unknown>)["__natstackRequire__"];
-    (globalThis as Record<string, unknown>)["__natstackRequire__"] = mockFn;
+    const original = (globalThis as Record<string, unknown>)["__vibez1Require__"];
+    (globalThis as Record<string, unknown>)["__vibez1Require__"] = mockFn;
 
     try {
       expect(getDefaultRequire()).toBe(mockFn);
     } finally {
       if (original) {
-        (globalThis as Record<string, unknown>)["__natstackRequire__"] = original;
+        (globalThis as Record<string, unknown>)["__vibez1Require__"] = original;
       } else {
-        delete (globalThis as Record<string, unknown>)["__natstackRequire__"];
+        delete (globalThis as Record<string, unknown>)["__vibez1Require__"];
       }
     }
   });

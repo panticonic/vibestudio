@@ -1,20 +1,20 @@
 # @workspace/harness
 
-In-process Pi runtime for the NatStack agent worker DO.
+In-process Pi runtime for the Vibez1 agent worker DO.
 
 This package wraps `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`
-("Pi") for use inside NatStack's agentic Durable Objects. It provides:
+("Pi") for use inside Vibez1's agentic Durable Objects. It provides:
 
 - **`PiRunner`** — Worker DO companion class that owns one Pi `Agent`
   per channel. Constructs tools via the workerd-compatible RuntimeFs bridge,
   loads system prompt and skills via workspace.* RPC, registers the
-  three NatStack extension factories, bridges API keys via
+  three Vibez1 extension factories, bridges API keys via
   `setRuntimeApiKey`, and exposes `runTurn` / `steer` / `interrupt` / `fork`
   / `getStateSnapshot`.
-- **NatStack extension factories** (`extensions/{approval-gate,channel-tools,ask-user}.ts`)
+- **Vibez1 extension factories** (`extensions/{approval-gate,channel-tools,ask-user}.ts`)
   — Pi extensions supplied inline via `extensionFactories`. Closure-bound to
   the worker, NOT Pi-package-portable.
-- **`NatStackExtensionUIContext`** — Implements Pi's `ExtensionUIContext`
+- **`Vibez1ExtensionUIContext`** — Implements Pi's `ExtensionUIContext`
   interface, routing UI primitives (`select`, `confirm`, `notify`, `setStatus`,
   …) through worker callbacks that send channel feedback_form / ephemeral
   events.
@@ -23,7 +23,7 @@ This package wraps `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`
 
 ## Architecture
 
-Before this package's rewrite, NatStack used a 4-layer pipeline with a Node.js
+Before this package's rewrite, Vibez1 used a 4-layer pipeline with a Node.js
 child process running the Anthropic SDK. That layer is gone. Pi runs
 in-process inside the worker DO, the agent worker imports `PiRunner`
 directly, and `PiRunner` emits canonical `agentic.trajectory.v1` events that
@@ -56,8 +56,8 @@ import {
   type AskUserDeps,
 
   // UI bridge
-  NatStackExtensionUIContext,
-  type NatStackUIBridgeCallbacks,
+  Vibez1ExtensionUIContext,
+  type Vibez1UIBridgeCallbacks,
 
   // Channel boundary types
   type Attachment,
@@ -100,7 +100,7 @@ runner.hooks.on("transform_context", async (messages, context) => {
 This applies to all new `event`, `transform_context`, and
 `before_provider_request` listeners. Thread `context.signal` into any RPC,
 fetch, file walk, or other cancellable async operation, and check it before
-starting non-idempotent work. NatStack may stop awaiting a listener after
+starting non-idempotent work. Vibez1 may stop awaiting a listener after
 abort, but it cannot cancel side effects inside listener code that ignores the
 signal.
 

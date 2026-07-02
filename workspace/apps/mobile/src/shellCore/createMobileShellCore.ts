@@ -1,6 +1,6 @@
-import { PanelRegistry } from "@natstack/shared/panelRegistry";
-import { PanelManager } from "@natstack/shared/shell/panelManager";
-import type { Panel, PanelTreeSnapshot } from "@natstack/shared/types";
+import { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import { PanelManager } from "@vibez1/shared/shell/panelManager";
+import type { Panel, PanelTreeSnapshot } from "@vibez1/shared/types";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -8,17 +8,17 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@natstack/shared/shell/workspaceStateClient";
+} from "@vibez1/shared/shell/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-} from "@natstack/shared/runtime/entitySpec";
+} from "@vibez1/shared/runtime/entitySpec";
 import type {
   IndexablePanel,
   PanelSearchIndex,
   PanelSearchResult,
-} from "@natstack/shared/panelSearchTypes";
+} from "@vibez1/shared/panelSearchTypes";
 import type { MobileRpcClient } from "../services/mobileTransport";
 import { parseHostConfig } from "../services/panelUrls";
 import { createMobileLocalViewStateStore } from "./localViewState";

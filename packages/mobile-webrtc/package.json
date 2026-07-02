@@ -1,5 +1,5 @@
 {
-  "name": "@natstack/mobile-webrtc",
+  "name": "@vibez1/mobile-webrtc",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -10,7 +10,7 @@
     "./polyfills": "./src/polyfills.ts"
   },
   "dependencies": {
-    "@natstack/rpc": "workspace:*",
+    "@vibez1/rpc": "workspace:*",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "react-native-keychain": "^9.2.2",
     "react-native-webrtc": "^124.0.5",

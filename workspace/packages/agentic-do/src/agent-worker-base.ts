@@ -20,7 +20,7 @@ import {
   createDocsOpenTool,
   createWebTools,
   createToolVcs,
-  loadNatStackResources,
+  loadVibez1Resources,
 } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
@@ -108,7 +108,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     }
     if (this.promptResourceLoad) return this.promptResourceLoad;
 
-    const load = loadNatStackResources({ rpc: this.rpc })
+    const load = loadVibez1Resources({ rpc: this.rpc })
       .then((resources): AgentPromptResources => ({
         workspacePrompt: resources.systemPrompt,
         skillIndex: resources.skillIndex,

@@ -24,13 +24,13 @@ import { createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
-import type { LibraryBuildTarget } from "@natstack/shared/serviceSchemas/build";
+import type { LibraryBuildTarget } from "@vibez1/shared/serviceSchemas/build";
 import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
   isTerminalWorker,
-} from "@natstack/shared/unitManifest";
+} from "@vibez1/shared/unitManifest";
 import * as buildStore from "./buildStore.js";
 import {
   contentTypeForPath,
@@ -49,19 +49,19 @@ import {
   ensureExtensionRuntimeDeps,
 } from "./externalDeps.js";
 import { collectTransitiveInternalDeps, getBuildSourceProvider } from "./buildSource.js";
-import { PANEL_CSP_META } from "@natstack/shared/constants";
-import { EXTENSION_RUNTIME_ABI_VERSION } from "@natstack/shared/extensionRuntimeAbi";
+import { PANEL_CSP_META } from "@vibez1/shared/constants";
+import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibez1/shared/extensionRuntimeAbi";
 import { getAdapter } from "./adapters/index.js";
 import type { FrameworkAdapter } from "./adapters/types.js";
 import { resolveTemplate } from "./templateResolver.js";
-import { resolveExportSubpath } from "@natstack/typecheck";
+import { resolveExportSubpath } from "@vibez1/typecheck";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
 import type {
   BuildProvider,
   BuildProviderArtifact,
   BuildProviderInput,
-} from "@natstack/shared/buildProvider";
+} from "@vibez1/shared/buildProvider";
 
 // ---------------------------------------------------------------------------
 // Module Initialization
@@ -69,7 +69,7 @@ import type {
 
 /**
  * Absolute paths to the app's node_modules directories, where runtime packages
- * and @natstack/* platform packages are installed. Packaged builds may need
+ * and @vibez1/* platform packages are installed. Packaged builds may need
  * both app.asar.unpacked/node_modules for physical packages and app.asar/node_modules
  * for workspace-linked packages that electron-builder stores in the archive.
  */
@@ -88,7 +88,7 @@ export function initBuilder(appNodeModules: string | string[]): void {
 // ---------------------------------------------------------------------------
 
 function resolveMaxConcurrentBuilds(): number {
-  const parsed = Number.parseInt(process.env["NATSTACK_MAX_CONCURRENT_BUILDS"] ?? "", 10);
+  const parsed = Number.parseInt(process.env["VIBEZ1_MAX_CONCURRENT_BUILDS"] ?? "", 10);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   return 8;
 }
@@ -119,6 +119,10 @@ const PANEL_ASSET_LOADERS: Record<string, esbuild.Loader> = {
   ".wasm": "file",
   ".pdf": "file",
 };
+
+const LIBRARY_ASSET_LOADERS: Record<string, esbuild.Loader> = Object.fromEntries(
+  Object.keys(PANEL_ASSET_LOADERS).map((ext) => [ext, "dataurl" as esbuild.Loader])
+);
 
 const TEXT_EXTENSIONS = new Set([".js", ".css", ".json", ".map", ".svg", ".txt", ".md", ".html"]);
 
@@ -164,7 +168,7 @@ const FORCED_SPLIT_PACKAGES = [
 ] as const;
 
 function isVerboseBuildLogEnabled(): boolean {
-  return process.env["NATSTACK_LOG_LEVEL"] === "verbose";
+  return process.env["VIBEZ1_LOG_LEVEL"] === "verbose";
 }
 
 function formatBytes(bytes: number): string {
@@ -231,7 +235,7 @@ const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
  * Since materialized source states do not include generated dist/, the plugin maps
  * exports-based dist/ paths to their TypeScript source equivalents.
  */
-const PANEL_CONDITIONS = ["natstack-panel", "import", "default"] as const;
+const PANEL_CONDITIONS = ["vibez1-panel", "import", "default"] as const;
 
 function parseGraphImport(
   importPath: string,
@@ -273,7 +277,7 @@ function createWorkspaceResolvePlugin(
     name: "workspace-packages",
     setup(build) {
       // Match any package discovered in the workspace graph, including
-      // @workspace/* aliases and template-provided @natstack/* source packages.
+      // @workspace/* aliases and template-provided @vibez1/* source packages.
       build.onResolve({ filter: /^[^./]|^@/ }, (args) => {
         if (externalSet.has(args.path)) return { path: args.path, external: true };
         const parsed = parseGraphImport(args.path, graph);
@@ -635,9 +639,9 @@ function createExtensionCjsShimPlugin(
         return {
           loader: "js",
           contents: [
-            "import { createRequire as __natstackCjsShimCreateRequire } from 'node:module';",
-            "const __natstackCjsShimRequire = __natstackCjsShimCreateRequire(import.meta.url);",
-            `const mod = __natstackCjsShimRequire(${JSON.stringify(name)});`,
+            "import { createRequire as __vibez1CjsShimCreateRequire } from 'node:module';",
+            "const __vibez1CjsShimRequire = __vibez1CjsShimCreateRequire(import.meta.url);",
+            `const mod = __vibez1CjsShimRequire(${JSON.stringify(name)});`,
             "export default mod;",
           ].join("\n"),
         };
@@ -659,7 +663,7 @@ function pickForcedSplitModules(
     }
   }
 
-  // If a module is explicitly exposed for __natstackRequire__, keep it split out.
+  // If a module is explicitly exposed for __vibez1Require__, keep it split out.
   for (const specifier of exposeModules) {
     if (transitiveExternals[specifier]) {
       selected.add(specifier);
@@ -1209,37 +1213,37 @@ function generatePanelHtml(
 
 /**
  * Bootstrap target. Determines which globals are emitted:
- * - `"panel"` — full bootstrap including `__natstackRequireAsync__`, which uses
+ * - `"panel"` — full bootstrap including `__vibez1RequireAsync__`, which uses
  *   browser-native `import(id)` to lazily load unbundled modules. Used by
  *   `compileComponent` (inline_ui / feedback_custom).
- * - `"worker"` — bootstrap without `__natstackRequireAsync__`. workerd does not
+ * - `"worker"` — bootstrap without `__vibez1RequireAsync__`. workerd does not
  *   support dynamic `import(id)` of arbitrary specifiers, and no worker code
  *   path consumes the async fallback (compileComponent is panel-only).
  */
 export type BootstrapTarget = "panel" | "worker";
 
 export function generateModuleMapBootstrap(target: BootstrapTarget = "panel"): string {
-  const base = `globalThis.__natstackModuleMap__ = globalThis.__natstackModuleMap__ || {};
-globalThis.__natstackRequire__ = function(id) {
-  const mod = globalThis.__natstackModuleMap__[id];
+  const base = `globalThis.__vibez1ModuleMap__ = globalThis.__vibez1ModuleMap__ || {};
+globalThis.__vibez1Require__ = function(id) {
+  const mod = globalThis.__vibez1ModuleMap__[id];
   if (mod) return mod;
-  throw new Error('Module "' + id + '" not available. Workspace packages (@workspace/*, @natstack/*) are auto-resolved. For npm packages, use imports: { "' + id + '": "npm:latest" }');
+  throw new Error('Module "' + id + '" not available. Workspace packages (@workspace/*, @vibez1/*) are auto-resolved. For npm packages, use imports: { "' + id + '": "npm:latest" }');
 };`;
 
   if (target === "worker") return base;
 
   return `${base}
-globalThis.__natstackModuleLoadingPromises__ = globalThis.__natstackModuleLoadingPromises__ || {};
-globalThis.__natstackRequireAsync__ = async function(id) {
-  if (globalThis.__natstackModuleMap__[id]) return globalThis.__natstackModuleMap__[id];
-  if (globalThis.__natstackModuleLoadingPromises__[id]) return globalThis.__natstackModuleLoadingPromises__[id];
+globalThis.__vibez1ModuleLoadingPromises__ = globalThis.__vibez1ModuleLoadingPromises__ || {};
+globalThis.__vibez1RequireAsync__ = async function(id) {
+  if (globalThis.__vibez1ModuleMap__[id]) return globalThis.__vibez1ModuleMap__[id];
+  if (globalThis.__vibez1ModuleLoadingPromises__[id]) return globalThis.__vibez1ModuleLoadingPromises__[id];
   const loadPromise = import(id).then((mod) => {
-    globalThis.__natstackModuleMap__[id] = mod;
+    globalThis.__vibez1ModuleMap__[id] = mod;
     return mod;
   }).finally(() => {
-    delete globalThis.__natstackModuleLoadingPromises__[id];
+    delete globalThis.__vibez1ModuleLoadingPromises__[id];
   });
-  globalThis.__natstackModuleLoadingPromises__[id] = loadPromise;
+  globalThis.__vibez1ModuleLoadingPromises__[id] = loadPromise;
   return loadPromise;
 };`;
 }
@@ -1261,7 +1265,7 @@ export function generateExposeModuleCode(
     (dep, index) => `import * as __mod${index}__ from ${JSON.stringify(dep)};`
   );
   const registerLines = effectiveExposeModules.map(
-    (dep, index) => `globalThis.__natstackModuleMap__[${JSON.stringify(dep)}] = __mod${index}__;`
+    (dep, index) => `globalThis.__vibez1ModuleMap__[${JSON.stringify(dep)}] = __mod${index}__;`
   );
 
   // Register Node built-in shims if @workspace/runtime is exposed.
@@ -1278,7 +1282,7 @@ export function generateExposeModuleCode(
   var methods = ["readFile","writeFile","readdir","stat","lstat","mkdir","rmdir","unlink","rename","copyFile","access","rm","readlink","realpath","appendFile","chmod","truncate","utimes","open"];
   methods.forEach(function(m) { if (_fs[m]) fsShim[m] = function() { return _fs[m].apply(_fs, arguments); }; });
   fsShim.default = fsShim;
-  var map = globalThis.__natstackModuleMap__;
+  var map = globalThis.__vibez1ModuleMap__;
   map["fs"] = fsShim; map["node:fs"] = fsShim;
   map["fs/promises"] = _fs; map["node:fs/promises"] = _fs;
 })();`);
@@ -1308,7 +1312,7 @@ function generatePanelEntry(
  *
  * Workers run in workerd as ES modules: workerd reads `default` for the fetch
  * handler and named exports for Durable Object classes. The wrapper imports
- * the expose file (so __natstackRequire__/__natstackModuleMap__ are populated
+ * the expose file (so __vibez1Require__/__vibez1ModuleMap__ are populated
  * before any user code runs) and then re-exports everything from the user
  * entry to preserve the workerd module shape.
  *
@@ -1318,18 +1322,18 @@ function generatePanelEntry(
  */
 export function generateWorkerEntry(exposeEntryFile: string, entryFile: string): string {
   return `import ${JSON.stringify(exposeEntryFile)};
-import * as __natstackWorkerEntry from ${JSON.stringify(entryFile)};
+import * as __vibez1WorkerEntry from ${JSON.stringify(entryFile)};
 export * from ${JSON.stringify(entryFile)};
-const __natstackDefaultExport = Object.prototype.hasOwnProperty.call(__natstackWorkerEntry, "default")
-  ? Reflect.get(__natstackWorkerEntry, "default")
-  : { fetch() { return new Response("NatStack worker module has no default fetch handler."); } };
-export default __natstackDefaultExport;
+const __vibez1DefaultExport = Object.prototype.hasOwnProperty.call(__vibez1WorkerEntry, "default")
+  ? Reflect.get(__vibez1WorkerEntry, "default")
+  : { fetch() { return new Response("Vibez1 worker module has no default fetch handler."); } };
+export default __vibez1DefaultExport;
 `;
 }
 
 export function generateForcedSplitEntry(specifier: string): string {
-  return `import * as __natstackForcedSplitModule from ${JSON.stringify(specifier)};
-export { __natstackForcedSplitModule };
+  return `import * as __vibez1ForcedSplitModule from ${JSON.stringify(specifier)};
+export { __vibez1ForcedSplitModule };
 `;
 }
 
@@ -1588,7 +1592,7 @@ async function prepareBuildEnv(
   // and its dependencies disagree about a package's panel-vs-worker fork.
   conditions: readonly string[] = PANEL_CONDITIONS
 ): Promise<BuildEnv> {
-  const outdir = path.join(os.tmpdir(), "natstack-builds", `build-${buildKey}`);
+  const outdir = path.join(os.tmpdir(), "vibez1-builds", `build-${buildKey}`);
   fs.mkdirSync(outdir, { recursive: true });
 
   const sourcePath = sourcePathForNode(node, sourceRoot);
@@ -1604,7 +1608,7 @@ async function prepareBuildEnv(
   const nodeModulesDir = await ensureExternalDeps(externalDeps, dependencyOverrides);
   const nodePaths = nodeModulesDir ? [nodeModulesDir] : [];
 
-  // App's node_modules for @natstack/* packages (workspace:* deps).
+  // App's node_modules for @vibez1/* packages (workspace:* deps).
   // These are skipped by ensureExternalDeps and must be found via nodePaths.
   if (_appNodeModules.length > 0) {
     nodePaths.push(..._appNodeModules);
@@ -1692,7 +1696,7 @@ async function buildPanel(
   const panelSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(panelSourcePath, "package.json");
   const pkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
-  const extractedManifest = pkg.natstack ?? {};
+  const extractedManifest = pkg.vibez1 ?? {};
   const extractedDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
 
   // Resolve framework and HTML template from materialized source
@@ -1937,7 +1941,7 @@ function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly string
  * be stubbed out of worker bundles. The SDK dependencies of
  * `@earendil-works/pi-ai` (aws-sdk credential providers, undici, proxy-agent,
  * etc.) import these modules at module scope but only call them inside
- * code paths (e.g. file-based SSO credential loaders) that the NatStack
+ * code paths (e.g. file-based SSO credential loaders) that the Vibez1
  * agent worker never reaches. Stubbing to an empty / throwing module keeps
  * the bundle valid; an attempted use at runtime throws a clear error.
  */
@@ -2309,13 +2313,13 @@ async function buildWorker(
   const workerSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(workerSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
-  const extractedManifest = extractedPkg.natstack ?? {};
+  const extractedManifest = extractedPkg.vibez1 ?? {};
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
   const terminalWorker = isTerminalWorker(extractedManifest);
 
   // Generate the expose entry (always — even with empty exposeModules, this
-  // sets up __natstackRequire__/__natstackModuleMap__ so eval has a working
+  // sets up __vibez1Require__/__vibez1ModuleMap__ so eval has a working
   // require() in the worker context). Then wrap the user entry so the
   // bootstrap runs before user code, and re-export the user module's surface
   // (default fetch handler + named DO classes) for workerd.
@@ -2441,9 +2445,9 @@ async function buildApp(
   const appSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(appSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8")) as {
-    natstack?: Record<string, unknown>;
+    vibez1?: Record<string, unknown>;
   };
-  const extractedManifest = extractedPkg.natstack ?? {};
+  const extractedManifest = extractedPkg.vibez1 ?? {};
   validateUnitManifest(appUnitManifestDescriptor, extractedManifest, { unitName: node.name });
 
   const appManifest = extractedManifest["app"] as Record<string, unknown>;
@@ -2539,7 +2543,7 @@ async function buildTerminalApp(
   const { outdir, nodePaths, resolveDir, sourcePath } = env;
   const entry = appManifest["entry"];
   if (typeof entry !== "string" || entry.trim().length === 0) {
-    throw new Error(`Terminal app ${node.name} requires natstack.app.entry`);
+    throw new Error(`Terminal app ${node.name} requires vibez1.app.entry`);
   }
   const entryFile = path.join(sourcePath, entry);
   if (!fs.existsSync(entryFile)) {
@@ -2555,8 +2559,8 @@ async function buildTerminalApp(
       outfile: path.join(outdir, "index.mjs"),
       banner: {
         js:
-          'import { createRequire as __natstackCreateRequire } from "node:module";\n' +
-          "const require = __natstackCreateRequire(import.meta.url);",
+          'import { createRequire as __vibez1CreateRequire } from "node:module";\n' +
+          "const require = __vibez1CreateRequire(import.meta.url);",
       },
       sourcemap: sourcemap ? "inline" : false,
       metafile: true,
@@ -2682,9 +2686,9 @@ async function buildExtension(
   const extensionSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(extensionSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8")) as {
-    natstack?: Record<string, unknown>;
+    vibez1?: Record<string, unknown>;
   };
-  const extractedManifest = extractedPkg.natstack ?? {};
+  const extractedManifest = extractedPkg.vibez1 ?? {};
   validateExtensionManifest(node, extractedManifest);
   const extensionManifest = extractedManifest["extension"] as Record<string, unknown> | undefined;
   const dependencyMode = normalizeExtensionDependencyMode(extensionManifest?.["dependencyMode"]);
@@ -2722,12 +2726,12 @@ async function buildExtension(
       outfile: path.join(outdir, "bundle.js"),
       banner: {
         js: [
-          "import { createRequire as __natstackCreateRequire } from 'node:module';",
-          "import { fileURLToPath as __natstackFileURLToPath } from 'node:url';",
-          "import { dirname as __natstackDirname } from 'node:path';",
-          "const require = __natstackCreateRequire(import.meta.url);",
-          "const __filename = __natstackFileURLToPath(import.meta.url);",
-          "const __dirname = __natstackDirname(__filename);",
+          "import { createRequire as __vibez1CreateRequire } from 'node:module';",
+          "import { fileURLToPath as __vibez1FileURLToPath } from 'node:url';",
+          "import { dirname as __vibez1Dirname } from 'node:path';",
+          "const require = __vibez1CreateRequire(import.meta.url);",
+          "const __filename = __vibez1FileURLToPath(import.meta.url);",
+          "const __dirname = __vibez1Dirname(__filename);",
         ].join("\n"),
       },
       sourcemap: "inline",
@@ -2815,7 +2819,7 @@ async function smokeTestExtensionBuild(
     dependencyDiagnostics: ExtensionDependencyDiagnostics;
   }
 ): Promise<void> {
-  const smokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extension-smoke-"));
+  const smokeDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extension-smoke-"));
   const smokeScript = path.join(smokeDir, "smoke.mjs");
   try {
     fs.writeFileSync(
@@ -2831,7 +2835,7 @@ async function smokeTestExtensionBuild(
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: "1",
-        NATSTACK_EXTENSION_SMOKE_BUNDLE: bundlePath,
+        VIBEZ1_EXTENSION_SMOKE_BUNDLE: bundlePath,
       },
       timeout: 15_000,
       maxBuffer: 1024 * 1024,
@@ -3082,6 +3086,7 @@ async function buildLibraryBundle(
         createPathShimPlugin(env.resolveDir),
       ],
       nodePaths: env.nodePaths,
+      loader: LIBRARY_ASSET_LOADERS,
       logLevel: "warning",
       tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
     });
@@ -3172,7 +3177,7 @@ function npmBuildKey(specifier: string, version: string, externals: string[]): s
  *
  * Unlike buildLibraryBundle (which builds workspace packages from GAD state), this
  * installs an arbitrary npm package and bundles it with esbuild. The result
- * is a self-contained CJS string that can be loaded into __natstackModuleMap__.
+ * is a self-contained CJS string that can be loaded into __vibez1ModuleMap__.
  *
  * Flow: validate → npm install → esbuild bundle → cache → return CJS string.
  *
@@ -3229,7 +3234,7 @@ async function doNpmBuild(
 
     const outdir = path.join(
       os.tmpdir(),
-      "natstack-builds",
+      "vibez1-builds",
       `npm-${specifier.replace(/[/@]/g, "_")}-${Date.now()}`
     );
     fs.mkdirSync(outdir, { recursive: true });
@@ -3294,11 +3299,11 @@ async function doNpmBuild(
 }
 
 // ---------------------------------------------------------------------------
-// Platform Library Build (@natstack/* packages)
+// Platform Library Build (@vibez1/* packages)
 // ---------------------------------------------------------------------------
 
 /**
- * Build a @natstack/* platform package as a CJS library bundle for eval.
+ * Build a @vibez1/* platform package as a CJS library bundle for eval.
  *
  * These packages live in the app's node_modules (installed via pnpm workspace
  * protocol), not in the workspace build graph. We bundle them the same way
@@ -3309,7 +3314,7 @@ export async function buildPlatformLibrary(
   externals: string[]
 ): Promise<string> {
   if (_appNodeModules.length === 0) {
-    throw new Error("App node_modules not configured — cannot build @natstack/* packages");
+    throw new Error("App node_modules not configured — cannot build @vibez1/* packages");
   }
 
   const buildKey = `platform:${specifier}:${externals.sort().join(",")}`;
@@ -3342,7 +3347,7 @@ async function doPlatformBuild(
   try {
     const outdir = path.join(
       os.tmpdir(),
-      "natstack-builds",
+      "vibez1-builds",
       `platform-${specifier.replace(/[/@]/g, "_")}-${Date.now()}`
     );
     fs.mkdirSync(outdir, { recursive: true });
@@ -3358,7 +3363,7 @@ async function doPlatformBuild(
         entryPoints: [entryFile],
         bundle: true,
         format: "cjs",
-        // Use "neutral" not "browser" — @natstack/* packages (like git wrapping
+        // Use "neutral" not "browser" — @vibez1/* packages (like git wrapping
         // isomorphic-git) work with injected fs, not Node.js builtins.
         platform: "neutral",
         outfile: path.join(outdir, "bundle.js"),

@@ -12,7 +12,7 @@
  * a hardcoded literal.
  */
 export const APP_THEME = {
-  accentColor: "iris",
+  accentColor: "amber",
   grayColor: "slate",
   radius: "medium",
   scaling: "100%",

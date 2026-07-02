@@ -1,16 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { filterBootstrapApprovalsForTarget } from "@natstack/shared/bootstrapApprovals";
-import type { PendingApproval, PendingUnitBatchApproval } from "@natstack/shared/approvals";
-import { approvalViewModels, targetLabel } from "@natstack/shared/bootstrapLaunchGate";
-import type { EventService } from "@natstack/shared/eventsService";
-import type { HostTargetChangedPayload } from "@natstack/shared/events";
+import { filterBootstrapApprovalsForTarget } from "@vibez1/shared/bootstrapApprovals";
+import type { PendingApproval, PendingUnitBatchApproval } from "@vibez1/shared/approvals";
+import { approvalViewModels, targetLabel } from "@vibez1/shared/bootstrapLaunchGate";
+import type { EventService } from "@vibez1/shared/eventsService";
+import type { HostTargetChangedPayload } from "@vibez1/shared/events";
 import type {
   HostTarget,
   HostTargetLaunchPhaseId,
   HostTargetLaunchSessionSnapshot,
   HostTargetLaunchSessionStatus,
   HostTargetLaunchResult,
-} from "@natstack/shared/hostTargets";
+} from "@vibez1/shared/hostTargets";
 import type { AppHost, ReactNativeHostReadiness } from "./appHost.js";
 
 const BEGIN_LAUNCH_REFRESH_GRACE_MS = 250;

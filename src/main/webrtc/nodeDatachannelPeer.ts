@@ -47,8 +47,8 @@ import type {
   RtcPeerConfig,
   RtcPeerConnectionLike,
   RtcSessionDescription,
-} from "@natstack/rpc/transports/webrtcPeer";
-import { parseSdpFingerprint } from "@natstack/rpc/transports/webrtcPeer";
+} from "@vibez1/rpc/transports/webrtcPeer";
+import { parseSdpFingerprint } from "@vibez1/rpc/transports/webrtcPeer";
 import { certFileFingerprint } from "./cert.js";
 
 export { pemFingerprint } from "./cert.js";
@@ -79,7 +79,7 @@ export function createNodeDatachannelProvider(
   return {
     create(config: RtcPeerConfig): RtcPeerConnectionLike {
       const nd = loadNodeDatachannel();
-      const pc = new nd.PeerConnection(`${defaults.peerName ?? "natstack"}-${++counter}`, {
+      const pc = new nd.PeerConnection(`${defaults.peerName ?? "vibez1"}-${++counter}`, {
         iceServers: toNodeIceServers(config.iceServers),
         iceTransportPolicy: config.iceTransportPolicy,
         certificatePemFile: config.certificatePemFile ?? defaults.certificatePemFile,

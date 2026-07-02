@@ -1,11 +1,11 @@
 ---
 name: system-testing
-description: Automated system testing via headless agentic sessions. Spawns test agents to exercise NatStack services, skills, and runtime, then validates results programmatically. Includes a self-improvement workflow for fixing discovered bugs.
+description: Automated system testing via headless agentic sessions. Spawns test agents to exercise Vibez1 services, skills, and runtime, then validates results programmatically. Includes a self-improvement workflow for fixing discovered bugs.
 ---
 
 # System Testing Skill
 
-Spin up headless agentic sessions to systematically test every NatStack capability — filesystem, database, GAD workspace VCS, external Git interop, workers, panels, browser panels, build system, OAuth, skills, and more. Collect structured pass/fail results with full diagnostic data for every turn.
+Spin up headless agentic sessions to systematically test every Vibez1 capability — filesystem, database, GAD workspace VCS, external Git interop, workers, panels, browser panels, build system, OAuth, skills, and more. Collect structured pass/fail results with full diagnostic data for every turn.
 
 ## Files
 
@@ -626,7 +626,7 @@ with ordinary smoke testing:
 - browser-panel workspace edits go through `edit`/`write`/`vcs.edit` as
   UNCOMMITTED working changes (projected to disk, not yet a commit); a deliberate
   `vcs.commit(message)` then seals them, and `vcs.push` fast-forwards them into
-  `main`; external Git remotes use `@natstack/git` with `credentials.gitHttp()`
+  `main`; external Git remotes use `@vibez1/git` with `credentials.gitHttp()`
 - GAD raw SQL uses positional `(sql, bindings)` calls
 - channel/history inspection must stay bounded enough for agent context
 - large eval/tool results must complete visibly without pending invocation
@@ -693,7 +693,7 @@ runtime; do not narrow the test prompt to route around the failure.
 
 ## Auto-Start as Initial Panel
 
-See `meta/natstack.yml` for the current testing agent configuration.
+See `meta/vibez1.yml` for the current testing agent configuration.
 
 ## Build Model
 
@@ -735,12 +735,12 @@ For trusted app failures under `apps/`, read `skills/appdev/SKILL.md` before
 changing shell, mobile, or terminal app source. App bugs often involve approval
 identity, capabilities, native bootstrap, or target-specific build artifacts.
 
-For NatStack application source (`src/server/`, `src/main/`, root
-`packages/*`), use a plain checkout under `projects/natstack`. In normal mode
+For Vibez1 application source (`src/server/`, `src/main/`, root
+`packages/*`), use a plain checkout under `projects/vibez1`. In normal mode
 that prepares a branch/patch but does not hot-patch the running server. In
 dogfood server mode (`pnpm dev:self:server`), the workspace contains
 `meta/dogfood.json`, but host-checkout mirroring is unavailable under GAD VCS.
-Treat `projects/natstack` as an external Git project used to
+Treat `projects/vibez1` as an external Git project used to
 prepare a branch or patch; it does not hot-patch the running server. See
 [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) for the full workflow and the
 userland detection snippet.

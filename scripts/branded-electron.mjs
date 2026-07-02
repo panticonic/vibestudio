@@ -6,15 +6,15 @@ import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const APP_NAME = "NatStack";
-const APP_BUNDLE_IDENTIFIER = "com.natstack.app.dev";
+const APP_NAME = "Vibez1";
+const APP_BUNDLE_IDENTIFIER = "com.vibez1.app.dev";
 const CACHE_VERSION = 3;
 
 const require = createRequire(import.meta.url);
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 /**
- * Resolve the Electron executable, branded as "NatStack" on macOS.
+ * Resolve the Electron executable, branded as "Vibez1" on macOS.
  *
  * @param {{ installed?: boolean }} [opts] When `installed` is true (the npm
  *   global-install launcher), the branded copy is cached under the per-user
@@ -22,7 +22,7 @@ const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
  *   id, and is ad-hoc re-signed so it launches on Apple Silicon. The default
  *   (dev) path keeps the repo-local cache and the `.dev` bundle id.
  */
-export function resolveElectronExecutableForNatStack(opts = {}) {
+export function resolveElectronExecutableForVibez1(opts = {}) {
   const electronExecutable = require("electron");
   if (process.platform !== "darwin") return electronExecutable;
   return ensureBrandedMacElectronApp(electronExecutable, opts);
@@ -33,13 +33,13 @@ function ensureBrandedMacElectronApp(electronExecutable, opts = {}) {
   if (!sourceApp) return electronExecutable;
 
   const installed = opts.installed === true;
-  const bundleIdentifier = installed ? "com.natstack.app" : APP_BUNDLE_IDENTIFIER;
+  const bundleIdentifier = installed ? "com.vibez1.app" : APP_BUNDLE_IDENTIFIER;
   const electronVersion = readElectronVersion();
   // Dev caches under the (writable) repo; an installed global package may live
   // in a root-owned prefix, so the branded copy goes in the per-user data dir.
   const cacheBase = installed
-    ? path.join(os.homedir(), "Library", "Application Support", "natstack", "electron-cache")
-    : path.join(repoRoot, ".cache", "natstack-electron");
+    ? path.join(os.homedir(), "Library", "Application Support", "vibez1", "electron-cache")
+    : path.join(repoRoot, ".cache", "vibez1-electron");
   const cacheRoot = path.join(cacheBase, `darwin-${process.arch}-${electronVersion}`);
   const brandedApp = path.join(cacheRoot, `${APP_NAME}.app`);
   const markerPath = path.join(cacheRoot, "metadata.json");
@@ -124,7 +124,7 @@ function patchBundleMetadata(appPath, bundleIdentifier) {
 
   const iconSource = path.join(repoRoot, "build-resources", "icon.icns");
   if (fs.existsSync(iconSource)) {
-    const iconName = "natstack.icns";
+    const iconName = "vibez1.icns";
     fs.copyFileSync(iconSource, path.join(appPath, "Contents", "Resources", iconName));
     plist = setPlistString(plist, "CFBundleIconFile", iconName);
   }

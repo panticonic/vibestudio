@@ -1,4 +1,4 @@
-// NatStack Android root build file
+// Vibez1 Android root build file
 
 buildscript {
     ext {

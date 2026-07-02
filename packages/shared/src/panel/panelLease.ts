@@ -1,7 +1,7 @@
 import type { PanelEntityId, PanelSlotId } from "./ids.js";
-import type { ClientPlatform } from "@natstack/rpc/protocol/wsProtocol";
+import type { ClientPlatform } from "@vibez1/rpc/protocol/wsProtocol";
 
-export type { ClientPlatform } from "@natstack/rpc/protocol/wsProtocol";
+export type { ClientPlatform } from "@vibez1/rpc/protocol/wsProtocol";
 
 export interface PanelHostRegistration {
   clientSessionId: string;

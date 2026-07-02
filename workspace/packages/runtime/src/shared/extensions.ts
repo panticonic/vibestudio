@@ -6,7 +6,7 @@ import {
     type ExtensionSource,
     type RegistryEntry,
     type WorkspaceExtensions,
-} from "@natstack/extension";
+} from "@vibez1/extension";
 export {
     createExtensionsClient,
     type Disposable,

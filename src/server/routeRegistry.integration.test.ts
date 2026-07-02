@@ -13,7 +13,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "http";
-import { TokenManager } from "@natstack/shared/tokenManager";
+import { TokenManager } from "@vibez1/shared/tokenManager";
 import { Gateway } from "./gateway.js";
 import { RouteRegistry } from "./routeRegistry.js";
 
@@ -47,7 +47,7 @@ async function startHarness(): Promise<Harness> {
   const workerdServer = createServer((req: IncomingMessage, res: ServerResponse) => {
     workerdPaths.push(req.url ?? "(unknown)");
     events.push(`proxy:${req.url ?? "(unknown)"}`);
-    const dispatchSecret = req.headers["x-natstack-dispatch-secret"];
+    const dispatchSecret = req.headers["x-vibez1-dispatch-secret"];
     workerdDispatchSecrets.push(Array.isArray(dispatchSecret) ? dispatchSecret[0] : dispatchSecret);
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end(`workerd saw ${req.url}`);
@@ -126,7 +126,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("rewrites userland DO routes to /_u/{packedKey}/{path} (UniversalDO facet host)", async () => {
-    const { SingletonRegistry } = await import("@natstack/shared/workspace/singletonRegistry");
+    const { SingletonRegistry } = await import("@vibez1/shared/workspace/singletonRegistry");
     const { encodeUniversalKey } = await import("./doDispatch.js");
     const singletons = new SingletonRegistry([
       { source: "workers/hello-test", className: "HelloDO", key: "singleton" },
@@ -166,7 +166,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("ensures a DO-backed route before proxying the first request", async () => {
-    const { SingletonRegistry } = await import("@natstack/shared/workspace/singletonRegistry");
+    const { SingletonRegistry } = await import("@vibez1/shared/workspace/singletonRegistry");
     const singletons = new SingletonRegistry([
       { source: "workers/lazy-route", className: "LazyDO", key: "lazy-singleton" },
     ]);
@@ -196,7 +196,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("does not proxy a DO-backed route when lazy ensure fails", async () => {
-    const { SingletonRegistry } = await import("@natstack/shared/workspace/singletonRegistry");
+    const { SingletonRegistry } = await import("@vibez1/shared/workspace/singletonRegistry");
     const singletons = new SingletonRegistry([
       { source: "workers/failing-route", className: "FailingDO", key: "failing-singleton" },
     ]);

@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import type { FileHandle as NodeFileHandle } from "fs/promises";
 import type { ServiceContext } from "./serviceDispatcher.js";
 import type { ContextFolderManager } from "./contextFolderManager.js";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { EntityCache } from "./runtime/entityCache.js";
 import { splitRepoPath, taxonomyRepoForPath, type RepoPath } from "./runtime/entitySpec.js";
 

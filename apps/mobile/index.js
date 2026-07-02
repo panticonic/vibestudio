@@ -2,13 +2,13 @@
 //
 // This file is intentionally not the workspace mobile app. It is the minimal
 // native-host recovery surface used only when no approved workspace app bundle
-// is active yet. The workspace app is fetched through NatStackMobileHost,
+// is active yet. The workspace app is fetched through Vibez1MobileHost,
 // verified by rnHostAbi + integrity, activated from native-owned storage, and
 // then the RN bridge reloads onto that bundle.
 
-// Must precede any @natstack/rpc import: installs a TextDecoder polyfill that
+// Must precede any @vibez1/rpc import: installs a TextDecoder polyfill that
 // Hermes lacks (the WebRTC control-frame codec needs it).
-import "@natstack/mobile-webrtc/polyfills";
+import "@vibez1/mobile-webrtc/polyfills";
 import "react-native-get-random-values";
 import "react-native-url-polyfill/auto";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -26,7 +26,7 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { parseConnectLink } from "@natstack/shared/connect";
+import { parseConnectLink } from "@vibez1/shared/connect";
 import {
   establishWebRtcConnection,
   reconnectViaWebRtc,
@@ -35,7 +35,7 @@ import {
   clearShellCredential,
   makeShellTokenProvider,
   deviceIdFromCallerId,
-} from "@natstack/mobile-webrtc";
+} from "@vibez1/mobile-webrtc";
 import {
   formatCapabilities,
   launchCopy,
@@ -44,19 +44,20 @@ import {
   unitReviewRows,
   unitSourceLabel,
   unitSummaryChips,
-} from "@natstack/shared/bootstrapLaunchGate";
+} from "@vibez1/shared/bootstrapLaunchGate";
 import {
   HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS,
   isLaunchSessionEventForTarget,
-} from "@natstack/shared/hostTargetLaunchGate";
+} from "@vibez1/shared/hostTargetLaunchGate";
 import { name as appName } from "./app.json";
+import { Vibez1Logo } from "./Vibez1Logo";
 
 const RN_HOST_ABI = "rn-host-1";
-const CONSUMED_CONNECT_LINK_KEY = "natstack:connect:consumed-url";
-const nativeHost = NativeModules.NatStackMobileHost;
+const CONSUMED_CONNECT_LINK_KEY = "vibez1:connect:consumed-url";
+const nativeHost = NativeModules.Vibez1MobileHost;
 
 function smokePhase(phase) {
-  console.log(`[NatStackMobileSmoke] phase=${phase}`);
+  console.log(`[Vibez1MobileSmoke] phase=${phase}`);
 }
 
 function platformName() {
@@ -64,12 +65,11 @@ function platformName() {
 }
 
 function missingNativeHostError() {
-  return new Error("NatStackMobileHost native module is unavailable");
+  return new Error("Vibez1MobileHost native module is unavailable");
 }
 
-
 function parseConnectDeepLink(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.startsWith("natstack://connect")) return null;
+  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibez1://connect")) return null;
   const parsed = parseConnectLink(rawUrl);
   if (parsed.kind === "error") throw new Error(parsed.reason);
   // New WebRTC pairing payload: a signaling rendezvous room + the server's pinned
@@ -90,12 +90,12 @@ function pairingLabel(pairing) {
   try {
     return new URL(pairing.sig).host;
   } catch {
-    return "this NatStack server";
+    return "this Vibez1 server";
   }
 }
 
 async function markConnectLinkConsumed(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.startsWith("natstack://connect")) return;
+  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibez1://connect")) return;
   await AsyncStorage.setItem(
     CONSUMED_CONNECT_LINK_KEY,
     JSON.stringify({ url: rawUrl, consumedAt: Date.now() })
@@ -222,7 +222,7 @@ async function streamArtifactToNative(connection, descriptor, buildKey, artifact
   // small enough for react-native-webrtc's serialized bulk receive; the native host
   // decompresses before verifying the uncompressed integrity. The header confirms it.
   const gzipped = decoded.headers.some(
-    (h) => h[0].toLowerCase() === "x-natstack-content-gzip" && h[1] === "1"
+    (h) => h[0].toLowerCase() === "x-vibez1-content-gzip" && h[1] === "1"
   );
   const reader = decoded.body.getReader();
   let first = true;
@@ -243,7 +243,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
   const stored = await loadShellCredential();
   if (!stored) {
     throw new Error(
-      "Pair this device with a trusted NatStack server before loading the workspace app."
+      "Pair this device with a trusted Vibez1 server before loading the workspace app."
     );
   }
 
@@ -304,7 +304,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
 // The shell-credential store + the WebRTC connect helpers
 // (establishWebRtcConnection / reconnectViaWebRtc / persist+loadShellCredential /
 // makeShellTokenProvider / deviceIdFromCallerId) now live in
-// @natstack/mobile-webrtc, shared with the post-reload workspace app. Only the
+// @vibez1/mobile-webrtc, shared with the post-reload workspace app. Only the
 // fresh-pairing flow below (which emits the smoke phases) stays here.
 
 /** Fresh pairing: redeem the code, capture + persist the issued device credential. */
@@ -512,7 +512,7 @@ function LaunchTimeline({ session }) {
   );
 }
 
-function NatStackMobileHostBootstrap() {
+function Vibez1MobileHostBootstrap() {
   const [status, setStatus] = useState("Loading approved workspace app...");
   const [busy, setBusy] = useState(true);
   const [pendingConnect, setPendingConnect] = useState(null);
@@ -547,7 +547,12 @@ function NatStackMobileHostBootstrap() {
       }
       let session =
         initialSession ??
-        (await launchGateRpc(grant, "workspace.hostTargets.beginLaunch", ["react-native"], deadline));
+        (await launchGateRpc(
+          grant,
+          "workspace.hostTargets.beginLaunch",
+          ["react-native"],
+          deadline
+        ));
       for (;;) {
         if (!isCurrent()) return;
         setLaunchSession(session);
@@ -642,7 +647,7 @@ function NatStackMobileHostBootstrap() {
       const parsed = parseConnectDeepLink(rawUrl);
       if (!parsed) {
         setPendingConnect(null);
-        setStatus("Open a NatStack connect link to pair this device.");
+        setStatus("Open a Vibez1 connect link to pair this device.");
         setBusy(false);
         return;
       }
@@ -655,7 +660,7 @@ function NatStackMobileHostBootstrap() {
       setStatus(
         `${
           error instanceof Error ? error.message : String(error)
-        }\n\nScan a fresh NatStack pairing QR code to re-pair this device.`
+        }\n\nScan a fresh Vibez1 pairing QR code to re-pair this device.`
       );
       setBusy(false);
     }
@@ -684,7 +689,7 @@ function NatStackMobileHostBootstrap() {
     setStatus("Loading approved workspace app...");
     try {
       const initialUrl = await Linking.getInitialURL();
-      if (initialUrl && initialUrl.startsWith("natstack://connect")) {
+      if (initialUrl && initialUrl.startsWith("vibez1://connect")) {
         presentConnectLink(initialUrl);
         return;
       }
@@ -693,7 +698,7 @@ function NatStackMobileHostBootstrap() {
       const stored = await loadShellCredential();
       if (!stored) {
         setStatus(
-          "Open a NatStack pairing link or scan a QR code from a trusted desktop or terminal."
+          "Open a Vibez1 pairing link or scan a QR code from a trusted desktop or terminal."
         );
         return;
       }
@@ -705,7 +710,7 @@ function NatStackMobileHostBootstrap() {
       // for a fresh QR instead of looping on a credential the server won't honor.
       if (error?.code === "SESSION_AUTH_FAILED") {
         await clearShellCredential().catch(() => {});
-        setStatus("Your saved pairing was rejected. Scan a fresh NatStack QR code to re-pair.");
+        setStatus("Your saved pairing was rejected. Scan a fresh Vibez1 QR code to re-pair.");
       } else {
         setStatus(error instanceof Error ? error.message : String(error));
       }
@@ -788,11 +793,9 @@ function NatStackMobileHostBootstrap() {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.panel}>
           <View style={styles.brandRow}>
-            <View style={styles.brandMark}>
-              <Text style={styles.brandMarkText}>N</Text>
-            </View>
+            <Vibez1Logo size={44} variant="tile" />
             <View style={styles.brandText}>
-              <Text style={styles.eyebrow}>NatStack</Text>
+              <Text style={styles.eyebrow}>Vibez1</Text>
               <Text style={styles.title}>Mobile Host</Text>
             </View>
           </View>
@@ -922,7 +925,7 @@ function NatStackMobileHostBootstrap() {
           ) : (
             <View style={styles.actions}>
               <Text style={styles.hint}>
-                Open a NatStack pairing link or scan a QR code from a trusted desktop or terminal.
+                Open a Vibez1 pairing link or scan a QR code from a trusted desktop or terminal.
               </Text>
               <ActionButton title="Retry" onPress={load} variant="secondary" />
             </View>
@@ -953,19 +956,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     gap: 12,
-  },
-  brandMark: {
-    alignItems: "center",
-    backgroundColor: "#78d4ff",
-    borderRadius: 8,
-    height: 44,
-    justifyContent: "center",
-    width: 44,
-  },
-  brandMarkText: {
-    color: "#071522",
-    fontSize: 20,
-    fontWeight: "800",
   },
   brandText: {
     flex: 1,
@@ -1266,4 +1256,4 @@ const styles = StyleSheet.create({
   },
 });
 
-AppRegistry.registerComponent(appName, () => NatStackMobileHostBootstrap);
+AppRegistry.registerComponent(appName, () => Vibez1MobileHostBootstrap);

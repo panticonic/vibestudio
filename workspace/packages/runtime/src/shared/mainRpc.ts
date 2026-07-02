@@ -1,4 +1,4 @@
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 
 export type MainCaller = <T>(method: string, ...args: unknown[]) => Promise<T>;
 

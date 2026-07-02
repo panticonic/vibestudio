@@ -63,8 +63,8 @@ index f92c66f..8d43844 100644
 +function isConsumableWebSocket(socket) {
 +    return typeof socket?.send === "function" && typeof socket?.addEventListener === "function";
 +}
-+function prepareNatStackModelWebSocket(url, headers) {
-+    const hook = globalThis.__natstackPrepareModelWebSocket;
++function prepareVibez1ModelWebSocket(url, headers) {
++    const hook = globalThis.__vibez1PrepareModelWebSocket;
 +    if (typeof hook !== "function") {
 +        return null;
 +    }
@@ -79,7 +79,7 @@ index f92c66f..8d43844 100644
 +    return typeof WebSocketPair === "function" || /\b(?:Cloudflare-Workers|workerd)\b/i.test(userAgent);
 +}
 +function shouldReuseSessionWebSockets() {
-+    const hook = globalThis.__natstackShouldReuseCodexWebSocket;
++    const hook = globalThis.__vibez1ShouldReuseCodexWebSocket;
 +    if (typeof hook === "function") {
 +        return hook() !== false;
 +    }
@@ -142,15 +142,15 @@ index f92c66f..8d43844 100644
      }
      const wsHeaders = headersToRecord(headers);
      delete wsHeaders["OpenAI-Beta"];
-+    const natstackPrepared = prepareNatStackModelWebSocket(url, headers);
++    const vibez1Prepared = prepareVibez1ModelWebSocket(url, headers);
      return new Promise((resolve, reject) => {
          let settled = false;
          let timeout;
          let socket;
          try {
 -            socket = new WebSocketCtor(url, { headers: wsHeaders });
-+            socket = natstackPrepared
-+                ? new WebSocketCtor(natstackPrepared.url, natstackPrepared.protocols)
++            socket = vibez1Prepared
++                ? new WebSocketCtor(vibez1Prepared.url, vibez1Prepared.protocols)
 +                : new WebSocketCtor(url, { headers: wsHeaders });
          }
          catch (error) {

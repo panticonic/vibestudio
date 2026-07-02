@@ -20,8 +20,8 @@ import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import path from "node:path";
 import { Buffer } from "node:buffer";
-import type { RpcCaller } from "@natstack/rpc";
-import { createExtensionProxy } from "@natstack/extension";
+import type { RpcCaller } from "@vibez1/rpc";
+import { createExtensionProxy } from "@vibez1/extension";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
 import {

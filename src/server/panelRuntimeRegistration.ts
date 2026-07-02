@@ -6,16 +6,16 @@
  */
 
 import { randomUUID } from "crypto";
-import { createDevLogger } from "@natstack/dev-log";
-import type { ServiceContainer } from "@natstack/shared/serviceContainer";
+import { createDevLogger } from "@vibez1/dev-log";
+import type { ServiceContainer } from "@vibez1/shared/serviceContainer";
 import {
   createVerifiedCaller,
   type ServiceContext,
   type ServiceDispatcher,
-} from "@natstack/shared/serviceDispatcher";
-import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
-import type { CentralDataManager } from "@natstack/shared/centralData";
-import type { HostConfig } from "@natstack/shared/hostConfig";
+} from "@vibez1/shared/serviceDispatcher";
+import type { Workspace, WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import type { CentralDataManager } from "@vibez1/shared/centralData";
+import type { HostConfig } from "@vibez1/shared/hostConfig";
 import type {
   HostTarget,
   HostTargetCandidate,
@@ -23,20 +23,20 @@ import type {
   HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
   HostTargetSelectionInput,
-} from "@natstack/shared/hostTargets";
+} from "@vibez1/shared/hostTargets";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
-import { PanelRegistry } from "@natstack/shared/panelRegistry";
+import { PanelRegistry } from "@vibez1/shared/panelRegistry";
 import {
   getCurrentSnapshot,
   getPanelContextId,
   getPanelSource,
   getPanelStateArgs,
-} from "@natstack/shared/panel/accessors";
-import { isBrowserPanelSource, isOpenPanelBrowserUrl } from "@natstack/shared/panelChrome";
-import { asPanelSlotId } from "@natstack/shared/panel/ids";
-import { resolveOwningPanelSlot } from "@natstack/shared/panel/owningPanelSlot";
-import { PanelManager } from "@natstack/shared/shell/panelManager";
+} from "@vibez1/shared/panel/accessors";
+import { isBrowserPanelSource, isOpenPanelBrowserUrl } from "@vibez1/shared/panelChrome";
+import { asPanelSlotId } from "@vibez1/shared/panel/ids";
+import { resolveOwningPanelSlot } from "@vibez1/shared/panel/owningPanelSlot";
+import { PanelManager } from "@vibez1/shared/shell/panelManager";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -44,19 +44,19 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@natstack/shared/shell/workspaceStateClient";
+} from "@vibez1/shared/shell/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-} from "@natstack/shared/runtime/entitySpec";
-import type { PanelNavigationState } from "@natstack/shared/types";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+} from "@vibez1/shared/runtime/entitySpec";
+import type { PanelNavigationState } from "@vibez1/shared/types";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 import type {
   IndexablePanel,
   PanelSearchIndex,
   PanelSearchResult,
-} from "@natstack/shared/panelSearchTypes";
+} from "@vibez1/shared/panelSearchTypes";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
@@ -437,7 +437,7 @@ export async function createServerPanelTreeBridge(
     };
   };
   const panelToListItem = (
-    panel: import("@natstack/shared/types").Panel,
+    panel: import("@vibez1/shared/types").Panel,
     parentId: string | null
   ) => ({
     panelId: panel.id,
@@ -885,13 +885,13 @@ export interface CommonDeps {
   centralData: CentralDataManager | null;
   hostConfig: HostConfig;
   isIpcMode: boolean;
-  tokenManager?: import("@natstack/shared/tokenManager").TokenManager;
-  eventService?: import("@natstack/shared/eventsService").EventService;
+  tokenManager?: import("@vibez1/shared/tokenManager").TokenManager;
+  eventService?: import("@vibez1/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
-  entityCache?: import("@natstack/shared/runtime/entityCache").EntityCache;
+  entityCache?: import("@vibez1/shared/runtime/entityCache").EntityCache;
   /** True when the target context already holds state (active entity or materialized folder). */
   contextExists: (contextId: string) => boolean;
   /** Human label for the entity owning the target context, for prompt copy. */
@@ -911,7 +911,7 @@ export interface CommonDeps {
     | Promise<import("./services/workspaceService.js").WorkspaceUnitStatus[]>
     | import("./services/workspaceService.js").WorkspaceUnitStatus[];
   restartWorkspaceUnit?: (
-    ctx: import("@natstack/shared/serviceDispatcher").ServiceContext,
+    ctx: import("@vibez1/shared/serviceDispatcher").ServiceContext,
     name: string
   ) => Promise<void>;
   listWorkspaceUnitLogs?: (
@@ -1044,7 +1044,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     return { ...meta, id: panelId };
   };
   const resolveRequesterPanelMetadataForServices = async (
-    caller: import("@natstack/shared/serviceDispatcher").VerifiedCaller
+    caller: import("@vibez1/shared/serviceDispatcher").VerifiedCaller
   ): Promise<PanelAccessMetadata | null> => {
     if (caller.runtime.kind !== "panel") return null;
     const lease = deps.panelRuntimeCoordinator?.getLease(caller.runtime.id);
@@ -1082,8 +1082,8 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   {
     const { createWorkspaceService } = await import("./services/workspaceService.js");
     const { createWorkspaceConfigManager, createAndRegisterWorkspace, deleteWorkspaceDir } =
-      await import("@natstack/shared/workspace/loader");
-    const wsConfigPath = path.join(workspacePath, "meta/natstack.yml");
+      await import("@vibez1/shared/workspace/loader");
+    const wsConfigPath = path.join(workspacePath, "meta/vibez1.yml");
     const wsConfigManager = createWorkspaceConfigManager(wsConfigPath, workspaceConfig);
 
     container.registerRpc(
@@ -1203,7 +1203,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   }
 
   {
-    let panelCdpDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
+    let panelCdpDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelCdp",
       dependencies: ["cdpBridge", "shellPresence"],
@@ -1344,7 +1344,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   }
 
   {
-    let panelTreeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
+    let panelTreeDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelTree",
       dependencies: ["shellPresence", "buildSystem", "workspace-state", "runtime"],
@@ -1420,7 +1420,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             type: "ws:event",
             event: "build:complete",
             payload: { source, error },
-          } as import("@natstack/shared/ws/protocol").WsServerMessage);
+          } as import("@vibez1/shared/ws/protocol").WsServerMessage);
         },
       });
 
@@ -1432,13 +1432,13 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     const { createFsServiceDefinition } = await import("./services/fsServiceDef.js");
-    let fsServiceInstance: import("@natstack/shared/fsService").FsService;
+    let fsServiceInstance: import("@vibez1/shared/fsService").FsService;
     container.registerManaged({
       name: "fsRpc",
       dependencies: ["fsService"],
       async start(resolve) {
         fsServiceInstance = assertPresent(
-          resolve<import("@natstack/shared/fsService").FsService>("fsService")
+          resolve<import("@vibez1/shared/fsService").FsService>("fsService")
         );
       },
       getServiceDefinition() {

@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@natstack/rpc": "workspace:*"
+    "@vibez1/rpc": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.2.2"

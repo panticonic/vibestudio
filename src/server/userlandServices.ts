@@ -1,10 +1,10 @@
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
-import type { DORefParam } from "@natstack/shared/userlandServiceRpc";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { DORefParam } from "@vibez1/shared/userlandServiceRpc";
 import type {
   WorkspaceDeclarations,
   SingletonRegistry,
-} from "@natstack/shared/workspace/singletonRegistry";
-import type { WorkspaceServiceDecl } from "@natstack/shared/workspace/types";
+} from "@vibez1/shared/workspace/singletonRegistry";
+import type { WorkspaceServiceDecl } from "@vibez1/shared/workspace/types";
 
 export interface UserlandServicePolicy {
   allowed?: CallerKind[];

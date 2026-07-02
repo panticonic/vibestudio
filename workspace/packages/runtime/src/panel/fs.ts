@@ -10,7 +10,7 @@
  */
 
 import type { RuntimeFs } from "../types.js";
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 import { createRpcFs } from "../shared/rpcFs.js";
 
 let _fs: RuntimeFs | null = null;
@@ -53,7 +53,7 @@ export const fs: RuntimeFs = new Proxy({} as RuntimeFs, {
     if (prop === "constants") return FS_CONSTANTS;
     return async (...args: unknown[]) => {
       await _ready;
-      if (!_fs) throw new Error("[NatStack] Filesystem not initialized");
+      if (!_fs) throw new Error("[Vibez1] Filesystem not initialized");
       const method = (_fs as any)[prop] as (...args: unknown[]) => Promise<unknown>;
       return method.apply(_fs, args);
     };

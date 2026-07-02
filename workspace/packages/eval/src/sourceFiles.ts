@@ -15,7 +15,7 @@ export interface SourceFileOptions {
   loadSourceFile?: LoadSourceFile;
   /**
    * Per-execution module registry for local modules. When provided, compiled local modules
-   * are stored here instead of the per-isolate global `__natstackModuleMap__` (isolates
+   * are stored here instead of the per-isolate global `__vibez1ModuleMap__` (isolates
    * multi-tenant callers sharing an isolate). Falls back to the global map when absent.
    */
   moduleMap?: Record<string, unknown>;
@@ -190,7 +190,7 @@ function normalizeDependencyRef(
   specifier: string,
   version: string | undefined
 ): string | undefined {
-  if (specifier.startsWith("@workspace") || specifier.startsWith("@natstack/")) {
+  if (specifier.startsWith("@workspace") || specifier.startsWith("@vibez1/")) {
     if (!version || version.startsWith("workspace:")) return "latest";
     return version;
   }
@@ -543,12 +543,12 @@ async function loadLocalModules(
   const loading = new Set<string>();
   const moduleMap =
     moduleMapOverride ??
-    (((globalThis as Record<string, unknown>)["__natstackModuleMap__"] ??= {}) as Record<
+    (((globalThis as Record<string, unknown>)["__vibez1ModuleMap__"] ??= {}) as Record<
       string,
       unknown
     >);
   const requireFn = requireOverride ?? getDefaultRequire();
-  if (!requireFn) throw new Error("__natstackRequire__ not available. Build may be outdated.");
+  if (!requireFn) throw new Error("__vibez1Require__ not available. Build may be outdated.");
 
   async function loadModule(filePath: string): Promise<void> {
     const normalized = normalizeSourcePath(filePath);

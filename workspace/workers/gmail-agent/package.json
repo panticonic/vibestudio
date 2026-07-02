@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "entry": "index.ts",
     "durable": {
       "classes": [{ "className": "GmailAgentWorker" }]

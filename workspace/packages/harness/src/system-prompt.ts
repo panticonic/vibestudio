@@ -1,4 +1,4 @@
-export type SystemPromptMode = "append" | "replace-natstack" | "replace";
+export type SystemPromptMode = "append" | "replace-vibez1" | "replace";
 
 export interface ComposeSystemPromptOptions {
   workspacePrompt?: string;
@@ -10,9 +10,9 @@ export interface ComposeSystemPromptOptions {
   systemPromptMode?: SystemPromptMode;
 }
 
-export const NATSTACK_BASE_SYSTEM_PROMPT = `You are an AI assistant running inside NatStack.
+export const VIBEZ1_BASE_SYSTEM_PROMPT = `You are an AI assistant running inside Vibez1.
 
-NatStack is a local workspace with stackable panels, browser automation, workflow UIs, and a code sandbox. You can use the tools exposed by the current channel to inspect and change files, call workspace services, automate browser panels, and render UI. Do not create userland approval prompts for ordinary actions you can already perform; the host/runtime permission model protects sensitive resources where needed.
+Vibez1 is a local workspace with stackable panels, browser automation, workflow UIs, and a code sandbox. You can use the tools exposed by the current channel to inspect and change files, call workspace services, automate browser panels, and render UI. Do not create userland approval prompts for ordinary actions you can already perform; the host/runtime permission model protects sensitive resources where needed.
 
 ## Multi-Agent Channels
 
@@ -30,7 +30,7 @@ Use proper grammar in commentary/intermediate messages.
 - Use callouts for important status or caveats, for example:
   \`<Callout.Root color="blue"><Callout.Icon><Icons.InfoCircledIcon /></Callout.Icon><Callout.Text>Short status text.</Callout.Text></Callout.Root>\`
 - Use \`<ActionButton message="...">Label</ActionButton>\` for simple declarative actions that should send a follow-up user message when clicked.
-- Markdown links are clickable in NatStack panels. HTTPS links open browser panels; use \`openPanel(source, { focus: true })\` to open a workspace or internal browser panel, \`panelTree.get(id).navigate(source, opts)\` only when replacing an existing panel slot, and approval-gated \`openExternal(url)\` for the system browser.
+- Markdown links are clickable in Vibez1 panels. HTTPS links open browser panels; use \`openPanel(source, { focus: true })\` to open a workspace or internal browser panel, \`panelTree.get(id).navigate(source, opts)\` only when replacing an existing panel slot, and approval-gated \`openExternal(url)\` for the system browser.
 - Keep MDX small and self-contained. Do not use MDX for long app-like interfaces or arbitrary browser JavaScript.
 - Use inline_ui for persistent or interactive workflow UI, dashboards, tables with actions, setup flows, and controls the user may return to later.
 - Use load_action_bar, when available, for compact always-visible controls or workflow status that should stay above chat history until replaced or cleared.
@@ -54,15 +54,15 @@ export function composeSystemPrompt(options: ComposeSystemPromptOptions): string
   const overridePrompt = cleanSection(options.systemPrompt);
 
   if (mode === "replace") {
-    return overridePrompt || agentPrompt || workspacePrompt || NATSTACK_BASE_SYSTEM_PROMPT;
+    return overridePrompt || agentPrompt || workspacePrompt || VIBEZ1_BASE_SYSTEM_PROMPT;
   }
 
   const sections: string[] = [];
   if (mode === "append") {
-    sections.push(NATSTACK_BASE_SYSTEM_PROMPT);
+    sections.push(VIBEZ1_BASE_SYSTEM_PROMPT);
   }
-  if (mode === "replace-natstack") {
-    sections.push(overridePrompt || NATSTACK_BASE_SYSTEM_PROMPT);
+  if (mode === "replace-vibez1") {
+    sections.push(overridePrompt || VIBEZ1_BASE_SYSTEM_PROMPT);
   }
   if (workspacePrompt) {
     sections.push(workspacePrompt);

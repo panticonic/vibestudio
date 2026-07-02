@@ -1,6 +1,6 @@
 /**
  * Chromium executable resolution: explicit path → system browser → managed
- * download via @puppeteer/browsers into the NatStack cache dir.
+ * download via @puppeteer/browsers into the Vibez1 cache dir.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -15,7 +15,7 @@ import {
   type BrowserPlatform,
   type InstalledBrowser,
 } from "@puppeteer/browsers";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 
 const log = createDevLogger("HeadlessHost:acquire");
 
@@ -133,9 +133,9 @@ export async function resolveChromium(opts: {
     return { executablePath: cached.executablePath, source: "downloaded" };
   }
 
-  if (opts.allowDownload === false || process.env["NATSTACK_HEADLESS_NO_DOWNLOAD"] === "1") {
+  if (opts.allowDownload === false || process.env["VIBEZ1_HEADLESS_NO_DOWNLOAD"] === "1") {
     throw new Error(
-      "No Chromium found (NATSTACK_CHROMIUM_PATH unset, no system chrome/chromium) and download is disabled"
+      "No Chromium found (VIBEZ1_CHROMIUM_PATH unset, no system chrome/chromium) and download is disabled"
     );
   }
 

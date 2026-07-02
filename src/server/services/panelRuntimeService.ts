@@ -1,10 +1,10 @@
 import type { z } from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import {
   panelRuntimeMethods,
   registerClientSchema,
   leaseRequestSchema,
-} from "@natstack/shared/serviceSchemas/panelRuntime";
+} from "@vibez1/shared/serviceSchemas/panelRuntime";
 import type { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 
 export function createPanelRuntimeService(deps: {

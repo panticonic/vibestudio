@@ -94,7 +94,7 @@ describe("WorkspaceVcs.push (per-repo, fast-forward-only, build-gated)", () => {
         {
           kind: "create",
           path: "package.json",
-          content: text(`{ "name": "@workspace-packages/foo", "natstack": {} }\n`),
+          content: text(`{ "name": "@workspace-packages/foo", "vibez1": {} }\n`),
         },
         { kind: "create", path: "index.ts", content: text("export const x = 1;\n") },
       ],
@@ -422,7 +422,7 @@ describe("WorkspaceVcs.push (per-repo, fast-forward-only, build-gated)", () => {
           {
             kind: "create",
             path: "package.json",
-            content: text(`{\n  "name": "@workspace-panels/chat",\n  "natstack": {}\n}\n`),
+            content: text(`{\n  "name": "@workspace-panels/chat",\n  "vibez1": {}\n}\n`),
           },
           { kind: "create", path: "index.tsx", content: text("export const Chat = () => null;\n") },
         ],

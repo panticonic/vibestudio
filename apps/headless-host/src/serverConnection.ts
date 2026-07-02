@@ -4,12 +4,12 @@
  * device credentials, and event subscription for lease changes.
  */
 import { WebSocket } from "ws";
-import { createRpcClient, type RpcClient } from "@natstack/rpc";
-import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
-import { NodeWsLike } from "@natstack/shared/shell/transport/nodeWsLike";
-import { createDevLogger } from "@natstack/dev-log";
+import { createRpcClient, type RpcClient } from "@vibez1/rpc";
+import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
+import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
+import { createDevLogger } from "@vibez1/dev-log";
 import type { HeadlessHostConfig } from "./config.js";
-import { serverAuthRouteUrl, serverRpcWsUrl } from "@natstack/shared/connect";
+import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibez1/shared/connect";
 
 const log = createDevLogger("HeadlessHost:rpc");
 

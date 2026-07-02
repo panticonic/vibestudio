@@ -2,33 +2,33 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { extensionsMethods } from "@natstack/shared/serviceSchemas/extensions";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { extensionsMethods } from "@vibez1/shared/serviceSchemas/extensions";
 import {
   ServiceError,
   type ServiceContext,
   type VerifiedCaller,
-} from "@natstack/shared/serviceDispatcher";
-import type { TokenManager } from "@natstack/shared/tokenManager";
-import type { EventName } from "@natstack/shared/events";
-import type { NotificationPayload } from "@natstack/shared/events";
-import type { EventService, Subscriber } from "@natstack/shared/eventsService";
-import { EXTENSION_RUNTIME_ABI_VERSION } from "@natstack/shared/extensionRuntimeAbi";
+} from "@vibez1/shared/serviceDispatcher";
+import type { TokenManager } from "@vibez1/shared/tokenManager";
+import type { EventName } from "@vibez1/shared/events";
+import type { NotificationPayload } from "@vibez1/shared/events";
+import type { EventService, Subscriber } from "@vibez1/shared/eventsService";
+import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibez1/shared/extensionRuntimeAbi";
 import type {
   BuildProvider,
   BuildProviderOutput,
   BuildProviderTarget,
-} from "@natstack/shared/buildProvider";
-import type { PendingUnitBatchApproval, UnitBatchEntry } from "@natstack/shared/approvals";
+} from "@vibez1/shared/buildProvider";
+import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibez1/shared/approvals";
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredExtensions,
-} from "@natstack/shared/workspace/configParser";
+} from "@vibez1/shared/workspace/configParser";
 import {
   UnitManifestError,
   extensionUnitManifestDescriptor,
   readAndValidateUnitManifest,
-} from "@natstack/shared/unitManifest";
+} from "@vibez1/shared/unitManifest";
 import {
   UnitHost,
   UnitRegistry,
@@ -51,7 +51,7 @@ import {
   type UnitMetaChangeApprovalProvider,
   type UnitReconcileTrigger,
   type UnitWorkspaceStatus,
-} from "@natstack/unit-host";
+} from "@vibez1/unit-host";
 
 import { ExtensionProcessManager } from "./processManager.js";
 import {
@@ -333,7 +333,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           id: `extensions-unresolved-${encodeURIComponent(sources.join(","))}`,
           type: "error",
           title: "Unknown extensions declared",
-          message: `meta/natstack.yml declares extensions that don't exist: ${sources.join(", ")}.`,
+          message: `meta/vibez1.yml declares extensions that don't exist: ${sources.join(", ")}.`,
         });
       },
       validateBeforeApproval: (node) => this.validateExtensionManifestAtPath(node.path, node.name),
@@ -399,7 +399,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   /**
    * Reconcile the registry against the declared extension set from
-   * `meta/natstack.yml`. This is the single entry point that installs or
+   * `meta/vibez1.yml`. This is the single entry point that installs or
    * removes extensions. Called at boot and after a meta-state update (post-receive).
    * The declared set is authoritative: anything in the registry but not
    * declared is removed.
@@ -1151,7 +1151,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private async readDeclaredExtensionsFromCommit(commit: string): Promise<UnitDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/natstack.yml");
+      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibez1.yml");
       if (!content) return [];
       return resolveDeclaredExtensions(
         parseWorkspaceConfigContentWithId(content, this.deps.workspaceId)
@@ -1213,7 +1213,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       this.deps.registerBuildProvider({
         name: entry.name,
         target,
-        contractVersion: "natstack-build-provider-v1",
+        contractVersion: "vibez1-build-provider-v1",
         activeEv: entry.activeEv,
         activeBuildKey: entry.activeBundleKey,
         build: async (input) => {

@@ -4,8 +4,8 @@
     "Online": true
   },
   "Peer": {
-    "peer-natstack": {
-      "DNSName": "natstack.tailnet.ts.net.",
+    "peer-vibez1": {
+      "DNSName": "vibez1.tailnet.ts.net.",
       "Online": true
     },
     "peer-plain": {

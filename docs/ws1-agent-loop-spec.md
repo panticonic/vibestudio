@@ -80,7 +80,7 @@ types/compaction/session-tree only — no pi-ai at the pure layer).
 
 Derived by fold, never stored authoritatively (`fold_cache` is a P1 cache,
 §2.3). All fields are JSON-serializable; large payloads remain as
-`natstack.blob-ref.v1` `StoredValueRef`s inside entries (hydration happens in
+`vibez1.blob-ref.v1` `StoredValueRef`s inside entries (hydration happens in
 executors, never in the fold).
 
 ```ts

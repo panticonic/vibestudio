@@ -171,8 +171,8 @@ describe("effectiveVersion", () => {
     });
 
     it("does not invalidate workspace builds when host dist bundles change", () => {
-      const previousAppRoot = process.env["NATSTACK_APP_ROOT"];
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-root-fingerprint-"));
+      const previousAppRoot = process.env["VIBEZ1_APP_ROOT"];
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-root-fingerprint-"));
       const rootA = path.join(root, "a");
       const rootB = path.join(root, "b");
       try {
@@ -187,13 +187,13 @@ describe("effectiveVersion", () => {
         fs.writeFileSync(path.join(rootB, "dist", "server.mjs"), "console.log('new server');\n");
         fs.writeFileSync(path.join(rootB, "dist", "main.cjs"), "console.log('new main');\n");
 
-        process.env["NATSTACK_APP_ROOT"] = rootA;
+        process.env["VIBEZ1_APP_ROOT"] = rootA;
         const first = computeBuildKey("unit-a", "ev1", true);
-        process.env["NATSTACK_APP_ROOT"] = rootB;
+        process.env["VIBEZ1_APP_ROOT"] = rootB;
         expect(computeBuildKey("unit-a", "ev1", true)).toBe(first);
       } finally {
-        if (previousAppRoot === undefined) delete process.env["NATSTACK_APP_ROOT"];
-        else process.env["NATSTACK_APP_ROOT"] = previousAppRoot;
+        if (previousAppRoot === undefined) delete process.env["VIBEZ1_APP_ROOT"];
+        else process.env["VIBEZ1_APP_ROOT"] = previousAppRoot;
         fs.rmSync(root, { recursive: true, force: true });
       }
     });

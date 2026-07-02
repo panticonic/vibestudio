@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { envelopeFromMessage, type RpcEnvelope, type RpcResponse } from "@natstack/rpc";
+import { envelopeFromMessage, type RpcEnvelope, type RpcResponse } from "@vibez1/rpc";
 import { createServerClient } from "./serverClient.js";
 
 const cleanup: Array<() => Promise<void> | void> = [];

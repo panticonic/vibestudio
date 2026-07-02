@@ -151,9 +151,9 @@ describe("approvalQueue", () => {
     });
     void queue.request({
       kind: "capability",
-      callerId: "do:natstack/internal:EvalDO:one",
+      callerId: "do:vibez1/internal:EvalDO:one",
       callerKind: "do",
-      repoPath: "natstack/internal",
+      repoPath: "vibez1/internal",
       effectiveVersion: "internal",
       capability: "external-browser-open",
       title: "Open external browser",

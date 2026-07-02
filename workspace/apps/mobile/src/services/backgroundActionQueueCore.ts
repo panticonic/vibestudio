@@ -1,4 +1,4 @@
-import type { ApprovalDecisionId } from "@natstack/shared/approvalContract";
+import type { ApprovalDecisionId } from "@vibez1/shared/approvalContract";
 
 export const BACKGROUND_ACTION_QUEUE_TTL_MS = 24 * 60 * 60 * 1000;
 

@@ -2,12 +2,12 @@ import { readFile, stat, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionContext, UserlandApprovalRequest } from "@natstack/extension";
+import type { ExtensionContext, UserlandApprovalRequest } from "@vibez1/extension";
 import { activate } from "./index.js";
 import type { SessionInfoEvent } from "./types.js";
 
 async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "allow") {
-  const root = await mkdtemp(join(tmpdir(), "natstack-shell-test-"));
+  const root = await mkdtemp(join(tmpdir(), "vibez1-shell-test-"));
   const approvals = Array.isArray(approval) ? [...approval] : undefined;
   const request = vi.fn(async (_req: UserlandApprovalRequest) => ({
     kind: "choice" as const,
@@ -224,11 +224,11 @@ describe("@workspace-extensions/shell", () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({ command: "/bin/bash" });
 
-    await api.write(sessionId, "cd /tmp\nprintf 'natstack-shell-integration-proof\\n'\nexit\n");
+    await api.write(sessionId, "cd /tmp\nprintf 'vibez1-shell-integration-proof\\n'\nexit\n");
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId, 1024 * 1024);
 
-    expect(scrollback.text).toContain("natstack-shell-integration-proof");
+    expect(scrollback.text).toContain("vibez1-shell-integration-proof");
     expect(scrollback.text).toContain("\x1b]633;P;Cwd=/tmp\x07");
     expect(scrollback.text).toContain("\x1b]633;E;cd /tmp;");
     expect(scrollback.text).toContain("\x1b]633;C\x07");

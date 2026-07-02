@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { StreamFrameDecoderV2 } from "@natstack/rpc/protocol/streamCodec";
+import { StreamFrameDecoderV2 } from "@vibez1/rpc/protocol/streamCodec";
 import {
   decodeControlFrame,
   type SessionControlFrame,
-} from "@natstack/rpc/protocol/sessionNegotiation";
-import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
+} from "@vibez1/rpc/protocol/sessionNegotiation";
+import type { WsClientMessage, WsServerMessage } from "@vibez1/shared/ws/protocol";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 
 function harness() {

@@ -2,7 +2,7 @@
  * Worker environment types for workerd bindings.
  *
  * Workers receive these as the `env` parameter in their fetch handler.
- * NatStack injects the RPC bindings; user workers add their own.
+ * Vibez1 injects the RPC bindings; user workers add their own.
  */
 
 export interface WorkerEnv {

@@ -1,14 +1,14 @@
 /**
- * Central data management for NatStack.
+ * Central data management for Vibez1.
  *
- * Manages persistent data stored in ~/.config/natstack/data.json including:
+ * Manages persistent data stored in ~/.config/vibez1/data.json including:
  * - Workspace registry (authoritative source for workspace metadata)
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import { getCentralConfigPaths } from "./workspace/loader.js";
-import { getWorkspaceDir } from "@natstack/env-paths";
+import { getWorkspaceDir } from "@vibez1/env-paths";
 import type { CentralData, WorkspaceEntry } from "./workspace/types.js";
 
 export type LastWorkspaceTarget =
@@ -84,7 +84,7 @@ export class CentralDataManager {
   listWorkspaces(): WorkspaceEntry[] {
     let pruned = false;
     this.data.workspaces = this.data.workspaces.filter((w) => {
-      const configPath = path.join(getWorkspaceDir(w.name), "source", "meta/natstack.yml");
+      const configPath = path.join(getWorkspaceDir(w.name), "source", "meta/vibez1.yml");
       if (fs.existsSync(configPath)) return true;
       pruned = true;
       return false;
@@ -101,7 +101,7 @@ export class CentralDataManager {
     const idx = this.data.workspaces.findIndex((w) => w.name === name);
     if (idx === -1) return false;
 
-    const configPath = path.join(getWorkspaceDir(name), "source", "meta/natstack.yml");
+    const configPath = path.join(getWorkspaceDir(name), "source", "meta/vibez1.yml");
     if (fs.existsSync(configPath)) return true;
 
     // Stale entry — prune it
@@ -148,7 +148,7 @@ export class CentralDataManager {
       return;
     }
 
-    const configPath = path.join(getWorkspaceDir(name), "source", "meta/natstack.yml");
+    const configPath = path.join(getWorkspaceDir(name), "source", "meta/vibez1.yml");
     if (!fs.existsSync(configPath)) return;
 
     this.data.workspaces.unshift({ name, lastOpened: now });
@@ -172,7 +172,7 @@ export class CentralDataManager {
     const sorted = [...this.data.workspaces].sort((a, b) => b.lastOpened - a.lastOpened);
     let pruned = false;
     for (const entry of sorted) {
-      const configPath = path.join(getWorkspaceDir(entry.name), "source", "meta/natstack.yml");
+      const configPath = path.join(getWorkspaceDir(entry.name), "source", "meta/vibez1.yml");
       if (fs.existsSync(configPath)) return entry;
       // Stale — prune
       this.data.workspaces = this.data.workspaces.filter((w) => w.name !== entry.name);

@@ -24,7 +24,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `getParentWithContract` | value |  | Get the parent handle typed by a panel contract, or null. |
 | `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
-| `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
+| `gatewayConfig` | value |  | Gateway base URL and bearer token for Vibez1 service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `openExternal` | value |  |  |
 | `workers` | namespace | `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` |  |
@@ -66,7 +66,7 @@ skills pick it up immediately. A working edit is not a commit: seal working edit
 as a messaged milestone with `vcs.commit({ message })`, then advance `main` with
 the fast-forward-only, build-gated `vcs.push`. Use `git` only for external
 project import, shared remotes, and build-event lookup. For external Git smart
-HTTP, construct `GitClient` from `@natstack/git` with `credentials.gitHttp()`.
+HTTP, construct `GitClient` from `@vibez1/git` with `credentials.gitHttp()`.
 For workspace-managed external repo declarations, startup auto-import, branches,
 approvals, and private repo retries, see
 `skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
@@ -157,7 +157,7 @@ under a tracked directory (`projects/`, `panels/`, `packages/`, `apps/`,
 `workers/`, `skills/`, `extensions/`). A *temporary* or throwaway file you record
 still goes inside a repo under one of those — e.g. `projects/tmp-foo/note.txt` —
 **not** a
-platform-ignored path. `vcs.edit` rejects ignored dirs (`.natstack`,
+platform-ignored path. `vcs.edit` rejects ignored dirs (`.vibez1`,
 `.tmp`, `.git`, `.gad`, `node_modules`, `dist`) and ignored files (`.env`,
 `*.log`); in particular do **not** pass an `fs.mktemp()` path (it returns an
 ignored `.tmp/` location) to `vcs.edit`. In container sections such as
@@ -311,14 +311,14 @@ a mobile/non-CDP host rejects CDP access.
 
 Use `approvals.request()` only when custom userland code exposes a shared resource
 to other panels, workers, DOs, or extensions and needs a user decision that
-NatStack cannot represent as a built-in permission. The shell verifies the
+Vibez1 cannot represent as a built-in permission. The shell verifies the
 issuer identity (`callerId`/`callerKind`) and shows the user a trusted consent
 prompt for that custom resource.
 
 Do **not** call `approvals.request()` for ordinary actions the caller can already
 perform: context filesystem reads/writes/removes, eval work, panel operations,
 browser automation, git/runtime APIs, external opens, credential use, and other
-host-mediated capabilities are already protected by NatStack's outer permission
+host-mediated capabilities are already protected by Vibez1's outer permission
 systems where needed.
 
 ```ts
@@ -383,7 +383,7 @@ letters/numbers/`_-`; `dismiss` is reserved.
 
 Do not use `approvals.request()` as a general confirmation dialog or a defensive
 wrapper around actions the agent/runtime can already take. For host capabilities
-that already have a NatStack permission flow, use `openExternal()`,
+that already have a Vibez1 permission flow, use `openExternal()`,
 `credentials.*`, `git.*`, `vcs.*`, or the relevant runtime API so the host can apply the
 right trust scope and audit model.
 

@@ -81,7 +81,7 @@ describe("WorkspaceVcs — full context lifecycle (e2e)", () => {
     await fsp.mkdir(path.join(workspaceRoot, "packages/bar"), { recursive: true });
     await fsp.writeFile(path.join(workspaceRoot, "packages/bar/index.ts"), "export const y = 1;\n");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta/natstack.yml"), "name: test\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: test\n");
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     caller = callerFor(gad);

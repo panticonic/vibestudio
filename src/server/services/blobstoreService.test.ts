@@ -5,7 +5,7 @@ import * as path from "path";
 import * as os from "os";
 import { Readable } from "stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
 import { createBlobstoreService } from "./blobstoreService.js";
 
 interface TestServer {
@@ -114,7 +114,7 @@ describe("blobstoreService", () => {
   let blobsDir: string;
 
   beforeEach(async () => {
-    rootDir = await fsp.mkdtemp(path.join(os.tmpdir(), "natstack-blobstore-"));
+    rootDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vibez1-blobstore-"));
     blobsDir = path.join(rootDir, "blobs");
   });
 

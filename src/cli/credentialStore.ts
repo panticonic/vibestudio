@@ -13,7 +13,7 @@ export interface CliCredentials {
 }
 
 export function credentialPath(): string {
-  return path.join(os.homedir(), ".config", "natstack", "cli-credentials.json");
+  return path.join(os.homedir(), ".config", "vibez1", "cli-credentials.json");
 }
 
 export function loadCliCredentials(): CliCredentials | null {

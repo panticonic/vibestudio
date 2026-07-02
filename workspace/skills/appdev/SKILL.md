@@ -1,6 +1,6 @@
 ---
 name: appdev
-description: Author NatStack trusted workspace apps for Electron, React Native, and terminal targets, including manifests, capabilities, pairing/client auth, build artifacts, approval flow, and development workflow.
+description: Author Vibez1 trusted workspace apps for Electron, React Native, and terminal targets, including manifests, capabilities, pairing/client auth, build artifacts, approval flow, and development workflow.
 ---
 
 # App Development Skill
@@ -49,7 +49,7 @@ from panels, workers, and extensions:
 ## Quick Start
 
 Create an app repo under `apps/<name>` with package name
-`@workspace-apps/<name>`, then declare the app in `meta/natstack.yml`:
+`@workspace-apps/<name>`, then declare the app in `meta/vibez1.yml`:
 
 ```yaml
 apps:
@@ -65,7 +65,7 @@ Minimal Electron app package:
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "displayName": "My App",
     "app": {
       "target": "electron",
@@ -74,8 +74,8 @@ Minimal Electron app package:
     }
   },
   "dependencies": {
-    "@natstack/rpc": "workspace:*",
-    "@natstack/shared": "workspace:*",
+    "@vibez1/rpc": "workspace:*",
+    "@vibez1/shared": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   }

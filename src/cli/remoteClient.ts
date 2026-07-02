@@ -4,9 +4,9 @@ import {
   serverWorkspaceRouteUrl,
   PAIRING_CODE_PATTERN,
   parseConnectServerUrl,
-} from "@natstack/shared/connect";
+} from "@vibez1/shared/connect";
 import { AuthError } from "./output.js";
-import { authMethods } from "@natstack/shared/serviceSchemas/auth";
+import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { typedClient } from "./typedClients.js";
 
@@ -166,12 +166,12 @@ function remoteErrorMessage(body: { error?: unknown; code?: unknown }, fallback:
 
 function parsePairOptions(options: PairOptions): { url: string; code: string } {
   if (options.link) {
-    // A natstack://connect link now carries a WebRTC room + DTLS fingerprint, not
+    // A vibez1://connect link now carries a WebRTC room + DTLS fingerprint, not
     // a server URL — it is redeemed by the desktop/mobile shell over the encrypted
     // pipe, not by the CLI's HTTP device-credential pairing. There is no origin to
     // POST a pairing request to, so the CLI pairs against a co-located server URL.
     throw new Error(
-      "natstack://connect links pair the desktop/mobile app over WebRTC, not the CLI. " +
+      "vibez1://connect links pair the desktop/mobile app over WebRTC, not the CLI. " +
         "Pair the CLI against a co-located server with --url <http://127.0.0.1:PORT> --code <code>."
     );
   }

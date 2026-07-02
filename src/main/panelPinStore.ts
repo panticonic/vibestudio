@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "fs";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 
 const log = createDevLogger("PanelPinStore");
 

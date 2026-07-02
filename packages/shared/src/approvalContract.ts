@@ -19,8 +19,8 @@ export const NOTIFICATION_ACTION_IDS_STANDARD = [
 ] as const;
 export const NOTIFICATION_ACTION_IDS_INPUT_REQUIRED = ["open"] as const;
 
-export const APPROVAL_CATEGORY_DECIDE = "natstack-approval-decide";
-export const APPROVAL_CATEGORY_INPUT_REQUIRED = "natstack-approval-input-required";
+export const APPROVAL_CATEGORY_DECIDE = "vibez1-approval-decide";
+export const APPROVAL_CATEGORY_INPUT_REQUIRED = "vibez1-approval-input-required";
 
 export type PushApprovalDataPayload = {
   kind: "approval-prompt" | "approval-cancel";

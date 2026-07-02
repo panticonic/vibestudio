@@ -188,7 +188,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   createDurableObjectServiceClient: valueEntry(
     "Resolve a Durable Object-backed service and call it through unified RPC."
   ),
-  gatewayConfig: valueEntry("Gateway base URL and bearer token for NatStack service routes."),
+  gatewayConfig: valueEntry("Gateway base URL and bearer token for Vibez1 service routes."),
   gatewayFetch: valueEntry(
     "Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."
   ),

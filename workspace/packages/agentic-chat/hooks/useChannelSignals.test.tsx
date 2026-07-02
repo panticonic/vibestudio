@@ -38,7 +38,7 @@ describe("useChannelSignals", () => {
       {
         delivery: "signal",
         type: "signal",
-        contentType: "natstack-ext-working",
+        contentType: "vibez1-ext-working",
         content: JSON.stringify({ message: null }),
         ts: 1,
       },
@@ -53,7 +53,7 @@ describe("useChannelSignals", () => {
     expect(debug).toHaveBeenCalledWith(
       "[useChannelSignals] suppressed transient signal",
       expect.objectContaining({
-        contentType: "natstack-ext-working",
+        contentType: "vibez1-ext-working",
         content: JSON.stringify({ message: null }),
       })
     );
@@ -65,7 +65,7 @@ describe("useChannelSignals", () => {
       {
         delivery: "signal",
         type: "signal",
-        contentType: "natstack-ext-working",
+        contentType: "vibez1-ext-working",
         content: JSON.stringify({ message: "Checking credentials" }),
         ts: 1,
       },
@@ -76,7 +76,7 @@ describe("useChannelSignals", () => {
     await waitFor(() => {
       expect(latest).toEqual([
         expect.objectContaining({
-          contentType: "natstack-ext-working",
+          contentType: "vibez1-ext-working",
           content: "Checking credentials",
         }),
       ]);

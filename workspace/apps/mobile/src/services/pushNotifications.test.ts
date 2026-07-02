@@ -139,7 +139,7 @@ function createShellClient(
 
 beforeEach(() => {
   setApprovedAppCapabilities(["notifications", "keychain"]);
-  (NativeModules.NatStackMobileHost as { firebaseConfigured?: boolean }).firebaseConfigured = true;
+  (NativeModules.Vibez1MobileHost as { firebaseConfigured?: boolean }).firebaseConfigured = true;
   jest.clearAllMocks();
   mockStorage.clear();
   mockListeners.tokenRefresh = undefined;
@@ -159,7 +159,7 @@ afterAll(() => {
 
 describe("pushNotifications", () => {
   it("skips Firebase messaging setup when the native app has no Firebase config", async () => {
-    (NativeModules.NatStackMobileHost as { firebaseConfigured?: boolean }).firebaseConfigured =
+    (NativeModules.Vibez1MobileHost as { firebaseConfigured?: boolean }).firebaseConfigured =
       false;
     const shellClient = createShellClient();
 

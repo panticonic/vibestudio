@@ -6,22 +6,22 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
-// Publish mode (NATSTACK_EXTHOST_PUBLISH=1) emits a fully self-contained bundle
-// into dist-publish/ for npm packaging: @natstack/extension and
-// @natstack/process-adapter are inlined too (on top of the always-inlined
-// source-only @natstack/shared + unit-host), so the published @natstack/server
+// Publish mode (VIBEZ1_EXTHOST_PUBLISH=1) emits a fully self-contained bundle
+// into dist-publish/ for npm packaging: @vibez1/extension and
+// @vibez1/process-adapter are inlined too (on top of the always-inlined
+// source-only @vibez1/shared + unit-host), so the published @vibez1/server
 // can vendor *just* this package and resolve on any Node >=20 with no
 // workspace:* and no source-.ts imports at runtime. The default (dev/monorepo)
 // build keeps those two external to avoid the dual-package hazard for other
 // in-repo consumers (and skips the publish-only dist-publish/ output).
-const PUBLISH = process.env.NATSTACK_EXTHOST_PUBLISH === "1";
+const PUBLISH = process.env.VIBEZ1_EXTHOST_PUBLISH === "1";
 const outdir = PUBLISH ? "dist-publish" : "dist";
 
 fs.rmSync(outdir, { recursive: true, force: true });
 fs.mkdirSync(outdir, { recursive: true });
 
 // Bundle JS for the host entry and the forked-child runtime entry. Runtime JS
-// must not resolve @natstack/shared directly: shared is a source-only package
+// must not resolve @vibez1/shared directly: shared is a source-only package
 // whose exports point at .ts files with NodeNext-style .js specifiers.
 await esbuild.build({
   entryPoints: ["src/index.ts", "src/childRuntime.ts"],
@@ -41,7 +41,7 @@ const require = __createRequire(import.meta.url);
   // only inside Electron, so it stays a runtime-optional require in both modes.
   external: PUBLISH
     ? ["electron"]
-    : ["@natstack/extension", "@natstack/process-adapter"],
+    : ["@vibez1/extension", "@vibez1/process-adapter"],
 });
 
 if (PUBLISH) {

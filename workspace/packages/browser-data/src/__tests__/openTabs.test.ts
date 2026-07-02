@@ -9,7 +9,7 @@ import { readOpenTabs } from "../readers/openTabs.js";
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-open-tabs-"));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-open-tabs-"));
 });
 
 afterEach(() => {

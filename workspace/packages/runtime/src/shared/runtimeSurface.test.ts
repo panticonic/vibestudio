@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 import { helpfulNamespace } from "./helpfulNamespace.js";
 import { createHostedRuntime, type RuntimeHost } from "./hostedRuntime.js";
 import { createWorkerRuntime } from "../worker/index.js";
-import { panelRuntimeSurface } from "@natstack/shared/runtimeSurface.panel";
-import { workerRuntimeSurface } from "@natstack/shared/runtimeSurface.worker";
-import { coreRuntimeSurface } from "@natstack/shared/runtimeSurface.core";
+import { panelRuntimeSurface } from "@vibez1/shared/runtimeSurface.panel";
+import { workerRuntimeSurface } from "@vibez1/shared/runtimeSurface.worker";
+import { coreRuntimeSurface } from "@vibez1/shared/runtimeSurface.core";
 import {
   EVAL_AMBIENT_ONLY,
   evalImportableSurface,
-} from "@natstack/shared/runtimeSurface.eval";
-import { PORTABLE_KEYS } from "@natstack/shared/runtimeSurface.portable";
+} from "@vibez1/shared/runtimeSurface.eval";
+import { PORTABLE_KEYS } from "@vibez1/shared/runtimeSurface.portable";
 
 /**
  * Execution-based cross-target parity gates. Instead of grepping source, we
@@ -119,15 +119,15 @@ describe("runtimeSurface manifests", () => {
     const G = globalThis as Record<string, unknown>;
     const saved: Record<string, unknown> = {};
     const PANEL_GLOBALS = {
-      __natstackEntityId: "panel:test-entity",
-      __natstackSlotId: "panel:test-slot",
-      __natstackContextId: "ctx_test",
-      __natstackKind: "panel",
-      __natstackInitialTheme: "light",
-      __natstackEnv: {},
-      __natstackGatewayConfig: { serverUrl: "http://server.test", token: "tok" },
+      __vibez1EntityId: "panel:test-entity",
+      __vibez1SlotId: "panel:test-slot",
+      __vibez1ContextId: "ctx_test",
+      __vibez1Kind: "panel",
+      __vibez1InitialTheme: "light",
+      __vibez1Env: {},
+      __vibez1GatewayConfig: { serverUrl: "http://server.test", token: "tok" },
       // Minimal shell bridge so createPanelTransport() doesn't throw on import.
-      __natstackShell: {
+      __vibez1Shell: {
         postEnvelope: async () => {},
         onEnvelope: () => () => {},
         onRecovery: () => () => {},

@@ -8,7 +8,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { WebSocketServer } from "ws";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import type {
   BuildArtifactManifestEntry,
   BuildResult,
@@ -44,16 +44,39 @@ function loadBrowserTransport(): string {
   }
 
   log.info(`[PanelHttpServer] Browser transport not found, using inline stub`);
-  return `console.warn("[NatStack] Browser transport not available — panel RPC will not work.");`;
+  return `console.warn("[Vibez1] Browser transport not available — panel RPC will not work.");`;
 }
 
 const BROWSER_TRANSPORT_JS = loadBrowserTransport();
 
-// ---------------------------------------------------------------------------
-// Embedded favicon (SVG)
-// ---------------------------------------------------------------------------
+function loadBrandAsset(filename: string): Buffer | null {
+  const candidates = [
+    typeof __dirname !== "undefined" && __dirname
+      ? path.join(__dirname, "assets", "brand", filename)
+      : null,
+    path.join(process.cwd(), "dist", "assets", "brand", filename),
+    path.join(process.cwd(), "build-resources", "brand", filename),
+  ].filter((candidate): candidate is string => Boolean(candidate));
 
-const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#1a1a2e"/><text x="16" y="23" text-anchor="middle" font-size="20" font-family="system-ui" fill="#e94560">N</text></svg>`;
+  for (const assetPath of candidates) {
+    try {
+      return fs.readFileSync(assetPath);
+    } catch {
+      // Try the next runtime layout.
+    }
+  }
+  return null;
+}
+
+const BRAND_FAVICON_ICO = loadBrandAsset("favicon.ico");
+const BRAND_FAVICON_PNG = loadBrandAsset("favicon-64.png");
+const BRAND_FAVICON_SVG = loadBrandAsset("favicon.svg");
+const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#111"/><path d="M7 25h18M14 25V13l-8 5M14 13l5-3M18 15l5 5M18 15l7-2" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
+const BRAND_MARK_WHITE_SVG = loadBrandAsset("vibez1-mark-white.svg");
+const DEFAULT_BRAND_MARK_WHITE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 904 904" fill="none"><path d="M116 805H788" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M496 805V350L204 536" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M155 608L496 392" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M280 238L414 372L179 519" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M302 184L430 312" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M338 88L510 278" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M265 127L291 153" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M496 278L557 180C592 123 552 80 507 87C470 93 450 121 450 165V236" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M525 355L616 222C653 168 728 189 737 238C743 274 724 295 690 303L538 342L633 437" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M554 578V431L709 579V394" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const BRAND_MARK_WHITE_DATA_URL = `data:image/svg+xml;base64,${(
+  BRAND_MARK_WHITE_SVG ?? Buffer.from(DEFAULT_BRAND_MARK_WHITE_SVG)
+).toString("base64")}`;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,9 +127,9 @@ function extractSourcePath(pathname: string): { source: string; resource: string
 }
 
 function shouldLogPanelResourceRequests(): boolean {
-  if (process.env["NATSTACK_PANEL_RESOURCE_LOG"] === "0") return false;
+  if (process.env["VIBEZ1_PANEL_RESOURCE_LOG"] === "0") return false;
   return (
-    process.env["NATSTACK_PANEL_RESOURCE_LOG"] === "1" || process.env["NODE_ENV"] === "development"
+    process.env["VIBEZ1_PANEL_RESOURCE_LOG"] === "1" || process.env["NODE_ENV"] === "development"
   );
 }
 
@@ -339,7 +362,7 @@ export class PanelHttpServer {
 
     // ── Favicon ─────────────────────────────────────────────────────────
     if (pathname === "/favicon.ico" || pathname === "/favicon.svg") {
-      this.serveFavicon(res);
+      this.serveFavicon(pathname, res);
       return;
     }
 
@@ -393,7 +416,7 @@ export class PanelHttpServer {
     res.once("finish", () => {
       const durationMs = Date.now() - startedAt;
       const client =
-        typeof userAgent === "string" && userAgent.includes("NatStack-Mobile") ? "mobile" : "web";
+        typeof userAgent === "string" && userAgent.includes("Vibez1-Mobile") ? "mobile" : "web";
       log.info(
         `Panel resource ${method} ${source}${resource} route=${routeLabel} ` +
           `status=${res.statusCode} durationMs=${durationMs} client=${client}`
@@ -543,19 +566,23 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Building — NatStack</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>Building — Vibez1</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 500px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #e0e0e0; background: #1a1a2e; }
-    h1 { color: #e94560; font-size: 1.5rem; }
-    p { color: #888; line-height: 1.6; }
-    .spinner { width: 24px; height: 24px; border: 3px solid #333; border-top: 3px solid #e94560;
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
+    h1 { color: #f8fafc; font-size: 1.5rem; }
+    p { color: #9ca3af; line-height: 1.6; }
+    code { color: #facc15; }
+    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .spinner { width: 24px; height: 24px; border: 3px solid #303a4f; border-top: 3px solid #f59e0b;
                border-radius: 50%; animation: spin 0.8s linear infinite; margin: 1rem auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
   <meta http-equiv="refresh" content="2">
 </head>
 <body>
+  <div class="brand-mark"><img src="${BRAND_MARK_WHITE_DATA_URL}" alt="" aria-hidden="true"></div>
   <h1>Building Panel</h1>
   <div class="spinner"></div>
   <p>The panel <code>${escapeHtml(panelLabel)}</code> is still building. This page will refresh automatically.</p>
@@ -579,17 +606,21 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Build Error — NatStack</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>Build Error — Vibez1</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #e0e0e0; background: #1a1a2e; }
-    h1 { color: #e94560; font-size: 1.5rem; }
-    p { color: #888; line-height: 1.6; }
-    pre { background: #16213e; padding: 1rem; border-radius: 6px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: #ffa0a0; }
-    a { color: #0a84ff; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
+    h1 { color: #f8fafc; font-size: 1.5rem; }
+    p { color: #9ca3af; line-height: 1.6; }
+    code { color: #facc15; }
+    pre { background: #101318; border: 1px solid #303a4f; padding: 1rem; border-radius: 10px; text-align: left; overflow-x: auto; font-size: 0.85rem; color: #fecaca; }
+    a { color: #f59e0b; }
+    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
   </style>
 </head>
 <body>
+  <div class="brand-mark"><img src="${BRAND_MARK_WHITE_DATA_URL}" alt="" aria-hidden="true"></div>
   <h1>Build Failed</h1>
   <p>The panel <code>${escapeHtml(source)}</code> failed to build:</p>
   <pre>${escapeHtml(error)}</pre>
@@ -628,7 +659,7 @@ export class PanelHttpServer {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "X-NatStack-Build-Revision": String(build.revision),
+      "X-Vibez1-Build-Revision": String(build.revision),
     });
     res.end(build.htmlArtifact.content);
   }
@@ -657,7 +688,7 @@ export class PanelHttpServer {
         "Content-Type": artifact.contentType,
         "Content-Length": body.length,
         "Cache-Control": cacheControl,
-        "X-NatStack-Build-Revision": String(revision),
+        "X-Vibez1-Build-Revision": String(revision),
       });
       res.end(body);
       return;
@@ -665,7 +696,7 @@ export class PanelHttpServer {
     res.writeHead(200, {
       "Content-Type": artifact.contentType,
       "Cache-Control": cacheControl,
-      "X-NatStack-Build-Revision": String(revision),
+      "X-Vibez1-Build-Revision": String(revision),
     });
     res.end(artifact.content);
   }
@@ -689,24 +720,30 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NatStack Panels</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <title>Vibez1 Panels</title>
+  <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #e0e0e0; background: #1a1a2e; }
-    h1 { color: #e94560; }
-    code { background: #16213e; padding: 0.1em 0.4em; border-radius: 3px; font-size: 0.8em; color: #a0a0b8; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
+    h1 { color: #f8fafc; }
+    code { background: #101318; border: 1px solid #303a4f; padding: 0.1em 0.4em; border-radius: 5px; font-size: 0.8em; color: #d1d5db; }
     ul { list-style: none; padding: 0; }
-    li { margin: 0.8rem 0; }
-    a { color: #0a84ff; text-decoration: none; font-weight: 500; }
+    li { margin: 0.8rem 0; padding: 0.8rem 0; border-bottom: 1px solid #222834; }
+    a { color: #f59e0b; text-decoration: none; font-weight: 600; }
     a:hover { text-decoration: underline; }
-    .sub { color: #555; margin-left: 0.5em; }
-    .empty { color: #888; }
+    .brand-header { display: flex; align-items: center; gap: 1rem; margin: 0 0 1.5rem; }
+    .brand-mark { width: 58px; height: 58px; filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35)); }
+    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+    .sub { color: #6b7280; margin-left: 0.5em; }
+    .empty { color: #9ca3af; }
     .badge { font-size: 0.7em; padding: 0.15em 0.5em; border-radius: 3px; margin-left: 0.5em; text-transform: uppercase; font-weight: 600; }
     .badge.running { background: #1b5e20; color: #81c784; }
   </style>
 </head>
 <body>
-  <h1>NatStack Panels</h1>
+  <div class="brand-header">
+    <div class="brand-mark"><img src="${BRAND_MARK_WHITE_DATA_URL}" alt="" aria-hidden="true"></div>
+    <h1>Vibez1 Panels</h1>
+  </div>
   ${
     allEntries.length > 0
       ? `<ul>${allEntries.join("\n")}</ul>`
@@ -719,7 +756,34 @@ export class PanelHttpServer {
     res.end(html);
   }
 
-  private serveFavicon(res: import("http").ServerResponse): void {
+  private serveFavicon(pathname: string, res: import("http").ServerResponse): void {
+    if (pathname === "/favicon.svg" && BRAND_FAVICON_SVG) {
+      res.writeHead(200, {
+        "Content-Type": "image/svg+xml; charset=utf-8",
+        "Content-Length": BRAND_FAVICON_SVG.length,
+        "Cache-Control": "public, max-age=86400",
+      });
+      res.end(BRAND_FAVICON_SVG);
+      return;
+    }
+    if (pathname === "/favicon.ico" && BRAND_FAVICON_ICO) {
+      res.writeHead(200, {
+        "Content-Type": "image/x-icon",
+        "Content-Length": BRAND_FAVICON_ICO.length,
+        "Cache-Control": "public, max-age=86400",
+      });
+      res.end(BRAND_FAVICON_ICO);
+      return;
+    }
+    if (BRAND_FAVICON_PNG) {
+      res.writeHead(200, {
+        "Content-Type": "image/png",
+        "Content-Length": BRAND_FAVICON_PNG.length,
+        "Cache-Control": "public, max-age=86400",
+      });
+      res.end(BRAND_FAVICON_PNG);
+      return;
+    }
     res.writeHead(200, {
       "Content-Type": "image/svg+xml; charset=utf-8",
       "Cache-Control": "public, max-age=86400",

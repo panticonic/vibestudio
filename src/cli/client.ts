@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { appendServerPath, isSelectedWorkspaceUrl } from "@natstack/shared/connect";
+import { appendServerPath, isSelectedWorkspaceUrl } from "@vibez1/shared/connect";
 import {
   clearCliCredentials,
   loadCliCredentials,
@@ -51,7 +51,7 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
   if (typeof inv.flags["code"] === "string") opts.code = inv.flags["code"];
   if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
   const positional = inv.positionals[0];
-  if (positional?.startsWith("natstack://")) opts.link = positional;
+  if (positional?.startsWith("vibez1://")) opts.link = positional;
   else if (positional) opts.url = positional;
   try {
     const creds = await pairRemoteServer(opts);
@@ -76,9 +76,7 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
     const creds = loadCliCredentials();
     if (!creds) throw new AuthError("not paired");
     if (!creds.workspaceName || !isSelectedWorkspaceUrl(creds.url)) {
-      throw new AuthError(
-        "no remote workspace selected - run `natstack remote select <workspace>`"
-      );
+      throw new AuthError("no remote workspace selected - run `vibez1 remote select <workspace>`");
     }
     const refresh = await refreshShell(creds);
     const response = await fetch(appendServerPath(creds.url, "/healthz"));
@@ -200,10 +198,10 @@ function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
   if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
 
   const positional = inv.positionals[0];
-  if (positional?.startsWith("natstack://")) opts.link = positional;
+  if (positional?.startsWith("vibez1://")) opts.link = positional;
   else if (positional) {
     throw new UsageError(
-      `Unexpected argument for terminal start: ${positional}. Pass a natstack://connect link with --pair.`
+      `Unexpected argument for terminal start: ${positional}. Pass a vibez1://connect link with --pair.`
     );
   }
 
@@ -234,7 +232,7 @@ async function terminalCredentials(
     const loaded = loadCliCredentials();
     if (!loaded) {
       throw new AuthError(
-        'not paired - run `natstack terminal start --pair "natstack://connect?url=...&code=..."`'
+        'not paired - run `vibez1 terminal start --pair "vibez1://connect?url=...&code=..."`'
       );
     }
     creds = loaded;
@@ -374,7 +372,7 @@ function scriptCommand(
 const remoteCommands: CliCommand[] = [
   scriptCommand("remote", "serve", "remote-serve.mjs", "Start a QR/deep-link pairing server", {
     aliases: ["server"],
-    usage: "natstack remote serve [--port 3030]",
+    usage: "vibez1 remote serve [--port 3030]",
     // The pair server's own help documents the resolved server entry.
     passthroughHelp: true,
   }),
@@ -382,7 +380,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "pair",
     summary: "Save a CLI device credential without launching Electron",
-    usage: 'natstack remote pair "natstack://connect?url=...&code=..."',
+    usage: 'vibez1 remote pair "vibez1://connect?url=...&code=..."',
     flags: [
       { name: "url", takesValue: true, description: "Server URL (with --code)" },
       { name: "code", takesValue: true, description: "Pairing code (with --url)" },
@@ -395,7 +393,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "invite",
     summary: "Create a pairing invite for another device",
-    usage: "natstack remote invite [--ttl-ms <milliseconds>]",
+    usage: "vibez1 remote invite [--ttl-ms <milliseconds>]",
     flags: [{ name: "ttl-ms", takesValue: true }, JSON_FLAG],
     run: remoteInvite,
   },
@@ -403,7 +401,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "status",
     summary: "Check the stored credential against the server",
-    usage: "natstack remote status",
+    usage: "vibez1 remote status",
     flags: [JSON_FLAG],
     run: remoteStatus,
   },
@@ -411,7 +409,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "workspaces",
     summary: "List workspaces on the paired server",
-    usage: "natstack remote workspaces",
+    usage: "vibez1 remote workspaces",
     flags: [JSON_FLAG],
     run: remoteWorkspaceList,
   },
@@ -419,7 +417,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "select",
     summary: "Select a workspace on the paired server",
-    usage: "natstack remote select <workspace>",
+    usage: "vibez1 remote select <workspace>",
     flags: [{ name: "workspace", takesValue: true }, JSON_FLAG],
     run: remoteWorkspaceSelect,
   },
@@ -427,12 +425,12 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "terminal",
     summary: "Review approvals and start the selected terminal app",
-    usage: "natstack remote terminal [--pair <link>] [--workspace <name>] [--yes]",
+    usage: "vibez1 remote terminal [--pair <link>] [--workspace <name>] [--yes]",
     flags: [
       {
         name: "pair",
         takesValue: true,
-        description: "Pair from a natstack://connect link before starting",
+        description: "Pair from a vibez1://connect link before starting",
       },
       { name: "url", takesValue: true, description: "Server URL for --code pairing" },
       { name: "code", takesValue: true, description: "Pairing code for --url pairing" },
@@ -451,7 +449,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "logout",
     summary: "Remove the stored CLI device credential",
-    usage: "natstack remote logout",
+    usage: "vibez1 remote logout",
     flags: [JSON_FLAG],
     run: async (inv) => {
       const json = jsonMode(inv.flags["json"] === true);
@@ -466,7 +464,7 @@ const remoteCommands: CliCommand[] = [
     aliases: ["headless-host"],
     summary: "Run a headless Chromium panel host against the paired server",
     usage:
-      "natstack remote host [--url <serverUrl> --token <shellToken>] [--label <name>] " +
+      "vibez1 remote host [--url <serverUrl> --token <shellToken>] [--label <name>] " +
       "[--max-panels 8] [--idle-unload-min 5] [--idle-exit-min 0] [--chromium-path <bin>] [--lean-browser]",
     flags: [
       { name: "url", takesValue: true, description: "Server URL (defaults to the paired server)" },
@@ -504,12 +502,12 @@ const terminalCommands: CliCommand[] = [
     name: "start",
     aliases: ["launch"],
     summary: "Review approvals and start the selected terminal app",
-    usage: "natstack terminal start [--pair <link>] [--workspace <name>] [--yes]",
+    usage: "vibez1 terminal start [--pair <link>] [--workspace <name>] [--yes]",
     flags: [
       {
         name: "pair",
         takesValue: true,
-        description: "Pair from a natstack://connect link before starting",
+        description: "Pair from a vibez1://connect link before starting",
       },
       { name: "url", takesValue: true, description: "Server URL for --code pairing" },
       { name: "code", takesValue: true, description: "Pairing code for --url pairing" },
@@ -550,11 +548,11 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
   } else {
     const creds = loadCliCredentials();
     if (!creds) {
-      console.error("not paired — run `natstack remote pair` first or pass --url and --token");
+      console.error("not paired — run `vibez1 remote pair` first or pass --url and --token");
       return 3;
     }
     if (!explicitUrl && !creds.workspaceName) {
-      console.error("no remote workspace selected — run `natstack remote select <workspace>`");
+      console.error("no remote workspace selected — run `vibez1 remote select <workspace>`");
       return 3;
     }
     if (!explicitUrl && !isSelectedWorkspaceUrl(creds.url)) {
@@ -618,12 +616,12 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
 
 const mobileCommands: CliCommand[] = [
   scriptCommand("mobile", "pair", "mobile-pair.mjs", "Start the QR/deep-link pairing server", {
-    usage: "natstack mobile pair [--port 3030]",
+    usage: "vibez1 mobile pair [--port 3030]",
     // The pair server's own help documents the resolved server entry.
     passthroughHelp: true,
   }),
   scriptCommand("mobile", "dev", "mobile-dev.mjs", "Metro + local server + debug APK", {
-    usage: "natstack mobile dev [--avd <name>] [--device <serial>]",
+    usage: "vibez1 mobile dev [--avd <name>] [--device <serial>]",
   }),
   scriptCommand(
     "mobile",
@@ -631,23 +629,23 @@ const mobileCommands: CliCommand[] = [
     "mobile-smoke.mjs",
     "Verify the installed internal APK can pair and reach the workspace app",
     {
-      usage: "natstack mobile smoke [options]",
+      usage: "vibez1 mobile smoke [options]",
       passthroughHelp: true,
     }
   ),
   scriptCommand("mobile", "build", "mobile-install.mjs", "Build the trusted internal APK", {
     aliases: ["apk"],
-    usage: "natstack mobile build",
+    usage: "vibez1 mobile build",
     prependArgs: ["--build-only"],
   }),
   scriptCommand("mobile", "install", "mobile-install.mjs", "Install the internal APK", {
-    usage: "natstack mobile install [--device <serial>] [--launch]",
+    usage: "vibez1 mobile install [--device <serial>] [--launch]",
   }),
   scriptCommand("mobile", "logs", "mobile-logs.mjs", "Tail app logs from a device", {
-    usage: "natstack mobile logs [--device <serial>]",
+    usage: "vibez1 mobile logs [--device <serial>]",
   }),
   scriptCommand("mobile", "emulator", "mobile-emulator.mjs", "Start an Android emulator", {
-    usage: "natstack mobile emulator [--avd <name>]",
+    usage: "vibez1 mobile emulator [--avd <name>]",
   }),
 ];
 
@@ -757,7 +755,7 @@ function runScript(scriptName: string, argv: string[]): Promise<number> {
 
 function printHelp(): void {
   const sections = GROUP_ORDER.map((group) => renderGroupHelp(commandRegistry, group)).join("\n");
-  console.log(`natstack
+  console.log(`vibez1
 
 Usage:
 ${sections}
@@ -767,7 +765,7 @@ Credentials are stored as a 0600 JSON file at ${credentialPath()}.
 }
 
 function printGroupHelp(group: string): void {
-  console.log(`natstack ${group}
+  console.log(`vibez1 ${group}
 
 Usage:
 ${renderGroupHelp(commandRegistry, group)}

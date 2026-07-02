@@ -14,9 +14,9 @@ describe("oauthHandler", () => {
     });
   });
 
-  it("rejects natstack custom-scheme OAuth callbacks", () => {
+  it("rejects vibez1 custom-scheme OAuth callbacks", () => {
     expect(
-      __test__.parseCallback("natstack://oauth/callback/openai-codex?code=code-1&state=state-1")
+      __test__.parseCallback("vibez1://oauth/callback/openai-codex?code=code-1&state=state-1")
     ).toBeNull();
   });
 });

@@ -1,5 +1,10 @@
 <resources>
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@drawable/launch_screen</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:statusBarColor">@color/vibez1_splash_background</item>
+        <item name="android:navigationBarColor">@color/vibez1_splash_background</item>
         <item name="android:editTextBackground">@android:color/transparent</item>
         <item name="android:editTextColor">?android:attr/textColorPrimary</item>
     </style>

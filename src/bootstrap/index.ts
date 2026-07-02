@@ -3,8 +3,8 @@ import {
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
-} from "@natstack/rpc";
-import type { PendingUnitBatchApproval } from "@natstack/shared/approvals";
+} from "@vibez1/rpc";
+import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
 import {
   approvalIds,
   formatCapabilities,
@@ -16,16 +16,16 @@ import {
   unitReviewRows,
   unitSourceLabel,
   unitSummaryChips,
-} from "@natstack/shared/bootstrapLaunchGate";
+} from "@vibez1/shared/bootstrapLaunchGate";
 import {
   HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
   isLaunchSessionEventFor,
   isLaunchSessionEventForTarget,
-} from "@natstack/shared/hostTargetLaunchGate";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
-import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
-import type { HostTargetLaunchSessionSnapshot } from "@natstack/shared/hostTargets";
+} from "@vibez1/shared/hostTargetLaunchGate";
+import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { eventsMethods } from "@vibez1/shared/serviceSchemas/events";
+import type { HostTargetLaunchSessionSnapshot } from "@vibez1/shared/hostTargets";
 
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -44,18 +44,18 @@ type BootstrapConnectionState = {
   localWorkspaces: Array<{ name: string; lastOpened: number }>;
   lastLocalWorkspaceName: string | null;
   isDev?: boolean;
-  /** The natstack://connect deep link the app was opened with (auto-pair). */
+  /** The vibez1://connect deep link the app was opened with (auto-pair). */
   pendingPairLink?: string | null;
 };
 
 const globals = globalThis as unknown as {
-  __natstackTransport?: ShellTransportBridge;
-  __natstackBootstrap?: BootstrapBridge;
+  __vibez1Transport?: ShellTransportBridge;
+  __vibez1Bootstrap?: BootstrapBridge;
 };
 const container = document.getElementById("approvals");
 if (!container) throw new Error("Bootstrap approval container missing");
-const bootstrapTransport = globals.__natstackTransport;
-const bootstrapApi = globals.__natstackBootstrap;
+const bootstrapTransport = globals.__vibez1Transport;
+const bootstrapApi = globals.__vibez1Bootstrap;
 const approvalsContainer = container;
 const launchCopy = document.getElementById("launch-copy");
 const bootstrapMain = document.querySelector("main");
@@ -309,7 +309,7 @@ function launchSessionText(session: HostTargetLaunchSessionSnapshot): string {
     return [session.message, session.detail].filter(Boolean).join(" ");
   }
   if (session.status === "approval-required") {
-    return decisionError ?? "Review the workspace code that wants to run before NatStack starts.";
+    return decisionError ?? "Review the workspace code that wants to run before Vibez1 starts.";
   }
   return [session.message, session.detail].filter(Boolean).join(" ");
 }
@@ -334,7 +334,7 @@ function render(): void {
     approvalsContainer.className = "launch-card";
     if (launchCopy) {
       launchCopy.textContent =
-        decisionError ?? "Review the workspace code that wants to run before NatStack starts.";
+        decisionError ?? "Review the workspace code that wants to run before Vibez1 starts.";
     }
     for (const approval of pending) {
       const copy = getLaunchCopy(approval);
@@ -397,7 +397,7 @@ let connectionHandoff: { title: string; detail: string } | null = null;
 let connectionError: string | null = null;
 let pairLinkValue = "";
 let localWorkspaceValue = "";
-// Guards the one-shot auto-pair when the app was opened with a natstack://connect
+// Guards the one-shot auto-pair when the app was opened with a vibez1://connect
 // deep link — we pair automatically instead of waiting for a paste + click.
 let autoPairTriggered = false;
 
@@ -541,7 +541,7 @@ function appendPairRemote(parent: HTMLElement): void {
   const meta = document.createElement("div");
   meta.className = "meta";
   meta.textContent =
-    "Paste the natstack:// pairing link from the server. Pairing connects over WebRTC and opens the remote workspace in this window.";
+    "Paste the vibez1:// pairing link from the server. Pairing connects over WebRTC and opens the remote workspace in this window.";
   const fields = document.createElement("div");
   fields.className = "field-grid";
 
@@ -550,7 +550,7 @@ function appendPairRemote(parent: HTMLElement): void {
   const linkInput = document.createElement("input");
   linkInput.name = "link";
   linkInput.type = "text";
-  linkInput.placeholder = "natstack://connect?room=...";
+  linkInput.placeholder = "vibez1://connect?room=...";
   linkInput.value = pairLinkValue;
   linkInput.autocomplete = "off";
   linkInput.oninput = () => {
@@ -566,7 +566,7 @@ function appendPairRemote(parent: HTMLElement): void {
     connectionButton("Pair server", "pair", async () => {
       if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
       const link = pairLinkValue.trim();
-      if (!link) throw new Error("Paste a natstack:// pairing link");
+      if (!link) throw new Error("Paste a vibez1:// pairing link");
       const result = await bootstrapApi.pairRemote({ link });
       // On success the host accepts the pairing and connects in this process;
       // only a failed parse returns an { ok: false } result for us to surface.
@@ -685,7 +685,7 @@ function renderConnectionChooser(state: BootstrapConnectionState): void {
   appendConnectionStatus(approvalsContainer);
   appendPairRemote(approvalsContainer);
   appendLocalWorkspaces(approvalsContainer, state);
-  // Opened via a natstack://connect deep link ⇒ pair automatically (one-shot).
+  // Opened via a vibez1://connect deep link ⇒ pair automatically (one-shot).
   // The user already expressed intent by opening the link; on success the host
   // connects in this process and the launch gate proceeds in this window.
   if (state.pendingPairLink && !autoPairTriggered && !connectionBusyAction) {

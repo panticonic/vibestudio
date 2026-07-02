@@ -6,7 +6,7 @@ export type AgentRespondPolicy =
   | "mentioned-strict"
   | "mentioned-or-followup"
   | "from-participants";
-export type AgentSystemPromptMode = "append" | "replace" | "replace-natstack";
+export type AgentSystemPromptMode = "append" | "replace" | "replace-vibez1";
 
 /**
  * The per-agent BEHAVIOR settings. These are PER-AGENT: seeded into the agent's

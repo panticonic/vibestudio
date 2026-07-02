@@ -8,8 +8,8 @@
 
 import { randomUUID } from "node:crypto";
 
-import { canonicalKey } from "@natstack/shared/canonicalKey";
-import type { EventService } from "@natstack/shared/eventsService";
+import { canonicalKey } from "@vibez1/shared/canonicalKey";
+import type { EventService } from "@vibez1/shared/eventsService";
 import type {
   ApprovalDecision,
   ApprovalOperationDescriptor,
@@ -28,12 +28,12 @@ import type {
   UserlandApprovalChoice,
   UserlandApprovalOption,
   UserlandApprovalSubject,
-} from "@natstack/shared/approvals";
+} from "@vibez1/shared/approvals";
 import type {
   AccountIdentity,
   CredentialInjection,
   UrlAudience,
-} from "@natstack/shared/credentials/types";
+} from "@vibez1/shared/credentials/types";
 
 /** Terminal decision surfaced back to queue waiters (dismiss collapses to deny). */
 export type GrantedDecision = "once" | "session" | "version" | "repo" | "deny";
@@ -129,7 +129,7 @@ export interface SecretInputApprovalQueueRequest extends ApprovalQueueRequestBas
 export interface UserlandApprovalQueueRequest {
   principal: ApprovalPrincipal;
   /** Issuer of the request — defaults to principal when omitted. */
-  issuer?: import("@natstack/shared/approvals").UserlandApprovalIssuer;
+  issuer?: import("@vibez1/shared/approvals").UserlandApprovalIssuer;
   subject: UserlandApprovalSubject;
   title: string;
   summary?: string;

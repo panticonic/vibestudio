@@ -2,7 +2,7 @@
   "name": "sample-do",
   "version": "0.0.0",
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "title": "Sample Durable Object",
     "kind": "worker",
     "entry": "index.ts",

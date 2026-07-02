@@ -1,5 +1,5 @@
 {
-  "name": "@natstack/well-known",
+  "name": "@vibez1/well-known",
   "private": true,
   "scripts": {
     "build:site": "tsx build.ts",

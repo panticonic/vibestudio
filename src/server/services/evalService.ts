@@ -1,10 +1,10 @@
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { evalMethods } from "@natstack/shared/serviceSchemas/eval";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { evalMethods } from "@vibez1/shared/serviceSchemas/eval";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { DODispatch } from "../doDispatch.js";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import { resolveOwningPanelSlot } from "@natstack/shared/panel/owningPanelSlot";
-import type { TokenManager } from "@natstack/shared/tokenManager";
+import { resolveOwningPanelSlot } from "@vibez1/shared/panel/owningPanelSlot";
+import type { TokenManager } from "@vibez1/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
 
 /** Parse a `do:<source>:<className>:<objectKey>` runtime id into a DO ref (source may contain '/'). */
@@ -158,7 +158,7 @@ export function createEvalService(deps: {
 
   /**
    * Owner-scoped gateway token for THIS EvalDO. Pinned to the concrete
-   * `do:natstack/internal:EvalDO:<objectKey>` identity (kind `do`), NOT the
+   * `do:vibez1/internal:EvalDO:<objectKey>` identity (kind `do`), NOT the
    * shared `do-service:*` bearer — so the kernel's `gatewayFetch` resolves the
    * owner's context and a leak's blast radius is the owner alone (eval code can
    * read `gatewayConfig.token`, but it IS the owner's own authority). Minted

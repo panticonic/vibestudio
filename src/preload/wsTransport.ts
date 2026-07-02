@@ -2,11 +2,11 @@
  * WebSocket transport bridge for preload scripts.
  */
 
-import type { RpcEnvelope, RpcMessage } from "@natstack/rpc";
-import { TERMINAL_CLOSE_CODES } from "@natstack/rpc";
-import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
-import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
-import type { RecoveryKind } from "@natstack/shared/shell/recoveryCoordinator";
+import type { RpcEnvelope, RpcMessage } from "@vibez1/rpc";
+import { TERMINAL_CLOSE_CODES } from "@vibez1/rpc";
+import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
+import type { WsLike } from "@vibez1/rpc/protocol/wsAdapter";
+import type { RecoveryKind } from "@vibez1/shared/shell/recoveryCoordinator";
 
 type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 
@@ -22,10 +22,10 @@ type PanelInitProvider = {
   getPanelInit: () => Promise<PanelInitPayload>;
 };
 
-type NatstackTransportGlobals = typeof globalThis & {
-  __natstackShell?: PanelInitProvider;
-  __natstackElectron?: PanelInitProvider;
-  __natstackGatewayToken?: string;
+type vibez1TransportGlobals = typeof globalThis & {
+  __vibez1Shell?: PanelInitProvider;
+  __vibez1Electron?: PanelInitProvider;
+  __vibez1GatewayToken?: string;
 };
 
 export type TransportBridge = {
@@ -148,14 +148,14 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
   };
 
   const refreshAuthToken = async (): Promise<string> => {
-    const globals = globalThis as NatstackTransportGlobals;
-    const shell = globals.__natstackShell ?? globals.__natstackElectron;
+    const globals = globalThis as vibez1TransportGlobals;
+    const shell = globals.__vibez1Shell ?? globals.__vibez1Electron;
     if (!shell || typeof shell.getPanelInit !== "function") return authToken;
     const panelInit = await shell.getPanelInit();
     const nextToken = panelInit?.gatewayConfig?.token;
     if (typeof nextToken === "string" && nextToken.length > 0) {
       authToken = nextToken;
-      globals.__natstackGatewayToken = nextToken;
+      globals.__vibez1GatewayToken = nextToken;
       if (typeof panelInit.connectionId === "string") {
         connectionId = panelInit.connectionId;
       }
@@ -163,7 +163,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
         clientLabel = panelInit.clientLabel;
       }
       try {
-        sessionStorage.setItem("__natstackPanelInit", JSON.stringify(panelInit));
+        sessionStorage.setItem("__vibez1PanelInit", JSON.stringify(panelInit));
       } catch {
         // ignore
       }

@@ -1,2 +1,2 @@
-export { resolveContextScope } from "@natstack/shared/contextMiddleware";
-export type { ContextScope } from "@natstack/shared/contextMiddleware";
+export { resolveContextScope } from "@vibez1/shared/contextMiddleware";
+export type { ContextScope } from "@vibez1/shared/contextMiddleware";

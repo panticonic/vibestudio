@@ -1,5 +1,5 @@
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { buildMethods } from "@natstack/shared/serviceSchemas/build";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { buildMethods } from "@vibez1/shared/serviceSchemas/build";
 import type { BuildSystemV2, BuildUnitOptions } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";

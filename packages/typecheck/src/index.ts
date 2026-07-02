@@ -1,5 +1,5 @@
 /**
- * @natstack/typecheck — TypeScript type checking for NatStack projects.
+ * @vibez1/typecheck — TypeScript type checking for Vibez1 projects.
  *
  * Server-side type checking for panels, workspace packages, and workers.
  * The TypeCheckService runs TypeScript's language service against on-disk
@@ -8,7 +8,7 @@
  *
  * @example
  * ```typescript
- * import { TypeCheckService, createDiskFileSource, loadSourceFiles } from "@natstack/typecheck";
+ * import { TypeCheckService, createDiskFileSource, loadSourceFiles } from "@vibez1/typecheck";
  *
  * const service = new TypeCheckService({
  *   panelPath: "/abs/path/to/workspace/packages/my-pkg",

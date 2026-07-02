@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { PanelViewLike } from "@natstack/shared/panelInterfaces";
+import type { PanelViewLike } from "@vibez1/shared/panelInterfaces";
 import {
   AppOrchestrator,
   ELECTRON_APP_HOST_CAPABILITIES,
@@ -157,7 +157,7 @@ describe("AppOrchestrator", () => {
   });
 
   it("persists pending desktop app updates across orchestrator restarts", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-app-updates-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-app-updates-"));
     try {
       const panelView = createPanelView();
       (panelView.hasView as ReturnType<typeof vi.fn>).mockReturnValue(true);
@@ -204,7 +204,7 @@ describe("AppOrchestrator", () => {
   });
 
   it("reads and mounts packaged baked Electron app payloads", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-baked-app-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-baked-app-"));
     try {
       fs.mkdirSync(path.join(root, "artifacts"), { recursive: true });
       fs.writeFileSync(path.join(root, "artifacts", "index.html"), "<html></html>");

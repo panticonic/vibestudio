@@ -20,7 +20,7 @@ const FIXTURE_LOG = "vcs:workspace";
 
 describe("assertWritableVcsPath", () => {
   it("rejects a platform-ignored dir with an ACTIONABLE error (names a writable location)", async () => {
-    await expect(assertWritableVcsPath(".natstack/tmp/x.txt")).rejects.toThrow(
+    await expect(assertWritableVcsPath(".vibez1/tmp/x.txt")).rejects.toThrow(
       /platform-ignored directory.*projects\//s
     );
   });

@@ -46,31 +46,60 @@ export class WebViewErrorBoundary extends React.Component<
     console.error(
       `[WebViewErrorBoundary] Panel ${this.props.panelId} crashed:`,
       error,
-      errorInfo.componentStack,
+      errorInfo.componentStack
     );
   }
 
   private handleReload = () => {
-    this.setState(prev => ({ hasError: false, error: null, resetKey: (prev.resetKey ?? 0) + 1 }));
+    this.setState((prev) => ({ hasError: false, error: null, resetKey: (prev.resetKey ?? 0) + 1 }));
   };
 
   render() {
     if (this.state.hasError) {
       const colors = this.props.colors;
       return (
-        <View style={[styles.container, colors?.background != null && { backgroundColor: colors.background }]}>
-          <Text style={[styles.title, colors?.text != null && { color: colors.text }]}>Panel failed to load</Text>
-          <Text style={[styles.message, colors?.textSecondary != null && { color: colors.textSecondary }]}>
+        <View
+          style={[
+            styles.container,
+            colors?.background != null && { backgroundColor: colors.background },
+          ]}
+        >
+          <Text style={[styles.title, colors?.text != null && { color: colors.text }]}>
+            Panel failed to load
+          </Text>
+          <Text
+            style={[
+              styles.message,
+              colors?.textSecondary != null && { color: colors.textSecondary },
+            ]}
+          >
             {this.state.error?.message || "An unexpected error occurred."}
           </Text>
-          <Pressable style={[styles.reloadButton, colors?.accent != null && { backgroundColor: colors.accent }]} onPress={this.handleReload}>
-            <Text style={[styles.reloadText, colors?.accentText != null && { color: colors.accentText }]}>Reload</Text>
+          <Pressable
+            style={[
+              styles.reloadButton,
+              colors?.accent != null && { backgroundColor: colors.accent },
+            ]}
+            onPress={this.handleReload}
+          >
+            <Text
+              style={[
+                styles.reloadText,
+                colors?.accentText != null && { color: colors.accentText },
+              ]}
+            >
+              Reload
+            </Text>
           </Pressable>
         </View>
       );
     }
 
-    return <View key={this.state.resetKey} style={{ flex: 1 }}>{this.props.children}</View>;
+    return (
+      <View key={this.state.resetKey} style={{ flex: 1 }}>
+        {this.props.children}
+      </View>
+    );
   }
 }
 
@@ -80,7 +109,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     padding: 32,
-    backgroundColor: "#1a1a2e",
+    backgroundColor: "#0a0b0c",
   },
   title: {
     fontSize: 18,

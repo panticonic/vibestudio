@@ -1,6 +1,6 @@
 import type { AgenticEvent } from "./events.js";
 
-export const STORED_VALUE_REF_PROTOCOL = "natstack.blob-ref.v1" as const;
+export const STORED_VALUE_REF_PROTOCOL = "vibez1.blob-ref.v1" as const;
 
 export const MAX_INLINE_TRAJECTORY_TEXT_BYTES = 128 * 1024;
 export const MAX_INLINE_TRAJECTORY_EVENT_BYTES = 512 * 1024;

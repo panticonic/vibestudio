@@ -1,12 +1,5 @@
 import React from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
 import type { StackNavigationProp } from "@react-navigation/stack";
 import { useAtomValue, useSetAtom } from "jotai";
 import type { RootStackParamList } from "../navigation/RootNavigator";
@@ -15,7 +8,7 @@ import {
   StoredCredentialsNeedRepairError,
   type Credentials,
 } from "../services/auth";
-import { loadShellCredential, clearShellCredential } from "@natstack/mobile-webrtc";
+import { loadShellCredential, clearShellCredential } from "@vibez1/mobile-webrtc";
 import { ShellClient } from "../services/shellClient";
 import {
   serverUrlAtom,
@@ -26,10 +19,11 @@ import {
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
+import { Vibez1Logo } from "./Vibez1Logo";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
-  console.log(`[NatStackMobileSmoke] phase=${phase}${suffix}`);
+  console.log(`[Vibez1MobileSmoke] phase=${phase}${suffix}`);
 }
 
 type LoginScreenNavigationProp = StackNavigationProp<RootStackParamList, "Login">;
@@ -40,9 +34,9 @@ interface LoginScreenProps {
 
 function missingWorkspaceMessage(credentials: Credentials | null): string {
   if (!credentials) {
-    return "No selected workspace is stored on this device. Scan a NatStack pairing QR code to choose a workspace.";
+    return "No selected workspace is stored on this device. Scan a Vibez1 pairing QR code to choose a workspace.";
   }
-  return "This device is paired with a server, but no workspace is selected. Scan a NatStack pairing QR code to choose a workspace.";
+  return "This device is paired with a server, but no workspace is selected. Scan a Vibez1 pairing QR code to choose a workspace.";
 }
 
 export function LoginScreen({ navigation }: LoginScreenProps) {
@@ -105,7 +99,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         smokePhase("workspace-login-credentials", { hasShellCredential: Boolean(stored) });
         if (!stored) {
           throw new Error(
-            "No NatStack pairing is stored on this device. Scan a pairing QR code from a trusted desktop or terminal."
+            "No Vibez1 pairing is stored on this device. Scan a pairing QR code from a trusted desktop or terminal."
           );
         }
         const credentials: Credentials = {
@@ -175,7 +169,8 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.content}>
-        <Text style={[styles.title, { color: colors.text }]}>NatStack</Text>
+        <Vibez1Logo size={84} variant="tile" style={styles.brandMark} />
+        <Text style={[styles.title, { color: colors.text }]}>Vibez1</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           Opening the selected workspace
         </Text>
@@ -184,7 +179,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           <View style={styles.loadingBlock}>
             <ActivityIndicator color={colors.primary} size="large" />
             <Text style={[styles.message, { color: colors.textSecondary }]}>
-              Connecting to your NatStack workspace...
+              Connecting to your Vibez1 workspace...
             </Text>
           </View>
         ) : null}
@@ -225,6 +220,9 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     padding: 24,
+  },
+  brandMark: {
+    marginBottom: 18,
   },
   title: {
     fontSize: 32,

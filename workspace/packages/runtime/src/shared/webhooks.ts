@@ -1,9 +1,9 @@
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcCaller } from "@vibez1/rpc";
 import type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretResult,
   WebhookIngressSubscriptionSummary,
-} from "@natstack/shared/webhooks/ingress";
+} from "@vibez1/shared/webhooks/ingress";
 export type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretRequest,
@@ -17,7 +17,7 @@ export type {
   WebhookResponsePolicy,
   WebhookTarget,
   WebhookVerifierConfig,
-} from "@natstack/shared/webhooks/ingress";
+} from "@vibez1/shared/webhooks/ingress";
 export interface WebhookIngressClient {
   createSubscription(
     input: CreateWebhookIngressSubscriptionRequest

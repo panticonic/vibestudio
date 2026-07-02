@@ -93,7 +93,7 @@ export interface LifecycleRecoveryNotice {
  * Single source of truth for agent lifecycle/recovery notice prose, keyed by the
  * typed reason code. Producers emit `*.message`; consumers classify content via
  * `lifecycleRecoveryNoticeForMessage`. The reason code — not the prose — is the
- * authoritative control-flow signal (see `natstackDiagnostic`); this table just
+ * authoritative control-flow signal (see `vibez1Diagnostic`); this table just
  * de-duplicates the human strings that previously lived in 3+ places.
  */
 export const LIFECYCLE_RECOVERY_NOTICES = {
@@ -135,7 +135,7 @@ export const AGENT_INTERRUPTED_BEFORE_TOOL_DISPATCH =
 
 /**
  * Classify a lifecycle/recovery message string into its typed notice. Shared by
- * the agent vessel (which attaches it as `natstackDiagnostic`) and the chat
+ * the agent vessel (which attaches it as `vibez1Diagnostic`) and the chat
  * projection (fallback when the diagnostic metadata is absent), so the matching
  * logic lives in exactly one place.
  */

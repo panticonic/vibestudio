@@ -1,11 +1,11 @@
-import type { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { EntityKind, EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityKind, EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 import type {
   ApprovalRequesterBreadcrumb,
   ApprovalRequesterCategory,
   ApprovalRequesterIdentity,
   ApprovalRequesterKind,
-} from "@natstack/shared/approvals";
+} from "@vibez1/shared/approvals";
 
 export interface ApprovalCallerTitleDeps {
   entityCache: Pick<EntityCache, "resolve">;
@@ -61,7 +61,7 @@ function isEvalRecord(record: EntityRecord | null | undefined): boolean {
   return (
     record?.kind === "do" &&
     record.className === "EvalDO" &&
-    (record.source.repoPath === "natstack/internal" || record.id.includes(":EvalDO:"))
+    (record.source.repoPath === "vibez1/internal" || record.id.includes(":EvalDO:"))
   );
 }
 
@@ -94,7 +94,7 @@ function categoryForRecord(
     case "worker":
       return "worker";
     case "do":
-      return record.source.repoPath === "natstack/internal" ? "internal-service" : "durable-object";
+      return record.source.repoPath === "vibez1/internal" ? "internal-service" : "durable-object";
     case "shell":
     case "server":
       return "system";
@@ -190,7 +190,7 @@ export function resolveApprovalRequester(
       ? (panelTitle ?? directTitle)
       : (directTitle ?? panelTitle)) ?? fallbackLabel(callerRecord, input.callerId);
   const internalIdentity =
-    effectiveVersion === "internal" || sourcePath === "natstack/internal" || category === "eval";
+    effectiveVersion === "internal" || sourcePath === "vibez1/internal" || category === "eval";
   const breadcrumbs =
     lineage.length > 0
       ? lineage

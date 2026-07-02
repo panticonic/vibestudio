@@ -1,8 +1,8 @@
-import type { PushApprovalDataPayload } from "@natstack/shared/approvalContract";
+import type { PushApprovalDataPayload } from "@vibez1/shared/approvalContract";
 import {
   APPROVAL_CATEGORY_DECIDE,
   APPROVAL_CATEGORY_INPUT_REQUIRED,
-} from "@natstack/shared/approvalContract";
+} from "@vibez1/shared/approvalContract";
 import {
   APPROVAL_NOTIFICATION_CHANNEL_ID,
   getAndroidNotificationActions,

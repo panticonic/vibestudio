@@ -8,11 +8,11 @@ function jsonOutput(): unknown {
   return JSON.parse(lines[lines.length - 1]!);
 }
 
-describe("natstack agent skill", () => {
+describe("vibez1 agent skill", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-skill-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-skill-"));
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -31,7 +31,7 @@ describe("natstack agent skill", () => {
     const custom = path.join(tmpDir, "custom-skill");
     fs.mkdirSync(custom, { recursive: true });
     fs.writeFileSync(path.join(custom, "SKILL.md"), "---\nname: x\n---\n");
-    vi.stubEnv("NATSTACK_AGENT_SKILL_DIR", custom);
+    vi.stubEnv("VIBEZ1_AGENT_SKILL_DIR", custom);
     expect(resolveSkillDir()).toBe(custom);
   });
 
@@ -40,9 +40,9 @@ describe("natstack agent skill", () => {
     fs.mkdirSync(source, { recursive: true });
     fs.writeFileSync(path.join(source, "SKILL.md"), "skill body");
     fs.writeFileSync(path.join(source, "EVAL.md"), "eval body");
-    vi.stubEnv("NATSTACK_AGENT_SKILL_DIR", source);
+    vi.stubEnv("VIBEZ1_AGENT_SKILL_DIR", source);
 
-    const dest = path.join(tmpDir, "proj", ".claude", "skills", "natstack-agent");
+    const dest = path.join(tmpDir, "proj", ".claude", "skills", "vibez1-agent");
     const { main } = await import("../client.js");
     await expect(main(["agent", "skill", "install", "--dir", dest, "--json"])).resolves.toBe(0);
 
@@ -55,7 +55,7 @@ describe("natstack agent skill", () => {
     const source = path.join(tmpDir, "bundle");
     fs.mkdirSync(source, { recursive: true });
     fs.writeFileSync(path.join(source, "SKILL.md"), "the skill text\n");
-    vi.stubEnv("NATSTACK_AGENT_SKILL_DIR", source);
+    vi.stubEnv("VIBEZ1_AGENT_SKILL_DIR", source);
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     const { main } = await import("../client.js");
@@ -72,7 +72,7 @@ describe("natstack agent skill", () => {
     const { resolveSkillDir } = await import("./skillCommand.js");
     const dir = resolveSkillDir();
     const skillMd = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
-    expect(skillMd.startsWith("---\nname: natstack-agent\n")).toBe(true);
+    expect(skillMd.startsWith("---\nname: vibez1-agent\n")).toBe(true);
     expect(skillMd).toMatch(/^description: .*[Uu]se when/m);
     for (const file of ["EVAL.md", "FILES.md", "RECIPES.md", "API.md"]) {
       expect(fs.existsSync(path.join(dir, file)), `${file} missing`).toBe(true);

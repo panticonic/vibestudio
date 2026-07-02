@@ -1,12 +1,12 @@
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
-import type { PanelRegistry } from "@natstack/shared/panelRegistry";
+import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
 import type { PanelView } from "../panelView.js";
 import type { ViewManager } from "../viewManager.js";
-import type { ThemeAppearance, ThemeConfig } from "@natstack/shared/types";
+import type { ThemeAppearance, ThemeConfig } from "@vibez1/shared/types";
 import type { ServerClient } from "../serverClient.js";
-import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
+import { panelMethods } from "@vibez1/shared/serviceSchemas/panel";
 import {
   buildPanelChromeState,
   isBrowserPanelSource,
@@ -17,10 +17,10 @@ import {
   type BrowserAddressOptions,
   type PanelChromeState,
   type PanelRepoState,
-} from "@natstack/shared/panelChrome";
-import { createBrowserDataRpcClient } from "@natstack/browser-data";
-import { getPanelSource } from "@natstack/shared/panel/accessors";
-import type { BrowserNavigationIntent } from "@natstack/shared/panelCommands";
+} from "@vibez1/shared/panelChrome";
+import { createBrowserDataRpcClient } from "@vibez1/browser-data";
+import { getPanelSource } from "@vibez1/shared/panel/accessors";
+import type { BrowserNavigationIntent } from "@vibez1/shared/panelCommands";
 import { requireAppCapability } from "./appCapabilities.js";
 
 async function getPanelAddressOptions(

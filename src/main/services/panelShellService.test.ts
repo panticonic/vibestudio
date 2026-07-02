@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
 import { createPanelShellService } from "./panelShellService.js";
 
 const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
@@ -12,7 +12,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
   const setCurrentThemeConfig = vi.fn();
   const broadcastThemeConfig = vi.fn();
   const themeConfig = {
-    accentColor: "iris",
+    accentColor: "amber",
     grayColor: "slate",
     radius: "medium" as const,
     scaling: "100%" as const,

@@ -1,5 +1,5 @@
 import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webViewStack";
-import { PANEL_UI_IDLE_UNLOAD_MS } from "@natstack/shared/constants";
+import { PANEL_UI_IDLE_UNLOAD_MS } from "@vibez1/shared/constants";
 
 const NONE = {
   isPinned: () => false,

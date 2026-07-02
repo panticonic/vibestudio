@@ -6,8 +6,8 @@ import type {
   HostTargetCandidate,
   HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
-} from "@natstack/shared/hostTargets";
-import type { PendingUnitBatchApproval } from "@natstack/shared/approvals";
+} from "@vibez1/shared/hostTargets";
+import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
 import {
   formatCapabilities,
   launchCopy,
@@ -18,7 +18,7 @@ import {
   unitReviewRows,
   unitSourceLabel,
   unitSummaryChips,
-} from "@natstack/shared/bootstrapLaunchGate";
+} from "@vibez1/shared/bootstrapLaunchGate";
 import { workspace } from "../shell/client";
 
 const HOST_TARGETS: HostTarget[] = ["electron", "react-native", "terminal"];

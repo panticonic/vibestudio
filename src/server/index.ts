@@ -1,5 +1,5 @@
 /**
- * natstack-server — Headless and IPC entry point for NatStack.
+ * vibez1-server — Headless and IPC entry point for Vibez1.
  *
  * Starts all headless-capable services (Build V2, Git, workspace services, RPC).
  *
@@ -18,10 +18,10 @@
 import * as path from "path";
 import * as fs from "fs";
 import { execFile } from "node:child_process";
-import type { AppCapability } from "@natstack/shared/unitManifest";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
 import { createHash, randomBytes } from "crypto";
-import { canonicalEntityId, type EntityRecord } from "@natstack/shared/runtime/entitySpec";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { canonicalEntityId, type EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
@@ -218,10 +218,10 @@ interface CliArgs {
 
 function printHelp(): void {
   console.log(`
-natstack-server — Headless and standalone NatStack server
+vibez1-server — Headless and standalone Vibez1 server
 
 Usage:
-  natstack-server [options]
+  vibez1-server [options]
   pnpm server:live [options]
   node dist/server.mjs [options]
 
@@ -235,7 +235,7 @@ Options:
   --gateway-port <port>    Port for the gateway HTTP/WS ingress (default: auto-assigned)
   --panel-port <port>      Port for panel HTTP (default: auto-assigned)
   --log-level <level>      Log verbosity
-  --print-credentials      Print NATSTACK_ADMIN_TOKEN and NATSTACK_PAIRING_CODE for scripting
+  --print-credentials      Print VIBEZ1_ADMIN_TOKEN and VIBEZ1_PAIRING_CODE for scripting
   --require-mobile-ready   Fail startup unless the workspace React Native app can be
                            built and served to native mobile clients.
   --require-electron-ready Fail startup unless the workspace Electron shell app can be
@@ -243,12 +243,12 @@ Options:
   --help                   Show this help message and exit
 
 Environment variables:
-  NATSTACK_ADMIN_TOKEN     Use a stable admin token instead of generating a random one
-  NATSTACK_HOST            External hostname (same as --host)
-  NATSTACK_BIND_HOST       Explicit bind address (same as --bind-host)
-  NATSTACK_GATEWAY_PORT    Gateway ingress port (same as --gateway-port)
-  NATSTACK_APP_ROOT        Application root (same as --app-root)
-  NATSTACK_LOG_LEVEL       Log verbosity (same as --log-level)
+  VIBEZ1_ADMIN_TOKEN     Use a stable admin token instead of generating a random one
+  VIBEZ1_HOST            External hostname (same as --host)
+  VIBEZ1_BIND_HOST       Explicit bind address (same as --bind-host)
+  VIBEZ1_GATEWAY_PORT    Gateway ingress port (same as --gateway-port)
+  VIBEZ1_APP_ROOT        Application root (same as --app-root)
+  VIBEZ1_LOG_LEVEL       Log verbosity (same as --log-level)
 `);
 }
 
@@ -414,9 +414,8 @@ if (!ipcChannel) {
     printHelp();
     process.exit(0);
   }
-  process.env["NATSTACK_APP_ROOT"] =
-    args.appRoot ?? process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
-  if (args.logLevel) process.env["NATSTACK_LOG_LEVEL"] = args.logLevel;
+  process.env["VIBEZ1_APP_ROOT"] = args.appRoot ?? process.env["VIBEZ1_APP_ROOT"] ?? process.cwd();
+  if (args.logLevel) process.env["VIBEZ1_LOG_LEVEL"] = args.logLevel;
 } else {
   // IPC mode: env vars already set by parent via fork({ env: {...} })
 }
@@ -426,20 +425,20 @@ if (!ipcChannel) {
 // =============================================================================
 
 async function main() {
-  const { getUserDataPath, setUserDataPath } = await import("@natstack/env-paths");
-  const { loadCentralEnv, deleteWorkspaceDir } = await import("@natstack/shared/workspace/loader");
+  const { getUserDataPath, setUserDataPath } = await import("@vibez1/env-paths");
+  const { loadCentralEnv, deleteWorkspaceDir } = await import("@vibez1/shared/workspace/loader");
   const { loadPersistedAdminToken, savePersistedAdminToken, getAdminTokenPath } =
-    await import("@natstack/shared/centralAuth");
-  const { resolveLocalWorkspaceStartup } = await import("@natstack/shared/workspace/startup");
-  const { CentralDataManager } = await import("@natstack/shared/centralData");
-  const { TokenManager } = await import("@natstack/shared/tokenManager");
-  const { ServiceDispatcher } = await import("@natstack/shared/serviceDispatcher");
+    await import("@vibez1/shared/centralAuth");
+  const { resolveLocalWorkspaceStartup } = await import("@vibez1/shared/workspace/startup");
+  const { CentralDataManager } = await import("@vibez1/shared/centralData");
+  const { TokenManager } = await import("@vibez1/shared/tokenManager");
+  const { ServiceDispatcher } = await import("@vibez1/shared/serviceDispatcher");
   const { EventService, createEventsServiceDefinition } =
-    await import("@natstack/shared/eventsService");
-  const { getExistingAppNodeModulesRoots } = await import("@natstack/shared/runtimePaths");
+    await import("@vibez1/shared/eventsService");
+  const { getExistingAppNodeModulesRoots } = await import("@vibez1/shared/runtimePaths");
   const eventService = new EventService();
   const { RpcServer } = await import("./rpcServer.js");
-  const { ServiceContainer } = await import("@natstack/shared/serviceContainer");
+  const { ServiceContainer } = await import("@vibez1/shared/serviceContainer");
   const { initBuildSystemV2 } = await import("./buildV2/index.js");
 
   loadCentralEnv();
@@ -451,19 +450,19 @@ async function main() {
   // happens through paired clients. The flags below are a private contract for
   // Electron and hub-managed child runtimes after a workspace has been selected.
 
-  const appRoot = process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
+  const appRoot = process.env["VIBEZ1_APP_ROOT"] ?? process.cwd();
   const centralData = !ipcChannel ? new CentralDataManager() : null;
 
-  if (!ipcChannel && process.env["NATSTACK_FORCE_WORKSPACE_SERVER"] !== "1") {
+  if (!ipcChannel && process.env["VIBEZ1_FORCE_WORKSPACE_SERVER"] !== "1") {
     const forbiddenWorkspaceSelection =
       args.workspaceName ||
       args.workspaceDir ||
       args.init ||
-      process.env["NATSTACK_WORKSPACE"] ||
-      process.env["NATSTACK_WORKSPACE_DIR"];
+      process.env["VIBEZ1_WORKSPACE"] ||
+      process.env["VIBEZ1_WORKSPACE_DIR"];
     if (forbiddenWorkspaceSelection) {
       throw new Error(
-        "Public natstack-server starts the server hub only. Pair with the server, then choose or create a workspace from the client."
+        "Public vibez1-server starts the server hub only. Pair with the server, then choose or create a workspace from the client."
       );
     }
     const { runHubServer } = await import("./hubServer.js");
@@ -471,10 +470,10 @@ async function main() {
     return;
   }
 
-  const wsDir = args.workspaceDir ?? process.env["NATSTACK_WORKSPACE_DIR"];
-  const wsName = args.workspaceName ?? process.env["NATSTACK_WORKSPACE"];
+  const wsDir = args.workspaceDir ?? process.env["VIBEZ1_WORKSPACE_DIR"];
+  const wsName = args.workspaceName ?? process.env["VIBEZ1_WORKSPACE"];
 
-  let workspace: import("@natstack/shared/workspace/types").Workspace;
+  let workspace: import("@vibez1/shared/workspace/types").Workspace;
   let workspaceName: string;
   let workspaceIsEphemeral = false;
   try {
@@ -489,8 +488,7 @@ async function main() {
     });
     workspace = startup.resolved.workspace;
     workspaceName = startup.resolved.name;
-    workspaceIsEphemeral =
-      startup.isEphemeral || process.env["NATSTACK_WORKSPACE_EPHEMERAL"] === "1";
+    workspaceIsEphemeral = startup.isEphemeral || process.env["VIBEZ1_WORKSPACE_EPHEMERAL"] === "1";
   } catch (error) {
     const msg = `Workspace resolution failed: ${error}`;
     if (ipcChannel) {
@@ -513,11 +511,10 @@ async function main() {
   // Parse workspace declarations (singletonObjects + services + routes).
   // Validation (every DO-backed service/route has a matching singleton row)
   // runs eagerly here — bad workspaces fail fast at startup with a clear msg.
-  const { buildWorkspaceDeclarations } =
-    await import("@natstack/shared/workspace/singletonRegistry");
+  const { buildWorkspaceDeclarations } = await import("@vibez1/shared/workspace/singletonRegistry");
   const workspaceDecls = buildWorkspaceDeclarations(workspaceConfig);
   // ===========================================================================
-  // App node_modules resolution (for @natstack/* platform packages)
+  // App node_modules resolution (for @vibez1/* platform packages)
   // ===========================================================================
 
   const appNodeModules = getExistingAppNodeModulesRoots(appRoot);
@@ -530,8 +527,8 @@ async function main() {
   // ===========================================================================
 
   const tokenManager = new TokenManager();
-  const { EntityCache } = await import("@natstack/shared/runtime/entityCache");
-  const { ConnectionGrantService } = await import("@natstack/shared/connectionGrants");
+  const { EntityCache } = await import("@vibez1/shared/runtime/entityCache");
+  const { ConnectionGrantService } = await import("@vibez1/shared/connectionGrants");
   const entityCache = new EntityCache();
   entityCache.registerBootstrap({ id: "server", kind: "server" });
   entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
@@ -563,10 +560,10 @@ async function main() {
   const { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } =
     await import("./services/deviceAuthStore.js");
   const authStorePath =
-    process.env["NATSTACK_AUTH_STORE_PATH"] ?? path.join(statePath, "auth", "devices.json");
+    process.env["VIBEZ1_AUTH_STORE_PATH"] ?? path.join(statePath, "auth", "devices.json");
   const deviceAuthStore = new DeviceAuthStore(authStorePath);
   const startupPairingCodes =
-    !ipcChannel && process.env["NATSTACK_DISABLE_STARTUP_PAIRING"] !== "1"
+    !ipcChannel && process.env["VIBEZ1_DISABLE_STARTUP_PAIRING"] !== "1"
       ? [
           deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
           deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
@@ -622,18 +619,18 @@ async function main() {
     resolveTitle: (entityId) => resolveApprovalCallerTitle(approvalRequesterDeps, entityId),
     resolveRequester: (input) => resolveApprovalRequester(approvalRequesterDeps, input),
     autoApprove:
-      process.env["NODE_ENV"] === "development" && process.env["NATSTACK_AUTO_APPROVE"] === "1",
+      process.env["NODE_ENV"] === "development" && process.env["VIBEZ1_AUTO_APPROVE"] === "1",
   });
   const { ServerUnitApprovalCoordinator } = await import("./unitApprovalCoordinator.js");
   const unitApprovalCoordinator = new ServerUnitApprovalCoordinator({
     approvalQueue,
     delayMs: 250,
-    autoApproveStartupUnits: process.env["NATSTACK_AUTO_APPROVE_STARTUP_UNITS"] === "1",
+    autoApproveStartupUnits: process.env["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"] === "1",
   });
   const requireMobileReady =
-    args.requireMobileReady || process.env["NATSTACK_REQUIRE_MOBILE_READY"] === "1";
+    args.requireMobileReady || process.env["VIBEZ1_REQUIRE_MOBILE_READY"] === "1";
   const requireElectronReady =
-    args.requireElectronReady || process.env["NATSTACK_REQUIRE_ELECTRON_READY"] === "1";
+    args.requireElectronReady || process.env["VIBEZ1_REQUIRE_ELECTRON_READY"] === "1";
   const credentialLifecycle = new CredentialLifecycle({
     credentialStore,
     clientConfigStore,
@@ -651,7 +648,7 @@ async function main() {
     | import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator
     | null = null;
   const cleanupRuntimeEntityRecord = async (
-    record: import("@natstack/shared/runtime/entitySpec").EntityRecord
+    record: import("@vibez1/shared/runtime/entitySpec").EntityRecord
   ) => {
     const { cleanupRuntimeEntity } = await import("./runtimeEntityCleanup.js");
     await cleanupRuntimeEntity(record, {
@@ -664,7 +661,7 @@ async function main() {
       entityTitleService,
       getFsService: () => {
         try {
-          return container.get<import("@natstack/shared/fsService").FsService>("fsService");
+          return container.get<import("@vibez1/shared/fsService").FsService>("fsService");
         } catch {
           return null;
         }
@@ -695,7 +692,7 @@ async function main() {
   // checkout.
   const templateDir = path.join(appRoot, "workspace");
   const isPnpmDevMode = process.env["NODE_ENV"] === "development";
-  const hasDevTemplate = fs.existsSync(path.join(templateDir, "meta", "natstack.yml"));
+  const hasDevTemplate = fs.existsSync(path.join(templateDir, "meta", "vibez1.yml"));
   const templateDiffersFromActive =
     templateDir !== workspacePath && !workspacePath.startsWith(templateDir + path.sep);
   // pnpm dev mode: mirror committed workspace changes back to the template
@@ -704,18 +701,18 @@ async function main() {
     isPnpmDevMode && workspaceIsEphemeral && hasDevTemplate && templateDiffersFromActive
       ? templateDir
       : null;
-  if (process.env["NATSTACK_DOGFOOD"] === "1") {
+  if (process.env["VIBEZ1_DOGFOOD"] === "1") {
     console.warn(
-      "[Dogfood] NATSTACK_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
+      "[Dogfood] VIBEZ1_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
         "use the git bridge (vcs export) once available."
     );
   }
-  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("NATSTACK_GATEWAY_PORT");
+  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBEZ1_GATEWAY_PORT");
   const configuredProtocol = "http" as const;
-  let extensionHostForGateway: import("@natstack/extension-host").ExtensionHost | null = null;
+  let extensionHostForGateway: import("@vibez1/extension-host").ExtensionHost | null = null;
   let appHostForGateway: import("./appHost.js").AppHost | null = null;
   type TrustedUnitHostInstance =
-    | import("@natstack/extension-host").ExtensionHost
+    | import("@vibez1/extension-host").ExtensionHost
     | import("./appHost.js").AppHost;
   const trustedUnitHosts = (): TrustedUnitHostInstance[] =>
     [extensionHostForGateway, appHostForGateway].filter(
@@ -760,7 +757,7 @@ async function main() {
   });
   // Create ContextFolderManager before core services. Context folders are
   // GAD branch forks of the workspace main head, materialized from the CAS.
-  const { ContextFolderManager } = await import("@natstack/shared/contextFolderManager");
+  const { ContextFolderManager } = await import("@vibez1/shared/contextFolderManager");
   const contextFolderManager = new ContextFolderManager({
     contextsRoot: path.join(statePath, ".contexts"),
     materialize: (contextId) => workspaceVcs.ensureContextFolder(contextId),
@@ -790,9 +787,9 @@ async function main() {
   };
 
   const { isDeclaredRemoteRepoPath, syncDeclaredRemoteForRepo } =
-    await import("@natstack/shared/workspace/remotes");
+    await import("@vibez1/shared/workspace/remotes");
   const { loadWorkspaceConfig, resolveDeclaredApps, resolveDeclaredExtensions } =
-    await import("@natstack/shared/workspace/loader");
+    await import("@vibez1/shared/workspace/loader");
   const reconcileDeclaredWorkspaceUnits = async (
     nextConfig: ReturnType<typeof loadWorkspaceConfig>,
     trigger: "startup" | "meta-change"
@@ -804,7 +801,7 @@ async function main() {
           extensionHostForGateway
             .reconcileDeclared(resolveDeclaredExtensions(nextConfig), { trigger })
             .then(() => extensionHostForGateway?.whenReconciled())
-            .then(() => import("@natstack/shared/workspace/extensionRegistry"))
+            .then(() => import("@vibez1/shared/workspace/extensionRegistry"))
             .then(({ writeExtensionRegistry }) => {
               writeExtensionRegistry(workspacePath);
             })
@@ -1042,7 +1039,7 @@ async function main() {
   container.registerRpc(createPresenceService({ presence }));
 
   {
-    let tokensDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
+    let tokensDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition | null =
       null;
     container.registerManaged({
       name: "tokens",
@@ -1084,7 +1081,7 @@ async function main() {
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     onWorkspaceSourceChanged: async (ctx, summary) => {
       // Per-repo model: a git import mutates one or more repo subtrees on disk
-      // (e.g. importProject rewrites meta/natstack.yml). Snapshot EVERY present
+      // (e.g. importProject rewrites meta/vibez1.yml). Snapshot EVERY present
       // repo's disk state onto its `vcs:repo:<path>` main —
       // committing out-of-band changes to EXISTING repos (which
       // `ensureRepoLogsFromDisk` skips because they already have a main) AND
@@ -1532,8 +1529,7 @@ async function main() {
   // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
   {
     const { createEvalService } = await import("./services/evalService.js");
-    let evalDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
-      null;
+    let evalDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition | null = null;
     container.registerManaged({
       name: "eval",
       dependencies: ["doDispatch"],
@@ -1575,7 +1571,7 @@ async function main() {
     }
   };
 
-  // Declarative scheduled jobs from natstack.yml `recurring:`. Managed service
+  // Declarative scheduled jobs from vibez1.yml `recurring:`. Managed service
   // below; the meta-change reload hook pokes it after approved config changes.
   let recurringRegistryInstance:
     | import("./services/recurringRegistry.js").RecurringRegistry
@@ -1587,7 +1583,7 @@ async function main() {
   {
     const { createWorkspaceStateService } = await import("./services/workspaceStateService.js");
     let workspaceStateDefinition:
-      | import("@natstack/shared/serviceDefinition").ServiceDefinition
+      | import("@vibez1/shared/serviceDefinition").ServiceDefinition
       | null = null;
     container.registerManaged({
       name: "workspace-state",
@@ -1633,7 +1629,7 @@ async function main() {
   // mints or retires entity rows. Cleanup hooks fire post-retire (see §10).
   {
     const { createRuntimeService } = await import("./services/runtimeService.js");
-    let runtimeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
+    let runtimeDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition | null =
       null;
     container.registerManaged({
       name: "runtime",
@@ -1716,9 +1712,9 @@ async function main() {
           resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
         );
         webhookIngress = createWebhookIngressService({
-          relaySigningSecret: process.env["NATSTACK_RELAY_SIGNING_SECRET"],
+          relaySigningSecret: process.env["VIBEZ1_RELAY_SIGNING_SECRET"],
           relayPublicBaseUrl:
-            process.env["NATSTACK_WEBHOOK_PUBLIC_URL"] ?? "https://hooks.snugenv.com",
+            process.env["VIBEZ1_WEBHOOK_PUBLIC_URL"] ?? "https://hooks.snugenv.com",
           // No public ingress: direct-mode webhooks only resolve co-located (loopback).
           // Remote webhooks ride the multi-tenant callback relay (relayPublicBaseUrl).
           directPublicBaseUrl: getLocalGatewayUrl("webhook direct base URL"),
@@ -1752,8 +1748,8 @@ async function main() {
   }
 
   // Admin token resolution (first hit wins):
-  //   1. NATSTACK_ADMIN_TOKEN env var (always overrides)
-  //   2. Persisted token at ~/.config/natstack/admin-token (survives restarts)
+  //   1. VIBEZ1_ADMIN_TOKEN env var (always overrides)
+  //   2. Persisted token at ~/.config/vibez1/admin-token (survives restarts)
   //   3. Generate a random one and persist it so remote clients can save it
   //
   // In IPC mode (Electron-embedded) we skip persistence: the Electron parent
@@ -1762,8 +1758,8 @@ async function main() {
   // other workspaces.
   let adminToken: string;
   let tokenSource: "env" | "persisted" | "generated" = "generated";
-  if (process.env["NATSTACK_ADMIN_TOKEN"]) {
-    adminToken = assertPresent(process.env["NATSTACK_ADMIN_TOKEN"]);
+  if (process.env["VIBEZ1_ADMIN_TOKEN"]) {
+    adminToken = assertPresent(process.env["VIBEZ1_ADMIN_TOKEN"]);
     tokenSource = "env";
   } else if (!ipcChannel) {
     const persisted = loadPersistedAdminToken();
@@ -1818,7 +1814,7 @@ async function main() {
     dependencies: ["tokenManager", "fsService"],
     async start(resolve) {
       const fsService = assertPresent(
-        resolve<import("@natstack/shared/fsService").FsService>("fsService")
+        resolve<import("@vibez1/shared/fsService").FsService>("fsService")
       );
       const { createPairingRedeemer } = await import("./services/authService.js");
       const server = new RpcServer({
@@ -1852,7 +1848,7 @@ async function main() {
   });
   {
     const { createPanelRuntimeService } = await import("./services/panelRuntimeService.js");
-    let panelRuntimeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
+    let panelRuntimeDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelRuntime",
       async start() {
@@ -1873,12 +1869,12 @@ async function main() {
     name: "extensionHost",
     dependencies: ["buildSystem", "tokenManager"],
     async start(resolve) {
-      const { ExtensionHost } = await import("@natstack/extension-host");
+      const { ExtensionHost } = await import("@vibez1/extension-host");
       const buildSystemInst = assertPresent(
         resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
       );
       const tokenManagerInst = assertPresent(
-        resolve<import("@natstack/shared/tokenManager").TokenManager>("tokenManager")
+        resolve<import("@vibez1/shared/tokenManager").TokenManager>("tokenManager")
       );
       const host = new ExtensionHost({
         statePath,
@@ -1925,12 +1921,12 @@ async function main() {
       extensionHostForGateway = host;
       return host;
     },
-    async stop(instance: import("@natstack/extension-host").ExtensionHost) {
+    async stop(instance: import("@vibez1/extension-host").ExtensionHost) {
       await instance?.shutdown();
     },
-    getServiceDefinition(instance?: import("@natstack/extension-host").ExtensionHost) {
+    getServiceDefinition(instance?: import("@vibez1/extension-host").ExtensionHost) {
       if (!instance) {
-        instance = container.get<import("@natstack/extension-host").ExtensionHost>("extensionHost");
+        instance = container.get<import("@vibez1/extension-host").ExtensionHost>("extensionHost");
       }
       return instance.createServiceDefinition();
     },
@@ -2027,7 +2023,7 @@ async function main() {
   };
 
   {
-    let workerServiceDef: import("@natstack/shared/serviceDefinition").ServiceDefinition;
+    let workerServiceDef: import("@vibez1/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "workersRpc",
       dependencies: ["buildSystem", "workerdManager", "doDispatch"],
@@ -2068,7 +2064,7 @@ async function main() {
   // Filesystem service (used internally by workerdManager; in Electron mode
   // the main process has its OWN FsService for panel-facing FS RPC)
   {
-    const { FsService } = await import("@natstack/shared/fsService");
+    const { FsService } = await import("@vibez1/shared/fsService");
     const { isWritableVcsPath, vcsContextHead } = await import("./gadVcs/store.js");
     // Reroute: sandboxed context mutations to GAD-tracked paths commit through
     // GAD (edit-first) instead of writing the worktree projection directly.
@@ -2076,7 +2072,7 @@ async function main() {
     // Per-repo routing. fsService routes each workspace-relative edit to its
     // owning repo by section taxonomy, strips the repo prefix, and records a
     // working edit on that repo's `ctx:{contextId}` head.
-    const vcsBridge: import("@natstack/shared/fsService").FsVcsBridge = {
+    const vcsBridge: import("@vibez1/shared/fsService").FsVcsBridge = {
       isTracked: (relPath) => isWritableVcsPath(relPath),
       // fs writes of tracked paths are WORKING edits (recordEdit): tracked
       // durably with provenance, projected to disk, but NOT a commit — no head
@@ -2129,7 +2125,7 @@ async function main() {
   // shared listener. Populated by WorkerdManager on worker create/destroy.
   const egressCallers = new Map<
     string,
-    import("@natstack/shared/serviceDispatcher").VerifiedCaller
+    import("@vibez1/shared/serviceDispatcher").VerifiedCaller
   >();
   {
     let workerdManagerInstance: import("./workerdManager.js").WorkerdManager | null = null;
@@ -2143,7 +2139,7 @@ async function main() {
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
         const fsServiceInst = assertPresent(
-          resolve<import("@natstack/shared/fsService").FsService>("fsService")
+          resolve<import("@vibez1/shared/fsService").FsService>("fsService")
         );
 
         workerdManagerInstance = new WorkerdManager({
@@ -2158,7 +2154,7 @@ async function main() {
           getServerAliasUrls: () => {
             if (!gatewayPortResolved) return [];
             const aliases = new Set<string>();
-            const configuredAliases = process.env["NATSTACK_GATEWAY_ALIASES"];
+            const configuredAliases = process.env["VIBEZ1_GATEWAY_ALIASES"];
             if (configuredAliases) {
               for (const alias of parseGatewayAliases(configuredAliases)) {
                 aliases.add(alias);
@@ -2470,7 +2466,7 @@ async function main() {
   // ===========================================================================
 
   // Resolve host configuration from CLI args / env vars
-  const { resolveHostConfig } = await import("@natstack/shared/hostConfig");
+  const { resolveHostConfig } = await import("@vibez1/shared/hostConfig");
   const hostConfig = resolveHostConfig({
     workerdPort: 0, // ports filled later
     gatewayPort: requestedGatewayPort ?? 0,
@@ -2600,7 +2596,7 @@ async function main() {
       return rows;
     },
     restartWorkspaceUnit: async (
-      ctx: import("@natstack/shared/serviceDispatcher").ServiceContext,
+      ctx: import("@vibez1/shared/serviceDispatcher").ServiceContext,
       name: string
     ) => {
       // Resolve by kind via the build graph so callers can use either the
@@ -2904,11 +2900,11 @@ async function main() {
         row.name
       ) as Promise<{ ok: true }>;
     },
-    listHostTargetCandidates: (target: import("@natstack/shared/hostTargets").HostTarget) => {
+    listHostTargetCandidates: (target: import("@vibez1/shared/hostTargets").HostTarget) => {
       const appHost = appHostForGateway;
       return appHost?.listHostTargetCandidates(target) ?? [];
     },
-    getHostTargetSelection: (target: import("@natstack/shared/hostTargets").HostTarget) => {
+    getHostTargetSelection: (target: import("@vibez1/shared/hostTargets").HostTarget) => {
       const appHost = appHostForGateway;
       return (
         appHost?.getHostTargetSelection(target) ?? {
@@ -2919,18 +2915,18 @@ async function main() {
       );
     },
     setHostTargetSelection: (
-      target: import("@natstack/shared/hostTargets").HostTarget,
-      input: import("@natstack/shared/hostTargets").HostTargetSelectionInput
+      target: import("@vibez1/shared/hostTargets").HostTarget,
+      input: import("@vibez1/shared/hostTargets").HostTargetSelectionInput
     ) => {
       const appHost = appHostForGateway;
       if (!appHost) throw new Error("App host is not available");
       return appHost.setHostTargetSelection(target, input);
     },
-    clearHostTargetSelection: (target: import("@natstack/shared/hostTargets").HostTarget) => {
+    clearHostTargetSelection: (target: import("@vibez1/shared/hostTargets").HostTarget) => {
       appHostForGateway?.clearHostTargetSelection(target);
     },
     listHostTargetVersions: (
-      target: import("@natstack/shared/hostTargets").HostTarget,
+      target: import("@vibez1/shared/hostTargets").HostTarget,
       sourceOrName: string
     ) => {
       const appHost = appHostForGateway;
@@ -2938,7 +2934,7 @@ async function main() {
       return appHost.listHostTargetVersions(target, sourceOrName);
     },
     prepareHostTargetPinnedRef: (
-      target: import("@natstack/shared/hostTargets").HostTarget,
+      target: import("@vibez1/shared/hostTargets").HostTarget,
       sourceOrName: string,
       ref: string
     ) => {
@@ -2946,10 +2942,10 @@ async function main() {
       if (!appHost) throw new Error("App host is not available");
       return appHost.prepareHostTargetPinnedRef(target, sourceOrName, ref);
     },
-    launchHostTarget: async (target: import("@natstack/shared/hostTargets").HostTarget) => {
+    launchHostTarget: async (target: import("@vibez1/shared/hostTargets").HostTarget) => {
       return hostTargetLaunchCoordinator.launch(target);
     },
-    beginHostTargetLaunch: async (target: import("@natstack/shared/hostTargets").HostTarget) => {
+    beginHostTargetLaunch: async (target: import("@vibez1/shared/hostTargets").HostTarget) => {
       return hostTargetLaunchCoordinator.beginLaunch(target);
     },
     getHostTargetLaunchSession: (sessionId: string) => {
@@ -2990,8 +2986,8 @@ async function main() {
   await registerPanelServices(commonDeps);
 
   {
-    const { panelRuntimeSurface } = await import("@natstack/shared/runtimeSurface.panel");
-    const { workerRuntimeSurface } = await import("@natstack/shared/runtimeSurface.worker");
+    const { panelRuntimeSurface } = await import("@vibez1/shared/runtimeSurface.panel");
+    const { workerRuntimeSurface } = await import("@vibez1/shared/runtimeSurface.worker");
     // Agent-facing capability catalog (caller-aware discovery) — the single
     // introspection surface; it absorbed the former `meta` service
     // (listServices/describeService now live on `docs`).
@@ -3049,13 +3045,13 @@ async function main() {
           getConnectionInfo: () => {
             const gatewayPort = getResolvedGatewayPort("auth connection info");
             const protocol = gatewayProtocol();
-            const hubUrl = process.env["NATSTACK_HUB_URL"];
+            const hubUrl = process.env["VIBEZ1_HUB_URL"];
             return {
               serverUrl: hubUrl ?? getExternalGatewayUrl("auth connection info"),
               protocol,
               externalHost: hostConfig.externalHost,
               gatewayPort,
-              // Lets createPairingInvite mint a real natstack://connect deep link
+              // Lets createPairingInvite mint a real vibez1://connect deep link
               // (room/fp/sig); null when the answerer is off ⇒ deepLink stays null.
               pairing: webrtcPairing ?? undefined,
             };
@@ -3122,7 +3118,7 @@ async function main() {
     healthProvider: (detailed) => {
       const base: Record<string, unknown> = {
         ok: true,
-        product: "natstack",
+        product: "vibez1",
         discoveryVersion: 1,
         protocol: "http",
         serverId: deviceAuthStore.getServerId(),
@@ -3156,7 +3152,7 @@ async function main() {
   // ── Workerd inspector bridge + service (userland profiling of workers/DOs) ──
   {
     let workerdInspectorDefinition:
-      | import("@natstack/shared/serviceDefinition").ServiceDefinition
+      | import("@vibez1/shared/serviceDefinition").ServiceDefinition
       | null = null;
     container.registerManaged({
       name: "workerdInspector",
@@ -3207,14 +3203,14 @@ async function main() {
     // even when the Electron desktop is connected, because desktop clients are
     // not lease-assignment defaults. Env/flag override both ways. Keep-alive is
     // opt-in so startup does not launch Chromium before the UI is connected.
-    const envAutospawn = process.env["NATSTACK_HEADLESS_HOST_AUTOSPAWN"];
+    const envAutospawn = process.env["VIBEZ1_HEADLESS_HOST_AUTOSPAWN"];
     const autospawnEnabled = resolveHeadlessHostAutospawn({
       cliValue: args.headlessHostAutospawn,
       envValue: envAutospawn,
     });
-    const envKeepAlive = process.env["NATSTACK_HEADLESS_HOST_KEEP_ALIVE"];
+    const envKeepAlive = process.env["VIBEZ1_HEADLESS_HOST_KEEP_ALIVE"];
     const keepAliveEnabled = envKeepAlive === "1" || envKeepAlive === "true";
-    const spawnTimeoutEnv = process.env["NATSTACK_HEADLESS_HOST_SPAWN_TIMEOUT_MS"];
+    const spawnTimeoutEnv = process.env["VIBEZ1_HEADLESS_HOST_SPAWN_TIMEOUT_MS"];
     const parsedSpawnTimeout = spawnTimeoutEnv ? Number.parseInt(spawnTimeoutEnv, 10) : Number.NaN;
     // Honor an explicit 0 (don't let `|| undefined` swallow it); only fall back on missing/garbage.
     const spawnTimeoutMs =
@@ -3248,26 +3244,26 @@ async function main() {
   await container.startAll();
 
   // ── WebRTC answerer (now that rpcServerForGateway is live) ──
-  // Activated when NATSTACK_WEBRTC_SIGNAL_URL is set (off by default ⇒ loopback
+  // Activated when VIBEZ1_WEBRTC_SIGNAL_URL is set (off by default ⇒ loopback
   // co-located mode is unaffected). The server picks a room, presents a
   // persistent DTLS cert (stable QR `fp`), joins the signaling room, and attaches
   // the pipe to the live RpcServer; a paired client reaches us over WebRTC with
   // no public endpoint. See docs/webrtc-local-e2e.md.
-  const webrtcSignalUrl = process.env["NATSTACK_WEBRTC_SIGNAL_URL"];
+  const webrtcSignalUrl = process.env["VIBEZ1_WEBRTC_SIGNAL_URL"];
   if (webrtcSignalUrl && rpcServerForGateway) {
     try {
       const { startWebRtcAnswerer } = await import("./webrtcAnswererBootstrap.js");
       const { ensurePersistentCert, ensurePersistentRoom } = await import("../main/webrtc/cert.js");
       const pathMod = await import("node:path");
-      const certDir = pathMod.join(appRoot, ".natstack", "webrtc");
+      const certDir = pathMod.join(appRoot, ".vibez1", "webrtc");
       const cert = ensurePersistentCert({
         certificatePemFile:
-          process.env["NATSTACK_WEBRTC_CERT"] ?? pathMod.join(certDir, "server.pem"),
-        keyPemFile: process.env["NATSTACK_WEBRTC_KEY"] ?? pathMod.join(certDir, "server.key"),
+          process.env["VIBEZ1_WEBRTC_CERT"] ?? pathMod.join(certDir, "server.pem"),
+        keyPemFile: process.env["VIBEZ1_WEBRTC_KEY"] ?? pathMod.join(certDir, "server.key"),
       });
       // The advertised pairing code MUST be one the deviceAuthStore can redeem
       // (`completePairing`). Use the registered startup code; mint a fresh
-      // registered one only if startup pairing was disabled. NATSTACK_PAIRING_CODE
+      // registered one only if startup pairing was disabled. VIBEZ1_PAIRING_CODE
       // is NOT used — an unregistered code fails `hasPendingPairingCode`.
       const pairingCode =
         startupPairingCode ?? deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS);
@@ -3275,7 +3271,7 @@ async function main() {
       // SAME room after a server restart; a fresh per-start UUID would strand them.
       // An explicit env override still wins for ops/multi-instance setups.
       const room =
-        process.env["NATSTACK_WEBRTC_ROOM"] ?? ensurePersistentRoom(pathMod.join(certDir, "room"));
+        process.env["VIBEZ1_WEBRTC_ROOM"] ?? ensurePersistentRoom(pathMod.join(certDir, "room"));
       const handle = await startWebRtcAnswerer({
         rpcServer: rpcServerForGateway,
         signalUrl: webrtcSignalUrl,
@@ -3283,8 +3279,8 @@ async function main() {
         certificatePemFile: cert.certificatePemFile,
         keyPemFile: cert.keyPemFile,
         pairingCode,
-        iceTransportPolicy: process.env["NATSTACK_WEBRTC_ICE"] === "relay" ? "relay" : "all",
-        srv: process.env["NATSTACK_WORKSPACE"] ?? undefined,
+        iceTransportPolicy: process.env["VIBEZ1_WEBRTC_ICE"] === "relay" ? "relay" : "all",
+        srv: process.env["VIBEZ1_WORKSPACE"] ?? undefined,
       });
       // Expose the pairing material (room + DTLS fingerprint + signaling) to
       // auth.getConnectionInfo (pairing deep links) and the ready-file writer.
@@ -3367,11 +3363,11 @@ async function main() {
     );
   }
 
-  // 4. Singleton reconciliation against natstack.yml.singletonObjects.
+  // 4. Singleton reconciliation against vibez1.yml.singletonObjects.
   try {
     const { createHash } = await import("node:crypto");
-    const { canonicalEntityId } = await import("@natstack/shared/runtime/entitySpec");
-    type EntityRecord = import("@natstack/shared/runtime/entitySpec").EntityRecord;
+    const { canonicalEntityId } = await import("@vibez1/shared/runtime/entitySpec");
+    type EntityRecord = import("@vibez1/shared/runtime/entitySpec").EntityRecord;
     const declaredKeys = new Set<string>();
     for (const decl of workspaceDecls.singletons.all()) {
       const contextId =
@@ -3540,14 +3536,14 @@ async function main() {
 
     const proto = "http";
     const wsProto = "ws";
-    console.log("natstack-server ready:");
+    console.log("vibez1-server ready:");
     console.log(`  Workspace:   ${workspaceName}${workspaceIsEphemeral ? " (ephemeral dev)" : ""}`);
     console.log(`  Gateway:     ${proto}://${hostConfig.externalHost}:${gatewayPort} (loopback)`);
     console.log(`  Workerd:     (via gateway /_w/)`);
     console.log(`  RPC:         ${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`);
     const sourceLabel =
       tokenSource === "env"
-        ? " (from NATSTACK_ADMIN_TOKEN)"
+        ? " (from VIBEZ1_ADMIN_TOKEN)"
         : tokenSource === "persisted"
           ? " (persisted)"
           : " (newly generated)";
@@ -3604,9 +3600,9 @@ async function main() {
     }
 
     if (args.printCredentials) {
-      console.log(`\nNATSTACK_ADMIN_TOKEN=${adminToken}`);
-      if (startupPairingCode) console.log(`NATSTACK_PAIRING_CODE=${startupPairingCode}`);
-      if (startupQrPairingCode) console.log(`NATSTACK_QR_PAIRING_CODE=${startupQrPairingCode}`);
+      console.log(`\nVIBEZ1_ADMIN_TOKEN=${adminToken}`);
+      if (startupPairingCode) console.log(`VIBEZ1_PAIRING_CODE=${startupPairingCode}`);
+      if (startupQrPairingCode) console.log(`VIBEZ1_QR_PAIRING_CODE=${startupQrPairingCode}`);
     }
   }
 

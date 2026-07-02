@@ -19,8 +19,8 @@
  * WebRTC answerer is a translation layer, not a parallel server.
  */
 
-import { FRAME_DATA, encodeStreamFrameV2 } from "@natstack/rpc/protocol/streamCodec";
-import { isTerminalCloseCode } from "@natstack/rpc/protocol/closeCodes";
+import { FRAME_DATA, encodeStreamFrameV2 } from "@vibez1/rpc/protocol/streamCodec";
+import { isTerminalCloseCode } from "@vibez1/rpc/protocol/closeCodes";
 import {
   encodeControlFrame,
   SESSION_CLOSED,
@@ -31,9 +31,9 @@ import {
   SESSION_ROUTED_RESPONSE_ERROR,
   SESSION_RPC,
   type SessionControlFrame,
-} from "@natstack/rpc/protocol/sessionNegotiation";
-import type { CallerKind } from "@natstack/shared/serviceDispatcher";
-import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
+} from "@vibez1/rpc/protocol/sessionNegotiation";
+import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { WsClientMessage, WsServerMessage } from "@vibez1/shared/ws/protocol";
 
 /** The two SCTP channels of one WebRTC pipe (answerer side). */
 export interface PipeChannels {

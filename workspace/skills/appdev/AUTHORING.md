@@ -14,7 +14,7 @@ Do not add a package scope segment to the filesystem path. The path
 
 ## Package Manifest
 
-Each app is a normal package with a `natstack.app` manifest in `package.json`:
+Each app is a normal package with a `vibez1.app` manifest in `package.json`:
 
 ```json
 {
@@ -22,7 +22,7 @@ Each app is a normal package with a `natstack.app` manifest in `package.json`:
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "displayName": "Foo",
     "app": {
       "target": "electron",
@@ -36,18 +36,18 @@ Each app is a normal package with a `natstack.app` manifest in `package.json`:
 Fields:
 
 - `name`: stable app principal identity. Must use `@workspace-apps/<name>`.
-- `natstack.displayName`: user-facing name in approval and unit surfaces.
-- `natstack.app.target`: one of `electron`, `react-native`, or `terminal`.
+- `vibez1.displayName`: user-facing name in approval and unit surfaces.
+- `vibez1.app.target`: one of `electron`, `react-native`, or `terminal`.
 - Target entry:
   - `electron`: `renderer`
   - `react-native`: `renderer`, plus mobile metadata such as
     `rnComponentName` and `rnHostAbi`
   - `terminal`: `entry`
-- `natstack.app.capabilities`: explicit host/service privileges.
+- `vibez1.app.capabilities`: explicit host/service privileges.
 
 ## Workspace Declaration
 
-Apps are trusted workspace units and should be declared in `meta/natstack.yml`
+Apps are trusted workspace units and should be declared in `meta/vibez1.yml`
 when they are part of the workspace runtime:
 
 ```yaml
@@ -124,8 +124,8 @@ Use workspace dependencies for shared code:
 {
   "dependencies": {
     "@workspace/react": "workspace:*",
-    "@natstack/rpc": "workspace:*",
-    "@natstack/shared": "workspace:*"
+    "@vibez1/rpc": "workspace:*",
+    "@vibez1/shared": "workspace:*"
   }
 }
 ```

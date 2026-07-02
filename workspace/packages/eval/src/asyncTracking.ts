@@ -1,7 +1,7 @@
 /**
  * Unified async tracking API for both panels and workers.
  *
- * If a runtime provides __natstackAsyncTracking__, this module uses it.
+ * If a runtime provides __vibez1AsyncTracking__, this module uses it.
  * Otherwise it provides a no-op implementation that preserves the same API
  * shape. The no-op implementation cannot discover unawaited promises; callers
  * should await the work they start.
@@ -18,7 +18,7 @@ export interface TrackingContext {
 
 /**
  * The async tracking API interface.
- * This is accessed via globalThis.__natstackAsyncTracking__ when a runtime
+ * This is accessed via globalThis.__vibez1AsyncTracking__ when a runtime
  * provides one.
  */
 export interface AsyncTrackingAPI {
@@ -46,10 +46,10 @@ export interface AsyncTrackingAPI {
 
 /**
  * Get the async tracking API from the global scope.
- * Returns undefined if not available (not running in NatStack panel/worker).
+ * Returns undefined if not available (not running in Vibez1 panel/worker).
  */
 export function getAsyncTracking(): AsyncTrackingAPI | undefined {
-  return (globalThis as Record<string, unknown>)["__natstackAsyncTracking__"] as
+  return (globalThis as Record<string, unknown>)["__vibez1AsyncTracking__"] as
     | AsyncTrackingAPI
     | undefined;
 }
@@ -77,7 +77,7 @@ function createFallbackContext(): TrackingContext {
 }
 
 /**
- * Create a fallback async tracking API for testing or non-NatStack environments.
+ * Create a fallback async tracking API for testing or non-Vibez1 environments.
  * This implementation maintains the same API but doesn't actually track async operations.
  * Promises must be awaited manually.
  */

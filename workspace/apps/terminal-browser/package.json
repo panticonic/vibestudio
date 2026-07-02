@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
-    "displayName": "NatStack Terminal",
+  "vibez1": {
+    "displayName": "Vibez1 Terminal",
     "app": {
       "target": "terminal",
       "entry": "src/index.ts",
@@ -13,8 +13,8 @@
     }
   },
   "dependencies": {
-    "@natstack/rpc": "workspace:*",
-    "@natstack/shared": "workspace:*",
+    "@vibez1/rpc": "workspace:*",
+    "@vibez1/shared": "workspace:*",
     "@workspace/terminal-host-protocol": "workspace:*",
     "@xterm/headless": "^5.5.0",
     "ink": "^6.0.0",

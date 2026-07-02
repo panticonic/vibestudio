@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@natstack/env-paths";
+import { setUserDataPath } from "@vibez1/env-paths";
 
 import { buildUnit } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
@@ -25,7 +25,7 @@ describe("buildUnit app builds", () => {
   let workspaceRoot: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-app-build-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-app-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
     clearBuildProvidersForTests();
@@ -45,7 +45,7 @@ describe("buildUnit app builds", () => {
         name: "@workspace-apps/shell",
         version: "0.1.0",
         private: true,
-        natstack: {
+        vibez1: {
           app: {
             target: "electron",
             renderer: "index.ts",
@@ -67,7 +67,7 @@ describe("buildUnit app builds", () => {
     git(appDir, ["add", "."]);
     git(appDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",
@@ -109,7 +109,7 @@ describe("buildUnit app builds", () => {
     fs.writeFileSync(
       path.join(rpcDir, "package.json"),
       JSON.stringify({
-        name: "@natstack/rpc",
+        name: "@vibez1/rpc",
         version: "0.1.0",
         type: "module",
         exports: { ".": "./src/index.ts" },
@@ -123,7 +123,7 @@ describe("buildUnit app builds", () => {
     git(rpcDir, ["add", "."]);
     git(rpcDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",
@@ -138,7 +138,7 @@ describe("buildUnit app builds", () => {
         name: "@workspace-apps/remote-cli",
         version: "0.1.0",
         private: true,
-        natstack: {
+        vibez1: {
           app: {
             target: "terminal",
             entry: "index.ts",
@@ -146,7 +146,7 @@ describe("buildUnit app builds", () => {
           },
         },
         dependencies: {
-          "@natstack/rpc": "workspace:*",
+          "@vibez1/rpc": "workspace:*",
           ws: "^8.18.3",
         },
       })
@@ -154,7 +154,7 @@ describe("buildUnit app builds", () => {
     fs.writeFileSync(
       path.join(appDir, "index.ts"),
       [
-        "import { createHandlerRegistry } from '@natstack/rpc';",
+        "import { createHandlerRegistry } from '@vibez1/rpc';",
         "import WebSocket from 'ws';",
         "export function main() {",
         "  const registry = createHandlerRegistry();",
@@ -167,7 +167,7 @@ describe("buildUnit app builds", () => {
     git(appDir, ["add", "."]);
     git(appDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",
@@ -203,11 +203,11 @@ describe("buildUnit app builds", () => {
         name: "@workspace-apps/mobile",
         version: "0.1.0",
         private: true,
-        natstack: {
+        vibez1: {
           app: {
             target: "react-native",
             renderer: "index.tsx",
-            rnComponentName: "NatStackMobile",
+            rnComponentName: "Vibez1Mobile",
             rnHostAbi: "rn-host-1",
           },
         },
@@ -221,7 +221,7 @@ describe("buildUnit app builds", () => {
     git(appDir, ["add", "."]);
     git(appDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",
@@ -313,7 +313,7 @@ describe("buildUnit app builds", () => {
     git(runtimeDir, ["add", "."]);
     git(runtimeDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",
@@ -330,7 +330,7 @@ describe("buildUnit app builds", () => {
         version: "0.1.0",
         private: true,
         type: "module",
-        natstack: {
+        vibez1: {
           title: "FS Panel",
           entry: "index.ts",
         },
@@ -352,7 +352,7 @@ describe("buildUnit app builds", () => {
     git(panelDir, ["add", "."]);
     git(panelDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",
@@ -388,7 +388,7 @@ describe("buildUnit app builds", () => {
         name: "@workspace-apps/prebuilt",
         version: "0.1.0",
         private: true,
-        natstack: {
+        vibez1: {
           app: {
             target: "dist",
             distDir: "dist",
@@ -400,7 +400,7 @@ describe("buildUnit app builds", () => {
     git(appDir, ["add", "."]);
     git(appDir, [
       "-c",
-      "user.name=NatStack Test",
+      "user.name=Vibez1 Test",
       "-c",
       "user.email=test@example.invalid",
       "commit",

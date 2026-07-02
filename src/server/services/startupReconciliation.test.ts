@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { vi } from "vitest";
-import { createTestDO } from "@natstack/durable/test-utils";
+import { createTestDO } from "@vibez1/durable/test-utils";
 
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
-import { canonicalEntityId } from "@natstack/shared/runtime/entitySpec";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import { canonicalEntityId } from "@vibez1/shared/runtime/entitySpec";
 import { runStartupReconciliation } from "./startupReconciliation.js";
 
 describe("runStartupReconciliation", () => {

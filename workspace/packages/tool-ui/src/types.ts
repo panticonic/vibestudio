@@ -6,7 +6,7 @@
  */
 
 import type { ComponentType } from "react";
-import type { FieldDefinition, FieldValue } from "@natstack/types";
+import type { FieldDefinition, FieldValue } from "@vibez1/types";
 
 // ============================================================================
 // Feedback Result Types

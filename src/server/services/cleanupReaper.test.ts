@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCleanupReaper } from "./cleanupReaper.js";
 import type { DODispatch, DORef } from "../doDispatch.js";
-import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 
 function makeRecord(id: string): EntityRecord {
   return {
@@ -18,7 +18,7 @@ function makeRecord(id: string): EntityRecord {
 }
 
 const workspaceDORef: DORef = {
-  source: "natstack/internal",
+  source: "vibez1/internal",
   className: "WorkspaceDO",
   objectKey: "workspace-main",
 };

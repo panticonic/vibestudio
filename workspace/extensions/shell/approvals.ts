@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { UserlandApprovalRequest } from "@natstack/extension";
+import type { UserlandApprovalRequest } from "@vibez1/extension";
 
 const options = [
   { value: "allow", label: "Allow", tone: "primary" as const },

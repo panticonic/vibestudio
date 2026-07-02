@@ -5,7 +5,7 @@
  * (setApiKey, removeApiKey, setModelRole) were removed in the Phase 8
  * migration to the chat agent path.
  */
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 import { settingsMethods } from "../serviceSchemas/settings.js";
 import { createTypedServiceClient, type TypedServiceClient } from "../typedServiceClient.js";
 import type { SettingsData } from "../types.js";

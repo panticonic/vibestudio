@@ -11,7 +11,7 @@
     "noEmit": true,
     "lib": ["ES2022", "DOM"],
     "paths": {
-      "@natstack/rpc": ["../rpc/src/index.ts"]
+      "@vibez1/rpc": ["../rpc/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"]

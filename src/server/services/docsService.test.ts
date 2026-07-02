@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import type {
   ServiceContext,
   ServiceDispatcher,
   CallerKind,
-} from "@natstack/shared/serviceDispatcher";
-import type { RuntimeSurface } from "@natstack/shared/runtimeSurface";
-import type { CatalogEntry, CatalogHit } from "@natstack/shared/serviceSchemas/docs";
+} from "@vibez1/shared/serviceDispatcher";
+import type { RuntimeSurface } from "@vibez1/shared/runtimeSurface";
+import type { CatalogEntry, CatalogHit } from "@vibez1/shared/serviceSchemas/docs";
 import { createDocsService } from "./docsService.js";
 
 const blobstore: ServiceDefinition = {

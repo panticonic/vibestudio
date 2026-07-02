@@ -7,8 +7,8 @@ import {
   createVerifiedCaller,
   ServiceDispatcher,
   type ServiceContext,
-} from "@natstack/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+} from "@vibez1/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 

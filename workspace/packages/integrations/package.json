@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./calendar": "./src/calendar.ts",
+    "./drive": "./src/drive.ts",
     "./github": "./src/github.ts",
     "./providers": "./src/providers.ts",
     "./github-issue-mirror": "./src/github-issue-mirror.ts"

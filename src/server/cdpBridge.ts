@@ -11,7 +11,7 @@
  * - `/cdp/{targetId}` — per-panel Playwright client WebSocket connections
  *
  * Both paths authenticate with a first WebSocket message:
- * `{ "type": "natstack:cdp-auth", "token": "..." }`.
+ * `{ "type": "vibez1:cdp-auth", "token": "..." }`.
  *
  * The client ↔ server protocol is standard CDP, so Playwright connects
  * identically regardless of backend.
@@ -20,10 +20,10 @@
 import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
-import { constantTimeStringEqual } from "@natstack/shared/tokenManager";
-import { CdpGrantService } from "@natstack/shared/cdpGrants";
-import type { PanelRuntimeLeaseChangedEvent } from "@natstack/shared/panel/panelLease";
-import { createDevLogger } from "@natstack/dev-log";
+import { constantTimeStringEqual } from "@vibez1/shared/tokenManager";
+import { CdpGrantService } from "@vibez1/shared/cdpGrants";
+import type { PanelRuntimeLeaseChangedEvent } from "@vibez1/shared/panel/panelLease";
+import { createDevLogger } from "@vibez1/dev-log";
 
 const log = createDevLogger("CdpBridge");
 
@@ -203,7 +203,7 @@ export class CdpBridge {
           return;
         }
         if (
-          parsed.type !== "natstack:cdp-auth" ||
+          parsed.type !== "vibez1:cdp-auth" ||
           typeof parsed.token !== "string" ||
           !validate(parsed.token)
         ) {
@@ -241,7 +241,7 @@ export class CdpBridge {
         ).then((ok) => {
           if (!ok) return;
           this.handleProviderConnection(hostConnectionId, ws);
-          ws.send(JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+          ws.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
         });
       });
     } else if (pathname.startsWith("/cdp/")) {
@@ -264,7 +264,7 @@ export class CdpBridge {
             return;
           }
           this.handleClientConnection(ws, targetId);
-          ws.send(JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+          ws.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
         });
       });
     } else {
@@ -295,7 +295,7 @@ export class CdpBridge {
       throw new Error(`CDP host provider not authorized: ${hostConnectionId}`);
     }
     this.handleProviderConnection(hostConnectionId, provider);
-    provider.send(JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    provider.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
   }
 
   /**

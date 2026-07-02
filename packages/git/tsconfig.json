@@ -15,7 +15,7 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@natstack/types": ["../types/src/index.ts"]
+      "@vibez1/types": ["../types/src/index.ts"]
     }
   },
   "include": ["src/**/*"],

@@ -10,8 +10,8 @@
  * creates the new schema empty. No data migration.
  */
 
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@natstack/durable";
-import type { AuthenticatedCaller } from "@natstack/rpc";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibez1/durable";
+import type { AuthenticatedCaller } from "@vibez1/rpc";
 import {
   IdentityCollisionError,
   canonicalEntityId,
@@ -159,7 +159,7 @@ const WORKSPACE_REQUIRED_TABLES = [
   "heartbeat_registry",
 ] as const;
 
-/** One declared recurring job (see meta/natstack.yml `recurring:`). */
+/** One declared recurring job (see meta/vibez1.yml `recurring:`). */
 export interface RecurringJobRow {
   name: string;
   source: string;
@@ -750,7 +750,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // recurring jobs (declared in meta/natstack.yml `recurring:`;
+  // recurring jobs (declared in meta/vibez1.yml `recurring:`;
   // driven by the server's RecurringRegistry)
   // ─────────────────────────────────────────────────────────────
 
@@ -1670,7 +1670,7 @@ export class WorkspaceDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_do_alarms_wake ON do_alarms(wake_at)`);
-    // Declarative recurring jobs from meta/natstack.yml `recurring:`. The
+    // Declarative recurring jobs from meta/vibez1.yml `recurring:`. The
     // RecurringRegistry syncs declarations here and dispatches due jobs;
     // durable next_run_at survives restarts without re-running missed bursts.
     this.sql.exec(`

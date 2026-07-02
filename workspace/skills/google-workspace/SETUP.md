@@ -2,13 +2,13 @@
 
 Use a workflow UI. Do not dump a wall of Google Cloud instructions into chat.
 The user needs a checklist with direct Google Console links and a choice to
-open each link inside NatStack or in the system browser.
+open each link inside Vibez1 or in the system browser.
 
 This setup is modeled on gogcli's Google quick start: create/select one Google
-Cloud project, enable the Workspace bundle NatStack requests up front, configure
+Cloud project, enable the Workspace bundle Vibez1 requests up front, configure
 OAuth consent/branding, add test users if the app is still in Testing, create a
 **Desktop app** OAuth client, save its client ID and client secret, then connect
-the account. NatStack asks Google for broad durable Workspace access once, then
+the account. Vibez1 asks Google for broad durable Workspace access once, then
 uses local credential bindings to stage Gmail, Calendar, Drive, Docs, Sheets,
 Slides, People, and identity separately inside the app.
 
@@ -50,7 +50,7 @@ Optional APIs when the user's task needs them:
    Desktop app `client_id` and `client_secret`. Do not ask the user to paste
    secrets into chat.
 6. Run `connectGoogle()` to launch the host-owned PKCE flow. The helper asks
-   Google for offline access and tells NatStack to persist the returned refresh
+   Google for offline access and tells Vibez1 to persist the returned refresh
    token.
 7. Run `verifyGoogleCredential(credentialId)` or
    `verifyGoogleConnection(connectionId)`.
@@ -151,7 +151,7 @@ const requiredSteps = [
     id: "client",
     title: "Create a Desktop app OAuth client",
     href: "https://console.cloud.google.com/auth/clients",
-    note: "Choose Application type: Desktop app. You will enter its client_id and client_secret in NatStack's trusted approval UI.",
+    note: "Choose Application type: Desktop app. You will enter its client_id and client_secret in Vibez1's trusted approval UI.",
   },
 ];
 
@@ -272,7 +272,7 @@ export default function GoogleWorkspaceSetup({ onSubmit, onCancel }) {
 
 ## Link Behavior
 
-- **Internal** opens a NatStack browser panel. Prefer this when the user may
+- **Internal** opens a Vibez1 browser panel. Prefer this when the user may
   want the agent to inspect page state or keep the flow in the workspace.
 - **External** opens the system browser through approval-gated `openExternal`.
   Prefer this when the user is already signed into Google in their normal
@@ -284,10 +284,10 @@ expectedRedirectUri })` so the host validates the OAuth callback binding
 ## Gmail Push Notifications (optional, Cloud Pub/Sub)
 
 Without this, the Gmail agent polls via the history API (default 5 min).
-With it, Gmail pushes new-mail notifications to the natstack server and syncs
+With it, Gmail pushes new-mail notifications to the vibez1 server and syncs
 arrive in seconds; polling drops to a 30-minute safety net.
 
-Requirements: a GCP project, a Pub/Sub topic, and natstack server reachable by Google Pub/Sub via the callback relay (see docs/webrtc-rpc-transport.md §7).
+Requirements: a GCP project, a Pub/Sub topic, and vibez1 server reachable by Google Pub/Sub via the callback relay (see docs/webrtc-rpc-transport.md §7).
 
 1. Create the topic and grant Gmail publish rights:
    ```bash
@@ -296,7 +296,7 @@ Requirements: a GCP project, a Pub/Sub topic, and natstack server reachable by G
      --member=serviceAccount:gmail-api-push@system.gserviceaccount.com \
      --role=roles/pubsub.publisher
    ```
-2. Create one generic NatStack webhook subscription for Google Cloud Pub/Sub
+2. Create one generic Vibez1 webhook subscription for Google Cloud Pub/Sub
    deliveries. Run this from a trusted panel/shell eval and keep the token:
 
    ```ts
@@ -324,7 +324,7 @@ Requirements: a GCP project, a Pub/Sub topic, and natstack server reachable by G
 3. Create a Google Pub/Sub push subscription pointing at that generic webhook
    URL:
    ```bash
-   gcloud pubsub subscriptions create gmail-push-natstack \
+   gcloud pubsub subscriptions create gmail-push-vibez1 \
      --topic gmail-push \
      --push-endpoint="<subscription.publicUrl>?token=<secret>"
    ```

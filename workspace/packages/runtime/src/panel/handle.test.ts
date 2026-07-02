@@ -123,10 +123,10 @@ describe("PanelHandle", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.doUnmock("@workspace/cdp-client");
-    delete (globalThis as any).__natstackShell;
-    delete (globalThis as any).__natstackRequire__;
-    delete (globalThis as any).__natstackRequireAsync__;
-    delete (globalThis as any).__natstackLoadImport__;
+    delete (globalThis as any).__vibez1Shell;
+    delete (globalThis as any).__vibez1Require__;
+    delete (globalThis as any).__vibez1RequireAsync__;
+    delete (globalThis as any).__vibez1LoadImport__;
   });
 
   it("returns a workspace handle from openPanel", async () => {
@@ -522,7 +522,7 @@ describe("PanelHandle", () => {
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
     }));
-    (globalThis as any).__natstackRequireAsync__ = vi.fn(async (id: string) => {
+    (globalThis as any).__vibez1RequireAsync__ = vi.fn(async (id: string) => {
       if (id === "@workspace/cdp-client") return { BrowserImpl: { connect } };
       throw new Error(`unexpected module: ${id}`);
     });
@@ -537,7 +537,7 @@ describe("PanelHandle", () => {
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
     expect(click).toHaveBeenCalledWith("button.submit");
-    expect((globalThis as any).__natstackRequireAsync__).toHaveBeenCalledWith(
+    expect((globalThis as any).__vibez1RequireAsync__).toHaveBeenCalledWith(
       "@workspace/cdp-client"
     );
   });
@@ -547,10 +547,10 @@ describe("PanelHandle", () => {
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
     }));
-    (globalThis as any).__natstackRequire__ = vi.fn(() => {
+    (globalThis as any).__vibez1Require__ = vi.fn(() => {
       throw new Error("not in map");
     });
-    (globalThis as any).__natstackRequireAsync__ = vi.fn(async (id: string) => {
+    (globalThis as any).__vibez1RequireAsync__ = vi.fn(async (id: string) => {
       if (id === "@workspace/cdp-client") return { BrowserImpl: { connect } };
       throw new Error(`unexpected module: ${id}`);
     });
@@ -563,7 +563,7 @@ describe("PanelHandle", () => {
 
     await expect(getPanelHandle("panel-1", "browser").cdp.lightweightPage()).resolves.toBe(page);
 
-    expect((globalThis as any).__natstackRequireAsync__).toHaveBeenNthCalledWith(
+    expect((globalThis as any).__vibez1RequireAsync__).toHaveBeenNthCalledWith(
       1,
       "@workspace/cdp-client"
     );

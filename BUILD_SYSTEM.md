@@ -150,7 +150,7 @@ Two build strategies, selected by unit kind:
 - `path` shim delegates to `pathe` (browser-compatible)
 - Forced split points for known heavy modules (`@mdx-js/mdx`, `typescript`, `monaco-editor`, etc.)
 - Manifest `externals` produce an import map in the generated HTML
-- Manifest `exposeModules` register modules on `globalThis.__natstackModuleMap__`
+- Manifest `exposeModules` register modules on `globalThis.__vibez1ModuleMap__`
 - Output: `bundle.js` + `bundle.css` + `index.html` + `assets/`
 
 **Extension build** (node target):
@@ -183,9 +183,9 @@ Two build strategies, selected by unit kind:
 - Used by `imports` parameter of the eval tool with `"npm:<version>"` values
 - Native addons are not supported (esbuild will fail to bundle `.node` files)
 
-**Concurrency:** Semaphore with `MAX_CONCURRENT_BUILDS = 8` by default (override via `NATSTACK_MAX_CONCURRENT_BUILDS`). Build coalescing deduplicates concurrent builds of the same key.
+**Concurrency:** Semaphore with `MAX_CONCURRENT_BUILDS = 8` by default (override via `VIBEZ1_MAX_CONCURRENT_BUILDS`). Build coalescing deduplicates concurrent builds of the same key.
 
-**Workspace resolve plugin:** Resolves `@workspace/*` imports from the materialized source tree. Reads `package.json` exports fields with condition-based resolution (panel: `natstack-panel`, `import`, `default`; extension: `import`, `default`). Since build sources do not include generated `dist/` output, the plugin maps `dist/` paths to their TypeScript source equivalents.
+**Workspace resolve plugin:** Resolves `@workspace/*` imports from the materialized source tree. Reads `package.json` exports fields with condition-based resolution (panel: `vibez1-panel`, `import`, `default`; extension: `import`, `default`). Since build sources do not include generated `dist/` output, the plugin maps `dist/` paths to their TypeScript source equivalents.
 
 ### State Trigger (`stateTrigger.ts`)
 
@@ -193,7 +193,7 @@ Subscribes to GAD VCS state-advance events. Only the advanced head's changed pat
 
 **On main-head advance:**
 
-1. Check if `package.json` deps or natstack manifest changed (sorted JSON comparison to avoid key-order false positives). If changed → full rediscovery.
+1. Check if `package.json` deps or vibez1 manifest changed (sorted JSON comparison to avoid key-order false positives). If changed → full rediscovery.
 2. Otherwise: incremental path. Recompute EVs from changed units upward. Build changed units from the immutable state that triggered the advance.
 
 **Full rediscovery** (triggered by dep/manifest changes or pinned source-ref advances):
@@ -254,12 +254,12 @@ workspace/
 
 ### Package Manifest
 
-Unit metadata lives in `package.json` under the `natstack` key:
+Unit metadata lives in `package.json` under the `vibez1` key:
 
 ```json
 {
   "name": "@workspace-about/model-provider-config",
-  "natstack": {
+  "vibez1": {
     "title": "Model Provider Config",
     "shell": true,
     "hiddenInLauncher": false,
@@ -280,7 +280,7 @@ Unit metadata lives in `package.json` under the `natstack` key:
 | `sourcemap`        | `true`        | Include inline source maps                                          |
 | `entry`            | auto-detected | Explicit entry point path                                           |
 | `externals`        | `{}`          | Import map entries (externalized from bundle)                       |
-| `exposeModules`    | `[]`          | Modules registered on `__natstackModuleMap__`                       |
+| `exposeModules`    | `[]`          | Modules registered on `__vibez1ModuleMap__`                       |
 | `dedupeModules`    | `[]`          | Additional packages to deduplicate (react/react-dom always deduped) |
 
 ---

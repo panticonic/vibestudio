@@ -8,11 +8,11 @@
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 import type { ChannelEvent } from "@workspace/harness";
 import { participantIsAgentVessel, type BroadcastEnvelope } from "./types.js";
 import type { RpcChannelMessage } from "@workspace/pubsub";
-import { serializeByKey } from "@natstack/shared/keyedSerializer";
+import { serializeByKey } from "@vibez1/shared/keyedSerializer";
 
 export interface BroadcastDeps {
   sql: SqlStorage;

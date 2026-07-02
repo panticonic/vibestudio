@@ -16,11 +16,11 @@ const activeListeners = new Map<
 const appTransport = createIpcTransport();
 
 const serviceCall = (method: string, ...args: unknown[]) =>
-  ipcRenderer.invoke("natstack:serviceCall", method, args);
+  ipcRenderer.invoke("vibez1:serviceCall", method, args);
 
-const natstackApp = {
-  getBootstrapConfig: () => ipcRenderer.invoke("natstack:getPanelInit"),
-  getInfo: () => ipcRenderer.invoke("natstack:bridge.getInfo"),
+const vibez1App = {
+  getBootstrapConfig: () => ipcRenderer.invoke("vibez1:getPanelInit"),
+  getInfo: () => ipcRenderer.invoke("vibez1:bridge.getInfo"),
   serviceCall,
   native: {
     menu: {
@@ -48,39 +48,39 @@ const natstackApp = {
     const listener = (_e: IpcRendererEvent, event: string, payload: unknown) =>
       handler(event, payload);
     activeListeners.set(id, listener);
-    ipcRenderer.on("natstack:event", listener);
+    ipcRenderer.on("vibez1:event", listener);
     return id;
   },
   removeEventListener: (id: number) => {
     const listener = activeListeners.get(id);
     if (listener) {
-      ipcRenderer.off("natstack:event", listener);
+      ipcRenderer.off("vibez1:event", listener);
       activeListeners.delete(id);
     }
   },
 };
 
-contextBridge.exposeInMainWorld("__natstackApp", natstackApp);
-contextBridge.exposeInMainWorld("__natstackTransport", appTransport);
-contextBridge.exposeInMainWorld("__natstackShellOverlay", {
+contextBridge.exposeInMainWorld("__vibez1App", vibez1App);
+contextBridge.exposeInMainWorld("__vibez1Transport", appTransport);
+contextBridge.exposeInMainWorld("__vibez1ShellOverlay", {
   on(handler: (event: unknown) => void) {
     const listener = (_event: IpcRendererEvent, payload: unknown) => handler(payload);
-    ipcRenderer.on("natstack:shell-overlay:event", listener);
-    return () => ipcRenderer.off("natstack:shell-overlay:event", listener);
+    ipcRenderer.on("vibez1:shell-overlay:event", listener);
+    return () => ipcRenderer.off("vibez1:shell-overlay:event", listener);
   },
 });
 // Intents forwarded from the content-overlay surface (a separate WebContents)
 // back to the hosted shell that owns the surface's state + RPC.
-contextBridge.exposeInMainWorld("__natstackContentOverlayHost", {
+contextBridge.exposeInMainWorld("__vibez1ContentOverlayHost", {
   on(handler: (payload: unknown) => void) {
     const listener = (_event: IpcRendererEvent, payload: unknown) => handler(payload);
-    ipcRenderer.on("natstack:content-overlay:forward", listener);
-    return () => ipcRenderer.off("natstack:content-overlay:forward", listener);
+    ipcRenderer.on("vibez1:content-overlay:forward", listener);
+    return () => ipcRenderer.off("vibez1:content-overlay:forward", listener);
   },
 });
-contextBridge.exposeInMainWorld("__natstackIncomingPairLink", {
+contextBridge.exposeInMainWorld("__vibez1IncomingPairLink", {
   getPending() {
-    return ipcRenderer.invoke("natstack:drain-pair-link") as Promise<{
+    return ipcRenderer.invoke("vibez1:drain-pair-link") as Promise<{
       url: string;
       code: string;
     } | null>;
@@ -88,7 +88,7 @@ contextBridge.exposeInMainWorld("__natstackIncomingPairLink", {
   onLink(handler: (link: { url: string; code: string }) => void) {
     const listener = (_event: IpcRendererEvent, payload: { url: string; code: string }) =>
       handler(payload);
-    ipcRenderer.on("natstack:incoming-pair-link", listener);
-    return () => ipcRenderer.off("natstack:incoming-pair-link", listener);
+    ipcRenderer.on("vibez1:incoming-pair-link", listener);
+    return () => ipcRenderer.off("vibez1:incoming-pair-link", listener);
   },
 });

@@ -1,5 +1,5 @@
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@natstack/durable";
-import type { AuthenticatedCaller } from "@natstack/rpc";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibez1/durable";
+import type { AuthenticatedCaller } from "@vibez1/rpc";
 import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 
 interface WebhookIngressSubscriptionRow {

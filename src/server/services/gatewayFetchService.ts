@@ -21,8 +21,8 @@
  */
 
 import { z } from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { ServiceError } from "@natstack/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { ServiceError } from "@vibez1/shared/serviceDispatcher";
 
 /** Loopback fetch request shape sent by the panel-asset façade. */
 export interface GatewayFetchDescriptor {
@@ -52,7 +52,7 @@ const fetchDescriptorSchema = z.object({
   // receive (one message per round-trip), so a multi-MB asset streams too slowly
   // over a relay; gzip (~4×) keeps it inside the pipe window. The caller is
   // responsible for decompressing (the mobile native host does, before verifying
-  // the *uncompressed* integrity). Signaled back via `x-natstack-content-gzip`.
+  // the *uncompressed* integrity). Signaled back via `x-vibez1-content-gzip`.
   gzip: z.boolean().optional(),
 });
 
@@ -127,7 +127,7 @@ export function createGatewayFetchService(deps: {
         // transform; the caller decompresses. Drop content-length — the recompressed
         // length differs and the stream carries no length anyway.
         const headers = new Headers(response.headers);
-        headers.set("x-natstack-content-gzip", "1");
+        headers.set("x-vibez1-content-gzip", "1");
         headers.delete("content-length");
         return new Response(response.body.pipeThrough(new CompressionStream("gzip")), {
           status: response.status,

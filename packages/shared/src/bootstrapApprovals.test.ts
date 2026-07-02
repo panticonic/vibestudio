@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PendingApproval, PendingUnitBatchApproval } from "@natstack/shared/approvals";
+import type { PendingApproval, PendingUnitBatchApproval } from "@vibez1/shared/approvals";
 
 import {
   filterBootstrapApprovals,

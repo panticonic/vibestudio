@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { createAppService } from "./appService.js";
 
 vi.mock("electron", () => ({

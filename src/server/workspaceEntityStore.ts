@@ -24,8 +24,8 @@
 
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import type { DODispatch } from "./doDispatch.js";
-import type { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { EntityKind, EntityRecord, EntitySource } from "@natstack/shared/runtime/entitySpec";
+import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityKind, EntityRecord, EntitySource } from "@vibez1/shared/runtime/entitySpec";
 
 const WORKSPACE_DO_CLASS = "WorkspaceDO";
 

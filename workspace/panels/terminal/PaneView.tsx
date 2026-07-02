@@ -37,7 +37,7 @@ const IMAGE_PASTE_HINT_KEY = "terminal.imagePasteScratchHintShown";
 
 declare global {
   interface Window {
-    __natstackTerminalPaneTestRegistry?: Record<string, { serialize(): string }>;
+    __vibez1TerminalPaneTestRegistry?: Record<string, { serialize(): string }>;
   }
 }
 
@@ -132,15 +132,15 @@ export function PaneView(props: {
       onTitleChange: (title) => handleTitleChange(title, sessionId),
     });
     terminalRef.current = terminal;
-    window.__natstackTerminalPaneTestRegistry ??= {};
+    window.__vibez1TerminalPaneTestRegistry ??= {};
     const testEntry = {
       serialize: () => terminal.serialize(),
     };
-    window.__natstackTerminalPaneTestRegistry[sessionId] = testEntry;
+    window.__vibez1TerminalPaneTestRegistry[sessionId] = testEntry;
     void terminal.attach(host);
     return () => {
-      if (window.__natstackTerminalPaneTestRegistry?.[sessionId] === testEntry) {
-        delete window.__natstackTerminalPaneTestRegistry[sessionId];
+      if (window.__vibez1TerminalPaneTestRegistry?.[sessionId] === testEntry) {
+        delete window.__vibez1TerminalPaneTestRegistry[sessionId];
       }
       terminal.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
@@ -526,7 +526,7 @@ export function PaneView(props: {
       />
       <div
         ref={hostRef}
-        className="natstack-terminal-host"
+        className="vibez1-terminal-host"
         style={{
           flex: 1,
           width: "100%",

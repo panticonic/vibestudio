@@ -27,29 +27,29 @@ describe("sandbox source hooks", () => {
   let originalPreload: unknown;
 
   beforeEach(() => {
-    originalModuleMap = (globalThis as Record<string, unknown>)["__natstackModuleMap__"];
-    originalRequire = (globalThis as Record<string, unknown>)["__natstackRequire__"];
-    originalPreload = (globalThis as Record<string, unknown>)["__natstackPreloadModules__"];
+    originalModuleMap = (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"];
+    originalRequire = (globalThis as Record<string, unknown>)["__vibez1Require__"];
+    originalPreload = (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"];
 
     const moduleMap: Record<string, unknown> = {};
-    (globalThis as Record<string, unknown>)["__natstackModuleMap__"] = moduleMap;
-    (globalThis as Record<string, unknown>)["__natstackRequire__"] = (id: string) => {
+    (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"] = moduleMap;
+    (globalThis as Record<string, unknown>)["__vibez1Require__"] = (id: string) => {
       if (id in moduleMap) return moduleMap[id];
       throw new Error(`Module not found: ${id}`);
     };
-    (globalThis as Record<string, unknown>)["__natstackPreloadModules__"] = async (ids: string[]) => ids.map((id) => {
+    (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"] = async (ids: string[]) => ids.map((id) => {
       if (id in moduleMap) return moduleMap[id];
       throw new Error(`Module not found: ${id}`);
     });
   });
 
   afterEach(() => {
-    if (originalModuleMap === undefined) delete (globalThis as Record<string, unknown>)["__natstackModuleMap__"];
-    else (globalThis as Record<string, unknown>)["__natstackModuleMap__"] = originalModuleMap;
-    if (originalRequire === undefined) delete (globalThis as Record<string, unknown>)["__natstackRequire__"];
-    else (globalThis as Record<string, unknown>)["__natstackRequire__"] = originalRequire;
-    if (originalPreload === undefined) delete (globalThis as Record<string, unknown>)["__natstackPreloadModules__"];
-    else (globalThis as Record<string, unknown>)["__natstackPreloadModules__"] = originalPreload;
+    if (originalModuleMap === undefined) delete (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"];
+    else (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"] = originalModuleMap;
+    if (originalRequire === undefined) delete (globalThis as Record<string, unknown>)["__vibez1Require__"];
+    else (globalThis as Record<string, unknown>)["__vibez1Require__"] = originalRequire;
+    if (originalPreload === undefined) delete (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"];
+    else (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"] = originalPreload;
   });
 
   it("compiles inline_ui file sources with package.json inferred imports", async () => {

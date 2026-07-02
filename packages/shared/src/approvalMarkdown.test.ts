@@ -3,13 +3,13 @@ import { parseApprovalMarkdown } from "./approvalMarkdown";
 
 describe("approval markdown", () => {
   it("parses safe approval body formatting", () => {
-    expect(parseApprovalMarkdown("Run `sudo systemctl restart natstack`.\n\n- **Gate:** plugin\n- *Reason:* deploy update"))
+    expect(parseApprovalMarkdown("Run `sudo systemctl restart vibez1`.\n\n- **Gate:** plugin\n- *Reason:* deploy update"))
       .toEqual([
         {
           kind: "paragraph",
           children: [
             { kind: "text", text: "Run " },
-            { kind: "code", text: "sudo systemctl restart natstack" },
+            { kind: "code", text: "sudo systemctl restart vibez1" },
             { kind: "text", text: "." },
           ],
         },

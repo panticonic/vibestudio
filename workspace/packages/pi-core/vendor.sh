@@ -60,8 +60,8 @@ find "$VENDOR" -name '*.ts' -exec sed -i \
 
 # (3) barrel decoupling patches in harness/types.ts
 sed -i \
-  -e 's|import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";|// NatStack vendoring patch: upstream barrel import rewritten to "../types.js" (the barrel\n// re-exports excluded runtime modules and is not vendored).\nimport type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.js";|' \
-  -e 's|export type { AgentHarness } from "./agent-harness.js";|// NatStack vendoring patch: AgentHarness re-export removed (agent-harness.ts is intentionally not vendored).|' \
+  -e 's|import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";|// Vibez1 vendoring patch: upstream barrel import rewritten to "../types.js" (the barrel\n// re-exports excluded runtime modules and is not vendored).\nimport type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../types.js";|' \
+  -e 's|export type { AgentHarness } from "./agent-harness.js";|// Vibez1 vendoring patch: AgentHarness re-export removed (agent-harness.ts is intentionally not vendored).|' \
   "$VENDOR/harness/types.ts"
 
 # (4) @ts-nocheck banner

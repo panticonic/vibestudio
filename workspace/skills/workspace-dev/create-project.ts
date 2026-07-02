@@ -128,7 +128,7 @@ export async function createProject(params: {
             version: "0.1.0",
             private: true,
             type: "module",
-            natstack: {
+            vibez1: {
               title,
               ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
             },
@@ -146,7 +146,7 @@ export async function createProject(params: {
   import { theme } from "@workspace/svelte";
   import { onMount } from "svelte";
 
-  let mode = window.__natstackAgentMode ?? "live";
+  let mode = window.__vibez1AgentMode ?? "live";
   const data = {
     fixture: "${title} fixture data",
     live: "${title} live data",
@@ -154,8 +154,8 @@ export async function createProject(params: {
 
   onMount(() => {
     const handler = (event) => { mode = event.detail; };
-    window.addEventListener("natstack:agentModeChanged", handler);
-    return () => window.removeEventListener("natstack:agentModeChanged", handler);
+    window.addEventListener("vibez1:agentModeChanged", handler);
+    return () => window.removeEventListener("vibez1:agentModeChanged", handler);
   });
 </script>
 
@@ -183,7 +183,7 @@ export async function createProject(params: {
             version: "0.1.0",
             private: true,
             type: "module",
-            natstack: {
+            vibez1: {
               title,
               ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
             },
@@ -209,12 +209,12 @@ const DataModeContext = createContext<{ mode: DataMode; message: string }>({
 
 function DataModeProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<DataMode>(() =>
-    (window as Window & { __natstackAgentMode?: DataMode }).__natstackAgentMode ?? "live"
+    (window as Window & { __vibez1AgentMode?: DataMode }).__vibez1AgentMode ?? "live"
   );
   useEffect(() => {
     const handler = (event: Event) => setMode((event as CustomEvent<DataMode>).detail);
-    window.addEventListener("natstack:agentModeChanged", handler);
-    return () => window.removeEventListener("natstack:agentModeChanged", handler);
+    window.addEventListener("vibez1:agentModeChanged", handler);
+    return () => window.removeEventListener("vibez1:agentModeChanged", handler);
   }, []);
   const value = useMemo(() => ({
     mode,
@@ -298,7 +298,7 @@ function ${toPascalCase(name)}Content() {
             version: "0.1.0",
             private: true,
             type: "module",
-            natstack: {
+            vibez1: {
               type: "worker",
               entry: "index.ts",
               durable: {
@@ -331,7 +331,7 @@ import type { ParticipantDescriptor } from "@workspace/harness";
  * channel transcript. You only need to override the small set of customization
  * hooks below.
  *
- * The system prompt is composed from the NatStack base prompt,
+ * The system prompt is composed from the Vibez1 base prompt,
  * workspace/meta/AGENTS.md, the generated skill index, and optional channel
  * prompt config.
  */
@@ -403,7 +403,7 @@ describe("${className}", () => {
             version: "0.1.0",
             private: true,
             type: "module",
-            natstack: { type: "worker", entry: "index.ts", title },
+            vibez1: { type: "worker", entry: "index.ts", title },
             dependencies: { "@workspace/runtime": "workspace:*" },
           },
           null,
@@ -435,7 +435,7 @@ const COPY_SKIP_DIRS = new Set([
   ".databases",
   ".gad",
   ".git",
-  ".natstack",
+  ".vibez1",
   ".parcel-cache",
   ".pnpm-store",
   ".testkit",
@@ -627,19 +627,19 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
           rewrites.push({ file: rel, description: "Updated package name" });
         }
         if (rewriteEnabled(options, "title")) {
-          pkg.natstack = { ...(pkg.natstack ?? {}), title: newTitle };
-          rewrites.push({ file: rel, description: "Updated natstack title" });
+          pkg.vibez1 = { ...(pkg.vibez1 ?? {}), title: newTitle };
+          rewrites.push({ file: rel, description: "Updated vibez1 title" });
         }
         if (
-          pkg.natstack?.entry &&
-          typeof pkg.natstack.entry === "string" &&
-          pkg.natstack.entry.includes(oldName)
+          pkg.vibez1?.entry &&
+          typeof pkg.vibez1.entry === "string" &&
+          pkg.vibez1.entry.includes(oldName)
         ) {
-          pkg.natstack.entry = pkg.natstack.entry.split(oldName).join(newName);
-          rewrites.push({ file: rel, description: "Updated natstack entry path" });
+          pkg.vibez1.entry = pkg.vibez1.entry.split(oldName).join(newName);
+          rewrites.push({ file: rel, description: "Updated vibez1 entry path" });
         }
         if (effectiveType === "worker" && rewriteEnabled(options, "workerClassNames")) {
-          const classes = pkg.natstack?.durable?.classes;
+          const classes = pkg.vibez1?.durable?.classes;
           if (Array.isArray(classes)) {
             if (classes.length === 1) {
               const oldClass = classes[0]?.className;
@@ -711,14 +711,14 @@ export async function forkProject(options: ForkProjectOptions): Promise<ForkProj
   }
 
   try {
-    if (await fs.exists("meta/natstack.yml")) {
-      const meta = await readText("meta/natstack.yml");
+    if (await fs.exists("meta/vibez1.yml")) {
+      const meta = await readText("meta/vibez1.yml");
       if (
         meta.includes(from) ||
         Object.keys(effectiveClassMap).some((oldClass) => meta.includes(oldClass))
       ) {
         warnings.push(
-          "Workspace meta/natstack.yml references the source project or worker classes; review global config before launching the fork."
+          "Workspace meta/vibez1.yml references the source project or worker classes; review global config before launching the fork."
         );
       }
     }

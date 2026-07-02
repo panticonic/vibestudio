@@ -74,8 +74,8 @@ async function createWorkerdHarness(
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
-    workspacePath: mkdtempSync(join(tmpdir(), "natstack-workerd-workspace-")),
-    statePath: mkdtempSync(join(tmpdir(), "natstack-workerd-state-")),
+    workspacePath: mkdtempSync(join(tmpdir(), "vibez1-workerd-workspace-")),
+    statePath: mkdtempSync(join(tmpdir(), "vibez1-workerd-state-")),
     getProxyPort: () => 9,
     getSharedEgressPort: () => Promise.resolve(10),
     registerEgressCaller: () => {},
@@ -87,7 +87,7 @@ async function createWorkerdHarness(
   const loaderServer = createServer((req, res) => {
     const u = req.url ?? "";
     if (u.startsWith("/_doversion/") || u.startsWith("/_docode/")) {
-      if (req.headers["x-natstack-loader-secret"] !== manager.getLoaderSecret()) {
+      if (req.headers["x-vibez1-loader-secret"] !== manager.getLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -182,7 +182,7 @@ async function bundleWorker(source: string, entryPoint: string, ev: string): Pro
 
 function buildResult(source: string, ev: string, bundle: string): BuildResult {
   return {
-    dir: `/tmp/natstack-${ev}-build`,
+    dir: `/tmp/vibez1-${ev}-build`,
     sourceStateHash: "state:test",
     metadata: {
       kind: "worker",
@@ -753,7 +753,7 @@ describe("internal storage DOs under workerd", () => {
         });
         const bundle = result.outputFiles[0]!.text;
         return {
-          dir: "/tmp/natstack-gad-store-test-build",
+          dir: "/tmp/vibez1-gad-store-test-build",
           sourceStateHash: "state:test",
           metadata: {
             kind: "worker",

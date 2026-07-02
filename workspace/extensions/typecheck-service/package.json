@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "displayName": "Typecheck Service",
     "entry": "index.ts",
     "sourcemap": true,
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@natstack/env-paths": "workspace:*",
-    "@natstack/shared": "workspace:*",
-    "@natstack/typecheck": "workspace:*"
+    "@vibez1/env-paths": "workspace:*",
+    "@vibez1/shared": "workspace:*",
+    "@vibez1/typecheck": "workspace:*"
   }
 }

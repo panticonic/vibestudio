@@ -291,7 +291,7 @@ function codedError(code: string, message: string): Error {
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@natstack/extension" {
+declare module "@vibez1/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/file-tools": Api;
   }

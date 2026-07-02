@@ -10,7 +10,7 @@ import {
   runImportPipeline,
 } from "@workspace/browser-data";
 import type { PreviewResult } from "@workspace/browser-data";
-import { resolveProfilePath } from "@natstack/browser-data";
+import { resolveProfilePath } from "@vibez1/browser-data";
 import type {
   BrowserOpenTabsRequest,
   ImportDataType,
@@ -30,7 +30,7 @@ import type {
   OpenTabsAsPanelsResult,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,
-} from "@natstack/browser-data";
+} from "@vibez1/browser-data";
 
 interface InvocationLike {
   current(): {
@@ -45,7 +45,7 @@ interface ApprovalDetailLike {
   format?: "plain" | "markdown" | "code";
 }
 
-/** Mirrors `UserlandApprovalRequest` from `@natstack/extension` (inlined to avoid a type-only dependency). */
+/** Mirrors `UserlandApprovalRequest` from `@vibez1/extension` (inlined to avoid a type-only dependency). */
 interface UserlandApprovalRequestLike {
   subject: { id: string; label?: string };
   title: string;
@@ -57,7 +57,7 @@ interface UserlandApprovalRequestLike {
   promptOptions?: "scoped" | "choices";
 }
 
-/** Mirrors `UserlandApprovalChoice` from `@natstack/extension`. */
+/** Mirrors `UserlandApprovalChoice` from `@vibez1/extension`. */
 type UserlandApprovalChoiceLike =
   | { kind: "choice"; choice: string }
   | { kind: "dismissed" }
@@ -83,7 +83,7 @@ interface ExtensionContextLike {
   emit(event: string, payload: unknown): void;
 }
 
-const DO_SOURCE = "natstack/internal";
+const DO_SOURCE = "vibez1/internal";
 const DO_CLASS = "BrowserDataDO";
 const DO_KEY = "global";
 
@@ -196,7 +196,7 @@ const METHOD_LABELS: Record<string, string> = {
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@natstack/extension" {
+declare module "@vibez1/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/browser-data": Api;
   }
@@ -672,7 +672,7 @@ function validateHistoryVisit(request: RecordHistoryVisitRequest): RecordHistory
     visitTime: request.visitTime ?? Date.now(),
     transition: request.transition ?? "link",
     typed: Boolean(request.typed),
-    source: request.source ?? "natstack",
+    source: request.source ?? "vibez1",
     panelId: request.panelId?.trim() || undefined,
   };
 }

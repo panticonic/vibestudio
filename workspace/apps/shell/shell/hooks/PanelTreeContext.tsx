@@ -33,8 +33,8 @@ import type {
   PanelNavigationState,
   PanelArtifacts,
   PanelTreeSnapshot,
-} from "@natstack/shared/types";
-import { getPanelContextId, getPanelSource } from "@natstack/shared/panel/accessors";
+} from "@vibez1/shared/types";
+import { getPanelContextId, getPanelSource } from "@vibez1/shared/panel/accessors";
 import { assertPresent } from "../../utils/assertPresent";
 
 // Re-export types for consumers

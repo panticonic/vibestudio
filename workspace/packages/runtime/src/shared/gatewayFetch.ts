@@ -1,4 +1,4 @@
-import { envelopeFromMessage, bytesToBase64, type RpcEnvelope } from "@natstack/rpc";
+import { envelopeFromMessage, bytesToBase64, type RpcEnvelope } from "@vibez1/rpc";
 
 export interface GatewayFetchConfig {
   serverUrl: string;
@@ -27,7 +27,7 @@ type ShellStreamBridge = {
 };
 
 function getShellBridge(): unknown {
-  return (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
+  return (globalThis as any).__vibez1Shell ?? (globalThis as any).__vibez1Electron;
 }
 
 export interface GatewayFetchDeps {
@@ -101,7 +101,7 @@ export function createGatewayFetch(
     return fetch(target, { ...init, headers });
 
     async function tunnelOverBridge(absoluteTarget: string, gatewayBase: string): Promise<Response> {
-      const entityId = (globalThis as any).__natstackEntityId as string | undefined;
+      const entityId = (globalThis as any).__vibez1EntityId as string | undefined;
       if (typeof entityId !== "string" || entityId.length === 0) {
         throw new Error("gatewayFetch: panel entity id is unavailable");
       }

@@ -7,7 +7,7 @@ Example:
 
 ```json
 {
-  "natstack": {
+  "vibez1": {
     "app": {
       "target": "electron",
       "renderer": "index.tsx",
@@ -34,7 +34,7 @@ Example:
 | --- | --- |
 | `panel-hosting` | App can manage host panel layout, visibility, theme CSS, overlays, and shell-like view controls. Use only for shell/chrome apps. |
 | `connection-management` | App can create pairing invites and participate in remote-client/device setup flows. |
-| `incoming-pair-links` | Electron app can receive `natstack://connect` deep links from the host. |
+| `incoming-pair-links` | Electron app can receive `vibez1://connect` deep links from the host. |
 | `notifications` | App can use notification surfaces or native notification permission where available. |
 | `open-external` | App can request system-browser external opens through host-gated APIs. |
 | `window-management` | App can access host window/fullscreen/display-capture style operations where implemented. |

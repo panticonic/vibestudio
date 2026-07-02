@@ -44,7 +44,7 @@ import {
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import type { AgentTool } from "@workspace/pi-core";
-import { serializeByKey } from "@natstack/shared/keyedSerializer";
+import { serializeByKey } from "@vibez1/shared/keyedSerializer";
 import { toCredentialConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   defaultPolicies,
@@ -181,7 +181,7 @@ type ConnectCredentialEnvelope = {
 };
 
 function isSystemPromptMode(value: unknown): value is SystemPromptMode {
-  return value === "append" || value === "replace" || value === "replace-natstack";
+  return value === "append" || value === "replace" || value === "replace-vibez1";
 }
 
 function normalizeBrowserOpenMode(value: unknown): BrowserOpenMode {
@@ -871,7 +871,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private async channelTarget(channelId: string): Promise<string> {
     const service = await this.rpc.call<{ targetId?: string }>("main", "workers.resolveService", [
-      "natstack.channel.v1",
+      "vibez1.channel.v1",
       channelId,
     ]);
     if (!service.targetId) throw new Error("channel service did not resolve");
@@ -2139,7 +2139,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    * Auth: the caller MUST be this agent's own EvalDO. We re-derive that DO's
    * objectKey the SAME way evalService does — sha256(ownerId + "\\0" + subKey),
    * hex, first 40 chars — and require the verified caller id to be
-   * `do:natstack/internal:EvalDO:<key>`. Any other caller is rejected; the
+   * `do:vibez1/internal:EvalDO:<key>`. Any other caller is rejected; the
    * generic DO relay is open, so a sensitive receiver gates on receipt.
    */
   @rpc({ callers: ["do"] })
@@ -2280,7 +2280,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private async assertOwnEvalCaller(channelId: string): Promise<void> {
     const callerId = this.rpcCallerId;
     const expectedKey = await sha256Hex(`${this.participantId()}\0${channelId}`);
-    const expectedCaller = `do:natstack/internal:EvalDO:${expectedKey.slice(0, 40)}`;
+    const expectedCaller = `do:vibez1/internal:EvalDO:${expectedKey.slice(0, 40)}`;
     if (callerId !== expectedCaller) {
       throw new Error(
         `chatOp: refusing caller ${callerId ?? "unknown"} — only this agent's own EvalDO may forward chat ops`

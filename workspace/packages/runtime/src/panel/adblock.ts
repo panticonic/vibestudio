@@ -4,7 +4,7 @@
  * Provides a clean API for panels to interact with the ad blocking system,
  * including per-panel stats and control.
  */
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 /**
  * Ad blocking statistics.
  */

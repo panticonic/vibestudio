@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { PanelRegistry } from "@natstack/shared/panelRegistry";
-import type { Panel } from "@natstack/shared/types";
-import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
-import { asPanelEntityId, asPanelSlotId } from "@natstack/shared/panel/ids";
+import { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import type { Panel } from "@vibez1/shared/types";
+import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
+import { asPanelEntityId, asPanelSlotId } from "@vibez1/shared/panel/ids";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 
 function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel>): Panel {

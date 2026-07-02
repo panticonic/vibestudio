@@ -73,7 +73,7 @@ export class TerminalChatWorker extends DurableObjectBase {
     // Render a connecting placeholder immediately so the host shows something.
     this.instance = this.renderInk(
       <Centered>
-        <Text color="green">NatStack Chat</Text>
+        <Text color="green">Vibez1 Chat</Text>
         <Text dimColor>Connecting to agent…</Text>
       </Centered>,
     );
@@ -113,7 +113,7 @@ export class TerminalChatWorker extends DurableObjectBase {
       const message = err instanceof Error ? err.message : String(err);
       this.instance?.rerender(
         <Centered>
-          <Text color="green">NatStack Chat</Text>
+          <Text color="green">Vibez1 Chat</Text>
           <Text color="red">Could not connect to the agent.</Text>
           <Text dimColor>{message}</Text>
           <Text dimColor>Ctrl+N to retry · Ctrl+A for approvals</Text>

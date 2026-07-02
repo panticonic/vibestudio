@@ -492,7 +492,7 @@ export interface PendingDeviceCodeApproval extends PendingApprovalBase {
   verificationUri: string;
   /**
    * Some providers (Google, GitHub, others) return a URL with the code
-   * pre-filled. When present, the natstack shell auto-opens this URL; the
+   * pre-filled. When present, the vibez1 shell auto-opens this URL; the
    * user code is still displayed in case the user prefers to type it.
    */
   verificationUriComplete?: string;

@@ -33,7 +33,7 @@ describe("createGadClient", () => {
       1,
       "main",
       "workers.resolveService",
-      ["natstack.gad.workspace.v1", null]
+      ["vibez1.gad.workspace.v1", null]
     );
     expect(rpc.call).toHaveBeenNthCalledWith(
       2,
@@ -51,7 +51,7 @@ describe("createGadClient", () => {
 
   it("keeps semantic envelope reads hydrated while inspection stays compact", async () => {
     const ref = {
-      protocol: "natstack.blob-ref.v1",
+      protocol: "vibez1.blob-ref.v1",
       digest: "digest-1",
       size: 15,
       encoding: "json",

@@ -3,12 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { UnitBatchEntry } from "@natstack/shared/approvals";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import {
-  unitChangeSessionGrantKey,
-  type UnitMetaChangeApprovalProvider,
-} from "@natstack/unit-host";
+import type { UnitBatchEntry } from "@vibez1/shared/approvals";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { unitChangeSessionGrantKey, type UnitMetaChangeApprovalProvider } from "@vibez1/unit-host";
 import type { StateAdvancedEvent } from "../buildV2/stateTrigger.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -24,7 +21,7 @@ afterEach(() => {
 });
 
 function tempStatePath(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-main-advance-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-main-advance-"));
   roots.push(root);
   return root;
 }
@@ -61,7 +58,7 @@ function stateAdvance(overrides: Partial<StateAdvancedEvent> = {}): StateAdvance
     headHash: "head:1",
     actor: { id: "panel-1", kind: "panel" },
     transitionKind: "merge",
-    changedPaths: ["meta/natstack.yml"],
+    changedPaths: ["meta/vibez1.yml"],
     fileChanges: [],
     editOps: [],
     ...overrides,
@@ -128,7 +125,7 @@ describe("createMainAdvanceApprovalGate", () => {
         trigger: "meta-change",
         configWrite: {
           repoPath: "meta",
-          summary: "meta/natstack.yml changed",
+          summary: "meta/vibez1.yml changed",
         },
         units: [unit],
       })
@@ -224,7 +221,7 @@ describe("createMainAdvanceApprovalGate", () => {
 
     await gate.approve({
       event: stateAdvance({
-        changedPaths: ["meta/natstack.yml", "apps/shell/index.tsx"],
+        changedPaths: ["meta/vibez1.yml", "apps/shell/index.tsx"],
       }),
       caller: panelCaller(),
       operation: "push",
@@ -236,7 +233,7 @@ describe("createMainAdvanceApprovalGate", () => {
         kind: "unit-batch",
         configWrite: {
           repoPath: "meta",
-          summary: "meta/natstack.yml changed; 1 other workspace path changed",
+          summary: "meta/vibez1.yml changed; 1 other workspace path changed",
         },
       })
     );

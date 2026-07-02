@@ -8,13 +8,16 @@ import { panel, palette } from "../shell/client";
 import { useShellEvent } from "../shell/useShellEvent";
 
 /** Accent swatches offered as quick theme commands (mirrors ThemeSettings). */
-const ACCENTS = ["iris", "blue", "cyan", "grass", "amber", "tomato", "violet", "gray"] as const;
+const ACCENTS = ["amber", "gray", "iris", "blue", "cyan", "grass", "tomato", "violet"] as const;
 
 type PaletteAction =
   | { kind: "global"; run: () => void | Promise<void> }
   | { kind: "panel"; panelId: string; commandId: string };
 
-type PanelContribution = { panelId: string; commands: { id: string; label: string; hint?: string; section?: string }[] };
+type PanelContribution = {
+  panelId: string;
+  commands: { id: string; label: string; hint?: string; section?: string }[];
+};
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -50,11 +53,16 @@ export function AppCommandPalette() {
 
   useEffect(() => {
     const electron =
-      (globalThis as { __natstackShell?: unknown; __natstackElectron?: unknown }).__natstackShell ??
-      (globalThis as { __natstackElectron?: unknown }).__natstackElectron;
+      (globalThis as { __vibez1Shell?: unknown; __vibez1Electron?: unknown }).__vibez1Shell ??
+      (globalThis as { __vibez1Electron?: unknown }).__vibez1Electron;
     if (electron) return; // menu accelerator handles it
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "K")) {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        (e.key === "k" || e.key === "K")
+      ) {
         e.preventDefault();
         setOpen((o) => !o);
       }
@@ -83,16 +91,36 @@ export function AppCommandPalette() {
 
   const globalItems = useMemo<CommandItem<PaletteAction>[]>(() => {
     const items: CommandItem<PaletteAction>[] = [
-      { id: "appearance:light", label: "Appearance: Light", section: "Appearance", value: { kind: "global", run: () => setThemeMode("light") } },
-      { id: "appearance:dark", label: "Appearance: Dark", section: "Appearance", value: { kind: "global", run: () => setThemeMode("dark") } },
-      { id: "appearance:system", label: "Appearance: System", section: "Appearance", value: { kind: "global", run: () => setThemeMode("system") } },
+      {
+        id: "appearance:light",
+        label: "Appearance: Light",
+        section: "Appearance",
+        value: { kind: "global", run: () => setThemeMode("light") },
+      },
+      {
+        id: "appearance:dark",
+        label: "Appearance: Dark",
+        section: "Appearance",
+        value: { kind: "global", run: () => setThemeMode("dark") },
+      },
+      {
+        id: "appearance:system",
+        label: "Appearance: System",
+        section: "Appearance",
+        value: { kind: "global", run: () => setThemeMode("system") },
+      },
       ...ACCENTS.map((accent) => ({
         id: `accent:${accent}`,
         label: `Accent: ${cap(accent)}`,
         section: "Theme",
         value: { kind: "global" as const, run: () => setThemeConfig({ accentColor: accent }) },
       })),
-      { id: "workspace:switch", label: "Switch workspace…", section: "Workspace", value: { kind: "global", run: () => setWorkspaceChooserOpen(true) } },
+      {
+        id: "workspace:switch",
+        label: "Switch workspace…",
+        section: "Workspace",
+        value: { kind: "global", run: () => setWorkspaceChooserOpen(true) },
+      },
       {
         id: "panel:reload",
         label: "Reload current panel",

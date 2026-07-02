@@ -1,5 +1,5 @@
 /**
- * Virtual type definitions for NatStack type checking.
+ * Virtual type definitions for Vibez1 type checking.
  *
  * These definitions are loaded by the TypeCheckService to provide accurate
  * type information for shimmed APIs (fs, globals) without requiring external
@@ -234,28 +234,28 @@ export function toNamespacedPath(p: string): string;
 `;
 
 /**
- * Global type definitions for NatStack panels/workers.
+ * Global type definitions for Vibez1 panels/workers.
  */
 export const GLOBAL_TYPE_DEFINITIONS = `
 /**
- * NatStack global module map for shared dependencies.
+ * Vibez1 global module map for shared dependencies.
  */
-declare const __natstackModuleMap__: Record<string, unknown>;
+declare const __vibez1ModuleMap__: Record<string, unknown>;
 
 /**
- * NatStack require function for pre-bundled modules.
+ * Vibez1 require function for pre-bundled modules.
  */
-declare function __natstackRequire__(specifier: string): unknown;
+declare function __vibez1Require__(specifier: string): unknown;
 
 /**
- * NatStack async require for CDN-loaded modules.
+ * Vibez1 async require for CDN-loaded modules.
  */
-declare function __natstackRequireAsync__(specifier: string): Promise<unknown>;
+declare function __vibez1RequireAsync__(specifier: string): Promise<unknown>;
 
 /**
  * Preload multiple modules from CDN.
  */
-declare function __natstackPreloadModules__(specifiers: string[]): Promise<void>;
+declare function __vibez1PreloadModules__(specifiers: string[]): Promise<void>;
 
 /**
  * Async tracking context for promise management.
@@ -265,9 +265,9 @@ interface AsyncTrackingContext {
 }
 
 /**
- * NatStack async tracking API.
+ * Vibez1 async tracking API.
  */
-declare const __natstackAsyncTracking__: {
+declare const __vibez1AsyncTracking__: {
   start(): AsyncTrackingContext;
   enter(ctx: AsyncTrackingContext): void;
   exit(): void;

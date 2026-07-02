@@ -2,14 +2,15 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSetAtom } from "jotai";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import { Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { Vibez1Logo } from "@workspace/ui";
 import { useIsMobile } from "@workspace/react/responsive";
 
 import type { LazyTitleNavigationData, LazyStatusNavigationData } from "./navigationTypes";
-import type { PanelContextMenuAction } from "@natstack/shared/types";
+import type { PanelContextMenuAction } from "@vibez1/shared/types";
 import type {
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
-} from "@natstack/shared/panel/panelLease";
+} from "@vibez1/shared/panel/panelLease";
 import {
   DEFAULT_SEARCH_TEMPLATE,
   applySearchTemplate,
@@ -17,14 +18,14 @@ import {
   getBrowserNavigationIntentForCommand,
   type AddressNavigationMode,
   type PanelCommandId,
-} from "@natstack/shared/panelCommands";
+} from "@vibez1/shared/panelCommands";
 import {
   buildPanelChromeState,
   isBrowserPanelSource,
   parseAddressInput,
   type AddressAction,
   type PanelChromeState,
-} from "@natstack/shared/panelChrome";
+} from "@vibez1/shared/panelChrome";
 import {
   useRootPanels,
   useFullPanel,
@@ -35,7 +36,7 @@ import {
 } from "../shell/hooks/PanelTreeContext";
 import { app, panel as panelService, view } from "../shell/client";
 import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../state/appModeAtoms";
-import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
+import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
 import { useNavigation } from "./NavigationContext";
 import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";
@@ -873,17 +874,34 @@ export function PanelStack({
   // Show loading state while initializing
   if (rootLoading && rootPanels.length === 0) {
     return (
-      <Flex direction="column" align="center" justify="center" style={{ flex: 1, height: "100%" }}>
+      <Flex
+        direction="column"
+        align="center"
+        justify="center"
+        gap="3"
+        style={{ flex: 1, height: "100%" }}
+      >
+        <Vibez1Logo size={68} variant="mark" />
         <Spinner size="3" />
-        <Text mt="3">Initializing panels...</Text>
+        <Text>Initializing panels...</Text>
       </Flex>
     );
   }
 
   if (!visiblePanel && !panelLoading) {
     return (
-      <Flex direction="column" align="center" justify="center" style={{ flex: 1, height: "100%" }}>
-        <Text>No panels available.</Text>
+      <Flex
+        direction="column"
+        align="center"
+        justify="center"
+        gap="3"
+        style={{ flex: 1, height: "100%", textAlign: "center" }}
+      >
+        <Vibez1Logo size={72} variant="mark" />
+        <Text weight="medium">No panels available.</Text>
+        <Text size="2" color="gray">
+          Create a panel or choose another workspace to continue.
+        </Text>
       </Flex>
     );
   }
@@ -892,9 +910,10 @@ export function PanelStack({
   const renderPanelContent = () => {
     if (!visiblePanel) {
       return (
-        <Flex direction="column" align="center" justify="center" height="100%">
+        <Flex direction="column" align="center" justify="center" gap="3" height="100%">
+          <Vibez1Logo size={56} variant="mark" />
           <Spinner size="3" />
-          <Text mt="3">Loading panel...</Text>
+          <Text>Loading panel...</Text>
         </Flex>
       );
     }

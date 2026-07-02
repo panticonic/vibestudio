@@ -17,7 +17,7 @@ import type {
   Credential,
   CredentialUseGrant,
 } from "../../../packages/shared/src/credentials/types.js";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import {
   EgressProxy,
   shouldRetryWebSocketConnectWithIpv4,
@@ -93,7 +93,7 @@ class MemoryCredentialUseGrantStore {
 }
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-egress-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-egress-"));
 }
 
 function workerCaller(callerId: string) {
@@ -354,7 +354,7 @@ describe("EgressProxy", () => {
         received = {
           url: req.url,
           authorization: req.headers.authorization,
-          runtimeId: req.headers["x-natstack-runtime-id"] as string | undefined,
+          runtimeId: req.headers["x-vibez1-runtime-id"] as string | undefined,
           body: Buffer.concat(chunks).toString("utf8"),
         };
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -381,7 +381,7 @@ describe("EgressProxy", () => {
         headers: {
           "Content-Type": "application/json",
           Authorization: "Bearer platform-token",
-          "X-Natstack-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+          "X-vibez1-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
         },
         body: JSON.stringify({ type: "emit" }),
       });
@@ -470,7 +470,7 @@ describe("EgressProxy", () => {
     try {
       const response = await requestWebSocketUpgradeThroughProxy({
         proxyPort,
-        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket?__natstack_ws_headers=${encodeURIComponent(
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket?__vibez1_ws_headers=${encodeURIComponent(
           encodeWebSocketMetadata([
             ["openai-beta", "responses=experimental; websockets=v1"],
             ["origin", `http://127.0.0.1:${upstreamPort}`],
@@ -480,8 +480,8 @@ describe("EgressProxy", () => {
         headers: {
           Authorization: "Bearer sentinel",
           Origin: "http://127.0.0.1:12345",
-          "X-NatStack-Egress-Caller": "worker:test",
-          "X-NatStack-Egress-Secret": "secret",
+          "X-Vibez1-Egress-Caller": "worker:test",
+          "X-Vibez1-Egress-Secret": "secret",
         },
       });
 
@@ -553,8 +553,8 @@ describe("EgressProxy", () => {
         targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
         headers: {
           Origin: "http://127.0.0.1:12345",
-          "X-NatStack-Egress-Caller": "worker:test",
-          "X-NatStack-Egress-Secret": "secret",
+          "X-Vibez1-Egress-Caller": "worker:test",
+          "X-Vibez1-Egress-Secret": "secret",
         },
       });
 
@@ -614,7 +614,7 @@ describe("EgressProxy", () => {
     try {
       const response = await requestWebSocketUpgradeThroughProxy({
         proxyPort,
-        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket?__natstack_ws_headers=${encodeURIComponent(
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket?__vibez1_ws_headers=${encodeURIComponent(
           encodeWebSocketMetadata([
             ["openai-beta", "responses=experimental; websockets=v1"],
             ["origin", `http://127.0.0.1:${upstreamPort}`],
@@ -625,8 +625,8 @@ describe("EgressProxy", () => {
         headers: {
           Authorization: "Bearer sentinel",
           Origin: "http://127.0.0.1:12345",
-          "X-NatStack-Egress-Caller": "worker:test",
-          "X-NatStack-Egress-Secret": "secret",
+          "X-Vibez1-Egress-Caller": "worker:test",
+          "X-Vibez1-Egress-Secret": "secret",
         },
       });
 
@@ -709,8 +709,8 @@ describe("EgressProxy", () => {
         proxyPort,
         targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
         headers: {
-          "X-NatStack-Egress-Caller": "worker:test",
-          "X-NatStack-Egress-Secret": "secret",
+          "X-Vibez1-Egress-Caller": "worker:test",
+          "X-Vibez1-Egress-Secret": "secret",
         },
       });
 
@@ -789,8 +789,8 @@ describe("EgressProxy", () => {
         proxyPort,
         targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
         headers: {
-          "X-NatStack-Egress-Caller": "worker:test",
-          "X-NatStack-Egress-Secret": "secret",
+          "X-Vibez1-Egress-Caller": "worker:test",
+          "X-Vibez1-Egress-Secret": "secret",
         },
       });
 

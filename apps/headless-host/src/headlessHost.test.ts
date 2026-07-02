@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { HeadlessHost } from "./headlessHost.js";
 import type { HeadlessHostConfig } from "./config.js";
-import { LeaseTracker } from "@natstack/shared/panel/leaseTracker";
-import type { PanelRuntimeLease } from "@natstack/shared/panel/panelLease";
+import { LeaseTracker } from "@vibez1/shared/panel/leaseTracker";
+import type { PanelRuntimeLease } from "@vibez1/shared/panel/panelLease";
 
 function config(): HeadlessHostConfig {
   return {
@@ -12,8 +12,8 @@ function config(): HeadlessHostConfig {
     clientSessionId: "headless-test",
     maxPanels: 8,
     idleUnloadMs: 60_000,
-    cacheDir: "/tmp/natstack-test-cache",
-    profileDir: "/tmp/natstack-test-profile",
+    cacheDir: "/tmp/vibez1-test-cache",
+    profileDir: "/tmp/vibez1-test-profile",
   };
 }
 

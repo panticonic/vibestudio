@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import type { RpcEnvelope } from "@natstack/rpc";
-import type { WebRtcSession, WebRtcTransport } from "@natstack/rpc/transports/webrtcClient";
-import type { ConnectPairing } from "@natstack/shared/connect";
+import type { RpcEnvelope } from "@vibez1/rpc";
+import type { WebRtcSession, WebRtcTransport } from "@vibez1/rpc/transports/webrtcClient";
+import type { ConnectPairing } from "@vibez1/shared/connect";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
 
 const PAIRING = {

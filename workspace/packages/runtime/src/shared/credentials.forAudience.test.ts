@@ -1,4 +1,4 @@
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcCaller } from "@vibez1/rpc";
 import {
   createCredentialClient,
   type CredentialClient,

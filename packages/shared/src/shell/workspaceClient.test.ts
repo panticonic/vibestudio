@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { WorkspaceClient } from "./workspaceClient.js";
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 
 // ---------------------------------------------------------------------------
 // Helpers

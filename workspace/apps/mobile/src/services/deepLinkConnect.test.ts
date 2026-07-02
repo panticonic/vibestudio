@@ -3,7 +3,7 @@ import { parseConnectDeepLink } from "./deepLinkConnect";
 const FP = "AA".repeat(32);
 const CODE = "a".repeat(24);
 function makeLink(sig = "wss://signal.example/"): string {
-  return `natstack://connect?room=room-1111-2222&fp=${FP}&code=${CODE}&sig=${encodeURIComponent(sig)}`;
+  return `vibez1://connect?room=room-1111-2222&fp=${FP}&code=${CODE}&sig=${encodeURIComponent(sig)}`;
 }
 
 describe("deepLinkConnect", () => {
@@ -21,11 +21,11 @@ describe("deepLinkConnect", () => {
   });
 
   it("rejects a link missing required pairing params", () => {
-    expect(parseConnectDeepLink("natstack://connect?room=room-1111-2222").kind).toBe("error");
+    expect(parseConnectDeepLink("vibez1://connect?room=room-1111-2222").kind).toBe("error");
   });
 
   it("rejects a fingerprint that is not a SHA-256", () => {
-    const link = `natstack://connect?room=room-1111-2222&fp=DE:AD:BE:EF&code=${CODE}&sig=${encodeURIComponent("wss://signal.example/")}`;
+    const link = `vibez1://connect?room=room-1111-2222&fp=DE:AD:BE:EF&code=${CODE}&sig=${encodeURIComponent("wss://signal.example/")}`;
     expect(parseConnectDeepLink(link).kind).toBe("error");
   });
 

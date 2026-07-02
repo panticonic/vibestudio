@@ -1,6 +1,8 @@
 // --- App-wide design language ---
 export { APP_THEME } from "./theme.config";
 export type { AppTheme } from "./theme.config";
+export { Vibez1Logo } from "./brand";
+export type { Vibez1LogoProps } from "./brand";
 
 // --- Shared UI kit: layout primitives ---
 export { Stack, Surface, Toolbar, PanelChrome } from "./kit/layout";
@@ -14,13 +16,7 @@ export type {
 } from "./kit/layout";
 
 // --- Shared UI kit: feedback primitives ---
-export {
-  StatusBadge,
-  NarrationPill,
-  EmptyState,
-  Snackbar,
-  useSnackbar,
-} from "./kit/feedback";
+export { StatusBadge, NarrationPill, EmptyState, Snackbar, useSnackbar } from "./kit/feedback";
 export type {
   Intent,
   StatusBadgeProps,
@@ -35,10 +31,6 @@ export type { AppDialogProps, AppPopoverProps } from "./kit/overlay";
 
 // --- Shared UI kit: unified command palette + shortcuts help ---
 export { CommandPalette } from "./kit/CommandPalette";
-export type {
-  CommandPaletteProps,
-  CommandItem,
-  SelectModifiers,
-} from "./kit/CommandPalette";
+export type { CommandPaletteProps, CommandItem, SelectModifiers } from "./kit/CommandPalette";
 export { ShortcutsHelp } from "./kit/ShortcutsHelp";
 export type { ShortcutsHelpProps, ShortcutGroup, ShortcutEntry } from "./kit/ShortcutsHelp";

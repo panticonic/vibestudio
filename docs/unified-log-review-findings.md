@@ -207,7 +207,7 @@ hash-chain integrity. The rewrite then punched four inconsistent holes in it:
 
 `getBuild` accepts only HEAD / `state:...` / `ctx:...`, but the git-SHA era
 survives at every boundary: the shell pin-by-commit UI, `ref:` fields in
-natstack.yml, the worker-pinning API and its docs, persisted worker instances
+vibez1.yml, the worker-pinning API and its docs, persisted worker instances
 (IN-1). Explicit `ctx:` refs work as targeted build selectors; `contextId`
 itself is runtime/file-state identity and must not be treated as a build ref.
 **Required:** one ref grammar, validated at every entry point, with either a
@@ -819,7 +819,7 @@ loss, IN=integration/refs, SEC=security, PF=performance, CL=cleanup.
     (Rollback/"Pin previous" via `getBuildByKey` (`appHost.ts:766-784`) still
     works — only pin-by-commit is broken.)
   - (b) `appHost.ts:1329` and `packages/extension-host/src/service.ts:1319` —
-    `decl.ref` from natstack.yml (any non-empty string; default "main") goes
+    `decl.ref` from vibez1.yml (any non-empty string; default "main") goes
     into getBuild at boot → declared SHA/branch refs error the unit;
     `resolveDeclarationRef` (`service.ts:1459-1463`) can even rewrite
     `main`→`master`, which then throws.
@@ -946,7 +946,7 @@ loss, IN=integration/refs, SEC=security, PF=performance, CL=cleanup.
   server never restarts, and the banner actively claims otherwise.
   `tests/dogfood-server.test.ts` stays green (pure helpers only).
 - **Fix:** decide: implement the vcs-side answer (subscribe to
-  `state-advanced(main)` for `projects/natstack` paths + gitBridge export →
+  `state-advanced(main)` for `projects/vibez1` paths + gitBridge export →
   host checkout fast-forward), or rip the self-update machinery + banner out
   and log "self-update unsupported under GAD vcs" loudly. Don't ship the
   misleading middle state.

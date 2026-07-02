@@ -1,8 +1,8 @@
 import { AuthError } from "./output.js";
-import { serverAuthRouteUrl, serverRpcHttpUrl } from "@natstack/shared/connect";
+import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibez1/shared/connect";
 
 /**
- * HTTP RPC client for a paired NatStack server.
+ * HTTP RPC client for a paired Vibez1 server.
  *
  * Auth flow: the long-lived device credential (deviceId + refreshToken) is
  * exchanged at `/_r/s/auth/refresh-shell` for a short-lived shell token,

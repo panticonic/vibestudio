@@ -1,7 +1,7 @@
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { EntityKind } from "@natstack/shared/runtime/entitySpec";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityKind } from "@vibez1/shared/runtime/entitySpec";
 import { createVcsService } from "./vcsService.js";
 
 function panelCaller(id = "panel-source") {

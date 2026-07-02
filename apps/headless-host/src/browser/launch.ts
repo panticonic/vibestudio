@@ -6,7 +6,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 
 const log = createDevLogger("HeadlessHost:launch");
 
@@ -39,7 +39,7 @@ export function resolveChromiumProfileDir(opts: {
   const homeDir = opts.homeDir ?? os.homedir();
   const snapName = snapNameFromExecutablePath(opts.executablePath);
   if (!snapName || !isHiddenHomePath(opts.profileDir, homeDir)) return opts.profileDir;
-  return path.join(homeDir, "snap", snapName, "common", "natstack", "headless-host");
+  return path.join(homeDir, "snap", snapName, "common", "vibez1", "headless-host");
 }
 
 export async function launchChromium(opts: {

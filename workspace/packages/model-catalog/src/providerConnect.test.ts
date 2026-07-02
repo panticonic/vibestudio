@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ConnectCredentialParamsSchema } from "@natstack/shared/serviceSchemas/credentials";
-import { toCredentialConnectRequest as toSharedCredentialConnectRequest } from "@natstack/shared/providerConnect";
+import { ConnectCredentialParamsSchema } from "@vibez1/shared/serviceSchemas/credentials";
+import { toCredentialConnectRequest as toSharedCredentialConnectRequest } from "@vibez1/shared/providerConnect";
 
 import { toCredentialConnectRequest } from "./providerConnect";
 

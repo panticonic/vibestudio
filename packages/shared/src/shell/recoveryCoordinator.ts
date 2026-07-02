@@ -1,9 +1,9 @@
 export {
   DefaultRecoveryCoordinator,
   createRecoveryCoordinator,
-} from "@natstack/rpc/protocol/recoveryCoordinator";
+} from "@vibez1/rpc/protocol/recoveryCoordinator";
 
 export type {
   RecoveryCoordinator,
   RecoveryKind,
-} from "@natstack/rpc/protocol/recoveryCoordinator";
+} from "@vibez1/rpc/protocol/recoveryCoordinator";

@@ -33,7 +33,7 @@ own agent DO. That is the load-bearing invariant:
 - **Never reuse a shared / "standing" key** (e.g. `explorer-standing`) for an ad-hoc add.
   One DO across multiple channels folds their turn state together and **corrupts the channel
   log** — it can adopt another channel's in-flight turn → duplicate envelope ids → GAD
-  `id-collision`. `*-standing` keys are ONLY for scheduled instances under `natstack.yml
+  `id-collision`. `*-standing` keys are ONLY for scheduled instances under `vibez1.yml
   recurring:`.
 - **Don't improvise with `resolveDurableObject` + a guessed key.** That only *resolves* a
   target for the key you pass — pass a key you found lying around and you subscribe the

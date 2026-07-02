@@ -334,7 +334,7 @@ export const workspaceMethods = defineServiceMethods({
       path: z.string().describe("Absolute path to the workspace source tree."),
       statePath: z.string().describe("Absolute path to the workspace's persisted state directory."),
       contextsPath: z.string().describe("Absolute path to the workspace's `.contexts` directory."),
-      config: WorkspaceConfigSchema.describe("The resolved workspace config (meta/natstack.yml)."),
+      config: WorkspaceConfigSchema.describe("The resolved workspace config (meta/vibez1.yml)."),
     }),
     access: READ_ACCESS,
   },
@@ -357,7 +357,7 @@ export const workspaceMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getConfig: {
-    description: "The active workspace's resolved config (meta/natstack.yml).",
+    description: "The active workspace's resolved config (meta/vibez1.yml).",
     args: z.tuple([]),
     returns: WorkspaceConfigSchema,
     access: READ_ACCESS,
@@ -429,7 +429,7 @@ export const workspaceMethods = defineServiceMethods({
   // by default, but userland can request a one-shot approval.
   setConfigField: {
     description:
-      "Write an arbitrary field into the workspace config (meta/natstack.yml); approval-gated for userland.",
+      "Write an arbitrary field into the workspace config (meta/vibez1.yml); approval-gated for userland.",
     args: z.tuple([
       z.string().describe("Config field key to write."),
       z.unknown().describe("New value for the field."),
@@ -574,7 +574,7 @@ export const workspaceMethods = defineServiceMethods({
   },
   "recurring.list": {
     description:
-      "List declarative scheduled jobs from meta/natstack.yml with their durable run state (next/last run, failures, backoff).",
+      "List declarative scheduled jobs from meta/vibez1.yml with their durable run state (next/last run, failures, backoff).",
     args: z.tuple([]),
     returns: z.array(WorkspaceRecurringJobStatusSchema),
     policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },

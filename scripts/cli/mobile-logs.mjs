@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Tail adb logcat for the NatStack Android app process.
+// Tail adb logcat for the Vibez1 Android app process.
 
 import { spawn } from "node:child_process";
 
 function parseArgs(argv) {
   const options = {
     device: null,
-    packageName: "com.natstack.mobile.internal",
+    packageName: "com.vibez1.mobile.internal",
     help: false,
   };
 
@@ -29,15 +29,15 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`natstack mobile logs
+  console.log(`vibez1 mobile logs
 
 Usage:
-  natstack mobile logs
-  natstack mobile logs --device <adb-serial>
+  vibez1 mobile logs
+  vibez1 mobile logs --device <adb-serial>
 
 Options:
   --device <serial>  Target a specific adb device.
-  --package <id>     App package to inspect. Defaults to com.natstack.mobile.internal.
+  --package <id>     App package to inspect. Defaults to com.vibez1.mobile.internal.
   --help             Show this help message.
 `);
 }

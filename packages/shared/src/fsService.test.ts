@@ -88,7 +88,7 @@ describe("FsService", () => {
   let entityCache: EntityCache;
 
   beforeEach(() => {
-    tmpRoot = mkdtempSync(path.join(tmpdir(), "natstack-fsservice-"));
+    tmpRoot = mkdtempSync(path.join(tmpdir(), "vibez1-fsservice-"));
     entityCache = new EntityCache();
     service = new FsService(makeStubFolderManager(tmpRoot), entityCache);
   });
@@ -174,15 +174,15 @@ describe("FsService", () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-nested-write");
 
-      await service.handleCall(ctx, "writeFile", [".natstack/tmp/fs-text-roundtrip.txt", "ok"]);
+      await service.handleCall(ctx, "writeFile", [".vibez1/tmp/fs-text-roundtrip.txt", "ok"]);
 
       expect(
         existsSync(
-          path.join(tmpRoot, "ctx-nested-write", ".natstack", "tmp", "fs-text-roundtrip.txt")
+          path.join(tmpRoot, "ctx-nested-write", ".vibez1", "tmp", "fs-text-roundtrip.txt")
         )
       ).toBe(true);
       await expect(
-        service.handleCall(ctx, "readFile", [".natstack/tmp/fs-text-roundtrip.txt", "utf8"])
+        service.handleCall(ctx, "readFile", [".vibez1/tmp/fs-text-roundtrip.txt", "utf8"])
       ).resolves.toBe("ok");
     });
 

@@ -2,10 +2,10 @@
 
 ## Motivation
 
-Natstack has three related but distinct scheduling needs:
+vibez1 has three related but distinct scheduling needs:
 
 - **Cron jobs**: deterministic calls into a Durable Object, declared in
-  `meta/natstack.yml` `recurring:` and approval-gated before they can run.
+  `meta/vibez1.yml` `recurring:` and approval-gated before they can run.
 - **Liveness heartbeats**: cheap "is this process/session/connection alive?"
   pings, already used by shells, pubsub clients, and long-running RPC paths.
 - **Agent heartbeats**: scheduled or event-driven agent turns that inspect
@@ -31,7 +31,7 @@ and not "still working" progress pings. A heartbeat wakes an agent with context
 and tools, asks it to inspect current state, lets it perform a safe micro-action,
 and records run metadata such as last run, status, failures, and next action.
 
-OpenClaw's public bug history also highlights two failure modes Natstack should
+OpenClaw's public bug history also highlights two failure modes vibez1 should
 avoid:
 
 - Loading full conversation/workspace context on every heartbeat can create
@@ -59,7 +59,7 @@ avoid:
    owns the one physical alarm slot.
 
 4. **Approval-gate unattended declarations.**
-   Editing `meta/natstack.yml` to add or change a heartbeat is an unattended
+   Editing `meta/vibez1.yml` to add or change a heartbeat is an unattended
    execution capability and should appear in the same meta-change approval flow
    as `recurring:`.
 
@@ -79,11 +79,11 @@ should include all of:
 - durable heartbeat failure/backoff/status state;
 - a workspace heartbeat registry/index for discovery and global controls;
 - `workspace.heartbeats.*` service methods backed by that registry;
-- `meta/natstack.yml` `heartbeats:` parsing, validation, and approval entries;
+- `meta/vibez1.yml` `heartbeats:` parsing, validation, and approval entries;
 - bgkit migrated onto the general system and registered in the workspace index.
 
 The only "gate" that remains is the existing trust/approval gate for declaring
-unattended scheduled agent work in `meta/natstack.yml`. That is a safety
+unattended scheduled agent work in `meta/vibez1.yml`. That is a safety
 property, not a staged rollout.
 
 ## Proposed Surface
@@ -261,7 +261,7 @@ from that durable policy, and model-step execution overlays the per-turn config
 patch when deriving the model call. A new command kind should only be introduced
 if normal prompt metadata cannot express the lifecycle cleanly.
 
-### 5. `meta/natstack.yml` Declarative Heartbeats
+### 5. `meta/vibez1.yml` Declarative Heartbeats
 
 Add a top-level `heartbeats:` section rather than overloading `recurring:`.
 
@@ -311,7 +311,7 @@ the registry is an index/control plane, not the scheduler that calls models.
 
 Per-channel agents such as bgkit should also register code-owned heartbeat
 instances in the same registry. They do not need to be represented by a template
-string like `bgkit-${channelId}` in `meta/natstack.yml`; they can register their
+string like `bgkit-${channelId}` in `meta/vibez1.yml`; they can register their
 concrete `(source, className, objectKey, heartbeatName, channelId)` when the
 channel subscription exists. Any declaration that fans out over channels must do
 so through this same registry/discovery surface rather than by inventing

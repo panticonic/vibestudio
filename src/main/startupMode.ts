@@ -8,12 +8,12 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 import { isDev } from "./utils.js";
 import { getAppRoot, getCentralConfigDirectory } from "./paths.js";
-import { resolveWorkspaceName } from "@natstack/shared/workspace/loader";
-import { resolveLocalWorkspaceStartup } from "@natstack/shared/workspace/startup";
-import type { CentralDataManager } from "@natstack/shared/centralData";
+import { resolveWorkspaceName } from "@vibez1/shared/workspace/loader";
+import { resolveLocalWorkspaceStartup } from "@vibez1/shared/workspace/startup";
+import type { CentralDataManager } from "@vibez1/shared/centralData";
 
 const log = createDevLogger("StartupMode");
 export const CHOOSE_CONNECTION_ARG = "--choose-connection";
@@ -116,7 +116,7 @@ function hasExplicitWorkspaceSelection(): boolean {
 }
 
 function hasConnectDeepLinkArg(): boolean {
-  return process.argv.some((arg) => arg.startsWith("natstack://connect"));
+  return process.argv.some((arg) => arg.startsWith("vibez1://connect"));
 }
 
 function shouldCreateExplicitWorkspaceIfMissing(): boolean {
@@ -136,7 +136,7 @@ export function stripStartupSelectionArgs(rawArgs: readonly string[]): string[] 
     if (arg === WORKSPACE_CREATE_IF_MISSING_ARG) continue;
     if (arg === DEV_WEBRTC_REMOTE_ARG) continue;
     if (arg === EPHEMERAL_WORKSPACE_ARG) continue;
-    if (arg?.startsWith("natstack://connect")) continue;
+    if (arg?.startsWith("vibez1://connect")) continue;
     if (arg !== undefined) filteredArgs.push(arg);
   }
   return filteredArgs;

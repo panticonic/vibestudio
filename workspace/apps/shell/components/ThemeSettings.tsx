@@ -5,7 +5,15 @@
  */
 import type { CSSProperties } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Popover, IconButton, Flex, Text, SegmentedControl, Tooltip, Select } from "@radix-ui/themes";
+import {
+  Popover,
+  IconButton,
+  Flex,
+  Text,
+  SegmentedControl,
+  Tooltip,
+  Select,
+} from "@radix-ui/themes";
 import { ColorWheelIcon, CheckIcon } from "@radix-ui/react-icons";
 import {
   themeModeAtom,
@@ -15,7 +23,7 @@ import {
   type ThemeConfigValue,
 } from "../state/themeAtoms";
 
-const ACCENTS = ["iris", "blue", "cyan", "grass", "amber", "tomato", "violet", "gray"] as const;
+const ACCENTS = ["amber", "gray", "iris", "blue", "cyan", "grass", "tomato", "violet"] as const;
 const GRAYS = ["gray", "mauve", "slate", "sage", "olive", "sand"] as const;
 const RADII: ThemeConfigValue["radius"][] = ["none", "small", "medium", "large", "full"];
 const SCALINGS: ThemeConfigValue["scaling"][] = ["90%", "95%", "100%", "105%", "110%"];
@@ -30,7 +38,12 @@ export function ThemeSettings() {
     <Popover.Root>
       <Tooltip content="Appearance">
         <Popover.Trigger>
-          <IconButton variant="ghost" size="2" className="app-touch-target" aria-label="Appearance settings">
+          <IconButton
+            variant="ghost"
+            size="2"
+            className="app-touch-target"
+            aria-label="Appearance settings"
+          >
             <ColorWheelIcon />
           </IconButton>
         </Popover.Trigger>
@@ -49,9 +62,15 @@ export function ThemeSettings() {
               value={mode}
               onValueChange={(value) => setMode(value as typeof mode)}
             >
-              <SegmentedControl.Item className="app-touch-target" value="light">Light</SegmentedControl.Item>
-              <SegmentedControl.Item className="app-touch-target" value="dark">Dark</SegmentedControl.Item>
-              <SegmentedControl.Item className="app-touch-target" value="system">System</SegmentedControl.Item>
+              <SegmentedControl.Item className="app-touch-target" value="light">
+                Light
+              </SegmentedControl.Item>
+              <SegmentedControl.Item className="app-touch-target" value="dark">
+                Dark
+              </SegmentedControl.Item>
+              <SegmentedControl.Item className="app-touch-target" value="system">
+                System
+              </SegmentedControl.Item>
             </SegmentedControl.Root>
           </Flex>
 
@@ -143,7 +162,9 @@ export function ThemeSettings() {
             <Select.Root
               size="1"
               value={config.scaling}
-              onValueChange={(value) => setConfig({ scaling: value as ThemeConfigValue["scaling"] })}
+              onValueChange={(value) =>
+                setConfig({ scaling: value as ThemeConfigValue["scaling"] })
+              }
             >
               <Select.Trigger className="app-touch-target" />
               <Select.Content>
@@ -167,8 +188,12 @@ export function ThemeSettings() {
                 setConfig({ panelBackground: value as ThemeConfigValue["panelBackground"] })
               }
             >
-              <SegmentedControl.Item className="app-touch-target" value="solid">Solid</SegmentedControl.Item>
-              <SegmentedControl.Item className="app-touch-target" value="translucent">Translucent</SegmentedControl.Item>
+              <SegmentedControl.Item className="app-touch-target" value="solid">
+                Solid
+              </SegmentedControl.Item>
+              <SegmentedControl.Item className="app-touch-target" value="translucent">
+                Translucent
+              </SegmentedControl.Item>
             </SegmentedControl.Root>
           </Flex>
         </Flex>

@@ -1,5 +1,5 @@
 /**
- * @natstack/types - Shared type definitions for NatStack.
+ * @vibez1/types - Shared type definitions for Vibez1.
  *
  * This is the canonical source for all types shared between the app (src/)
  * and workspace packages. Zero runtime dependencies.

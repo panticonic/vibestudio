@@ -8,13 +8,13 @@
  * manipulate slots via runtime.*, not directly here.
  */
 
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
-import type { IndexablePanel, PanelSearchResult } from "@natstack/shared/panelSearchTypes";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+import type { IndexablePanel, PanelSearchResult } from "@vibez1/shared/panelSearchTypes";
 import {
   WORKSPACE_STATE_READ_POLICY as READ_POLICY,
   workspaceStateMethods,
-} from "@natstack/shared/serviceSchemas/workspaceState";
+} from "@vibez1/shared/serviceSchemas/workspaceState";
 import type { DODispatch } from "../doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 

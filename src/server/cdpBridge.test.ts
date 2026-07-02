@@ -3,8 +3,8 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import { CdpBridge } from "./cdpBridge.js";
-import type { PanelRuntimeLeaseChangedEvent } from "@natstack/shared/panel/panelLease";
-import { asPanelEntityId, asPanelSlotId } from "@natstack/shared/panel/ids";
+import type { PanelRuntimeLeaseChangedEvent } from "@vibez1/shared/panel/panelLease";
+import { asPanelEntityId, asPanelSlotId } from "@vibez1/shared/panel/ids";
 
 type BridgeHarness = {
   bridge: CdpBridge;
@@ -155,8 +155,8 @@ async function connectHostProviderOnly(
   );
   harness.sockets.push(ws);
   await waitForOpen(ws);
-  ws.send(JSON.stringify({ type: "natstack:cdp-auth", token: "admin-token" }));
-  await expect(waitForJson(ws)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+  ws.send(JSON.stringify({ type: "vibez1:cdp-auth", token: "admin-token" }));
+  await expect(waitForJson(ws)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
   return ws;
 }
 
@@ -180,21 +180,21 @@ describe("CdpBridge authentication", () => {
     const client = new WebSocket(endpoint!.wsEndpoint);
     harness.sockets.push(client);
     await waitForOpen(client);
-    client.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint!.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    client.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint!.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
   });
 
   it("builds public wss endpoints from the configured gateway host", async () => {
     const harness = await createHarness({
       protocol: "https",
-      externalHost: "natstack.example.com",
+      externalHost: "vibez1.example.com",
       port: 443,
     });
     await connectHostProvider(harness, "desktop-host");
 
     const endpoint = await waitForEndpoint(harness);
 
-    expect(endpoint.wsEndpoint).toBe("wss://natstack.example.com:443/cdp/panel:tree/browser-1");
+    expect(endpoint.wsEndpoint).toBe("wss://vibez1.example.com:443/cdp/panel:tree/browser-1");
   });
 
   it("does not accept legacy query-token authentication", async () => {
@@ -225,8 +225,8 @@ describe("CdpBridge authentication", () => {
     const client = new WebSocket(endpoint.wsEndpoint);
     harness.sockets.push(client);
     await waitForOpen(client);
-    client.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    client.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
 
     client.send(
       JSON.stringify({ id: 7, method: "Runtime.evaluate", params: { expression: "2+2" } })
@@ -248,8 +248,8 @@ describe("CdpBridge authentication", () => {
     const client = new WebSocket(endpoint.wsEndpoint);
     harness.sockets.push(client);
     await waitForOpen(client);
-    client.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    client.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
 
     client.send(
       JSON.stringify({
@@ -505,8 +505,8 @@ describe("CdpBridge authentication", () => {
     const client = new WebSocket(endpoint.wsEndpoint);
     harness.sockets.push(client);
     await waitForOpen(client);
-    client.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    client.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
 
     holder = "headless-host";
     harness.bridge.handleRuntimeLeaseChanged(
@@ -550,8 +550,8 @@ describe("CdpBridge authentication", () => {
     const client = new WebSocket(endpoint.wsEndpoint);
     harness.sockets.push(client);
     await waitForOpen(client);
-    client.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    client.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
 
     harness.bridge.handleRuntimeLeaseChanged(
       leaseChangedEvent("panel:tree/browser-1", "desktop-host", "desktop-host")
@@ -735,8 +735,8 @@ describe("CdpBridge authentication", () => {
     const client = new WebSocket(endpoint.wsEndpoint);
     harness.sockets.push(client);
     await waitForOpen(client);
-    client.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(client)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    client.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(client)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
 
     client.send(JSON.stringify({ id: 42, method: "Runtime.evaluate" }));
     const command = await waitForJson(provider);
@@ -781,15 +781,15 @@ describe("CdpBridge authentication", () => {
     const clientA = new WebSocket(endpoint.wsEndpoint);
     harness.sockets.push(clientA);
     await waitForOpen(clientA);
-    clientA.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
-    await expect(waitForJson(clientA)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    clientA.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(clientA)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
 
     const endpointB = await waitForEndpoint(harness);
     const clientB = new WebSocket(endpointB.wsEndpoint);
     harness.sockets.push(clientB);
     await waitForOpen(clientB);
-    clientB.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpointB.token }));
-    await expect(waitForJson(clientB)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+    clientB.send(JSON.stringify({ type: "vibez1:cdp-auth", token: endpointB.token }));
+    await expect(waitForJson(clientB)).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
 
     // Second client must NOT emit another pin.
     expect(pinChanges).toEqual([{ targetId: "panel:tree/browser-1", pinned: true }]);

@@ -3,8 +3,8 @@ import {
   ServiceDispatcher,
   type ServiceContext,
   type VerifiedCodeIdentity,
-} from "@natstack/shared/serviceDispatcher";
-import type { RpcEnvelope, RpcMessage } from "@natstack/rpc";
+} from "@vibez1/shared/serviceDispatcher";
+import type { RpcEnvelope, RpcMessage } from "@vibez1/rpc";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
@@ -49,7 +49,7 @@ function expectSentRpcMessage(
   message: RpcMessage
 ): void {
   expect(wc.send).toHaveBeenCalledWith(
-    "natstack:rpc:message",
+    "vibez1:rpc:message",
     expect.objectContaining({
       from: "main",
       target,
@@ -133,7 +133,7 @@ describe("IpcDispatcher", () => {
       callAs,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -177,7 +177,7 @@ describe("IpcDispatcher", () => {
       onServerRpcResult,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: shellWc } as never,
       rpcEnvelope("shell", "shell", {
         type: "request",
@@ -227,7 +227,7 @@ describe("IpcDispatcher", () => {
       callAs,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: shellWc } as never,
       rpcEnvelope("shell", "shell", {
         type: "request",
@@ -272,7 +272,7 @@ describe("IpcDispatcher", () => {
       method: "workspace.getInfo",
       args: [],
     } satisfies RpcMessage);
-    ipcHandlers.get("natstack:rpc:send")?.({ sender: panelWc } as never, envelope as never);
+    ipcHandlers.get("vibez1:rpc:send")?.({ sender: panelWc } as never, envelope as never);
 
     await vi.waitFor(() => {
       expect(openPanelSession).toHaveBeenCalledWith("entity-1", "conn-1");
@@ -292,7 +292,7 @@ describe("IpcDispatcher", () => {
       getPanelRuntimeConnection: () => undefined,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: panelWc } as never,
       rpcEnvelope("panel-2", "panel", {
         type: "request",
@@ -305,7 +305,7 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() => {
       expect(panelWc.send).toHaveBeenCalledWith(
-        "natstack:rpc:message",
+        "vibez1:rpc:message",
         expect.objectContaining({
           message: expect.objectContaining({ type: "response", requestId: "req-2" }),
         })
@@ -326,7 +326,7 @@ describe("IpcDispatcher", () => {
       authorizeAppServerCall,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -362,7 +362,7 @@ describe("IpcDispatcher", () => {
       authorizeAppServerCall,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -411,7 +411,7 @@ describe("IpcDispatcher", () => {
       authorizeAppServerCall: vi.fn(),
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", request, {
         idempotencyKey: "idem-1",
@@ -457,7 +457,7 @@ describe("IpcDispatcher", () => {
       },
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -491,7 +491,7 @@ describe("IpcDispatcher", () => {
       addMessageListener,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -519,7 +519,7 @@ describe("IpcDispatcher", () => {
     );
     emitToApp(eventEnvelope);
 
-    expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", eventEnvelope);
+    expect(appWc.send).toHaveBeenCalledWith("vibez1:rpc:message", eventEnvelope);
   });
 
   it("registers an IPC event subscriber for app-backed shell views", async () => {
@@ -529,7 +529,7 @@ describe("IpcDispatcher", () => {
       getWebContentsForCaller: () => appWc,
     });
 
-    ipcHandlers.get("natstack:rpc:send")?.(
+    ipcHandlers.get("vibez1:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",

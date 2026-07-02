@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { RpcClient } from "@natstack/rpc";
+import type { RpcClient } from "@vibez1/rpc";
 import { executeSandbox } from "./sandbox.js";
 import { createHostedRuntime, type RuntimeHost } from "@workspace/runtime/hosted";
 import * as portableHelpers from "@workspace/runtime/portable";
-import { evalImportableSurface, EVAL_AMBIENT_ONLY } from "@natstack/shared/runtimeSurface.eval";
+import { evalImportableSurface, EVAL_AMBIENT_ONLY } from "@vibez1/shared/runtimeSurface.eval";
 
 /**
  * Surface contract the EvalDO depends on: the eval engine resolves

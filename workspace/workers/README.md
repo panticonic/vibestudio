@@ -2,7 +2,7 @@
 
 This guide covers building Durable Object (DO) workers that participate in AI chat channels. Workers run in workerd (Cloudflare's V8 isolate runtime) and use `this.sql` state that survives across invocations.
 
-NatStack runs Pi (`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`)
+Vibez1 runs Pi (`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`)
 in-process inside each agent worker DO — there is no harness child process
 layer. See `docs/pi-architecture.md` for the full architectural picture and
 `docs/agentic-architecture.md` for the higher-level overview.
@@ -36,7 +36,7 @@ workspace/workers/my-agent/
 ```json
 {
   "name": "@workspace-workers/my-agent",
-  "natstack": {
+  "vibez1": {
     "entry": "index.ts",
     "durable": {
       "classes": [{ "className": "MyAgentWorker" }]
@@ -77,10 +77,10 @@ keeping the same PubSub fan-out/replay API and the same UI reducer path.
 ### Userland Services
 
 Worker package.json only declares DO classes (workerd binding) via
-`natstack.durable.classes`. Workspace-level declarations — singletons,
-services, and HTTP routes — live in `workspace/meta/natstack.yml`.
+`vibez1.durable.classes`. Workspace-level declarations — singletons,
+services, and HTTP routes — live in `workspace/meta/vibez1.yml`.
 
-DO-backed service (in `workspace/meta/natstack.yml`):
+DO-backed service (in `workspace/meta/vibez1.yml`):
 
 ```yaml
 singletonObjects:
@@ -127,7 +127,7 @@ if (api.kind === "worker") {
 A `services[].durableObject` or `routes[].durableObject` entry referencing a
 DO class with no matching `singletonObjects` row is rejected at workspace-load
 time. The package.json no longer carries `services` or `routes` arrays — those
-sections live exclusively in `natstack.yml`.
+sections live exclusively in `vibez1.yml`.
 
 ### Entry Point (index.ts)
 
@@ -188,7 +188,7 @@ The default reads from a per-channel `state` table key
 
 ### System prompt
 
-The final prompt is composed at `PiRunner` init from the NatStack base prompt,
+The final prompt is composed at `PiRunner` init from the Vibez1 base prompt,
 `workspace/meta/AGENTS.md`, the generated skill index, and optional
 subscription config (`systemPrompt` / `systemPromptMode`). Model/runtime
 customization is via effective getters plus the `getDefault...()` hooks.
@@ -417,7 +417,7 @@ if (config?.model) {
 
 Subscription config can override `model`, `thinkingLevel`, `systemPrompt`, and
 `systemPromptMode` via `extraConfig`. The final prompt is composed from the
-NatStack base prompt, `workspace/meta/AGENTS.md`, the generated skill index,
+Vibez1 base prompt, `workspace/meta/AGENTS.md`, the generated skill index,
 and any subscription prompt override.
 
 ## 10. Event Flow
@@ -519,7 +519,7 @@ import type { ChannelEvent, ParticipantDescriptor, TurnInput } from "@workspace/
 export class CodeReviewWorker extends AgentWorkerBase {
   static override schemaVersion = 3;
 
-  // The system prompt is composed from NatStack base + workspace/meta/AGENTS.md.
+  // The system prompt is composed from Vibez1 base + workspace/meta/AGENTS.md.
   // Override getDefaultModel() to select a specific model for code review:
   protected override getDefaultModel(): string {
     return "openai-codex:gpt-5.5";

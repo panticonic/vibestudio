@@ -7,7 +7,7 @@
  * It's a safety net; on a clean run there is nothing to do.
  */
 
-import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 import type { DODispatch, DORef } from "../doDispatch.js";
 
 export interface CleanupReaperDeps {

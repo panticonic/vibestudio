@@ -1,12 +1,12 @@
 # Panel System Overview
 
-NatStack panels are dynamically loaded TypeScript apps that run in isolated webviews. Panels navigate to each other via URL-based navigation.
+Vibez1 panels are dynamically loaded TypeScript apps that run in isolated webviews. Panels navigate to each other via URL-based navigation.
 
 ## Panel Structure
 
 ```
 my-panel/
-├── package.json      # Manifest with natstack field (required)
+├── package.json      # Manifest with vibez1 field (required)
 ├── index.tsx         # Entry point
 ├── contract.ts       # Optional: RPC contract for typed parent communication
 └── style.css         # Optional: Styles
@@ -20,7 +20,7 @@ my-panel/
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "natstack": {
+  "vibez1": {
     "title": "My Panel",
     "entry": "index.tsx",
     "exposeModules": ["@radix-ui/colors"]
@@ -41,14 +41,14 @@ my-panel/
 | `template` | string | `"default"` | Workspace template name (see below) |
 | `sourcemap` | boolean | `true` | Include inline source maps |
 | `externals` | Record | `{}` | Import map entries (externalized from bundle) |
-| `exposeModules` | string[] | `[]` | Modules registered on `__natstackModuleMap__` |
+| `exposeModules` | string[] | `[]` | Modules registered on `__vibez1ModuleMap__` |
 | `dedupeModules` | string[] | `[]` | Additional packages to deduplicate (react/react-dom always deduped) |
 | `shell` | boolean | `false` | Grants shell service access (about pages) |
 | `hiddenInLauncher` | boolean | `false` | Hide from launcher UI |
 
 ## Workspace Templates
 
-The `template` field in the natstack config selects a workspace template from `workspace/templates/{name}/`. Each template provides a `template.json` (framework config) and an `index.html` (HTML shell that loads `bundle.js` into `#root`). The template defines the framework, so panels do not need a separate `framework` field.
+The `template` field in the vibez1 config selects a workspace template from `workspace/templates/{name}/`. Each template provides a `template.json` (framework config) and an `index.html` (HTML shell that loads `bundle.js` into `#root`). The template defines the framework, so panels do not need a separate `framework` field.
 
 Three frameworks are supported, one per template:
 
@@ -65,7 +65,7 @@ Most panels should use the `default` (React) template. To use another framework,
 The build's `src/server/buildV2/templateResolver.ts` picks the HTML shell and framework from the panel's source in this order:
 
 1. **Panel owns an `index.html`** → it is self-contained: its own HTML is used, and the default template's framework does **not** bleed in.
-2. **Otherwise, an explicit `natstack.template`** → that template's `index.html` and `template.json` are used.
+2. **Otherwise, an explicit `vibez1.template`** → that template's `index.html` and `template.json` are used.
 3. **Otherwise, the default template** (`templates/default/`, React) is used.
 
 The framework id is read from the chosen template's `template.json` (`{"framework": ...}`). When no template applies (a self-contained panel, or no template at all), it falls back to dependency auto-detection: `@workspace/react` ⇒ `react`, `@workspace/svelte` ⇒ `svelte`, neither ⇒ `vanilla`.

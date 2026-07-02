@@ -3,11 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
-import { parseCanonicalKey } from "@natstack/shared/canonicalKey";
+import { parseCanonicalKey } from "@vibez1/shared/canonicalKey";
 import { UserlandApprovalGrantStore, keyFor } from "./userlandApprovalGrantStore.js";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-userland-grants-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-userland-grants-"));
 }
 
 const workerAlpha = {
@@ -110,9 +110,9 @@ describe("UserlandApprovalGrantStore", () => {
   it("matches internal version-scoped grants by concrete caller id", async () => {
     const store = new UserlandApprovalGrantStore({ statePath: tempDir() });
     const evalOne = {
-      callerId: "do:natstack/internal:EvalDO:one",
+      callerId: "do:vibez1/internal:EvalDO:one",
       callerKind: "do" as const,
-      repoPath: "natstack/internal",
+      repoPath: "vibez1/internal",
       effectiveVersion: "internal",
     };
     await store.record(evalOne, { id: "team-x:foo" }, "allow", 10, undefined, "version");
@@ -125,7 +125,7 @@ describe("UserlandApprovalGrantStore", () => {
       store.lookup(
         {
           ...evalOne,
-          callerId: "do:natstack/internal:EvalDO:two",
+          callerId: "do:vibez1/internal:EvalDO:two",
         },
         "team-x:foo"
       )

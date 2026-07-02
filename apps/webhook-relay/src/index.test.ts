@@ -9,10 +9,10 @@ import worker, { type Env } from "./index";
 function makeEnv(overrides: Partial<Env> = {}): { env: Env; stub: { fetch: ReturnType<typeof vi.fn> } } {
   const stub = { fetch: vi.fn(async () => new Response("from-do", { status: 222 })) };
   const env = {
-    NATSTACK_RELAY_SIGNING_SECRET: "relay-secret",
-    NATSTACK_APPLE_APP_ID: "ABCDE12345.com.natstack.mobile",
-    NATSTACK_ANDROID_PACKAGE_NAME: "com.natstack.mobile",
-    NATSTACK_ANDROID_SHA256_CERT_FINGERPRINTS: "aa:bb:cc",
+    VIBEZ1_RELAY_SIGNING_SECRET: "relay-secret",
+    VIBEZ1_APPLE_APP_ID: "ABCDE12345.com.vibez1.mobile",
+    VIBEZ1_ANDROID_PACKAGE_NAME: "com.vibez1.mobile",
+    VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS: "aa:bb:cc",
     RELAY_REGISTRY: {
       idFromName: vi.fn(() => "global-id"),
       get: vi.fn(() => stub),
@@ -80,7 +80,7 @@ describe("webhook relay Worker — universal-link host", () => {
     expect(resp.status).toBe(200);
     expect(resp.headers.get("content-type")).toBe("application/json");
     const doc = (await resp.json()) as any;
-    expect(doc.applinks.details[0].appIDs).toEqual(["ABCDE12345.com.natstack.mobile"]);
+    expect(doc.applinks.details[0].appIDs).toEqual(["ABCDE12345.com.vibez1.mobile"]);
     expect(doc.applinks.details[0].components[0]["/"]).toBe("/oauth/callback/*");
   });
 
@@ -89,12 +89,12 @@ describe("webhook relay Worker — universal-link host", () => {
     const resp = await worker.fetch(new Request("https://hooks.snugenv.com/.well-known/assetlinks.json"), env);
     expect(resp.status).toBe(200);
     const doc = (await resp.json()) as any;
-    expect(doc[0].target.package_name).toBe("com.natstack.mobile");
+    expect(doc[0].target.package_name).toBe("com.vibez1.mobile");
     expect(doc[0].target.sha256_cert_fingerprints).toEqual(["AA:BB:CC"]);
   });
 
   it("fails loud (503) when the universal-link host is unconfigured", async () => {
-    const { env } = makeEnv({ NATSTACK_APPLE_APP_ID: undefined });
+    const { env } = makeEnv({ VIBEZ1_APPLE_APP_ID: undefined });
     const resp = await worker.fetch(
       new Request("https://hooks.snugenv.com/.well-known/apple-app-site-association"),
       env,

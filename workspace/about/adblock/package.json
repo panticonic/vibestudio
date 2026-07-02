@@ -2,7 +2,7 @@
   "name": "@workspace-about/adblock",
   "version": "0.1.0",
   "private": true,
-  "natstack": {
+  "vibez1": {
     "title": "Ad Blocking",
     "description": "Configure ad and tracker blocking",
     "hiddenInLauncher": false,

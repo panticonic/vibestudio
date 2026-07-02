@@ -2,5 +2,5 @@ export type {
   RuntimeSurface,
   RuntimeSurfaceEntry,
   RuntimeSurfaceTarget,
-} from "@natstack/shared/runtimeSurface";
-export { namespaceEntry, valueEntry } from "@natstack/shared/runtimeSurface";
+} from "@vibez1/shared/runtimeSurface";
+export { namespaceEntry, valueEntry } from "@vibez1/shared/runtimeSurface";

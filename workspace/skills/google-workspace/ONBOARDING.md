@@ -1,7 +1,7 @@
 # Google Workspace Onboarding Flow
 
 This document is for onboarding agents. It describes how to guide a user from
-no Google configuration to a verified NatStack Google Workspace connection.
+no Google configuration to a verified Vibez1 Google Workspace connection.
 
 ## Principles
 
@@ -55,7 +55,7 @@ include these deep-linked actions:
 3. Configure OAuth branding.
 4. Open OAuth audience and publish to Production.
 5. Create OAuth credentials with application type Desktop app.
-6. Return to NatStack and run `configureGoogleOAuthClient()` so the trusted
+6. Return to Vibez1 and run `configureGoogleOAuthClient()` so the trusted
    approval UI can collect `installed.client_id` and `installed.client_secret`.
 
 Do not say that Google verification is required for local development. It is
@@ -81,7 +81,7 @@ return result;
 ```
 
 If the browser flow succeeds, keep the returned `connectionId`.
-The helper requests Google offline access and opts into NatStack refresh-token
+The helper requests Google offline access and opts into Vibez1 refresh-token
 persistence. If an existing credential reports `credential-expired` or warns
 that no refresh token is stored, replace it with `connectGoogle({ force: true })`.
 

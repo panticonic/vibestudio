@@ -13,8 +13,8 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
-import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@natstack/shared/workspace/sourceDirs";
-import type { PanelLifecycleResult } from "@natstack/shared/types";
+import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@vibez1/shared/workspace/sourceDirs";
+import type { PanelLifecycleResult } from "@vibez1/shared/types";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,11 +77,11 @@ function getTestEnv(testRoot: string): Record<string, string> {
 function getCentralDataDirFromEnv(env: Record<string, string>): string {
   switch (process.platform) {
     case "win32":
-      return path.join(env.APPDATA!, "natstack");
+      return path.join(env.APPDATA!, "vibez1");
     case "darwin":
-      return path.join(env.HOME!, "Library", "Application Support", "natstack");
+      return path.join(env.HOME!, "Library", "Application Support", "vibez1");
     default:
-      return path.join(env.XDG_CONFIG_HOME!, "natstack");
+      return path.join(env.XDG_CONFIG_HOME!, "vibez1");
   }
 }
 
@@ -112,7 +112,7 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
 
 function getWorkspaceTemplateDir(projectRoot: string): string {
   const templateDir = path.join(projectRoot, "workspace");
-  if (!fs.existsSync(path.join(templateDir, "meta/natstack.yml"))) {
+  if (!fs.existsSync(path.join(templateDir, "meta/vibez1.yml"))) {
     throw new Error(`Workspace template not found at ${templateDir}`);
   }
   return templateDir;
@@ -144,7 +144,7 @@ function initializeUnitGitRepos(sourceRoot: string): void {
       cwd: unitDir,
       stdio: "ignore",
     });
-    execFileSync("git", ["config", "user.name", "NatStack E2E"], { cwd: unitDir, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "Vibez1 E2E"], { cwd: unitDir, stdio: "ignore" });
     execFileSync("git", ["add", "-A"], { cwd: unitDir, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "Initial e2e workspace snapshot"], {
       cwd: unitDir,
@@ -156,7 +156,7 @@ function initializeUnitGitRepos(sourceRoot: string): void {
 export function createManagedTestWorkspace(projectRoot?: string): string {
   const resolvedProjectRoot = projectRoot ?? path.resolve(__dirname, "../..");
   const templateDir = getWorkspaceTemplateDir(resolvedProjectRoot);
-  const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-e2e-"));
+  const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-e2e-"));
   const env = getTestEnv(testRoot);
   const workspaceName = `e2e_${crypto.randomBytes(6).toString("hex")}`;
   const workspaceDir = path.join(getCentralDataDirFromEnv(env), "workspaces", workspaceName);
@@ -195,7 +195,7 @@ export function removeManagedTestWorkspace(workspaceDir: string): void {
 }
 
 /**
- * Launch the Natstack Electron app with an isolated test workspace.
+ * Launch the vibez1 Electron app with an isolated test workspace.
  *
  * @example
  * ```typescript
@@ -251,7 +251,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     env: {
       ...process.env,
       NODE_ENV: "development",
-      NATSTACK_TEST_MODE: "1",
+      VIBEZ1_TEST_MODE: "1",
       // Disable GPU acceleration for CI environments
       ELECTRON_DISABLE_GPU: "1",
       ELECTRON_DISABLE_SANDBOX: "1",
@@ -334,7 +334,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
 function cleanupKnownChildProcesses(mainPid: number | undefined): void {
   if (!mainPid) return;
   if (process.platform === "win32") return;
-  const workerdConfigDir = `/tmp/natstack-workerd-${mainPid}/config.capnp`;
+  const workerdConfigDir = `/tmp/vibez1-workerd-${mainPid}/config.capnp`;
   for (const pid of findPidsByCommand(workerdConfigDir)) {
     try {
       process.kill(pid, "SIGTERM");
@@ -447,7 +447,7 @@ export async function getPanelTree(
   return app.evaluate(() => {
     const testApi = (globalThis as { __testApi?: { getPanelTree: () => unknown[] } }).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getPanelTree();
   }) as Promise<
@@ -463,7 +463,7 @@ export async function getFocusedPanelId(app: ElectronApplication): Promise<strin
     const testApi = (globalThis as { __testApi?: { getFocusedPanelId: () => string | null } })
       .__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getFocusedPanelId();
   });
@@ -480,7 +480,7 @@ export async function getFocusedPanelWebContentsId(
       globalThis as { __testApi?: { getFocusedPanelWebContentsId: () => string | null } }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getFocusedPanelWebContentsId();
   });
@@ -514,7 +514,7 @@ export async function createPanel(
         }
       ).__testApi;
       if (!testApi) {
-        throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+        throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
       }
       return testApi.createPanel(parentId, source, options);
     },
@@ -530,7 +530,7 @@ export async function closePanel(app: ElectronApplication, panelId: string): Pro
     const testApi = (globalThis as { __testApi?: { closePanel: (id: string) => Promise<void> } })
       .__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.closePanel(id);
   }, panelId);
@@ -550,7 +550,7 @@ export async function reloadPanel(
       }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.reloadPanel(id);
   }, panelId);
@@ -564,7 +564,7 @@ export async function isPanelLoaded(app: ElectronApplication, panelId: string): 
     const testApi = (globalThis as { __testApi?: { isPanelLoaded: (id: string) => boolean } })
       .__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.isPanelLoaded(id);
   }, panelId);
@@ -576,7 +576,7 @@ export async function getPanelText(app: ElectronApplication, panelId: string): P
       globalThis as { __testApi?: { getPanelText: (id: string) => Promise<string> } }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getPanelText(id);
   }, panelId);
@@ -588,7 +588,7 @@ export async function getPanelHtml(app: ElectronApplication, panelId: string): P
       globalThis as { __testApi?: { getPanelHtml: (id: string) => Promise<string> } }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getPanelHtml(id);
   }, panelId);
@@ -631,7 +631,7 @@ export async function startPanelDiagnostics(
       globalThis as { __testApi?: { startPanelDiagnostics: (id: string) => Promise<void> } }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.startPanelDiagnostics(id);
   }, panelId);
@@ -646,7 +646,7 @@ export async function getPanelDiagnostics(
       globalThis as { __testApi?: { getPanelDiagnostics: (id: string) => PanelDiagnostic[] } }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getPanelDiagnostics(id);
   }, panelId);
@@ -663,7 +663,7 @@ export async function getPanelLayoutAudit(
       }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getPanelLayoutAudit(id);
   }, panelId);
@@ -695,7 +695,7 @@ export async function getNativePanelSlotDebugInfo(app: ElectronApplication): Pro
       }
     ).__testApi;
     if (!testApi) {
-      throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+      throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
     }
     return testApi.getNativePanelSlotDebugInfo();
   });
@@ -714,7 +714,7 @@ export async function clickPanelSelector(
         }
       ).__testApi;
       if (!testApi) {
-        throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+        throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
       }
       return testApi.clickPanelSelector(args.panelId, args.selector);
     },
@@ -738,7 +738,7 @@ export async function clickPanelText(
         }
       ).__testApi;
       if (!testApi) {
-        throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+        throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
       }
       return testApi.clickPanelText(args.panelId, args.selector, args.text);
     },
@@ -761,7 +761,7 @@ export async function executePanelScript<T = unknown>(
         }
       ).__testApi;
       if (!testApi) {
-        throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+        throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
       }
       return testApi.executePanelScript<T>(args.panelId, args.script);
     },
@@ -787,7 +787,7 @@ export async function getPanelSelectorWindowPoint(
         }
       ).__testApi;
       if (!testApi) {
-        throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+        throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
       }
       return testApi.getPanelSelectorWindowPoint(args.panelId, args.selector);
     },
@@ -808,7 +808,7 @@ export async function typePanelText(
         }
       ).__testApi;
       if (!testApi) {
-        throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+        throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
       }
       return testApi.typePanelText(args.panelId, args.text);
     },
@@ -845,7 +845,7 @@ export async function callTerminalPanel<T = unknown>(
         }
       ).__testApi;
       if (!testApi) {
-        throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
+        throw new Error("Test API not available. Make sure VIBEZ1_TEST_MODE=1 is set.");
       }
       return testApi.callTerminalPanel(request.panelId, request.method, request.args) as Promise<T>;
     },

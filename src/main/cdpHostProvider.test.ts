@@ -85,10 +85,10 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
-      { type: "natstack:cdp-auth", token: "token" },
+      { type: "vibez1:cdp-auth", token: "token" },
       { type: "cdp:register", targetId: "panel-1", tabId: 42 },
     ]);
   });
@@ -129,7 +129,7 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     await provider.handleProviderMessageForTest({
       type: "cdp:command",
@@ -162,7 +162,7 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     await provider.handleProviderMessageForTest({
       type: "cdp:command",
@@ -188,7 +188,7 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
     debuggerApi.attach.mockImplementationOnce(() => {
       throw new Error("debugger backend unavailable");
     });
@@ -230,7 +230,7 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
     debuggerApi.sendCommand
       .mockRejectedValueOnce(new Error("target closed while handling command"))
       .mockResolvedValueOnce({ ok: true });
@@ -318,7 +318,7 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     await provider.handleProviderMessageForTest({
       type: "cdp:command",
@@ -342,7 +342,7 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     await provider.handleProviderMessageForTest({
       type: "cdp:command",
@@ -359,7 +359,7 @@ describe("CdpHostProvider", () => {
     expect(debuggerApi.detach).toHaveBeenCalledTimes(1);
 
     socket.sent = [];
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([]);
   });
@@ -369,7 +369,7 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     await provider.handleProviderMessageForTest({
       type: "cdp:command",
@@ -386,7 +386,7 @@ describe("CdpHostProvider", () => {
     expect(debuggerApi.detach).not.toHaveBeenCalled();
 
     socket.sent = [];
-    socket.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    socket.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     expect(socket.sent.map((entry) => JSON.parse(entry))).toEqual([
       { type: "cdp:register", targetId: "panel-1", tabId: 42 },
@@ -687,17 +687,17 @@ describe("CdpHostProvider", () => {
     provider.registerTarget("panel-1", 42);
     provider.start();
     sockets[0]!.emit("open");
-    sockets[0]!.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    sockets[0]!.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
     sockets[0]!.close();
 
     await vi.advanceTimersByTimeAsync(25);
     expect(sockets).toHaveLength(2);
 
     sockets[1]!.emit("open");
-    sockets[1]!.emit("message", JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+    sockets[1]!.emit("message", JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
 
     expect(sockets[1]!.sent.map((entry) => JSON.parse(entry))).toEqual([
-      { type: "natstack:cdp-auth", token: "token" },
+      { type: "vibez1:cdp-auth", token: "token" },
       { type: "cdp:register", targetId: "panel-1", tabId: 42 },
     ]);
 

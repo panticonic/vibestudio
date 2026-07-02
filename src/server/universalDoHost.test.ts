@@ -122,8 +122,8 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       );
       return entry?.[1] ?? null;
     },
-    workspacePath: mkdtempSync(join(tmpdir(), "natstack-udo-ws-")),
-    statePath: mkdtempSync(join(tmpdir(), "natstack-udo-state-")),
+    workspacePath: mkdtempSync(join(tmpdir(), "vibez1-udo-ws-")),
+    statePath: mkdtempSync(join(tmpdir(), "vibez1-udo-state-")),
     getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(59999),
     registerEgressCaller: () => {},
@@ -135,7 +135,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
 
   const gateway = createServer((req, res) => {
     const url = req.url ?? "";
-    const secret = req.headers["x-natstack-loader-secret"];
+    const secret = req.headers["x-vibez1-loader-secret"];
     if (url.startsWith("/_doversion/") || url.startsWith("/_docode/")) {
       if (secret !== manager.getLoaderSecret()) {
         res.writeHead(403);
@@ -186,7 +186,7 @@ async function createHarness(builds: Record<string, BuildResult>): Promise<Harne
       method: "POST",
       headers: {
         Authorization: "Bearer udo-gateway-token",
-        "X-NatStack-Dispatch-Secret": manager.getDispatchSecret(),
+        "X-Vibez1-Dispatch-Secret": manager.getDispatchSecret(),
         "Content-Type": "application/json",
       },
       body: "[]",
@@ -274,7 +274,7 @@ describe("UniversalDO facet host (real workerd)", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/_u/${encodeURIComponent(key)}`, {
         headers: {
           Authorization: "Bearer udo-gateway-token",
-          "X-NatStack-Dispatch-Secret": manager.getDispatchSecret(),
+          "X-Vibez1-Dispatch-Secret": manager.getDispatchSecret(),
         },
       });
       const timer = setTimeout(() => reject(new Error("WS timeout")), 8_000);

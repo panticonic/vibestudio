@@ -18,8 +18,8 @@
  * the whole way. Two adapter bugs (the {value,algorithm} fingerprint, channel-vs-
  * ICE open timing) were first caught here against the live native module.
  *
- * Gated behind NATSTACK_RUN_WEBRTC_E2E=1 (spawns wrangler dev + opens real UDP):
- *   NATSTACK_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-system.e2e.test.ts
+ * Gated behind VIBEZ1_RUN_WEBRTC_E2E=1 (spawns wrangler dev + opens real UDP):
+ *   VIBEZ1_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-system.e2e.test.ts
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -29,20 +29,20 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { CallerKind, ServiceContext, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
-import { TokenManager } from "@natstack/shared/tokenManager";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { RpcEnvelope } from "@natstack/rpc";
-import { createWebRtcTransport } from "@natstack/rpc/transports/webrtcClient";
-import { createWebRtcAnswererPipe } from "@natstack/rpc/transports/webrtcAnswerer";
-import { createSignalingClient } from "@natstack/rpc/transports/webrtcSignalingClient";
+import type { CallerKind, ServiceContext, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+import { TokenManager } from "@vibez1/shared/tokenManager";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { RpcEnvelope } from "@vibez1/rpc";
+import { createWebRtcTransport } from "@vibez1/rpc/transports/webrtcClient";
+import { createWebRtcAnswererPipe } from "@vibez1/rpc/transports/webrtcAnswerer";
+import { createSignalingClient } from "@vibez1/rpc/transports/webrtcSignalingClient";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/services/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
 import { createNodeDatachannelProvider } from "../src/main/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
 
-const RUN = process.env["NATSTACK_RUN_WEBRTC_E2E"] === "1";
+const RUN = process.env["VIBEZ1_RUN_WEBRTC_E2E"] === "1";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SIGNAL_PORT = 8798;
 const SIG = `ws://127.0.0.1:${SIGNAL_PORT}`;
@@ -138,7 +138,7 @@ async function bringUp(room: string, certFingerprint: string, certFile: string, 
 }
 
 describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + real DTLS + real RpcServer)", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-rtc-sys-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-rtc-sys-"));
   const cert = ensurePersistentCert({ certificatePemFile: path.join(tmp, "server.pem"), keyPemFile: path.join(tmp, "server.key") });
   let sys: System | null = null;
   let shellToken = "";

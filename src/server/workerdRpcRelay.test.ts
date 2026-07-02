@@ -70,7 +70,7 @@ describe("workerdRpcRelay", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer gateway-token",
-          "X-NatStack-Dispatch-Secret": "dispatch-secret",
+          "X-Vibez1-Dispatch-Secret": "dispatch-secret",
         }),
       })
     );

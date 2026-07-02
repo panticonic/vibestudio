@@ -5,16 +5,16 @@
  * with in-memory view state. getPanelInit() returns the bootstrap config
  * (incl. a fresh single-use auth.grantConnection token — never cache it).
  */
-import { PanelRegistry } from "@natstack/shared/panelRegistry";
-import { PanelManager } from "@natstack/shared/shell/panelManager";
-import type { CreatePanelResult, NavigatePanelOptions } from "@natstack/shared/shell/panelManager";
-import { asPanelSlotId, type PanelSlotId } from "@natstack/shared/panel/ids";
-import { buildPanelUrl } from "@natstack/shared/panelFactory";
-import type { PanelRuntimeAcquireResult } from "@natstack/shared/panel/panelLease";
+import { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import { PanelManager } from "@vibez1/shared/shell/panelManager";
+import type { CreatePanelResult, NavigatePanelOptions } from "@vibez1/shared/shell/panelManager";
+import { asPanelSlotId, type PanelSlotId } from "@vibez1/shared/panel/ids";
+import { buildPanelUrl } from "@vibez1/shared/panelFactory";
+import type { PanelRuntimeAcquireResult } from "@vibez1/shared/panel/panelLease";
 import {
   createPanelRuntimeLeaseRequest,
   formatPanelRuntimeLeaseDeniedMessage,
-} from "@natstack/shared/panel/panelLease";
+} from "@vibez1/shared/panel/panelLease";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -22,19 +22,19 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@natstack/shared/shell/workspaceStateClient";
+} from "@vibez1/shared/shell/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-} from "@natstack/shared/runtime/entitySpec";
-import type { RpcClient } from "@natstack/rpc";
+} from "@vibez1/shared/runtime/entitySpec";
+import type { RpcClient } from "@vibez1/rpc";
 
 export interface PanelLoadInfo {
   panelUrl: string;
   contextId: string;
   source: string;
-  /** Bootstrap payload incl. connectionId — inject as __natstackPanelInit. */
+  /** Bootstrap payload incl. connectionId — inject as __vibez1PanelInit. */
   panelInit: Record<string, unknown>;
 }
 

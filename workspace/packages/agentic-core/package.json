@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*",
+    "@vibez1/shared": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/model-catalog": "workspace:*",

@@ -1,4 +1,4 @@
 export function applyStateArgsSnapshot(next: Record<string, unknown>): void {
-  (window as { __natstackStateArgs?: Record<string, unknown> }).__natstackStateArgs = next;
-  window.dispatchEvent(new CustomEvent("natstack:stateArgsChanged", { detail: next }));
+  (window as { __vibez1StateArgs?: Record<string, unknown> }).__vibez1StateArgs = next;
+  window.dispatchEvent(new CustomEvent("vibez1:stateArgsChanged", { detail: next }));
 }

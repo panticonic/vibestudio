@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, type ServiceContext } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
 import type { StoredRemote } from "./remoteCredStore.js";
 
 const mocks = vi.hoisted(() => ({
   app: {
     relaunch: vi.fn(),
     exit: vi.fn(),
-    getPath: vi.fn(() => "/tmp/natstack-remote-cred-test"),
+    getPath: vi.fn(() => "/tmp/vibez1-remote-cred-test"),
   },
   safeStorage: {
     encryptString: vi.fn((s: string) => Buffer.from(s, "utf8")),
@@ -111,7 +111,7 @@ describe("remoteCredService", () => {
   });
 
   it("can disable remote credential persistence for the dev WebRTC harness", async () => {
-    vi.stubEnv("NATSTACK_DISABLE_REMOTE_CRED_PERSISTENCE", "1");
+    vi.stubEnv("VIBEZ1_DISABLE_REMOTE_CRED_PERSISTENCE", "1");
     const { persistRotatedRemoteCredential, saveStoredRemote } =
       await import("./remoteCredService.js");
 

@@ -8,10 +8,10 @@ import {
   ServiceDispatcher,
   ServiceError,
   parseServiceMethod,
-} from "@natstack/shared/serviceDispatcher";
-import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
-import type { ServiceContext, ServiceHandler } from "@natstack/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+} from "@vibez1/shared/serviceDispatcher";
+import { fsMethods } from "@vibez1/shared/serviceSchemas/fs";
+import type { ServiceContext, ServiceHandler } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 

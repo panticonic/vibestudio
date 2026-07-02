@@ -1,10 +1,10 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { PendingApproval } from "@natstack/shared/approvals";
+import type { PendingApproval } from "@vibez1/shared/approvals";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
-} from "@natstack/shared/approvalMarkdown";
+} from "@vibez1/shared/approvalMarkdown";
 
 export interface ApprovalsOverlayProps {
   pending: PendingApproval[];

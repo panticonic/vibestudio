@@ -16,9 +16,9 @@ class FakeBridgeServer {
       this.socket = ws;
       ws.on("message", (data) => {
         const message = JSON.parse(String(data)) as Record<string, unknown>;
-        if (message["type"] === "natstack:cdp-auth") {
+        if (message["type"] === "vibez1:cdp-auth") {
           if (message["token"] === this.authToken) {
-            ws.send(JSON.stringify({ type: "natstack:cdp-auth-ok" }));
+            ws.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
           } else {
             ws.close(4401);
           }

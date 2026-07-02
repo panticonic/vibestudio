@@ -3,13 +3,13 @@ import type {
   ApprovalRequesterCategory,
   ApprovalResourceScope,
   PendingCapabilityApproval,
-} from "@natstack/shared/approvals";
+} from "@vibez1/shared/approvals";
 import type {
   VerifiedCaller,
   ServiceContext,
   DeferredResult,
-} from "@natstack/shared/serviceDispatcher";
-import { deferIfNeeded } from "@natstack/shared/serviceDispatcher";
+} from "@vibez1/shared/serviceDispatcher";
+import { deferIfNeeded } from "@vibez1/shared/serviceDispatcher";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 

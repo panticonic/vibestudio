@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   APPROVAL_CATEGORY_DECIDE,
   APPROVAL_CATEGORY_INPUT_REQUIRED,
-} from "@natstack/shared/approvalContract";
+} from "@vibez1/shared/approvalContract";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createApprovalPushBridge } from "./approvalPushBridge.js";
 import type { PushSendResult, PushServiceInternal } from "./pushService.js";

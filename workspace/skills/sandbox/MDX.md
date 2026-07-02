@@ -52,7 +52,7 @@ Use callouts for short status, caveats, or setup notes.
 
 ## Links
 
-Markdown links are clickable in NatStack panels.
+Markdown links are clickable in Vibez1 panels.
 
 - HTTPS links open browser panels.
 - Workspace panel navigation should use `buildPanelLink` from

@@ -5,8 +5,8 @@
  * surface, a separate document with NO RPC). Keeping these helpers here lets the
  * card be hosted in the overlay without dragging in `../shell/client`.
  */
-import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
-import { getApprovalRiskTone, getRequesterCategoryLabel } from "@natstack/shared/approvalCopy";
+import type { ApprovalDecision, PendingApproval } from "@vibez1/shared/approvals";
+import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibez1/shared/approvalCopy";
 
 export interface CallerInfo {
   /** Friendly user-visible label — panel title, worker source basename, etc. */

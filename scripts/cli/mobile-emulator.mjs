@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 
 function parseArgs(argv) {
   const options = {
-    avd: process.env.NATSTACK_ANDROID_AVD ?? "NatStack_Test",
+    avd: process.env.VIBEZ1_ANDROID_AVD ?? "Vibez1_Test",
     help: false,
     emulatorArgs: [],
   };
@@ -25,17 +25,17 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`natstack mobile emulator
+  console.log(`vibez1 mobile emulator
 
 Usage:
-  natstack mobile emulator
-  natstack mobile emulator --avd <name>
-  natstack mobile emulator -- <extra emulator args>
+  vibez1 mobile emulator
+  vibez1 mobile emulator --avd <name>
+  vibez1 mobile emulator -- <extra emulator args>
 
 Defaults:
-  AVD: NatStack_Test
+  AVD: Vibez1_Test
 
-Set NATSTACK_ANDROID_AVD=<name> to change the default.
+Set VIBEZ1_ANDROID_AVD=<name> to change the default.
 `);
 }
 

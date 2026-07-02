@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StoredCookie } from "@natstack/browser-data";
+import type { StoredCookie } from "@vibez1/browser-data";
 
 vi.mock("electron", () => ({
   session: {

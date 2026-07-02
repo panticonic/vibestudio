@@ -1,16 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { z } from "zod";
-import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { authMethods, CreatePairingInviteArgsSchema } from "@natstack/shared/serviceSchemas/auth";
-import type { TokenManager } from "@natstack/shared/tokenManager";
+import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { authMethods, CreatePairingInviteArgsSchema } from "@vibez1/shared/serviceSchemas/auth";
+import type { TokenManager } from "@vibez1/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
 import type { DeviceAuthStore } from "./deviceAuthStore.js";
-import type { ConnectionGrantService } from "@natstack/shared/connectionGrants";
-import type { AuditLog } from "@natstack/shared/credentials/audit";
-import type { PendingUnitBatchApproval } from "@natstack/shared/approvals";
-import type { AppCapability } from "@natstack/shared/unitManifest";
-import { isPanelSlotId } from "@natstack/shared/panel/ids";
+import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
+import type { AuditLog } from "@vibez1/shared/credentials/audit";
+import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
+import type { AppCapability } from "@vibez1/shared/unitManifest";
+import { isPanelSlotId } from "@vibez1/shared/panel/ids";
 import {
   connectionInfoResponse,
   createPairingInviteResponse,
@@ -235,7 +235,7 @@ export function createAuthService(deps: {
         try {
           const body = IssueDeviceBodySchema.parse(await readJson(req));
           const credential = deps.deviceAuthStore.issueDevice({
-            label: body.label ?? "NatStack client",
+            label: body.label ?? "Vibez1 client",
             platform: body.platform,
           });
           sendJson(res, 200, responseForCredential(deps, credential, { includeShellToken: true }));

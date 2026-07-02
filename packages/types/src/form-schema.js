@@ -6,5 +6,5 @@
  *
  * Runtime functions (evaluateCondition, isFieldVisible, etc.) live in @workspace/core (form-schema only).
  */
-export const FREE_TEXT_CHOICE_VALUE = "__natstack_free_text__";
+export const FREE_TEXT_CHOICE_VALUE = "__vibez1_free_text__";
 //# sourceMappingURL=form-schema.js.map

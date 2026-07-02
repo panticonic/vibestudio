@@ -7,7 +7,7 @@
 
 import { WebContentsView, ipcMain } from "electron";
 import type { BaseWindow } from "electron";
-import { createDevLogger } from "@natstack/dev-log";
+import { createDevLogger } from "@vibez1/dev-log";
 
 const overlayLog = createDevLogger("AutofillOverlay");
 
@@ -31,7 +31,7 @@ export class AutofillOverlay {
     // Sender attribution: only accept from the overlay's own webContents.
     // Audit finding 01-HIGH-2 / #44: any panel could otherwise force a
     // credential autofill into any other loaded panel.
-    ipcMain.on("natstack:autofill-overlay:select", (event, id: number) => {
+    ipcMain.on("vibez1:autofill-overlay:select", (event, id: number) => {
       if (this.overlayWcId === null || event.sender.id !== this.overlayWcId) {
         overlayLog.warn(
           `Rejected autofill-overlay:select from non-overlay sender id=${event.sender.id} (expected ${this.overlayWcId ?? "<none>"})`
@@ -41,7 +41,7 @@ export class AutofillOverlay {
       this.callbacks?.onSelect(id);
     });
 
-    ipcMain.on("natstack:autofill-overlay:dismiss", (event) => {
+    ipcMain.on("vibez1:autofill-overlay:dismiss", (event) => {
       if (this.overlayWcId === null || event.sender.id !== this.overlayWcId) {
         overlayLog.warn(
           `Rejected autofill-overlay:dismiss from non-overlay sender id=${event.sender.id} (expected ${this.overlayWcId ?? "<none>"})`
@@ -123,11 +123,11 @@ ${itemsHtml}
 <script>
   document.querySelectorAll('.item').forEach(function(el) {
     el.addEventListener('click', function() {
-      window.__natstack_autofill_overlay.select(Number(this.dataset.id));
+      window.__vibez1_autofill_overlay.select(Number(this.dataset.id));
     });
     el.addEventListener('keydown', function(e) {
       if (e.key === 'Enter') {
-        window.__natstack_autofill_overlay.select(Number(this.dataset.id));
+        window.__vibez1_autofill_overlay.select(Number(this.dataset.id));
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         var next = this.nextElementSibling;
@@ -137,12 +137,12 @@ ${itemsHtml}
         var prev = this.previousElementSibling;
         if (prev) prev.focus();
       } else if (e.key === 'Escape') {
-        window.__natstack_autofill_overlay.dismiss();
+        window.__vibez1_autofill_overlay.dismiss();
       }
     });
   });
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') window.__natstack_autofill_overlay.dismiss();
+    if (e.key === 'Escape') window.__vibez1_autofill_overlay.dismiss();
   });
   // Focus first item for keyboard nav
   var first = document.querySelector('.item');
@@ -217,8 +217,8 @@ ${itemsHtml}
     }
     this.view = null;
     this.overlayWcId = null;
-    ipcMain.removeAllListeners("natstack:autofill-overlay:select");
-    ipcMain.removeAllListeners("natstack:autofill-overlay:dismiss");
+    ipcMain.removeAllListeners("vibez1:autofill-overlay:select");
+    ipcMain.removeAllListeners("vibez1:autofill-overlay:dismiss");
   }
 }
 

@@ -3,30 +3,30 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import { writeProductSeedSourceRecord } from "@natstack/shared/productSeedTrust";
-import { EntityCache } from "@natstack/shared/runtime/entityCache";
-import type { PendingApproval } from "@natstack/shared/approvals";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { writeProductSeedSourceRecord } from "@vibez1/shared/productSeedTrust";
+import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { PendingApproval } from "@vibez1/shared/approvals";
 import { AppHost } from "./appHost.js";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 
 const roots: string[] = [];
-const originalAppDevStatus = process.env["NATSTACK_APP_DEV_STATUS"];
+const originalAppDevStatus = process.env["VIBEZ1_APP_DEV_STATUS"];
 const REACT_NATIVE_PROVIDER = {
   name: "@workspace-extensions/react-native",
   activeEv: "ev-provider",
   activeBuildKey: "provider-build",
-  contractVersion: "natstack-build-provider-v1",
+  contractVersion: "vibez1-build-provider-v1",
 };
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-  if (originalAppDevStatus === undefined) delete process.env["NATSTACK_APP_DEV_STATUS"];
-  else process.env["NATSTACK_APP_DEV_STATUS"] = originalAppDevStatus;
+  if (originalAppDevStatus === undefined) delete process.env["VIBEZ1_APP_DEV_STATUS"];
+  else process.env["VIBEZ1_APP_DEV_STATUS"] = originalAppDevStatus;
 });
 
 function tempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-app-host-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-app-host-"));
   roots.push(root);
   return root;
 }
@@ -52,7 +52,7 @@ function makeHarness(
     JSON.stringify({
       name: "@workspace-apps/shell",
       version: "1.0.0",
-      natstack: {
+      vibez1: {
         displayName: "Shell App",
         app: {
           target: "electron",
@@ -253,7 +253,7 @@ function createAppGraphNode(
     JSON.stringify({
       name: opts.name,
       version: "1.0.0",
-      natstack: {
+      vibez1: {
         displayName: opts.displayName ?? opts.name,
         app: {
           target: opts.target,
@@ -294,7 +294,7 @@ function setAppManifestTarget(
         ? {
             target,
             renderer: "index.tsx",
-            rnComponentName: "NatStackMobile",
+            rnComponentName: "Vibez1Mobile",
             rnHostAbi: "rn-host-1",
             capabilities,
           }
@@ -304,7 +304,7 @@ function setAppManifestTarget(
     JSON.stringify({
       name: node.name,
       version: "1.0.0",
-      natstack: {
+      vibez1: {
         displayName: node.manifest.displayName,
         app: appBlock,
       },
@@ -400,7 +400,7 @@ describe("AppHost", () => {
 
     const approval = await host.metaChangeApprovalForCommit("state:next");
 
-    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/natstack.yml");
+    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/vibez1.yml");
     expect(approval.units).toEqual([
       expect.objectContaining({
         unitKind: "app",
@@ -1152,7 +1152,7 @@ describe("AppHost", () => {
   });
 
   it("emits a development app status diagnostic", async () => {
-    process.env["NATSTACK_APP_DEV_STATUS"] = "1";
+    process.env["VIBEZ1_APP_DEV_STATUS"] = "1";
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
     const { host } = makeHarness();
 
@@ -1343,7 +1343,7 @@ describe("AppHost", () => {
       JSON.stringify({
         name: "@workspace-apps/shell",
         version: "1.0.0",
-        natstack: {
+        vibez1: {
           displayName: "Remote CLI",
           app: {
             target: "terminal",
@@ -1667,14 +1667,14 @@ describe("AppHost", () => {
       target: "react-native",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-old:provider-build-old:natstack-build-provider-v1",
+          "ev-provider-old:provider-build-old:vibez1-build-provider-v1",
       },
     });
     const provider = {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider-new",
       activeBuildKey: "provider-build-new",
-      contractVersion: "natstack-build-provider-v1",
+      contractVersion: "vibez1-build-provider-v1",
     };
     buildSystem.getBuildProviderDetails.mockReturnValue(provider);
     const approval = await host.metaChangeApprovalForCommit("state:provider-change");
@@ -1685,7 +1685,7 @@ describe("AppHost", () => {
         provider,
         externalDeps: expect.objectContaining({
           "build-provider:@workspace-extensions/react-native":
-            "ev-provider-new:provider-build-new:natstack-build-provider-v1",
+            "ev-provider-new:provider-build-new:vibez1-build-provider-v1",
         }),
       }),
     ]);
@@ -1758,7 +1758,7 @@ describe("AppHost", () => {
       activeBundleKey: "rn-app-key",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-new:provider-build-new:natstack-build-provider-v1",
+          "ev-provider-new:provider-build-new:vibez1-build-provider-v1",
       },
     });
     expect(eventService.emit).toHaveBeenCalledWith(
@@ -1826,20 +1826,20 @@ describe("AppHost", () => {
       target: "react-native",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-old:provider-build-old:natstack-build-provider-v1",
+          "ev-provider-old:provider-build-old:vibez1-build-provider-v1",
       },
     });
     const oldProvider = {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider-old",
       activeBuildKey: "provider-build-old",
-      contractVersion: "natstack-build-provider-v1",
+      contractVersion: "vibez1-build-provider-v1",
     };
     const newProvider = {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider-new",
       activeBuildKey: "provider-build-new",
-      contractVersion: "natstack-build-provider-v1",
+      contractVersion: "vibez1-build-provider-v1",
     };
     buildSystem.getBuildProviderDetails.mockReturnValue(oldProvider);
     const declaration = {
@@ -1872,7 +1872,7 @@ describe("AppHost", () => {
         provider: newProvider,
         externalDeps: expect.objectContaining({
           "build-provider:@workspace-extensions/react-native":
-            "ev-provider-new:provider-build-new:natstack-build-provider-v1",
+            "ev-provider-new:provider-build-new:vibez1-build-provider-v1",
         }),
       }),
     ]);
@@ -1992,7 +1992,7 @@ describe("AppHost", () => {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider",
       activeBuildKey: "provider-build",
-      contractVersion: "natstack-build-provider-v1",
+      contractVersion: "vibez1-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(
@@ -2061,7 +2061,7 @@ describe("AppHost", () => {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider",
       activeBuildKey: "provider-build",
-      contractVersion: "natstack-build-provider-v1",
+      contractVersion: "vibez1-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-ready-key"),
@@ -2122,7 +2122,7 @@ describe("AppHost", () => {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider",
       activeBuildKey: "provider-build",
-      contractVersion: "natstack-build-provider-v1",
+      contractVersion: "vibez1-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-delayed-key"),

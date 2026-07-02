@@ -33,8 +33,8 @@ const actionGroups = [
     description: "Create your first panel, inspect runtime APIs, or organize workspaces.",
     actions: [
       { label: "Build a panel", message: "Help me build a panel" },
-      { label: "Explore runtime", message: "Show me what NatStack runtime APIs can do" },
-      { label: "Workspaces", message: "Help me organize NatStack workspaces" },
+      { label: "Explore runtime", message: "Show me what Vibez1 runtime APIs can do" },
+      { label: "Workspaces", message: "Help me organize Vibez1 workspaces" },
     ],
   },
 ];

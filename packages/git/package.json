@@ -1,5 +1,5 @@
 {
-  "name": "@natstack/git",
+  "name": "@vibez1/git",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +18,7 @@
     "dev": "tsc --project tsconfig.build.json --watch"
   },
   "dependencies": {
-    "@natstack/types": "workspace:*",
+    "@vibez1/types": "workspace:*",
     "diff": "^7.0.0",
     "isomorphic-git": "^1.36.1"
   },

@@ -141,18 +141,18 @@ describe("useAgenticChat set_title", () => {
     });
 
     const result = await methods!["set_title"]!.execute(
-      { title: "Welcome to NatStack" },
+      { title: "Welcome to Vibez1" },
       {} as never
     );
 
     expect(result).toEqual({ ok: true });
-    expect(document.title).toBe("Welcome to NatStack");
+    expect(document.title).toBe("Welcome to Vibez1");
     expect(config.rpc.call).toHaveBeenCalledWith("main", "runtime.setTitle", [
-      "Welcome to NatStack",
+      "Welcome to Vibez1",
       { explicit: true },
     ]);
     expect(client.updateChannelConfig).toHaveBeenCalledWith({
-      title: "Welcome to NatStack",
+      title: "Welcome to Vibez1",
       titleExplicit: false,
     });
 
@@ -191,13 +191,13 @@ describe("useAgenticChat set_title", () => {
     });
 
     const result = await methods!["set_title"]!.execute(
-      { title: "Welcome to NatStack" },
+      { title: "Welcome to Vibez1" },
       {} as never
     );
 
     expect(result).toEqual({ ok: true, warnings: ["runtime unavailable"] });
     expect(client.updateChannelConfig).toHaveBeenCalledWith({
-      title: "Welcome to NatStack",
+      title: "Welcome to Vibez1",
       titleExplicit: false,
     });
     expect(warn).toHaveBeenCalledWith(

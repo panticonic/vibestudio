@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { callerHasPlatformCapability, isAuthorizedChrome } from "./chromeTrust.js";
 
 describe("chromeTrust", () => {

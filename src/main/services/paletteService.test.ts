@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
-import type { PaletteCommand } from "@natstack/shared/types";
+import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import type { PaletteCommand } from "@vibez1/shared/types";
 import { createPaletteService } from "./paletteService.js";
 import type { ViewManager } from "../viewManager.js";
 

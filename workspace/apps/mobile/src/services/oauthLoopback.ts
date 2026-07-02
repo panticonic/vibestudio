@@ -93,5 +93,5 @@ function describeMissingLoopback(rawUrl: string): string | null {
     if (redirectUri.startsWith("http://localhost:") || redirectUri.startsWith("http://127.0.0.1:")) {
         return null;
     }
-    return "OpenAI OAuth was started without the Android loopback callback. Restart the NatStack server and retry so the mobile panel uses the client-loopback OAuth flow.";
+    return "OpenAI OAuth was started without the Android loopback callback. Restart the Vibez1 server and retry so the mobile panel uses the client-loopback OAuth flow.";
 }

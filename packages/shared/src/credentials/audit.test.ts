@@ -46,7 +46,7 @@ describe("AuditLog", () => {
   let logDir: string;
 
   beforeEach(() => {
-    logDir = mkdtempSync(path.join(tmpdir(), "natstack-audit-"));
+    logDir = mkdtempSync(path.join(tmpdir(), "vibez1-audit-"));
   });
 
   afterEach(() => {

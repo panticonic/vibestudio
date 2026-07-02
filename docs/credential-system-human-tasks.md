@@ -10,7 +10,7 @@ The server binds loopback only and remote clients reach it over WebRTC, so there
 is no per-server public URL for OAuth providers to redirect to. Provider redirect
 URIs that need a public HTTPS endpoint resolve through the **callback relay**
 (`apps/webhook-relay`, plan §7): the relay owns a stable public origin
-(`NATSTACK_RELAY_OAUTH_BASE_URL`), receives the provider's redirect, and backhauls
+(`VIBEZ1_RELAY_OAUTH_BASE_URL`), receives the provider's redirect, and backhauls
 the authorization code to the originating loopback server over its pipe. Each user
 registers the relay's `…/oauth/callback` URL with their own OAuth provider clients
 (in their own Google / GitHub / etc developer console).
@@ -22,7 +22,7 @@ The bootstrap and registration flow is described in
 [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) (§7 callback relay).
 
 The `auth.snugenv.com` shared universal-link relay below is an alternative
-path — useful only if you want one redirect URI shared across many natstack
+path — useful only if you want one redirect URI shared across many vibez1
 deployments without per-user provider registration. It requires hosted
 infrastructure (DNS, static site, signed mobile app) and is not on the
 critical path for personal-server use.
@@ -37,14 +37,14 @@ OAuth callback paths (when using the shared-relay path) should be:
 
 - `https://auth.snugenv.com/oauth/callback/:providerId`
 
-`natstack://oauth/callback/:providerId` is no longer accepted; OAuth callbacks
+`vibez1://oauth/callback/:providerId` is no longer accepted; OAuth callbacks
 must arrive through the verified app-link/universal-link host.
 
 Webhook public ingress paths should be:
 
 - `https://hooks.snugenv.com/i/:subscriptionId`
 
-The NatStack server should continue to receive relay traffic on private service
+The Vibez1 server should continue to receive relay traffic on private service
 routes, not on provider-facing URLs directly.
 
 ## Operating Principles
@@ -100,19 +100,19 @@ Follow-up TODOs:
   - `hooks.snugenv.com`
 - TODO: Bind `snugenv.com` and `auth.snugenv.com` to the well-known static site.
 - TODO: Bind `hooks.snugenv.com` to the webhook relay Worker.
-- TODO: Decide the production NatStack relay-to-server target for hosted/dev
+- TODO: Decide the production Vibez1 relay-to-server target for hosted/dev
   deployments. For local-only development, expose the local gateway through an
   explicit tunnel and set the relay's upstream to that tunnel URL.
 - TODO: Configure Cloudflare secrets for the relay:
-  - `NATSTACK_SERVER_BASE_URL`
-  - `NATSTACK_RELAY_SIGNING_SECRET`
+  - `VIBEZ1_SERVER_BASE_URL`
+  - `VIBEZ1_RELAY_SIGNING_SECRET`
 
 ### TODO: Mobile App Links
 
 - TODO: Fill `apps/well-known/config.json` with the real Apple Developer Team ID,
-  or set `NATSTACK_APPLE_TEAM_ID` in CI/deploy.
+  or set `VIBEZ1_APPLE_TEAM_ID` in CI/deploy.
 - TODO: Fill `apps/well-known/config.json` with Android release signing SHA256
-  fingerprints, or set `NATSTACK_ANDROID_SHA256_CERT_FINGERPRINTS` as a
+  fingerprints, or set `VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS` as a
   comma-separated list in CI/deploy:
   - upload key
   - Play App Signing key, if Play signing is enabled
@@ -124,7 +124,7 @@ Follow-up TODOs:
     are kept.
 - TODO: Confirm iOS associated domains include `applinks:auth.snugenv.com`.
 - TODO: Confirm Android intent filters include `https://auth.snugenv.com/oauth/callback`.
-- Done: OAuth callbacks are app-link/universal-link only. `natstack://` remains
+- Done: OAuth callbacks are app-link/universal-link only. `vibez1://` remains
   registered only for connect-link onboarding and is not accepted as an OAuth
   callback path.
 
@@ -135,7 +135,7 @@ For each OAuth-backed credential provider we ship or document:
 - **Per-personal-server** (default path): each user registers
   `https://<their-server>.<their-tailnet>.ts.net/_r/s/credentials/oauth/callback`
   with their own OAuth client in the provider's developer console. The
-  natstack readiness banner prints the exact string to copy.
+  vibez1 readiness banner prints the exact string to copy.
 - **Device-code fallback** (RFC 8628): for providers that support it
   (Google, Microsoft/Azure AD, GitHub, GitLab, Slack, Twitch, Spotify,
   Dropbox, Atlassian, Discord), userland can pass `type: "oauth2-device-code"`
@@ -217,7 +217,7 @@ Done:
 1. Provider-shaped relay routes were replaced with one public route:
    - `POST /i/:subscriptionId`
 2. The relay preserves the raw request body and original provider headers.
-3. The relay signs an envelope before forwarding to the NatStack server:
+3. The relay signs an envelope before forwarding to the Vibez1 server:
    - method
    - path
    - query

@@ -99,7 +99,7 @@ describe("validateUnitManifest", () => {
     expect(() =>
       validateUnitManifest(
         appUnitManifestDescriptor,
-        { app: { target: "react-native", renderer: "index.tsx", rnComponentName: "NatStack" } },
+        { app: { target: "react-native", renderer: "index.tsx", rnComponentName: "Vibez1" } },
         { unitName: "@workspace-apps/mobile" },
       ),
     ).toThrow(/requires rnComponentName and rnHostAbi/);

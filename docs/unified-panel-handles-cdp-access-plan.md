@@ -1,6 +1,6 @@
 # Unified Panel Handles + Approval-Gated CDP/RPC Access — Implementation Plan
 
-> Handoff plan for an implementing agent. NatStack is pre-release; prefer clean
+> Handoff plan for an implementing agent. Vibez1 is pre-release; prefer clean
 > architecture over backward compatibility. All file:line references are anchors, not
 > exact targets — re-confirm before editing.
 >
@@ -10,7 +10,7 @@
 
 ## 1. Context & problem
 
-NatStack is an Electron tree-browser: the UI is a tree of "panels" (each an Electron
+Vibez1 is an Electron tree-browser: the UI is a tree of "panels" (each an Electron
 `WebContentsView`), plus non-visual participants — workers and Durable Objects (DOs) —
 sharing one userland runtime. Today's connectivity model is fragmented and restrictive:
 
@@ -323,7 +323,7 @@ Export `panelTree` + `PanelHandle` from `workspace/packages/runtime/src/panel/in
   param and `assertBrowser` (and its 7 call sites); rename → `createCdpAutomation` /
   `CdpAutomation`. It obtains the endpoint from the **`getCdpEndpoint` server service** (§4.3)
   on its own RPC connection — not via the Electron IPC fast-path — and connects to the server
-  broker, so panels, workers, and DOs all use one path. (The `globalThis.__natstackShell` IPC
+  broker, so panels, workers, and DOs all use one path. (The `globalThis.__vibez1Shell` IPC
   fast-path for CDP goes away.)
 - **Privileged tracking** (severity input, not exclusion): add `privileged?: boolean` to
   `PanelSnapshot` (`packages/shared/src/types.ts:~217`) and `createSnapshot`
