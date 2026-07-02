@@ -85,9 +85,10 @@ distinction) folded in.
 1. **Blame that works in production** — for any file/line/head, recover which
    edit changed it, in which commit, by which invocation/turn/actor — including
    the uncommitted working tail.
-2. **Read-time provenance attachment** — on each read, automatically attach a
-   compact summary ranked by relevance to the current session, floored so it
-   only appears when worth reading. Deeper exploration is on-demand.
+2. **Read-time provenance attachment** — on each read, attach a compact
+   summary at the agent-requested depth, ranked by relevance to the current
+   session and floored so it only renders what is worth reading. Deeper
+   exploration is on-demand.
 3. **Two-source retrieval, density-reranked** — candidates from **structure**
    (blame, edit lineage, claim links) and **similarity** (FTS recall over
    claims, commit messages, messages, files), ordered by **session density**:
@@ -396,11 +397,10 @@ the design). If profiling on real logs shows the counts biting, a
 optimization, not a correctness mechanism. The same periodic pass is the
 escape hatch for richer-than-2-hop affinity if 2-hop proves insufficient.
 
-## 7. Read-time attachment: automatic, parallel, best-effort, warmed
+## 7. Read-time attachment: agent-budgeted, parallel, best-effort, warmed
 
 Carried from v1 with two new signal lines (commit messages, working-edit
-status) and one behavioral correction (§7.1). Restated compactly; v1's
-rationale holds where not amended.
+status). Restated compactly; v1's rationale holds where not amended.
 
 **Behavioral grounding, stated once.** Agents do not seek context; they use
 what is in front of them — push beats pull, always. Agents follow verbatim
@@ -411,39 +411,61 @@ paging is a safety valve. And agents habituate to boilerplate within a few
 reads — a block that is filler on most reads gets skimmed forever after,
 including the day it carries a critical contradiction. **Silence preserves
 salience**: an attachment worth reading every time it appears beats one that
-always appears. These three facts drive §7.1 and §7.5.
+always appears. These facts drive §7.5 — and they shape how the tier is
+prompted (§7.1, §13): as a policy the agent sets and tunes, not a per-file
+whim.
 
-### 7.1 Depth: automatic by default, escalation on request
+### 7.1 The mandatory tier: a task-mode policy the agent owns and tunes
 
-v1 made a ternary `provenance` tier **mandatory on every read**, hoping to
-force a per-file judgement. That is discipline-shaped and behaviorally wrong:
-models settle into a constant within a few calls (whatever the prompt example
-showed), so the mandatory arg buys schema friction, not judgement. The routine
-case must not be a decision; only the exception is:
+`read` takes a **mandatory** `provenance: "none" | "moderate" | "deep"` — the
+agent's context budget for the read:
 
-- **`moderate` is automatic.** Every read gets the standard attachment — blame
-  (last-commit + working-edit lines) + FTS recall + 1-hop density re-rank —
-  with no argument at all.
-- **`deep` is the one agent-facing dial**: an optional `provenance: "deep"`
-  escalation (full 2-hop density + the claim-relation walk) for a file the
-  agent is about to change with non-obvious ramifications. Rare by design.
-- **`none` is a mechanism, not a choice.** The v1 `none` case was "re-reads
-  and files you know cold" — and the system detects re-reads better than the
-  agent will ever bother to. Suppression has its **own key**, not the warm
-  cache's `touch_version` (which advances on *every* touch — including the
-  `observed` touch each read writes — so a version-keyed check would never
-  fire). Define a **block signature** per (session, path): hash of (the path's
-  content hash, the path's latest edit-op id, the path's exception-item set).
-  The read tool's coalesced `observed` upsert already lands on exactly the
-  per-(session, path) row this needs, so the signature is stored there
-  (`gad_touches.last_block_sig`, §4.2): recompute is one indexed lookup, and
-  when the signature is unchanged the block is **suppressed automatically** —
-  zero extra tables, zero extra writes. A file changed by another session, or
-  one that gained an exception item, changes the signature and re-attaches —
-  exactly the re-read that must not be silent.
+| tier       | does                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------ |
+| `none`     | file content only — no attachment                                                           |
+| `moderate` | blame (last-commit + working-edit lines) + FTS recall + 1-hop density re-rank               |
+| `deep`     | `moderate` + full 2-hop density + claim-relation walk (`supports`/`contradicts`/`refines`)  |
+
+The known failure mode of a mandatory per-call arg is collapse to a constant —
+models settle into whatever the last few calls used. We keep the tier mandatory
+anyway, and defuse the failure mode by changing what the choice is *about*:
+the agent is not asked for a fresh per-file judgement, it is asked to hold a
+**task-mode policy** and deviate deliberately:
+
+- **Using code without modifying it** (running, calling, answering questions
+  from it) → `none`. Provenance is background you don't need; don't pay for it.
+- **Executing a set plan** → `moderate`. The plan already encodes the
+  understanding; you need blame, concurrency, and recalled claims to execute
+  without collisions or re-derivation, not the full belief structure.
+- **Planning and conceptualizing before modifying** → `deep` on the files
+  central to the change. How the code *got this way* — the claims, the
+  contradictions, the commit trail — is exactly the input to a good plan.
+
+The policy is per-task, which is a cadence agents actually sustain (one
+decision at task start, revisited at mode changes), unlike per-file triage.
+On top of it, the prompt (§13) instructs **experience-based tuning**: the tier
+is a dial the agent owns — dial down when recent blocks have been chatty or
+distracting, dial up when they have been earning their tokens. The tier
+distribution by task mode is instrumented (§12); if it still collapses to a
+constant across modes, the fix is prompt pressure, never a silent default.
+
+**Re-read suppression still applies underneath nonzero tiers.** The system
+detects redundancy better than any policy: suppression has its **own key**,
+not the warm cache's `touch_version` (which advances on *every* touch —
+including the `observed` touch each read writes — so a version-keyed check
+would never fire). Define a **block signature** per (session, path): hash of
+(the path's content hash, the path's latest edit-op id, the path's
+exception-item set). The read tool's coalesced `observed` upsert already lands
+on exactly the per-(session, path) row this needs, so the signature is stored
+there (`gad_touches.last_block_sig`, §4.2): recompute is one indexed lookup,
+and when the signature is unchanged the block is suppressed — zero extra
+tables, zero extra writes. A file changed by another session, or one that
+gained an exception item, changes the signature and re-attaches — exactly the
+re-read that must not be silent.
 
 The runtime enforces hard ceilings regardless (`PROV_BUDGET_MS`, per-tier item
-caps), so even reflexive `deep` cannot blow up compute or context.
+caps), so even reflexive `deep` cannot blow up compute or context — the tier
+is a request within system bounds, not authority.
 
 `recallKeywords: string[]` (optional) steers the similarity leg beyond the
 file's own text. Expect it to be used sporadically at best — optional steering
@@ -460,8 +482,9 @@ reachable via eval (`gad.provenanceForFile({ path, head, tier, after })`) —
 returns `{ items, shown, total, nextCursor }`: unbounded paging on top of the
 cheap first page; deepen one item (`provenance("claim#42")`) or page a file.
 
-**Every read leaves a trace**: one coalesced `observed` touch, even when the
-block is suppressed. Depth is a budget dial, not a graph signal.
+**Every read leaves a trace**: one coalesced `observed` touch, at every tier,
+even when the block is suppressed. The tier is the agent's budget dial, not a
+graph signal — nothing records what depth was asked.
 
 **Token-budget realism.** A working agent reads 20–40 files per turn; at ~5
 items × ~40 tokens that is 4–8k tokens/turn of attachments. The salience floor
@@ -709,10 +732,11 @@ until all of them are:
 - **Recall** — T3 (commit messages into `gad_memory_fts`); `recallKeywords`
   steering.
 - **Density + attachment** — `provenanceForFile` (§6 pipeline over the views,
-  query-time degree, capped 2-hop); automatic `moderate` + the optional `deep`
-  escalation and mechanical re-read suppression (§7.1); the exception class +
-  salience floor (§7.5); parallel best-effort attachment (§7.2–7.5);
-  `provenance()` tool + paging; the `edge_graph`/`claim_graph` views.
+  query-time degree, capped 2-hop); the mandatory ternary `provenance` read
+  arg with task-mode guidance, plus mechanical re-read suppression underneath
+  (§7.1); the exception class + salience floor (§7.5); parallel best-effort
+  attachment (§7.2–7.5); `provenance()` tool + paging; the
+  `edge_graph`/`claim_graph` views.
 - **Speculative warm** — `gad_provenance_cache`; warm on `turn.opened` and
   during generation; degrade-to-hint on miss.
 - **Prompt** — the §13 guidance lands with the tools, not after them: the
@@ -756,12 +780,15 @@ Resolved (locked for the build):
   optimization lever, not a correctness mechanism.
 - **Session identity:** trajectory-DAG position; `gad_touches.session_*` is a
   hint; forks fall back to branch-chain scoping.
-- **Attachment depth is automatic, not asked.** `moderate` runs on every read
-  with no argument; `deep` is the one optional agent-facing escalation; `none`
-  is mechanical re-read suppression (block-signature-keyed, above), never an
-  agent choice (§7.1). The v1 mandatory ternary is rescinded: routine decisions
-  collapse to constants in real agents, so the routine case must not be a
-  decision.
+- **The tier is mandatory, and it is a task-mode policy.** Every read names
+  `none`/`moderate`/`deep`; the prompt anchors the choice to the task mode
+  (using → `none`, executing a plan → `moderate`, planning before modifying →
+  `deep`) and tells the agent to tune it from experience — dial down when
+  blocks have been chatty/distracting, up when they earn their tokens (§7.1,
+  §13). The known collapse-to-a-constant risk is accepted, monitored via the
+  per-mode tier distribution, and answered with prompt pressure — never a
+  silent default. Mechanical block-signature re-read suppression still runs
+  underneath nonzero tiers.
 - **Exceptions first, floored.** Contradictions and cross-session concurrency
   always render, at the top, regardless of density; everything else clears a
   minimum score or the block is thin/absent. No structural filler — silence
@@ -783,20 +810,23 @@ Remaining knobs (set defaults now, tune on real logs): λ and `K`/`M`/`N`; kind
 weights and `w_sim`/`w_prov`; the `hits` curve (default `sqrt`); whether the
 historical leg decays at all or `idf` alone discriminates (default: mild decay
 and `idf`); the salience-floor threshold; `PROV_BUDGET_MS`; warm-set selection;
-per-depth item budgets; **exploration-sweep damping** — a grep-then-read-15-files
+per-tier item budgets; **exploration-sweep damping** — a grep-then-read-15-files
 sweep floods the touch-set with shallow `observed` signal, so consider weighting
 a read by whether the session later edits or cites near it, or capping the
 read-only share of the density seed. Scope is the agent read tool only, never
 the fs RPC or panel/programmatic reads.
 
 **Instrumentation (ships with the bang, §11).** Four behavioral counters tell
-us which bet is failing, and they are the tuning inputs: (1) `deep`-escalation
-rate, (2) drill-down/paging rate, (3) claims recorded per session — split
-commit-borne vs standalone, (4) **attached-claim action rate**: how often an
-item we pushed gets cited, deepened, or edited-near downstream. (4) is the
-system's real KPI — it measures whether the attachment is being read or
-skimmed. If it sags while attachments are being rendered, the salience floor
-is too low; raise it before touching anything else.
+us which bet is failing, and they are the tuning inputs: (1) the **tier
+distribution, split by task mode** — the health check on the §7.1 policy: it
+should differ across using/executing/planning, and a mode-invariant constant
+means the prompt needs pressure, (2) drill-down/paging rate, (3) claims
+recorded per session — split commit-borne vs standalone, (4) **attached-claim
+action rate**: how often an item we pushed gets cited, deepened, or
+edited-near downstream. (4) is the system's real KPI — it measures whether the
+attachment is being read or skimmed. If it sags while attachments are being
+rendered, the salience floor is too low; raise it before touching anything
+else.
 
 ## 13. Prompting the agent
 
@@ -805,15 +835,31 @@ memory. The prompt is short on exhortation and long on concrete triggers —
 abstract "use your tools wisely" guidance does nothing; named moments do.
 Phrased to the agent roughly as:
 
-**Provenance arrives on its own.** Reads carry a `prov` block when there is
-something worth knowing — you never ask for the routine view. Two lines demand
-action, not skimming: a **⚠ contradiction** (reconcile it or relate the claims
-before building on either) and a **concurrent-session line** (someone else has
-uncommitted edits here — check before you collide). Escalate with
-`provenance: "deep"` only when you are about to change a file with non-obvious
-ramifications and need the belief structure around it. Pass `recallKeywords`
-when you want what we know about a _topic_ while reading a file about
-something else.
+**Set your tier from your task, then tune it from experience.** `provenance`
+(`none` | `moderate` | `deep`) is mandatory on every read. Don't re-decide it
+per file — decide it per task, and deviate deliberately:
+
+- **Using the code without modifying it** — running it, calling it, answering
+  a question from it → `none`. You don't need its history to use it.
+- **Executing a set plan** → `moderate`. The understanding is already in the
+  plan; what you need is blame, concurrent edits, and recalled claims so you
+  don't collide or re-derive.
+- **Planning or conceptualizing before you modify** → `deep` on the files
+  central to the change. How the code came to be this way — the claims, the
+  contradictions, the commit trail — is exactly the input to a good plan.
+  Stay at `moderate` for peripheral files.
+
+**The tier is a dial you own — tune it.** Notice what the blocks have been
+doing for you lately: if they've been chatty, redundant, or distracting on
+this codebase, dial down and pull detail on demand with `provenance(...)`
+instead; if they've been saving you from re-deriving things or walking into
+collisions, dial up. Recalibrate when your task mode changes, not per file.
+
+Whatever the tier, two lines demand action, not skimming: a **⚠ contradiction**
+(reconcile it or relate the claims before building on either) and a
+**concurrent-session line** (someone else has uncommitted edits here — check
+before you collide). Pass `recallKeywords` when you want what we know about a
+_topic_ while reading a file about something else.
 
 **Read the block as a launchpad, not a verdict.** It is intentionally partial —
 top-ranked items plus a `K of M` count of what was withheld. Chase a thread
