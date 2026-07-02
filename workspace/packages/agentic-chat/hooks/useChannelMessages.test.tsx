@@ -144,6 +144,8 @@ function createClient(events: unknown[] = [], overrides: Partial<PubSubClient> =
   const client = {
     channelId: "channel-1",
     hasMoreBefore: false,
+    connected: false,
+    onReady: vi.fn(() => () => {}),
     events: vi.fn(async function* () {
       for (const event of events) yield event;
     }),

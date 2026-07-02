@@ -116,6 +116,40 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+/** Wire shape of a full logical workspace context branch. */
+export const WorkspaceContextSchema = z
+  .object({
+    contextId: z.string().describe("Context id for a full logical workspace branch view."),
+  })
+  .strict();
+
+/** One source→clone entity mapping produced by `cloneContext`. */
+export const ClonedEntitySchema = z
+  .object({
+    sourceId: z.string().describe("Canonical id of the source entity that was cloned."),
+    newId: z.string().describe("Canonical id of the freshly-created clone in the new context."),
+    kind: z.enum(["worker", "do"]).describe("Cloned entity kind (only durable kinds are cloned)."),
+    source: z.string().describe("Shared source repo path (clone runs the same code)."),
+    className: z.string().optional().describe("DO class name (present for kind 'do')."),
+    sourceKey: z.string().describe("The source entity's instance key."),
+    newKey: z.string().describe("The clone's freshly-minted instance key."),
+    targetId: z.string().describe("Runtime target handle of the clone (workerd target)."),
+  })
+  .strict();
+
+/** Wire shape of a `cloneContext` result: the new context + the source→clone map. */
+export const CloneContextResultSchema = z
+  .object({
+    contextId: z.string().describe("The freshly-minted, isolated context holding the clones."),
+    entities: z
+      .array(ClonedEntitySchema)
+      .describe("Source→clone mapping for every cloned worker/DO, in clone order."),
+  })
+  .strict();
+
+export type ClonedEntity = z.infer<typeof ClonedEntitySchema>;
+export type CloneContextResult = z.infer<typeof CloneContextResultSchema>;
+
 export const runtimeMethods = defineServiceMethods({
   createEntity: {
     description:
@@ -133,15 +167,16 @@ export const runtimeMethods = defineServiceMethods({
           reason: "app/session runtime entities are host-managed",
         },
       ],
-      // Declares the handler's cross-context approval gate
-      // (resolveContextPolicy → requestCapabilityPermission for
-      // RUNTIME_CROSS_CONTEXT_ENTITY when the target context differs).
+      // Declares the handler's context-boundary approval gate
+      // (resolveContextPolicy → requireContextBoundaryPermission). Fires only
+      // when the target context is BOTH foreign to the caller AND already exists;
+      // same-context and fresh-context launches are free, as is trusted chrome.
       approval: [
         {
-          when: "creating in a different context than the caller",
-          capability: "runtime.crossContextEntity",
+          when: "launching into another, already-existing context than the caller",
+          capability: "context.boundary",
           operation: { kind: "runtime", verb: "Create runtime entity" },
-          reason: "cross-context entity creation requires approval",
+          reason: "launching code into another agent or panel's existing context requires approval",
         },
       ],
     },
@@ -219,5 +254,78 @@ export const runtimeMethods = defineServiceMethods({
     policy: { allowed: ["panel", "app", "worker", "do"] },
     access: TITLE_ACCESS,
     examples: [{ args: ["Workspace Shell", { explicit: true }] }],
+  },
+  createContext: {
+    description:
+      "Create a full logical workspace context branch. Every context presents the whole workspace tree; per-repo ctx heads are created lazily as edits are made. Use vcs.contextStatus to inspect uncommitted changes, ahead/behind repos, and deleted refs.",
+    args: z.tuple([
+      z.object({
+        contextId: z
+          .string()
+          .optional()
+          .describe("Explicit context id; omit to mint a random UUID."),
+      }),
+    ]),
+    returns: WorkspaceContextSchema,
+    access: { sensitivity: "write" },
+    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
+    examples: [{ args: [{}] }, { args: [{ contextId: "agent-branch-1" }] }],
+  },
+  cloneContext: {
+    description:
+      "Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity map. The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them.",
+    args: z.tuple([
+      z.object({
+        sourceContextId: z.string().describe("Context whose durable state is cloned."),
+        include: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Canonical ids of the worker/DO entities to clone; omit to clone every durable entity in the source context. (The file/VCS snapshot is always the whole context.)"
+          ),
+      }),
+    ]),
+    returns: CloneContextResultSchema,
+    access: {
+      sensitivity: "write",
+      // Reading + duplicating another context's durable state is gated by the
+      // single context-boundary capability: prompts iff the SOURCE context is
+      // BOTH foreign to the caller AND already exists. Cloning your own context
+      // is free; the freshly-minted target context is always free.
+      approval: [
+        {
+          when: "cloning another, already-existing context than the caller",
+          capability: "context.boundary",
+          operation: { kind: "runtime", verb: "Clone context" },
+          reason: "cloning another agent or panel's existing context state requires approval",
+        },
+      ],
+    },
+    examples: [{ args: [{ sourceContextId: "ctx-abc" }] }],
+  },
+  destroyContext: {
+    description:
+      "Retire every entity in a context and delete its folder + VCS state. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context.",
+    args: z.tuple([
+      z.object({
+        contextId: z.string().describe("Context to destroy (all its entities are retired)."),
+      }),
+    ]),
+    returns: z.void(),
+    access: {
+      sensitivity: "destructive",
+      // Gated by context-boundary, with an ownership bypass: destroying a context
+      // whose every active entity you launched (or your own context) is free; only
+      // tearing down another agent or panel's existing context prompts.
+      approval: [
+        {
+          when: "destroying another agent or panel's existing context (not one you own)",
+          capability: "context.boundary",
+          operation: { kind: "runtime", verb: "Destroy context" },
+          reason: "destroying another agent or panel's existing context requires approval",
+        },
+      ],
+    },
+    examples: [{ args: [{ contextId: "ctx-abc" }] }],
   },
 });

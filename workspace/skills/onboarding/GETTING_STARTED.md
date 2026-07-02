@@ -75,8 +75,8 @@ Key directories:
 - `panels/` — panel apps (UI)
 - `packages/` — shared workspace packages
 - `workers/` — workerd workers and Durable Objects
-- `agents/` — agent definitions
 - `skills/` — skill documentation (like this one)
+- `projects/` — plain editable repos
 
 ## Step 2: Recommend a First Setup Path
 
@@ -110,8 +110,10 @@ concise plain-text list:
 1. **Connect API providers** — set up Gmail, GitHub, Slack, or other provider
    integrations through OAuth/credentials. This is available immediately and
    does not require importing browser data.
-2. **Import browser data** — bring in cookies, bookmarks, passwords, or history
-   from Chrome/Firefox/etc. when they want local browser state in NatStack.
+2. **Import browser data** — bring in cookies, bookmarks, passwords, history,
+   and optionally current open tabs from Chrome/Firefox/etc. when they want
+   local browser state in NatStack. Repeat imports are incremental for the same
+   browser/profile.
 3. **Build something** — scaffold and launch a panel app.
 4. **Organize workspaces** — create, fork, or switch workspaces.
 5. **Explore capabilities** — inspect runtime APIs and live examples.
@@ -292,13 +294,14 @@ eval({ code: `
 })
 ```
 
-Then edit the generated files with Read/Edit/Write tools — each edit commits to
-your context head and projects to disk atomically (edit-first), so it is
-build-ready immediately — and launch.
+Then edit the generated files with Read/Edit/Write tools — each edit is recorded
+as a tracked WORKING change on your context head and projected to disk (no commit
+or build yet). Seal milestones with `vcs.commit({ message })`, preview a build on
+demand with `vcs.previewBuild`, and `vcs.push` to build-gate it into `main` — and
+launch.
 
-`openPanel` is a panel/component-runtime API; it does not initialize in
-server-side eval — run it from panel code or an `inline_ui`/`feedback_custom`
-component:
+`openPanel` is part of the portable runtime surface from `@workspace/runtime`;
+it works from server-side eval, panels, workers, and DOs:
 
 ```tsx
 import { openPanel } from "@workspace/runtime";

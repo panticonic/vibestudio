@@ -58,15 +58,15 @@ function createRepoAdapter(serverClient: ServerClient) {
         relativePath: string;
       } | null>,
     unitStatus: async (unitPath: string) => {
-      const status = (await serverClient.call("vcs", "unitStatus", [unitPath])) as {
-        unitPath: string;
-        head: string;
+      // Per-repo VCS: `unitStatus` is gone — the unit path IS the repo path, so
+      // use repo-native `status(repoPath)` (returns {stateHash, dirty}, no head).
+      const status = (await serverClient.call("vcs", "status", [unitPath])) as {
         stateHash: string | null;
         dirty: boolean;
       };
       return {
-        unitPath: status.unitPath,
-        head: status.head,
+        unitPath,
+        head: null as string | null,
         stateHash: status.stateHash,
         dirty: status.dirty,
       };

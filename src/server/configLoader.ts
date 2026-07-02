@@ -64,7 +64,6 @@ export const CONFIG_LOADER_JS = `(async () => {
       const stored = value && typeof value === "object" ? { ...value } : value;
       if (stored && typeof stored === "object") {
         delete stored.connectionId;
-        delete stored.leaseConnectionId;
       }
       sessionStorage.setItem(storageKey(), JSON.stringify(stored));
     } catch {
@@ -94,8 +93,7 @@ export const CONFIG_LOADER_JS = `(async () => {
   const entityId = cfg?.entityId;
   const slotId = cfg?.slotId ?? entityId;
   const url = new URL(location.href);
-  const configuredConnectionId = cfg?.connectionId ?? cfg?.leaseConnectionId;
-  const connectionId = typeof configuredConnectionId === "string" ? configuredConnectionId : undefined;
+  const connectionId = typeof cfg?.connectionId === "string" ? cfg.connectionId : undefined;
 
   if (!cfg || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
     const root = document.getElementById("root");
@@ -104,11 +102,11 @@ export const CONFIG_LOADER_JS = `(async () => {
   }
 
   globalThis.__natstackEntityId = entityId;
-  globalThis.__natstackId = entityId;
   globalThis.__natstackSlotId = slotId;
   const gatewayConfig = cfg.gatewayConfig;
-  const gatewayRpcWsUrl = gatewayConfig.serverUrl.replace(/^https:/, "wss:").replace(/^http:/, "ws:").replace(/\\/$/, "") + "/rpc";
-  globalThis.__natstackGatewayRpcWsUrl = gatewayRpcWsUrl;
+  // Panel RPC rides the shell bridge (host → WebRTC control channel), not a
+  // direct /rpc WebSocket: no panel-side ws URL is built. The token still
+  // arrives out-of-band here and is consumed by the bridge's SessionNegotiation.
   globalThis.__natstackGatewayToken = gatewayConfig.token;
   globalThis.__natstackKind = "panel";
 

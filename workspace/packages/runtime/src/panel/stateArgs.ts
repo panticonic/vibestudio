@@ -1,4 +1,3 @@
-import { useState, useEffect } from "react";
 import { applyStateArgsSnapshot } from "@natstack/shared/panel/applyStateArgsSnapshot";
 import type { PanelSlotId } from "@natstack/shared/panel/ids";
 
@@ -26,24 +25,6 @@ export function _initStateArgsRuntime(
  */
 export function getStateArgs<T = Record<string, unknown>>(): T {
   return (window.__natstackStateArgs ?? {}) as T;
-}
-
-/**
- * React hook for reactive state args access.
- * Re-renders when state args change via setStateArgs().
- */
-export function useStateArgs<T = Record<string, unknown>>(): T {
-  const [args, setArgs] = useState<T>(() => getStateArgs<T>());
-
-  useEffect(() => {
-    const handler = (event: CustomEvent<Record<string, unknown>>) => {
-      setArgs(event.detail as T);
-    };
-    window.addEventListener("natstack:stateArgsChanged", handler as EventListener);
-    return () => window.removeEventListener("natstack:stateArgsChanged", handler as EventListener);
-  }, []);
-
-  return args;
 }
 
 /**

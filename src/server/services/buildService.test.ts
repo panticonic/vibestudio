@@ -8,6 +8,7 @@ function buildTrigger(path: string) {
   return {
     head: "main",
     stateHash: "state:abcdef123",
+    repoStateHash: "state:abcdef123",
     sinceStateHash: "state:previous",
     eventId: "event:abcdef123",
     headHash: "head:abcdef123",

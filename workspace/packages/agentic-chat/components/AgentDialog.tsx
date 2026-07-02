@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Button, Callout, Dialog, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { isAgentParticipantType } from "@workspace/agentic-core";
-import type { AgentSubscriptionConfig, ModelCatalog } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
 import { AgentConfigForm, type AgentConfigDraft } from "./AgentConfigForm";
+import { draftForAgent as seedDraftForAgent, draftToConfig } from "./agentConfigDraft";
 import { AgentTypeCard } from "./AgentTypeCard";
 
 export interface AgentDialogProps {
@@ -16,32 +16,16 @@ export interface AgentDialogProps {
 
 type Mode = "add" | "switch" | "edit";
 
-function pickDefaultModel(
-  catalog: ModelCatalog | null,
-  connected: ReadonlySet<string>,
-  defaultModelRef?: string | null
-): string {
-  const models = catalog?.models ?? [];
+function sameDraft(a: AgentConfigDraft, b: AgentConfigDraft): boolean {
   return (
-    (defaultModelRef && models.some((m) => m.ref === defaultModelRef) ? defaultModelRef : null) ??
-    models.find((m) => m.recommended && connected.has(m.ref))?.ref ??
-    models.find((m) => connected.has(m.ref))?.ref ??
-    models.find((m) => m.recommended)?.ref ??
-    models[0]?.ref ??
-    ""
+    a.model === b.model &&
+    a.thinkingLevel === b.thinkingLevel &&
+    a.approvalLevel === b.approvalLevel &&
+    a.respondPolicy === b.respondPolicy &&
+    a.handle === b.handle &&
+    a.systemPrompt === b.systemPrompt &&
+    (a.respondFrom ?? []).join("\0") === (b.respondFrom ?? []).join("\0")
   );
-}
-
-function draftToConfig(draft: AgentConfigDraft): AgentSubscriptionConfig {
-  const config: AgentSubscriptionConfig = {};
-  if (draft.model) config.model = draft.model;
-  if (draft.thinkingLevel) config.thinkingLevel = draft.thinkingLevel;
-  if (draft.approvalLevel !== undefined) config.approvalLevel = draft.approvalLevel;
-  if (draft.respondPolicy) config.respondPolicy = draft.respondPolicy;
-  if (draft.respondFrom && draft.respondFrom.length > 0) config.respondFrom = draft.respondFrom;
-  if (draft.handle) config["handle"] = draft.handle;
-  if (draft.systemPrompt) config.systemPrompt = draft.systemPrompt;
-  return config;
 }
 
 export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDialogProps) {
@@ -52,6 +36,8 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     availableAgents = [],
     modelCatalog = null,
     defaultModelRef,
+    defaultAgentConfig,
+    onSaveDefaults,
     connectedModelRefs,
     onAddAgent,
     onReplaceAgent,
@@ -92,29 +78,21 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
   const [agentId, setAgentId] = useState<string | undefined>(availableAgents[0]?.id);
   const [step, setStep] = useState<"type" | "config">(showGallery ? "type" : "config");
   const [draft, setDraft] = useState<AgentConfigDraft>({ model: "" });
+  const [draftTouched, setDraftTouched] = useState(false);
   const [modelTouched, setModelTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const draftForAgent = useCallback(
-    (agent = availableAgents[0]): AgentConfigDraft => {
-      const defaults = agent?.defaultConfig ?? {};
-      const defaultHandle =
-        typeof defaults["handle"] === "string" ? defaults["handle"] : agent?.proposedHandle;
-      return {
-        model:
-          typeof defaults.model === "string"
-            ? defaults.model
-            : pickDefaultModel(modelCatalog, connectedRefs, defaultModelRef),
-        thinkingLevel: defaults.thinkingLevel,
-        approvalLevel: defaults.approvalLevel ?? 2,
-        respondPolicy: defaults.respondPolicy ?? (showReactiveness ? "mentioned" : undefined),
-        respondFrom: defaults.respondFrom,
-        handle: defaultHandle,
-        systemPrompt: defaults.systemPrompt,
-      };
-    },
-    [availableAgents, connectedRefs, defaultModelRef, modelCatalog, showReactiveness]
+    (agent = availableAgents[0]): AgentConfigDraft =>
+      seedDraftForAgent(agent, {
+        modelCatalog,
+        connectedRefs,
+        defaultModelRef,
+        defaultAgentConfig,
+        showReactiveness,
+      }),
+    [availableAgents, connectedRefs, defaultModelRef, defaultAgentConfig, modelCatalog, showReactiveness]
   );
 
   // Initialize when the dialog opens.
@@ -124,6 +102,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     setBusy(false);
     setStep(showGallery ? "type" : "config");
     setAgentId(availableAgents[0]?.id);
+    setDraftTouched(false);
     setModelTouched(false);
 
     if (mode === "add") {
@@ -168,13 +147,18 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
   }, [open]);
 
   useEffect(() => {
-    if (!open || mode !== "add" || modelTouched) return;
-    const nextModel = pickDefaultModel(modelCatalog, connectedRefs, defaultModelRef);
-    if (!nextModel) return;
-    setDraft((current) =>
-      current.model === nextModel ? current : { ...current, model: nextModel }
-    );
-  }, [open, mode, modelTouched, modelCatalog, connectedRefs, defaultModelRef]);
+    if (!open || mode !== "add" || draftTouched) return;
+    const agent = availableAgents.find((a) => a.id === agentId) ?? availableAgents[0];
+    const seeded = draftForAgent(agent);
+    if (!seeded.model && !seeded.handle) return;
+    setDraft((current) => {
+      const next = {
+        ...seeded,
+        model: modelTouched ? current.model : seeded.model,
+      };
+      return sameDraft(current, next) ? current : next;
+    });
+  }, [open, mode, draftTouched, modelTouched, agentId, availableAgents, draftForAgent]);
 
   const selectedModel = useMemo(
     () => modelCatalog?.models.find((m) => m.ref === draft.model) ?? null,
@@ -335,10 +319,13 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
               connectedRefs={connectedRefs}
               value={draft}
               onChange={(next) => {
+                setDraftTouched(true);
                 if (next.model !== draft.model) setModelTouched(true);
                 setDraft(next);
               }}
               modelEditable={mode !== "edit"}
+              defaultAgentConfig={defaultAgentConfig}
+              onSaveAsDefault={onSaveDefaults}
               showReactiveness={showReactiveness}
               showHandle={showHandle}
               participants={otherParticipants}

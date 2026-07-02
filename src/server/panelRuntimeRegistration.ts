@@ -33,6 +33,7 @@ import {
   getPanelSource,
   getPanelStateArgs,
 } from "@natstack/shared/panel/accessors";
+import { isBrowserPanelSource, isOpenPanelBrowserUrl } from "@natstack/shared/panelChrome";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
 import { resolveOwningPanelSlot } from "@natstack/shared/panel/owningPanelSlot";
 import { PanelManager } from "@natstack/shared/shell/panelManager";
@@ -89,6 +90,21 @@ function normalizePanelNavigationState(input: Record<string, unknown>): PanelNav
     ...(typeof input["canGoBack"] === "boolean" ? { canGoBack: input["canGoBack"] } : {}),
     ...(typeof input["canGoForward"] === "boolean" ? { canGoForward: input["canGoForward"] } : {}),
   };
+}
+
+function shouldValidateOpenPanelWorkspaceUnit(source: string): boolean {
+  if (!source) return false;
+  if (isBrowserPanelSource(source)) return false;
+  if (source.startsWith("about/")) return false;
+  return source === "panels" || source.startsWith("panels/");
+}
+
+function panelOpenBuildRef(options: Record<string, unknown>): string | undefined {
+  if (typeof options["ref"] === "string" && options["ref"].length > 0) return options["ref"];
+  if (typeof options["contextId"] === "string" && options["contextId"].length > 0) {
+    return `ctx:${options["contextId"]}`;
+  }
+  return undefined;
 }
 
 function normalizePanelTreeNavigateOptions(input: unknown):
@@ -549,8 +565,7 @@ export async function createServerPanelTreeBridge(
             null,
           contextId: getPanelContextId(panel),
           ref: snapshot.options.ref,
-          privileged:
-            snapshot.privileged === true || (snapshot as { shell?: boolean }).shell === true,
+          privileged: snapshot.privileged === true,
         };
       }
       case "create": {
@@ -580,7 +595,7 @@ export async function createServerPanelTreeBridge(
                 resolveParentId: async (id) =>
                   (await workspaceState.resolveActiveEntity(id))?.parentId,
               });
-        const isBrowser = /^https?:\/\//i.test(source);
+        const isBrowser = isOpenPanelBrowserUrl(source);
         // A null parent means a root panel. addPanel() treats a null parent
         // WITHOUT addAsRoot as "replace the tree with this single panel", so root
         // creates MUST set addAsRoot/isRoot — otherwise a root create would wipe
@@ -608,6 +623,7 @@ export async function createServerPanelTreeBridge(
           id: created.panelId,
           title: created.title,
           kind: isBrowser ? "browser" : "workspace",
+          parentId: parentId ?? null,
           contextId: created.contextId,
           source: created.source,
           runtimeEntityId,
@@ -702,6 +718,13 @@ export async function createServerPanelTreeBridge(
           source: result.source,
           contextId: result.contextId,
         };
+      }
+      case "historyTargetContext": {
+        // Non-mutating peek for the context-boundary gate (panelTreeService) so
+        // a cross-context back/forward is gated against its destination context.
+        const panelId = String(args[0]);
+        const delta = (args[1] === 1 ? 1 : -1) as -1 | 1;
+        return panelManager.historyTargetContext(asPanelSlotId(panelId), delta);
       }
       case "navigateHistory": {
         const panelId = String(args[0]);
@@ -867,6 +890,12 @@ export interface CommonDeps {
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
+  entityCache?: import("@natstack/shared/runtime/entityCache").EntityCache;
+  /** True when the target context already holds state (active entity or materialized folder). */
+  contextExists: (contextId: string) => boolean;
+  /** Human label for the entity owning the target context, for prompt copy. */
+  resolveContextOwnerLabel?: (contextId: string) => string | undefined;
   panelRuntimeCoordinator?: import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator;
   /**
    * Renderer of last resort: spawn (or reuse) the standalone headless host
@@ -1026,6 +1055,30 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     });
   };
 
+  // Shared context-boundary resolvers for the panel control-plane gate. Built from
+  // the active-entity cache so the panel-tree and CDP services attribute cross-
+  // context prompts to the real subject (the direct caller, or the anchor entity
+  // behind a host-mediated server/shell call).
+  const panelGateEntityCache = assertPresent(deps.entityCache);
+  const panelGateDeps = {
+    contextExists: deps.contextExists,
+    resolveContextOwnerLabel: deps.resolveContextOwnerLabel,
+    resolveCallerContext: async (callerId: string) => panelGateEntityCache.resolveContext(callerId),
+    resolveEntityContext: (entityId: string) => panelGateEntityCache.resolveContext(entityId),
+    resolveSubjectCaller: (entityId: string) => {
+      const rec = panelGateEntityCache.resolveActive(entityId);
+      if (!rec) return null;
+      const k = rec.kind;
+      if (k !== "panel" && k !== "app" && k !== "worker" && k !== "do") return null;
+      return createVerifiedCaller(rec.id, k, {
+        callerId: rec.id,
+        callerKind: k,
+        repoPath: rec.source.repoPath,
+        effectiveVersion: rec.source.effectiveVersion,
+      });
+    },
+  };
+
   {
     const { createWorkspaceService } = await import("./services/workspaceService.js");
     const { createWorkspaceConfigManager, createAndRegisterWorkspace, deleteWorkspaceDir } =
@@ -1077,12 +1130,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     container.registerManaged({
       name: "panelHttpServer",
       async start() {
-        const server = new PanelHttpServer(
-          hostConfig.bindHost,
-          adminToken,
-          hostConfig.externalHost,
-          hostConfig.protocol
-        );
+        const server = new PanelHttpServer();
         server.initHandlers();
         return { server, port: 0 };
       },
@@ -1120,8 +1168,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               )
             );
           },
-          canRegisterHostProvider: (hostConnectionId) =>
-            Boolean(deps.panelRuntimeCoordinator?.hasClientHostConnection(hostConnectionId)),
+          canRegisterHostProvider: (hostConnectionId, ownerCallerId) =>
+            Boolean(
+              deps.panelRuntimeCoordinator?.hasClientHostConnection(hostConnectionId, ownerCallerId)
+            ),
           resolveHostForTarget: (targetId) => {
             const resolved = deps.panelRuntimeCoordinator?.resolveHostForSlot(targetId);
             if (!resolved) return null;
@@ -1165,7 +1215,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           )
         );
         const { createPanelCdpService } = await import("./services/panelCdpService.js");
+        const { CdpHostProviderRpcChannel } = await import("./cdpHostProviderRpcChannel.js");
+        const hostProviderChannel = new CdpHostProviderRpcChannel(bridge);
         panelCdpDefinition = createPanelCdpService({
+          ...panelGateDeps,
           approvalQueue: assertPresent(deps.approvalQueue),
           grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
@@ -1193,6 +1246,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               import("./services/panelCdpService.js").PanelConsoleHistoryResult
             >;
           },
+          hostProvider: hostProviderChannel,
           logAccess: (event) => {
             const message = event.denied ? "Panel CDP access denied" : "Panel CDP access";
             const payload = {
@@ -1275,6 +1329,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             throw new Error(`CDP endpoint unavailable for panel: ${panelId}`);
           }
         }
+        return hostProviderChannel;
+      },
+      async stop(
+        instance: import("./cdpHostProviderRpcChannel.js").CdpHostProviderRpcChannel | undefined
+      ) {
+        instance?.stop();
       },
       getServiceDefinition() {
         if (!panelCdpDefinition) throw new Error("panelCdp service not initialized");
@@ -1287,12 +1347,15 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     let panelTreeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelTree",
-      dependencies: ["shellPresence"],
+      dependencies: ["shellPresence", "buildSystem", "workspace-state", "runtime"],
       async start(resolve) {
         const shellPresence = assertPresent(
           resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(
             "shellPresence"
           )
+        );
+        const buildSystem = assertPresent(
+          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
         const { createPanelTreeService } = await import("./services/panelTreeService.js");
         const bridge = await getPanelTreeBridge();
@@ -1300,11 +1363,22 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         // afterward mirror the seeded tree). See seedPanelTreeIfEmpty / plan Gate 3.
         await seedPanelTreeIfEmpty(bridge, deps.workspaceConfig?.initPanels ?? []);
         panelTreeDefinition = createPanelTreeService({
+          ...panelGateDeps,
           approvalQueue: assertPresent(deps.approvalQueue),
           grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
           hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
+          validateOpenPanelSource: async ({ source, options }) => {
+            if (!shouldValidateOpenPanelWorkspaceUnit(source)) return;
+            const ref = panelOpenBuildRef(options);
+            const unit = await buildSystem.resolveBuildUnit(source, ref);
+            if (!unit) {
+              throw new Error(
+                ref ? `Unknown build unit at ${ref}: ${source}` : `Unknown build unit: ${source}`
+              );
+            }
+          },
           bridge,
         });
       },
@@ -1340,7 +1414,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       panelHttpServer.populateSourceRegistry(entries);
 
       panelHttpServer.setCallbacks({
-        listPanels: () => [],
         getBuild: (source, ref) => buildSystem.getBuild(source, ref),
         onBuildComplete: (source, error) => {
           rpcServer.broadcastToControlPlane({

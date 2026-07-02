@@ -30,6 +30,14 @@ export const smokeTests: TestCase[] = [
     category: "smoke",
     prompt: "Exercise a basic file write/read round-trip.",
     validate: (result) => {
+      const completed = completedToolNames(result);
+      const missing = ["write", "read"].filter((name) => !completed.has(name));
+      if (missing.length > 0) {
+        return {
+          passed: false,
+          reason: `Expected completed tool calls for ${missing.join(", ")}. Completed: ${[...completed].join(", ") || "(none)"}`,
+        };
+      }
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();
       const hasWriteRead = lower.includes("wrote") || lower.includes("read") || lower.includes("content") || lower.includes("match");

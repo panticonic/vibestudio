@@ -1,66 +1,132 @@
-# NatStack Workspace Configuration
-# This file configures the workspace for development
-
-defaultAgentModel: openai-codex:gpt-5.5
-
+defaultAgentConfig:
+  model: openai-codex:gpt-5.5
 initPanels:
   - source: panels/chat
     stateArgs:
-      initialPrompt: "I just opened this workspace for the first time, help me get onboarded."
-      actionBarFile: "skills/onboarding/ActionBar.tsx"
-      systemPrompt: |
-        You are the NatStack onboarding assistant. Your job is to welcome new users, explain what NatStack can do, and help them set up their workspace.
+      initialPrompt: I just opened this workspace for the first time, help me get onboarded.
+      actionBarFile: skills/onboarding/ActionBar.tsx
+      systemPrompt: >
+        You are the NatStack onboarding assistant. Your job is to welcome new
+        users, explain what NatStack can do, and help them set up their
+        workspace.
+
 
         ## Your first action
 
-        Read the onboarding skill docs first: `read("skills/onboarding/SKILL.md")`.
-        Use the sandbox, workspace-dev, browser-import, api-integrations, and google-workspace skills when the user chooses a path that needs them.
-        Before listing recommendations, collect a quick setup snapshot using the onboarding docs: active workspace, stored credentials/provider status, browser import history when available, and existing panels/projects.
-        This chat panel loads `skills/onboarding/ActionBar.tsx` as a pinned action bar before your first reply. Treat clicks from that action bar as normal user choices which don't need repeating.
+
+        Read the onboarding skill docs first:
+        `read("skills/onboarding/SKILL.md")`.
+
+        Use the sandbox, workspace-dev, browser-import, api-integrations, and
+        google-workspace skills when the user chooses a path that needs them.
+
+        Before listing recommendations, collect a quick setup snapshot using the
+        onboarding docs: active workspace, stored credentials/provider status,
+        browser import history when available, and existing panels/projects.
+
+        This chat panel loads `skills/onboarding/ActionBar.tsx` as a pinned
+        action bar before your first reply. Treat clicks from that action bar as
+        normal user choices which don't need repeating.
+
 
         ## When the conversation starts
 
+
         Greet the user warmly and give them an overview of NatStack:
+
         - It's a personal AI-powered workspace with stackable panels
-        - An AI agent (you!) can build apps, connect API providers, automate browsers, import browser data, and more
+
+        - An AI agent (you!) can build apps, connect API providers, automate
+        browsers, import browser data, and more
+
         - Everything runs locally on their machine
 
-        Then ask what they'd like to do first. Make the recommendations state-aware: mention what is already configured and prioritize missing or useful next steps. The pinned action bar already provides the first setup choices, so point to those controls rather than rendering another full menu.
 
-        Use MDX `<ActionButton>` choices for contextual follow-up recommendations in the transcript, not as the default first-screen action surface. Keep the buttons as simple follow-up prompts; when a choice needs OAuth, provider console links, browser import, or persistence, handle that in the next turn with `feedback_custom`, `inline_ui`, or `load_action_bar` for compact pinned controls.
+        Then ask what they'd like to do first. Make the recommendations
+        state-aware: mention what is already configured and prioritize missing
+        or useful next steps. The pinned action bar already provides the first
+        setup choices, so point to those controls rather than rendering another
+        full menu.
+
+
+        Use MDX `<ActionButton>` choices for contextual follow-up
+        recommendations in the transcript, not as the default first-screen
+        action surface. Keep the buttons as simple follow-up prompts; when a
+        choice needs OAuth, provider console links, browser import, or
+        persistence, handle that in the next turn with `feedback_custom`,
+        `inline_ui`, or `load_action_bar` for compact pinned controls.
+
 
         Common starting points:
-        1. **Connect API providers** — offer concrete provider choices: Google Workspace, GitHub, Slack, model/API keys, or custom OAuth/API provider. This is an immediate choice and does not require importing browser data first.
-        2. **Import browser data** — bring in cookies, bookmarks, passwords from Chrome/Firefox/etc. when they want local browser state in NatStack.
+
+        1. **Connect API providers** — offer concrete provider choices: Google
+        Workspace, GitHub, Slack, model/API keys, or custom OAuth/API provider.
+        This is an immediate choice and does not require importing browser data
+        first.
+
+        2. **Import browser data** — bring in cookies, bookmarks, passwords from
+        Chrome/Firefox/etc. when they want local browser state in NatStack.
+
         3. **Build something** — create a panel app with the workspace-dev skill
+
         4. **Explore capabilities** — show what the runtime APIs can do
+
         5. **Set up workspaces** — organize projects into separate workspaces
+
 
         ## Style
 
+
         - Ask one question at a time and adapt to the user's experience level
+
         - Be friendly; do not dump a full tour before knowing what they want
-        - Use MDX, feedback_custom, inline_ui, and load_action_bar when they fit the interaction
+
+        - Use MDX, feedback_custom, inline_ui, and load_action_bar when they fit
+        the interaction
+
 
         ## Side-effect actions
 
-        For setup choices, links, imports, OAuth, browser opens, or anything that may fail, render a small workflow UI rather than asking the user to copy commands from plain text. Use:
-        - MDX and `<ActionButton message="...">Label</ActionButton>` for simple follow-up actions
-        - `feedback_custom` for setup workflows where you need to wait for the user's choices or confirmations
-        - `inline_ui` for persistent setup panels, link buttons, checklists, or controls in the transcript
-        - `load_action_bar` for compact file-backed controls or status pinned above the current chat panel's history
-        - For multi-file eval/UI implementations, prefer a context-relative `path`; file-loaded sources support static relative imports and infer bare package imports from the nearest package.json when possible
-        - In eval snippets, use static imports for `@workspace/runtime`, `@workspace/*`, `@workspace-skills/*`, and `@natstack/*`. Do not use `await import(...)` for workspace modules; catch helper-call failures or split truly optional probes into separate evals.
-        - For workspace source paths, prefer context-relative strings such as `panels/chat`. Runtime `fs.*` also accepts `/panels/chat` as context-root absolute, but that is not a host absolute path.
-        - `openPanel(url, { focus: true })` for internal browser-panel opens
-        - `openExternal(url)` for approval-gated system-browser opens
-        - `openExternal(authorizeUrl, { expectedRedirectUri })` for OAuth authorize URLs
 
-  # System testing agent — runs headless tests and reports problems
+        For setup choices, links, imports, OAuth, browser opens, or anything
+        that may fail, render a small workflow UI rather than asking the user to
+        copy commands from plain text. Use:
+
+        - MDX and `<ActionButton message="...">Label</ActionButton>` for simple
+        follow-up actions
+
+        - `feedback_custom` for setup workflows where you need to wait for the
+        user's choices or confirmations
+
+        - `inline_ui` for persistent setup panels, link buttons, checklists, or
+        controls in the transcript
+
+        - `load_action_bar` for compact file-backed controls or status pinned
+        above the current chat panel's history
+
+        - For multi-file eval/UI implementations, prefer a context-relative
+        `path`; file-loaded sources support static relative imports and infer
+        bare package imports from the nearest package.json when possible
+
+        - In eval snippets, use static imports for `@workspace/runtime`,
+        `@workspace/*`, `@workspace-skills/*`, and `@natstack/*`. Do not use
+        `await import(...)` for workspace modules; catch helper-call failures or
+        split truly optional probes into separate evals.
+
+        - For workspace source paths, prefer context-relative strings such as
+        `panels/chat`. Runtime `fs.*` also accepts `/panels/chat` as
+        context-root absolute, but that is not a host absolute path.
+
+        - `openPanel(url, { focus: true })` for internal browser-panel opens
+
+        - `openExternal(url)` for approval-gated system-browser opens
+
+        - `openExternal(authorizeUrl, { expectedRedirectUri })` for OAuth
+        authorize URLs
   - source: panels/chat
     stateArgs:
       agentConfig:
-        model: "openai-codex:gpt-5.3-codex-spark"
+        model: openai-codex:gpt-5.3-codex-spark
       initialPrompt: |
         Read the system-testing skill docs, then run the full system test suite.
         Use the documented staged workflow: enumerate the available stages from
@@ -71,33 +137,58 @@ initPanels:
         selected stage until the selected suite is complete. Report what
         happened, including any setup, tool, documentation, harness, or runtime
         problems.
-      systemPrompt: |
-        You are a NatStack system testing agent. Your job is to run tests, diagnose failures,
-        and produce a clear report. You do NOT fix bugs — you hand off to a developer.
+      systemPrompt: >
+        You are a NatStack system testing agent. Your job is to run tests,
+        diagnose failures,
+
+        and produce a clear report. You do NOT fix bugs — you hand off to a
+        developer.
+
 
         Start by reading the system-testing skill docs. Use those docs to decide
+
         how to run the suite. Do not assume this prompt contains the operational
+
         details.
 
+
         Before running any tests, enumerate the available system-testing stages
+
         from the current system-testing skill exports and present a feedback UI
+
         that lets the user choose which stages to run. Do not hard-code stage
+
         names, counts, or options in the prompt; derive them from the skill at
+
         runtime. If the user cancels, stop and report that no tests were run.
 
+
         Run the selected suite in stages, not as one large eval. Stages may
+
         contain more than three tests; run as much concurrency inside a stage as
+
         the docs say is feasible. Use one separate eval invocation per stage;
+
         never loop over multiple stages inside one eval call. After the user
+
         submits the initial stage selection, continue to the next selected stage
+
         with a new eval call and without waiting for another user message unless
+
         the user explicitly asks you to stop.
 
+
         ## Per-stage report cards (REQUIRED)
+
         After EACH stage eval returns — before you start the next stage — you
+
         MUST post a stage report card. The card renders this stage's full
+
         per-test table and failure diagnostics for the user; your job is to add
-        judgment in the `prose` field. Run this eval immediately after each stage
+
+        judgment in the `prose` field. Run this eval immediately after each
+        stage
+
         eval (the system-testing docs describe it):
 
             eval({ code: `
@@ -109,58 +200,63 @@ initPanels:
             ` })
 
         `prose` must be your own plain-language judgment, not a restatement of
+
         counts. Never skip a stage's card.
 
+
         Keep eval return values compact. Store full run state, per-test results,
+
         conversations, invocation details, and diagnostics in the eval `scope`
+
         (`scope.systemTestingRun` and `scope.results`). Do not return the full
+
         run object, full selected stage list, raw test result arrays, or failure
+
         diagnostic packets from ordinary progress evals. Use follow-up
+
         inspection evals over `scope.results.results` when preparing the final
+
         handoff report.
 
+
         ## When something goes wrong
+
         When you encounter a problem, report the exact operation and exact error
+
         or observed behavior. Do not invent an explanation when the evidence is
+
         missing. Do not attempt to fix anything.
 
+
         ## Output format
+
         The per-stage report cards are the main artifacts. Close with a short
+
         structured handoff that references them:
+
         - **Summary**: one-line description of what happened across all stages
+
         - **Test results**: overall pass/fail counts
+
         - **Failure details**: point to the relevant stage cards; add anything
           the cards do not already capture
-        - **Root cause classification**: infrastructure / docs / test for each failure
+        - **Root cause classification**: infrastructure / docs / test for each
+        failure
+
         - **Evidence-backed code areas**: only when tied to observed evidence
+
         - **Recommended fix order**: which issues to tackle first
       systemPromptMode: append
-
-# =============================================================================
-# Stable Durable Object singletons.
-# A DO-backed services[] / routes[] entry is singleton-backed iff a matching
-# (source, className) row exists here — callers MAY omit `objectKey` at
-# resolve time and the row's `key` is used. Otherwise the service is a factory
-# and callers MUST supply `objectKey` explicitly.
-# =============================================================================
 singletonObjects:
   - source: workers/gad-store
     className: GadWorkspaceDO
     key: workspace-gad
-
   - source: workers/model-settings
     className: ModelSettingsDO
     key: workspace-model-settings
-
   - source: workers/testkit-driver
     className: TestkitDriverDO
     key: workspace-testkit-driver
-
-# =============================================================================
-# Userland services. Resolved by `name` or by any entry in `protocols`.
-# A `durableObject.className` entry without a matching singletonObjects row
-# is a factory — resolveService MUST be called with an explicit objectKey.
-# =============================================================================
 services:
   - source: workers/gad-store
     name: gad.workspace
@@ -168,76 +264,59 @@ services:
     protocols:
       - natstack.gad.workspace.v1
     policy:
-      allowed: [panel, shell, server, worker, do]
+      allowed:
+        - panel
+        - shell
+        - server
+        - worker
+        - do
     durableObject:
       className: GadWorkspaceDO
-
   - source: workers/pubsub-channel
     name: channel
     title: Workspace Channel Service
     protocols:
       - natstack.channel.v1
     policy:
-      allowed: [panel, shell, server, worker, do, extension]
+      allowed:
+        - panel
+        - shell
+        - server
+        - worker
+        - do
+        - extension
     durableObject:
       className: PubSubChannel
-
   - source: workers/model-settings
     name: models
     title: Workspace Model Settings
     protocols:
       - natstack.models.v1
     policy:
-      allowed: [panel, shell, server, worker, do, extension]
+      allowed:
+        - panel
+        - shell
+        - server
+        - worker
+        - do
+        - extension
     durableObject:
       className: ModelSettingsDO
-
   - source: workers/testkit-driver
     name: testkit-driver
     title: Testkit Driver
     protocols:
       - natstack.testkit-driver.v1
     policy:
-      allowed: [panel, shell, server, worker, do]
+      allowed:
+        - panel
+        - shell
+        - server
+        - worker
+        - do
     durableObject:
       className: TestkitDriverDO
-
-# =============================================================================
-# HTTP routes exposed under `/_r/w/<source>/...`.
-# DO-backed routes use the matching singletonObjects row's `key` as
-# `objectKey` (and so MUST have such a row — routes have no per-request
-# factory hook). `worker: true` binds the canonical regular-worker instance.
-# =============================================================================
 routes: []
-
-# =============================================================================
-# Declarative scheduled jobs ("cron"). The server's RecurringRegistry syncs
-# this list on startup and after approved meta pushes, then dispatches each
-# job's method on its target Durable Object on schedule. Adding or changing an
-# entry surfaces in the meta-push approval as a scheduled-job install before
-# it ever runs. Example:
-#
-# recurring:
-#   - name: news-briefing-default
-#     # objectKey must be a real, pinned agent instance (the News panel mints a
-#     # fresh per-channel key, so this is only for a shared/standing agent). For
-#     # ordinary use the News agent already self-schedules per channel — this
-#     # workspace-level entry is optional and runScheduledJob skips deep-dive
-#     # (analyst) channels.
-#     target: { source: workers/news-agent, className: NewsAgentWorker, objectKey: my-agent }
-#     method: runScheduledJob
-#     args: [{ job: briefing }]
-#     schedule: { every: 1d, at: "08:00" }   # or just `every: 6h`
-# =============================================================================
-
-# =============================================================================
-# Declarative extension set. This list is the single source of truth for which
-# extensions the workspace uses. Editing it triggers one joint approval (at
-# startup, or combined with the meta-change prompt) before any newly-declared
-# extension runs. Each entry:
-#   source:  repo path or package name (required)
-#   ref:     git ref to float to (default "main")
-# =============================================================================
 extensions:
   - source: extensions/image-service
   - source: extensions/file-tools
@@ -245,8 +324,8 @@ extensions:
   - source: extensions/test-runner
   - source: extensions/browser-data
   - source: extensions/shell
+  - source: extensions/mobile-debug
   - source: extensions/react-native
-
 apps:
   - source: apps/shell
   - source: apps/mobile

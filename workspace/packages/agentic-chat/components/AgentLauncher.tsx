@@ -12,11 +12,14 @@ import { AgentDialog } from "./AgentDialog";
  * agent"; otherwise it "Add"s another agent. Reads everything from context.
  */
 export function AgentLauncher() {
-  const { onAddAgent, onReplaceAgent, messages, participants } = useChatContext();
+  const { onAddAgent, onReplaceAgent, messages, participants, deferredAgent } = useChatContext();
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
 
   if (!onAddAgent && !onReplaceAgent) return null;
+  // The inline first-agent setup owns adding the very first agent — hide the
+  // header launcher until an agent is actually present.
+  if (deferredAgent?.active) return null;
 
   const agentCount = Object.values(participants).filter((p) =>
     isAgentParticipantType(p.metadata.type)

@@ -31,6 +31,11 @@ import {
 
 import { createDevLogger } from "@natstack/dev-log";
 import { ShellOverlayView, type ShellOverlayOptions } from "./shellOverlayView.js";
+import {
+  ShellContentOverlayView,
+  type ContentOverlayShowOptions,
+  type ContentOverlayUpdateOptions,
+} from "./shellContentOverlayView.js";
 import type { AppCapability } from "@natstack/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@natstack/shared/chromeTrust";
 
@@ -191,7 +196,12 @@ export class ViewManager {
   private window: BaseWindow;
   private views = new Map<string, ManagedView>();
   private shellView: WebContentsView;
+  /** Whether the bootstrap launch-gate view is currently a child of the window.
+   *  It is fully detached on handoff to the hosted shell so its titlebar drag
+   *  region is cleared from the shared BaseWindow (see show/hideBootstrapShell). */
+  private bootstrapShellAttached = true;
   private nativeShellOverlay: ShellOverlayView;
+  private shellContentOverlay: ShellContentOverlayView;
   private currentThemeCss: string | null = null;
   /** Per-view locks to prevent concurrent withViewVisible operations */
   private visibilityLocks = new Map<string, Promise<unknown>>();
@@ -252,6 +262,7 @@ export class ViewManager {
     window: BaseWindow;
     shellPreload: string;
     shellOverlayPreload?: string;
+    contentOverlayPreload?: string;
     shellHtmlPath: string;
     shellAdditionalArguments?: string[];
     devTools?: boolean;
@@ -282,6 +293,17 @@ export class ViewManager {
       }
     );
     this.nativeShellOverlay.setWindow(this.window);
+    this.shellContentOverlay = new ShellContentOverlayView(
+      options.contentOverlayPreload ?? options.shellPreload,
+      () => {
+        const wc = this.getShellChromeWebContents();
+        return wc && !wc.isDestroyed() ? wc.getURL() : null;
+      },
+      (payload) => {
+        this.getShellChromeWebContents()?.send("natstack:content-overlay:forward", payload);
+      }
+    );
+    this.shellContentOverlay.setWindow(this.window);
 
     // Add shell to window and set it to fill
     this.window.contentView.addChildView(this.shellView);
@@ -386,10 +408,44 @@ export class ViewManager {
   }
 
   private updateShellBounds(): void {
+    // The bootstrap view is detached while the hosted shell owns the window
+    // (see hideBootstrapShell); there is nothing to size then.
+    if (!this.bootstrapShellAttached) return;
     const size = this.window.getContentSize();
     const width = size[0] ?? 0;
     const height = size[1] ?? 0;
     this.shellView.setBounds({ x: 0, y: 0, width, height });
+  }
+
+  /**
+   * Show the bootstrap launch gate, re-attaching the view if it was detached on
+   * handoff to the hosted shell. A WebContentsView must be attached (not merely
+   * setVisible(true)) for its content to render and its titlebar drag region to
+   * apply.
+   */
+  private showBootstrapShell(): void {
+    if (!this.bootstrapShellAttached) {
+      this.window.contentView.addChildView(this.shellView);
+      this.bootstrapShellAttached = true;
+    }
+    this.updateShellBounds();
+    this.shellView.setVisible(true);
+  }
+
+  /**
+   * Hide the bootstrap launch gate once the hosted shell is up. Fully detaches
+   * the view (removeChildView) rather than only setVisible(false): a
+   * hidden-but-attached WebContentsView keeps its `-webkit-app-region: drag`
+   * titlebar region registered on the shared BaseWindow, which leaks onto the
+   * hosted shell's titlebar and makes its chrome controls drag the window
+   * instead of click. Detaching clears that region.
+   */
+  private hideBootstrapShell(): void {
+    this.shellView.setVisible(false);
+    if (this.bootstrapShellAttached) {
+      this.window.contentView.removeChildView(this.shellView);
+      this.bootstrapShellAttached = false;
+    }
   }
 
   private fullWindowBounds(): ViewBounds {
@@ -507,7 +563,7 @@ export class ViewManager {
           this.clearAllPanelSlots();
           managed.visible = false;
           managed.view.setVisible(false);
-          this.shellView.setVisible(true);
+          this.showBootstrapShell();
           this.reconcileNativeLayerOrder();
         }
         if (["crashed", "oom", "launch-failed"].includes(details.reason)) {
@@ -780,7 +836,7 @@ export class ViewManager {
         log.verbose(
           ` Hosted shell ready reasserted by ${ownerViewId} (gen ${this.nativePanelSlots.hostedShellGeneration}); keeping ${this.nativePanelSlots.activeSlots.size} slot(s)`
         );
-        this.shellView.setVisible(false);
+        this.hideBootstrapShell();
         this.setViewVisible(ownerViewId, true);
         this.refreshActivePanelSlots();
         return;
@@ -792,7 +848,7 @@ export class ViewManager {
       this.clearAllPanelSlots();
       this.nativePanelSlots.activeHostedShellViewId = ownerViewId;
       this.nativePanelSlots.hostedShellReady = true;
-      this.shellView.setVisible(false);
+      this.hideBootstrapShell();
       this.setViewVisible(ownerViewId, true);
       this.reconcileNativeLayerOrder();
       return;
@@ -814,7 +870,7 @@ export class ViewManager {
     this.clearAllPanelSlots();
     owner.visible = false;
     owner.view.setVisible(false);
-    this.shellView.setVisible(true);
+    this.showBootstrapShell();
     this.reconcileNativeLayerOrder();
   }
 
@@ -1086,6 +1142,20 @@ export class ViewManager {
 
   isNativeShellOverlayVisible(): boolean {
     return this.nativeShellOverlay.isVisible();
+  }
+
+  showContentOverlay(options: ContentOverlayShowOptions): void {
+    // Like the rows overlay, just show + raise; no full reconcile (that re-stacks
+    // every managed view and can steal focus). `bringToFront` keeps it on top.
+    this.shellContentOverlay.show(options);
+  }
+
+  updateContentOverlay(options: ContentOverlayUpdateOptions): void {
+    this.shellContentOverlay.update(options);
+  }
+
+  hideContentOverlay(): void {
+    this.shellContentOverlay.hide();
   }
 
   private shouldHidePanelViewForBootstrap(managed: ManagedView): boolean {
@@ -1425,6 +1495,7 @@ export class ViewManager {
       cb();
     }
     this.nativeShellOverlay.bringToFront();
+    this.shellContentOverlay.bringToFront();
   }
 
   /**
@@ -2008,7 +2079,7 @@ export class ViewManager {
       this.clearAllPanelSlots();
       managed.visible = false;
       managed.view.setVisible(false);
-      this.shellView.setVisible(true);
+      this.showBootstrapShell();
       this.reconcileNativeLayerOrder();
     }
     managed.appIdentity = nextIdentity;
@@ -2095,6 +2166,7 @@ export class ViewManager {
     this.stopCompositorKeepalive();
     this.stopCompositorStallDetector();
     this.nativeShellOverlay.destroy();
+    this.shellContentOverlay.destroy();
 
     for (const id of this.views.keys()) {
       if (id !== "shell") {

@@ -23,6 +23,13 @@ import {
   type RpcStreamRequest,
 } from "@natstack/rpc";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
+import {
+  decodeControlFrame,
+  encodeControlFrame,
+  type SessionControlFrame,
+} from "@natstack/rpc/protocol/sessionNegotiation";
+import { encodeStreamErrorFrameV2 } from "@natstack/rpc/protocol/streamCodec";
+import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
 import type { ToolExecutionResult } from "@natstack/shared/types";
 import { createDevLogger } from "@natstack/dev-log";
@@ -75,6 +82,21 @@ function parseDOTarget(targetId: string): { source: string; className: string; o
 
 /** The server's identity stamped onto response envelopes it returns over /rpc. */
 const SERVER_RESPONDER = { callerId: "main", callerKind: "server" as const };
+
+function envelopeForWsDelivery(
+  fromId: string,
+  fromKind: CallerKind | "unknown",
+  targetId: string,
+  message: RpcMessage
+): RpcEnvelope {
+  return envelopeFromMessage({
+    selfId: fromId,
+    from: fromId,
+    target: targetId,
+    callerKind: fromKind,
+    message,
+  });
+}
 
 function envelopeTransportFromWsServer(transport: WsServerTransportInternal): EnvelopeRpcTransport {
   return {
@@ -158,6 +180,7 @@ type RelayErrorCode =
   | "SERVER_SHUTTING_DOWN"
   | "DO_CONTEXT_MISMATCH"
   | "DO_NOT_CREATED"
+  | "RPC_PROTOCOL_ERROR"
   | "TARGET_NOT_REACHABLE"
   | "UNKNOWN_TARGET_KIND";
 
@@ -450,6 +473,23 @@ export class RpcServer {
       sessionInboxCapacity?: SessionRegistryOptions["inboxCapacity"];
       sessionTtlMs?: SessionRegistryOptions["ttlMs"];
       runtimeCoordinator?: PanelRuntimeCoordinator;
+      /**
+       * Optional: redeem a device-pairing credential presented as a session
+       * token — a QR pairing `code` (fresh device) or `refresh:<deviceId>:<token>`
+       * (returning device) — into a shell principal. This is the over-the-pipe
+       * equivalent of the loopback HTTP `/complete-pairing` + `/refresh-shell`
+       * endpoints (which a remote WebRTC client cannot reach). A freshly issued
+       * device credential is returned so the auth-result hands it back to the
+       * client to persist for reconnects. Returns null if the token is neither.
+       */
+      redeemPairingCredential?: (
+        token: string,
+        ctx: { clientLabel?: string; clientPlatform?: ClientPlatform }
+      ) => {
+        callerId: string;
+        callerKind: CallerKind;
+        deviceCredential?: { deviceId: string; refreshToken: string };
+      } | null;
     }
   ) {
     this.dispatcher = deps.dispatcher;
@@ -551,8 +591,8 @@ export class RpcServer {
         this.getConnection(targetId, connectionId)
       );
     }
-    const leaseConnectionId = this.deps.runtimeCoordinator?.resolveRouteConnection(targetId);
-    if (leaseConnectionId) return this.getConnection(routedTargetId, leaseConnectionId);
+    const routeConnectionId = this.deps.runtimeCoordinator?.resolveRouteConnection(targetId);
+    if (routeConnectionId) return this.getConnection(routedTargetId, routeConnectionId);
     return this.pickPrimary(targetId);
   }
 
@@ -681,6 +721,7 @@ export class RpcServer {
 
     const grant = this.deps.connectionGrants?.redeem(token);
     let entry: { callerId: string; callerKind: CallerKind } | null;
+    let deviceCredential: { deviceId: string; refreshToken: string } | undefined;
     try {
       entry = grant
         ? {
@@ -690,6 +731,18 @@ export class RpcServer {
         : this.deps.tokenManager.validateToken(token);
     } catch {
       entry = null;
+    }
+    if (!entry) {
+      // A fresh device (pairing code) or a returning one (refresh credential)
+      // bootstraps its shell session over the pipe with no pre-issued bearer
+      // token. The refresh secret only exists at completePairing time (the store
+      // keeps just its hash), so a freshly issued device credential rides back on
+      // the auth-result for the client to persist for reconnects.
+      const paired = this.deps.redeemPairingCredential?.(token, { clientLabel, clientPlatform });
+      if (paired) {
+        entry = { callerId: paired.callerId, callerKind: paired.callerKind };
+        deviceCredential = paired.deviceCredential;
+      }
     }
     if (!entry) {
       const msg: WsServerMessage = {
@@ -801,6 +854,7 @@ export class RpcServer {
       connectionId,
       serverBootId: this.bootId,
       sessionDirty,
+      ...(deviceCredential ? { deviceCredential } : {}),
     };
     ws.send(JSON.stringify(authResult));
 
@@ -810,8 +864,7 @@ export class RpcServer {
       for (const queued of this.sessions.takeInbox(callerId)) {
         this.sendToWs(ws, {
           type: "ws:routed",
-          fromId: queued.fromId,
-          message: queued.message,
+          envelope: queued.envelope,
         });
       }
     }
@@ -870,8 +923,15 @@ export class RpcServer {
 
     switch (msg.type) {
       case "ws:rpc": {
-        const rpcMessage = msg.envelope?.message ?? msg.message;
-        if (!rpcMessage) return;
+        const envelope = (msg as { envelope?: RpcEnvelope }).envelope;
+        if (!envelope?.message) {
+          log.warn("malformed ws:rpc frame without envelope", {
+            callerId: client.caller.runtime.id,
+            callerKind: client.caller.runtime.kind,
+          });
+          return;
+        }
+        const rpcMessage = envelope.message;
         // If the message belongs to a server-initiated call via the client's RPC bridge,
         // route it to the client transport. Streaming responses use `stream-frame`; without
         // this branch, server -> extension stream callers wait forever for HEAD.
@@ -890,24 +950,27 @@ export class RpcServer {
             return;
           }
         }
-        void this.handleRpc(client, rpcMessage, msg.envelope);
+        void this.handleRpc(client, rpcMessage, envelope);
         break;
       }
       case "ws:tool-result":
         this.handleToolResult(msg.callId, msg.result as ToolExecutionResult);
         break;
       case "ws:route":
-        if (msg.envelope) {
-          this.handleRoute(
-            client,
-            msg.envelope.target,
-            msg.envelope.message,
-            msg.targetConnectionId,
-            msg.envelope
-          );
-        } else if (msg.targetId && msg.message) {
-          this.handleRoute(client, msg.targetId, msg.message, msg.targetConnectionId);
+        if (!msg.envelope?.message) {
+          log.warn("malformed ws:route frame without envelope", {
+            callerId: client.caller.runtime.id,
+            callerKind: client.caller.runtime.kind,
+          });
+          return;
         }
+        this.handleRoute(
+          client,
+          msg.envelope.target,
+          msg.envelope.message,
+          msg.targetConnectionId,
+          msg.envelope
+        );
         break;
       case "ws:auth":
         // Ignore duplicate auth messages
@@ -932,7 +995,7 @@ export class RpcServer {
   private async handleRpc(
     client: WsClientState,
     message: RpcMessage,
-    envelope?: RpcEnvelope
+    envelope: RpcEnvelope
   ): Promise<void> {
     if (message.type === "stream-request") {
       await this.handleWsStreamRequest(client, message, envelope);
@@ -960,11 +1023,11 @@ export class RpcServer {
     if (!parsed) {
       this.sendToWs(client.ws, {
         type: "ws:rpc",
-        message: {
+        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "response",
           requestId: request.requestId,
           error: `Invalid method format: "${request.method}". Expected "service.method"`,
-        },
+        }),
       });
       return;
     }
@@ -976,17 +1039,17 @@ export class RpcServer {
     } catch (error) {
       this.sendToWs(client.ws, {
         type: "ws:rpc",
-        message: {
+        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "response",
           requestId: request.requestId,
           error: error instanceof Error ? error.message : String(error),
-        },
+        }),
       });
       return;
     }
 
-    const idempotencyKey = envelope?.delivery.idempotencyKey;
-    const readOnly = envelope?.delivery.readOnly === true;
+    const idempotencyKey = envelope.delivery.idempotencyKey;
+    const readOnly = envelope.delivery.readOnly === true;
     const ctx = this.serviceContextForRpcMessage(client, request, {
       ...(request.requestId ? { requestId: request.requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -999,18 +1062,22 @@ export class RpcServer {
       const result = await dispatcher.dispatch(ctx, service, method, request.args);
       this.sendToWs(client.ws, {
         type: "ws:rpc",
-        message: { type: "response", requestId: request.requestId, result },
+        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
+          type: "response",
+          requestId: request.requestId,
+          result,
+        }),
       });
     } catch (error) {
       const errorCode = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
       this.sendToWs(client.ws, {
         type: "ws:rpc",
-        message: {
+        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "response",
           requestId: request.requestId,
           error: error instanceof Error ? error.message : String(error),
           ...(errorCode ? { errorCode } : {}),
-        },
+        }),
       });
     }
   }
@@ -1028,8 +1095,8 @@ export class RpcServer {
     client: WsClientState,
     targetId: string,
     message: RpcMessage,
-    targetConnectionId?: string,
-    routeEnvelope?: RpcEnvelope
+    targetConnectionId: string | undefined,
+    routeEnvelope: RpcEnvelope
   ): void {
     const auth = this.checkRelayAuth(
       client.caller.runtime.id,
@@ -1042,6 +1109,11 @@ export class RpcServer {
     }
 
     if (message.type === "response") {
+      if (targetId === "server") {
+        this.failServerBoundRoutedResponse(client, message);
+        return;
+      }
+
       // MED-7: route the response back to the ORIGIN CONNECTION that issued the
       // request, not merely to the origin caller's primary connection. A
       // multi-connection origin would otherwise misroute the reply to the wrong
@@ -1068,9 +1140,7 @@ export class RpcServer {
         (originClient) => {
           this.sendToWs(originClient.ws, {
             type: "ws:routed",
-            fromId: client.caller.runtime.id,
-            fromKind: client.caller.runtime.kind,
-            message,
+            envelope: routeEnvelope,
           });
         },
         (err) => this.sendRouteError(client, targetId, message, err)
@@ -1125,7 +1195,9 @@ export class RpcServer {
                 requestId,
                 result,
               }
-            ).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
+            ).catch((sendErr) => {
+              this.sendRouteError(client, targetId, message, sendErr);
+            });
           },
           (err) => {
             const errorCode = getErrorCode(err);
@@ -1157,10 +1229,7 @@ export class RpcServer {
 
     this.sendToWs(targetClient.ws, {
       type: "ws:routed",
-      ...(routeEnvelope ? { envelope: routeEnvelope } : {}),
-      fromId: client.caller.runtime.id,
-      fromKind: client.caller.runtime.kind,
-      message,
+      envelope: routeEnvelope,
     });
   }
 
@@ -1183,13 +1252,12 @@ export class RpcServer {
     if (message.type === "request") {
       this.sendToWs(client.ws, {
         type: "ws:routed",
-        fromId: targetId,
-        message: {
+        envelope: envelopeForWsDelivery(targetId, "unknown", client.caller.runtime.id, {
           type: "response",
           requestId: message.requestId,
           error: errorMessage,
           ...(errorCode ? { errorCode } : {}),
-        },
+        }),
       });
       return;
     }
@@ -1234,6 +1302,41 @@ export class RpcServer {
     }
   }
 
+  private failServerBoundRoutedResponse(client: WsClientState, message: RpcResponse): void {
+    const err = createRelayError(
+      `Protocol error: response for server request ${message.requestId} was sent via ws:route; use ws:rpc for server-bound responses`,
+      "RPC_PROTOCOL_ERROR"
+    );
+    const errorMessage = err.message;
+    const errorCode = getErrorCode(err);
+
+    log.warn("server-bound routed response", {
+      callerId: client.caller.runtime.id,
+      callerKind: client.caller.runtime.kind,
+      requestId: message.requestId,
+      error: errorMessage,
+      errorCode,
+    });
+
+    const transport = this.connections.getTransport(client.caller.runtime.id, client.connectionId);
+    if (transport) {
+      transport.deliver(client.caller.runtime.id, {
+        type: "response",
+        requestId: message.requestId,
+        error: errorMessage,
+        ...(errorCode ? { errorCode } : {}),
+      });
+    }
+
+    this.sendToWs(client.ws, {
+      type: "ws:routed-response-error",
+      targetId: "server",
+      requestId: message.requestId,
+      error: errorMessage,
+      ...(errorCode ? { errorCode } : {}),
+    });
+  }
+
   private recordRoutedRequestOrigin(requestId: string, client: WsClientState): void {
     this.routedRequestOrigins.set(requestId, {
       callerId: client.caller.runtime.id,
@@ -1257,8 +1360,7 @@ export class RpcServer {
     const originClient = await this.resolveWsRelayTarget(origin.callerId, origin.connectionId);
     this.sendToWs(originClient.ws, {
       type: "ws:routed",
-      fromId,
-      message,
+      envelope: envelopeForWsDelivery(fromId, "unknown", origin.callerId, message),
     });
   }
 
@@ -1266,8 +1368,8 @@ export class RpcServer {
     const callerId = client.caller.runtime.id;
     const callerKind = client.caller.runtime.kind;
     const connectionKey = this.connectionKey(callerId, client.connectionId);
-    const wasReplaced = this.connections.getConnection(callerId, client.connectionId) !== client;
-    this.connections.removeClient(client);
+    const removedActive = this.connections.removeClient(client);
+    const wasReplaced = !removedActive;
 
     // Abort any in-flight streaming RPCs owned by this connection.
     // Without this, the upstream fetch keeps draining bytes that
@@ -1280,7 +1382,7 @@ export class RpcServer {
       }
     }
 
-    if (callerKind === "panel") {
+    if (!wasReplaced && callerKind === "panel") {
       this.deps.runtimeCoordinator?.markDisconnected(callerId, client.connectionId);
       this.lastDisconnectAt.set(callerId, Date.now());
       log.info("panel disconnected", {
@@ -1297,7 +1399,9 @@ export class RpcServer {
                 : "other",
       });
     }
-    this.sessions.markDisconnected(callerId, callerKind);
+    if (!wasReplaced) {
+      this.sessions.markDisconnected(callerId, callerKind);
+    }
 
     // Reject pending tool calls for this client
     for (const [callId, pending] of this.pendingToolCalls) {
@@ -1308,7 +1412,8 @@ export class RpcServer {
       }
     }
 
-    // If this socket was replaced (code 4002), the replacement is already connected.
+    // If this socket was replaced, the replacement is already connected under the
+    // same caller/connection id. Do not arm reconnect waiters or expire the live lease.
     if (wasReplaced) return;
 
     if (!this.connectionReconnectWaiters.has(connectionKey)) {
@@ -2095,20 +2200,20 @@ export class RpcServer {
   private async handleWsStreamRequest(
     client: WsClientState,
     request: import("@natstack/rpc").RpcStreamRequest,
-    envelope?: RpcEnvelope
+    envelope: RpcEnvelope
   ): Promise<void> {
-    const idempotencyKey = envelope?.delivery.idempotencyKey;
-    const readOnly = envelope?.delivery.readOnly === true;
+    const idempotencyKey = envelope.delivery.idempotencyKey;
+    const readOnly = envelope.delivery.readOnly === true;
     const sendFrame = (frameType: number, payload: string): void => {
       this.sendToWs(client.ws, {
         type: "ws:rpc",
-        message: {
+        envelope: responseEnvelopeFor(envelope, SERVER_RESPONDER, {
           type: "stream-frame",
           requestId: request.requestId,
           fromId: "main",
           frameType,
           payload,
-        },
+        }),
       });
     };
 
@@ -2404,8 +2509,7 @@ export class RpcServer {
     if (client?.ws.readyState === WebSocket.OPEN) {
       this.sendToWs(client.ws, {
         type: "ws:routed",
-        fromId,
-        message: response,
+        envelope: envelopeForWsDelivery(fromId, "unknown", targetId, response),
       });
       return;
     }
@@ -2587,9 +2691,12 @@ export class RpcServer {
       for (const wsClient of wsClients) {
         this.sendToWs(wsClient.ws, {
           type: "ws:routed",
-          fromId,
-          fromKind,
-          message: { type: "event", fromId, event, payload },
+          envelope: envelopeForWsDelivery(fromId, fromKind, routedTargetId, {
+            type: "event",
+            fromId,
+            event,
+            payload,
+          }),
         });
       }
       return;
@@ -2752,6 +2859,154 @@ export class RpcServer {
   /** Accept a pre-upgraded WebSocket from the gateway (no WSS needed on our side). */
   handleGatewayWsConnection(ws: WebSocket): void {
     this.handleConnection(ws);
+  }
+
+  /**
+   * Attach the answerer side of a WebRTC pipe (plan §1/§3). N logical panel/shell
+   * sessions multiplex over the pipe's control channel; each `open` frame stands
+   * up a per-session `SessionWebSocketShim` that drives the EXISTING per-connection
+   * machinery (handleConnection → handleAuth → per-session bridge with close-time
+   * `CONNECTION_LOST` synthesis). Streaming bodies ride the binary bulk channel.
+   * This reuses one server RPC implementation — the answerer is a translation
+   * layer, not a parallel server (fail-loud rule). Local co-located mode keeps the
+   * loopback WS via `handleGatewayWsConnection`; both feed the same dispatch.
+   */
+  attachWebRtcPipe(
+    pipe: PipeChannels & {
+      onControl(handler: (data: Uint8Array) => void): void;
+      onDown?(handler: (reason: string) => void): () => void;
+    }
+  ): void {
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    const shims = new Map<string, SessionWebSocketShim>();
+    const writeControlFrame = (frame: SessionControlFrame): void => {
+      pipe.writeControl(encoder.encode(encodeControlFrame(frame)));
+    };
+    const writeUnknownSessionResponse = (sid: string, envelope: RpcEnvelope): void => {
+      const message = envelope.message;
+      if (message.type !== "request" && message.type !== "stream-request") return;
+      const response: RpcMessage = {
+        type: "response",
+        requestId: message.requestId,
+        error: "WebRTC session is not open",
+        errorCode: "SESSION_NOT_OPEN",
+      };
+      writeControlFrame({
+        t: "rpc",
+        sid,
+        envelope: responseEnvelopeFor(
+          envelope,
+          { callerId: "main", callerKind: "server" },
+          response
+        ),
+      });
+    };
+    const getShim = (sid: string, frameType: string): SessionWebSocketShim | undefined => {
+      const shim = shims.get(sid);
+      if (!shim) log.warn(`WebRTC pipe: dropping ${frameType} for unknown session ${sid}`);
+      return shim;
+    };
+
+    pipe.onDown?.((reason) => {
+      for (const [sid, shim] of [...shims]) {
+        shims.delete(sid);
+        shim.remoteClosed(1006, reason || "WebRTC pipe down");
+      }
+    });
+
+    pipe.onControl((data) => {
+      let frame: SessionControlFrame;
+      try {
+        frame = decodeControlFrame(decoder.decode(data));
+      } catch (err) {
+        log.warn(`WebRTC pipe: dropping malformed control frame: ${(err as Error).message}`);
+        return;
+      }
+      switch (frame.t) {
+        case "ping":
+          writeControlFrame({ t: "pong", ts: frame.ts });
+          return;
+        case "open": {
+          // A re-sent SESSION_OPEN on reconnect means the prior pipe generation's
+          // shim is stale (its connection is gone, but the answerer pipe + this
+          // closure survive the ICE re-establish). Tear it down — firing the old
+          // connection's handleClose WITHOUT writing SESSION_CLOSED to the client
+          // (it is re-opening, not closing), and GC'ing the old shim's per-session
+          // stream maps — so the re-sent auth drives a FRESH handleConnection →
+          // handleAuth that emits a new open-result. Reusing the stale shim would
+          // route the auth into the live handleMessage, which IGNORES a duplicate
+          // ws:auth (rpcServer ~"ws:auth" case), so reopen()/ready() would hang
+          // forever and onRecovery (resubscribe / cold-recover) would never fire.
+          const stale = shims.get(frame.sid);
+          if (stale) stale.remoteClosed(4000, "superseded by re-open");
+          const shim = new SessionWebSocketShim(frame.sid, pipe, (sid) => shims.delete(sid));
+          shims.set(frame.sid, shim);
+          // Drive the full auth/session/bridge pipeline for this logical session.
+          this.handleConnection(shim as unknown as WebSocket);
+          shim.deliverInbound({
+            type: "ws:auth",
+            token: frame.token,
+            connectionId: frame.connectionId,
+            clientLabel: frame.clientLabel,
+            clientSessionId: frame.clientSessionId,
+            clientPlatform: frame.clientPlatform,
+          });
+          return;
+        }
+        case "rpc": {
+          const shim = getShim(frame.sid, frame.t);
+          if (!shim) {
+            writeUnknownSessionResponse(frame.sid, frame.envelope);
+            return;
+          }
+          shim.deliverInbound({ type: "ws:rpc", envelope: frame.envelope });
+          return;
+        }
+        case "route": {
+          const shim = getShim(frame.sid, frame.t);
+          if (!shim) {
+            writeUnknownSessionResponse(frame.sid, frame.envelope);
+            return;
+          }
+          shim.deliverInbound({
+            type: "ws:route",
+            envelope: frame.envelope,
+            targetConnectionId: frame.targetConnectionId,
+          });
+          return;
+        }
+        case "stream-open": {
+          const shim = getShim(frame.sid, frame.t);
+          if (!shim) {
+            pipe.writeBulk(
+              encodeStreamErrorFrameV2(frame.streamId, {
+                status: 409,
+                message: "WebRTC session is not open",
+                code: "SESSION_NOT_OPEN",
+              })
+            );
+            return;
+          }
+          const requestId = (frame.envelope.message as { requestId?: string }).requestId;
+          if (requestId) shim.registerStream(requestId, frame.streamId);
+          shim.deliverInbound({ type: "ws:rpc", envelope: frame.envelope });
+          return;
+        }
+        case "stream-cancel":
+          getShim(frame.sid, frame.t)?.cancelStream(frame.streamId);
+          return;
+        case "close": {
+          const shim = shims.get(frame.sid);
+          shims.delete(frame.sid);
+          shim?.remoteClosed(frame.code, frame.reason);
+          return;
+        }
+        default:
+          // open-result/closed/routed/event/pong/*-error are client-bound.
+          return;
+      }
+    });
   }
 
   /** Handle an HTTP POST /rpc from the gateway (in-process dispatch). */

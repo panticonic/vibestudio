@@ -4,11 +4,15 @@ import path from "path";
 import process from "process";
 import net from "net";
 import { spawn } from "child_process";
+import { randomBytes, randomUUID } from "crypto";
 import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
 import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";
+import { createConnectDeepLink, parseConnectLink } from "./lib/connect-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
+const signalingDir = path.join(repoRoot, "apps", "signaling");
 const mobileDir = path.join(repoRoot, "apps", "mobile");
 const androidDir = path.join(mobileDir, "android");
 const appPackage = "com.natstack.mobile";
@@ -200,12 +204,120 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs = 120_000) {
   throw new Error(`Timed out waiting for server ready file: ${readyFile}`);
 }
 
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+// Cloudflare's local runtime (Miniflare) hosting the real SignalingRoom DO, the
+// WebRTC rendezvous — exactly as tests/webrtc-system.e2e.test.ts drives it.
+async function startSignaling(port) {
+  const child = spawnManaged(
+    wranglerBin,
+    ["dev", "--port", String(port), "--local", "--var", "ENVIRONMENT:test"],
+    { cwd: signalingDir, label: "signaling" }
+  );
+  for (let i = 0; i < 90; i++) {
+    if (child.exitCode != null) {
+      throw new Error(`wrangler dev (signaling) exited before healthy (code ${child.exitCode})`);
+    }
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`);
+      if (res.ok) return child;
+    } catch {
+      // Not up yet.
+    }
+    await sleep(1_000);
+  }
+  throw new Error("wrangler dev (signaling) did not become healthy");
+}
+
+// Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
+// natstack://connect?...` line. Attach this BEFORE the link can be printed so no
+// chunk is missed.
+function waitForPairingLink(serverChild, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    const onData = (chunk) => {
+      buffer += chunk.toString();
+      const match = buffer.match(/natstack:\/\/connect\?\S+/);
+      if (match) {
+        cleanup();
+        resolve(match[0]);
+      }
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      serverChild.stdout?.off("data", onData);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(
+        new Error(
+          "Timed out waiting for the server's [webrtc-answerer] pairing link. " +
+            "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
+        )
+      );
+    }, timeoutMs);
+    serverChild.stdout?.on("data", onData);
+  });
+}
+
 function makeAdbArgs(device, args) {
   return device ? ["-s", device, ...args] : args;
 }
 
 async function adb(device, ...args) {
   return runCommand("adb", makeAdbArgs(device, args), { label: "adb" });
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function shellCommand(args) {
+  return args.map(shellQuote).join(" ");
+}
+
+async function startConnectIntent(device, link) {
+  const packageResult = await adb(
+    device,
+    "shell",
+    shellCommand([
+      "am",
+      "start",
+      "-W",
+      "-a",
+      "android.intent.action.VIEW",
+      "-d",
+      link,
+      "-p",
+      appPackage,
+    ])
+  ).catch((error) => error);
+  if (!(packageResult instanceof Error)) return;
+
+  await adb(
+    device,
+    "shell",
+    shellCommand([
+      "am",
+      "start",
+      "-W",
+      "-a",
+      "android.intent.action.VIEW",
+      "-d",
+      link,
+      "-n",
+      appActivity,
+    ])
+  );
 }
 
 async function hasAdbDevice(device) {
@@ -228,24 +340,6 @@ async function waitForAndroidBoot(device, timeoutMs = 180_000) {
   throw new Error("Timed out waiting for Android boot completion");
 }
 
-async function writeDevBootstrap(serverUrl, pairingCode, workspaceName) {
-  await runCommand("node", [
-    "scripts/write-mobile-dev-bootstrap.mjs",
-    "--server-url",
-    serverUrl,
-    "--pairing-code",
-    pairingCode,
-    "--workspace-name",
-    workspaceName,
-    "--auto-connect",
-    "true",
-  ], { label: "bootstrap" });
-}
-
-async function clearDevBootstrap() {
-  await runCommand("node", ["scripts/write-mobile-dev-bootstrap.mjs", "--clear"], { label: "bootstrap" });
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -262,11 +356,6 @@ async function main() {
     if (cleanedUp) return;
     cleanedUp = true;
 
-    try {
-      await clearDevBootstrap();
-    } catch (error) {
-      console.warn(`[mobile-dev] Failed to clear bootstrap: ${error instanceof Error ? error.message : String(error)}`);
-    }
     try {
       await fsp.unlink(readyFilePath);
     } catch {}
@@ -339,6 +428,18 @@ async function main() {
       await fsp.unlink(readyFilePath);
     } catch {}
 
+    // Local signaling (Cloudflare local runtime) — the WebRTC rendezvous. The
+    // phone reaches it over loopback via the adb-reversed signaling port.
+    const signalPort = await findFreePort();
+    const signalingChild = await startSignaling(signalPort);
+    startedChildren.push(signalingChild);
+    const signalUrl = `ws://127.0.0.1:${signalPort}`;
+
+    // The server runs as a WebRTC answerer. We pick the room + pairing code; the
+    // server presents its persistent DTLS cert and logs the natstack://connect
+    // link whose `fp` pins that cert.
+    const room = randomUUID();
+    const pairingCode = randomBytes(18).toString("base64url");
     const serverArgs = [
       serverEntryArg(),
       "--app-root",
@@ -353,17 +454,36 @@ async function main() {
       env: {
         ...process.env,
         NODE_ENV: process.env.NODE_ENV ?? "development",
+        NATSTACK_WEBRTC_SIGNAL_URL: signalUrl,
+        NATSTACK_WEBRTC_ROOM: room,
+        NATSTACK_PAIRING_CODE: pairingCode,
       },
       label: "server",
     });
     await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
     startedChildren.push(serverChild);
+    // Capture the answerer's pairing link from stdout now (before readiness).
+    const pairingLinkPromise = waitForPairingLink(serverChild, 120_000);
 
     const ready = await waitForServerReady(readyFilePath, serverChild);
     readyInfo = ready;
-    await writeDevBootstrap(ready.connectUrl ?? ready.gatewayUrl, ready.pairingCode, "dev");
+    // Rebuild the WebRTC pairing link via the canonical builder (the server
+    // contributed `fp`; we own room/code/sig). The phone joins the loopback
+    // signaling room (adb-reversed) and pins the server's DTLS fingerprint.
+    const parsedPairing = parseConnectLink(await pairingLinkPromise);
+    if (parsedPairing.kind !== "ok") {
+      throw new Error(`Server logged an invalid pairing link: ${parsedPairing.reason}`);
+    }
+    const connectLink = createConnectDeepLink({
+      room: parsedPairing.room,
+      fp: parsedPairing.fp,
+      code: parsedPairing.code,
+      sig: parsedPairing.sig,
+      ice: parsedPairing.ice,
+    });
 
     await adb(options.device, "reverse", `tcp:${metroPort}`, `tcp:${metroPort}`);
+    await adb(options.device, "reverse", `tcp:${signalPort}`, `tcp:${signalPort}`);
     await adb(options.device, "reverse", `tcp:${ready.gatewayPort}`, `tcp:${ready.gatewayPort}`);
 
     if (!options.noInstall) {
@@ -380,7 +500,8 @@ async function main() {
     }
 
     if (!options.noLaunch) {
-      await adb(options.device, "shell", "am", "start", "-n", appActivity);
+      await adb(options.device, "shell", "am", "force-stop", appPackage).catch(() => null);
+      await startConnectIntent(options.device, connectLink);
     }
 
     console.log(`[mobile-dev] Ready`);

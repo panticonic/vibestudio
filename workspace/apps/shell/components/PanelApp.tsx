@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Flex } from "@radix-ui/themes";
+import { Box, Flex } from "@radix-ui/themes";
 
 import { effectiveThemeAtom, loadThemePreferenceAtom } from "../state/themeAtoms";
 import { NavigationProvider, useNavigation } from "./NavigationContext";
@@ -11,7 +11,7 @@ import { PanelStack } from "./PanelStack";
 import type { ChromeCommand } from "./PanelStack";
 import { TitleBar } from "./TitleBar";
 import { NotificationBar } from "./NotificationBar";
-import { ConsentApprovalBar } from "./ConsentApprovalBar";
+import { ConsentApprovalBar, APPROVAL_OVERLAY_HOST_ID } from "./ConsentApprovalBar";
 import type { PanelContextMenuAction } from "@natstack/shared/types";
 import type { PanelChromeState } from "@natstack/shared/panelChrome";
 
@@ -153,21 +153,35 @@ function PanelAppContent() {
       />
       <NotificationBar />
       <ConsentApprovalBar />
-      <PanelStack
-        onTitleChange={setCurrentTitle}
-        onChromeStateChange={setChromeState}
-        hostTheme={effectiveTheme}
-        onRegisterDevToolsHandler={(handler) => {
-          openPanelDevToolsRef.current = handler;
+      {/* Panel region — also the positioning host the approval card portals
+          into, so it floats over the panels rather than the chrome. */}
+      <Box
+        id={APPROVAL_OVERLAY_HOST_ID}
+        style={{
+          position: "relative",
+          flex: "1 1 0",
+          minHeight: 0,
+          minWidth: 0,
+          display: "flex",
+          flexDirection: "column",
         }}
-        onRegisterNavigateToId={registerNavigateToId}
-        onRegisterPanelAction={(handler) => {
-          handlePanelActionRef.current = handler;
-        }}
-        onRegisterChromeCommand={(handler) => {
-          handleChromeCommandRef.current = handler;
-        }}
-      />
+      >
+        <PanelStack
+          onTitleChange={setCurrentTitle}
+          onChromeStateChange={setChromeState}
+          hostTheme={effectiveTheme}
+          onRegisterDevToolsHandler={(handler) => {
+            openPanelDevToolsRef.current = handler;
+          }}
+          onRegisterNavigateToId={registerNavigateToId}
+          onRegisterPanelAction={(handler) => {
+            handlePanelActionRef.current = handler;
+          }}
+          onRegisterChromeCommand={(handler) => {
+            handleChromeCommandRef.current = handler;
+          }}
+        />
+      </Box>
     </Flex>
   );
 }

@@ -15,9 +15,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "http";
-import { createServer as createHttpsServer } from "https";
 import { randomBytes } from "crypto";
-import * as fs from "fs";
 import { connect as connectNet } from "net";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Duplex } from "stream";
@@ -160,16 +158,10 @@ export interface GatewayDeps {
    *  (`/_workercode/{name}`, `/_workerversion/{name}`). The workerd manager
    *  satisfies this; absent until workerd is wired. */
   getWorkerHost?: () => WorkerHostCodeProvider | null | undefined;
-  /** External hostname for generated public URLs and origin checks */
+  /** External hostname for origin checks (loopback only). */
   externalHost: string;
-  /** Current public URL for origin checks, including --public-url / NATSTACK_PUBLIC_URL overrides. */
-  getPublicUrl?: () => string | null | undefined;
-  /** Bind host (default "0.0.0.0") */
+  /** Bind host (loopback only; default "127.0.0.1") */
   bindHost?: string;
-  /** Path to TLS certificate file (enables HTTPS) */
-  tlsCert?: string;
-  /** Path to TLS private key file (enables HTTPS) */
-  tlsKey?: string;
   /** Called by /healthz to produce the JSON body */
   healthProvider?: (detailed: boolean) => Record<string, unknown>;
   /** Admin token — when provided and presented as Bearer, /healthz returns detailed fields */
@@ -183,6 +175,9 @@ export interface GatewayDeps {
   /** Route registry for `/_r/` dispatch (worker and service routes). Optional
    *  — when absent, `/_r/` paths fall through to 404. */
   routeRegistry?: RouteRegistry;
+  /** Lazily ensure a DO class/object before proxying a DO-backed `/_r/w/...`
+   *  route. This keeps route registration independent from startup prebuilds. */
+  ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void;
 }
 
 export class Gateway {
@@ -206,8 +201,6 @@ export class Gateway {
   }
 
   async start(port: number): Promise<number> {
-    const { tlsCert, tlsKey } = this.deps;
-
     const { healthProvider, adminToken, tokenManager, routeRegistry } = this.deps;
     const workerdToken = this.workerdGatewayToken;
 
@@ -451,19 +444,25 @@ export class Gateway {
 
       // /_r/ → route registry dispatch (worker + service HTTP routes)
       if (url.startsWith("/_r/") && routeRegistry) {
-        const handled = handleRouteRequest(
+        void handleRouteRequest(
           req,
           res,
           url,
           routeRegistry,
-          workerdPort,
+          () => this.deps.getWorkerdPort?.() ?? this.deps.workerdPort,
           adminToken,
           tokenManager,
           workerdToken,
-          this.deps.getWorkerdDispatchSecret?.()
-        );
-        if (handled) return;
-        // Fall through to 404 below — no panel fallback for `/_r/` misses.
+          this.deps.getWorkerdDispatchSecret?.(),
+          this.deps.ensureDORoute
+        ).catch((err: unknown) => {
+          log.warn(`Route dispatch error:`, err);
+          if (!res.headersSent && !res.writableEnded) {
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            res.end("Route dispatch error");
+          }
+        });
+        return;
       }
 
       // /_a/<build-key>/... → approved workspace app artifacts.
@@ -498,15 +497,9 @@ export class Gateway {
       res.end("Not Found");
     };
 
-    // Create HTTP or HTTPS server
-    if (tlsCert && tlsKey) {
-      this.server = createHttpsServer(
-        { cert: fs.readFileSync(tlsCert), key: fs.readFileSync(tlsKey) },
-        requestHandler
-      );
-    } else {
-      this.server = createServer(requestHandler);
-    }
+    // Loopback HTTP only — the public/TLS ingress is decommissioned; remote
+    // reach is the WebRTC pipe, co-located reach is loopback WS.
+    this.server = createServer(requestHandler);
 
     // WebSocket upgrade routing. No payload cap is configured here so the
     // gateway preserves existing WebSocket behavior for large developer flows.
@@ -517,10 +510,7 @@ export class Gateway {
       const rpcHandler = this.deps.getRpcHandler?.() ?? this.deps.rpcHandler;
       const panelHttpHandler = this.deps.getPanelHttpHandler?.() ?? this.deps.panelHttpHandler;
       const workerdPort = this.deps.getWorkerdPort?.() ?? this.deps.workerdPort;
-      const allowedOrigins = buildOriginAllowList(
-        this.deps.externalHost,
-        this.deps.getPublicUrl?.()
-      );
+      const allowedOrigins = buildOriginAllowList(this.deps.externalHost);
 
       // Origin allow-list (audit #30). Bearer auth still gates the actual
       // RPC, but rejecting cross-site browser connects defends against the
@@ -589,20 +579,26 @@ export class Gateway {
 
       // /_r/ → route registry dispatch (worker + service WS routes)
       if (url.startsWith("/_r/") && routeRegistry) {
-        const handled = handleRouteUpgrade(
+        void handleRouteUpgrade(
           req,
           socket,
           head,
           url,
           routeRegistry,
-          workerdPort,
+          () => this.deps.getWorkerdPort?.() ?? this.deps.workerdPort,
           adminToken,
           tokenManager,
           workerdToken,
-          this.deps.getWorkerdDispatchSecret?.()
-        );
-        if (handled) return;
-        // Miss → fall through to destroy below.
+          this.deps.getWorkerdDispatchSecret?.(),
+          this.deps.ensureDORoute
+        ).catch((err: unknown) => {
+          log.warn(`Route WS dispatch error:`, err);
+          if (!socket.destroyed) {
+            socket.write("HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\n");
+            socket.destroy();
+          }
+        });
+        return;
       }
 
       // Default: panel HTTP handler (CDP bridge, etc.)
@@ -613,13 +609,12 @@ export class Gateway {
       socket.destroy();
     });
 
-    const isTls = !!(tlsCert && tlsKey);
-    const bindHost = this.deps.bindHost ?? "0.0.0.0";
+    const bindHost = this.deps.bindHost ?? "127.0.0.1";
     return new Promise((resolve, reject) => {
       assertPresent(this.server).listen(port, bindHost, () => {
         const addr = assertPresent(this.server).address();
         const assignedPort = typeof addr === "object" && addr ? addr.port : port;
-        log.info(`Gateway listening on ${bindHost}:${assignedPort}${isTls ? " (TLS)" : ""}`);
+        log.info(`Gateway listening on ${bindHost}:${assignedPort}`);
         resolve(assignedPort);
       });
       assertPresent(this.server).on("error", reject);
@@ -653,30 +648,17 @@ export class Gateway {
  * curl, the Electron preload, etc., do not send Origin).
  *
  * The list intentionally does not contain a port: we accept any port the
- * caller used (the gateway is loopback-bound on the dev host; in remote
- * mode the externalHost resolves to a fixed published port).
+ * caller used (the gateway is loopback-bound).
  *
  * Override / extension: set `NATSTACK_WS_ALLOWED_ORIGINS` to a comma list
  * of additional origins (e.g. `http://my-dev-host:5173,chrome-extension://xyz`).
  */
-function buildOriginAllowList(
-  externalHost: string,
-  publicUrl?: string | null
-): { exact: Set<string>; suffix: Set<string> } {
+function buildOriginAllowList(externalHost: string): { exact: Set<string>; suffix: Set<string> } {
   const exact = new Set<string>();
   const suffix = new Set<string>();
   // Bare host on http/https.
   exact.add(`http://${externalHost}`);
   exact.add(`https://${externalHost}`);
-  if (publicUrl) {
-    try {
-      const parsed = new URL(publicUrl);
-      exact.add(parsed.origin);
-      exact.add(`${parsed.protocol}//${parsed.hostname}`);
-    } catch {
-      log.warn(`Ignoring invalid public URL for WS Origin allow-list: ${publicUrl}`);
-    }
-  }
   // Loopback dev origins.
   for (const h of ["localhost", "127.0.0.1", "[::1]"]) {
     exact.add(`http://${h}`);
@@ -918,6 +900,58 @@ function enforceAuth(
   }
 }
 
+function doRouteEnsureError(err: unknown): {
+  status: number;
+  statusText: string;
+  body: string;
+  headers?: Record<string, string>;
+} {
+  const code = (err as { code?: unknown })?.code;
+  const message = err instanceof Error ? err.message : String(err);
+  if (code === "RUNTIME_IMAGE_WARMING") {
+    return {
+      status: 503,
+      statusText: "Service Unavailable",
+      body: "DO route warming",
+      headers: { "Retry-After": "1" },
+    };
+  }
+  if (code === "RUNTIME_IMAGE_UNAVAILABLE") {
+    return {
+      status: 410,
+      statusText: "Gone",
+      body: `DO route unavailable: ${message}`,
+    };
+  }
+  return {
+    status: 503,
+    statusText: "Service Unavailable",
+    body: `DO route unavailable: ${message}`,
+  };
+}
+
+function writeDoRouteEnsureHttpError(res: ServerResponse, err: unknown): void {
+  const details = doRouteEnsureError(err);
+  res.writeHead(details.status, {
+    "Content-Type": "text/plain",
+    ...(details.headers ?? {}),
+  });
+  res.end(details.body);
+}
+
+function writeDoRouteEnsureUpgradeError(socket: Duplex, err: unknown): void {
+  const details = doRouteEnsureError(err);
+  const headers = Object.entries(details.headers ?? {})
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\r\n");
+  socket.write(
+    `HTTP/1.1 ${details.status} ${details.statusText}\r\n${
+      headers ? `${headers}\r\n` : ""
+    }Connection: close\r\n\r\n`
+  );
+  socket.destroy();
+}
+
 /**
  * Build the rewritten target path for a worker-route lookup.
  *
@@ -953,17 +987,18 @@ function buildWorkerTargetPath(
  * the request was handled (response started or dispatched); `false` if the
  * caller should continue with fallbacks.
  */
-function handleRouteRequest(
+async function handleRouteRequest(
   req: IncomingMessage,
   res: ServerResponse,
   url: string,
   routeRegistry: RouteRegistry,
-  workerdPort: number | null | undefined,
+  getWorkerdPort: () => number | null | undefined,
   adminToken: string | undefined,
   tokenManager: TokenManager,
   workerdToken: string,
-  workerdDispatchSecret?: string | null
-): boolean {
+  workerdDispatchSecret?: string | null,
+  ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void
+): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
   const method = req.method ?? "GET";
@@ -1003,17 +1038,26 @@ function handleRouteRequest(
   }
 
   // worker-do / worker-regular → reverse proxy to workerd with rewritten path.
+  if (result.kind === "worker-do" && !workerdDispatchSecret) {
+    res.writeHead(503, { "Content-Type": "text/plain" });
+    res.end("DO dispatch unavailable");
+    return true;
+  }
+  if (result.kind === "worker-do" && ensureDORoute) {
+    try {
+      await ensureDORoute(result.source, result.className, result.objectKey);
+    } catch (err) {
+      writeDoRouteEnsureHttpError(res, err);
+      return true;
+    }
+  }
+  const workerdPort = getWorkerdPort();
   if (!workerdPort) {
     res.writeHead(503, { "Content-Type": "text/plain" });
     res.end("workerd not running");
     return true;
   }
   const targetPath = buildWorkerTargetPath(result, url);
-  if (result.kind === "worker-do" && !workerdDispatchSecret) {
-    res.writeHead(503, { "Content-Type": "text/plain" });
-    res.end("DO dispatch unavailable");
-    return true;
-  }
   const extraHeaders =
     result.kind === "worker-do" && workerdDispatchSecret
       ? { "X-NatStack-Dispatch-Secret": workerdDispatchSecret }
@@ -1025,18 +1069,19 @@ function handleRouteRequest(
 /**
  * Handle a WebSocket upgrade that matched `/_r/`. Returns `true` if handled.
  */
-function handleRouteUpgrade(
+async function handleRouteUpgrade(
   req: IncomingMessage,
   socket: Duplex,
   head: Buffer,
   url: string,
   routeRegistry: RouteRegistry,
-  workerdPort: number | null | undefined,
+  getWorkerdPort: () => number | null | undefined,
   adminToken: string | undefined,
   tokenManager: TokenManager,
   workerdToken: string,
-  workerdDispatchSecret?: string | null
-): boolean {
+  workerdDispatchSecret?: string | null,
+  ensureDORoute?: (source: string, className: string, objectKey: string) => Promise<void> | void
+): Promise<boolean> {
   const qIdx = url.indexOf("?");
   const pathOnly = qIdx === -1 ? url : url.slice(0, qIdx);
   const method = req.method ?? "GET";
@@ -1066,17 +1111,26 @@ function handleRouteUpgrade(
     return true;
   }
 
+  if (result.kind === "worker-do" && !workerdDispatchSecret) {
+    socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+    return true;
+  }
+  if (result.kind === "worker-do" && ensureDORoute) {
+    try {
+      await ensureDORoute(result.source, result.className, result.objectKey);
+    } catch (err) {
+      writeDoRouteEnsureUpgradeError(socket, err);
+      return true;
+    }
+  }
+  const workerdPort = getWorkerdPort();
   if (!workerdPort) {
     socket.destroy();
     return true;
   }
   // Rewrite req.url so the upstream (workerd) sees the rewritten path.
   req.url = buildWorkerTargetPath(result, url);
-  if (result.kind === "worker-do" && !workerdDispatchSecret) {
-    socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
-    socket.destroy();
-    return true;
-  }
   const extraHeaders =
     result.kind === "worker-do" && workerdDispatchSecret
       ? { "X-NatStack-Dispatch-Secret": workerdDispatchSecret }

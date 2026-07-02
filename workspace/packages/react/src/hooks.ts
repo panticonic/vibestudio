@@ -357,3 +357,44 @@ export function useAgentState(key: string, value: unknown): void {
     };
   }, [key]);
 }
+
+// =============================================================================
+// State Args Hook
+// =============================================================================
+
+/**
+ * Reactively read this panel's state args, re-rendering whenever they change.
+ *
+ * Initializes from the synchronous snapshot (`runtime.panel.stateArgs.get()`,
+ * which reads `window.__natstackStateArgs`) and then subscribes to the
+ * host-published `"natstack:stateArgsChanged"` window event, whose `detail`
+ * carries the new args. Use this React hook in place of the one-shot
+ * `runtime.panel.stateArgs.get()` when the panel must follow live updates made
+ * via `runtime.panel.stateArgs.set()` (or by another panel).
+ *
+ * This is the React-bound replacement for the former
+ * `runtime.panel.stateArgs.use` / `@workspace/runtime` `useStateArgs`, which was
+ * moved here to keep `@workspace/runtime` framework-neutral. The non-reactive
+ * `get`/`set` helpers remain in `@workspace/runtime`.
+ *
+ * @example
+ * ```tsx
+ * function MyPanel() {
+ *   const args = useStateArgs<{ vaultId: string }>();
+ *   return <div>Vault: {args.vaultId}</div>;
+ * }
+ * ```
+ */
+export function useStateArgs<T = Record<string, unknown>>(): T {
+  const [args, setArgs] = useState<T>(() => runtime.panel.stateArgs.get<T>());
+
+  useEffect(() => {
+    const handler = (event: CustomEvent<Record<string, unknown>>) => {
+      setArgs(event.detail as T);
+    };
+    window.addEventListener("natstack:stateArgsChanged", handler as EventListener);
+    return () => window.removeEventListener("natstack:stateArgsChanged", handler as EventListener);
+  }, []);
+
+  return args;
+}

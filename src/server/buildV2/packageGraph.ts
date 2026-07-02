@@ -35,6 +35,12 @@ export interface GraphNode {
   internalDeps: string[];
   /** Dependency declaration errors that block this unit without aborting graph discovery. */
   dependencyErrors?: string[];
+  /**
+   * Declared `exports` subpaths from package.json (the keys, e.g. ".",
+   * "./panel"). Used by the push gate to validate a package's library bundles
+   * for each declared export, not just the root entry.
+   */
+  exports?: string[];
   /** natstack manifest from package.json */
   manifest: PackageManifest;
 }
@@ -140,7 +146,6 @@ const WORKSPACE_SCOPES = [
   "@workspace/",
   "@workspace-panels/",
   "@workspace-about/",
-  "@workspace-agents/",
   "@workspace-workers/",
   "@workspace-skills/",
   "@workspace-extensions/",
@@ -246,11 +251,24 @@ function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind
       dependencyOverrides: packageManagerOverrides(pkg),
       internalDeps,
       ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
+      ...(pkg.exports ? { exports: declaredExportSubpaths(pkg.exports) } : {}),
       manifest: pkg.natstack ?? {},
     });
   }
 
   return nodes;
+}
+
+/**
+ * Extract the declared subpath keys from a package.json `exports` field, e.g.
+ * `{ ".": ..., "./panel": ... }` → `[".", "./panel"]`. Conditional-only exports
+ * (a flat condition map without subpath keys) collapse to `["."]`.
+ */
+function declaredExportSubpaths(exports: Record<string, unknown>): string[] {
+  const keys = Object.keys(exports);
+  const subpaths = keys.filter((k) => k === "." || k.startsWith("./"));
+  if (subpaths.length === 0) return ["."];
+  return subpaths;
 }
 
 import type { TemplateConfig } from "./templateResolver.js";

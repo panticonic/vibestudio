@@ -9,4 +9,11 @@
  */
 
 export { autoMountSveltePanel, shouldAutoMount } from "./autoMount.js";
-export { theme, panelId, contextId, connectionError } from "./stores.js";
+export {
+  theme,
+  panelId,
+  contextId,
+  connectionError,
+  stateArgs,
+  setStateArgs,
+} from "./stores.js";

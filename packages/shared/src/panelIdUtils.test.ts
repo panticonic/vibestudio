@@ -2,7 +2,12 @@
  * Tests for panelIdUtils: sanitizePanelIdSegment, generatePanelNonce, computePanelId.
  */
 
-import { sanitizePanelIdSegment, generatePanelNonce, computePanelId } from "./panelIdUtils.js";
+import {
+  sanitizePanelIdSegment,
+  panelIdSegmentFromName,
+  generatePanelNonce,
+  computePanelId,
+} from "./panelIdUtils.js";
 
 vi.mock("crypto", () => ({
   randomBytes: vi.fn(() => Buffer.from([0xde, 0xad, 0xbe, 0xef])),
@@ -59,6 +64,22 @@ describe("sanitizePanelIdSegment", () => {
 
   it("throws for segment with leading underscore", () => {
     expect(() => sanitizePanelIdSegment("_foo")).toThrow("Invalid panel identifier segment");
+  });
+});
+
+describe("panelIdSegmentFromName", () => {
+  it("preserves already-valid panel id segments", () => {
+    expect(panelIdSegmentFromName("my-panel")).toBe("my-panel");
+  });
+
+  it("coerces human-readable names to safe panel id segments", () => {
+    expect(panelIdSegmentFromName("StateArgs CDP Test")).toBe("StateArgs-CDP-Test");
+    expect(panelIdSegmentFromName("  My Panel!!  ")).toBe("My-Panel");
+    expect(panelIdSegmentFromName("a/b\\c")).toBe("a-b-c");
+  });
+
+  it("still rejects names without any usable id characters", () => {
+    expect(() => panelIdSegmentFromName("...")).toThrow("Invalid panel identifier segment");
   });
 });
 

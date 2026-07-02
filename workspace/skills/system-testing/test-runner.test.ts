@@ -32,10 +32,14 @@ describe("TestRunner", () => {
       },
     } satisfies ChatMessage;
     const messages = [lifecycleMessage, diagnosticMessage];
+    let waitSignal: AbortSignal | undefined;
     const session = {
       channelId: "chat-timeout",
       messages,
-      sendAndWait: vi.fn(() => new Promise(() => undefined)),
+      sendAndWait: vi.fn((_prompt: string, opts?: { signal?: AbortSignal }) => {
+        waitSignal = opts?.signal;
+        return new Promise(() => undefined);
+      }),
       snapshot: vi.fn(() => ({
         messages,
         invocations: [{ id: "call-eval", name: "eval", status: "pending" }],
@@ -68,10 +72,12 @@ describe("TestRunner", () => {
       'Last lifecycle: waiting reason=model_credential_required "Waiting for model credential approval".'
     );
     expect(execution.error).toContain('Last diagnostic: code=message_empty "No assistant response".');
+    expect(waitSignal?.aborted).toBe(true);
     expect(runner.collectDiagnostics).toHaveBeenCalledWith({
       channelId: "chat-timeout",
       error: expect.objectContaining({ message: execution.error }),
     });
+    expect(session.close).toHaveBeenCalledWith({ waitForRemoteCleanup: false });
   });
 
   it("keeps the original test failure when diagnostics collection fails", async () => {
@@ -208,5 +214,70 @@ describe("TestRunner", () => {
         error: "ReferenceError: missingVar is not defined",
       }),
     ]);
+  });
+
+  it("runs custom test orchestration through the normal validation path", async () => {
+    const messages = [
+      {
+        id: "prompt-1",
+        senderId: "headless",
+        kind: "message",
+        complete: true,
+        content: "prompt",
+      },
+      {
+        id: "answer-1",
+        senderId: "agent",
+        kind: "message",
+        complete: true,
+        content: "ORCHESTRATED_OK",
+      },
+    ] satisfies ChatMessage[];
+    const session = {
+      channelId: "chat-orchestrated",
+      messages,
+      sendAndWait: vi.fn(async () => undefined),
+      snapshot: vi.fn(() => ({
+        messages,
+        invocations: [],
+        debugEvents: [],
+        cleanupErrors: [],
+        participants: {},
+        connected: true,
+        duration: 10,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({})),
+    } as unknown as HeadlessRunner;
+    const tester = new TestRunner(runner, { testTimeoutMs: 5 });
+
+    const { result, execution } = await tester.runOne({
+      name: "orchestrated-test",
+      category: "test",
+      description: "orchestrated",
+      prompt: "default prompt should not be sent directly",
+      orchestrate: async ({ runner: orchestrationRunner, sendAndWait }) => {
+        const target = await orchestrationRunner.spawn();
+        await sendAndWait(target, "phase prompt", "phase one");
+        return {
+          messages: [...target.messages],
+          duration: 1,
+          snapshot: target.snapshot(),
+        };
+      },
+      validate: (value) => ({
+        passed: value.messages.some((message) => message.content === "ORCHESTRATED_OK"),
+      }),
+    });
+
+    expect(result.passed).toBe(true);
+    expect(execution.messages).toEqual(messages);
+    expect(session.sendAndWait).toHaveBeenCalledWith(
+      "phase prompt",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 });

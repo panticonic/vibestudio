@@ -52,7 +52,7 @@ describe("@workspace-extensions/shell", () => {
     expect(approval.subject.label!.length).toBeLessThanOrEqual(80);
     expect(approval.summary!.length).toBeLessThanOrEqual(1000);
     for (const detail of approval.details ?? []) {
-      expect(detail.value.length).toBeLessThanOrEqual(200);
+      expect(detail.value.length).toBeLessThanOrEqual(1000);
     }
   });
 

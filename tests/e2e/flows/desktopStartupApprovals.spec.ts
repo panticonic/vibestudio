@@ -185,53 +185,67 @@ async function rpcCall(
 
 async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
   return testApp.app.evaluate(async ({ webContents }) => {
+    let hasHostedShellChrome = false;
+    let hasApprovalSurface = false;
+    let hasLaunchGateApproval = false;
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
       try {
-        const result = await contents.executeJavaScript(
+        const result = (await contents.executeJavaScript(
           `(() => {
-            const hasHostedShellApproval = Boolean(
-              document.querySelector(".approval-bar")
-                && (document.querySelector(".titlebar-breadcrumb-scroll")
-                  || document.querySelector('[aria-label="Menu"]'))
-            );
             const bodyText = document.body?.innerText ?? "";
-            const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-              && Array.from(document.querySelectorAll("button")).some((button) =>
-                /^(Approve and start|Deny)$/i.test(button.textContent?.trim() ?? "")
-              );
-            return hasHostedShellApproval || hasLaunchGateApproval;
+            return {
+              hasHostedShellChrome: Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
+                || document.querySelector('[aria-label="Menu"]')),
+              hasApprovalSurface: Boolean(document.querySelector(".approval-card, .approval-pill")),
+              hasLaunchGateApproval: Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
+                && Array.from(document.querySelectorAll("button")).some((button) =>
+                  /^(Approve and start|Deny)$/i.test(button.textContent?.trim() ?? "")
+                ),
+            };
           })()`,
           true
-        );
-        if (result) return true;
+        )) as {
+          hasHostedShellChrome: boolean;
+          hasApprovalSurface: boolean;
+          hasLaunchGateApproval: boolean;
+        };
+        hasHostedShellChrome ||= result.hasHostedShellChrome;
+        hasApprovalSurface ||= result.hasApprovalSurface;
+        hasLaunchGateApproval ||= result.hasLaunchGateApproval;
       } catch {
         // Ignore non-DOM webContents.
       }
     }
-    return false;
+    return hasLaunchGateApproval || (hasHostedShellChrome && hasApprovalSurface);
   });
 }
 
 async function hostedShellHasApprovalUi(testApp: TestApp): Promise<boolean> {
   return testApp.app.evaluate(async ({ webContents }) => {
+    let hasHostedShellChrome = false;
+    let hasApprovalSurface = false;
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
       try {
-        const result = await contents.executeJavaScript(
-          `(() => Boolean(
-            document.querySelector(".approval-bar")
-              && (document.querySelector(".titlebar-breadcrumb-scroll")
-                || document.querySelector('[aria-label="Menu"]'))
-          ))()`,
+        const result = (await contents.executeJavaScript(
+          `(() => ({
+            hasHostedShellChrome: Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
+              || document.querySelector('[aria-label="Menu"]')),
+            hasApprovalSurface: Boolean(document.querySelector(".approval-card, .approval-pill")),
+          }))()`,
           true
-        );
-        if (result) return true;
+        )) as {
+          hasHostedShellChrome: boolean;
+          hasApprovalSurface: boolean;
+        };
+        hasHostedShellChrome ||= result.hasHostedShellChrome;
+        hasApprovalSurface ||= result.hasApprovalSurface;
       } catch {
         // Ignore non-DOM webContents.
       }
     }
-    return false;
+    return hasHostedShellChrome && hasApprovalSurface;
   });
 }
 
@@ -290,7 +304,7 @@ async function clickShellButton(testApp: TestApp, label: RegExp): Promise<boolea
             `(() => {
               const hasHostedShellChrome = Boolean(document.querySelector(".titlebar-breadcrumb-scroll")
                 || document.querySelector('[aria-label="Menu"]'));
-              const hasApprovalBar = Boolean(document.querySelector(".approval-bar"));
+              const hasApprovalBar = Boolean(document.querySelector(".approval-card, .approval-pill"));
               const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
                 && Array.from(document.querySelectorAll("button")).some((button) =>
                   /^(Approve and start|Deny)$/i.test(button.textContent?.trim() ?? "")
@@ -362,7 +376,7 @@ async function listShellDomSnapshots(testApp: TestApp): Promise<
       try {
         const dom = await contents.executeJavaScript(
           `(() => {
-            const approval = document.querySelector(".approval-bar");
+            const approval = document.querySelector(".approval-card, .approval-pill");
             const bodyText = document.body?.innerText ?? "";
             const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
               && Array.from(document.querySelectorAll("button")).some((button) =>

@@ -69,6 +69,15 @@ contextBridge.exposeInMainWorld("__natstackShellOverlay", {
     return () => ipcRenderer.off("natstack:shell-overlay:event", listener);
   },
 });
+// Intents forwarded from the content-overlay surface (a separate WebContents)
+// back to the hosted shell that owns the surface's state + RPC.
+contextBridge.exposeInMainWorld("__natstackContentOverlayHost", {
+  on(handler: (payload: unknown) => void) {
+    const listener = (_event: IpcRendererEvent, payload: unknown) => handler(payload);
+    ipcRenderer.on("natstack:content-overlay:forward", listener);
+    return () => ipcRenderer.off("natstack:content-overlay:forward", listener);
+  },
+});
 contextBridge.exposeInMainWorld("__natstackIncomingPairLink", {
   getPending() {
     return ipcRenderer.invoke("natstack:drain-pair-link") as Promise<{

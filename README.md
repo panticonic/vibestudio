@@ -82,32 +82,53 @@ NatStack is built as a hierarchical, tree-based browser where every "tab" is a s
 
 ## Installation
 
+Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
+
+### Desktop app (macOS, Linux; Windows soon)
+
+Installs the GUI and the bundled server:
+
 ```bash
-pnpm install
+npm install -g @natstack/app
+natstack             # launch the desktop app
+natstack --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
 ```
 
-During development, run the CLI live from TypeScript:
+On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
+DMG/AppImage/deb installers are published to GitHub Releases as they become available.
+
+### Headless server (remote/home server; clients connect to it)
 
 ```bash
-pnpm cli --help
-pnpm cli remote serve --host tailscale --port 3030
+npm install -g @natstack/server
+export NATSTACK_WEBRTC_SIGNAL_URL=wss://natstack-signaling.<account>.workers.dev
+natstack remote serve --port 3030
+# quick one-off (no global install):
+npx -p @natstack/server natstack remote serve --signal-url wss://natstack-signaling.<account>.workers.dev --port 3030
+```
+
+The server installs with no compiler (workerd/esbuild ship prebuilt binaries) and
+builds panels/workers on demand. Remote clients pair over WebRTC; the signaling
+endpoint is only used to rendezvous, not to carry workspace data. See
+[docs/webrtc-deployment.md](docs/webrtc-deployment.md) and [docs/cli.md](docs/cli.md).
+
+### Develop (contributors)
+
+```bash
+pnpm install
+pnpm dev             # build + start Electron with DevTools
+pnpm dev:webrtc      # build + start local server, then connect to it over WebRTC
+pnpm cli --help      # run the CLI live from TypeScript
 pnpm server:live --help
 ```
 
-For a stable `natstack` command on your PATH:
-
-```bash
-pnpm build
-pnpm link --global
-```
-
-The linked command runs built files from `dist/`; re-run `pnpm build` after
-server, Electron, shared runtime, or built CLI changes. `pnpm cli ...` runs the
-CLI and standalone server live from TypeScript. See [docs/cli.md](docs/cli.md).
+See [docs/cli.md](docs/cli.md). (The published npm packages above replace the old
+`pnpm link --global` flow; `pnpm dev` / `pnpm cli` remain the dev workflow.)
 
 ## Scripts
 
 - `pnpm dev` - Build and start in development mode with DevTools
+- `pnpm dev:webrtc` - Build, start a local workspace server as a WebRTC answerer, and launch Electron through the remote transport
 - `pnpm dev -- --auto-approve` - Start dev mode and automatically approve decision-style approval prompts
 - `pnpm build` - Production build
 - `pnpm start` - Start the app (requires prior build)
@@ -134,6 +155,18 @@ pnpm dev
 ```
 
 The app will open with DevTools enabled for debugging.
+
+To exercise the remote WebRTC transport without a second machine:
+
+```bash
+pnpm rebuild node-datachannel   # one-time, if the native module is not built
+pnpm dev:webrtc
+```
+
+`pnpm dev:webrtc` starts local signaling, starts a local workspace server as a
+WebRTC answerer, and launches Electron with a fresh `natstack://connect` link.
+Use `pnpm dev:webrtc -- --ephemeral` for a disposable workspace, or
+`pnpm dev:webrtc -- --workspace <name>` to force a specific workspace.
 
 ### Memory Diagnostics (optional)
 
@@ -177,22 +210,28 @@ HTTP.
 ### Prerequisites
 
 ```bash
-pnpm install
-pnpm build
+npm install -g @natstack/server
 ```
+
+For development from a source checkout instead: `pnpm install && pnpm build`.
 
 ### Running
 
 ```bash
-node dist/server.mjs --host 0.0.0.0 --gateway-port 3030
+export NATSTACK_WEBRTC_SIGNAL_URL=wss://natstack-signaling.<account>.workers.dev
+natstack remote serve --port 3030
+# from a source checkout:
+pnpm cli remote serve --signal-url wss://natstack-signaling.<account>.workers.dev --port 3030
 ```
 
-On startup the server prints connection details:
+The installed launcher pins the app root to the package, so it works from any
+directory. On startup the pairing server prints a QR/deep-link:
 
 ```
-natstack-server ready:
-  Gateway:     http://127.0.0.1:3030
-  Pairing code: abc123...
+Pair a NatStack device
+  Room:        ...
+  Fingerprint: ...
+  Pair URL:    natstack://connect?room=...&fp=...&code=...&sig=...
 ```
 
 ### CLI Flags
@@ -200,38 +239,35 @@ natstack-server ready:
 | Flag                  | Description                                             |
 | --------------------- | ------------------------------------------------------- |
 | `--app-root=PATH`     | Application root (defaults to cwd)                      |
-| `--host=HOST`         | External hostname or address clients can reach          |
 | `--gateway-port=PORT` | Port for the hub HTTP/WS ingress (default: random)      |
-| `--public-url=URL`    | Verified public URL used for OAuth/webhook routes       |
 | `--log-level=LEVEL`   | Log level                                               |
+
+The gateway binds loopback only; remote clients reach it over WebRTC (paired by
+QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
+decommissioned with remote-mode public ingress. OAuth/webhook routes resolve
+through the callback relay (`NATSTACK_RELAY_OAUTH_BASE_URL`).
 
 The public server is always a hub. Clients pair with the hub, choose a
 workspace, and then connect to `/_workspace/<name>`. Workspace flags are
 reserved for internal child runtimes and are rejected by the public server.
 
-### Android phone over VPN
+### Android phone pairing
 
-For trusted phone testing over a VPN/LAN, build the internal Android app and
-start a stable QR-pairing server. If you use the Tailscale HTTPS route, first
-configure Serve on the server machine once:
-
-```bash
-sudo tailscale serve --bg 3030
-```
-
-Then start pairing:
+For phone testing, build the internal Android app and start a QR-pairing server.
+Pairing is over WebRTC (signaling room + DTLS fingerprint) — no Tailscale/VPN or
+HTTPS serve setup:
 
 ```bash
 natstack mobile install --launch
 pnpm build
-natstack mobile pair --host tailscale --port 3030
+natstack mobile pair --port 3030
 ```
 
-See [docs/mobile-vpn.md](docs/mobile-vpn.md) for host selection, workspace
-selection, dev workspace mode, and reconnect behavior. Use the desktop app's
-bootstrap screen to pair a laptop without copying an admin token.
-After one desktop client is connected, use **Remote server** → **Paired
-devices** → **Pair another device** to create additional pairing links.
+Scan the printed `natstack://connect?room=…&fp=…&code=…&sig=…` QR. See
+[docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the WebRTC pairing +
+local setup. Use the desktop app's bootstrap screen to pair a laptop without
+copying an admin token. After one desktop client is connected, use **Remote
+server** → **Paired devices** → **Pair another device** for additional links.
 
 Each panel gets:
 

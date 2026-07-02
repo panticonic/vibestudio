@@ -45,7 +45,13 @@ const _slotId = config.slotId ?? config.entityId;
 const _env = config.env;
 export const id = config.entityId;
 const gatewayConfig = config.gatewayConfig;
-const gatewayFetch = createGatewayFetch(gatewayConfig);
+const gatewayFetch = createGatewayFetch(gatewayConfig, {
+  // Stream gateway fetches over the panel's RPC client; it falls back to the
+  // duplex stream-frame envelope path when the host bridge has no first-class
+  // stream() (mobile and desktop), so gatewayFetch no longer hard-requires one.
+  rpcStream: (target, method, args, options) =>
+    runtime.rpc.stream(target, method, args, options?.signal ? { signal: options.signal } : undefined),
+});
 const {
   parentId: runtimeParentId,
   parentEntityId: runtimeParentEntityId,
@@ -188,7 +194,7 @@ export type { NotificationClient } from "./notifications.js";
 export type { CdpAutomation, CdpEndpoint } from "./cdpAutomation.js";
 
 // --- Panel-only affordances under the `panel` namespace (panel target only) ---
-import { getStateArgs, useStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js";
+import { getStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js";
 
 /**
  * Reopen THIS panel in place under a (possibly new) context + state args — a
@@ -237,7 +243,6 @@ export const panel = helpfulNamespace("panel", {
   stateArgs: helpfulNamespace("panel.stateArgs", {
     get: getStateArgs,
     set: setStateArgs,
-    use: useStateArgs,
     setForPanel: setStateArgsForPanel,
   }),
 });

@@ -66,9 +66,11 @@ export const evalRunArgsSchema = z
 export const evalRunResultSchema = z
   .object({
     success: z.boolean(),
-    /** Formatted console output captured during the run. */
+    /** Formatted console output captured during the run. Oversized output may be windowed; read
+     *  `scope.$lastConsole` in a follow-up eval for the bounded saved copy. */
     console: z.string(),
-    /** Safe-serialized return value (present on success). */
+    /** Safe-serialized return value (present on success). Oversized values may be replaced with a
+     *  structured truncation summary pointing at `scope.$lastReturn`. */
     returnValue: z.unknown().optional(),
     /** Error message (present on failure). */
     error: z.string().optional(),

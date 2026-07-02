@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { FLAT_SECTIONS } from "../runtime/entitySpec.js";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
@@ -35,7 +36,12 @@ export function normalizeWorkspaceRepoPath(repoPath: string): string {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
   }
   const segments = normalized.split("/");
-  if (segments.length < 2 || segments.some((segment) => !SAFE_REPO_SEGMENT.test(segment))) {
+  if (segments.some((segment) => !SAFE_REPO_SEGMENT.test(segment))) {
+    throw new Error(`Invalid workspace repo path: ${repoPath}`);
+  }
+  // Single-segment paths are only valid for the designated flat-section repos
+  // (today only `meta`, which holds `natstack.yml`/`AGENTS.md` directly).
+  if (segments.length < 2 && !FLAT_SECTIONS.has(normalized)) {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
   }
   return normalized;

@@ -38,7 +38,7 @@ async function listWebContents(testApp: TestApp): Promise<WebContentsSnapshot[]>
             text: document.body?.innerText ?? "",
             hasTitlebar: !!document.querySelector(".titlebar-breadcrumb-scroll")
               || !!document.querySelector('[aria-label="Menu"]'),
-            hasApprovalBar: !!document.querySelector(".approval-bar"),
+            hasApprovalBar: !!document.querySelector(".approval-card, .approval-pill"),
           })`,
           true
         );
@@ -86,7 +86,7 @@ async function getPanelSurfaceLayout(testApp: TestApp): Promise<{
             if (!surface) return null;
             return {
               surface,
-              approval: rectFor(document.querySelector(".approval-bar")),
+              approval: rectFor(document.querySelector(".approval-card, .approval-pill")),
               topChrome: Array.from(document.querySelectorAll("[data-shell-top-chrome]"))
                 .map(rectFor)
                 .filter(Boolean),
@@ -198,10 +198,10 @@ test.describe("Desktop Shell Chrome", () => {
             Math.abs(slot.bounds.y - layout.surface.y) <= 1 &&
             Math.abs(slot.bounds.width - layout.surface.width) <= 1 &&
             Math.abs(slot.bounds.height - layout.surface.height) <= 1;
-          const approvalDoesNotOverlap =
-            !layout.approval ||
-            layout.approval.bottom <= layout.surface.y ||
-            layout.approval.y >= layout.surface.bottom;
+          // The approval card is now a deliberate overlay floating over the
+          // panel surface, so it is exempt from the no-overlap rule. The
+          // minimized approval pill is in-flow top chrome and is covered by the
+          // topChrome check below.
           const topChromeDoesNotOverlap = layout.topChrome.every(
             (rect) => rect.bottom <= layout.surface!.y || rect.y >= layout.surface!.bottom
           );
@@ -214,7 +214,6 @@ test.describe("Desktop Shell Chrome", () => {
           return (
             matchesPanel &&
             matchesBounds &&
-            approvalDoesNotOverlap &&
             topChromeDoesNotOverlap &&
             sidebarDoesNotOverlap
           );

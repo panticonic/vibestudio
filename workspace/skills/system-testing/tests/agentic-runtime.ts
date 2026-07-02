@@ -1,7 +1,10 @@
 import type { TestCase } from "../types.js";
 import { completedToolNames, finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
 
-function withNoPending(result: ReturnType<typeof finalMessageHasAll>, execution: Parameters<typeof noIncompleteInvocations>[0]) {
+function withNoPending(
+  result: ReturnType<typeof finalMessageHasAll>,
+  execution: Parameters<typeof noIncompleteInvocations>[0]
+) {
   if (!result.passed) return result;
   const pending = noIncompleteInvocations(execution);
   return pending.passed ? result : pending;
@@ -12,14 +15,17 @@ export const agenticRuntimeTests: TestCase[] = [
     name: "state-args-immediate-snapshot",
     description: "Panel state changes are immediately observable",
     category: "agentic-runtime",
-    prompt: "Check whether panel state changes are visible immediately in the same panel context. Finish with STATE_ARGS_OK and state-args-ok.",
-    validate: (result) => withNoPending(finalMessageHasAll(result, ["STATE_ARGS_OK", "state-args-ok"]), result),
+    prompt:
+      "Exercise panel state changes from eval and verify they are immediately observable. Finish with STATE_ARGS_OK and state-args-ok.",
+    validate: (result) =>
+      withNoPending(finalMessageHasAll(result, ["STATE_ARGS_OK", "state-args-ok"]), result),
   },
   {
     name: "runtime-vcs-client-helper",
     description: "Workspace VCS operations are usable from the runtime context",
     category: "agentic-runtime",
-    prompt: "Check whether the runtime vcs namespace is available from this runtime context. Finish with VCS_CLIENT_OK.",
+    prompt:
+      "Check whether the runtime vcs namespace is available from this runtime context. Finish with VCS_CLIENT_OK.",
     validate: (result) => withNoPending(finalMessageHasAll(result, ["VCS_CLIENT_OK"]), result),
   },
   {
@@ -33,18 +39,25 @@ export const agenticRuntimeTests: TestCase[] = [
     name: "channel-envelope-inspection-bounded",
     description: "Channel history inspection stays usable",
     category: "agentic-runtime",
-    prompt: "Inspect channel history for a harmless fake channel id. Finish with CHANNEL_INSPECT_OK and bounded.",
-    validate: (result) => withNoPending(finalMessageHasAll(result, ["CHANNEL_INSPECT_OK", "bounded"]), result),
+    prompt:
+      "Inspect channel history for a harmless fake channel id. Finish with CHANNEL_INSPECT_OK and bounded.",
+    validate: (result) =>
+      withNoPending(finalMessageHasAll(result, ["CHANNEL_INSPECT_OK", "bounded"]), result),
   },
   {
     name: "large-eval-result-terminal",
-    description: "Large eval results complete visibly without leaving an invocation spinner pending",
+    description:
+      "Large eval results complete visibly without leaving an invocation spinner pending",
     category: "agentic-runtime",
-    prompt: "Create a large temporary value and report only a summary. Finish with LARGE_EVAL_OK and 2000.",
+    prompt:
+      "Create a large temporary value and report only a summary. Finish with LARGE_EVAL_OK and 2000.",
     validate: (result) => {
       const completed = completedToolNames(result);
       if (!completed.has("eval")) {
-        return { passed: false, reason: `Expected completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}` };
+        return {
+          passed: false,
+          reason: `Expected completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
+        };
       }
       return withNoPending(finalMessageHasAll(result, ["LARGE_EVAL_OK", "2000"]), result);
     },
@@ -53,7 +66,8 @@ export const agenticRuntimeTests: TestCase[] = [
     name: "agent-debug-state-method",
     description: "Agent debug state is inspectable",
     category: "agentic-runtime",
-    prompt: "Check whether this chat agent exposes debug state. Finish with DEBUG_STATE_OK or DEBUG_STATE_UNAVAILABLE.",
+    prompt:
+      "Check whether this chat agent exposes debug state. Finish with DEBUG_STATE_OK or DEBUG_STATE_UNAVAILABLE.",
     validate: (result) => {
       const ok = finalMessageHasAll(result, ["DEBUG_STATE_OK"]);
       if (ok.passed) return withNoPending(ok, result);
@@ -62,9 +76,11 @@ export const agenticRuntimeTests: TestCase[] = [
   },
   {
     name: "turn-no-silent-stall-after-tool",
-    description: "A normal tool-using turn ends with a visible assistant response and no pending invocation",
+    description:
+      "A normal tool-using turn ends with a visible assistant response and no pending invocation",
     category: "agentic-runtime",
-    prompt: "Use one tool, then produce a visible final response. Finish with NO_STALL_OK and final-response-visible.",
+    prompt:
+      "Use one tool, then produce a visible final response. Finish with NO_STALL_OK and final-response-visible.",
     validate: (result) => {
       const msg = finalMessageHasAll(result, ["NO_STALL_OK", "final-response-visible"]);
       return withNoPending(msg, result);
@@ -84,10 +100,7 @@ export const agenticRuntimeTests: TestCase[] = [
           reason: `Expected a completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
         };
       }
-      const msg = finalMessageHasAll(result, [
-        "WORKSPACE_TEST_RUNNER_OK",
-        "test-runner-extension",
-      ]);
+      const msg = finalMessageHasAll(result, ["WORKSPACE_TEST_RUNNER_OK", "test-runner-extension"]);
       return withNoPending(msg, result);
     },
   },

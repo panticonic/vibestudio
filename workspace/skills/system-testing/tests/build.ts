@@ -22,14 +22,20 @@ export const buildTests: TestCase[] = [
     prompt:
       "Exercise building or resolving a small pure-JavaScript npm dependency " +
       "(e.g. left-pad) that does not rely on Node.js built-in modules like " +
-      "child_process/fs/os. Finish with BUILD_NPM_OK.",
+      "child_process/fs/os. In eval imports, use the package name as the key " +
+      'and a version-only npm ref as the value, e.g. { "left-pad": "npm:1.3.0" }. ' +
+      "Finish with BUILD_NPM_OK.",
     validate: (result) => checked(result, ["BUILD_NPM_OK"]),
   },
   {
     name: "build-at-state-ref",
     description: "Build a workspace package at a specific GAD state ref",
     category: "build",
-    prompt: "Exercise building a workspace unit at an immutable GAD state ref from vcs.log. Finish with BUILD_STATE_REF_OK or BUILD_STATE_REF_UNAVAILABLE.",
+    prompt:
+      "Exercise building a workspace unit at an immutable GAD state ref from vcs.log. " +
+      "vcs.log returns a repo-rooted outputStateHash; convert it to a workspace-rooted " +
+      "state with vcs.workspaceViewWithRepoAt(repoPath, outputStateHash) before passing " +
+      "it to build.getBuild. Finish with BUILD_STATE_REF_OK or BUILD_STATE_REF_UNAVAILABLE.",
     validate: (result) => {
       const ok = finalMessageHasAll(result, ["BUILD_STATE_REF_OK"]);
       if (ok.passed) return noIncompleteInvocations(result);

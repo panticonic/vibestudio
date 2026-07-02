@@ -9,6 +9,7 @@ import {
   normalizeBrowserAddressSuggestions,
   formatRepoChip,
   isBrowserPanelSource,
+  isOpenPanelBrowserUrl,
   parseAddressInput,
   panelSourceFromBrowserUrl,
   splitTextByMatchRanges,
@@ -36,6 +37,16 @@ describe("panelChrome", () => {
     expect(browserUrlFromPanelSource("browser:https://example.com")).toBe("https://example.com");
     expect(panelSourceFromBrowserUrl("https://example.com")).toBe("browser:https://example.com");
     expect(isBrowserPanelSource("panels/chat")).toBe(false);
+  });
+
+  it("recognizes URLs that openPanel should route to browser panels", () => {
+    expect(isOpenPanelBrowserUrl("https://example.com")).toBe(true);
+    expect(isOpenPanelBrowserUrl("http://example.com")).toBe(true);
+    expect(isOpenPanelBrowserUrl("data:text/html,<button>Click</button>")).toBe(true);
+    expect(isOpenPanelBrowserUrl("about:blank")).toBe(true);
+    expect(isOpenPanelBrowserUrl("about:blank#ready")).toBe(true);
+    expect(isOpenPanelBrowserUrl("panels/chat")).toBe(false);
+    expect(isOpenPanelBrowserUrl("javascript:alert(1)")).toBe(false);
   });
 
   it("parses address input into panel sources, urls, or searches", () => {

@@ -3,6 +3,9 @@
  * subtree hashes (no git, no DO, no filesystem beyond persistence).
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import {
   computeEffectiveVersions,
@@ -165,6 +168,34 @@ describe("effectiveVersion", () => {
       expect(computeBuildKey("unit-b", "ev1", true)).not.toBe(base);
       expect(computeBuildKey("unit-a", "ev2", true)).not.toBe(base);
       expect(computeBuildKey("unit-a", "ev1", false)).not.toBe(base);
+    });
+
+    it("does not invalidate workspace builds when host dist bundles change", () => {
+      const previousAppRoot = process.env["NATSTACK_APP_ROOT"];
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-root-fingerprint-"));
+      const rootA = path.join(root, "a");
+      const rootB = path.join(root, "b");
+      try {
+        for (const dir of [rootA, rootB]) {
+          fs.mkdirSync(path.join(dir, "dist"), { recursive: true });
+          fs.writeFileSync(path.join(dir, "package.json"), '{"name":"host","version":"1.0.0"}');
+          fs.writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+          fs.writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "packages: []\n");
+        }
+        fs.writeFileSync(path.join(rootA, "dist", "server.mjs"), "console.log('old server');\n");
+        fs.writeFileSync(path.join(rootA, "dist", "main.cjs"), "console.log('old main');\n");
+        fs.writeFileSync(path.join(rootB, "dist", "server.mjs"), "console.log('new server');\n");
+        fs.writeFileSync(path.join(rootB, "dist", "main.cjs"), "console.log('new main');\n");
+
+        process.env["NATSTACK_APP_ROOT"] = rootA;
+        const first = computeBuildKey("unit-a", "ev1", true);
+        process.env["NATSTACK_APP_ROOT"] = rootB;
+        expect(computeBuildKey("unit-a", "ev1", true)).toBe(first);
+      } finally {
+        if (previousAppRoot === undefined) delete process.env["NATSTACK_APP_ROOT"];
+        else process.env["NATSTACK_APP_ROOT"] = previousAppRoot;
+        fs.rmSync(root, { recursive: true, force: true });
+      }
     });
   });
 });

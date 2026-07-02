@@ -1,5 +1,5 @@
 import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as http from "node:http";
 import { generateKeyPairSync } from "node:crypto";
 import { chatMessagesFromChannelView } from "@workspace/agentic-core";
@@ -24,6 +24,7 @@ import type {
   Credential,
   CredentialAuditEvent,
   ManagedCredentialSummary,
+  CredentialUseGrant,
   StoredCredentialSummary,
 } from "../../../packages/shared/src/credentials/types.js";
 import type { ClientConfigRecord } from "../../../packages/shared/src/credentials/clientConfigStore.js";
@@ -121,6 +122,46 @@ class MemoryCredentialStore {
   }
 }
 
+class MemoryCredentialUseGrantStore {
+  private readonly grants: Array<CredentialUseGrant & { credentialId: string }> = [];
+
+  list(credentialId: string): CredentialUseGrant[] {
+    return this.grants
+      .filter((grant) => grant.credentialId === credentialId)
+      .map(({ credentialId: _credentialId, ...grant }) => ({ ...grant }));
+  }
+
+  upsert(credentialId: string, grant: CredentialUseGrant): void {
+    const key = [
+      credentialId,
+      grant.bindingId,
+      grant.use,
+      grant.resource,
+      grant.action,
+      grant.scope,
+      grant.callerId ?? "",
+      grant.repoPath ?? "",
+      grant.effectiveVersion ?? "",
+    ].join("\x00");
+    const index = this.grants.findIndex(
+      (entry) =>
+        [
+          entry.credentialId,
+          entry.bindingId,
+          entry.use,
+          entry.resource,
+          entry.action,
+          entry.scope,
+          entry.callerId ?? "",
+          entry.repoPath ?? "",
+          entry.effectiveVersion ?? "",
+        ].join("\x00") === key
+    );
+    if (index >= 0) this.grants.splice(index, 1);
+    this.grants.push({ credentialId, ...grant });
+  }
+}
+
 class MemoryAuditLog {
   readonly entries: CredentialAuditEvent[] = [];
 
@@ -194,6 +235,7 @@ function approvingQueue(decision: "once" | "session" | "version" | "repo" | "den
   return {
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+    requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
     presentDeviceCode: vi.fn((_req: unknown) => ({
@@ -204,6 +246,7 @@ function approvingQueue(decision: "once" | "session" | "version" | "repo" | "den
     resolve: vi.fn(),
     resolveUserland: vi.fn(),
     submitClientConfig: vi.fn(),
+    submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
     listPending: vi.fn(() => []),
   };
@@ -231,6 +274,20 @@ async function startOAuthConnection(
   ctx: ServiceContext,
   request: unknown
 ) {
+  // Round-trip OAuth tests deliver the callback to a server-local listener via
+  // http.get(redirect_uri). The PRODUCTION default redirect is now the relay (§7,
+  // unreachable in-process), so opt into the server-owned `loopback` redirect when
+  // a test does not specify one — keeping the in-process callback round-trip valid.
+  // Tests that assert a specific redirect (client-loopback / public-relay) pass
+  // their own `spec.redirect` and are unaffected.
+  const req = request as { redirect?: unknown; spec?: { redirect?: unknown } };
+  if (req && typeof req === "object") {
+    if (req.spec && typeof req.spec === "object") {
+      if (req.spec.redirect === undefined) req.spec.redirect = { type: "loopback" };
+    } else if (req.redirect === undefined) {
+      req.redirect = { type: "loopback" };
+    }
+  }
   const pending = service.handler(ctx, "connect", [request]) as Promise<StoredCredentialSummary>;
   await vi.waitFor(() =>
     expect(emit).toHaveBeenCalledWith(
@@ -259,7 +316,15 @@ async function deliverOAuthCallback(redirectUri: string, params: URLSearchParams
 }
 
 describe("credentialService", () => {
+  // OAuth callbacks are now relay-hosted for every platform (plan §7); the
+  // `public` default redirect_uri is built from this origin (buildRelayOAuthCallbackUrl).
+  const ORIGINAL_RELAY = process.env["NATSTACK_RELAY_OAUTH_BASE_URL"];
+  beforeEach(() => {
+    process.env["NATSTACK_RELAY_OAUTH_BASE_URL"] = "https://relay.test";
+  });
   afterEach(() => {
+    if (ORIGINAL_RELAY === undefined) delete process.env["NATSTACK_RELAY_OAUTH_BASE_URL"];
+    else process.env["NATSTACK_RELAY_OAUTH_BASE_URL"] = ORIGINAL_RELAY;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -479,12 +544,14 @@ describe("credentialService", () => {
     const approvalQueue = {
       request: vi.fn(async () => "deny" as const),
       requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({
         decision: "submit" as const,
         values: { token: "github_pat_secret" },
       })),
       resolve: vi.fn(),
       submitClientConfig: vi.fn(),
+      submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -535,12 +602,14 @@ describe("credentialService", () => {
     const approvalQueue = {
       request: vi.fn(async () => "deny" as const),
       requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({
         decision: "submit" as const,
         values: { token: "agent_secret" },
       })),
       resolve: vi.fn(),
       submitClientConfig: vi.fn(),
+      submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -586,12 +655,14 @@ describe("credentialService", () => {
     const approvalQueue = {
       request: vi.fn(async () => "deny" as const),
       requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({
         decision: "submit" as const,
         values: { token: "github_pat_secret" },
       })),
       resolve: vi.fn(),
       submitClientConfig: vi.fn(),
+      submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -1044,6 +1115,63 @@ describe("credentialService", () => {
     );
   });
 
+  it("ignores central embedded credential grants when a workspace grant store is active", async () => {
+    const store = new MemoryCredentialStore();
+    const seedService = createCredentialService({
+      credentialStore: store as never,
+    });
+    const stored = (await seedService.handler(
+      { caller: verifiedTestCaller("worker:owner", "worker") },
+      "storeCredential",
+      [
+        {
+          label: "Example API",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          material: { type: "bearer-token", token: "secret-token" },
+        },
+      ]
+    )) as StoredCredentialSummary;
+    const persisted = await store.loadUrlBound(stored.id);
+    await store.saveUrlBound({
+      ...(persisted as Credential & { id: string }),
+      grants: [
+        {
+          bindingId: "fetch",
+          use: "fetch",
+          resource: "https://api.example.test/",
+          action: "use",
+          scope: "version",
+          repoPath: "/consumer",
+          effectiveVersion: "hash-1",
+          grantedAt: 1,
+          grantedBy: "version",
+        },
+      ],
+    });
+
+    const approvalQueue = {
+      request: vi.fn(async () => "once" as const),
+      resolve: vi.fn(),
+      listPending: vi.fn(() => []),
+    };
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue: approvalQueue as never,
+      sessionGrantStore: new CredentialSessionGrantStore(),
+      credentialUseGrantStore: new MemoryCredentialUseGrantStore(),
+    });
+
+    await expect(
+      service.handler(
+        { caller: verifiedTestCaller("worker:consumer", "worker") },
+        "resolveCredential",
+        [{ url: "https://api.example.test/v1" }]
+      )
+    ).resolves.toMatchObject({ id: stored.id });
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves queued credential use approvals covered by a trusted version grant", async () => {
     const store = new MemoryCredentialStore();
     const seedService = createCredentialService({
@@ -1106,6 +1234,46 @@ describe("credentialService", () => {
         effectiveVersion: "hash-1",
       })
     );
+  });
+
+  it("fails loud for an explicit public redirect when no relay is configured (the default falls back to loopback)", async () => {
+    // The relay path is deliberately fail-loud when unconfigured — it must not
+    // silently emit a server URL no third party can reach. The DEFAULT, by
+    // contrast, falls back to loopback when no relay is set (see
+    // resolveDefaultRedirectStrategy) so co-located `pnpm dev` OAuth still works.
+    // This is the negative the harness previously masked by stubbing the relay env.
+    delete process.env["NATSTACK_RELAY_OAUTH_BASE_URL"];
+    const store = new MemoryCredentialStore();
+    const emit = vi.fn();
+    const service = createCredentialService({
+      credentialStore: store as never,
+      eventService: targetedOpenEventService(emit) as never,
+      approvalQueue: approvingQueue("version") as never,
+    });
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
+
+    await expect(
+      service.handler(ctx, "connect", [
+        {
+          redirect: { type: "public" },
+          flow: {
+            type: "oauth2-auth-code-pkce",
+            authorizeUrl: "https://auth.example.test/oauth/authorize",
+            tokenUrl: "https://auth.example.test/oauth/token",
+            clientId: "client-1",
+            scopes: ["read"],
+          },
+          credential: {
+            label: "Relay OAuth",
+            audience: [{ url: "https://api.example.test/v1", match: "path-prefix" }],
+            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            accountIdentity: { email: "dev@example.test" },
+          },
+        },
+      ])
+    ).rejects.toThrow(/relay is not configured|redirect_unavailable/i);
+    // The authorize URL is never emitted — connect fails at redirect resolution.
+    expect(emit).not.toHaveBeenCalledWith("external-open:open", expect.anything());
   });
 
   it("creates URL-bound credentials through generic OAuth PKCE and discards refresh tokens", async () => {
@@ -1277,9 +1445,11 @@ describe("credentialService", () => {
     const approvalQueue = {
       request: vi.fn(async () => "session" as const),
       requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
       resolve: vi.fn(),
       submitClientConfig: vi.fn(),
+      submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -1323,6 +1493,7 @@ describe("credentialService", () => {
           audience: [{ url: "https://api.example.test/", match: "origin" }],
           injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
         },
+        redirect: { type: "loopback" },
       },
     ]) as Promise<StoredCredentialSummary>;
 
@@ -1518,6 +1689,7 @@ describe("credentialService", () => {
               injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
             },
             browser: "external",
+            redirect: { type: "loopback" },
           },
           handoffTarget: {
             callerId: "panel-test",
@@ -1589,6 +1761,7 @@ describe("credentialService", () => {
               injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
             },
             browser: "external",
+            redirect: { type: "loopback" },
           },
           handoffTarget: {
             callerId: "@workspace-apps/shell",
@@ -1667,6 +1840,7 @@ describe("credentialService", () => {
               injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
             },
             browser: "external",
+            redirect: { type: "loopback" },
           },
           handoffTarget: {
             callerId: "panel-test",
@@ -1740,6 +1914,7 @@ describe("credentialService", () => {
               injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
             },
             browser: "internal",
+            redirect: { type: "loopback" },
           },
           handoffTarget: {
             callerId: "panel-test",
@@ -2306,9 +2481,11 @@ describe("credentialService", () => {
           clientSecret: "secret-1",
         },
       })),
+      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
       resolve: vi.fn(),
       submitClientConfig: vi.fn(),
+      submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -2419,9 +2596,11 @@ describe("credentialService", () => {
       approvalQueue: {
         request: vi.fn(),
         requestClientConfig: vi.fn(),
+        requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
         requestCredentialInput: vi.fn(),
         resolve: vi.fn(),
         submitClientConfig: vi.fn(),
+        submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => []),
       } as never,
@@ -2685,9 +2864,11 @@ describe("credentialService", () => {
           clientSecret: "secret-2",
         },
       })),
+      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
       resolve: vi.fn(),
       submitClientConfig: vi.fn(),
+      submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),
       listPending: vi.fn(() => []),
     };
@@ -2723,9 +2904,11 @@ describe("credentialService", () => {
     const approvalQueue = {
       request: vi.fn(async () => "session" as const),
       requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+      requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
       resolve: vi.fn(),
       submitClientConfig: vi.fn(),
+      submitSecretInput: vi.fn(),
       submitCredentialInput: vi.fn(),
       listPending: vi.fn(() => []),
     };

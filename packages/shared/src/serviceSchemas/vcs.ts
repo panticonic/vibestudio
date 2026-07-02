@@ -1,6 +1,12 @@
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
+import {
+  buildDiagnosticSchema,
+  repoBuildReportSchema,
+  type BuildDiagnosticWire,
+  type RepoBuildReportWire,
+} from "./build.js";
 
 const nullableString = z.string().nullable();
 
@@ -9,9 +15,9 @@ const nullableString = z.string().nullable();
 // server/worker/do/extension), so these carry only doc/safety metadata
 // (sensitivity) and deliberately OMIT `callers`.
 //
-// Reads are pure projections of committed GAD state (status/log/diff/readFile/
-// resolveHead/recall). Writes commit through GAD and advance a head
-// (applyEdits/revert/merge/abortMerge/publish).
+// Reads are pure projections of GAD state (status/log/diff/readFile/
+// resolveHead/recall). Writes are tracked WORKING edits (edit/revert) or head
+// advances (commit/merge/push) through GAD — edit ≠ commit ≠ push.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
@@ -23,15 +29,6 @@ export const vcsFileStatusSchema = z.object({
   path: z.string(),
   status: z.enum(["added", "modified", "deleted"]),
 });
-
-export const VcsUnitStatusSchema = z.object({
-  unitPath: z.string(),
-  head: z.string(),
-  stateHash: nullableString,
-  dirty: z.boolean(),
-  files: z.array(vcsFileStatusSchema),
-});
-export type VcsUnitStatus = z.infer<typeof VcsUnitStatusSchema>;
 
 export const vcsFileWriteContentSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text: z.string() }),
@@ -116,18 +113,30 @@ export const vcsApplyEditsInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Optimistic-concurrency base: the head state the edits were computed against (a `state:…` hash). Omit to apply against the head's current state."
+      "Optimistic-concurrency base: the composed working state the edits were computed against (a `state:…` hash). Omit to apply against the head's current working state."
     ),
   edits: z
     .array(vcsEditOpSchema)
     .describe(
-      'Ordered edit ops applied as one atomic commit. Each op is discriminated by `kind` (replace/write/create/delete/chmod); `{ path, content: "…" }` is accepted shorthand for a write.'
+      'Ordered edit ops recorded as one working-set edit. Each op is discriminated by `kind` (replace/write/create/delete/chmod); `{ path, content: "…" }` is accepted shorthand for a write.'
     ),
   head: z
     .string()
     .optional()
     .describe(
-      "Head to commit onto. Omit for the caller's own context head; entity callers may only write their own `ctx:…` head."
+      "Context head to edit. Omit for the caller's own context head; entity callers may only write their own `ctx:…` head."
+    ),
+  repoPath: z
+    .string()
+    .optional()
+    .describe(
+      "Repo the edits target (workspace-relative). When set, edit paths are repo-relative and route to that repo's log. Omit to route each edit by path → owning repo."
+    ),
+  invocationId: z
+    .string()
+    .optional()
+    .describe(
+      "Authoring agent tool-call id (the model tool-call / invocation that produced these edits). Recorded on each edit-op row as the edge into the agentic trajectory: file → edit → invocation → turn → session is then traversable (and survives commit). Self-asserted by the calling agent runtime, consistent with how trajectory events carry causality."
     ),
 });
 export type VcsApplyEditsInput = z.infer<typeof vcsApplyEditsInputSchema>;
@@ -138,31 +147,110 @@ export const vcsMergeConflictSchema = z.object({
 });
 export type VcsMergeConflict = z.infer<typeof vcsMergeConflictSchema>;
 
-export const vcsApplyEditsResultSchema = z.object({
+/** Result of `vcs.edit` — a tracked WORKING edit (no commit, no build). */
+export const vcsEditResultSchema = z.object({
+  head: z.string(),
+  /** The working state hash (committed base + uncommitted ops) projected to disk. */
+  stateHash: z.string(),
+  committed: z.literal(false),
+  status: z.literal("uncommitted"),
+  /** The shared per-call edit sequence assigned to this edit's ops. */
+  editSeq: z.number().int().nonnegative(),
+  changedPaths: z.array(z.string()),
+});
+export type VcsEditResult = z.infer<typeof vcsEditResultSchema>;
+
+/** Input to `vcs.commit` — fold a context's uncommitted edits into a snapshot. */
+export const vcsCommitInputSchema = z.object({
+  message: z.string().describe("Commit message (mandatory) recorded on the snapshot."),
+  repoPaths: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Repos to commit (workspace-relative). Omit to commit every repo the caller's context has uncommitted edits in. Multi-repo commit is a non-atomic per-repo loop (atomicity is push's job)."
+    ),
+  exclude: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Workspace-relative paths to leave UNCOMMITTED (the inverse of `git add`): commit everything tracked except these."
+    ),
+  head: z
+    .string()
+    .optional()
+    .describe("Head to commit (default: the caller's own context head). `main` is rejected."),
+});
+export type VcsCommitInput = z.infer<typeof vcsCommitInputSchema>;
+
+/** Per-repo result of `vcs.commit`. */
+export const vcsCommitResultSchema = z.object({
+  repoPath: z.string(),
   head: z.string(),
   stateHash: z.string(),
   eventId: nullableString,
   headHash: nullableString,
-  status: z.enum(["clean", "conflicted"]),
-  conflicts: z.array(vcsMergeConflictSchema),
+  editCount: z.number().int().nonnegative(),
+  status: z.enum(["committed", "unchanged"]),
   changedPaths: z.array(z.string()),
 });
-export type VcsApplyEditsResult = z.infer<typeof vcsApplyEditsResultSchema>;
+export type VcsCommitResult = z.infer<typeof vcsCommitResultSchema>;
+
+/** A persisted edit-op row (provenance) returned by the traversal reads. */
+export const vcsEditOpRowSchema = z.object({
+  id: z.number().int(),
+  eventId: z.string(),
+  committedEventId: nullableString,
+  committedSeq: z.number().int().nullable(),
+  editSeq: z.number().int().nullable(),
+  outputStateHash: nullableString,
+  ordinal: z.number().int(),
+  kind: z.string(),
+  path: z.string(),
+  oldContentHash: nullableString,
+  newContentHash: nullableString,
+  mode: z.number().int().nullable(),
+  actorId: nullableString,
+  invocationId: nullableString,
+  turnId: nullableString,
+  createdAt: nullableString,
+});
+export type VcsEditOpRow = z.infer<typeof vcsEditOpRowSchema>;
+
+/** A commit on the source head not yet on the target (upstream-commit shape). */
+export const vcsUpstreamCommitSchema = z.object({
+  eventId: z.string(),
+  message: z.string(),
+  stateHash: z.string(),
+  createdAt: nullableString,
+});
+export type VcsUpstreamCommit = z.infer<typeof vcsUpstreamCommitSchema>;
+
+/** A commit DAG node (event-keyed) returned by `vcs.commitAncestors`. */
+export const vcsCommitAncestorSchema = z.object({
+  eventId: z.string(),
+  stateHash: nullableString,
+  parentEventIds: z.array(z.string()),
+});
+export type VcsCommitAncestor = z.infer<typeof vcsCommitAncestorSchema>;
 
 /**
- * Status is a pure GAD state-diff of a head against its publish baseline
- * (`main`): the unpublished changes that live on this head. It is NOT a
- * filesystem scan — the on-disk worktree is a disposable projection of the
- * head, so edits (which commit through `applyEdits`) never appear as "dirty".
- * `stateHash` is the head's current state; `dirty` is true iff the head is
- * ahead of `main`. Status on `main` is always clean (it is the baseline).
+ * Status is a GAD state-diff of a head against its publish baseline (`main`):
+ * the committed-but-unpushed changes, plus `uncommitted` (the count of WORKING
+ * edits not yet committed). The on-disk worktree is a disposable projection. The
+ * `dirty` flag is true iff the head is ahead of `main` OR has uncommitted edits.
+ * Status on `main` is always clean (it is the baseline).
  */
 export const vcsStatusResultSchema = z.object({
   stateHash: nullableString,
   dirty: z.boolean(),
+  /** Count of UNCOMMITTED working edits on this head (push rejects while > 0). */
+  uncommitted: z.number().int().nonnegative(),
   added: z.array(z.string()),
   removed: z.array(z.string()),
   changed: z.array(z.string()),
+  /** The repo was deleted from the workspace (`main` archived/gone) — a push
+   *  will be refused; restore it or drop the context. */
+  deleted: z.boolean(),
 });
 export type VcsStatusResult = z.infer<typeof vcsStatusResultSchema>;
 
@@ -189,10 +277,23 @@ export const vcsResolveHeadResultSchema = z.object({
 });
 export type VcsResolveHeadResult = z.infer<typeof vcsResolveHeadResultSchema>;
 
+export const vcsWorkspaceViewResultSchema = z.object({
+  stateHash: z
+    .string()
+    .describe("Workspace-rooted composed state hash, suitable for build.getBuild's immutable ref argument."),
+});
+export type VcsWorkspaceViewResult = z.infer<typeof vcsWorkspaceViewResultSchema>;
+
 export const vcsMergeResultSchema = z.object({
   status: z.enum(["up-to-date", "merged", "conflicted"]),
   stateHash: nullableString,
   conflicts: z.array(vcsMergeConflictSchema),
+  /** Whether the reconcile was clean (a merge commit, no file resolution) or in
+   *  conflict (markers in the context FS — resolve via vcs.edit then vcs.commit). */
+  mergeable: z.enum(["clean", "conflict"]),
+  /** The upstream (main) commits this reconcile pulled in. */
+  upstreamCommits: z.array(vcsUpstreamCommitSchema),
+  conflictPaths: z.array(z.string()).optional(),
 });
 export type VcsMergeResult = z.infer<typeof vcsMergeResultSchema>;
 
@@ -220,25 +321,19 @@ export const vcsFileListEntrySchema = z.object({
 });
 export type VcsFileListEntry = z.infer<typeof vcsFileListEntrySchema>;
 
-export const vcsPublishStatusSchema = z.object({
-  head: z.string(),
-  ctxStateHash: nullableString,
-  mainStateHash: nullableString,
-  ahead: z.number().int().nonnegative(),
-  files: z.array(
-    z.object({
-      path: z.string(),
-      kind: z.enum(["added", "removed", "changed"]),
-    })
-  ),
-});
-export type VcsPublishStatus = z.infer<typeof vcsPublishStatusSchema>;
-
 const vcsHeadAdvanceActorSchema = z.object({ id: z.string(), kind: z.string() }).nullable();
 
 export const vcsHeadAdvanceSchema = z.object({
   head: z.string(),
   stateHash: z.string(),
+  /**
+   * The advanced log's own state hash — the identity space of
+   * `vcs.edit`/`vcs.commit`/`readFile`/`revert` return values. For a per-repo head this
+   * is the subtree-rooted repo state and differs from `stateHash` (the composed
+   * view); they are equal for whole-workspace heads. Clients correlating an RPC
+   * result with this advance (self-echo / undo guards) must match on this.
+   */
+  repoStateHash: z.string(),
   sinceStateHash: nullableString,
   eventId: nullableString,
   headHash: nullableString,
@@ -268,6 +363,30 @@ export const vcsHeadAdvanceSchema = z.object({
 });
 export type VcsHeadAdvance = z.infer<typeof vcsHeadAdvanceSchema>;
 
+/**
+ * A WORKING-content advance (`vcs.edit`) on a `ctx:*` head — broadcast on the
+ * `vcs:working:{head}` topic, consumed via `subscribeWorking`. Deliberately
+ * distinct from {@link vcsHeadAdvanceSchema}: an edit is NOT a state operation
+ * (no commit, no build, not in vcs.log). Reactive views (and the editor undo
+ * path, since `vcs.revert` is now a working edit) consume this to reflect
+ * uncommitted edits; the build trigger ignores it.
+ */
+export const vcsWorkingAdvanceSchema = z.object({
+  head: z.string(),
+  repoPath: z.string().optional(),
+  actor: vcsHeadAdvanceActorSchema,
+  /** The working state hash (committed base + uncommitted ops) on disk. The
+   *  self-echo / undo-correlation hash, analogous to head-advance repoStateHash. */
+  stateHash: z.string(),
+  /** The committed base the working content composes on. */
+  baseStateHash: z.string(),
+  /** The shared per-call edit sequence for this edit's ops. */
+  editSeq: z.number().int().nonnegative(),
+  /** Paths changed by this edit (workspace-relative). */
+  changedPaths: z.array(z.string()),
+});
+export type VcsWorkingAdvance = z.infer<typeof vcsWorkingAdvanceSchema>;
+
 export const vcsRecallInputSchema = z.object({
   query: z
     .string()
@@ -283,8 +402,138 @@ export const vcsRecallInputSchema = z.object({
     .max(50)
     .optional()
     .describe("Maximum number of results to return (1–50, default applied server-side)."),
+  repoPaths: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Restrict recall to these repos' indices (workspace-relative repo paths); omit to search across all repos."
+    ),
 });
 export type VcsRecallInput = z.infer<typeof vcsRecallInputSchema>;
+
+// ---------------------------------------------------------------------------
+// Push surface (per-repo + group) — W4
+// ---------------------------------------------------------------------------
+
+export const vcsPushInputSchema = z.object({
+  repoPaths: z
+    .array(z.string())
+    .min(1)
+    .describe(
+      "Repos to push (workspace-relative repo paths). Multiple repos push as one atomic, build-gated group — all heads advance or none do."
+    ),
+  sourceHead: z
+    .string()
+    .optional()
+    .describe(
+      "Head to push from into each repo's main (e.g. a `ctx:…` context head). Omit to push the caller's own context head."
+    ),
+  message: z.string().optional().describe("Optional log summary recorded on the pushed repo commit(s)."),
+});
+export type VcsPushInput = z.infer<typeof vcsPushInputSchema>;
+
+/** A merge conflict that blocked a repo's push (the per-repo conflict shape). */
+export const vcsPushConflictSchema = vcsMergeConflictSchema.extend({
+  repoPath: z.string(),
+});
+export type VcsPushConflict = z.infer<typeof vcsPushConflictSchema>;
+
+/** Per-repo divergence in a rejected fast-forward-only push: `main` advanced past
+ *  the ctx head's merge-base. Reconcile with an explicit vcs.merge. */
+export const vcsRepoDivergenceSchema = z.object({
+  repoPath: z.string(),
+  base: nullableString,
+  mainTip: nullableString,
+  upstreamCommits: z.array(vcsUpstreamCommitSchema),
+  mergeable: z.enum(["clean", "conflict"]),
+  conflictPaths: z.array(z.string()).optional(),
+});
+export type VcsRepoDivergence = z.infer<typeof vcsRepoDivergenceSchema>;
+
+// The build-report contract (`buildDiagnosticSchema` + `repoBuildReportSchema`)
+// is the CANONICAL one from build.ts — `vcs.push`/`vcs.previewBuild` return
+// exactly what the build service produces and validates (the SAME producer:
+// buildV2's validateRepoPush). Re-exported here so `vcs.*` callers import it from
+// one place; defining a parallel copy is what drifted (artifact-integrity
+// optionality, diagnostic line/col nullability) and caused false return-
+// validation failures. Single source of truth → no future drift.
+export { buildDiagnosticSchema, repoBuildReportSchema };
+export type BuildDiagnostic = BuildDiagnosticWire;
+export type RepoBuildReport = RepoBuildReportWire;
+
+export const vcsPushResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("pushed"),
+    repoPaths: z.array(z.string()),
+    reports: z.array(repoBuildReportSchema),
+  }),
+  z.object({
+    status: z.literal("up-to-date"),
+    repoPaths: z.array(z.string()),
+    reports: z.array(repoBuildReportSchema),
+  }),
+  z.object({
+    status: z.literal("diverged"),
+    divergences: z.array(vcsRepoDivergenceSchema),
+  }),
+  z.object({
+    status: z.literal("build-failed"),
+    reports: z.array(repoBuildReportSchema),
+  }),
+]);
+export type VcsPushResult = z.infer<typeof vcsPushResultSchema>;
+
+export const vcsPushStatusSchema = z.object({
+  repoPath: z.string(),
+  head: z.string(),
+  headStateHash: nullableString,
+  mainStateHash: nullableString,
+  ahead: z.number().int().nonnegative(),
+  /** Count of UNCOMMITTED working edits (push rejects while > 0). */
+  uncommitted: z.number().int().nonnegative(),
+  /** `main` diverged past this head's base — a fast-forward push is impossible
+   *  without an explicit vcs.merge. */
+  diverged: z.boolean(),
+  /** The repo was deleted from the workspace (`main` archived/gone) — a push
+   *  will be refused; restore it or drop/rebase the context. */
+  deleted: z.boolean(),
+  files: z.array(
+    z.object({
+      path: z.string(),
+      kind: z.enum(["added", "removed", "changed"]),
+    })
+  ),
+});
+export type VcsPushStatus = z.infer<typeof vcsPushStatusSchema>;
+
+export const vcsDeleteRepoResultSchema = z.object({
+  repoPath: z.string(),
+  /** True when a `main` head existed and was archived (false would be a no-op,
+   *  but the service rejects missing repos before reaching here). */
+  archived: z.boolean(),
+  /** The non-`main` head the history was moved to (restorable), or null. */
+  archiveHead: nullableString,
+  /** Workspace-relative paths removed from main by the deletion. */
+  removedPaths: z.array(z.string()),
+  /** Live repos that depended on the deleted one (non-empty only under force). */
+  dependents: z.array(z.string()),
+  /** The composed workspace view AFTER removal. */
+  stateHash: z.string(),
+});
+export type VcsDeleteRepoResult = z.infer<typeof vcsDeleteRepoResultSchema>;
+
+export const vcsRestoreRepoResultSchema = z.object({
+  repoPath: z.string(),
+  /** True when an archived head was found and re-pointed at main. */
+  restored: z.boolean(),
+  /** The archive head the repo was recovered from, or null. */
+  fromArchiveHead: nullableString,
+  /** Workspace-relative paths re-added to main by the restore. */
+  restoredPaths: z.array(z.string()),
+  /** The composed workspace view AFTER restoration. */
+  stateHash: z.string(),
+});
+export type VcsRestoreRepoResult = z.infer<typeof vcsRestoreRepoResultSchema>;
 
 export const vcsRecallResultSchema = z.object({
   results: z.array(
@@ -305,43 +554,151 @@ export const vcsRecallResultSchema = z.object({
 });
 export type VcsRecallResult = z.infer<typeof vcsRecallResultSchema>;
 
+/**
+ * Per-repo scoping argument. The per-repo VCS has NO whole-tree log, so every
+ * head-keyed operation must name its repo — `repoPath` is REQUIRED on the
+ * methods whose core resolves a head (status/log/revert/merge/abortMerge/
+ * pendingMerge/resolveHead): omitting it throws `per-repo VCS: a repoPath is
+ * required` at runtime, so the schema forbids it at compile time.
+ */
+const repoPathArg = z
+  .string()
+  .describe(
+    "Workspace-relative repo path (e.g. `panels/chat`, `projects/vault`, `meta`) scoping this operation to one repo's log/head."
+  );
+
+/**
+ * Optional per-repo scoping for the path-routed / view-rooted reads
+ * (readFile/listFiles): when omitted, the service routes by edit/file path to
+ * the owning repo (readFile) or resolves the caller's composed workspace view
+ * (listFiles), so a missing `repoPath` is a meaningful default, not a throw.
+ */
+const repoPathArgOptional = z
+  .string()
+  .optional()
+  .describe(
+    "Workspace-relative repo path scoping this read to one repo's head. Omit to route by path (readFile) or read the whole composed context view (listFiles)."
+  );
+
 export const vcsMethods = defineServiceMethods({
-  applyEdits: {
+  edit: {
     description:
-      "Apply a batch of file edits as one atomic GAD commit onto the caller's head, advancing it; returns the new head state plus any merge conflicts and the changed paths.",
+      "Record a batch of file edits as UNCOMMITTED WORKING changes on the caller's context head — tracked durably with full provenance, but NOT a commit: no commit-log entry, no head advance, no build, and they never appear in vcs.log. Edits route to their owning repo by path. Make deliberate milestones with vcs.commit. Edits target a `ctx:*` head; `main` advances only via push.",
     args: z.tuple([vcsApplyEditsInputSchema]),
-    returns: vcsApplyEditsResultSchema,
+    returns: vcsEditResultSchema,
     access: WRITE_ACCESS,
     examples: [
       {
         args: [
           {
             edits: [
-              { kind: "write", path: "notes.md", content: { kind: "text", text: "# Notes\n" } },
+              {
+                kind: "write",
+                path: "panels/chat/notes.md",
+                content: { kind: "text", text: "# Notes\n" },
+              },
             ],
           },
         ],
       },
     ],
   },
+  commit: {
+    description:
+      "Fold the caller context's uncommitted working edits into ONE deliberate, messaged snapshot per repo, advancing each repo's context head and owning exactly those edits (queryable via commitEdits). `message` is mandatory. `exclude` leaves listed paths uncommitted (the inverse of `git add`). A repo with a pending merge commits the resolution. `main` is rejected (push only).",
+    args: z.tuple([vcsCommitInputSchema]),
+    returns: z.array(vcsCommitResultSchema),
+    access: WRITE_ACCESS,
+    examples: [{ args: [{ message: "Add notes panel" }] }],
+  },
+  discardEdits: {
+    description:
+      "Drop a repo's uncommitted working edits on the caller's context head AND clear any in-progress merge, restoring the committed head on disk (abort / stash-drop).",
+    args: z.tuple([repoPathArg, z.string().optional()]),
+    returns: z.object({ discarded: z.number().int().nonnegative(), stateHash: z.string() }),
+    access: { ...WRITE_ACCESS, sensitivity: "destructive" },
+    examples: [{ args: ["panels/chat"] }],
+  },
+  commitEdits: {
+    description:
+      "List the edit-ops a commit owns (commit → its edits), by commit event id. Index-backed; ordered by the edit replay order.",
+    args: z.tuple([repoPathArg, z.object({ eventId: z.string() })]),
+    returns: z.array(vcsEditOpRowSchema),
+    access: READ_ACCESS,
+    examples: [{ args: ["panels/chat", { eventId: "evt-123" }] }],
+  },
+  fileHistory: {
+    description:
+      "File history / blame: every edit to a path in COMMIT-lineage order (committed commits first, then the uncommitted working tail on the given head). Index-backed.",
+    args: z.tuple([repoPathArg, z.string(), z.string().optional(), z.number().optional()]),
+    returns: z.array(vcsEditOpRowSchema),
+    access: READ_ACCESS,
+    examples: [{ args: ["panels/chat", "notes.md"] }],
+  },
+  commitAncestors: {
+    description:
+      "Walk a commit's ancestry in the event-keyed commit DAG (by commit event id, not state hash — distinct commits can share content). Returns each commit's parents.",
+    args: z.tuple([repoPathArg, z.string(), z.number().optional()]),
+    returns: z.array(vcsCommitAncestorSchema),
+    access: READ_ACCESS,
+    examples: [{ args: ["panels/chat", "evt-123"] }],
+  },
+  editsByActor: {
+    description:
+      "Every edit authored by an actor (author provenance), across commits — index-backed.",
+    args: z.tuple([z.string(), z.number().optional()]),
+    returns: z.array(vcsEditOpRowSchema),
+    access: READ_ACCESS,
+    examples: [{ args: ["agent:scribe"] }],
+  },
+  editsByTurn: {
+    description:
+      "Every edit authored in an agent turn (causal provenance — ties VCS edits to the agentic trajectory). Index-backed.",
+    args: z.tuple([z.string()]),
+    returns: z.array(vcsEditOpRowSchema),
+    access: READ_ACCESS,
+    examples: [{ args: ["turn-abc"] }],
+  },
+  editsByInvocation: {
+    description:
+      "Every edit authored in a single tool-call invocation (causal provenance). Index-backed.",
+    args: z.tuple([z.string()]),
+    returns: z.array(vcsEditOpRowSchema),
+    access: READ_ACCESS,
+    examples: [{ args: ["inv-xyz"] }],
+  },
+  previewBuild: {
+    description:
+      "On-demand build of the caller context's WORKING content (committed head + uncommitted edits), scoped to specific repos or units. Does NOT touch the published EV baseline — builds happen authoritatively only at push. Use for a dev preview without committing.",
+    args: z.tuple([
+      z.object({
+        repoPaths: z.array(z.string()).optional(),
+        units: z.array(z.string()).optional(),
+        head: z.string().optional(),
+      }),
+    ]),
+    returns: z.array(repoBuildReportSchema),
+    access: READ_ACCESS,
+    examples: [{ args: [{ repoPaths: ["panels/chat"] }] }],
+  },
   readFile: {
     description:
-      "Read one file's content (text or base64 bytes) at a VCS ref, with its state/content hashes and mode; returns null if the path is absent. Empty ref ⇒ the caller's current head.",
-    args: z.tuple([z.string(), z.string()]),
+      "Read one file's content (text or base64 bytes) at a VCS ref, with its state/content hashes and mode; returns null if the path is absent. Empty ref ⇒ the caller's current head. Pass repoPath to read from a specific repo's head (path repo-relative).",
+    args: z.tuple([z.string(), z.string(), repoPathArgOptional]),
     returns: vcsFileContentSchema.nullable(),
     access: READ_ACCESS,
-    examples: [{ args: ["", "notes.md"] }],
+    examples: [{ args: ["", "notes.md", "panels/chat"] }],
   },
   listFiles: {
     description:
-      "List every file (path, content hash, mode) at a VCS ref; omit the ref for the caller's current head.",
-    args: z.tuple([z.string().optional()]),
+      "List every file (path, content hash, mode) at a VCS ref; omit the ref for the caller's current head. Pass repoPath to list a single repo's head.",
+    args: z.tuple([z.string().optional(), repoPathArgOptional]),
     returns: z.array(vcsFileListEntrySchema),
     access: READ_ACCESS,
   },
   revert: {
     description:
-      "Undo a prior change by forward-applying its inverse patch onto the caller's head, advancing it; target the change by state hash or event id.",
+      "Undo a prior change by forward-applying its inverse patch onto the caller's head, advancing it; target the change by state hash or event id. Pass repoPath to revert on a specific repo's log.",
     args: z.tuple([
       z.object({
         stateHash: z
@@ -358,34 +715,30 @@ export const vcsMethods = defineServiceMethods({
           .describe(
             "Head to revert on. Omit for the caller's own context head; entity callers may only write their own `ctx:…` head."
           ),
+        repoPath: z
+          .string()
+          .describe("Repo to revert on (workspace-relative repo path). Required (per-repo VCS)."),
       }),
     ]),
-    returns: vcsApplyEditsResultSchema,
+    returns: vcsEditResultSchema,
     access: { ...WRITE_ACCESS, sensitivity: "destructive" },
-    examples: [{ args: [{ eventId: "evt-123" }] }],
+    examples: [{ args: [{ eventId: "evt-123", repoPath: "panels/chat" }] }],
   },
   status: {
     description:
-      "Unpublished changes on a head relative to its publish baseline (main): the added/removed/changed paths plus the head state and whether it is ahead of main. Not a filesystem scan. Omit the head for the caller's current context head.",
-    args: z.tuple([z.string().optional()]),
+      "Unpushed changes on a repo's head relative to that repo's main: the added/removed/changed paths plus the head state and whether it is ahead of main. Not a filesystem scan. repoPath is required (per-repo VCS).",
+    args: z.tuple([repoPathArg, z.string().optional()]),
     returns: vcsStatusResultSchema,
     access: READ_ACCESS,
-  },
-  unitStatus: {
-    description:
-      "Status scoped to a single workspace unit (repo path): the unit's head, state hash, dirty flag, and per-file changes. Omit the head for the caller's current context head.",
-    args: z.tuple([z.string(), z.string().optional()]),
-    returns: VcsUnitStatusSchema,
-    access: READ_ACCESS,
-    examples: [{ args: ["panels/spectrolite"] }],
+    examples: [{ args: ["panels/chat"] }],
   },
   log: {
     description:
-      "Commit log for a head, most recent first, capped by limit (default 50). Omit the head for the caller's current context head.",
-    args: z.tuple([z.number().optional(), z.string().optional()]),
+      "Commit log for a repo's head, most recent first, capped by limit (default 50). repoPath is required (per-repo VCS).",
+    args: z.tuple([repoPathArg, z.number().optional(), z.string().optional()]),
     returns: z.array(vcsLogEntrySchema),
     access: READ_ACCESS,
-    examples: [{ args: [10] }],
+    examples: [{ args: ["packages/core", 10] }],
   },
   diff: {
     description:
@@ -396,51 +749,155 @@ export const vcsMethods = defineServiceMethods({
   },
   resolveHead: {
     description:
-      'Resolve a ref to its head name and current `state:…` hash. Omit the ref for the caller\'s current context head; pass "main"/"ctx:…" for an explicit ref.',
-    args: z.tuple([z.string().optional()]),
+      'Resolve a ref to its head name and current `state:…` hash on a repo\'s log. Omit the ref for the caller\'s current context head; pass "main"/"ctx:…" for an explicit ref, and repoPath to scope to a repo.',
+    args: z.tuple([z.string().optional(), repoPathArg]),
     returns: vcsResolveHeadResultSchema,
     access: READ_ACCESS,
-    examples: [{ args: ["main"] }],
+    examples: [{ args: ["main", "packages/core"] }],
+  },
+  workspaceViewWithRepoAt: {
+    description:
+      "Compose a workspace-rooted state view with one repo replaced by a repo-rooted state hash (or removed when null). Use this to convert a repo state from vcs.log/vcs.commit/vcs.resolveHead into the immutable state ref that build.getBuild expects.",
+    args: z.tuple([repoPathArg, nullableString]),
+    returns: vcsWorkspaceViewResultSchema,
+    access: READ_ACCESS,
+    examples: [{ args: ["panels/chat", "state:abc123"] }],
   },
   merge: {
     description:
-      "Merge a source head into a target head (default: the caller's own head), advancing the target; returns up-to-date/merged/conflicted plus any conflicts. The target is a head write.",
-    args: z.tuple([z.string(), z.string().optional()]),
+      "Reconcile divergence: pull `main` into the caller's context head on a repo, producing a MERGE COMMIT. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Returns the upstream commits + clean/conflict + conflictPaths. After merging, the context head descends from main so push fast-forwards.",
+    args: z.tuple([repoPathArg, z.string().optional()]),
     returns: vcsMergeResultSchema,
     access: { ...WRITE_ACCESS },
-    examples: [{ args: ["main"] }],
+    examples: [{ args: ["panels/chat"] }],
+  },
+  mergeGroup: {
+    description:
+      "Coordinated multi-repo pull: merge each repo's source head into its target (default main). Best-effort per-repo (not the atomic group-push path).",
+    args: z.tuple([
+      z.array(
+        z.object({
+          repoPath: z.string(),
+          sourceHead: z.string(),
+          targetHead: z.string().optional(),
+        })
+      ),
+    ]),
+    returns: z.array(
+      vcsMergeResultSchema.extend({ repoPath: z.string() })
+    ),
+    access: { ...WRITE_ACCESS },
   },
   abortMerge: {
     description:
-      "Abort a pending (conflicted) merge on a head, restoring its pre-merge tree; this is itself a head write. Omit the head for the caller's current context head.",
-    args: z.tuple([z.string().optional()]),
+      "Abort a pending (conflicted) merge on a repo's head, restoring its pre-merge tree; this is itself a head write. repoPath is required; omit head for the caller's own context head.",
+    args: z.tuple([repoPathArg, z.string().optional()]),
     returns: z.object({ aborted: z.boolean() }),
     access: { ...WRITE_ACCESS },
+    examples: [{ args: ["panels/chat"] }],
   },
   pendingMerge: {
     description:
-      "Inspect a head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. Omit the head for the caller's current context head.",
-    args: z.tuple([z.string().optional()]),
+      "Inspect a repo head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. repoPath is required; omit head for the caller's own context head.",
+    args: z.tuple([repoPathArg, z.string().optional()]),
     returns: vcsPendingMergeSchema,
     access: READ_ACCESS,
+    examples: [{ args: ["panels/chat"] }],
   },
-  publishStatus: {
+  push: {
     description:
-      "How far a head is ahead of main: the unpublished commit count and the per-file changes that a publish would carry. Omit the head for the caller's current context head.",
-    args: z.tuple([z.string().optional()]),
-    returns: vcsPublishStatusSchema,
+      "Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances. FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). Shell/server may pass sourceHead explicitly; context callers may only push their own ctx head.",
+    args: z.tuple([vcsPushInputSchema]),
+    returns: vcsPushResultSchema,
+    access: { ...WRITE_ACCESS, sensitivity: "admin" },
+    examples: [{ args: [{ repoPaths: ["panels/chat"] }] }],
+  },
+  pushStatus: {
+    description:
+      "How far each repo's head is ahead of that repo's main: the unpushed change count and per-file changes a push would carry.",
+    args: z.tuple([z.array(z.string())]),
+    returns: z.array(vcsPushStatusSchema),
+    access: READ_ACCESS,
+    examples: [{ args: [["panels/chat"]] }],
+  },
+  forkRepo: {
+    description:
+      "Fork a repo to a new path, preserving history: the new repo's log descends from the source's lineage (its `log` shows the inherited commits), so you can edit on top of the forked history. The package.json `name` leaf is rewritten to the new path so the fork is build-valid; deeper renames (component/class names) are yours to make, then push.",
+    args: z.tuple([
+      z.string().describe("Source repo path, e.g. panels/chat"),
+      z.string().describe("Destination repo path, e.g. panels/mychat"),
+    ]),
+    returns: z.object({
+      repoPath: z.string(),
+      head: z.string(),
+      inherited: z.number().describe("Number of commits inherited from the source's history."),
+      stateHash: z.string(),
+    }),
+    access: { ...WRITE_ACCESS, sensitivity: "admin" },
+    examples: [{ args: ["panels/chat", "panels/mychat"] }],
+  },
+  deleteRepo: {
+    description:
+      "SEVERE, global-state action: permanently remove a whole repo from the workspace. Distinct from edits — it archives the repo's history (moved to a recoverable archive head) and drops the repo from workspace main, deleting its working tree. Requires explicit user approval every time (a dedicated per-repo deletion grant that the ordinary write grant never covers). REFUSES if other repos depend on this one unless `force` is set (their builds will break). Rejects the `meta` repo and any path with no committed main.",
+    args: z.tuple([
+      z.object({
+        repoPath: z.string().describe("Workspace-relative repo path to delete, e.g. panels/old"),
+        force: z
+          .boolean()
+          .optional()
+          .describe("Delete even when other repos depend on this one (their builds may break)."),
+      }),
+    ]),
+    returns: vcsDeleteRepoResultSchema,
+    access: { ...WRITE_ACCESS, sensitivity: "destructive" },
+    examples: [{ args: [{ repoPath: "panels/old" }] }],
+  },
+  restoreRepo: {
+    description:
+      "Recover a previously deleted repo by re-pointing its main at its archived history. FAILS if a different repo now occupies that path (re-created since the deletion) rather than clobbering it, and if there is nothing archived to restore. Requires user approval (re-adds the repo to workspace main).",
+    args: z.tuple([
+      z.object({
+        repoPath: z.string().describe("Workspace-relative repo path to restore, e.g. panels/old"),
+      }),
+    ]),
+    returns: vcsRestoreRepoResultSchema,
+    access: { ...WRITE_ACCESS, sensitivity: "admin" },
+    examples: [{ args: [{ repoPath: "panels/old" }] }],
+  },
+  contextStatus: {
+    description:
+      "Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace (vcs.deleteRepo) while your branch still references it — a push will be refused, so drop/rebase your context or restore the repo. Only repos with changes or drift are returned.",
+    args: z.tuple([]),
+    returns: z.array(
+      z.object({
+        repoPath: z.string(),
+        forked: z.boolean(),
+        uncommitted: z.boolean(),
+        ahead: z.boolean(),
+        behind: z.boolean(),
+        deleted: z.boolean(),
+      })
+    ),
     access: READ_ACCESS,
   },
-  publish: {
+  rebaseContext: {
     description:
-      "Publish the caller's own context head into main by merging it (the one sanctioned ctx→main escalation; autonomous agents are user-approval gated). Returns merged/conflicted; a conflicted publish is rolled back, leaving main untouched.",
-    args: z.tuple([z.string().optional()]),
-    returns: vcsMergeResultSchema,
-    access: { ...WRITE_ACCESS, sensitivity: "admin" },
+      "Pull the latest main into your context: 3-way merges main into each repo you've edited, then re-pins your context's base to the current workspace so unedited repos also advance to latest. Use when contextStatus shows repos `behind`. Returns each edited repo's merge status.",
+    args: z.tuple([]),
+    returns: z.object({
+      repos: z.array(
+        z.object({
+          repoPath: z.string(),
+          status: z.enum(["up-to-date", "merged", "conflicted"]),
+        })
+      ),
+      baseView: z.string(),
+    }),
+    access: WRITE_ACCESS,
   },
   recall: {
     description:
-      "Semantic recall over the workspace's VCS memory (log summaries, file snippets) matching a query; returns ranked snippets with their head/event/path anchors.",
+      "Semantic recall over the workspace's VCS memory (log summaries, file snippets) matching a query; pass repoPaths to scope to selected repos. Returns ranked snippets with their head/event/path anchors.",
     args: z.tuple([vcsRecallInputSchema]),
     returns: vcsRecallResultSchema,
     access: READ_ACCESS,

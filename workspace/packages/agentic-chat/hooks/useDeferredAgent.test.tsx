@@ -1,0 +1,345 @@
+// @vitest-environment jsdom
+
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type { Participant } from "@workspace/pubsub";
+import type { AvailableAgent } from "@workspace/agentic-core";
+import { useDeferredAgent } from "./useDeferredAgent";
+import type { ChatParticipantMetadata } from "../types";
+
+const AGENT: AvailableAgent = {
+  id: "workers/agent-worker",
+  className: "AiChatWorker",
+  name: "AI Chat",
+  proposedHandle: "ai-chat",
+};
+
+const agentRoster = {
+  "do:workers/agent-worker:AiChatWorker:ai-chat-1": {
+    id: "do:workers/agent-worker:AiChatWorker:ai-chat-1",
+    metadata: { name: "AI Chat", type: "agent", handle: "ai-chat" },
+  },
+} as unknown as Record<string, Participant<ChatParticipantMetadata>>;
+
+interface Mocks {
+  clearComposer: ReturnType<typeof vi.fn>;
+  publishText: ReturnType<typeof vi.fn>;
+  maybeSetDefaultTitle: ReturnType<typeof vi.fn>;
+  coreSendMessage: ReturnType<typeof vi.fn>;
+  onAddAgent?: ReturnType<typeof vi.fn>;
+}
+
+function freshMocks(withAdd = true): Mocks {
+  return {
+    clearComposer: vi.fn(),
+    publishText: vi.fn().mockResolvedValue(undefined),
+    maybeSetDefaultTitle: vi.fn(),
+    coreSendMessage: vi.fn().mockResolvedValue(undefined),
+    onAddAgent: withAdd ? vi.fn() : undefined,
+  };
+}
+
+type Params = Parameters<typeof useDeferredAgent>[0];
+
+function makeParams(m: Mocks, over: Partial<Params> = {}): Params {
+  return {
+    participants: {},
+    pendingAgents: new Map(),
+    input: "",
+    clearComposer: m.clearComposer,
+    publishText: m.publishText,
+    maybeSetDefaultTitle: m.maybeSetDefaultTitle,
+    coreSendMessage: m.coreSendMessage,
+    onAddAgent: m.onAddAgent,
+    availableAgents: [AGENT],
+    modelCatalog: null,
+    connectedModelRefs: [],
+    defaultModelRef: null,
+    channelName: "chat-test",
+    messages: [],
+    replaySettled: true,
+    ...over,
+  };
+}
+
+describe("useDeferredAgent", () => {
+  it("arms the inline setup when no agent is present and one can be created", () => {
+    const m = freshMocks();
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m),
+    });
+    expect(result.current.deferredAgent?.setupActive).toBe(true);
+    expect(result.current.deferredAgent?.active).toBe(true);
+    expect(result.current.deferredAgent?.launching).toBe(false);
+  });
+
+  it("queues the first message, spawns exactly one agent, and never double-spawns", async () => {
+    const m = freshMocks();
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello" }),
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(m.clearComposer).toHaveBeenCalledTimes(1);
+    expect(m.onAddAgent).toHaveBeenCalledTimes(1);
+    expect(m.coreSendMessage).not.toHaveBeenCalled();
+    expect(result.current.deferredAgent?.queued.map((q) => q.text)).toEqual(["hello"]);
+    expect(result.current.deferredAgent?.launching).toBe(true);
+
+    // A second send before the agent joins enqueues but must not spawn again.
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(m.onAddAgent).toHaveBeenCalledTimes(1);
+    expect(result.current.deferredAgent?.queued.length).toBe(2);
+  });
+
+  it("flushes the queue live when an agent joins, then stands down", async () => {
+    const m = freshMocks();
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello" }),
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(result.current.deferredAgent?.queued.length).toBe(1);
+
+    // Agent joins the roster → the held message flushes live via publishText.
+    rerender(makeParams(m, { input: "", participants: agentRoster }));
+    await waitFor(() => expect(m.publishText).toHaveBeenCalledTimes(1));
+    expect(m.publishText).toHaveBeenCalledWith("hello", expect.objectContaining({}));
+    // Brand-new chat (empty transcript) → the first message titles the channel.
+    expect(m.maybeSetDefaultTitle).toHaveBeenCalledWith("hello");
+    await waitFor(() => expect(result.current.deferredAgent).toBeUndefined());
+  });
+
+  it("does not title the chat until the first queued message is successfully published", async () => {
+    const m = freshMocks();
+    let resolvePublish!: () => void;
+    m.publishText = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePublish = resolve;
+        })
+    );
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello" }),
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    rerender(makeParams(m, { input: "", participants: agentRoster }));
+    await waitFor(() => expect(m.publishText).toHaveBeenCalledTimes(1));
+    expect(m.maybeSetDefaultTitle).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePublish();
+    });
+    await waitFor(() => expect(m.maybeSetDefaultTitle).toHaveBeenCalledWith("hello"));
+  });
+
+  it("skips queued messages canceled before their flush turn begins", async () => {
+    const m = freshMocks();
+    let resolveFirst!: () => void;
+    m.publishText = vi.fn().mockImplementation((text: string) => {
+      if (text === "first") {
+        return new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "first" }),
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    rerender(makeParams(m, { input: "second" }));
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(result.current.deferredAgent?.queued.map((q) => q.text)).toEqual(["first", "second"]);
+
+    rerender(makeParams(m, { input: "", participants: agentRoster }));
+    await waitFor(() => expect(m.publishText).toHaveBeenCalledWith("first", expect.any(Object)));
+    const second = result.current.deferredAgent?.queued.find((q) => q.text === "second");
+    expect(second).toBeTruthy();
+    act(() => {
+      result.current.deferredAgent?.cancelQueued(second!.id);
+    });
+
+    await act(async () => {
+      resolveFirst();
+    });
+    await waitFor(() => expect(result.current.deferredAgent).toBeUndefined());
+    expect(m.publishText).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls through to the normal send when the host cannot create agents", async () => {
+    const m = freshMocks(false); // no onAddAgent
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hi" }),
+    });
+    expect(result.current.deferredAgent).toBeUndefined();
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(m.coreSendMessage).toHaveBeenCalledTimes(1);
+    expect(m.publishText).not.toHaveBeenCalled();
+  });
+
+  it("does not strand an initialPrompt in the deferred queue when the host cannot create agents", () => {
+    const m = freshMocks(false); // no onAddAgent; useAgenticChat leaves initialPrompt to useChatCore
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { initialPrompt: "do the thing", replaySettled: true }),
+    });
+    expect(result.current.deferredAgent).toBeUndefined();
+    expect(m.publishText).not.toHaveBeenCalled();
+  });
+
+  it("routes an initialPrompt through the same queue once connected", async () => {
+    const m = freshMocks();
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { initialPrompt: "do the thing", replaySettled: false }),
+    });
+    // Replay not settled yet → nothing queued; setup card suppressed by the prompt.
+    expect(result.current.deferredAgent?.queued.length ?? 0).toBe(0);
+    expect(result.current.deferredAgent?.setupActive ?? false).toBe(false);
+
+    // Replay settles → the prompt enqueues and spawns one agent.
+    rerender(makeParams(m, { initialPrompt: "do the thing", replaySettled: true }));
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(result.current.deferredAgent?.queued.map((q) => q.text)).toEqual(["do the thing"]);
+  });
+
+  it("never shows the setup card over an existing transcript (has-history guard)", () => {
+    const m = freshMocks();
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        messages: [{ id: "m1", senderId: "u", content: "hi" } as never],
+      }),
+    });
+    // No agent present, but the chat has history → don't replace it with setup.
+    expect(result.current.deferredAgent).toBeUndefined();
+  });
+
+  it("keeps the setup card hidden after an agent leaves (ever-had-agent latch)", () => {
+    const m = freshMocks();
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { participants: agentRoster }),
+    });
+    expect(result.current.deferredAgent).toBeUndefined(); // agent present
+    // Agent idle-stops → roster empties, nothing pending. Even with no messages,
+    // the setup card must not take over the conversation.
+    rerender(makeParams(m, { participants: {} }));
+    expect(result.current.deferredAgent?.setupActive ?? false).toBe(false);
+  });
+
+  it("surfaces a launch failure and retries on demand", async () => {
+    const m = freshMocks();
+    m.onAddAgent = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(undefined);
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello" }),
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    await waitFor(() => expect(result.current.deferredAgent?.launchFailed).toBe(true));
+    expect(m.onAddAgent).toHaveBeenCalledTimes(1);
+    // Retry re-issues the spawn (this attempt resolves) and clears the error.
+    await act(async () => {
+      result.current.deferredAgent?.retryLaunch();
+    });
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(2));
+    expect(result.current.deferredAgent?.launchFailed).toBe(false);
+  });
+
+  it("spawns once the agent gallery loads, even if the user sent first", async () => {
+    const m = freshMocks();
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello", availableAgents: [] }),
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    // No agent types yet → the message is held, but nothing is spawned.
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+    expect(result.current.deferredAgent?.queued.length).toBe(1);
+    // Gallery loads → the spawn-driver fires.
+    rerender(makeParams(m, { input: "", availableAgents: [AGENT] }));
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+  });
+
+  it("spawns with the host default (undefined id) when no type was picked", async () => {
+    const m = freshMocks();
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello" }),
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    // undefined id lets the panel honor a caller-pinned agentSource/agentClass.
+    expect(m.onAddAgent).toHaveBeenCalledWith(undefined, expect.any(Object));
+    // The seeded draft handle must NOT leak onto the spawn — the host derives a
+    // valid handle for the resolved agent (the inline setup has no handle field).
+    expect(m.onAddAgent!.mock.calls[0]?.[1]).not.toHaveProperty("handle");
+    // Untouched UI fallbacks must not mask workspace defaults that may resolve in
+    // the host at spawn time.
+    expect(m.onAddAgent!.mock.calls[0]?.[1]).not.toHaveProperty("approvalLevel");
+  });
+
+  it("locks the spawn type at send time even if the selection changes before launch", async () => {
+    const m = freshMocks();
+    // Gallery not loaded yet → the send is held (canSpawn false), not spawned.
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { input: "hello", availableAgents: [] }),
+    });
+    act(() => result.current.deferredAgent?.setAgentId("workers/agent-worker"));
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+    // A stray later selection change must NOT alter what this message committed to.
+    act(() => result.current.deferredAgent?.setAgentId("workers/other"));
+    rerender(makeParams(m, { input: "", availableAgents: [AGENT] }));
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(m.onAddAgent).toHaveBeenCalledWith("workers/agent-worker", expect.any(Object));
+  });
+
+  it("shows the setup card only once replay has settled (brand-new chat)", () => {
+    const m = freshMocks();
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { replaySettled: false }),
+    });
+    // Replay not settled → empty `messages` isn't yet a trustworthy "new chat".
+    expect(result.current.deferredAgent?.setupActive ?? false).toBe(false);
+    rerender(makeParams(m, { replaySettled: true }));
+    expect(result.current.deferredAgent?.setupActive).toBe(true);
+  });
+
+  it("never flashes the setup card over an agentless channel that has history", () => {
+    const m = freshMocks();
+    // Reopened agentless channel: history is mid-replay (not settled, empty yet).
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, { replaySettled: false, messages: [] }),
+    });
+    expect(result.current.deferredAgent?.setupActive ?? false).toBe(false);
+    // Replay settles and reveals the history → still no setup card.
+    rerender(
+      makeParams(m, {
+        replaySettled: true,
+        messages: [{ id: "m1", senderId: "u", content: "hi" } as never],
+      })
+    );
+    expect(result.current.deferredAgent?.setupActive ?? false).toBe(false);
+  });
+});

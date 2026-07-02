@@ -5,9 +5,10 @@
  * Architecture:
  *   Runtime (Playwright) → Server CDP WebSocket → Host provider → webContents.debugger → Panel
  *
- * Two WebSocket paths:
- * - `/api/cdp-host` — Electron host provider connection
- * - `/cdp/{targetId}` — per-panel Playwright client connections
+ * Two connection surfaces:
+ * - host providers connect either via `/api/cdp-host` WebSocket (local shells)
+ *   or a shell-authenticated RPC stream (remote/WebRTC shells)
+ * - `/cdp/{targetId}` — per-panel Playwright client WebSocket connections
  *
  * Both paths authenticate with a first WebSocket message:
  * `{ "type": "natstack:cdp-auth", "token": "..." }`.
@@ -33,7 +34,7 @@ interface CdpBridgeOptions {
   adminToken: string;
   cdpGrants?: CdpGrantService;
   authenticateHostProvider?: (token: string, hostConnectionId: string) => boolean;
-  canRegisterHostProvider?: (hostConnectionId: string) => boolean;
+  canRegisterHostProvider?: (hostConnectionId: string, ownerCallerId?: string) => boolean;
   resolveHostForTarget?: (targetId: string) => string | null;
   getTargetInfo?: (targetId: string) => CdpTargetInfo | null | Promise<CdpTargetInfo | null>;
   /** Check if a targetId corresponds to a known panel in the registry. */
@@ -52,6 +53,15 @@ interface CdpBridgeOptions {
 export interface CdpEndpoint {
   wsEndpoint: string;
   token: string;
+}
+
+export interface CdpHostProviderConnection {
+  readonly readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  on(event: "message", listener: (data: unknown) => void): this;
+  on(event: "close", listener: () => void): this;
+  on(event: "error", listener: (err: unknown) => void): this;
 }
 
 interface PendingCommand {
@@ -101,11 +111,19 @@ function isModelAwareHostCommand(action: string): boolean {
   return MODEL_AWARE_HOST_COMMANDS.has(action);
 }
 
+function providerMessageText(data: unknown): string {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data.toString();
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString();
+  if (Array.isArray(data) && data.every(Buffer.isBuffer)) return Buffer.concat(data).toString();
+  return String(data);
+}
+
 export class CdpBridge {
   private adminToken: string;
   private cdpGrants: CdpGrantService;
   private authenticateHostProvider: (token: string, hostConnectionId: string) => boolean;
-  private canRegisterHostProvider: (hostConnectionId: string) => boolean;
+  private canRegisterHostProvider: (hostConnectionId: string, ownerCallerId?: string) => boolean;
   private resolveHostForTarget?: (targetId: string) => string | null;
   private getTargetInfo?: (
     targetId: string
@@ -116,8 +134,8 @@ export class CdpBridge {
   private externalHost: string;
   private port: number;
 
-  /** Host provider WebSocket connections: stable hostConnectionId → provider WS */
-  private providers = new Map<string, WebSocket>();
+  /** Host provider connections: stable hostConnectionId → provider transport */
+  private providers = new Map<string, CdpHostProviderConnection>();
 
   /** Registered targets from providers: targetId → provider metadata */
   private targetRegistry = new Map<string, RegisteredTarget>();
@@ -253,6 +271,31 @@ export class CdpBridge {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
       socket.destroy();
     }
+  }
+
+  /**
+   * Attach a trusted host provider over an already-authenticated transport.
+   * Used by remote/WebRTC shells where the management plane is RPC, not a
+   * direct loopback WebSocket. The caller is responsible for authenticating and
+   * authorizing the shell before exposing this connection.
+   */
+  canConnectHostProvider(hostConnectionId: string, ownerCallerId?: string): boolean {
+    return Boolean(
+      hostConnectionId && this.canRegisterHostProvider(hostConnectionId, ownerCallerId)
+    );
+  }
+
+  connectHostProvider(
+    hostConnectionId: string,
+    provider: CdpHostProviderConnection,
+    ownerCallerId?: string
+  ): void {
+    if (!this.canConnectHostProvider(hostConnectionId, ownerCallerId)) {
+      provider.close(1008, "CDP host provider not authorized");
+      throw new Error(`CDP host provider not authorized: ${hostConnectionId}`);
+    }
+    this.handleProviderConnection(hostConnectionId, provider);
+    provider.send(JSON.stringify({ type: "natstack:cdp-auth-ok" }));
   }
 
   /**
@@ -450,7 +493,7 @@ export class CdpBridge {
     log.info("CdpBridge stopped");
   }
 
-  private handleProviderConnection(hostConnectionId: string, ws: WebSocket): void {
+  private handleProviderConnection(hostConnectionId: string, ws: CdpHostProviderConnection): void {
     const existing = this.providers.get(hostConnectionId);
     if (existing && existing !== ws) {
       this.flushProvider(hostConnectionId, "CDP host provider reconnected");
@@ -463,7 +506,7 @@ export class CdpBridge {
     let providerMessageQueue = Promise.resolve();
     ws.on("message", (data) => {
       try {
-        const msg = JSON.parse(data.toString()) as ProviderBridgeMessage;
+        const msg = JSON.parse(providerMessageText(data)) as ProviderBridgeMessage;
         providerMessageQueue = providerMessageQueue
           .then(() => this.handleProviderMessage(msg, ws, hostConnectionId))
           .catch((err: unknown) => {
@@ -497,7 +540,7 @@ export class CdpBridge {
 
   private async handleProviderMessage(
     msg: ProviderBridgeMessage,
-    providerWs: WebSocket,
+    providerWs: CdpHostProviderConnection,
     hostConnectionId?: string
   ): Promise<void> {
     switch (msg.type) {
@@ -818,7 +861,7 @@ export class CdpBridge {
   // Helpers
   // =========================================================================
 
-  private providerForTarget(targetId: string): WebSocket | null {
+  private providerForTarget(targetId: string): CdpHostProviderConnection | null {
     const registration = this.targetRegistry.get(targetId);
     if (!registration) return null;
 
@@ -847,7 +890,10 @@ export class CdpBridge {
     return this.targetRegistry.get(targetId)?.hostConnectionId === hostConnectionId;
   }
 
-  private isActiveProvider(hostConnectionId: string | undefined, providerWs: WebSocket): boolean {
+  private isActiveProvider(
+    hostConnectionId: string | undefined,
+    providerWs: CdpHostProviderConnection
+  ): boolean {
     if (!hostConnectionId) return false;
     return (
       this.providers.get(hostConnectionId) === providerWs &&

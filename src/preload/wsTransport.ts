@@ -3,6 +3,7 @@
  */
 
 import type { RpcEnvelope, RpcMessage } from "@natstack/rpc";
+import { TERMINAL_CLOSE_CODES } from "@natstack/rpc";
 import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
 import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
 import type { RecoveryKind } from "@natstack/shared/shell/recoveryCoordinator";
@@ -14,7 +15,6 @@ type PanelInitPayload = {
     token?: unknown;
   };
   connectionId?: unknown;
-  leaseConnectionId?: unknown;
   clientLabel?: unknown;
 };
 
@@ -156,9 +156,8 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     if (typeof nextToken === "string" && nextToken.length > 0) {
       authToken = nextToken;
       globals.__natstackGatewayToken = nextToken;
-      const nextConnectionId = panelInit.connectionId ?? panelInit.leaseConnectionId;
-      if (typeof nextConnectionId === "string") {
-        connectionId = nextConnectionId;
+      if (typeof panelInit.connectionId === "string") {
+        connectionId = panelInit.connectionId;
       }
       if (typeof panelInit.clientLabel === "string") {
         clientLabel = panelInit.clientLabel;
@@ -177,7 +176,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     getWsUrl: () => config.wsUrl ?? `ws://127.0.0.1:${config.wsPort}`,
     connectionId: config.connectionId,
     routeTarget: normalizeEndpointId,
-    terminalCloseCodes: [4001, 4005, 4006, 4090, 4091],
+    terminalCloseCodes: [...TERMINAL_CLOSE_CODES],
     translateEvent,
     logPrefix: "WsTransport",
     getAuthMessageFields: () => ({

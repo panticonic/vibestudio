@@ -26,14 +26,13 @@ describe("HeadlessRunner", () => {
     mocks.rpc.call.mockClear();
   });
 
-  it("spawns system-test agents without a model-call cap by default", async () => {
+  it("spawns system-test agents in isolated contexts without a model-call cap by default", async () => {
     const runner = new HeadlessRunner("ctx-test", { model: "anthropic:test-model" });
 
     await runner.spawn();
 
     expect(mocks.createWithAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        contextId: "ctx-test",
         extraConfig: expect.objectContaining({
           model: "anthropic:test-model",
         }),
@@ -44,7 +43,32 @@ describe("HeadlessRunner", () => {
       extraConfig: Record<string, unknown>;
     };
     expect(config.config.clientId).toBe(mocks.rpc.selfId);
+    expect(config).not.toHaveProperty("contextId");
     expect(config.extraConfig).not.toHaveProperty("maxModelCallsPerTurn");
+  });
+
+  it("can explicitly spawn in the orchestrator context", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+
+    await runner.spawn({ context: "parent" });
+
+    expect(mocks.createWithAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: "ctx-test",
+      })
+    );
+  });
+
+  it("can opt into synthetic panel UI tools for interaction-surface tests", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+
+    await runner.spawn({ syntheticPanelUiTools: true });
+
+    expect(mocks.createWithAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeSyntheticPanelUiMethods: true,
+      })
+    );
   });
 
   it("prompts system-test agents to probe the documented path instead of solving independently", async () => {

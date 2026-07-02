@@ -50,6 +50,47 @@ describe("ServiceContainer", () => {
     expect(order).toEqual(["a", "b", "c"]);
   });
 
+  it("starts independent services in the same dependency layer concurrently", async () => {
+    const container = new ServiceContainer();
+    const started: string[] = [];
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+
+    container.registerManaged({
+      name: "a",
+      start: vi.fn(async () => {
+        started.push("a");
+        await new Promise<void>((resolve) => {
+          releaseA = resolve;
+        });
+        return "a";
+      }),
+    });
+    container.registerManaged({
+      name: "b",
+      start: vi.fn(async () => {
+        started.push("b");
+        await new Promise<void>((resolve) => {
+          releaseB = resolve;
+        });
+        return "b";
+      }),
+    });
+    container.registerManaged(createService("c", ["a", "b"]));
+
+    const start = container.startAll();
+    await Promise.resolve();
+
+    expect(started).toEqual(["a", "b"]);
+    expect(container.has("c")).toBe(false);
+
+    releaseA();
+    releaseB();
+    await start;
+
+    expect(container.has("c")).toBe(true);
+  });
+
   it("resolves dependency instances in start()", async () => {
     const container = new ServiceContainer();
 
@@ -98,6 +139,38 @@ describe("ServiceContainer", () => {
 
     await expect(container.startAll()).rejects.toThrow("boom");
     expect(stopped).toEqual(["a"]);
+  });
+
+  it("fails fast when one service in a parallel layer rejects while another hangs", async () => {
+    const container = new ServiceContainer();
+    let releaseSlow!: (value: string) => void;
+    const slowStop = vi.fn();
+
+    container.registerManaged({
+      name: "slow",
+      start: vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            releaseSlow = resolve;
+          })
+      ),
+      stop: slowStop,
+    });
+    container.registerManaged({
+      name: "fail",
+      start: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+
+    await expect(container.startAll()).rejects.toThrow("boom");
+    expect(container.has("slow")).toBe(false);
+
+    releaseSlow("slow-instance");
+    await vi.waitFor(() => {
+      expect(slowStop).toHaveBeenCalledWith("slow-instance");
+    });
+    expect(container.has("slow")).toBe(false);
   });
 
   it("detects dependency cycles", async () => {

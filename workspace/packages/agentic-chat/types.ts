@@ -35,6 +35,9 @@ import type { ActiveFeedback, ToolApprovalProps } from "@workspace/tool-ui";
 import type { PendingImage } from "./utils/imageUtils";
 import type { ComponentType, RefObject } from "react";
 import type { ScopeManager, ScopesApi } from "@workspace/eval";
+import type { MessageTier } from "@workspace/agentic-protocol";
+import type { DefaultAgentConfig } from "@workspace/model-catalog/catalog";
+import type { AgentConfigDraft } from "./components/AgentConfigForm";
 import type {
   ChatParticipantMetadata,
   ChatSandboxValue,
@@ -168,12 +171,66 @@ export interface UndoableAction {
 }
 
 // ===========================================================================
+// Deferred agent — first-agent setup + pre-send delivery queue
+// ===========================================================================
+
+/** A message the user "sent" while no agent was present yet — held client-side
+ *  (unsent) and flushed live once the first agent joins the roster, so the very
+ *  first message lands as a normal live turn rather than backlog replay. */
+export interface PendingDelivery {
+  id: string;
+  text: string;
+  attachments?: AttachmentInput[];
+  mentions?: string[];
+  replyTo?: string;
+  metadata?: Record<string, unknown>;
+  tier?: MessageTier;
+  /** Stable key for idempotent (re)delivery — e.g. an injected initialPrompt. */
+  idempotencyKey?: string;
+}
+
+/** State for the first-agent flow: the inline armed config plus the queue of
+ *  messages waiting for that agent to come online. Present only on surfaces that
+ *  can create agents (host supplies `onAddAgent`). */
+export interface DeferredAgentState {
+  /** No agent present and one can or will be created — hides the header
+   *  "Add agent" launcher (the inline setup owns adding the first agent). */
+  active: boolean;
+  /** Show the inline config card: no agent present, none already spawning, and
+   *  we have the means to spawn one. Flips false once the first message arms it. */
+  setupActive: boolean;
+  /** True once the first message has armed the spawn (agent launching) — drives
+   *  the "Launching agent…" spinner/explanation in the pre-send queue. */
+  launching: boolean;
+  /** The spawn failed (onAddAgent rejected) — drives the queue's error + retry UI. */
+  launchFailed: boolean;
+  /** Retry a failed launch (re-issues the spawn). */
+  retryLaunch: () => void;
+  /** Inline config draft (model/effort/autonomy/…) applied to the agent spawned
+   *  on the first message. */
+  draft: AgentConfigDraft;
+  setDraft: (next: AgentConfigDraft) => void;
+  /** Selected agent-type id (worker source) for the first agent. */
+  agentId: string | undefined;
+  setAgentId: (id: string | undefined) => void;
+  /** Agent types available to choose from (mirrors `availableAgents`). */
+  availableAgents: AvailableAgent[];
+  /** Messages queued (unsent) until the agent joins; rendered in the pre-send queue. */
+  queued: PendingDelivery[];
+  /** Drop a queued message before it is delivered. */
+  cancelQueued: (id: string) => void;
+}
+
+// ===========================================================================
 // ChatContext Value
 // ===========================================================================
 
 export interface ChatContextValue {
   // Connection
   connected: boolean;
+  /** True once the initial replay has settled — `messages` then reliably
+   *  reflects prior history (distinct from socket connect). */
+  replaySettled: boolean;
   status: string;
   channelId: string | null;
   /** Connected runtime caller that can receive OAuth browser handoff events. */
@@ -221,6 +278,8 @@ export interface ChatContextValue {
   debugConsoleAgent: string | null;
   dirtyRepoWarnings: Map<string, DirtyRepoDetails>;
   pendingAgents: Map<string, PendingAgent>;
+  /** First-agent setup + pre-send delivery queue (only on agent-capable hosts). */
+  deferredAgent?: DeferredAgentState;
 
   // Feedback
   activeFeedbacks: Map<string, ActiveFeedback>;
@@ -294,6 +353,12 @@ export interface ChatContextValue {
   modelCatalog?: ModelCatalog | null;
   /** Workspace default model ref ("provider:modelId") for new agents. */
   defaultModelRef?: string | null;
+  /** Full workspace default agent config (model + behavior) for new agents. */
+  defaultAgentConfig?: DefaultAgentConfig | null;
+  /** Explicitly save the full default agent config (model + behavior) as the
+   *  workspace default — the ONLY path that writes it. Wired to the "Save as
+   *  defaults" control in the agent config UI. */
+  onSaveDefaults?: (config: DefaultAgentConfig) => Promise<void> | void;
   /** Model refs ("provider:modelId") with a usable credential (panel-scoped). */
   connectedModelRefs?: string[];
   onRemoveAgent?: (handle: string) => void;

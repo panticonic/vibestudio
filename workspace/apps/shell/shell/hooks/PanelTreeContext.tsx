@@ -56,6 +56,7 @@ export interface FullPanel {
   selectedChildId: string | null;
   snapshot: Panel["snapshot"];
   history?: Panel["history"];
+  state?: Panel["state"];
   navigation?: PanelNavigationState;
   artifacts: PanelArtifacts;
   path?: string;
@@ -342,6 +343,7 @@ function panelToFull(panel: Panel, parentId: string | null, position: number): F
     selectedChildId: panel.selectedChildId ?? null,
     snapshot: panel.snapshot,
     history: panel.history,
+    state: panel.state,
     navigation: panel.navigation,
     artifacts: panel.artifacts ?? {},
     path: source,

@@ -7,7 +7,6 @@
 
 import { NativeModules } from "react-native";
 import type { AppCapability } from "@natstack/shared/unitManifest";
-import { isSelectedWorkspaceUrl } from "@natstack/shared/connect";
 
 export class StoredCredentialsNeedRepairError extends Error {
   constructor(
@@ -18,9 +17,11 @@ export class StoredCredentialsNeedRepairError extends Error {
   }
 }
 
+// Non-secret connection metadata held by the native host. The server URL is
+// gone — remote reach is an encrypted WebRTC pipe pinned to the server's DTLS
+// fingerprint (held natively), so JS only sees identity metadata + one-time
+// connection grants.
 export interface Credentials {
-  serverUrl: string;
-  hubUrl?: string;
   workspaceName?: string;
   deviceId: string;
   serverId: string;
@@ -28,8 +29,6 @@ export interface Credentials {
 }
 
 export interface ServerPairingResponse {
-  serverUrl: string;
-  hubUrl: string;
   deviceId: string;
   serverId: string;
 }
@@ -70,6 +69,10 @@ export interface ActivatePreparedAppBundleResult {
   activated: boolean;
 }
 
+export interface ResetToNativeBootstrapResult {
+  reloading: boolean;
+}
+
 export function isWorkspaceMobileAppCallerId(callerId: string, deviceId?: string): boolean {
   if (!callerId.startsWith("app:apps/")) return false;
   if (deviceId && !callerId.endsWith(`:${deviceId}`)) return false;
@@ -92,6 +95,7 @@ export function isWorkspaceMobileHostCallerId(callerId: string, deviceId?: strin
 interface NatStackMobileHostNative {
   getCredentials(): Promise<Credentials | null>;
   clearCredentials(): Promise<void>;
+  resetToNativeBootstrap(): Promise<ResetToNativeBootstrapResult>;
   pairServer(serverUrl: string, code: string): Promise<ServerPairingResponse>;
   listWorkspaces(): Promise<{ workspaces: RemoteWorkspaceEntry[] }>;
   selectWorkspace(name: string, source: string | null): Promise<PairingResponse>;
@@ -123,26 +127,11 @@ export async function getCredentials(): Promise<Credentials | null> {
     const credentials = await nativeHost().getCredentials();
     if (!credentials) return null;
     if (
-      typeof credentials.serverUrl !== "string" ||
       typeof credentials.deviceId !== "string" ||
+      credentials.deviceId.length === 0 ||
       typeof credentials.serverId !== "string" ||
       credentials.serverId.length === 0
     ) {
-      await clearCredentials().catch(() => {});
-      throw new StoredCredentialsNeedRepairError(
-        "Stored mobile credentials are incomplete. Scan a new pairing QR code to reconnect."
-      );
-    }
-    const hasWorkspaceId =
-      typeof credentials.workspaceId === "string" && credentials.workspaceId.length > 0;
-    const hasHubUrl = typeof credentials.hubUrl === "string" && credentials.hubUrl.length > 0;
-    if (hasWorkspaceId && !isSelectedWorkspaceUrl(credentials.serverUrl)) {
-      await clearCredentials().catch(() => {});
-      throw new StoredCredentialsNeedRepairError(
-        "Stored mobile credentials are not scoped to a workspace. Scan a new pairing QR code to reconnect."
-      );
-    }
-    if (!hasWorkspaceId && !hasHubUrl) {
       await clearCredentials().catch(() => {});
       throw new StoredCredentialsNeedRepairError(
         "Stored mobile credentials are incomplete. Scan a new pairing QR code to reconnect."
@@ -162,14 +151,17 @@ export async function clearCredentials(): Promise<void> {
   await nativeHost().clearCredentials();
 }
 
+export async function resetToNativeBootstrap(): Promise<ResetToNativeBootstrapResult> {
+  const response = await nativeHost().resetToNativeBootstrap();
+  if (!response || typeof response.reloading !== "boolean") {
+    throw new Error("Native host returned an invalid bootstrap reset response");
+  }
+  return response;
+}
+
 export async function pairServer(serverUrl: string, code: string): Promise<ServerPairingResponse> {
   const response = await nativeHost().pairServer(serverUrl, code);
-  if (
-    typeof response.serverUrl !== "string" ||
-    typeof response.hubUrl !== "string" ||
-    typeof response.deviceId !== "string" ||
-    typeof response.serverId !== "string"
-  ) {
+  if (typeof response.deviceId !== "string" || typeof response.serverId !== "string") {
     throw new Error("Native host returned an invalid server pairing response");
   }
   return response;

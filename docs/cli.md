@@ -9,7 +9,7 @@ For ongoing source checkout work, use the live TypeScript entrypoint:
 ```sh
 pnpm install
 pnpm cli --help
-pnpm cli remote serve --host tailscale --port 3030
+pnpm cli remote serve --port 3030
 pnpm cli mobile install --launch
 ```
 
@@ -27,21 +27,23 @@ after Electron or local-child-server changes.
 
 ## Install
 
-For a stable command on your PATH, build and link the package bin:
+For a stable command on your PATH, install from npm:
 
 ```sh
-pnpm build
-pnpm link --global
+npm install -g @natstack/app        # GUI + the `natstack` CLI dispatcher
+# headless server box (CLI + daemon, no Electron):
+npm install -g @natstack/server
 ```
 
-That installs `natstack` and `natstack-server` from `package.json`. The global
-link continues to point at this checkout, but it runs built files from `dist/`;
-re-run `pnpm build` after source changes.
+`@natstack/app` provides `natstack` (bare invocation launches the GUI; subcommands
+run the CLI) and `natstack-server`. `@natstack/server` provides `natstack-server`
+plus the `natstack` CLI for pairing/remote management on a headless box. Update
+with `@latest`.
 
-If you do not want a global link, use the built file directly:
+From a source checkout, run the built CLI directly without a global install:
 
 ```sh
-node dist/cli/client.mjs --help
+node dist/cli/client.mjs --help     # or: pnpm cli --help
 ```
 
 ## Remote
@@ -49,9 +51,9 @@ node dist/cli/client.mjs --help
 Start a phone/laptop pairing server:
 
 ```sh
-natstack remote serve --host tailscale --port 3030
+natstack remote serve --port 3030
 # or, during source development:
-pnpm cli remote serve --host tailscale --port 3030
+pnpm cli remote serve --port 3030
 ```
 
 Pair this terminal, choose a workspace, start the terminal app, and mint new invites:
@@ -90,11 +92,11 @@ natstack mobile install --launch
 pnpm cli mobile install --launch
 ```
 
-Start the phone pairing server over Tailscale:
+Start the phone pairing server (pairing is over WebRTC — no Tailscale/HTTPS setup):
 
 ```sh
-sudo tailscale serve --bg 3030
-natstack mobile pair --host tailscale --port 3030
+export NATSTACK_WEBRTC_SIGNAL_URL=wss://natstack-signaling.<account>.workers.dev
+natstack mobile pair --port 3030
 ```
 
 Run the local Android dev loop:
@@ -114,9 +116,11 @@ natstack mobile smoke --avd Pixel_8
 Useful flags:
 
 - `--device <adb-serial>` targets a specific Android device.
-- `--host tailscale|lan|<host>` chooses the phone-reachable route.
+- `--port <port>` chooses the local pairing server port.
+- `--signal-url <url>` chooses the WebRTC signaling endpoint; otherwise
+  `NATSTACK_WEBRTC_SIGNAL_URL` is required.
 - `--dev` on `natstack mobile pair` offers a disposable template workspace named
   `dev` after pairing.
 
-See [remote-server.md](./remote-server.md) for deployment details and
-[mobile-vpn.md](./mobile-vpn.md) for Tailscale/mobile notes.
+Remote reach is WebRTC (pair by QR - signaling room + DTLS fingerprint); see
+[webrtc-rpc-transport.md](./webrtc-rpc-transport.md) and [webrtc-local-e2e.md](./webrtc-local-e2e.md).

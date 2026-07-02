@@ -138,11 +138,16 @@ export type AddressInputResult =
 
 const BROWSER_SOURCE_PREFIX = "browser:";
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+const OPEN_PANEL_BROWSER_URL_RE = /^(?:https?:\/\/|data:|about:blank(?:[?#].*)?$)/i;
 const PANEL_SOURCE_RE = /^(?:about|panels|packages|apps|templates|workers|skills|projects)\//;
 const DEFAULT_SEARCH_TEMPLATE = "https://www.google.com/search?q=%s";
 
 export function isBrowserPanelSource(source: string): boolean {
   return source.startsWith(BROWSER_SOURCE_PREFIX);
+}
+
+export function isOpenPanelBrowserUrl(source: string): boolean {
+  return OPEN_PANEL_BROWSER_URL_RE.test(source.trim());
 }
 
 export function browserUrlFromPanelSource(source: string): string | null {

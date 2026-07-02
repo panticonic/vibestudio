@@ -1,5 +1,6 @@
 import type { ChatMessage } from "@workspace/agentic-core";
-import type { SessionSnapshot } from "@workspace/agentic-session";
+import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
+import type { HeadlessRunner } from "./runner.js";
 
 export interface ToolFailureSummary {
   id?: string;
@@ -18,8 +19,20 @@ export interface TestCase {
   category: string;
   /** Natural language task prompt sent to the test agent */
   prompt: string;
+  /**
+   * Optional custom orchestration for tests that need multiple independent
+   * headless agents, ordered phases, or other harness-level setup that a single
+   * agent should not fake from inside one context.
+   */
+  orchestrate?: (context: TestOrchestrationContext) => Promise<TestExecutionResult>;
   /** Validate the test execution result */
   validate: (result: TestExecutionResult) => TestResult;
+}
+
+export interface TestOrchestrationContext {
+  runner: HeadlessRunner;
+  testTimeoutMs: number;
+  sendAndWait(session: HeadlessSession, prompt: string, phase: string): Promise<void>;
 }
 
 export interface TestExecutionResult {

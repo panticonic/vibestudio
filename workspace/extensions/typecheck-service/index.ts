@@ -24,6 +24,11 @@ interface ExtensionContextLike {
   workspace: {
     getInfo(): Promise<{ path: string; contextsPath: string }>;
   };
+  fs: {
+    /** Materialize the given workspace path(s)/repo(s) into the (sparse) context
+     *  folder so they can be read from disk. */
+    ensureMaterialized(scope: string | string[] | "all"): Promise<void>;
+  };
   invocation: {
     current(): {
       caller: { callerId: string; contextId?: string };
@@ -75,6 +80,11 @@ async function resolvePanelPath(
   const info = await ctx.workspace.getInfo();
   if (!contextId) return path.isAbsolute(panelPath) ? panelPath : resolveWithin(info.path, panelPath);
   validateContextId(contextId);
+  // The context folder is SPARSE — materialize the panel's own repo so its source
+  // is on disk to typecheck. The base package graph comes from the full workspace
+  // source (`info.path`); any context-edited dependency packages are already
+  // materialized by their edits, so this minimal scope (the panel's repo) is enough.
+  await ctx.fs.ensureMaterialized(panelPath);
   return resolveWithin(path.join(info.contextsPath, contextId), panelPath);
 }
 
@@ -112,6 +122,14 @@ async function buildContextWorkspaceContext(
     const relativeDir = path.relative(sourceContext.monorepoRoot, pkg.dir);
     if (relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) continue;
 
+    // Pinned-context isolation: materialize this dependency package into the
+    // context at ITS pinned state (the context's `ctx` head if edited, else the
+    // pinned base) so typecheck reads the context's dependency version — NOT live
+    // `main`. Without this, an unedited dependency absent from the sparse context
+    // tree falls through to the live source package below, so an older pinned
+    // context would be typechecked against newer main code.
+    await ctx.fs.ensureMaterialized(relativeDir).catch(() => {});
+
     const contextDir = path.join(contextRoot, relativeDir);
     const contextPackageJson = path.join(contextDir, "package.json");
     if (fs.existsSync(contextPackageJson)) {
@@ -126,6 +144,9 @@ async function buildContextWorkspaceContext(
         // Fall back to the source package below.
       }
     }
+    // Only reached when the package isn't in the context at all (e.g. added to
+    // main AFTER this context was pinned, so it's not in the pinned base) — a
+    // genuine last resort, not the unedited-dependency case covered above.
     packages.set(name, pkg);
   }
   for (const [name, pkg] of contextContext?.packages ?? []) {

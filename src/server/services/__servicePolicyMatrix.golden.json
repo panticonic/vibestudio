@@ -41,6 +41,7 @@
       "getBuild": null,
       "getBuildMetadata": null,
       "getBuildNpm": null,
+      "getBuildReport": null,
       "getEffectiveVersion": null,
       "getPanelMetadata": null,
       "hasUnit": null,
@@ -65,7 +66,7 @@
       "deleteClientConfig": null,
       "forwardOAuthCallback": null,
       "getClientConfigStatus": null,
-      "grantCredential": null,
+      "inspectStoredCredentials": null,
       "listStoredCredentials": null,
       "proxyFetch": null,
       "proxyGitHttp": null,
@@ -110,6 +111,7 @@
       "appendFile": null,
       "chmod": null,
       "copyFile": null,
+      "ensureMaterialized": null,
       "exists": null,
       "glob": null,
       "grep": null,
@@ -133,6 +135,12 @@
       "unlink": null,
       "utimes": null,
       "writeFile": null
+    }
+  },
+  "gateway": {
+    "service": ["app", "panel", "shell"],
+    "methods": {
+      "fetch": null
     }
   },
   "gitInterop": {
@@ -159,6 +167,9 @@
       "getCdpEndpoint": null,
       "goBack": null,
       "goForward": null,
+      "hostProvider.close": ["server", "shell"],
+      "hostProvider.open": ["server", "shell"],
+      "hostProvider.send": ["server", "shell"],
       "navigate": null,
       "reload": null,
       "stop": null
@@ -234,7 +245,10 @@
   "runtime": {
     "service": ["app", "do", "panel", "server", "shell", "worker"],
     "methods": {
+      "cloneContext": null,
+      "createContext": ["app", "do", "panel", "server", "shell", "worker"],
       "createEntity": null,
+      "destroyContext": null,
       "listEntities": null,
       "resolveContext": null,
       "retireEntity": null,
@@ -249,7 +263,8 @@
       "resolveBootstrap": null,
       "resolveUserland": null,
       "submitClientConfig": null,
-      "submitCredentialInput": null
+      "submitCredentialInput": null,
+      "submitSecretInput": null
     }
   },
   "shellPresence": {
@@ -273,6 +288,9 @@
     "methods": {
       "list": null,
       "request": null,
+      "requestAs": ["extension"],
+      "requestSecretInput": null,
+      "requestSecretInputAs": ["extension"],
       "revoke": null
     }
   },
@@ -280,20 +298,35 @@
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "abortMerge": null,
-      "applyEdits": null,
+      "commit": null,
+      "commitAncestors": null,
+      "commitEdits": null,
+      "contextStatus": null,
+      "deleteRepo": null,
       "diff": null,
+      "discardEdits": null,
+      "edit": null,
+      "editsByActor": null,
+      "editsByInvocation": null,
+      "editsByTurn": null,
+      "fileHistory": null,
+      "forkRepo": null,
       "listFiles": null,
       "log": null,
       "merge": null,
+      "mergeGroup": null,
       "pendingMerge": null,
-      "publish": null,
-      "publishStatus": null,
+      "previewBuild": null,
+      "push": null,
+      "pushStatus": null,
       "readFile": null,
+      "rebaseContext": null,
       "recall": null,
       "resolveHead": null,
+      "restoreRepo": null,
       "revert": null,
       "status": null,
-      "unitStatus": null
+      "workspaceViewWithRepoAt": null
     }
   },
   "webhookIngress": {
@@ -303,21 +336,6 @@
       "listSubscriptions": null,
       "revokeSubscription": null,
       "rotateSecret": null
-    }
-  },
-  "workerd": {
-    "service": ["app", "do", "extension", "panel", "server", "worker"],
-    "methods": {
-      "cloneDO": null,
-      "createInstance": null,
-      "destroyDO": null,
-      "destroyInstance": null,
-      "getInstanceStatus": null,
-      "getPort": null,
-      "listInstances": null,
-      "listInstanceSources": null,
-      "restartAll": null,
-      "updateInstance": null
     }
   },
   "workerdInspector": {

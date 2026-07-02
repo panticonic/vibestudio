@@ -220,6 +220,32 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           vm.hideNativeShellOverlay(args[0] as string | undefined);
           return;
         }
+        case "showContentOverlay": {
+          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "showContentOverlay");
+          const [options] = args as [
+            import("../shellContentOverlayView.js").ContentOverlayShowOptions,
+          ];
+          vm.showContentOverlay(options);
+          return;
+        }
+        case "updateContentOverlay": {
+          assertViewHost(
+            vm,
+            ctx.caller.runtime.id,
+            ctx.caller.runtime.kind,
+            "updateContentOverlay"
+          );
+          const [options] = args as [
+            import("../shellContentOverlayView.js").ContentOverlayUpdateOptions,
+          ];
+          vm.updateContentOverlay(options);
+          return;
+        }
+        case "hideContentOverlay": {
+          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "hideContentOverlay");
+          vm.hideContentOverlay();
+          return;
+        }
         case "browserNavigate": {
           const [browserId, url] = args as [string, string];
           assertOwnsOrViewHost(

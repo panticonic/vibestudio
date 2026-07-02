@@ -17,7 +17,10 @@ Use the `gad` runtime namespace. The storage model is canonical log-first:
   channel row's `origin_log_id`, `origin_head`, and `origin_envelope_id` columns;
   do not infer this relationship by matching payload text or timestamps.
 - Worktree state lives in `gad_worktree_states`, manifest tables, file versions,
-  `gad_state_transitions`, `gad_transition_parents`, and `gad_worktree_edit_ops`.
+  `gad_state_transitions`, `gad_transition_parents`, `gad_worktree_heads`
+  (structured per-`(log_id, head)` state pointers with `commit_event_id`),
+  `vcs_context_bases` (durable context base pins), and `gad_worktree_edit_ops`
+  (working + committed edit provenance with `actor_id`/`invocation_id`).
 
 Use only the canonical tables above. Older event/session families such as
 `trajectory_events`, `trajectory_branches`, `channel_envelopes`,
@@ -55,7 +58,9 @@ Current implemented hardening:
 - `trajectory_turns.opened_at` is no longer silently overwritten by duplicate
   opens.
 - Presence envelopes project into `channel_roster`.
-- `gad.query` accepts read-only CTEs and still rejects write CTEs.
+- `gad.query` accepts read-only CTEs and still rejects write CTEs, but it is a
+  schema-level escape hatch after bounded inspectors have found the exact table
+  or artifact you need.
 - Manifest/state hashes are synchronous SHA-256 over stable JSON.
 - Standard agent workers expose `inspectMethodSuspensions` to join local
   suspension rows with GAD invocation state.
@@ -64,14 +69,30 @@ Current implemented hardening:
 - Inspector APIs return summaries and byte counts so agents do not need to dump
   hydrated history into eval results.
 
-For SQL reads, prefer:
+For first-pass diagnostics from eval, prefer inspectors and let
+`inspectAgentHealth` derive the default channel branch:
+
+```ts
+const channelId = chat.channelId;
+const health = await gad.inspectAgentHealth({ channelId, limit: 50 });
+const publication = await gad.inspectPublicationIntegrity({ channelId });
+const turn = await gad.inspectTurnState({ channelId });
+const invocation = await gad.inspectInvocationState({ branchId: health.branchId });
+const storage = await gad.inspectStorageDiagnostics({ channelId, limit: 25 });
+```
+
+To enumerate logs and their current heads with SQL instead:
 
 ```sql
-SELECT h.log_id, h.head, h.log_kind, r.target_json, r.updated_at
+SELECT h.log_id, h.head, h.log_kind, w.state_hash, w.updated_at
 FROM log_heads h
-LEFT JOIN refs r ON r.ref_name = 'log:' || h.log_id || ':' || h.head
-ORDER BY r.updated_at DESC, h.created_at DESC;
+LEFT JOIN gad_worktree_heads w ON w.log_id = h.log_id AND w.head = h.head
+ORDER BY w.updated_at DESC, h.created_at DESC;
 ```
+
+Do not query `trajectory_branches`; it is not a public table in the current GAD
+schema. If you need SQL after an inspector points to a concrete artifact, first
+confirm the table exists with a bounded schema read and keep the result small.
 
 ```sql
 SELECT seq, envelope_id AS event_id, hash AS event_hash, prev_hash,
@@ -83,7 +104,8 @@ LIMIT 100;
 ```
 
 To connect what an agent privately did to what users or other agents actually
-received, join channel log rows back to their origin trajectory rows:
+received, use `gad.inspectPublicationIntegrity(...)` first; when you need the
+raw rows, join channel log rows back to their origin trajectory rows:
 
 ```sql
 SELECT c.log_id AS channel_id, c.seq AS channel_seq, c.envelope_id,

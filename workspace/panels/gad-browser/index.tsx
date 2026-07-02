@@ -13,8 +13,8 @@ import {
   Theme,
 } from "@radix-ui/themes";
 import { ReloadIcon } from "@radix-ui/react-icons";
-import { gad, panel } from "@workspace/runtime";
-import { useIsMobile, usePaletteCommands, usePanelTheme } from "@workspace/react";
+import { gad } from "@workspace/runtime";
+import { useIsMobile, usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import { PanelChrome } from "@workspace/ui";
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
@@ -69,7 +69,7 @@ function App() {
   const appearance = usePanelTheme();
   const appTheme = useAppTheme();
   const isMobile = useIsMobile();
-  const stateArgs = panel.stateArgs.use<StateArgs>();
+  const stateArgs = useStateArgs<StateArgs>();
   const [branches, setBranches] = useState<Row[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(
     stateArgs.branchId ?? null

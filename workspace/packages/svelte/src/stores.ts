@@ -25,3 +25,26 @@ export const connectionError = readable<{ code: number; reason: string; source?:
     return panel.onConnectionError((err) => set(err));
   },
 );
+
+/**
+ * Reactive state-args store — reflects the panel's current state args.
+ *
+ * Initializes from the current snapshot via `getStateArgs()` (exposed by
+ * @workspace/runtime as `panel.stateArgs.get`) and updates whenever the host
+ * dispatches the `natstack:stateArgsChanged` CustomEvent, whose `.detail` is the
+ * new args object. This is the Svelte-store analogue of React's `useStateArgs`.
+ */
+export const stateArgs = readable<Record<string, unknown>>(panel.stateArgs.get(), (set) => {
+  const handler = (event: Event) => {
+    set((event as CustomEvent<Record<string, unknown>>).detail);
+  };
+  window.addEventListener("natstack:stateArgsChanged", handler as EventListener);
+  return () => window.removeEventListener("natstack:stateArgsChanged", handler as EventListener);
+});
+
+/**
+ * Update this panel's state args. Re-exported from @workspace/runtime
+ * (`panel.stateArgs.set`, i.e. `setStateArgs`) for convenience — pairs with the
+ * `stateArgs` store, which reflects the resulting changes.
+ */
+export const setStateArgs = panel.stateArgs.set;

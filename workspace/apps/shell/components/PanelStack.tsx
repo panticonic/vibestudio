@@ -41,7 +41,7 @@ import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";
 import { SavePasswordBar } from "./SavePasswordBar";
 import { assertPresent } from "../utils/assertPresent";
-import { shouldShowPanelView } from "./PanelStackVisibility";
+import { leasedElsewhereInfo, shouldShowPanelView } from "./PanelStackVisibility";
 import { PanelSurface } from "./PanelSurface";
 
 interface PanelStackProps {
@@ -330,108 +330,111 @@ export function PanelStack({
   );
 
   // Handle panel context menu actions (reload, unload)
-  const handlePanelAction = useCallback(async (panelId: string, action: PanelContextMenuAction) => {
-    switch (action) {
-      case "back":
-        await panelService.markBrowserNavigationIntent(
-          panelId,
-          assertPresent(getBrowserNavigationIntentForCommand("back"))
-        );
-        await navigatePanelHistory(panelId, -1);
-        break;
-      case "forward":
-        await panelService.markBrowserNavigationIntent(
-          panelId,
-          assertPresent(getBrowserNavigationIntentForCommand("forward"))
-        );
-        await navigatePanelHistory(panelId, 1);
-        break;
-      case "reload":
-      case "reload-panel":
-        await panelService.markBrowserNavigationIntent(
-          panelId,
-          assertPresent(getBrowserNavigationIntentForCommand("reload-panel"))
-        );
-        await panelService.reload(panelId);
-        break;
-      case "reload-view":
-        await panelService.markBrowserNavigationIntent(
-          panelId,
-          assertPresent(getBrowserNavigationIntentForCommand("reload-view"))
-        );
-        await panelService.reloadView(panelId);
-        break;
-      case "force-reload":
-      case "force-reload-view":
-        await panelService.markBrowserNavigationIntent(
-          panelId,
-          assertPresent(getBrowserNavigationIntentForCommand("force-reload-view"))
-        );
-        await panelService.forceReloadView(panelId);
-        break;
-      case "rebuild-panel":
-        await panelService.rebuildPanel(panelId);
-        break;
-      case "stop":
-        await view.browserStop(panelId);
-        break;
-      case "copy-address": {
-        const state = await panelService.getChromeState(panelId);
-        await navigator.clipboard.writeText(state.editableAddress);
-        break;
-      }
-      case "copy-panel-id":
-        await navigator.clipboard.writeText(panelId);
-        break;
-      case "add-child": {
-        const result = await panelService.createChild(panelId, "about/new", { focus: true });
-        navigateToPanelId(result.id);
-        break;
-      }
-      case "open-external": {
-        const state = await panelService.getChromeState(panelId);
-        if (state.resolvedUrl && /^https?:\/\//i.test(state.resolvedUrl)) {
-          await app.openExternal(state.resolvedUrl);
+  const handlePanelAction = useCallback(
+    async (panelId: string, action: PanelContextMenuAction) => {
+      switch (action) {
+        case "back":
+          await panelService.markBrowserNavigationIntent(
+            panelId,
+            assertPresent(getBrowserNavigationIntentForCommand("back"))
+          );
+          await navigatePanelHistory(panelId, -1);
+          break;
+        case "forward":
+          await panelService.markBrowserNavigationIntent(
+            panelId,
+            assertPresent(getBrowserNavigationIntentForCommand("forward"))
+          );
+          await navigatePanelHistory(panelId, 1);
+          break;
+        case "reload":
+        case "reload-panel":
+          await panelService.markBrowserNavigationIntent(
+            panelId,
+            assertPresent(getBrowserNavigationIntentForCommand("reload-panel"))
+          );
+          await panelService.reload(panelId);
+          break;
+        case "reload-view":
+          await panelService.markBrowserNavigationIntent(
+            panelId,
+            assertPresent(getBrowserNavigationIntentForCommand("reload-view"))
+          );
+          await panelService.reloadView(panelId);
+          break;
+        case "force-reload":
+        case "force-reload-view":
+          await panelService.markBrowserNavigationIntent(
+            panelId,
+            assertPresent(getBrowserNavigationIntentForCommand("force-reload-view"))
+          );
+          await panelService.forceReloadView(panelId);
+          break;
+        case "rebuild-panel":
+          await panelService.rebuildPanel(panelId);
+          break;
+        case "stop":
+          await view.browserStop(panelId);
+          break;
+        case "copy-address": {
+          const state = await panelService.getChromeState(panelId);
+          await navigator.clipboard.writeText(state.editableAddress);
+          break;
         }
-        break;
-      }
-      case "duplicate": {
-        const state = await panelService.getChromeState(panelId);
-        if (state.kind === "browser") {
-          if (state.resolvedUrl) {
-            const result = await panelService.createBrowser(state.resolvedUrl, { focus: true });
+        case "copy-panel-id":
+          await navigator.clipboard.writeText(panelId);
+          break;
+        case "add-child": {
+          const result = await panelService.createChild(panelId, "about/new", { focus: true });
+          navigateToPanelId(result.id);
+          break;
+        }
+        case "open-external": {
+          const state = await panelService.getChromeState(panelId);
+          if (state.resolvedUrl && /^https?:\/\//i.test(state.resolvedUrl)) {
+            await app.openExternal(state.resolvedUrl);
+          }
+          break;
+        }
+        case "duplicate": {
+          const state = await panelService.getChromeState(panelId);
+          if (state.kind === "browser") {
+            if (state.resolvedUrl) {
+              const result = await panelService.createBrowser(state.resolvedUrl, { focus: true });
+              navigateToPanelId(result.id);
+            }
+          } else {
+            const result = await panelService.createPanel(state.source, { isRoot: true });
             navigateToPanelId(result.id);
           }
-        } else {
-          const result = await panelService.createPanel(state.source, { isRoot: true });
-          navigateToPanelId(result.id);
+          break;
         }
-        break;
+        case "toggle-pin": {
+          // Client-local pin: protects the panel from idle/cap GC. Update the
+          // mirror atom from the authoritative new state the main process returns,
+          // and bump the mutation seq so an in-flight tree reconcile can't clobber it.
+          const pinned = await panelService.togglePin(panelId);
+          setPinnedPanelIds((prev) => {
+            const next = new Set(prev);
+            if (pinned) next.add(panelId);
+            else next.delete(panelId);
+            return next;
+          });
+          bumpPinMutationSeq((seq) => seq + 1);
+          break;
+        }
+        case "unload":
+          // Unload panel resources but keep in tree (can be re-loaded later)
+          await panelService.unload(panelId);
+          break;
+        case "archive":
+          // Archive panel (remove from tree)
+          await panelService.archive(panelId);
+          break;
       }
-      case "toggle-pin": {
-        // Client-local pin: protects the panel from idle/cap GC. Update the
-        // mirror atom from the authoritative new state the main process returns,
-        // and bump the mutation seq so an in-flight tree reconcile can't clobber it.
-        const pinned = await panelService.togglePin(panelId);
-        setPinnedPanelIds((prev) => {
-          const next = new Set(prev);
-          if (pinned) next.add(panelId);
-          else next.delete(panelId);
-          return next;
-        });
-        bumpPinMutationSeq((seq) => seq + 1);
-        break;
-      }
-      case "unload":
-        // Unload panel resources but keep in tree (can be re-loaded later)
-        await panelService.unload(panelId);
-        break;
-      case "archive":
-        // Archive panel (remove from tree)
-        await panelService.archive(panelId);
-        break;
-    }
-  }, [navigatePanelHistory, navigateToPanelId, setPinnedPanelIds, bumpPinMutationSeq]);
+    },
+    [navigatePanelHistory, navigateToPanelId, setPinnedPanelIds, bumpPinMutationSeq]
+  );
 
   // Register panel action handler with parent
   useEffect(() => {
@@ -905,17 +908,21 @@ export function PanelStack({
     // `|| !artifacts?.htmlPath` conflated "still building" with "running
     // elsewhere", so a freshly-created panel flashed the Take Over screen — with
     // the desktop's own lease — until its first build artifacts arrived.)
-    const leasedElsewhere = visibleRuntimeLease && visibleRuntimeLease.platform !== "desktop";
+    const leasedElsewhere = leasedElsewhereInfo(
+      visiblePanel.id,
+      visibleRuntimeLease,
+      visiblePanel.state?.runtime
+    );
 
     if (leasedElsewhere) {
       return (
         <Flex direction="column" align="center" justify="center" height="100%" gap="3" p="4">
           <Text size="4" weight="bold">
-            Running on {visibleRuntimeLease.holderLabel}
+            Running on {leasedElsewhere.holderLabel}
           </Text>
           <Button
             onClick={() => {
-              void panelService.takeOver(visibleRuntimeLease.slotId).catch((error) => {
+              void panelService.takeOver(leasedElsewhere.slotId).catch((error) => {
                 console.error("Failed to take over panel", error);
               });
             }}
@@ -1042,16 +1049,28 @@ export function PanelStack({
             onPointerEnter={() => setIsResizeHover(true)}
             onPointerLeave={() => setIsResizeHover(false)}
             style={{
+              // A roomy, invisible grab area keeps resizing easy while the
+              // visible divider stays a slim hairline.
               cursor: "col-resize",
               flexShrink: 0,
-              width: 8,
+              width: 7,
               alignSelf: "stretch",
               touchAction: "none",
-              backgroundColor:
-                isResizingSidebar || isResizeHover ? "var(--gray-8)" : "var(--gray-6)",
-              transition: "background-color 120ms ease-out",
+              display: "flex",
+              justifyContent: "center",
+              background: "transparent",
             }}
-          />
+          >
+            <Box
+              style={{
+                width: isResizingSidebar || isResizeHover ? 2 : 1,
+                alignSelf: "stretch",
+                backgroundColor:
+                  isResizingSidebar || isResizeHover ? "var(--accent-8)" : "var(--gray-a6)",
+                transition: "background-color 120ms ease-out, width 120ms ease-out",
+              }}
+            />
+          </Box>
         )}
 
         {/* Current Panel Content */}

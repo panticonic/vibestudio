@@ -7,6 +7,7 @@ export type {
   TestResult,
   TestSuiteResult,
   TestExecutionResult,
+  TestOrchestrationContext,
   ToolFailureSummary,
 } from "./types.js";
 export type { SessionSnapshot } from "@workspace/agentic-session";

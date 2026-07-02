@@ -8,6 +8,13 @@ import { createVerifiedCaller, type ServiceDispatcher } from "@natstack/shared/s
 import { EntityCache } from "@natstack/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@natstack/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@natstack/shared/connectionGrants";
+import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@natstack/rpc";
+import { StreamFrameDecoderV2 } from "@natstack/rpc/protocol/streamCodec";
+import {
+  decodeControlFrame,
+  encodeControlFrame,
+  type SessionControlFrame,
+} from "@natstack/rpc/protocol/sessionNegotiation";
 
 function makeRecord(
   id: string,
@@ -47,15 +54,16 @@ type TestRpcServer = {
     { promise: Promise<void>; resolve: () => void; reject: (err: Error) => void }
   >;
   handleAuth(ws: unknown, token: string | null, connectionId: string): void;
+  handleConnection(ws: unknown): void;
   handleRoute(
     client: WsClientState,
     targetId: string,
-    message: unknown,
-    targetConnectionId?: string,
-    routeEnvelope?: unknown
+    message: RpcMessage,
+    targetConnectionId: string | undefined,
+    routeEnvelope: RpcEnvelope
   ): Promise<void> | void;
   handleClose(client: WsClientState, code: number, reason: string): void;
-  handleRpc(client: WsClientState, message: unknown): Promise<void>;
+  handleRpc(client: WsClientState, message: RpcMessage, envelope: RpcEnvelope): Promise<void>;
   relayCall(
     sourceId: string,
     callerKind: string,
@@ -166,6 +174,45 @@ function createSignalDeferred(): {
   return { promise, resolve, reject };
 }
 
+function makeEnvelope(
+  from: string,
+  target: string,
+  callerKind: RpcEnvelope["delivery"]["caller"]["callerKind"],
+  message: RpcMessage
+): RpcEnvelope {
+  return envelopeFromMessage({
+    selfId: from,
+    from,
+    target,
+    callerKind,
+    message,
+  });
+}
+
+function clientEnvelope(client: WsClientState, targetId: string, message: RpcMessage): RpcEnvelope {
+  return makeEnvelope(client.caller.runtime.id, targetId, client.caller.runtime.kind, message);
+}
+
+function handleRoute(
+  server: RpcServer,
+  client: WsClientState,
+  targetId: string,
+  message: RpcMessage,
+  targetConnectionId?: string
+): Promise<void> | void {
+  return testServer(server).handleRoute(
+    client,
+    targetId,
+    message,
+    targetConnectionId,
+    clientEnvelope(client, targetId, message)
+  );
+}
+
+function handleRpc(server: RpcServer, client: WsClientState, message: RpcMessage): Promise<void> {
+  return testServer(server).handleRpc(client, message, clientEnvelope(client, "main", message));
+}
+
 function createTestWs() {
   const handlers = new Map<string, (...args: unknown[]) => void>();
   return {
@@ -192,6 +239,115 @@ function registerClient(server: RpcServer, client: WsClientState): void {
 }
 
 describe("RpcServer relay behavior", () => {
+  it("closes all WebRTC logical sessions when the underlying pipe goes down", () => {
+    const { server } = createServer();
+    const closeArgs: unknown[][] = [];
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      (ws as { on(event: string, handler: (...args: unknown[]) => void): unknown }).on(
+        "close",
+        (...args) => closeArgs.push(args)
+      );
+    });
+
+    let controlHandler: ((data: Uint8Array) => void) | null = null;
+    let downHandler: ((reason: string) => void) | null = null;
+    server.attachWebRtcPipe({
+      writeControl: vi.fn(),
+      writeBulk: vi.fn(),
+      controlBufferedAmount: () => 0,
+      onControl: (handler) => {
+        controlHandler = handler;
+      },
+      onDown: (handler) => {
+        downHandler = handler;
+        return () => {
+          if (downHandler === handler) downHandler = null;
+        };
+      },
+    });
+
+    controlHandler!(
+      new TextEncoder().encode(
+        encodeControlFrame({ t: "open", sid: "s1", token: "grant", connectionId: "c1" })
+      )
+    );
+    expect(testServer(server).handleConnection).toHaveBeenCalledTimes(1);
+
+    downHandler!("ICE failed");
+    expect(closeArgs).toHaveLength(1);
+    expect(closeArgs[0]![0]).toBe(1006);
+    expect((closeArgs[0]![1] as Buffer).toString()).toBe("ICE failed");
+
+    downHandler!("late duplicate");
+    expect(closeArgs).toHaveLength(1);
+  });
+
+  it("fails unknown WebRTC session frames instead of silently dropping them", async () => {
+    const { server } = createServer();
+    const controlFrames: SessionControlFrame[] = [];
+    const bulkFrames: Array<{ streamId: number; type: number; payload: Uint8Array }> = [];
+    const bulkDecoder = new StreamFrameDecoderV2((streamId, type, payload) => {
+      bulkFrames.push({ streamId, type, payload });
+    });
+    let controlHandler: ((data: Uint8Array) => void) | null = null;
+    server.attachWebRtcPipe({
+      writeControl: (data) => {
+        controlFrames.push(decodeControlFrame(new TextDecoder().decode(data)));
+      },
+      writeBulk: (data) => void bulkDecoder.push(data),
+      controlBufferedAmount: () => 0,
+      onControl: (handler) => {
+        controlHandler = handler;
+      },
+    });
+
+    controlHandler!(
+      new TextEncoder().encode(
+        encodeControlFrame({
+          t: "rpc",
+          sid: "missing",
+          envelope: makeEnvelope("panel:c1", "main", "panel", {
+            type: "request",
+            requestId: "req-1",
+            fromId: "panel:c1",
+            method: "fs.read",
+            args: [],
+          }),
+        })
+      )
+    );
+    expect(controlFrames[0]).toMatchObject({
+      t: "rpc",
+      sid: "missing",
+      envelope: {
+        message: { type: "response", requestId: "req-1", errorCode: "SESSION_NOT_OPEN" },
+      },
+    });
+
+    controlHandler!(
+      new TextEncoder().encode(
+        encodeControlFrame({
+          t: "stream-open",
+          sid: "missing",
+          streamId: 42,
+          envelope: makeEnvelope("panel:c1", "main", "panel", {
+            type: "stream-request",
+            requestId: "stream-1",
+            fromId: "panel:c1",
+            method: "credentials.proxyFetch",
+            args: [],
+          }),
+        })
+      )
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(bulkFrames).toHaveLength(1);
+    expect(bulkFrames[0]).toMatchObject({ streamId: 42, type: 0x04 });
+    expect(JSON.parse(new TextDecoder().decode(bulkFrames[0]!.payload))).toMatchObject({
+      code: "SESSION_NOT_OPEN",
+    });
+  });
+
   it("allows authenticated panels to relay to panel, DO, and worker targets", () => {
     const { server } = createServer();
 
@@ -308,8 +464,8 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("keeps the replacement bridge when the old same-connection socket closes late", () => {
-    const { server, grantPanel } = createServer();
+  it("keeps the replacement bridge and lease when the old same-connection socket closes late", () => {
+    const { server, grantPanel, runtimeCoordinator } = createServer();
     const ws1 = createTestWs();
     const ws2 = createTestWs();
 
@@ -329,6 +485,10 @@ describe("RpcServer relay behavior", () => {
     expect(testServer(server).connections.getCallerConnections("panel:nav-a")).toEqual([
       expect.objectContaining({ connectionId: "conn-1", ws: ws2 }),
     ]);
+    expect(runtimeCoordinator.getLease("panel:nav-a")).toEqual(
+      expect.objectContaining({ connectionId: "conn-1" })
+    );
+    expect(runtimeCoordinator.getLease("panel:nav-a")).not.toHaveProperty("expiresAt");
   });
 
   it("ignores late frames from a replaced same-connection socket", async () => {
@@ -342,14 +502,16 @@ describe("RpcServer relay behavior", () => {
     testServer(server).handleAuth(ws1, grantPanel("panel:nav-a"), "conn-1");
     testServer(server).handleAuth(ws2, grantPanel("panel:nav-a"), "conn-1");
 
+    const lateMessage: RpcMessage = {
+      type: "request",
+      requestId: "late-old-frame",
+      fromId: "panel:nav-a",
+      method: "workspace.ping",
+      args: [],
+    };
     ws1.emitMessage({
       type: "ws:rpc",
-      message: {
-        type: "request",
-        requestId: "late-old-frame",
-        method: "workspace.ping",
-        args: [],
-      },
+      envelope: makeEnvelope("panel:nav-a", "main", "panel", lateMessage),
     });
     await Promise.resolve();
 
@@ -372,51 +534,110 @@ describe("RpcServer relay behavior", () => {
     );
     const sent = ws.send.mock.calls
       .map((call) => JSON.parse(String(call[0])))
-      .find((message) => message.type === "ws:rpc" && message.message?.type === "stream-request");
+      .find(
+        (message) =>
+          message.type === "ws:rpc" && message.envelope?.message?.type === "stream-request"
+      );
     expect(sent).toBeTruthy();
-    const requestId = sent.message.requestId as string;
+    const requestId = sent.envelope.message.requestId as string;
 
+    const headFrame: RpcMessage = {
+      type: "stream-frame",
+      requestId,
+      fromId: "@workspace-extensions/shell",
+      frameType: 0x01,
+      payload: JSON.stringify({
+        status: 200,
+        statusText: "OK",
+        headerPairs: [["content-type", "text/plain"]],
+        finalUrl: "",
+      }),
+    };
     ws.emitMessage({
       type: "ws:rpc",
-      message: {
-        type: "stream-frame",
-        requestId,
-        fromId: "@workspace-extensions/shell",
-        frameType: 0x01,
-        payload: JSON.stringify({
-          status: 200,
-          statusText: "OK",
-          headerPairs: [["content-type", "text/plain"]],
-          finalUrl: "",
-        }),
-      },
+      envelope: makeEnvelope("@workspace-extensions/shell", "server", "extension", headFrame),
     });
     const response = await responsePromise;
 
+    const chunkFrame: RpcMessage = {
+      type: "stream-frame",
+      requestId,
+      fromId: "@workspace-extensions/shell",
+      frameType: 0x02,
+      payload: Buffer.from("hello").toString("base64"),
+    };
     ws.emitMessage({
       type: "ws:rpc",
-      message: {
-        type: "stream-frame",
-        requestId,
-        fromId: "@workspace-extensions/shell",
-        frameType: 0x02,
-        payload: Buffer.from("hello").toString("base64"),
-      },
+      envelope: makeEnvelope("@workspace-extensions/shell", "server", "extension", chunkFrame),
     });
+    const endFrame: RpcMessage = {
+      type: "stream-frame",
+      requestId,
+      fromId: "@workspace-extensions/shell",
+      frameType: 0x03,
+      payload: JSON.stringify({ bytesIn: 5 }),
+    };
     ws.emitMessage({
       type: "ws:rpc",
-      message: {
-        type: "stream-frame",
-        requestId,
-        fromId: "@workspace-extensions/shell",
-        frameType: 0x03,
-        payload: JSON.stringify({ bytesIn: 5 }),
-      },
+      envelope: makeEnvelope("@workspace-extensions/shell", "server", "extension", endFrame),
     });
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/plain");
     await expect(response.text()).resolves.toBe("hello");
+  });
+
+  it("rejects server bridge calls when a client routes a response to server", async () => {
+    const { server, tokenManager } = createServer();
+    const extensionId = "@workspace-extensions/process-test";
+    const extensionToken = tokenManager.ensureToken(extensionId, "extension");
+    const ws = createTestWs();
+
+    testServer(server).handleAuth(ws, extensionToken, "ext-conn-1");
+    const bridge = server.getClientBridge(extensionId);
+    expect(bridge).toBeTruthy();
+
+    const call = bridge!.call(extensionId, "extension.invoke", ["ping", []]);
+    await Promise.resolve();
+
+    const sent = ws.send.mock.calls
+      .map(([raw]) => JSON.parse(raw as string))
+      .find(
+        (message) => message.type === "ws:rpc" && message.envelope?.message?.type === "request"
+      );
+    expect(sent).toBeTruthy();
+    const requestId = sent.envelope.message.requestId as string;
+
+    ws.emitMessage({
+      type: "ws:route",
+      envelope: {
+        from: extensionId,
+        target: "server",
+        delivery: { caller: { callerId: extensionId, callerKind: "extension" } },
+        provenance: [{ callerId: extensionId, callerKind: "extension" }],
+        message: {
+          type: "response",
+          requestId,
+          result: "pong",
+        },
+      },
+    });
+
+    await expect(call).rejects.toMatchObject({
+      message: expect.stringContaining("was sent via ws:route"),
+      code: "RPC_PROTOCOL_ERROR",
+    });
+
+    const routedError = ws.send.mock.calls
+      .map(([raw]) => JSON.parse(raw as string))
+      .find((message) => message.type === "ws:routed-response-error");
+    expect(routedError).toMatchObject({
+      type: "ws:routed-response-error",
+      targetId: "server",
+      requestId,
+      error: expect.stringContaining("was sent via ws:route"),
+      errorCode: "RPC_PROTOCOL_ERROR",
+    });
   });
 
   it("fans routed events out to every live connection for the target caller", () => {
@@ -427,7 +648,7 @@ describe("RpcServer relay behavior", () => {
     registerClient(server, target1);
     registerClient(server, target2);
 
-    testServer(server).handleRoute(source, "panel:nav-b", {
+    handleRoute(server, source, "panel:nav-b", {
       type: "event",
       fromId: "panel:nav-a",
       event: "test:event",
@@ -440,8 +661,10 @@ describe("RpcServer relay behavior", () => {
       JSON.parse((target1.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
     ).toMatchObject({
       type: "ws:routed",
-      fromId: "panel:nav-a",
-      message: { type: "event", event: "test:event", payload: { ok: true } },
+      envelope: {
+        from: "panel:nav-a",
+        message: { type: "event", event: "test:event", payload: { ok: true } },
+      },
     });
   });
 
@@ -454,15 +677,16 @@ describe("RpcServer relay behavior", () => {
     registerClient(server, origin2);
     registerClient(server, target);
 
-    testServer(server).handleRoute(origin2, "panel:nav-b", {
+    handleRoute(server, origin2, "panel:nav-b", {
       type: "request",
       requestId: "req-origin-2",
+      fromId: "panel:nav-a",
       method: "test.method",
       args: [],
     });
     (target.ws.send as ReturnType<typeof vi.fn>).mockClear();
 
-    testServer(server).handleRoute(target, "panel:nav-a", {
+    handleRoute(server, target, "panel:nav-a", {
       type: "response",
       requestId: "req-origin-2",
       result: { ok: true },
@@ -475,8 +699,10 @@ describe("RpcServer relay behavior", () => {
       JSON.parse((origin2.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
     ).toMatchObject({
       type: "ws:routed",
-      fromId: "panel:nav-b",
-      message: { type: "response", requestId: "req-origin-2", result: { ok: true } },
+      envelope: {
+        from: "panel:nav-b",
+        message: { type: "response", requestId: "req-origin-2", result: { ok: true } },
+      },
     });
   });
 
@@ -491,15 +717,16 @@ describe("RpcServer relay behavior", () => {
       registerClient(server, origin2);
       registerClient(server, target);
 
-      testServer(server).handleRoute(origin2, "panel:nav-b", {
+      handleRoute(server, origin2, "panel:nav-b", {
         type: "request",
         requestId: "req-reconnect",
+        fromId: "panel:nav-a",
         method: "test.method",
         args: [],
       });
       testServer(server).handleClose(origin2, 1006, "network");
 
-      testServer(server).handleRoute(target, "panel:nav-a", {
+      handleRoute(server, target, "panel:nav-a", {
         type: "response",
         requestId: "req-reconnect",
         result: { ok: true },
@@ -522,8 +749,10 @@ describe("RpcServer relay behavior", () => {
         .find((msg) => msg.type === "ws:routed");
       expect(routedCall).toMatchObject({
         type: "ws:routed",
-        fromId: "panel:nav-b",
-        message: { type: "response", requestId: "req-reconnect", result: { ok: true } },
+        envelope: {
+          from: "panel:nav-b",
+          message: { type: "response", requestId: "req-reconnect", result: { ok: true } },
+        },
       });
     } finally {
       vi.useRealTimers();
@@ -536,7 +765,7 @@ describe("RpcServer relay behavior", () => {
     const target = createClientWithConnection("panel:nav-b", "target-conn");
     registerClient(server, target);
 
-    testServer(server).handleRoute(client, "panel:nav-b", {
+    handleRoute(server, client, "panel:nav-b", {
       type: "event",
       fromId: "panel:nav-a",
       event: "test:event",
@@ -549,8 +778,10 @@ describe("RpcServer relay behavior", () => {
       JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
     ).toMatchObject({
       type: "ws:routed",
-      fromId: "panel:nav-a",
-      message: { type: "event", event: "test:event", payload: { ok: true } },
+      envelope: {
+        from: "panel:nav-a",
+        message: { type: "event", event: "test:event", payload: { ok: true } },
+      },
     });
   });
 
@@ -564,7 +795,7 @@ describe("RpcServer relay behavior", () => {
     // A connectionless DO participant (e.g. an EvalDO subscribed to a channel via
     // connectViaRpc) holds NO ws connection. Pre-fix, this event was silently dropped
     // (getCallerConnections empty → the WS loop no-ops), hanging the subscriber.
-    testServer(server).handleRoute(createClient(), "do:natstack/internal:EvalDO:k", {
+    handleRoute(server, createClient(), "do:natstack/internal:EvalDO:k", {
       type: "event",
       fromId: "panel:nav-a",
       event: "channel:message",
@@ -591,7 +822,7 @@ describe("RpcServer relay behavior", () => {
     const target = createClientWithConnection("panel:nav-b", "target-conn");
     registerClient(server, target);
 
-    testServer(server).handleRoute(client, "panel:tree/slot-b", {
+    handleRoute(server, client, "panel:tree/slot-b", {
       type: "event",
       fromId: "panel:nav-a",
       event: "test:event",
@@ -603,8 +834,10 @@ describe("RpcServer relay behavior", () => {
       JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
     ).toMatchObject({
       type: "ws:routed",
-      fromId: "panel:nav-a",
-      message: { type: "event", event: "test:event", payload: { ok: true } },
+      envelope: {
+        from: "panel:nav-a",
+        message: { type: "event", event: "test:event", payload: { ok: true } },
+      },
     });
   });
 
@@ -632,28 +865,27 @@ describe("RpcServer relay behavior", () => {
       .map(([raw]) => JSON.parse(raw as string))
       .find(
         (message) => message.type === "ws:rpc" && message.envelope?.message?.type === "request"
-      ) as
-      | { envelope: { delivery: unknown; message: { requestId: string } }; message: unknown }
-      | undefined;
+      ) as { envelope: RpcEnvelope } | undefined;
     expect(sent).toMatchObject({
       type: "ws:rpc",
       envelope: {
         delivery: { idempotencyKey: "idem-1", readOnly: true },
         message: { method: "onMethodCall" },
       },
-      message: { method: "onMethodCall" },
     });
-    expect(sent?.message).not.toHaveProperty("idempotencyKey");
-    expect(sent?.message).not.toHaveProperty("readOnly");
+    expect(sent).not.toHaveProperty("message");
+    expect(sent?.envelope.message).not.toHaveProperty("idempotencyKey");
+    expect(sent?.envelope.message).not.toHaveProperty("readOnly");
     expect(sent).toBeTruthy();
 
+    const responseMessage: RpcMessage = {
+      type: "response",
+      requestId: sent!.envelope.message.type === "request" ? sent!.envelope.message.requestId : "",
+      result: { ok: true },
+    };
     targetWs.emitMessage({
       type: "ws:rpc",
-      message: {
-        type: "response",
-        requestId: sent!.envelope.message.requestId,
-        result: { ok: true },
-      },
+      envelope: makeEnvelope("panel:nav-b", "server", "panel", responseMessage),
     });
 
     await expect(relay).resolves.toEqual({ ok: true });
@@ -741,7 +973,7 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer();
     const client = createClient();
 
-    testServer(server).handleRoute(client, "panel:nav-b", {
+    handleRoute(server, client, "panel:nav-b", {
       type: "response",
       requestId: "req-123",
       result: { ok: true },
@@ -766,6 +998,7 @@ describe("RpcServer caller identity", () => {
     return {
       type: "request" as const,
       requestId,
+      fromId: "test",
       method,
       args: [],
     };
@@ -774,7 +1007,7 @@ describe("RpcServer caller identity", () => {
   function sentResponse(client: WsClientState) {
     const calls = (client.ws.send as ReturnType<typeof vi.fn>).mock.calls;
     const raw = calls[calls.length - 1]![0] as string;
-    return JSON.parse(raw) as { message: { result?: unknown; error?: string } };
+    return JSON.parse(raw) as { envelope: { message: { result?: unknown; error?: string } } };
   }
 
   it("rejects WS authentication for the reserved in-process shell caller id", () => {
@@ -837,10 +1070,12 @@ describe("RpcServer caller identity", () => {
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["server"] });
     testServer(server).dispatcher.getMethodPolicy.mockReturnValue({ allowed: ["shell"] });
 
-    await testServer(server).handleRpc(client, rpcRequest("req-3", "internal.shellOnly"));
+    await handleRpc(server, client, rpcRequest("req-3", "internal.shellOnly"));
 
     expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
-    expect(sentResponse(client).message.error).toContain("not accessible to worker callers");
+    expect(sentResponse(client).envelope.message.error).toContain(
+      "not accessible to worker callers"
+    );
   });
 
   it("dispatches server callers using their own server identity", async () => {
@@ -855,13 +1090,13 @@ describe("RpcServer caller identity", () => {
       return { ok: true };
     });
 
-    await testServer(server).handleRpc(client, rpcRequest("req-4", "internal.ping"));
+    await handleRpc(server, client, rpcRequest("req-4", "internal.ping"));
 
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toMatchObject({
       caller: { runtime: { id: client.caller.runtime.id, kind: "server" } },
     });
-    expect(sentResponse(client).message.result).toEqual({ ok: true });
+    expect(sentResponse(client).envelope.message.result).toEqual({ ok: true });
   });
 
   it("preserves app chain caller attribution for extension parent invocations", async () => {
@@ -883,7 +1118,7 @@ describe("RpcServer caller identity", () => {
       return { ok: true };
     });
 
-    await testServer(server).handleRpc(client, {
+    await handleRpc(server, client, {
       ...rpcRequest("req-app-chain", "workspace.getInfo"),
       parentInvocationToken: "inv-app",
     });

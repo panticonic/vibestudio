@@ -98,6 +98,16 @@ export const NativePanelSlotSyncResultSchema = z.union([
 ]);
 export type NativePanelSlotSyncResult = z.infer<typeof NativePanelSlotSyncResultSchema>;
 
+export const ContentOverlayThemeSchema = z.object({
+  appearance: z.enum(["light", "dark"]).describe("Resolved light/dark appearance."),
+  accentColor: z.string().optional().describe("Radix accent color name."),
+  grayColor: z.string().optional().describe("Radix gray scale name."),
+  panelBackground: z.enum(["solid", "translucent"]).optional(),
+  radius: z.enum(["none", "small", "medium", "large", "full"]).optional(),
+  scaling: z.enum(["90%", "95%", "100%", "105%", "110%"]).optional(),
+});
+export type ContentOverlayTheme = z.infer<typeof ContentOverlayThemeSchema>;
+
 export const viewMethods = defineServiceMethods({
   setBounds: {
     description: "Reposition and resize a native view to the given window-relative pixel bounds.",
@@ -226,6 +236,44 @@ export const viewMethods = defineServiceMethods({
     description:
       "Hide a native shell overlay, optionally identified by id; omit the id to hide the active overlay.",
     args: z.tuple([z.string().optional()]),
+    returns: z.void(),
+    access: VIEW_OVERLAY_HIDE_ACCESS,
+  },
+  showContentOverlay: {
+    description:
+      "Show the rich content overlay (a shell React surface floated above the panels) for the given surface key, anchored to the supplied region.",
+    args: z.tuple([
+      z.object({
+        surface: z.string().describe("Registered overlay surface key (e.g. 'approval-card')."),
+        bounds: ViewBoundsSchema.describe("Anchor region (the panel viewport rect)."),
+        props: z.unknown().describe("Serialized props pushed to the surface."),
+        theme: ContentOverlayThemeSchema.describe(
+          "Theme identity so the surface matches the chrome."
+        ),
+        focus: z.boolean().optional().describe("Whether the overlay should grab focus."),
+      }),
+    ]),
+    returns: z.void(),
+    access: VIEW_OVERLAY_SHOW_ACCESS,
+  },
+  updateContentOverlay: {
+    description:
+      "Update the already-shown content overlay; every field is optional, so only the provided properties change.",
+    args: z.tuple([
+      z.object({
+        surface: z.string().optional().describe("New surface key, if retargeting."),
+        bounds: ViewBoundsSchema.optional().describe("New anchor region, if changing."),
+        props: z.unknown().optional().describe("Replacement props, if changing."),
+        theme: ContentOverlayThemeSchema.optional().describe("New theme identity, if changing."),
+        focus: z.boolean().optional().describe("New focus state, if changing."),
+      }),
+    ]),
+    returns: z.void(),
+    access: VIEW_OVERLAY_SHOW_ACCESS,
+  },
+  hideContentOverlay: {
+    description: "Hide the content overlay surface.",
+    args: z.tuple([]),
     returns: z.void(),
     access: VIEW_OVERLAY_HIDE_ACCESS,
   },

@@ -8,11 +8,12 @@ import type {
 } from "./types.js";
 import type { HeadlessRunner } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
-import type { SessionSnapshot } from "@workspace/agentic-session";
+import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
 
 type MaybePromise<T> = T | Promise<T>;
 type RunSuiteFilter = { category?: string; name?: string; concurrency?: number };
 const DEFAULT_PARALLEL_CONCURRENCY = 4;
+const DEFAULT_TEST_TIMEOUT_MS = 120_000;
 
 export class TestRunner {
   constructor(
@@ -20,13 +21,18 @@ export class TestRunner {
     private opts?: {
       onTestStart?: (test: TestCase) => void;
       onTestEnd?: (test: TestCase, result: TestResult, execution: TestExecutionResult) => void;
-      onTestResult?: (entry: TestSuiteResultEntry, aggregate: TestSuiteResult) => MaybePromise<void>;
+      onTestResult?: (
+        entry: TestSuiteResultEntry,
+        aggregate: TestSuiteResult
+      ) => MaybePromise<void>;
       concurrency?: number;
       testTimeoutMs?: number;
     }
   ) {
     if (!runner) {
-      throw new Error("TestRunner requires a HeadlessRunner instance. Usage: new TestRunner(new HeadlessRunner(contextId))");
+      throw new Error(
+        "TestRunner requires a HeadlessRunner instance. Usage: new TestRunner(new HeadlessRunner(contextId))"
+      );
     }
   }
 
@@ -43,7 +49,7 @@ export class TestRunner {
   };
 
   async runSuite(tests: TestCase[], filter?: RunSuiteFilter): Promise<TestSuiteResult> {
-    const filtered = tests.filter(t => {
+    const filtered = tests.filter((t) => {
       if (filter?.category && t.category !== filter.category) return false;
       if (filter?.name && !t.name.includes(filter.name)) return false;
       return true;
@@ -51,7 +57,10 @@ export class TestRunner {
 
     const startTime = Date.now();
     const results: Array<TestSuiteResultEntry | undefined> = new Array(filtered.length);
-    const concurrency = this.normalizeConcurrency(filter?.concurrency ?? this.opts?.concurrency ?? 1, filtered.length);
+    const concurrency = this.normalizeConcurrency(
+      filter?.concurrency ?? this.opts?.concurrency ?? 1,
+      filtered.length
+    );
     let nextIndex = 0;
 
     const runAt = async (index: number): Promise<void> => {
@@ -59,14 +68,22 @@ export class TestRunner {
       this.opts?.onTestStart?.(test);
       const { result, execution } = await this.runOne(test);
       const entry: TestSuiteResultEntry = {
-        test: { name: test.name, category: test.category, description: test.description, prompt: test.prompt },
+        test: {
+          name: test.name,
+          category: test.category,
+          description: test.description,
+          prompt: test.prompt,
+        },
         result,
         execution,
       };
       results[index] = entry;
       this.opts?.onTestEnd?.(test, result, execution);
       if (this.opts?.onTestResult) {
-        await this.opts.onTestResult(entry, this.buildSuiteResult(tests.length, filtered.length, results, startTime));
+        await this.opts.onTestResult(
+          entry,
+          this.buildSuiteResult(tests.length, filtered.length, results, startTime)
+        );
       }
     };
 
@@ -86,11 +103,14 @@ export class TestRunner {
     sourceTotal: number,
     filteredTotal: number,
     entries: Array<TestSuiteResultEntry | undefined>,
-    startTime: number,
+    startTime: number
   ): TestSuiteResult {
     const results = entries.filter((entry): entry is TestSuiteResultEntry => Boolean(entry));
-    let passed = 0, failed = 0, errored = 0;
-    let toolFailureCount = 0, testsWithToolFailures = 0;
+    let passed = 0,
+      failed = 0,
+      errored = 0;
+    let toolFailureCount = 0,
+      testsWithToolFailures = 0;
     for (const entry of results) {
       if (entry.execution.error) errored++;
       else if (entry.result.passed) passed++;
@@ -120,21 +140,41 @@ export class TestRunner {
 
   async runOne(test: TestCase): Promise<{ result: TestResult; execution: TestExecutionResult }> {
     const startTime = Date.now();
-    let session;
+    const testTimeoutMs = this.opts?.testTimeoutMs ?? DEFAULT_TEST_TIMEOUT_MS;
+    let session: HeadlessSession | undefined;
     let outcome: { result: TestResult; execution: TestExecutionResult } | undefined;
     try {
-      session = await this.runner.spawn();
+      const execution = test.orchestrate
+        ? await test.orchestrate({
+            runner: this.runner,
+            testTimeoutMs,
+            sendAndWait: async (targetSession, prompt, phase) => {
+              const controller = new AbortController();
+              await this.withTimeout(
+                targetSession.sendAndWait(prompt, { signal: controller.signal }),
+                testTimeoutMs,
+                `Timed out waiting for agent to finish test "${test.name}" during ${phase}`,
+                controller
+              );
+            },
+          })
+        : await (async (): Promise<TestExecutionResult> => {
+            session = await this.runner.spawn();
 
-      await this.withTimeout(
-        session.sendAndWait(test.prompt),
-        this.opts?.testTimeoutMs ?? 120_000,
-        `Timed out waiting for agent to finish test "${test.name}"`,
-      );
+            const controller = new AbortController();
+            await this.withTimeout(
+              session.sendAndWait(test.prompt, { signal: controller.signal }),
+              testTimeoutMs,
+              `Timed out waiting for agent to finish test "${test.name}"`,
+              controller
+            );
 
-      const messages = [...session.messages] as ChatMessage[];
-      const snapshot = session.snapshot();
-      const duration = Date.now() - startTime;
-      const execution: TestExecutionResult = { messages, duration, snapshot };
+            const messages = [...session.messages] as ChatMessage[];
+            const snapshot = session.snapshot();
+            const duration = Date.now() - startTime;
+            return { messages, duration, snapshot };
+          })();
+      execution.duration ||= Date.now() - startTime;
       execution.toolFailures = collectToolFailures(execution);
       const result = test.validate(execution);
       outcome = { result, execution };
@@ -173,29 +213,60 @@ export class TestRunner {
       };
     } finally {
       try {
-        await session?.close();
+        if (session) {
+          await session.close({ waitForRemoteCleanup: false });
+          if (outcome) {
+            outcome.execution.diagnostics = {
+              ...(outcome.execution.diagnostics ?? {}),
+              headlessCleanup: {
+                mode: "detached",
+                remoteCleanupAwaited: false,
+              },
+            };
+          }
+        }
       } catch (cleanupErr) {
         const message = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
         console.warn("[system-testing] Failed to close headless session:", cleanupErr);
         if (outcome) {
+          const cleanupMessage = `close: ${message}`;
           outcome.execution.cleanupErrors = [
             ...(outcome.execution.cleanupErrors ?? []),
-            `close: ${message}`,
+            cleanupMessage,
           ];
+          outcome.execution.error ??= `Headless cleanup failed: ${cleanupMessage}`;
+          if (outcome.result.passed) {
+            outcome.result = {
+              passed: false,
+              reason: `Headless cleanup failed: ${cleanupMessage}`,
+              details: { cleanupErrors: [cleanupMessage] },
+            };
+          } else {
+            outcome.result = {
+              ...outcome.result,
+              details: {
+                ...(outcome.result.details ?? {}),
+                cleanupErrors: [
+                  ...((outcome.result.details?.["cleanupErrors"] as string[] | undefined) ?? []),
+                  cleanupMessage,
+                ],
+              },
+            };
+          }
         }
       }
       let cleanupErrors: NonNullable<SessionSnapshot["cleanupErrors"]> = [];
       try {
         cleanupErrors = session?.snapshot().cleanupErrors ?? [];
       } catch (snapshotErr) {
-        console.warn("[system-testing] Failed to snapshot headless cleanup diagnostics:", snapshotErr);
+        console.warn(
+          "[system-testing] Failed to snapshot headless cleanup diagnostics:",
+          snapshotErr
+        );
       }
       if (cleanupErrors.length > 0 && outcome) {
         const messages = cleanupErrors.map((error) => `${error.phase}: ${error.message}`);
-        outcome.execution.cleanupErrors = [
-          ...(outcome.execution.cleanupErrors ?? []),
-          ...messages,
-        ];
+        outcome.execution.cleanupErrors = [...(outcome.execution.cleanupErrors ?? []), ...messages];
         outcome.execution.error ??= `Headless cleanup failed: ${messages.join("; ")}`;
         outcome.execution.snapshot = session?.snapshot();
         if (outcome.result.passed) {
@@ -221,13 +292,21 @@ export class TestRunner {
     return outcome;
   }
 
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number,
+    message: string,
+    controller?: AbortController
+  ): Promise<T> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
         promise,
         new Promise<T>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+          timer = setTimeout(() => {
+            reject(new Error(message));
+            controller?.abort();
+          }, timeoutMs);
         }),
       ]);
     } finally {
@@ -260,18 +339,27 @@ function timeoutDiagnosticDetails(
       `Pending invocations: ${pendingInvocations
         .slice(0, 5)
         .map((invocation) => `${invocation.name}:${invocation.status || "unknown"}`)
-        .join(", ")}${pendingInvocations.length > 5 ? ` (+${pendingInvocations.length - 5} more)` : ""}.`
+        .join(
+          ", "
+        )}${pendingInvocations.length > 5 ? ` (+${pendingInvocations.length - 5} more)` : ""}.`
     );
   }
   const lastLifecycle = [...messages].reverse().find((message) => message.lifecycle);
   if (lastLifecycle?.lifecycle) {
-    const reason = lastLifecycle.lifecycle.reason ? ` reason=${lastLifecycle.lifecycle.reason}` : "";
-    details.push(`Last lifecycle: ${lastLifecycle.lifecycle.status}${reason} "${lastLifecycle.lifecycle.title}".`);
+    const reason = lastLifecycle.lifecycle.reason
+      ? ` reason=${lastLifecycle.lifecycle.reason}`
+      : "";
+    details.push(
+      `Last lifecycle: ${lastLifecycle.lifecycle.status}${reason} "${lastLifecycle.lifecycle.title}".`
+    );
   }
-  const lastDiagnostic = [...messages].reverse().find((message) => message.diagnostic || message.error);
+  const lastDiagnostic = [...messages]
+    .reverse()
+    .find((message) => message.diagnostic || message.error);
   if (lastDiagnostic) {
     const code = lastDiagnostic.diagnostic?.code ? ` code=${lastDiagnostic.diagnostic.code}` : "";
-    const title = lastDiagnostic.diagnostic?.title ?? lastDiagnostic.error ?? lastDiagnostic.content;
+    const title =
+      lastDiagnostic.diagnostic?.title ?? lastDiagnostic.error ?? lastDiagnostic.content;
     details.push(`Last diagnostic:${code} "${String(title).slice(0, 200)}".`);
   }
   return details;
@@ -308,7 +396,9 @@ function collectToolFailures(execution: TestExecutionResult): ToolFailureSummary
   const add = (summary: ToolFailureSummary) => {
     const key = summary.id
       ? `id:${summary.id}`
-      : [summary.name, summary.status, summary.error, summary.resultSummary, summary.source].join("\0");
+      : [summary.name, summary.status, summary.error, summary.resultSummary, summary.source].join(
+          "\0"
+        );
     if (seen.has(key)) return;
     seen.add(key);
     failures.push(summary);
@@ -316,10 +406,13 @@ function collectToolFailures(execution: TestExecutionResult): ToolFailureSummary
 
   for (const message of execution.messages) {
     if (message.contentType !== "invocation") continue;
-    const payload = ((message as { invocation?: unknown }).invocation ?? parseJson(message.content)) as
-      | InvocationLike
-      | undefined;
-    const summary = summarizeToolFailure(payload, "message", (message as { error?: unknown }).error);
+    const payload = ((message as { invocation?: unknown }).invocation ??
+      parseJson(message.content)) as InvocationLike | undefined;
+    const summary = summarizeToolFailure(
+      payload,
+      "message",
+      (message as { error?: unknown }).error
+    );
     if (summary) add(summary);
   }
 
@@ -349,7 +442,7 @@ function summarizeToolFailure(
     invocation.error ??
     exec.error ??
     messageError ??
-    (isError ? exec.result ?? exec.description : undefined);
+    (isError ? (exec.result ?? exec.description) : undefined);
 
   if (!isError && !hasFailureStatus && !hasFailureOutcome && rawError === undefined) return null;
 

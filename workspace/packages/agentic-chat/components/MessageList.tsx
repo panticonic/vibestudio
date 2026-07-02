@@ -226,6 +226,8 @@ export interface MessageListProps {
   renderMessage?: (msg: ChatMessage, senderInfo: SenderInfo) => React.ReactNode;
   /** Override default inline group rendering */
   renderInlineGroup?: (items: InlineItem[]) => React.ReactNode;
+  /** Override the empty-transcript placeholder (e.g. while an agent is launching). */
+  emptyState?: React.ReactNode;
 }
 
 /**
@@ -261,6 +263,7 @@ export const MessageList = React.memo(function MessageList({
   mdxActions,
   renderMessage: customRenderMessage,
   renderInlineGroup: customRenderInlineGroup,
+  emptyState,
 }: MessageListProps) {
   // --- Scroll state ---
   const [showNewContent, setShowNewContent] = useState(false);
@@ -614,9 +617,11 @@ export const MessageList = React.memo(function MessageList({
             </Flex>
           )}
           {groupedItems.length === 0 && activeTypingItems.length === 0 ? (
-            <Text color="gray" size="2">
-              Send a message to start chatting
-            </Text>
+            emptyState ?? (
+              <Text color="gray" size="2">
+                Send a message to start chatting
+              </Text>
+            )
           ) : (
             <Flex className="message-list-stack" direction="column" gap="1">
               {groupedItems.map((item, index) => (

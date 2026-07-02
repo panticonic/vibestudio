@@ -33,6 +33,7 @@ const serverElectronConfig = {
     "electron",
     "esbuild",
     "@npmcli/arborist",
+    "node-datachannel",
     "@natstack/extension-host",
     "vitest",
     "vitest/node",
@@ -148,7 +149,7 @@ const clientConfig = {
   target: "node20",
   format: "esm",
   outfile: "dist/cli/client.mjs",
-  external: ["ws"],
+  external: ["ws", "node-datachannel"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
@@ -161,7 +162,7 @@ const mainConfig = {
   target: "node20",
   format: "cjs",
   outfile: "dist/main.cjs",
-  external: ["electron", "esbuild", "@npmcli/arborist"],
+  external: ["electron", "esbuild", "@npmcli/arborist", "node-datachannel"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
@@ -260,6 +261,19 @@ const shellOverlayPreloadConfig = {
   target: "node20",
   format: "cjs",
   outfile: "dist/shellOverlayPreload.cjs",
+  external: ["electron"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
+const contentOverlayPreloadConfig = {
+  entryPoints: ["src/preload/contentOverlayPreload.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  outfile: "dist/contentOverlayPreload.cjs",
   external: ["electron"],
   sourcemap: isDev,
   minify: !isDev,
@@ -577,6 +591,7 @@ async function build() {
     await esbuild.build(autofillPreloadConfig);
     await esbuild.build(autofillOverlayPreloadConfig);
     await esbuild.build(shellOverlayPreloadConfig);
+    await esbuild.build(contentOverlayPreloadConfig);
     await esbuild.build(browserTransportConfig);
     await esbuild.build(internalDoBundleConfig);
     // Read the internal-DO bundle output and inline it as a string into the

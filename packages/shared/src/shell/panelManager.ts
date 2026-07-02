@@ -7,13 +7,14 @@ import type { PanelSearchIndex } from "../panelSearchTypes.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 import { loadPanelManifest } from "../panelTypes.js";
 import { validateStateArgs } from "../stateArgsValidator.js";
-import { computePanelId } from "../panelIdUtils.js";
+import { computePanelId, panelIdSegmentFromName } from "../panelIdUtils.js";
 import {
   buildBootstrapConfig,
   browserSourceFromHostname,
   generateContextId,
   resolveSource,
 } from "../panelFactory.js";
+import { isOpenPanelBrowserUrl } from "../panelChrome.js";
 import {
   createSnapshot,
   getCurrentSnapshot,
@@ -242,7 +243,7 @@ export class PanelManager {
       computePanelId({
         relativePath,
         parent: opts?.parentId ? { id: opts.parentId } : null,
-        requestedId: opts?.name,
+        requestedId: opts?.name ? panelIdSegmentFromName(opts.name) : undefined,
         isRoot: opts?.isRoot,
       })
     );
@@ -330,16 +331,22 @@ export class PanelManager {
     url: string,
     opts?: { name?: string; addAsRoot?: boolean }
   ): Promise<CreatePanelResult & { url: string }> {
-    if (typeof url !== "string" || !/^https?:\/\//i.test(url)) {
-      throw new Error(`Invalid browser panel URL (must be http/https string): ${String(url)}`);
+    if (typeof url !== "string" || !isOpenPanelBrowserUrl(url)) {
+      throw new Error(
+        `Invalid browser panel URL (must be http/https, data:, or about:blank string): ${String(
+          url
+        )}`
+      );
     }
     const parsed = new URL(url);
-    const normalizedSource = browserSourceFromHostname(parsed.hostname);
+    const normalizedSource = browserSourceFromHostname(
+      parsed.hostname || parsed.protocol.replace(/:$/, "") || "browser"
+    );
     const slotId = asPanelSlotId(
       computePanelId({
         relativePath: normalizedSource,
         parent: parentId ? { id: parentId } : null,
-        requestedId: opts?.name,
+        requestedId: opts?.name ? panelIdSegmentFromName(opts.name) : undefined,
         isRoot: parentId == null,
       })
     );
@@ -381,7 +388,7 @@ export class PanelManager {
     this.currentEntityBySlot.set(slotId, entityId);
     this.currentEntitySourceBySlot.set(slotId, handle.source);
 
-    const title = opts?.name ?? parsed.hostname;
+    const title = opts?.name ?? (parsed.hostname || parsed.protocol.replace(/:$/, "") || "browser");
     const panel: Panel = {
       id: slotId,
       title,
@@ -635,6 +642,21 @@ export class PanelManager {
       autoArchiveWhenEmpty: nextSnapshot.autoArchiveWhenEmpty,
       privileged: nextSnapshot.privileged,
     };
+  }
+
+  /**
+   * Non-mutating peek: the context the panel WOULD move into for a history
+   * back/forward. The panel-tree service resolves this before the bridge so the
+   * context-boundary gate sees the destination context (a panel's history can
+   * span foreign contexts). Returns null when the move is a no-op.
+   */
+  async historyTargetContext(slotId: PanelSlotId, delta: -1 | 1): Promise<string | null> {
+    const before = await this.requireStoredPanel(slotId);
+    const history = before.history;
+    if (!history) return null;
+    const targetIndex = Math.max(0, Math.min(history.entries.length - 1, history.index + delta));
+    if (targetIndex === history.index) return null;
+    return history.entries[targetIndex]?.contextId ?? null;
   }
 
   async navigateHistory(slotId: PanelSlotId, delta: -1 | 1): Promise<Panel | null> {
@@ -1246,7 +1268,9 @@ export class PanelManager {
       const manifest = loadPanelManifest(absolutePath);
       return {
         ...manifest,
-        privileged: manifest.shell === true,
+        // Privileged is gated purely by location: any unit under about/. (No `shell`
+        // flag — an about page is a normal panel that lives in about/.)
+        privileged: relativePath.startsWith("about/"),
       };
     } catch (error) {
       if (allowMissing) {
@@ -1267,7 +1291,8 @@ export class PanelManager {
       const manifest = loadPanelManifest(absolutePath);
       return {
         ...manifest,
-        privileged: manifest.shell === true,
+        // Privileged is gated purely by location: any unit under about/.
+        privileged: source.startsWith("about/"),
       };
     } catch {
       return null;

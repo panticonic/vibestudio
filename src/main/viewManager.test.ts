@@ -110,7 +110,7 @@ vi.mock("electron", () => {
 
 // Import after mocks are set up
 import { ViewManager } from "./viewManager.js";
-import { BaseWindow, WebContentsView } from "electron";
+import { BaseWindow, WebContentsView, ipcMain } from "electron";
 
 type MockBaseWindow = InstanceType<typeof BaseWindow>;
 
@@ -146,6 +146,26 @@ describe("ViewManager", () => {
 
       const shellContents = vm.getShellWebContents();
       expect(shellContents.openDevTools).toHaveBeenCalled();
+    });
+
+    it("destroys content overlay IPC listeners with the manager", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+
+      vm.destroy();
+
+      expect(ipcMain.removeListener).toHaveBeenCalledWith(
+        "natstack:content-overlay:size",
+        expect.any(Function)
+      );
+      expect(ipcMain.removeListener).toHaveBeenCalledWith(
+        "natstack:content-overlay:intent",
+        expect.any(Function)
+      );
     });
   });
 
@@ -249,6 +269,42 @@ describe("ViewManager", () => {
       expect(mockWindow.contentView.removeChildView).toHaveBeenCalledWith(overlayView);
       expect(mockWindow.contentView.addChildView).toHaveBeenCalledWith(overlayView);
       expect(panelView.setVisible).toHaveBeenCalledWith(true);
+    });
+
+    it("applies content overlay focus after the first surface load completes", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellContents = vm.getShellWebContents();
+      (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
+
+      vm.showContentOverlay({
+        surface: "approval-card",
+        bounds: { x: 20, y: 40, width: 420, height: 300 },
+        props: { approvalId: "approval-1" },
+        theme: { appearance: "light" },
+        focus: true,
+      });
+
+      const results = (WebContentsView as unknown as Mock).mock.results;
+      const overlayView = results[results.length - 1]?.value;
+      expect(overlayView).toBeTruthy();
+      expect(overlayView.webContents.loadURL).toHaveBeenCalledWith(
+        "file:///shell/index.html#overlaySurface=approval-card"
+      );
+      expect(overlayView.webContents.focus).not.toHaveBeenCalled();
+
+      const didFinishLoad = (overlayView.webContents.on as Mock).mock.calls.find(
+        ([event]) => event === "did-finish-load"
+      )?.[1] as (() => void) | undefined;
+      expect(didFinishLoad).toEqual(expect.any(Function));
+
+      didFinishLoad?.();
+
+      expect(overlayView.webContents.focus).toHaveBeenCalledTimes(1);
     });
   });
 

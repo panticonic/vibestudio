@@ -27,14 +27,15 @@ import { tokensMethods } from "@natstack/shared/serviceSchemas/tokens";
 import { viewMethods } from "@natstack/shared/serviceSchemas/view";
 import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import type { ConnectPairing } from "@natstack/shared/connect";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
   onMessage: (handler: (envelope: RpcEnvelope) => void) => () => void;
 };
 type IncomingPairLinkBridge = {
-  getPending: () => Promise<{ url: string; code: string } | null>;
-  onLink: (handler: (link: { url: string; code: string }) => void) => () => void;
+  getPending: () => Promise<ConnectPairing | null>;
+  onLink: (handler: (link: ConnectPairing) => void) => () => void;
 };
 const g = globalThis as unknown as {
   __natstackTransport?: ShellTransportBridge;
@@ -324,6 +325,11 @@ export const view = {
     }
   ) => viewClient.updateNativeShellOverlay(options),
   hideNativeShellOverlay: (id?: string) => viewClient.hideNativeShellOverlay(id),
+  showContentOverlay: (options: Parameters<typeof viewClient.showContentOverlay>[0]) =>
+    viewClient.showContentOverlay(options),
+  updateContentOverlay: (options: Parameters<typeof viewClient.updateContentOverlay>[0]) =>
+    viewClient.updateContentOverlay(options),
+  hideContentOverlay: () => viewClient.hideContentOverlay(),
   browserNavigate: (browserId: string, url: string) => viewClient.browserNavigate(browserId, url),
   browserGoBack: (browserId: string) => viewClient.browserGoBack(browserId),
   browserGoForward: (browserId: string) => viewClient.browserGoForward(browserId),
@@ -342,9 +348,28 @@ export const nativeShellOverlay = {
     return bridge.on(handler);
   },
 };
+type ContentOverlayHostBridge = {
+  on: (handler: (payload: unknown) => void) => () => void;
+};
+/**
+ * Receives intent payloads emitted by the content-overlay surface (forwarded by
+ * main to the hosted shell). The bridge is injected by the app preload; absent
+ * outside Electron, where `.on` is a no-op.
+ */
+export const contentOverlay = {
+  on: (handler: (payload: unknown) => void) => {
+    const bridge = (
+      globalThis as unknown as {
+        __natstackContentOverlayHost?: ContentOverlayHostBridge;
+      }
+    ).__natstackContentOverlayHost;
+    if (!bridge) return () => {};
+    return bridge.on(handler);
+  },
+};
 export const incomingPairLink = {
   getPending: () => g.__natstackIncomingPairLink?.getPending() ?? Promise.resolve(null),
-  onLink: (handler: (link: { url: string; code: string }) => void) =>
+  onLink: (handler: (link: ConnectPairing) => void) =>
     g.__natstackIncomingPairLink?.onLink(handler) ?? (() => {}),
 };
 // =============================================================================
@@ -408,9 +433,8 @@ export interface RemoteCredCurrent {
   configured: boolean;
   isActive: boolean;
   bootstrap: "device" | "admin-token" | "hybrid" | "none";
+  remoteId?: string;
   url?: string;
-  caPath?: string;
-  fingerprint?: string;
   tokenPreview?: string;
   deviceId?: string;
   hubUrl?: string;
@@ -419,21 +443,16 @@ export interface RemoteCredCurrent {
 export interface RemoteCredSaveArgs {
   url: string;
   token: string;
-  caPath?: string;
-  fingerprint?: string;
 }
 export interface TestConnectionResult {
   ok: boolean;
-  error?: "invalid-url" | "unreachable" | "tls-mismatch" | "unauthorized" | "unknown";
+  error?: "invalid-url" | "unreachable" | "unauthorized" | "unknown";
   message?: string;
-  observedFingerprint?: string;
   serverVersion?: string;
 }
 export interface ExchangePairingCodeArgs {
-  url: string;
-  code: string;
-  caPath?: string;
-  fingerprint?: string;
+  /** A `natstack://connect?...` pairing link carrying the WebRTC pairing material. */
+  link: string;
   label?: string;
 }
 export interface DeviceRecord {
@@ -447,7 +466,6 @@ export interface DeviceRecord {
 export interface PairingInvite {
   code: string;
   deepLink: string | null;
-  connectUrl: string;
   serverUrl: string;
   publicUrl?: string | null;
   expiresAt: number;
@@ -456,25 +474,15 @@ export interface PairingInvite {
   serverBootId: string;
   workspaceId?: string | null;
 }
-export interface DiscoveredServer {
-  url: string;
-  hostname: string;
-  serverId?: string;
-  workspaceId?: string;
-  discoveryVersion: number;
-}
 export const remoteCred = {
   getCurrent: () => remoteCredClient.getCurrent(),
   save: (args: RemoteCredSaveArgs) => remoteCredClient.save(args),
   testConnection: (args: RemoteCredSaveArgs) => remoteCredClient.testConnection(args),
   exchangePairingCode: (args: ExchangePairingCodeArgs) =>
     remoteCredClient.exchangePairingCode(args),
-  discoverServers: () => remoteCredClient.discoverServers(),
   createPairingInvite: (args?: { ttlMs?: number }) => remoteCredClient.createPairingInvite(args),
   listDevices: () => remoteCredClient.listDevices(),
   revokeDevice: (deviceId: string) => remoteCredClient.revokeDevice(deviceId),
-  fetchPeerFingerprint: (url: string) => remoteCredClient.fetchPeerFingerprint(url),
-  pickCaFile: () => remoteCredClient.pickCaFile(),
   clear: () => remoteCredClient.clear(),
   relaunch: () => remoteCredClient.relaunch(),
 };
@@ -555,6 +563,8 @@ export const shellApproval = {
     shellApprovalClient.submitClientConfig(approvalId, values),
   submitCredentialInput: (approvalId: string, values: Record<string, string>) =>
     shellApprovalClient.submitCredentialInput(approvalId, values),
+  submitSecretInput: (approvalId: string, values: Record<string, string>) =>
+    shellApprovalClient.submitSecretInput(approvalId, values),
   listPending: () => shellApprovalClient.listPending(),
 };
 // =============================================================================

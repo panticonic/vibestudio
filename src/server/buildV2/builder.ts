@@ -1531,6 +1531,14 @@ async function doBuild(
       );
     } else if (node.kind === "template") {
       throw new Error(`Templates are not buildable: ${node.name}`);
+    } else if (node.kind === "package") {
+      // Packages have no standalone runtime artifact — they are validated as
+      // library bundles (panel/worker targets) by the push gate, never eagerly
+      // built as a panel. Falling through to buildPanel would silently produce
+      // a bogus panel artifact for a library.
+      throw new Error(
+        `package ${node.name} cannot be built as a runtime unit; build it as a library (options.library + libraryTarget)`
+      );
     } else {
       return await buildPanel(
         node,
@@ -3118,7 +3126,7 @@ function validateSandboxNpmLibrarySpecifier(specifier: string): void {
 }
 
 /**
- * Validate that a version string is a strict semver-shaped registry
+ * Validate that a version string is a registry semver/range
  * specifier. Rejects everything that npm would otherwise interpret as a
  * non-registry source (`file:`, `git+ssh://`, `https://`, `github:`,
  * `npm:`, local paths, tarball URLs). Without this check, a worker /
@@ -3127,7 +3135,7 @@ function validateSandboxNpmLibrarySpecifier(specifier: string): void {
  * URLs or copy local filesystem paths into the build cache.
  *
  * Allowed shapes:
- *   1.2.3                exact
+ *   1 / 1.2 / 1.2.3      major / minor / exact
  *   ^1.2.3 / ~1.2.3      caret / tilde
  *   >=1.2.3 etc.         comparator
  *   1.2.3-rc.1+build.5   pre-release / build metadata
@@ -3137,7 +3145,7 @@ function validateSandboxNpmLibrarySpecifier(specifier: string): void {
  * route it through a separate, shell-only RPC that takes a strongly-typed
  * `{ kind: "git" | "file"; …}` argument rather than a free-form string.
  */
-const SEMVER_RE = /^(\^|~|>=|<=|=|>|<)?\d+\.\d+\.\d+(-[\w.+-]+)?(\+[\w.+-]+)?$/;
+const SEMVER_RE = /^(\^|~|>=|<=|=|>|<)?(?:\d+|\d+\.\d+|\d+\.\d+\.\d+(-[\w.+-]+)?(\+[\w.+-]+)?)$/;
 function validateNpmVersion(version: string): void {
   if (typeof version !== "string" || version.length === 0 || version.length > 64) {
     throw new Error(`Invalid npm version: ${version}`);
@@ -3145,7 +3153,7 @@ function validateNpmVersion(version: string): void {
   if (version === "latest" || version === "*") return;
   if (SEMVER_RE.test(version)) return;
   throw new Error(
-    `Invalid npm version "${version}". Only strict semver, "latest", or "*" are allowed; ` +
+    `Invalid npm version "${version}". Only registry semver/range values, "latest", or "*" are allowed; ` +
       `file:, git+, http(s)://, github:, npm:, and local-path specifiers are rejected.`
   );
 }

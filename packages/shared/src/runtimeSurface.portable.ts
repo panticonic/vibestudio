@@ -20,20 +20,10 @@ import { namespaceEntry, valueEntry, type RuntimeSurfaceEntry } from "./runtimeS
 
 // --- shared namespace member arrays (single source of truth) ---
 export const WORKERS_MEMBERS = [
-  "create",
-  "destroy",
-  "update",
-  "list",
-  "status",
-  "listInstanceSources",
   "listServices",
   "resolveService",
   "resolveDurableObject",
   "durableObjectService",
-  "getPort",
-  "restartAll",
-  "cloneDO",
-  "destroyDO",
 ];
 
 export const WORKSPACE_MEMBERS = [
@@ -61,7 +51,6 @@ export const CREDENTIALS_MEMBERS = [
   "listStoredCredentials",
   "inspectStoredCredentials",
   "revokeCredential",
-  "grantCredential",
   "resolveCredential",
   "fetch",
   "hookForUrl",
@@ -78,25 +67,38 @@ export const GIT_MEMBERS = [
 ];
 
 export const VCS_MEMBERS = [
-  "applyEdits",
+  "edit",
+  "commit",
+  "discardEdits",
   "readFile",
   "listFiles",
   "revert",
   "status",
-  "unitStatus",
   "log",
   "diff",
   "resolveHead",
+  "workspaceViewWithRepoAt",
   "merge",
+  "mergeGroup",
   "abortMerge",
   "pendingMerge",
-  "publishStatus",
-  "publish",
+  "push",
+  "pushStatus",
+  "previewBuild",
+  "commitEdits",
+  "fileHistory",
+  "commitAncestors",
+  "editsByActor",
+  "editsByTurn",
+  "editsByInvocation",
+  "forkRepo",
+  "contextStatus",
+  "rebaseContext",
   "recall",
 ];
 
 export const VCS_DESCRIPTION =
-  "Workspace GAD VCS (edit-first): applyEdits commits and projects edits atomically; status reports a head's unpublished changes vs main; diff compares state hashes.";
+  "Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance.";
 
 export const GAD_MEMBERS = [
   "rawSql",

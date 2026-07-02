@@ -1,0 +1,160 @@
+/*
+ * hello-vanilla styles — plain CSS, no framework, no CSS-in-JS.
+ *
+ * The panel applies light/dark theming by toggling a single `data-theme`
+ * attribute on the `#root` element from index.ts. Everything below simply
+ * reacts to that attribute through CSS custom properties, so the TypeScript
+ * never has to touch individual colors.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Theme palettes: the only thing index.ts toggles is [data-theme]. */
+#root[data-theme="light"] {
+  --hv-bg: #f6f7f9;
+  --hv-fg: #1a1d21;
+  --hv-card-bg: #ffffff;
+  --hv-border: #d7dbe0;
+  --hv-muted: #6b7280;
+  --hv-accent: #2563eb;
+  --hv-accent-fg: #ffffff;
+  --hv-code-bg: #eef1f4;
+}
+
+#root[data-theme="dark"] {
+  --hv-bg: #14171a;
+  --hv-fg: #e6e8eb;
+  --hv-card-bg: #1c2024;
+  --hv-border: #2b3036;
+  --hv-muted: #9aa3ad;
+  --hv-accent: #3b82f6;
+  --hv-accent-fg: #ffffff;
+  --hv-code-bg: #0f1316;
+}
+
+#root {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 2rem 1rem;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  background-color: var(--hv-bg);
+  color: var(--hv-fg);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.hv-card {
+  width: 100%;
+  max-width: 34rem;
+  background-color: var(--hv-card-bg);
+  border: 1px solid var(--hv-border);
+  border-radius: 12px;
+  padding: 1.75rem 2rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+}
+
+.hv-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.4rem;
+  font-weight: 650;
+}
+
+.hv-subtitle {
+  margin: 0 0 1.5rem;
+  color: var(--hv-muted);
+  font-size: 0.9rem;
+}
+
+/* Definition list of runtime facts. */
+.hv-facts {
+  margin: 0 0 1.75rem;
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) 1fr;
+  gap: 0.5rem 1rem;
+}
+
+.hv-facts dt {
+  color: var(--hv-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+
+.hv-facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.hv-code {
+  display: block;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  background-color: var(--hv-code-bg);
+  border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.hv-mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+/* Counter — proves interactivity via plain DOM event listeners. */
+.hv-counter {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--hv-border);
+}
+
+.hv-count-value {
+  min-width: 3ch;
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.hv-btn {
+  appearance: none;
+  border: 1px solid var(--hv-border);
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.hv-btn:hover {
+  border-color: var(--hv-accent);
+}
+
+.hv-btn:active {
+  background-color: var(--hv-code-bg);
+}
+
+.hv-btn-reset {
+  width: auto;
+  padding: 0 0.85rem;
+  margin-left: auto;
+  font-size: 0.85rem;
+  background-color: var(--hv-accent);
+  color: var(--hv-accent-fg);
+  border-color: transparent;
+}

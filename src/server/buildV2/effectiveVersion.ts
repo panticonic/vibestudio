@@ -205,13 +205,7 @@ export function persistEvState(state: PersistedEvState): void {
 
 /** Increment when build logic changes (plugins, esbuild options, shims) to invalidate all cached builds. */
 const BUILD_CACHE_VERSION = "16";
-const ROOT_DEPENDENCY_FINGERPRINT_FILES = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "dist/server.mjs",
-  "dist/main.cjs",
-];
+const ROOT_DEPENDENCY_FINGERPRINT_FILES = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"];
 let rootDependencyFingerprintCache: { root: string; value: string } | null = null;
 
 function rootDependencyFingerprint(): string {

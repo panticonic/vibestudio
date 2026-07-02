@@ -107,6 +107,8 @@ describe("GadWorkspaceDO unified log (schema v19)", () => {
         "log_heads",
         "log_events",
         "log_blob_refs",
+        "gad_worktree_heads",
+        "vcs_context_bases",
         "refs",
         "ref_log",
         "gad_transition_parents",
@@ -319,12 +321,9 @@ describe("appendLogEvent core (§3.2)", () => {
       expect.objectContaining({ log_id: "traj-core", head: "main", turn_id: "turn-1" }),
     ]);
 
-    // log head pointer ref
-    const ref = await call<any>("resolveRef", { refName: "log:traj-core:main" });
-    expect(ref).toMatchObject({
-      kind: "log-head",
-      target: { seq: 2, hash: result.headHash, envelopeId: "evt-2" },
-    });
+    // structured log head pointer
+    const head = await call<any>("getLogHead", { logId: "traj-core", head: "main" });
+    expect(head).toMatchObject({ seq: 2, hash: result.headHash, envelopeId: "evt-2" });
 
     // point lookup + payloadKind filter
     const single = await call<any>("getLogEvent", {
@@ -1226,6 +1225,73 @@ describe("channel adapters (§3.4)", () => {
     expectNoPrivateParticipantMetadata(registered);
   });
 
+  it("sanitizes roster snapshot method metadata before hashing log events", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const hugeMetadata = largeParticipantMetadata();
+
+    await call("appendLogEvent", {
+      logId: "traj-roster",
+      head: "main",
+      logKind: "trajectory",
+      events: [
+        {
+          envelopeId: "roster-1",
+          actor: owner,
+          payloadKind: "system.event",
+          payload: {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            kind: "roster.snapshot",
+            details: {
+              kind: "roster.snapshot",
+              roster: {
+                participants: [
+                  {
+                    participantId: "panel:user",
+                    ref: {
+                      kind: "panel",
+                      id: "panel:user",
+                      participantId: "panel:user",
+                      metadata: hugeMetadata,
+                    },
+                    handle: "user",
+                    type: "panel",
+                    methods: hugeMetadata.methods,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT payload_ref_json FROM log_events WHERE envelope_id = ?",
+      ["roster-1"]
+    );
+    const payload = JSON.parse(String(rows.rows[0]?.["payload_ref_json"])) as {
+      details: {
+        roster: {
+          participants: Array<{
+            ref: { metadata?: unknown };
+            methods: unknown[];
+          }>;
+        };
+      };
+    };
+
+    expectNoPrivateParticipantMetadata(payload);
+    expect(payload.details.roster.participants[0]?.methods).toEqual([{ name: "eval" }]);
+    expect(payload.details.roster.participants[0]?.ref.metadata).toEqual({
+      type: "panel",
+      name: "Panel",
+      handle: "user",
+      methods: [{ name: "eval" }],
+    });
+    await expect(call("checkGadIntegrity", {})).resolves.toMatchObject({ ok: true });
+  });
+
   it("treats replayed matching channel envelope ids as idempotent appends", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const input = {
@@ -1824,6 +1890,34 @@ describe("refs (§3.7)", () => {
     const byPrefix = await call<any[]>("listRefs", { prefix: "context:" });
     expect(byPrefix.map((row: any) => row.refName)).toEqual(["context:ctx-1"]);
   });
+
+  it("treats ref prefixes literally instead of as LIKE patterns", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("updateRef", {
+      refName: "context:literal_%:one",
+      kind: "context",
+      target: { id: "literal" },
+    });
+    await call("updateRef", {
+      refName: "context:literal_A:any",
+      kind: "context",
+      target: { id: "wildcard-candidate" },
+    });
+    await call("updateRef", {
+      refName: "context:literal_zz:any",
+      kind: "context",
+      target: { id: "wildcard-candidate-2" },
+    });
+
+    const listed = await call<any[]>("listRefs", { prefix: "context:literal_%" });
+    expect(listed.map((row: any) => row.refName)).toEqual(["context:literal_%:one"]);
+
+    const deleted = await call<any>("deleteRefsByPrefix", { prefix: "context:literal_%" });
+    expect(deleted.deleted).toBe(1);
+    expect(await call<any>("resolveRef", { refName: "context:literal_%:one" })).toBeNull();
+    expect(await call<any>("resolveRef", { refName: "context:literal_A:any" })).toBeTruthy();
+    expect(await call<any>("resolveRef", { refName: "context:literal_zz:any" })).toBeTruthy();
+  });
 });
 
 describe("recursive manifests (§3.8)", () => {
@@ -1904,7 +1998,7 @@ describe("recursive manifests (§3.8)", () => {
       await call<any>("getSubtreeHash", { stateHash: stateA.stateHash, path: "nope/missing" })
     ).toEqual({ subtreeHash: null });
 
-    // full-file round trip through the worktree ref
+    // full-file round trip through the worktree head
     const branchFiles = await call<any[]>("listGadBranchFiles", {
       trajectoryId: "traj-manifest",
       branchId: "a",
@@ -1939,7 +2033,7 @@ describe("recursive manifests (§3.8)", () => {
 });
 
 describe("ingestWorktreeState (§3.9)", () => {
-  it("creates the state, journals a snapshot event, records transition parents, and CAS-advances the worktree ref", async () => {
+  it("creates the state, journals a snapshot event, records transition parents, and CAS-advances the worktree head", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const result = await call<any>("ingestWorktreeState", {
       files: [{ path: "a.txt", contentHash: "blob:a1" }],
@@ -1979,14 +2073,11 @@ describe("ingestWorktreeState (§3.9)", () => {
       { ordinal: 0, parent_state_hash: transitions.rows[0]?.["input_state_hash"] },
     ]);
 
-    // worktree ref advanced
-    const ref = await call<any>("resolveRef", { refName: "worktree:traj-ingest:main" });
-    expect(ref).toMatchObject({
-      kind: "worktree-branch",
-      target: { stateHash: result.stateHash },
-    });
+    // structured worktree head advanced
+    const head = await call<any>("resolveWorktreeHead", { logId: "traj-ingest", head: "main" });
+    expect(head).toMatchObject({ stateHash: result.stateHash });
 
-    // CAS conflict on the worktree ref throws
+    // CAS conflict on the worktree head throws
     await expect(
       call("ingestWorktreeState", {
         files: [{ path: "a.txt", contentHash: "blob:a2" }],
@@ -2096,9 +2187,9 @@ describe("state.merge_applied (§3.11)", () => {
       { ordinal: 1, parent_state_hash: sideParent.stateHash },
     ]);
 
-    // worktree ref advanced to the merge output
-    const ref = await call<any>("resolveRef", { refName: "worktree:traj-merge:main" });
-    expect(ref.target).toEqual({ stateHash: mergedOut.stateHash });
+    // structured worktree head advanced to the merge output
+    const head = await call<any>("resolveWorktreeHead", { logId: "traj-merge", head: "main" });
+    expect(head.stateHash).toBe(mergedOut.stateHash);
   });
 
   it("rejects merge/snapshot events whose output state value does not exist", async () => {
@@ -2173,6 +2264,124 @@ describe("projection replay (§3.12)", () => {
         status: "streaming",
       }),
     ]);
+  });
+
+  it("rebuilds worktree heads for every head when replaying a forked trajectory", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    // Parent branch: a snapshot ingest, a fork-point marker, then a second
+    // ingest that stays parent-only. Replay must re-derive each head's chain
+    // from its own lineage view.
+    const stateA = await call<any>("ingestWorktreeState", {
+      files: [{ path: "a.ts", contentHash: "blob:a1" }],
+      logId: "traj-parent",
+      head: "branch-parent",
+      actor: owner,
+      eventId: "apply-a",
+    });
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-parent",
+      branchId: "branch-parent",
+      owner,
+      events: [
+        {
+          eventId: "fork-point",
+          event: event("message.completed", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-fork" as never },
+            payload: textMessagePayload("msg-fork", "assistant", "fork here"),
+          }),
+        },
+      ],
+    });
+    const stateB = await call<any>("ingestWorktreeState", {
+      files: [
+        { path: "a.ts", contentHash: "blob:a1" },
+        { path: "b.ts", contentHash: "blob:b1" },
+      ],
+      logId: "traj-parent",
+      head: "branch-parent",
+      actor: owner,
+      eventId: "apply-b",
+    });
+
+    const forkPointHash = String(
+      (
+        await call<{ rows: Array<Record<string, unknown>> }>(
+          "query",
+          "SELECT hash FROM log_events WHERE envelope_id = ?",
+          ["fork-point"]
+        )
+      ).rows[0]?.["hash"]
+    );
+
+    // Fork through the marker: child inherits apply-a + the marker, NOT apply-b.
+    const fork = await call<Record<string, unknown>>("forkTrajectoryBranch", {
+      fromTrajectoryId: "traj-parent",
+      fromBranchId: "branch-parent",
+      toTrajectoryId: "traj-fork",
+      toBranchId: "branch-fork",
+      throughEventHash: forkPointHash,
+      owner,
+    });
+    expect(fork["copied"]).toBe(2); // inherited count; nothing was physically copied
+    expect((fork as any)["lineage"]).toEqual([]);
+    expect(await countRows(call, "log_id = ?", ["traj-fork"])).toBe(0);
+
+    // The two heads diverge: parent reflects both ingests, the fork only one.
+    expect(stateA.stateHash).toMatch(/^state:/);
+    expect(stateB.stateHash).toMatch(/^state:/);
+    expect(stateA.stateHash).not.toBe(stateB.stateHash);
+
+    const readHeads = async () => ({
+      parent: await call<any>("resolveWorktreeHead", {
+        logId: "traj-parent",
+        head: "branch-parent",
+      }),
+      fork: await call<any>("resolveWorktreeHead", {
+        logId: "traj-fork",
+        head: "branch-fork",
+      }),
+    });
+    const headsBefore = await readHeads();
+    expect(headsBefore).toMatchObject({
+      parent: { stateHash: stateB.stateHash },
+      fork: { stateHash: stateA.stateHash },
+    });
+    const stableHeads = (heads: Awaited<ReturnType<typeof readHeads>>) => ({
+      parent: {
+        logId: heads.parent?.logId,
+        head: heads.parent?.head,
+        stateHash: heads.parent?.stateHash,
+      },
+      fork: {
+        logId: heads.fork?.logId,
+        head: heads.fork?.head,
+        stateHash: heads.fork?.stateHash,
+      },
+    });
+
+    // No-copy fork ⇒ apply-a exists once as a log event; its transition is keyed
+    // by event_id, so the table holds one row per distinct event.
+    const transitionsQuery =
+      "SELECT event_id, input_state_hash, output_state_hash FROM gad_state_transitions ORDER BY event_id";
+    const transitionsBefore = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      transitionsQuery,
+      []
+    );
+    expect(transitionsBefore.rows).toHaveLength(2);
+
+    // Replay folds every head's lineage view (3 parent events + 2 inherited).
+    const replay = await call<{ replayed: number }>("rebuildTrajectoryProjections", {});
+    expect(replay.replayed).toBe(5);
+
+    expect(stableHeads(await readHeads())).toEqual(stableHeads(headsBefore));
+    const transitionsAfter = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      transitionsQuery,
+      []
+    );
+    expect(transitionsAfter.rows).toEqual(transitionsBefore.rows);
   });
 });
 
@@ -2835,7 +3044,7 @@ describe("checkGadIntegrity (§3.16)", () => {
     expect(serialized).toContain("missing-event");
   });
 
-  it("detects a log head ref that disagrees with the stored chain", async () => {
+  it("detects a log head pointer that disagrees with the stored chain", async () => {
     const { call, sql } = await createTestDO(GadWorkspaceDO);
     await call("appendChannelEnvelope", {
       channelId: "channel-1",
@@ -2846,9 +3055,12 @@ describe("checkGadIntegrity (§3.16)", () => {
     });
 
     sql.exec(
-      "UPDATE refs SET target_json = ? WHERE ref_name = ?",
-      JSON.stringify({ seq: 99, hash: "deadbeef", envelopeId: "env-x" }),
-      "log:channel-1:main"
+      "UPDATE log_heads SET current_seq = ?, current_hash = ?, current_envelope_id = ? WHERE log_id = ? AND head = ?",
+      99,
+      "deadbeef",
+      "env-x",
+      "channel-1",
+      "main"
     );
 
     const scoped = await call<{ ok: boolean; errors: unknown[] }>("checkLogIntegrity", {
@@ -2891,7 +3103,7 @@ describe("checkGadIntegrity (§3.16)", () => {
 });
 
 describe("cache amnesia (§3.17)", () => {
-  it("rebuilds identical derived state after deleting all projections and worktree refs", async () => {
+  it("rebuilds identical derived state after deleting all projections and worktree heads", async () => {
     const { call, sql } = await createTestDO(GadWorkspaceDO);
 
     // Scenario: turn + message (published) + invocation round trip + a
@@ -2965,9 +3177,10 @@ describe("cache amnesia (§3.17)", () => {
         branchId: "main",
       }),
       channel: await call<any[]>("listChannelEnvelopes", { channelId: "channel-amnesia" }),
-      worktreeRef: (
-        await call<any>("resolveRef", { refName: "worktree:traj-amnesia:main" })
-      )?.target,
+      worktreeHead: await call<any>("resolveWorktreeHead", {
+        logId: "traj-amnesia",
+        head: "main",
+      }),
     });
 
     const before = await readAll();
@@ -3005,7 +3218,7 @@ describe("cache amnesia (§3.17)", () => {
     ]) {
       sql.exec(`DELETE FROM ${table}`);
     }
-    sql.exec("DELETE FROM refs WHERE kind = 'worktree-branch'");
+    sql.exec("DELETE FROM gad_worktree_heads");
 
     // projections are gone
     expect(
@@ -3025,7 +3238,11 @@ describe("cache amnesia (§3.17)", () => {
     expect(after.files).toEqual(before.files);
     expect(after.turns).toEqual(before.turns);
     expect(after.channel).toEqual(before.channel);
-    expect(after.worktreeRef).toEqual(before.worktreeRef);
+    expect(after.worktreeHead).toMatchObject({
+      logId: before.worktreeHead.logId,
+      head: before.worktreeHead.head,
+      stateHash: before.worktreeHead.stateHash,
+    });
 
     // values were never touched
     expect(await valueCounts()).toEqual(valuesBefore);
@@ -3096,5 +3313,168 @@ describe("GC reachability protections (§3.18)", () => {
       []
     );
     expect(remaining.rows.map((row) => row.hash)).toEqual(["blob:orphan-young"]);
+  });
+});
+
+describe("per-repo state primitives (W1)", () => {
+  const wsFiles = [
+    { path: "packages/foo/src/index.ts", contentHash: "blob:foo-idx", size: 10, mode: 420 },
+    { path: "packages/foo/package.json", contentHash: "blob:foo-pkg", size: 20, mode: 420 },
+    { path: "panels/bar/index.tsx", contentHash: "blob:bar-idx", size: 30, mode: 420 },
+  ];
+
+  async function ingestWs(call: any) {
+    return call("ingestWorktreeState", {
+      files: wsFiles,
+      logId: "vcs:workspace",
+      head: "main",
+      actor: owner,
+      eventId: "ws-1",
+    });
+  }
+
+  it("getSubtreeAsState re-roots a subtree to repo-relative paths", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const ws = await ingestWs(call);
+    const foo = await call<any>("getSubtreeAsState", {
+      stateHash: ws.stateHash,
+      prefix: "packages/foo",
+    });
+    const files = await call<any[]>("listStateFiles", { stateHash: foo.stateHash });
+    expect(files.map((f) => [f.path, f.content_hash]).sort()).toEqual([
+      ["package.json", "blob:foo-pkg"],
+      ["src/index.ts", "blob:foo-idx"],
+    ]);
+  });
+
+  it("composeRepoStates is the inverse of getSubtreeAsState (content-addressed round-trip)", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const ws = await ingestWs(call);
+    const foo = await call<any>("getSubtreeAsState", {
+      stateHash: ws.stateHash,
+      prefix: "packages/foo",
+    });
+    const recomposed = await call<any>("composeRepoStates", {
+      repos: [{ repoPath: "packages/foo", stateHash: foo.stateHash }],
+    });
+    const subOfWs = await call<any>("getSubtreeHash", {
+      stateHash: ws.stateHash,
+      path: "packages/foo",
+    });
+    const subOfRecomposed = await call<any>("getSubtreeHash", {
+      stateHash: recomposed.stateHash,
+      path: "packages/foo",
+    });
+    expect(subOfRecomposed.subtreeHash).toBe(subOfWs.subtreeHash);
+  });
+
+  it("composeRepoStates of all repo subtrees reproduces the workspace state byte-identically", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const ws = await ingestWs(call);
+    const foo = await call<any>("getSubtreeAsState", {
+      stateHash: ws.stateHash,
+      prefix: "packages/foo",
+    });
+    const bar = await call<any>("getSubtreeAsState", {
+      stateHash: ws.stateHash,
+      prefix: "panels/bar",
+    });
+    const composed = await call<any>("composeRepoStates", {
+      repos: [
+        { repoPath: "packages/foo", stateHash: foo.stateHash },
+        { repoPath: "panels/bar", stateHash: bar.stateHash },
+      ],
+    });
+    expect(composed.stateHash).toBe(ws.stateHash);
+  });
+
+  async function seedRepo(call: any, repoPath: string, contentHash: string, eventId: string) {
+    return call("ingestWorktreeState", {
+      files: [{ path: "x", contentHash, size: 1, mode: 420 }],
+      logId: `vcs:repo:${repoPath}`,
+      head: "main",
+      actor: owner,
+      eventId,
+    });
+  }
+
+  it("ingestRepoGroup advances all heads in one transaction", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const foo0 = await seedRepo(call, "packages/foo", "blob:foo-0", "foo-0");
+    const bar0 = await seedRepo(call, "panels/bar", "blob:bar-0", "bar-0");
+
+    const group = await call<any>("ingestRepoGroup", {
+      entries: [
+        {
+          files: [{ path: "x", contentHash: "blob:foo-1", size: 1, mode: 420 }],
+          logId: "vcs:repo:packages/foo",
+          head: "main",
+          actor: owner,
+          eventId: "foo-1",
+          expectedRefStateHash: foo0.stateHash,
+        },
+        {
+          files: [{ path: "x", contentHash: "blob:bar-1", size: 1, mode: 420 }],
+          logId: "vcs:repo:panels/bar",
+          head: "main",
+          actor: owner,
+          eventId: "bar-1",
+          expectedRefStateHash: bar0.stateHash,
+        },
+      ],
+    });
+    expect(group.results).toHaveLength(2);
+
+    const fooFiles = await call<any[]>("listGadBranchFiles", {
+      trajectoryId: "vcs:repo:packages/foo",
+      branchId: "main",
+    });
+    expect(fooFiles.map((f: any) => f.content_hash)).toEqual(["blob:foo-1"]);
+    const barFiles = await call<any[]>("listGadBranchFiles", {
+      trajectoryId: "vcs:repo:panels/bar",
+      branchId: "main",
+    });
+    expect(barFiles.map((f: any) => f.content_hash)).toEqual(["blob:bar-1"]);
+  });
+
+  it("ingestRepoGroup is all-or-none: a stale CAS on one entry leaves every head unchanged", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const foo0 = await seedRepo(call, "packages/foo", "blob:foo-0", "foo-0");
+    await seedRepo(call, "panels/bar", "blob:bar-0", "bar-0");
+
+    await expect(
+      call("ingestRepoGroup", {
+        entries: [
+          {
+            files: [{ path: "x", contentHash: "blob:foo-1", size: 1, mode: 420 }],
+            logId: "vcs:repo:packages/foo",
+            head: "main",
+            actor: owner,
+            eventId: "foo-x",
+            expectedRefStateHash: foo0.stateHash,
+          },
+          {
+            files: [{ path: "x", contentHash: "blob:bar-1", size: 1, mode: 420 }],
+            logId: "vcs:repo:panels/bar",
+            head: "main",
+            actor: owner,
+            eventId: "bar-x",
+            expectedRefStateHash: "state:stale-bogus",
+          },
+        ],
+      })
+    ).rejects.toThrow(/CAS conflict/);
+
+    // Neither head advanced — both still hold their seeded content.
+    const fooFiles = await call<any[]>("listGadBranchFiles", {
+      trajectoryId: "vcs:repo:packages/foo",
+      branchId: "main",
+    });
+    expect(fooFiles.map((f: any) => f.content_hash)).toEqual(["blob:foo-0"]);
+    const barFiles = await call<any[]>("listGadBranchFiles", {
+      trajectoryId: "vcs:repo:panels/bar",
+      branchId: "main",
+    });
+    expect(barFiles.map((f: any) => f.content_hash)).toEqual(["blob:bar-0"]);
   });
 });

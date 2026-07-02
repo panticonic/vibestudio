@@ -6,6 +6,7 @@
     <title>NatStack Launch</title>
     <style>
       :root {
+        --macos-titlebar-control-reserve: 78px;
         color-scheme: dark;
         font-family:
           Inter,
@@ -15,7 +16,7 @@
           BlinkMacSystemFont,
           "Segoe UI",
           sans-serif;
-        background: #111315;
+        background: #1f2123;
         color: #f5f7f8;
       }
       body {
@@ -25,7 +26,7 @@
         padding-top: 36px;
         display: grid;
         place-items: center;
-        background: linear-gradient(180deg, #15191d 0%, #101214 100%);
+        background: linear-gradient(180deg, #26282b 0%, #1e2022 100%);
       }
       .bootstrap-titlebar {
         position: fixed;
@@ -37,13 +38,20 @@
         box-sizing: border-box;
         display: flex;
         align-items: center;
-        padding: 0 14px 0 78px;
+        padding: 0 14px 0 var(--macos-titlebar-control-reserve);
         border-bottom: 1px solid rgb(255 255 255 / 7%);
-        background: rgb(17 19 21 / 78%);
+        background: rgb(33 35 38 / 80%);
         color: #7f8a90;
         font-size: 12px;
         font-weight: 650;
         user-select: none;
+        /* Draggable — but this is ONLY safe because ViewManager fully detaches
+           this view (removeChildView) on handoff to the hosted shell; see
+           hideBootstrapShell(). The bootstrap and hosted shell are separate
+           WebContentsViews in one BaseWindow, and a hidden-but-attached view
+           keeps this drag region registered on the native window, where it
+           leaks onto the hosted shell's titlebar and makes its controls drag
+           instead of click. If you ever stop detaching, make this no-drag. */
         app-region: drag;
         -webkit-app-region: drag;
       }
@@ -99,7 +107,7 @@
       }
       .launch-card {
         border: 1px solid #31383d;
-        background: #171b1f;
+        background: #25272b;
         border-radius: 8px;
         padding: 18px;
         box-shadow: 0 16px 40px rgb(0 0 0 / 24%);
@@ -111,7 +119,7 @@
       }
       .connection-option {
         border: 1px solid #31383d;
-        background: #171b1f;
+        background: #25272b;
         border-radius: 8px;
         padding: 16px;
         min-height: 132px;
@@ -147,7 +155,7 @@
         width: 100%;
         box-sizing: border-box;
         border: 1px solid #3a4349;
-        background: #11161a;
+        background: #1f2124;
         color: #f5f7f8;
         border-radius: 6px;
         padding: 9px 10px;
@@ -169,7 +177,7 @@
         gap: 12px;
         align-items: center;
         border: 1px solid #2b3237;
-        background: #12171a;
+        background: #232528;
         border-radius: 6px;
         padding: 10px;
       }
@@ -191,7 +199,7 @@
         display: grid;
         gap: 10px;
         border: 1px solid #263136;
-        background: #101518;
+        background: #202225;
         border-radius: 6px;
         padding: 12px;
       }
@@ -216,7 +224,7 @@
       }
       .unit-review {
         border: 1px solid #2b3237;
-        background: #12171a;
+        background: #232528;
         border-radius: 6px;
       }
       .unit-review > summary {
@@ -254,7 +262,7 @@
         gap: 12px;
         align-items: center;
         border: 1px solid #2b3237;
-        background: #111518;
+        background: #212427;
         border-radius: 6px;
         padding: 10px 12px;
       }
@@ -289,8 +297,8 @@
         font-size: 13px;
       }
       button {
-        border: 1px solid #3d474d;
-        background: #20262a;
+        border: 1px solid #474f55;
+        background: #2b2e32;
         color: #f5f7f8;
         border-radius: 6px;
         padding: 8px 12px;
@@ -385,7 +393,7 @@
         }
         .bootstrap-titlebar {
           height: 34px;
-          padding-left: 72px;
+          padding-left: var(--macos-titlebar-control-reserve);
         }
         main,
         main[data-bootstrap-mode="connection"] {

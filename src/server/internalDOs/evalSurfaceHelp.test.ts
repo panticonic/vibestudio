@@ -2,38 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   describeEvalBindingSurface,
   EVAL_RUNTIME_METHOD_NOTES,
-  normalizeAmbientRpcCall,
+  invalidHelpArgumentResponse,
 } from "./evalSurfaceHelp.js";
-
-describe("normalizeAmbientRpcCall — eval ambient rpc.call accepts 2-arg and 3-arg forms", () => {
-  it("2-arg sugar call(method, args) targets main", () => {
-    expect(normalizeAmbientRpcCall("meta.describeService", ["fs"])).toEqual([
-      "main",
-      "meta.describeService",
-      ["fs"],
-    ]);
-  });
-
-  it("2-arg with omitted args defaults to []", () => {
-    expect(normalizeAmbientRpcCall("vcs.status")).toEqual(["main", "vcs.status", []]);
-  });
-
-  it("3-arg full-client form call('main', method, args) is accepted (the recurring footgun)", () => {
-    expect(normalizeAmbientRpcCall("main", "meta.describeService", ["panelTree"])).toEqual([
-      "main",
-      "meta.describeService",
-      ["panelTree"],
-    ]);
-  });
-
-  it("3-arg also routes a non-main runtime-id target", () => {
-    expect(normalizeAmbientRpcCall("do:workers/x:Y:z", "ping", [1])).toEqual([
-      "do:workers/x:Y:z",
-      "ping",
-      [1],
-    ]);
-  });
-});
 
 describe("describeEvalBindingSurface (help('<binding>') reflects the injected surface)", () => {
   // The fs case: the injected client exposes open()/readFile()/mktemp() but NOT the low-level
@@ -72,6 +42,18 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     expect(desc).toMatch(/mkdir|NOT Node's mkdtemp/);
   });
 
+  it("documents the worker launch/retire path via runtime.createEntity/retireEntity", () => {
+    const out = describeEvalBindingSurface("runtime", ["createEntity", "retireEntity"], {});
+
+    const createDesc = (out!.methods["createEntity"] as { description: string }).description;
+    expect(createDesc).toContain('kind: "worker"');
+    expect(createDesc).toContain("ctx:${ctx.contextId}");
+    expect(createDesc).toContain('rpc.call("main", `workers.listSources`, [])');
+    expect((out!.methods["retireEntity"] as { description: string }).description).toContain(
+      "runtime.retireEntity"
+    );
+  });
+
   it("falls back to a generic introspect note for a live method with no schema or override", () => {
     const out = describeEvalBindingSurface("widget", ["frobnicate"], {});
     expect((out!.methods["frobnicate"] as { description: string }).description).toContain(
@@ -83,10 +65,26 @@ describe("describeEvalBindingSurface (help('<binding>') reflects the injected su
     const out = describeEvalBindingSurface("fs", ["readFile", "open", "mktemp"], fsService);
     expect(Object.keys(out!.methods)).toEqual(["mktemp", "open", "readFile"]);
     expect(out!.surface).toBe("injected-runtime");
+    expect(out!.note).toContain('rpc.call("main", "fs.…"');
     expect(out!.note).toContain("services.fs");
   });
 
   it("returns null when there are no live methods (caller falls back to the service schema)", () => {
     expect(describeEvalBindingSurface("vcs", [], { applyEdits: {} })).toBeNull();
+  });
+});
+
+describe("invalidHelpArgumentResponse", () => {
+  it("turns help(workers) into a useful non-throwing diagnostic", () => {
+    expect(
+      invalidHelpArgumentResponse({ create: () => undefined, destroy: () => undefined })
+    ).toEqual({
+      error: "help() expects a string service or runtime binding name.",
+      received: "create, destroy",
+      example: 'await help("workers")',
+      note:
+        "Pass the binding name as a string. For a live object's enumerable methods, " +
+        "Object.keys(workers) also works.",
+    });
   });
 });

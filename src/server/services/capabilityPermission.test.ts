@@ -9,7 +9,6 @@ import {
   panelCapabilityResourceKey,
   requestCapabilityPermission,
 } from "./capabilityPermission.js";
-import { PANEL_AUTOMATE_CAPABILITY } from "@natstack/shared/panelAccessPolicy";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 
@@ -23,6 +22,7 @@ function createApprovalQueueMock(
   return {
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+    requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
     requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
     presentDeviceCode: vi.fn(() => ({
@@ -33,6 +33,7 @@ function createApprovalQueueMock(
     resolve: vi.fn(),
     resolveUserland: vi.fn(),
     submitClientConfig: vi.fn(),
+    submitSecretInput: vi.fn(),
     submitCredentialInput: vi.fn(),
     listPending: vi.fn(() => []),
     cancelForCaller: vi.fn(),
@@ -376,7 +377,7 @@ describe("capabilityPermission", () => {
     };
     const targetPanelId = "target-panel";
     const baseRequest = {
-      capability: PANEL_AUTOMATE_CAPABILITY,
+      capability: "context.boundary",
       resource: {
         type: "panel",
         label: "Panel",
@@ -423,24 +424,18 @@ describe("capabilityPermission", () => {
       },
     });
 
+    // Each requester entity is scoped by its own resource key, so a version/repo
+    // grant from one requester does not satisfy another's prompt.
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
     expect(approvalQueue.request).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        dedupKey: `panel-capability:${PANEL_AUTOMATE_CAPABILITY}:${panelCapabilityResourceKey(
-          targetPanelId,
-          firstCaller.runtime.id
-        )}`,
         grantResourceKey: panelCapabilityResourceKey(targetPanelId, firstCaller.runtime.id),
       })
     );
     expect(approvalQueue.request).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        dedupKey: `panel-capability:${PANEL_AUTOMATE_CAPABILITY}:${panelCapabilityResourceKey(
-          targetPanelId,
-          secondCaller.runtime.id
-        )}`,
         grantResourceKey: panelCapabilityResourceKey(targetPanelId, secondCaller.runtime.id),
       })
     );
@@ -460,7 +455,7 @@ describe("capabilityPermission", () => {
         repoPath: "panels/source",
         effectiveVersion: "version-1",
       }),
-      capability: PANEL_AUTOMATE_CAPABILITY,
+      capability: "context.boundary",
       severity: "severe",
       resource: {
         type: "panel",

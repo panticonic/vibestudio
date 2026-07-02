@@ -19,7 +19,7 @@ import {
   createPanelHostRegistration,
   createPanelRuntimeLeaseRequest,
 } from "@natstack/shared/panel/panelLease";
-import { asPanelSlotId } from "@natstack/shared/panel/ids";
+import { asPanelSlotId, asPanelEntityId, type PanelEntityId } from "@natstack/shared/panel/ids";
 import {
   getSharedBrowserAddressOptions,
   getSharedPanelAddressOptions,
@@ -36,8 +36,8 @@ import {
 import { createBridgeAdapter } from "./bridgeAdapter";
 import { MobileRpcClient, type ConnectionStatus } from "./mobileTransport";
 import { createMobileShellCore } from "../shellCore/createMobileShellCore";
+import { startPanelAssetFacade, type PanelAssetFacade } from "./panelAssetFacade";
 import type { Credentials } from "./auth";
-import { issueConnectionGrant } from "./auth";
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
@@ -127,13 +127,17 @@ class MobilePanels implements PanelHost {
   private panelManager: PanelManager | null = null;
   private registryInstance: PanelRegistry | null = null;
   private bridgeAdapterInstance: ReturnType<typeof createBridgeAdapter> | null = null;
+  // Set by the UI (MainScreen) so the panel-RPC relay can push server replies +
+  // events into the right panel's webview. A mutable field (not a constructor
+  // dep) because the webview refs live in the UI, which mounts after init().
+  private deliverToPanelFn: ((panelId: string, envelope: unknown) => void) | null = null;
   private readonly panelRuntime: PanelRuntimeClient;
   private readonly browserData: BrowserDataClient;
   private readonly workspaceRpc: WorkspaceRpcClient;
   private readonly vcs: VcsClient;
   private readonly runtimeConnectionBySlot = new Map<
     string,
-    { runtimeEntityId: string; connectionId: string }
+    { runtimeEntityId: PanelEntityId; connectionId: string }
   >();
   readonly registration: PanelHostRegistration;
   constructor(
@@ -186,9 +190,12 @@ class MobilePanels implements PanelHost {
       this.bridgeAdapterInstance = createBridgeAdapter({
         panelManager: core.panelManager,
         transport: this.deps.transport,
+        getPanelInit: (panelId) => this.getPanelInit(panelId),
         callbacks: {
           navigateToPanel: this.deps.navigateToPanel,
         },
+        deliverToPanel: (panelId, envelope) => this.deliverToPanelFn?.(panelId, envelope),
+        getPanelLease: (panelId) => this.runtimeConnectionBySlot.get(panelId),
       });
     }
     const initialTheme = Appearance.getColorScheme() === "light" ? "light" : "dark";
@@ -361,10 +368,12 @@ class MobilePanels implements PanelHost {
         sourceTree: () => this.workspaceRpc.sourceTree(),
         findUnitForPath: (path) => this.workspaceRpc.findUnitForPath(path),
         unitStatus: async (unitPath) => {
-          const status = await this.vcs.unitStatus(unitPath);
+          // Per-repo VCS: `unitStatus` is replaced by repo-native `status(repoPath)`
+          // (the unit path IS the repo path). Status no longer returns a head.
+          const status = await this.vcs.status(unitPath);
           return {
-            unitPath: status.unitPath,
-            head: status.head,
+            unitPath,
+            head: null,
             stateHash: status.stateHash,
             dirty: status.dirty,
           } satisfies PanelRepoState & { unitPath: string };
@@ -395,6 +404,9 @@ class MobilePanels implements PanelHost {
     this.requireManager().setCurrentTheme(theme);
   }
   async unload(panelId: string): Promise<void> {
+    // Tear down the panel's dedicated relay session (closed regardless of whether
+    // it held a runtime lease).
+    this.bridgeAdapterInstance?.closePanelSession(panelId);
     const lease = this.runtimeConnectionBySlot.get(panelId);
     this.runtimeConnectionBySlot.delete(panelId);
     if (!lease) return;
@@ -408,11 +420,19 @@ class MobilePanels implements PanelHost {
     }
   }
   async getPanelInit(panelId: string): Promise<unknown> {
-    return this.requireManager().getPanelInit(asPanelSlotId(panelId));
+    const slotId = asPanelSlotId(panelId);
+    const panelInit = await this.requireManager().getPanelInit(slotId);
+    const lease = this.runtimeConnectionBySlot.get(String(slotId));
+    if (!lease || !panelInit || typeof panelInit !== "object") return panelInit;
+    return {
+      ...(panelInit as Record<string, unknown>),
+      connectionId: lease.connectionId,
+      clientLabel: "Mobile",
+    };
   }
   async acquireLease(
     panelId: string,
-    runtimeEntityId: string,
+    runtimeEntityId: PanelEntityId,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
     const result = await this.panelRuntime.acquire(
@@ -424,16 +444,13 @@ class MobilePanels implements PanelHost {
       })
     );
     if (result.acquired) {
-      this.runtimeConnectionBySlot.set(panelId, {
-        runtimeEntityId,
-        connectionId: opts.connectionId,
-      });
+      this.setTrackedRuntimeLease(panelId, runtimeEntityId, opts.connectionId);
     }
     return result;
   }
   async takeOverLease(
     panelId: string,
-    runtimeEntityId: string,
+    runtimeEntityId: PanelEntityId,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
     const result = await this.panelRuntime.takeOver(
@@ -445,20 +462,19 @@ class MobilePanels implements PanelHost {
       })
     );
     if (result.acquired) {
-      this.runtimeConnectionBySlot.set(panelId, {
-        runtimeEntityId,
-        connectionId: opts.connectionId,
-      });
+      this.setTrackedRuntimeLease(panelId, runtimeEntityId, opts.connectionId);
     }
     return result;
   }
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
     this.registry.applyRuntimeLeaseChanged(event);
-    if (event.previous?.clientSessionId === this.deps.clientSessionId) {
-      this.runtimeConnectionBySlot.delete(String(event.previous.slotId));
-    }
     if (event.next?.clientSessionId === this.deps.clientSessionId) {
       this.trackRuntimeLease(event.next);
+    } else if (
+      event.previous?.clientSessionId === this.deps.clientSessionId ||
+      this.runtimeConnectionBySlot.has(String(event.slotId))
+    ) {
+      this.clearTrackedRuntimeLease(String(event.slotId));
     }
     this.deps.onTreeUpdated?.(this.getTree());
   }
@@ -472,15 +488,37 @@ class MobilePanels implements PanelHost {
     if (!this.bridgeAdapterInstance) throw new Error("Panels not initialized");
     return this.bridgeAdapterInstance.handle(panelId, method, args);
   }
+  /** Register the host→panel envelope delivery sink (called by the UI layer). */
+  setDeliverToPanel(fn: (panelId: string, envelope: unknown) => void): void {
+    this.deliverToPanelFn = fn;
+  }
   private requireManager(): PanelManager {
     if (!this.panelManager) throw new Error("Panels not initialized");
     return this.panelManager;
   }
   private trackRuntimeLease(lease: PanelRuntimeLease): void {
-    this.runtimeConnectionBySlot.set(String(lease.slotId), {
-      runtimeEntityId: String(lease.runtimeEntityId),
-      connectionId: lease.connectionId,
-    });
+    this.setTrackedRuntimeLease(
+      String(lease.slotId),
+      asPanelEntityId(String(lease.runtimeEntityId)),
+      lease.connectionId
+    );
+  }
+  private setTrackedRuntimeLease(
+    panelId: string,
+    runtimeEntityId: PanelEntityId,
+    connectionId: string
+  ): void {
+    const existing = this.runtimeConnectionBySlot.get(panelId);
+    const changed =
+      !existing ||
+      existing.runtimeEntityId !== runtimeEntityId ||
+      existing.connectionId !== connectionId;
+    this.runtimeConnectionBySlot.set(panelId, { runtimeEntityId, connectionId });
+    if (changed) this.bridgeAdapterInstance?.closePanelSession(panelId);
+  }
+  private clearTrackedRuntimeLease(panelId: string): void {
+    const tracked = this.runtimeConnectionBySlot.delete(panelId);
+    if (tracked) this.bridgeAdapterInstance?.closePanelSession(panelId);
   }
   private syncTrackedRuntimeLeases(snapshot: RuntimeLeaseSnapshot): void {
     const activeSlots = new Set<string>();
@@ -489,11 +527,23 @@ class MobilePanels implements PanelHost {
       activeSlots.add(String(lease.slotId));
       this.trackRuntimeLease(lease);
     }
-    for (const slotId of this.runtimeConnectionBySlot.keys()) {
-      if (!activeSlots.has(slotId)) this.runtimeConnectionBySlot.delete(slotId);
+    for (const slotId of Array.from(this.runtimeConnectionBySlot.keys())) {
+      if (!activeSlots.has(slotId)) this.clearTrackedRuntimeLease(slotId);
     }
   }
 }
+/**
+ * Mobile loopback origin fronting the WebRTC pipe (plan §4). Post-cutover the
+ * mobile `Credentials` no longer carry a remote `serverUrl` (§8c) — remote is
+ * WebRTC, paired by QR (room/fp/sig). SEAM: the mobile WebRTC transport wiring
+ * (react-native-webrtc provider + signaling client + on-device loopback bridge)
+ * is the mobile analog of the desktop `serverClient` WebRTC selection and is not
+ * yet built; `MobileRpcClient` is constructed against this loopback origin, which
+ * the on-device bridge will front once wired. Tracked in
+ * docs/webrtc-rpc-implementation-log.md.
+ */
+export const MOBILE_SERVER_LOOPBACK_ORIGIN = "http://127.0.0.1";
+
 export class ShellClient {
   readonly transport: MobileRpcClient;
   readonly panels: MobilePanels;
@@ -506,7 +556,11 @@ export class ShellClient {
   readonly push: PushClient;
   readonly recovery: RecoveryCoordinator;
   readonly credentials: Credentials;
-  readonly serverUrl: string;
+  // Mutable: starts as the loopback placeholder, then becomes
+  // `http://127.0.0.1:<facadePort>` once the panel-asset façade binds (init).
+  // `MainScreen` reads this for `buildPanelUrl`, so panel URLs hit the façade.
+  serverUrl: string;
+  private facade: PanelAssetFacade | null = null;
   private statusUnsub: (() => void) | null = null;
   private navigationListeners = new Set<(panelId: string) => void>();
   private periodicSyncTimer: ReturnType<typeof setInterval> | null = null;
@@ -516,11 +570,10 @@ export class ShellClient {
   private hostTargetReadinessEventsSubscribed = false;
   constructor(config: ShellClientConfig) {
     this.credentials = config.credentials;
-    this.serverUrl = config.credentials.serverUrl;
-    this.transport = new MobileRpcClient({
-      serverUrl: config.credentials.serverUrl,
-      issueConnectionGrant,
-    });
+    this.serverUrl = MOBILE_SERVER_LOOPBACK_ORIGIN;
+    // Remote is WebRTC: the client re-pairs to the stored shell credential's
+    // signaling room (no server URL, no native WS grant) — see mobileTransport.ts.
+    this.transport = new MobileRpcClient({});
     if (config.onStatusChange) {
       this.statusUnsub = this.transport.onStatusChange(config.onStatusChange);
     }
@@ -528,7 +581,7 @@ export class ShellClient {
     this.transport.onRecovery("resubscribe", () => this.recovery.run("resubscribe"));
     this.transport.onRecovery("cold-recover", () => this.recovery.run("cold-recover"));
     this.panels = new MobilePanels({
-      serverUrl: config.credentials.serverUrl,
+      serverUrl: MOBILE_SERVER_LOOPBACK_ORIGIN,
       transport: this.transport,
       onTreeUpdated: config.onTreeUpdated,
       clientSessionId: config.credentials.deviceId,
@@ -555,8 +608,23 @@ export class ShellClient {
   }
   async init(): Promise<void> {
     const info = await this.connectWorkspace();
+    await this.startPanelAssetFacade();
     await this.ensureReactNativeHostTargetReady();
     await this.initPanels(info);
+  }
+
+  /**
+   * Start the on-device panel-asset façade now that the pipe is up, and point
+   * panel URLs at it: panels load `http://127.0.0.1:<port>/{source}/` and the
+   * façade proxies each asset request to the remote gateway over the WebRTC pipe.
+   * `MainScreen` reads `shellClient.serverUrl` for `buildPanelUrl`, so this must
+   * land before the client is published to the UI (`finishConnectedClient`).
+   */
+  private async startPanelAssetFacade(): Promise<void> {
+    if (this.facade) return;
+    this.facade = await startPanelAssetFacade(this.transport);
+    this.serverUrl = `http://127.0.0.1:${this.facade.port}`;
+    smokePhase("workspace-panel-facade-ready", { port: this.facade.port });
   }
 
   /** Active workspace id, available after connect; null until then. */
@@ -703,6 +771,8 @@ export class ShellClient {
     this.panelRecoveryUnsubs = null;
     void (async () => {
       await this.panelRuntime.unregisterClient(this.credentials.deviceId).catch(() => {});
+      await this.facade?.close().catch(() => {});
+      this.facade = null;
       this.transport.disconnect();
     })();
     this.statusUnsub?.();

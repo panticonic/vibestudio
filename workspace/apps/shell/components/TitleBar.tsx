@@ -31,7 +31,14 @@ import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
 import { ThemeSettings } from "./ThemeSettings";
 import { ConnectionSettingsDialog } from "./ConnectionSettingsDialog";
 
-const isMac = /\b(Mac|iPhone|iPad|iPod)\b/.test(globalThis.navigator?.platform ?? "");
+const isMac = /Mac|iPhone|iPad|iPod/i.test(
+  (globalThis.navigator as { userAgentData?: { platform?: string } } | undefined)?.userAgentData
+    ?.platform ??
+    globalThis.navigator?.platform ??
+    globalThis.navigator?.userAgent ??
+    ""
+);
+const MACOS_TITLEBAR_CONTROL_RESERVE_PX = 68;
 
 import type {
   NavigationMode,
@@ -115,9 +122,10 @@ export function TitleBar({
             appRegion: "drag",
             WebkitAppRegion: "drag",
             userSelect: "none",
-            backgroundColor: "var(--surface-chrome)",
-            borderBottom: "1px solid var(--surface-border)",
-            boxShadow: "var(--elevation-1)",
+            // Shares the panel cards' raised tone; the cards' own top border is
+            // the single divider, so the titlebar carries no border of its own
+            // (a titlebar border + the flush card border read as a doubled seam).
+            backgroundColor: "var(--surface-raised)",
           } as CSSProperties
         }
       >
@@ -241,9 +249,11 @@ export function TitleBar({
           WebkitAppRegion: "drag",
           userSelect: "none",
           height: "28px",
-          backgroundColor: "var(--surface-chrome)",
-          borderBottom: "1px solid var(--surface-border)",
-          boxShadow: "var(--elevation-1)",
+          // Shares the panel cards' raised tone so the chrome reads as one calm
+          // grey frame. No border of its own: the cards sit flush beneath and
+          // carry their own top border, so a titlebar border would double it
+          // into a muddy seam. The cards' top border is the single divider.
+          backgroundColor: "var(--surface-raised)",
         } as CSSProperties
       }
     >
@@ -254,8 +264,8 @@ export function TitleBar({
           gap="2"
           style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
         >
-          {/* macOS: spacer for traffic light buttons */}
-          {isMac && <Box style={{ width: "78px", flexShrink: 0 }} />}
+          {/* macOS: reserve the native traffic-light cluster and hover target. */}
+          {isMac && <Box style={{ width: MACOS_TITLEBAR_CONTROL_RESERVE_PX, flexShrink: 0 }} />}
 
           <IconButton variant="ghost" size="1" onClick={handleHamburgerClick}>
             <HamburgerMenuIcon />
@@ -988,10 +998,16 @@ function HoverableBreadcrumbItem({
         style={{
           position: "relative",
           ...itemStyle,
-          // Breadcrumb look (not tabs): no per-item background fills, just a
-          // slight frame around the current breadcrumb.
-          borderColor: isCurrentActive ? "var(--accent-7)" : "transparent",
-          backgroundColor: isHovered ? "var(--gray-a3)" : undefined,
+          // Breadcrumb look (not tabs): the current item reads as a soft accent
+          // fill rather than a hard outlined box — calmer in the dense titlebar.
+          borderColor: "transparent",
+          backgroundColor: isCurrentActive
+            ? isHovered
+              ? "var(--accent-a4)"
+              : "var(--accent-a3)"
+            : isHovered
+              ? "var(--gray-a3)"
+              : undefined,
           color: isCurrentActive ? "var(--accent-12)" : undefined,
         }}
         onClick={handleActivate}

@@ -30,6 +30,9 @@ interface ExtensionContextLike {
   workspace: {
     getInfo(): Promise<{ path: string; contextsPath: string }>;
   };
+  fs: {
+    ensureMaterialized(scope: string | string[] | "all"): Promise<void>;
+  };
   invocation: {
     current(): {
       caller: { callerId: string; callerKind?: string; contextId?: string };
@@ -78,7 +81,7 @@ export {};
 globalThis.__natstackModuleMap__ = globalThis.__natstackModuleMap__ ?? {};
 globalThis.__natstackRequire__ = (id) => globalThis.__natstackModuleMap__[id];
 globalThis.__natstackRequireAsync__ = async (id) => globalThis.__natstackModuleMap__[id];
-globalThis.__natstackId = "test-panel";
+globalThis.__natstackEntityId = "test-panel";
 globalThis.__natstackContextId = "ctx-test";
 `;
 
@@ -216,6 +219,7 @@ export async function activate(ctx: ExtensionContextLike) {
       }
       validateContextId(contextId);
       const root = path.join(info.contextsPath, contextId);
+      await ctx.fs.ensureMaterialized(request.target);
       const targetPath = resolveWithin(root, request.target);
       if (!fs.existsSync(targetPath)) {
         throw new Error(`Target does not exist: ${request.target}`);

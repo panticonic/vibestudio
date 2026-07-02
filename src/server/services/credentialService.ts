@@ -11,7 +11,6 @@ import * as http from "node:http";
 import { createDevLogger } from "@natstack/dev-log";
 import type { EventName, EventPayloads, EventService } from "@natstack/shared/eventsService";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
-import { buildPublicUrl, isPublicUrlVerified } from "../publicUrl.js";
 import type { AuditLog } from "../../../packages/shared/src/credentials/audit.js";
 import {
   ClientConfigStore,
@@ -35,7 +34,6 @@ import type {
   DeleteClientConfigRequest,
   ForwardOAuthCallbackRequest,
   GetClientConfigStatusRequest,
-  GrantUrlBoundCredentialRequest,
   OAuthConnectionErrorCode,
   OAuthConnectionTransactionState,
   OAuthAccountValidationSpec,
@@ -73,7 +71,6 @@ import {
   type DeleteClientConfigParams,
   type ForwardOAuthCallbackParams,
   type GetClientConfigStatusParams,
-  type GrantCredentialParams,
   type ProxyFetchParams,
   type ProxyGitHttpParams,
   type RequestClientConfigParams,
@@ -90,6 +87,7 @@ import {
   type CredentialSessionGrantResource,
   type CredentialSessionGrantScope,
 } from "./credentialSessionGrants.js";
+import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("CredentialService");
@@ -281,21 +279,50 @@ function validateOAuthCredentialRequest(request: InternalOAuthConnectionRequest)
 /**
  * Decide which redirect strategy to use when the caller doesn't specify one.
  *
- * Loopback (browser-on-server) is the safe default for a personal desktop
- * server. When the public URL is verified working — either supplied
- * explicitly by the operator or auto-detected and reachability-tested —
- * default to "public" so OAuth works for mobile and remote-desktop clients
- * without each callsite having to know.
- *
- * Critically, an auto-detected URL that *failed* its reachability check
- * stays loopback by default — desktop in-process panels keep working even
- * when Tailscale serve provisioning fell through.
+ * After the WebRTC cutover the server has no public origin, so every remote
+ * platform routes OAuth through the public callback relay (§7). The parity rule
+ * means desktop and mobile share that one relay path rather than special-casing
+ * desktop loopback, so the default is "public" — which now points the IdP at the
+ * relay host (see buildRelayOAuthCallbackUrl), not the server's own URL. Genuinely
+ * co-located callers may still request "loopback"/"client-loopback" explicitly.
  */
 function resolveDefaultRedirectStrategy(
   requested: OAuthRedirectStrategy | undefined
 ): OAuthRedirectStrategy {
   if (requested) return requested;
-  return isPublicUrlVerified() ? "public" : "loopback";
+  // The "public" default routes the IdP through the callback relay (parity: desktop
+  // + mobile share it). But the relay is optional — `pnpm dev` sets no
+  // NATSTACK_RELAY_OAUTH_BASE_URL — and "public" then throws redirect_unavailable on
+  // every connect that doesn't pass an explicit redirect. Fall back to loopback when
+  // no relay is configured so co-located dev OAuth works; production configures the
+  // relay and keeps the parity path. (Remote sessions still need the relay set — a
+  // server-loopback redirect is unreachable from a remote browser by design.)
+  const relay = process.env["NATSTACK_RELAY_OAUTH_BASE_URL"];
+  return relay && relay.trim() ? "public" : "loopback";
+}
+
+/**
+ * Build the OAuth `redirect_uri` that lands on the public callback RELAY (§7).
+ *
+ * The server has no public URL of its own; the IdP redirects to the relay, which
+ * does a `state`/`transactionId`-keyed handoff back to the live server — mobile
+ * via App-Links deep-link, desktop via the authenticated backhaul. PKCE keeps the
+ * relay harmless: the `codeVerifier` never leaves this server, so even where the
+ * relay sees the `code` it is useless. The callback-path constant is unchanged so
+ * the relay and server agree on the route; only the host moves to the relay.
+ *
+ * Fails loud when unconfigured rather than silently falling back to a server URL
+ * that no third party can reach.
+ */
+function buildRelayOAuthCallbackUrl(): string {
+  const base = process.env["NATSTACK_RELAY_OAUTH_BASE_URL"];
+  if (!base || !base.trim()) {
+    throw new OAuthConnectionError(
+      "redirect_unavailable",
+      "OAuth callback relay is not configured — set NATSTACK_RELAY_OAUTH_BASE_URL to the relay origin."
+    );
+  }
+  return `${base.trim().replace(/\/+$/, "")}${PUBLIC_OAUTH_CALLBACK_PATH}`;
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -385,6 +412,7 @@ interface CredentialServiceDeps {
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
   approvalQueue?: ApprovalQueue;
   sessionGrantStore?: CredentialSessionGrantStore;
+  credentialUseGrantStore?: CredentialUseGrantStoreLike;
   credentialLifecycle?: CredentialLifecycle;
   sessionCredentialCapture?: SessionCredentialCapture;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
@@ -468,6 +496,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   const egressProxy = deps.egressProxy;
   const approvalQueue = deps.approvalQueue;
   const sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
+  const credentialUseGrantStore = deps.credentialUseGrantStore ?? null;
   const sessionCredentialCapture = deps.sessionCredentialCapture;
   const runtimeInspector = deps.runtimeInspector;
   const credentialLifecycle =
@@ -713,7 +742,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     };
 
     if (opts.preapprovedUseDecision) {
-      applyPreapprovedCredentialUseGrants(
+      await applyPreapprovedCredentialUseGrants(
         ctx,
         credential as Credential & { id: string },
         bindings,
@@ -2210,10 +2239,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         redirectUri = callback.redirectUri;
       } else if (redirectStrategy === "public") {
         transactionId = randomUUID();
-        redirectUri = buildPublicUrl(PUBLIC_OAUTH_CALLBACK_PATH);
+        redirectUri = buildRelayOAuthCallbackUrl();
       } else if (redirectStrategy === "client-forwarded") {
         transactionId = randomUUID();
-        redirectUri = redirect.callbackUri ?? buildPublicUrl(PUBLIC_OAUTH_CALLBACK_PATH);
+        redirectUri = redirect.callbackUri ?? buildRelayOAuthCallbackUrl();
       } else {
         throw new OAuthConnectionError("redirect_unavailable");
       }
@@ -2358,10 +2387,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         redirectUri = callback.redirectUri;
       } else if (redirectStrategy === "public") {
         transactionId = randomUUID();
-        redirectUri = buildPublicUrl(PUBLIC_OAUTH_CALLBACK_PATH);
+        redirectUri = buildRelayOAuthCallbackUrl();
       } else if (redirectStrategy === "client-forwarded") {
         transactionId = randomUUID();
-        redirectUri = redirect.callbackUri ?? buildPublicUrl(PUBLIC_OAUTH_CALLBACK_PATH);
+        redirectUri = redirect.callbackUri ?? buildRelayOAuthCallbackUrl();
       } else if (redirectStrategy === "client-loopback") {
         transactionId = randomUUID();
         redirectUri = buildClientLoopbackRedirectUri(redirect);
@@ -3423,17 +3452,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }
   }
 
-  async function grantCredential(
-    ctx: ServiceContext,
-    params: GrantCredentialParams
-  ): Promise<StoredCredentialSummary> {
-    requireShellOrServer(ctx, "grantCredential", deps);
-    const request = params as GrantUrlBoundCredentialRequest;
-    void request.callerId;
-    void request.grantedBy;
-    throw new Error("credentials.grantCredential was replaced by scoped approval grants");
-  }
-
   async function resolveCredential(
     ctx: ServiceContext,
     params: ResolveCredentialParams
@@ -3931,6 +3949,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!credential.id) {
       throw new Error("Credential is missing URL-bound metadata");
     }
+    const credentialId = credential.id;
     const identity = resolveApprovalIdentity(ctx);
     const decision = await approvalQueue.request({
       // When the caller deferred, this signal is aborted on TTL expiry so the
@@ -3970,27 +3989,21 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       // returns to the runner, then resolves credentials again during resume.
       // Treat that deferred one-shot approval as a session grant for the same
       // caller/resource so the approved turn can actually continue.
-      grantSessionCredentialUse(credential.id, identity, usage.sessionResource);
-      resolvePendingCredentialUseGrants(credential.id, identity, "session", usage);
+      grantSessionCredentialUse(credentialId, identity, usage.sessionResource);
+      resolvePendingCredentialUseGrants(credentialId, identity, "session", usage);
       return;
     }
     if (decision === "session") {
-      grantSessionCredentialUse(credential.id, identity, usage.sessionResource);
-      resolvePendingCredentialUseGrants(credential.id, identity, decision, usage);
+      grantSessionCredentialUse(credentialId, identity, usage.sessionResource);
+      resolvePendingCredentialUseGrants(credentialId, identity, decision, usage);
       return;
     }
-    await credentialStore.saveUrlBound({
-      ...credential,
-      grants: upsertCredentialUseGrant(
-        credential.grants ?? [],
-        grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage)
-      ),
-      metadata: {
-        ...(credential.metadata ?? {}),
-        updatedAt: String(now),
-      },
-    } as Credential & { id: string });
-    resolvePendingCredentialUseGrants(credential.id, identity, decision, usage);
+    await persistCredentialUseGrant(
+      credential as Credential & { id: string },
+      grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage),
+      now
+    );
+    resolvePendingCredentialUseGrants(credentialId, identity, decision, usage);
   }
 
   function canCallerUseStoredCredential(
@@ -4046,13 +4059,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }, "once");
   }
 
-  function applyPreapprovedCredentialUseGrants(
+  async function applyPreapprovedCredentialUseGrants(
     ctx: ServiceContext,
     credential: Credential & { id: string },
     bindings: CredentialBinding[],
     decision: Exclude<GrantedDecision, "deny">,
     now: number
-  ): void {
+  ): Promise<void> {
     const identity = resolveApprovalIdentity(ctx);
     const usageContexts = bindings.flatMap(preapprovedUseContextsForBinding);
     if (decision === "once" || decision === "session") {
@@ -4061,14 +4074,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       }
       return;
     }
-    credential.grants = usageContexts.reduce(
-      (grants, usage) =>
-        upsertCredentialUseGrant(
-          grants,
-          grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage)
-        ),
-      credential.grants ?? []
-    );
+    for (const usage of usageContexts) {
+      await persistCredentialUseGrant(
+        credential,
+        grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage),
+        now
+      );
+    }
   }
 
   function hasSessionCredentialUse(
@@ -4089,7 +4101,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     usage: CredentialUseContext
   ): boolean {
     const identity = resolveApprovalIdentity(ctx);
-    return !!credential.grants?.some(
+    return persistentCredentialUseGrants(credential).some(
       (grant) =>
         grant.bindingId === usage.binding.id &&
         grant.use === usage.binding.use &&
@@ -4097,6 +4109,35 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         grant.action === usage.action &&
         grantAppliesToIdentity(grant, identity)
     );
+  }
+
+  function persistentCredentialUseGrants(credential: Credential): CredentialUseGrant[] {
+    const credentialId = credential.id ?? credential.connectionId;
+    if (credentialUseGrantStore && credentialId) {
+      return credentialUseGrantStore.list(credentialId);
+    }
+    return credential.grants ?? [];
+  }
+
+  async function persistCredentialUseGrant(
+    credential: Credential & { id: string },
+    grant: CredentialUseGrant,
+    now: number
+  ): Promise<void> {
+    if (credentialUseGrantStore) {
+      await credentialUseGrantStore.upsert(credential.id, grant);
+      return;
+    }
+    const grants = upsertCredentialUseGrant(credential.grants ?? [], grant);
+    credential.grants = grants;
+    await credentialStore.saveUrlBound({
+      ...credential,
+      grants,
+      metadata: {
+        ...(credential.metadata ?? {}),
+        updatedAt: String(now),
+      },
+    } as Credential & { id: string });
   }
 
   const definition: ServiceDefinition = {
@@ -4126,8 +4167,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           return inspectStoredCredentials();
         case "revokeCredential":
           return revokeCredential(ctx, (args as [CredentialIdParams])[0]);
-        case "grantCredential":
-          return grantCredential(ctx, (args as [GrantCredentialParams])[0]);
         case "resolveCredential":
           return resolveCredential(ctx, (args as [ResolveCredentialParams])[0]);
         case "proxyFetch":
@@ -4779,16 +4818,6 @@ function gitRemoteFromUrl(targetUrl: URL): string {
   pathname = pathname.replace(/\/(?:info\/refs|git-upload-pack|git-receive-pack)$/, "");
   remote.pathname = pathname || "/";
   return remote.toString();
-}
-
-function requireShellOrServer(
-  ctx: ServiceContext,
-  method: string,
-  deps: Pick<CredentialServiceDeps, "hasAppCapability">
-): void {
-  if (!isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
-    throw new Error(`credentials.${method} is restricted to authorized chrome callers`);
-  }
 }
 
 function grantForDecision(

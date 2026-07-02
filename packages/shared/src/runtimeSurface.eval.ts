@@ -7,10 +7,10 @@
  * single source of truth shared with panel/worker), so eval has the full portable
  * surface including `callMain` and `parent`/`getParent`/`getParentWithContract`.
  *
- * `EVAL_AMBIENT_ONLY` are the eval-only ambient globals — REPL sugar injected as
- * free variables, NOT importable. It is the single source of truth for the
+ * `EVAL_AMBIENT_ONLY` are the eval-only ambient globals injected as free
+ * variables, NOT importable. It is the single source of truth for the
  * importValidation `PRE_INJECTED` set. `rpc` is intentionally absent here:
- * imported `rpc` = the portable client, ambient `rpc` = 2-arg REPL sugar.
+ * imported `rpc` and ambient `rpc` are the same portable client.
  */
 
 import type { RuntimeSurface } from "./runtimeSurface.js";

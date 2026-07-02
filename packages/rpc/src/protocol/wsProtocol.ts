@@ -1,4 +1,4 @@
-import type { CallerKind, RpcEnvelope, RpcMessage } from "../types.js";
+import type { CallerKind, RpcEnvelope } from "../types.js";
 
 export type ClientPlatform = "desktop" | "headless" | "mobile";
 
@@ -19,8 +19,7 @@ export interface WsAuthMessage {
 
 export interface WsRpcMessage {
   type: "ws:rpc";
-  envelope?: RpcEnvelope;
-  message?: RpcMessage;
+  envelope: RpcEnvelope;
 }
 
 export interface WsToolResultMessage {
@@ -31,9 +30,7 @@ export interface WsToolResultMessage {
 
 export interface WsRouteMessage {
   type: "ws:route";
-  envelope?: RpcEnvelope;
-  targetId?: string;
-  message?: RpcMessage;
+  envelope: RpcEnvelope;
   targetConnectionId?: string;
 }
 
@@ -47,13 +44,18 @@ export interface WsAuthResultMessage {
   connectionId?: string;
   serverBootId?: string;
   sessionDirty?: boolean;
+  /**
+   * Present only when this session authenticated by redeeming a one-time pairing
+   * code: the freshly issued device credential the client must persist to
+   * reconnect (the server keeps only its hash, so this is the one delivery).
+   */
+  deviceCredential?: { deviceId: string; refreshToken: string };
   error?: string;
 }
 
 export interface WsRpcResponseMessage {
   type: "ws:rpc";
-  envelope?: RpcEnvelope;
-  message?: RpcMessage;
+  envelope: RpcEnvelope;
 }
 
 export interface WsEventMessage {
@@ -64,10 +66,7 @@ export interface WsEventMessage {
 
 export interface WsRoutedMessage {
   type: "ws:routed";
-  envelope?: RpcEnvelope;
-  fromId?: string;
-  fromKind?: CallerKind;
-  message?: RpcMessage;
+  envelope: RpcEnvelope;
 }
 
 export interface WsRoutedEventErrorMessage {

@@ -48,6 +48,7 @@ import {
   type AppLifecyclePayload,
 } from "../services/appUpdatePrompt";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
+import { resetToNativeBootstrap } from "../services/auth";
 import {
   buildPanelChromeState,
   buildAddressAutocompleteItems,
@@ -172,6 +173,15 @@ export function MainScreen() {
     return () => {
       cancelled = true;
     };
+  }, [shellClient]);
+  // Route host→panel RPC envelopes (relay replies + events) into the target
+  // panel's webview. The shell-client relay holds this sink; we supply it here
+  // because the webview handles live in the UI layer.
+  useEffect(() => {
+    if (!shellClient) return;
+    shellClient.panels.setDeliverToPanel((panelId, envelope) => {
+      webViewRefsMap.current.get(panelId)?.deliverEnvelope(envelope);
+    });
   }, [shellClient]);
   const handleWebViewUnmount = useCallback(
     (panelId: string) => {
@@ -424,6 +434,14 @@ export function MainScreen() {
     async (approvalId: string, values: Record<string, string>) => {
       if (!shellClient) throw new Error("Shell client not available");
       await shellClient.shellApproval.submitCredentialInput(approvalId, values);
+      removeResolvedApproval(approvalId);
+    },
+    [removeResolvedApproval, shellClient]
+  );
+  const submitSecretInput = useCallback(
+    async (approvalId: string, values: Record<string, string>) => {
+      if (!shellClient) throw new Error("Shell client not available");
+      await shellClient.shellApproval.submitSecretInput(approvalId, values);
       removeResolvedApproval(approvalId);
     },
     [removeResolvedApproval, shellClient]
@@ -1279,9 +1297,17 @@ export function MainScreen() {
     const subscription = BackHandler.addEventListener("hardwareBackPress", onBackPress);
     return () => subscription.remove();
   }, [activePanelId, activePanelParentId, activatePanel, webViewNavigation]);
+  const handleRepair = useCallback(() => {
+    void resetToNativeBootstrap().catch((error) => {
+      Alert.alert(
+        "Re-pair failed",
+        error instanceof Error ? error.message : "Could not return to the pairing screen."
+      );
+    });
+  }, []);
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <ConnectionBar onRepair={() => navigation.getParent()?.navigate("Login" as never)} />
+      <ConnectionBar onRepair={handleRepair} />
       <AppBar
         title={activePanelTitle}
         onMenuPress={handleMenuPress}
@@ -1443,6 +1469,7 @@ export function MainScreen() {
         onResolve={resolveApproval}
         onSubmitClientConfig={submitClientConfig}
         onSubmitCredentialInput={submitCredentialInput}
+        onSubmitSecretInput={submitSecretInput}
         onResolveUserland={resolveUserland}
         onNavigateToPanel={activatePanel}
       />

@@ -4,6 +4,7 @@
  * connection error handling equivalent to React's ConnectionErrorBarrier.
  */
 
+import { mount } from "svelte";
 import { panel } from "@workspace/runtime";
 
 export interface AutoMountConfig {
@@ -39,11 +40,14 @@ export function autoMountSveltePanel(
   // Set up connection error handling (vanilla DOM, framework-agnostic)
   setupConnectionErrorOverlay();
 
-  // Mount the Svelte component (supports Svelte 4 and 5)
+  // Mount the Svelte component using the Svelte 5 runtime API.
   try {
-    new Component({ target: container });
-  } catch {
-    throw new Error("Failed to mount Svelte component. Ensure it has a valid default export.");
+    mount(Component, { target: container });
+  } catch (err) {
+    throw new Error(
+      "Failed to mount Svelte component. Ensure it is a valid Svelte 5 default export. " +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

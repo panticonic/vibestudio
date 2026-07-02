@@ -4,98 +4,77 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  PendingCapabilityApproval,
-  PendingUnitBatchApproval,
-  PendingUserlandApproval,
-} from "@natstack/shared/approvals";
+import type { PendingUnitBatchApproval, PendingUserlandApproval } from "@natstack/shared/approvals";
+import type { ApprovalCardIntent } from "./approvalCardModel";
 
 type ListPendingFn = () => Promise<unknown[]>;
 const shellClient = vi.hoisted(() => ({
   heartbeat: vi.fn(() => Promise.resolve()),
   listPending: vi.fn<ListPendingFn>(() => Promise.resolve([])),
   resolve: vi.fn(() => Promise.resolve()),
+  resolveUserland: vi.fn(() => Promise.resolve()),
+  submitClientConfig: vi.fn(() => Promise.resolve()),
+  submitCredentialInput: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(() => Promise.resolve()),
   unsubscribe: vi.fn(() => Promise.resolve()),
   onRpcEvent: vi.fn((_event: string, _listener: (event: { payload: unknown }) => void) => () => {}),
+}));
+
+// Capture what the coordinator drives the content overlay with, and the intent
+// callback, so tests can assert props and simulate the card emitting intents.
+const overlay = vi.hoisted(() => ({
+  options: null as {
+    open?: boolean;
+    props?: { approval?: { approvalId?: string }; queue?: unknown; decisionError?: unknown };
+  } | null,
+  onIntent: null as ((payload: unknown) => void) | null,
 }));
 
 vi.mock("../shell/client", () => ({
   shellApproval: {
     listPending: shellClient.listPending,
     resolve: shellClient.resolve,
-    resolveUserland: vi.fn(() => Promise.resolve()),
-    submitClientConfig: vi.fn(() => Promise.resolve()),
-    submitCredentialInput: vi.fn(() => Promise.resolve()),
+    resolveUserland: shellClient.resolveUserland,
+    submitClientConfig: shellClient.submitClientConfig,
+    submitCredentialInput: shellClient.submitCredentialInput,
   },
-  shellPresence: {
-    heartbeat: shellClient.heartbeat,
-  },
-  events: {
-    subscribe: shellClient.subscribe,
-    unsubscribe: shellClient.unsubscribe,
-  },
+  shellPresence: { heartbeat: shellClient.heartbeat },
+  events: { subscribe: shellClient.subscribe, unsubscribe: shellClient.unsubscribe },
   onRpcEvent: shellClient.onRpcEvent,
 }));
 
+vi.mock("../shell/useShellContentOverlay", () => ({
+  useShellContentOverlay: (options: unknown, onIntent: (payload: unknown) => void) => {
+    overlay.options = options as typeof overlay.options;
+    overlay.onIntent = onIntent;
+  },
+}));
+
+vi.mock("../state/themeAtoms", async () => {
+  const { atom } = await import("jotai");
+  return {
+    effectiveThemeAtom: atom("light"),
+    themeConfigAtom: atom({
+      accentColor: "iris",
+      grayColor: "slate",
+      radius: "medium",
+      scaling: "100%",
+      panelBackground: "translucent",
+    }),
+  };
+});
+
 vi.mock("./NavigationContext", () => ({
-  useNavigation: () => ({
-    navigateToId: vi.fn(),
-    registerNavigateToId: vi.fn(),
-    addressBarVisible: false,
-    setAddressBarVisible: vi.fn(),
-  }),
+  useNavigation: () => ({ navigateToId: vi.fn() }),
 }));
 
 import { ConsentApprovalBar } from "./ConsentApprovalBar";
 
-describe("ConsentApprovalBar shell presence", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    shellClient.heartbeat.mockClear();
-    shellClient.listPending.mockClear();
-    shellClient.resolve.mockClear();
-    shellClient.resolve.mockImplementation(() => Promise.resolve());
-    shellClient.subscribe.mockClear();
-    shellClient.unsubscribe.mockClear();
-    shellClient.onRpcEvent.mockClear();
+function emit(intent: ApprovalCardIntent): void {
+  act(() => {
+    overlay.onIntent?.(intent);
   });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("sends a heartbeat while mounted even when no approvals are pending", async () => {
-    const { unmount } = render(React.createElement(ConsentApprovalBar));
-
-    expect(shellClient.heartbeat).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(shellClient.heartbeat).toHaveBeenCalledTimes(2);
-    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(shellClient.heartbeat).toHaveBeenCalledTimes(3);
-    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
-
-    unmount();
-
-    await act(async () => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(shellClient.heartbeat).toHaveBeenCalledTimes(3);
-    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
-  });
-});
+}
 
 function userlandApproval(
   partial: Partial<PendingUserlandApproval> & { approvalId: string; title: string }
@@ -117,427 +96,173 @@ function userlandApproval(
   };
 }
 
-function capabilityApproval(
-  partial: Partial<PendingCapabilityApproval> & { approvalId: string; title: string }
-): PendingCapabilityApproval {
-  return {
-    kind: "capability",
-    callerId: partial.callerId ?? `panel:${partial.approvalId}`,
-    callerKind: partial.callerKind ?? "panel",
-    repoPath: partial.repoPath ?? "panels/test",
-    effectiveVersion: partial.effectiveVersion ?? "ev",
-    requestedAt: partial.requestedAt ?? Date.now(),
-    capability: partial.capability ?? "panel.automate",
-    severity: partial.severity,
-    title: partial.title,
-    description: partial.description,
-    resource: partial.resource ?? {
-      type: "panel",
-      label: "Panel",
-      value: "Shell",
-    },
-    grantResourceKey: partial.grantResourceKey,
-    details: partial.details,
-    approvalId: partial.approvalId,
-  };
-}
-
-function unitBatchApproval(
-  partial: Partial<PendingUnitBatchApproval> & { approvalId: string }
-): PendingUnitBatchApproval {
+function startupApproval(approvalId: string): PendingUnitBatchApproval {
   return {
     kind: "unit-batch",
-    trigger: partial.trigger ?? "source-change",
-    callerId: partial.callerId ?? "system:units",
-    callerKind: partial.callerKind ?? "system",
-    repoPath: partial.repoPath ?? "meta",
-    effectiveVersion: partial.effectiveVersion ?? "ev",
-    requestedAt: partial.requestedAt ?? Date.now(),
-    title: partial.title ?? "Approve workspace extensions",
-    description: partial.description ?? "This workspace declares extensions.",
-    approvalId: partial.approvalId,
-    units:
-      partial.units ??
-      Array.from({ length: 2 }, (_, index) => ({
-        unitKind: "extension" as const,
-        unitName: `@workspace-extensions/ext-${index + 1}`,
-        displayName: `Extension ${index + 1}`,
+    trigger: "startup",
+    callerId: "system:units",
+    callerKind: "system",
+    repoPath: "meta",
+    effectiveVersion: "ev",
+    requestedAt: Date.now(),
+    title: "Approve native extension",
+    description: "startup",
+    approvalId,
+    units: [
+      {
+        unitKind: "extension",
+        unitName: "@workspace-extensions/ext",
+        displayName: "Extension",
         version: "0.1.0",
-        source: {
-          kind: "workspace-repo" as const,
-          repo: `extensions/ext-${index + 1}`,
-          ref: "main",
-        },
-        ev: `ev-${index + 1}`,
-        capabilities: ["node:fs", "node:process"],
-      })),
+        source: { kind: "workspace-repo", repo: "extensions/ext", ref: "main" },
+        ev: "ev-ext",
+        capabilities: ["node:fs"],
+      },
+    ],
   };
 }
 
-describe("ConsentApprovalBar queue browsing", () => {
+function mountBar() {
+  // jsdom doesn't lay out, so stub the anchor host's rect to a real size — the
+  // coordinator only opens the overlay once it has a non-empty anchor.
+  const host = document.createElement("div");
+  host.id = "app-approval-host";
+  host.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      toJSON() {},
+    }) as DOMRect;
+  document.body.appendChild(host);
+  return render(
+    <Theme>
+      <ConsentApprovalBar />
+    </Theme>
+  );
+}
+
+describe("ConsentApprovalBar coordinator", () => {
   beforeEach(() => {
-    shellClient.heartbeat.mockClear();
-    shellClient.listPending.mockClear();
-    shellClient.resolve.mockClear();
+    overlay.options = null;
+    overlay.onIntent = null;
+    for (const fn of Object.values(shellClient)) fn.mockClear();
+    shellClient.listPending.mockResolvedValue([]);
     shellClient.resolve.mockImplementation(() => Promise.resolve());
-    shellClient.onRpcEvent.mockClear();
   });
 
-  it("shows a queue navigator when multiple approvals are pending and steps through them", async () => {
+  afterEach(() => {
+    document.getElementById("app-approval-host")?.remove();
+  });
+
+  it("sends a heartbeat and lists pending while mounted", async () => {
+    vi.useFakeTimers();
+    try {
+      render(React.createElement(ConsentApprovalBar));
+      expect(shellClient.heartbeat).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(shellClient.listPending).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        vi.advanceTimersByTime(5_000);
+      });
+      expect(shellClient.heartbeat).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drives the overlay with the active approval and queue length", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "a1", title: "First approval", callerTitle: "Chat A" }),
-      userlandApproval({ approvalId: "a2", title: "Second approval", callerTitle: "Chat B" }),
-      userlandApproval({ approvalId: "a3", title: "Third approval", callerTitle: "Chat C" }),
+      userlandApproval({ approvalId: "a1", title: "First" }),
+      userlandApproval({ approvalId: "a2", title: "Second" }),
+      userlandApproval({ approvalId: "a3", title: "Third" }),
     ]);
-
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
-    // Wait for the initial listPending to resolve and the first approval to
-    // render. We assert on the title text so we know we're looking at the
-    // active item, not just any approval payload.
+    mountBar();
     await waitFor(() => {
-      expect(screen.getByText("First approval")).toBeTruthy();
+      expect(overlay.options?.open).toBe(true);
+      expect(overlay.options?.props?.approval?.approvalId).toBe("a1");
     });
-    expect(screen.getByText("1 / 3")).toBeTruthy();
-
-    // Step forward.
-    await act(async () => {
-      fireEvent.click(screen.getByLabelText("Next approval"));
-    });
-    expect(screen.getByText("Second approval")).toBeTruthy();
-    expect(screen.getByText("2 / 3")).toBeTruthy();
-
-    // Step backward.
-    await act(async () => {
-      fireEvent.click(screen.getByLabelText("Previous approval"));
-    });
-    expect(screen.getByText("First approval")).toBeTruthy();
-    expect(screen.getByText("1 / 3")).toBeTruthy();
+    expect((overlay.options?.props?.queue as { total: number }).total).toBe(3);
   });
 
-  it("does not render startup privileged-unit approvals in the runtime consent bar", async () => {
-    const runtimeApproval = userlandApproval({
-      approvalId: "runtime-approval",
-      title: "Runtime approval",
-    });
+  it("excludes startup approvals from the runtime overlay", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      unitBatchApproval({
-        approvalId: "desktop-app-startup",
-        title: "Approve desktop app",
-        trigger: "startup",
-        units: [
-          {
-            unitKind: "app",
-            unitName: "@workspace-apps/shell",
-            displayName: "Shell",
-            version: "0.1.0",
-            target: "electron",
-            source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-            ev: "ev-shell",
-            capabilities: ["panel-hosting"],
-          },
-        ],
-      }),
-      unitBatchApproval({
-        approvalId: "mobile-app-startup",
-        title: "Approve mobile app",
-        trigger: "startup",
-        units: [
-          {
-            unitKind: "app",
-            unitName: "@workspace-apps/mobile",
-            displayName: "Mobile",
-            version: "0.1.0",
-            target: "react-native",
-            source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-            ev: "ev-mobile",
-            capabilities: [],
-          },
-        ],
-      }),
-      unitBatchApproval({
-        approvalId: "extension-startup",
-        title: "Approve native extension",
-        trigger: "startup",
-      }),
-      runtimeApproval,
+      startupApproval("extension-startup"),
+      userlandApproval({ approvalId: "runtime", title: "Runtime approval" }),
     ]);
-
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
+    mountBar();
     await waitFor(() => {
-      expect(screen.getByText("Runtime approval")).toBeTruthy();
+      expect(overlay.options?.props?.approval?.approvalId).toBe("runtime");
     });
-    expect(screen.queryByText("Approve desktop app")).toBeNull();
-    expect(screen.queryByText("Approve mobile app")).toBeNull();
-    expect(screen.queryByText("Approve native extension")).toBeNull();
-    expect(screen.queryByText("1 / 4")).toBeNull();
+    // Only one runtime approval remains → no queue navigator.
+    expect(overlay.options?.props?.queue).toBeNull();
   });
 
-  it("does not render a navigator for a single pending approval", async () => {
+  it("minimizes to a pill on a minimize intent and reopens on click", async () => {
     shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "solo", title: "Lonely approval" }),
+      userlandApproval({ approvalId: "solo", title: "Lonely", callerTitle: "Chat A" }),
     ]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
 
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
+    emit({ type: "minimize", approvalId: "solo" });
+    const pill = await screen.findByRole("button", { name: "Review approval: Lonely" });
+    expect(pill).toBeTruthy();
+    expect(overlay.options).toBeNull();
 
-    await waitFor(() => {
-      expect(screen.getByText("Lonely approval")).toBeTruthy();
-    });
-    expect(screen.queryByLabelText("Next approval")).toBeNull();
-    expect(screen.queryByLabelText("Previous approval")).toBeNull();
+    fireEvent.click(pill);
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+    expect(screen.queryByRole("button", { name: "Review approval: Lonely" })).toBeNull();
   });
 
-  it("renders severe panel capability approvals with danger-tone trust action", async () => {
-    shellClient.listPending.mockResolvedValueOnce([
-      capabilityApproval({
-        approvalId: "cap-severe",
-        title: "Drive privileged panel",
-        severity: "severe",
-      }),
-    ]);
-
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Drive privileged Shell")).toBeTruthy();
-    });
-    const bar = screen
-      .getByText("Drive privileged Shell")
-      .closest(".approval-bar") as HTMLElement | null;
-    expect(bar?.style.getPropertyValue("--app-approval-stripe")).toBe(
-      "var(--app-approval-red-stripe)"
-    );
-    const trustButton = screen.getByText("Trust and drive").closest("button");
-    expect(trustButton).toBeTruthy();
-    expect(trustButton?.getAttribute("data-accent-color")).toBe("red");
-  });
-
-  it("keeps unit-batch entries collapsed inside the approval bar by default", async () => {
-    shellClient.listPending.mockResolvedValueOnce([
-      unitBatchApproval({ approvalId: "extensions" }),
-    ]);
-
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Extension 1 · v0.1.0")).toBeTruthy();
-    });
-
-    const firstUnitDetails = screen
-      .getByText("Extension 1 · v0.1.0")
-      .closest("details") as HTMLDetailsElement | null;
-    const secondUnitDetails = screen
-      .getByText("Extension 2 · v0.1.0")
-      .closest("details") as HTMLDetailsElement | null;
-
-    expect(firstUnitDetails?.open).toBe(false);
-    expect(secondUnitDetails?.open).toBe(false);
-  });
-
-  it("removes a unit-batch approval immediately when approving or denying", async () => {
+  it("resolves and removes an approval on a decide intent", async () => {
     shellClient.resolve.mockImplementation(() => new Promise(() => undefined));
     shellClient.listPending.mockResolvedValueOnce([
-      unitBatchApproval({
-        approvalId: "apps-approval",
-        title: "Approve workspace apps",
-        trigger: "source-change",
-        units: [
-          {
-            unitKind: "app",
-            unitName: "@workspace-apps/mobile",
-            displayName: "NatStack Mobile",
-            version: "0.1.0",
-            target: "react-native",
-            source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-            ev: "ev-app",
-            capabilities: ["clipboard", "keychain", "notifications", "open-external"],
-          },
-        ],
-      }),
-      unitBatchApproval({
-        approvalId: "extensions-approval",
-        title: "Approve workspace extensions",
-      }),
+      userlandApproval({ approvalId: "solo", title: "Lonely" }),
     ]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
 
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Approve workspace apps")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("Approve change"));
-    await waitFor(() => {
-      expect(screen.queryByText("Approve workspace apps")).toBeNull();
-      expect(screen.getByText("Approve workspace extensions")).toBeTruthy();
-    });
-    expect(shellClient.resolve).toHaveBeenCalledWith("apps-approval", "once");
-
-    fireEvent.click(screen.getByText("Deny"));
-    await waitFor(() => {
-      expect(screen.queryByText("Approve workspace extensions")).toBeNull();
-    });
-    expect(shellClient.resolve).toHaveBeenCalledWith("extensions-approval", "deny");
+    emit({ type: "decide", decision: "once", approvalId: "solo" });
+    expect(shellClient.resolve).toHaveBeenCalledWith("solo", "once");
+    await waitFor(() => expect(overlay.options).toBeNull());
   });
 
-  it("restores a unit-batch approval with visible feedback when resolve fails", async () => {
+  it("ignores stale overlay intents for a previously rendered approval", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      userlandApproval({ approvalId: "current", title: "Current" }),
+    ]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({ type: "decide", decision: "once", approvalId: "stale" });
+
+    expect(shellClient.resolve).not.toHaveBeenCalled();
+    expect(overlay.options?.props?.approval?.approvalId).toBe("current");
+  });
+
+  it("surfaces a failed decision back through the overlay props", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     shellClient.resolve.mockRejectedValueOnce(new Error("resolve blocked"));
     shellClient.listPending.mockResolvedValueOnce([
-      unitBatchApproval({
-        approvalId: "apps-approval",
-        title: "Approve workspace apps",
-        trigger: "source-change",
-        units: [
-          {
-            unitKind: "app",
-            unitName: "@workspace-apps/mobile",
-            displayName: "NatStack Mobile",
-            version: "0.1.0",
-            target: "react-native",
-            source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
-            ev: "ev-app",
-            capabilities: ["clipboard", "keychain", "notifications", "open-external"],
-          },
-        ],
-      }),
+      userlandApproval({ approvalId: "solo", title: "Lonely" }),
     ]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
 
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
+    emit({ type: "decide", decision: "once", approvalId: "solo" });
     await waitFor(() => {
-      expect(screen.getByText("Approve workspace apps")).toBeTruthy();
+      expect(overlay.options?.props?.approval?.approvalId).toBe("solo");
+      expect(overlay.options?.props?.decisionError).toBe("resolve blocked");
     });
-
-    fireEvent.click(screen.getByText("Approve change"));
-    await waitFor(() => {
-      expect(screen.getByText("Approval action failed: resolve blocked")).toBeTruthy();
-    });
-    expect(screen.getByText("Approve workspace apps")).toBeTruthy();
-    expect(errorSpy).toHaveBeenCalledWith(
-      "[ConsentApprovalBar] resolve failed:",
-      expect.any(Error)
-    );
     errorSpy.mockRestore();
-  });
-
-  it("uses distinct approval tones for app and extension source changes", async () => {
-    const appApproval = unitBatchApproval({
-      approvalId: "app-source",
-      title: "Shell app source change",
-      trigger: "source-change",
-      units: [
-        {
-          unitKind: "app",
-          unitName: "@workspace-apps/shell",
-          displayName: "Shell",
-          version: "0.1.0",
-          target: "electron",
-          source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
-          ev: "ev-app",
-          capabilities: ["notifications"],
-        },
-      ],
-    });
-    const extensionApproval = unitBatchApproval({
-      approvalId: "extension-source",
-      title: "Extension source change",
-      trigger: "source-change",
-    });
-
-    shellClient.listPending.mockResolvedValueOnce([appApproval, extensionApproval]);
-
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Shell app source change")).toBeTruthy();
-    });
-    expect(
-      (
-        screen.getByText("Shell app source change").closest(".approval-bar") as HTMLElement | null
-      )?.style.getPropertyValue("--app-approval-stripe")
-    ).toBe("var(--app-approval-amber-stripe)");
-
-    fireEvent.click(screen.getByLabelText("Next approval"));
-    await waitFor(() => {
-      expect(screen.getByText("Extension source change")).toBeTruthy();
-    });
-    expect(
-      (
-        screen.getByText("Extension source change").closest(".approval-bar") as HTMLElement | null
-      )?.style.getPropertyValue("--app-approval-stripe")
-    ).toBe("var(--app-approval-red-stripe)");
-  });
-
-  it("renders pending approvals directly from event payloads", async () => {
-    shellClient.listPending.mockResolvedValueOnce([
-      userlandApproval({ approvalId: "a1", title: "First approval" }),
-    ]);
-
-    render(
-      <Theme>
-        <ConsentApprovalBar />
-      </Theme>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("First approval")).toBeTruthy();
-    });
-
-    const eventCallback = shellClient.onRpcEvent.mock.calls.find(
-      ([event]) => event === "event:shell-approval:pending-changed"
-    )?.[1];
-    expect(eventCallback).toBeTruthy();
-
-    await act(async () => {
-      eventCallback?.({
-        payload: {
-          pending: [
-            userlandApproval({ approvalId: "a1", title: "First approval" }),
-            userlandApproval({ approvalId: "a2", title: "Event approval" }),
-          ],
-        },
-      });
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("First approval")).toBeTruthy();
-      expect(screen.getByText("1 / 2")).toBeTruthy();
-    });
-    expect(screen.queryByText("Event approval")).toBeNull();
-    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
   });
 });
