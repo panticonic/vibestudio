@@ -415,7 +415,7 @@ always appears. These facts drive §7.5 — and they shape how the tier is
 prompted (§7.1, §13): as a policy the agent sets and tunes, not a per-file
 whim.
 
-### 7.1 The mandatory tier: a task-mode policy the agent owns and tunes
+### 7.1 The mandatory tier: informed judgment the agent owns and tunes
 
 `read` takes a **mandatory** `provenance: "none" | "moderate" | "deep"` — the
 agent's context budget for the read:
@@ -428,26 +428,24 @@ agent's context budget for the read:
 
 The known failure mode of a mandatory per-call arg is collapse to a constant —
 models settle into whatever the last few calls used. We keep the tier mandatory
-anyway, and defuse the failure mode by changing what the choice is *about*:
-the agent is not asked for a fresh per-file judgement, it is asked to hold a
-**task-mode policy** and deviate deliberately:
+anyway, and meet the failure mode with **judgment, not a lookup table**. The
+spec deliberately prescribes **no tier↔situation mapping**: we have no idea
+how well each tier is actually tuned for any given situation — whether an
+agent executing a set plan needs `moderate`, `none`, or `deep` is an empirical
+question only the agent's own experience answers. So the prompt (§13) does two
+things and no more:
 
-- **Using code without modifying it** (running, calling, answering questions
-  from it) → `none`. Provenance is background you don't need; don't pay for it.
-- **Executing a set plan** → `moderate`. The plan already encodes the
-  understanding; you need blame, concurrency, and recalled claims to execute
-  without collisions or re-derivation, not the full belief structure.
-- **Planning and conceptualizing before modifying** → `deep` on the files
-  central to the change. How the code *got this way* — the claims, the
-  contradictions, the commit trail — is exactly the input to a good plan.
+- **Makes the tiers legible** — what each one computes, what it costs, what it
+  tends to surface — so the choice is informed rather than ritual.
+- **Instructs the agent to choose from its situation and its experience**:
+  what it is doing right now (merely using code, executing a plan, planning a
+  change — each *bears on* how much history matters, without dictating a
+  tier), crossed with how the system has actually been behaving for it —
+  insightful, chatty, redundant, distracting — on this codebase, lately.
 
-The policy is per-task, which is a cadence agents actually sustain (one
-decision at task start, revisited at mode changes), unlike per-file triage.
-On top of it, the prompt (§13) instructs **experience-based tuning**: the tier
-is a dial the agent owns — dial down when recent blocks have been chatty or
-distracting, dial up when they have been earning their tokens. The tier
-distribution by task mode is instrumented (§12); if it still collapses to a
-constant across modes, the fix is prompt pressure, never a silent default.
+The tier distribution is instrumented (§12) as a judgment health-check:
+situation-responsive variation is what good use looks like; a reflexive
+constant means the prompt needs pressure — never a silent default.
 
 **Re-read suppression still applies underneath nonzero tiers.** The system
 detects redundancy better than any policy: suppression has its **own key**,
@@ -733,8 +731,8 @@ until all of them are:
   steering.
 - **Density + attachment** — `provenanceForFile` (§6 pipeline over the views,
   query-time degree, capped 2-hop); the mandatory ternary `provenance` read
-  arg with task-mode guidance, plus mechanical re-read suppression underneath
-  (§7.1); the exception class + salience floor (§7.5); parallel best-effort
+  arg with judgment-based guidance, plus mechanical re-read suppression
+  underneath (§7.1); the exception class + salience floor (§7.5); parallel best-effort
   attachment (§7.2–7.5); `provenance()` tool + paging; the
   `edge_graph`/`claim_graph` views.
 - **Speculative warm** — `gad_provenance_cache`; warm on `turn.opened` and
@@ -780,14 +778,15 @@ Resolved (locked for the build):
   optimization lever, not a correctness mechanism.
 - **Session identity:** trajectory-DAG position; `gad_touches.session_*` is a
   hint; forks fall back to branch-chain scoping.
-- **The tier is mandatory, and it is a task-mode policy.** Every read names
-  `none`/`moderate`/`deep`; the prompt anchors the choice to the task mode
-  (using → `none`, executing a plan → `moderate`, planning before modifying →
-  `deep`) and tells the agent to tune it from experience — dial down when
-  blocks have been chatty/distracting, up when they earn their tokens (§7.1,
+- **The tier is mandatory, and the choice is judgment — no prescribed
+  mapping.** Every read names `none`/`moderate`/`deep`. The spec deliberately
+  binds no situation to a tier (nobody knows yet how well each tier fits any
+  situation); the prompt makes the tiers legible and instructs the agent to
+  choose from its situation crossed with its accumulated experience of how
+  insightful vs. chatty the system has been, and to tune over time (§7.1,
   §13). The known collapse-to-a-constant risk is accepted, monitored via the
-  per-mode tier distribution, and answered with prompt pressure — never a
-  silent default. Mechanical block-signature re-read suppression still runs
+  tier distribution, and answered with prompt pressure — never a silent
+  default. Mechanical block-signature re-read suppression still runs
   underneath nonzero tiers.
 - **Exceptions first, floored.** Contradictions and cross-session concurrency
   always render, at the top, regardless of density; everything else clears a
@@ -818,9 +817,10 @@ the fs RPC or panel/programmatic reads.
 
 **Instrumentation (ships with the bang, §11).** Four behavioral counters tell
 us which bet is failing, and they are the tuning inputs: (1) the **tier
-distribution, split by task mode** — the health check on the §7.1 policy: it
-should differ across using/executing/planning, and a mode-invariant constant
-means the prompt needs pressure, (2) drill-down/paging rate, (3) claims
+distribution over time and situation** — the health check on §7.1's judgment
+bet: situation-responsive variation is what good use looks like, and a
+reflexive constant means the prompt needs pressure, (2) drill-down/paging
+rate, (3) claims
 recorded per session — split commit-borne vs standalone, (4) **attached-claim
 action rate**: how often an item we pushed gets cited, deepened, or
 edited-near downstream. (4) is the system's real KPI — it measures whether the
@@ -835,25 +835,31 @@ memory. The prompt is short on exhortation and long on concrete triggers —
 abstract "use your tools wisely" guidance does nothing; named moments do.
 Phrased to the agent roughly as:
 
-**Set your tier from your task, then tune it from experience.** `provenance`
-(`none` | `moderate` | `deep`) is mandatory on every read. Don't re-decide it
-per file — decide it per task, and deviate deliberately:
+**Choose your tier with judgment — yours, not a rulebook.** `provenance`
+(`none` | `moderate` | `deep`) is mandatory on every read. Know what each
+buys: `none` is just the bytes; `moderate` adds blame, concurrent edits, and
+recalled claims about the file; `deep` adds the wider belief structure — the
+claim relations, contradictions, and 2-hop neighborhood around it. Nobody has
+pre-tuned these tiers to situations — there is no fixed mapping from "kind of
+task" to "right tier", and we genuinely don't know, for instance, how much
+provenance an agent executing a set plan needs. You find out. Weigh two
+things:
 
-- **Using the code without modifying it** — running it, calling it, answering
-  a question from it → `none`. You don't need its history to use it.
-- **Executing a set plan** → `moderate`. The understanding is already in the
-  plan; what you need is blame, concurrent edits, and recalled claims so you
-  don't collide or re-derive.
-- **Planning or conceptualizing before you modify** → `deep` on the files
-  central to the change. How the code came to be this way — the claims, the
-  contradictions, the commit trail — is exactly the input to a good plan.
-  Stay at `moderate` for peripheral files.
+- **Your situation.** How much does this file's history bear on what you're
+  about to do? Merely running or calling code is different from changing it;
+  conceptualizing a change is different from executing one you've already
+  planned; a file at the center of your task is different from one at the
+  periphery. Let that judgment — not a habit — pick the tier.
+- **Your experience.** Notice what the blocks have actually been doing for
+  you on this codebase lately. If they've been insightful — saving you from
+  re-deriving things, flagging collisions — spend more freely. If they've
+  been chatty, redundant, or distracting, dial down and pull detail on demand
+  with `provenance(...)` instead. Your experience is data the system's tuning
+  doesn't have; use it.
 
-**The tier is a dial you own — tune it.** Notice what the blocks have been
-doing for you lately: if they've been chatty, redundant, or distracting on
-this codebase, dial down and pull detail on demand with `provenance(...)`
-instead; if they've been saving you from re-deriving things or walking into
-collisions, dial up. Recalibrate when your task mode changes, not per file.
+Re-examine the choice when your situation changes, and don't let it fossilize
+into a constant — if you notice you've typed the same tier twenty times
+without thinking, that's the signal to think.
 
 Whatever the tier, two lines demand action, not skimming: a **⚠ contradiction**
 (reconcile it or relate the claims before building on either) and a
