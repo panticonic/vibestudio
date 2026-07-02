@@ -85,9 +85,9 @@ distinction) folded in.
 1. **Blame that works in production** — for any file/line/head, recover which
    edit changed it, in which commit, by which invocation/turn/actor — including
    the uncommitted working tail.
-2. **Read-time provenance attachment** — on each read, attach a compact summary
-   at the agent-requested depth, ranked by relevance to the current session.
-   Deeper exploration is on-demand.
+2. **Read-time provenance attachment** — on each read, automatically attach a
+   compact summary ranked by relevance to the current session, floored so it
+   only appears when worth reading. Deeper exploration is on-demand.
 3. **Two-source retrieval, density-reranked** — candidates from **structure**
    (blame, edit lineage, claim links) and **similarity** (FTS recall over
    claims, commit messages, messages, files), ordered by **session density**:
@@ -171,7 +171,7 @@ physical table:
 
 | kind       | src → dst          | base weight | written by                                   |
 | ---------- | ------------------ | ----------- | -------------------------------------------- |
-| `observed` | invocation → file  | 0.5         | the agent read tool (every read, any tier)   |
+| `observed` | invocation → file  | 0.5         | the agent read tool (every read, even suppressed-block reads) |
 | `cited`    | invocation → claim | 0.7         | drill-down on a claim; claim-id args in tools |
 
 Soft edges are best-effort _signal_, not provenance. **The per-read DO write is
@@ -334,42 +334,70 @@ the design). If profiling on real logs shows the counts biting, a
 optimization, not a correctness mechanism. The same periodic pass is the
 escape hatch for richer-than-2-hop affinity if 2-hop proves insufficient.
 
-## 7. Read-time attachment: agent-budgeted, parallel, best-effort, warmed
+## 7. Read-time attachment: automatic, parallel, best-effort, warmed
 
 Carried from v1 with two new signal lines (commit messages, working-edit
-status). Restated compactly; v1's rationale holds.
+status) and one behavioral correction (§7.1). Restated compactly; v1's
+rationale holds where not amended.
 
-### 7.1 The mandatory tier and the item budget
+**Behavioral grounding, stated once.** Agents do not seek context; they use
+what is in front of them — push beats pull, always. Agents follow verbatim
+pre-written affordances but essentially never page (`+N more` is chased only
+when a warning or the task points into it), so the system's value concentrates
+in the **first handful of items**: page-one ranking quality is the product, and
+paging is a safety valve. And agents habituate to boilerplate within a few
+reads — a block that is filler on most reads gets skimmed forever after,
+including the day it carries a critical contradiction. **Silence preserves
+salience**: an attachment worth reading every time it appears beats one that
+always appears. These three facts drive §7.1 and §7.5.
 
-`read` takes one **mandatory** argument plus one optional steer:
+### 7.1 Depth: automatic by default, escalation on request
 
-- `provenance: "none" | "moderate" | "deep"` — the coarse budget for _this_
-  read: which layers run, and the default **item budget** (items, not tokens —
-  each item is one bounded `insight + handle` line). Mandatory on purpose: a
-  deliberate per-file judgement, biased _toward_ spending (`moderate` is the
-  normal choice; the failure mode to police is under-asking, not overspend).
-  The runtime still enforces hard ceilings (`PROV_BUDGET_MS`, per-tier caps),
-  so "always deep" cannot blow up compute.
-- `recallKeywords: string[]` (optional) — steers the similarity leg beyond the
-  file's own text.
+v1 made a ternary `provenance` tier **mandatory on every read**, hoping to
+force a per-file judgement. That is discipline-shaped and behaviorally wrong:
+models settle into a constant within a few calls (whatever the prompt example
+showed), so the mandatory arg buys schema friction, not judgement. The routine
+case must not be a decision; only the exception is:
 
-| tier       | does                                                                                      |
-| ---------- | ----------------------------------------------------------------------------------------- |
-| `none`     | file content only — no queries                                                             |
-| `moderate` | blame (last-commit line + working-edit line) + FTS recall + 1-hop density re-rank          |
-| `deep`     | `moderate` + full 2-hop density + claim-relation walk (`supports`/`contradicts`/`refines`) |
+- **`moderate` is automatic.** Every read gets the standard attachment — blame
+  (last-commit + working-edit lines) + FTS recall + 1-hop density re-rank —
+  with no argument at all.
+- **`deep` is the one agent-facing dial**: an optional `provenance: "deep"`
+  escalation (full 2-hop density + the claim-relation walk) for a file the
+  agent is about to change with non-obvious ramifications. Rare by design.
+- **`none` is a mechanism, not a choice.** The v1 `none` case was "re-reads
+  and files you know cold" — and the system detects re-reads better than the
+  agent will ever bother to: if the same session re-reads a path and the
+  attachment inputs are unchanged (same `touch_version` key the warm cache
+  already uses, §7.3), the block is **suppressed automatically**. A file
+  changed by another session re-attaches — that is exactly the re-read that
+  must not be silent.
 
-The low-ranked tail is **withheld but advertised**: every truncated section
-reports `K of M` and the exact call to fetch the rest. Under-budget is
-recoverable, so the low default budget is safe.
+The runtime enforces hard ceilings regardless (`PROV_BUDGET_MS`, per-tier item
+caps), so even reflexive `deep` cannot blow up compute or context.
+
+`recallKeywords: string[]` (optional) steers the similarity leg beyond the
+file's own text. Expect it to be used sporadically at best — optional steering
+args always are — so the fallback (path + session touch anchors) must carry
+the recall leg on its own; keyword steering is a bonus, never load-bearing.
+
+The item budget is counted in **items, not tokens** (each item one bounded
+`insight + handle` line), and the low-ranked tail is **withheld but
+advertised**: every truncated section reports `K of M` and the exact call to
+fetch the rest. Under-budget is recoverable, so the low default budget is safe.
 
 **Drill-down contract.** `provenance(target, after?)` — the tool, also
 reachable via eval (`gad.provenanceForFile({ path, head, tier, after })`) —
 returns `{ items, shown, total, nextCursor }`: unbounded paging on top of the
 cheap first page; deepen one item (`provenance("claim#42")`) or page a file.
 
-**Every read leaves a trace**: one coalesced `observed` touch, regardless of
-tier. The tier is the agent's budget dial, not a graph signal.
+**Every read leaves a trace**: one coalesced `observed` touch, even when the
+block is suppressed. Depth is a budget dial, not a graph signal.
+
+**Token-budget realism.** A working agent reads 20–40 files per turn; at ~5
+items × ~40 tokens that is 4–8k tokens/turn of attachments. The salience floor
+(§7.5) and re-read suppression are what keep the attachment from becoming the
+first thing context-window pressure squeezes out.
 
 ### 7.2 Run it in parallel — content and provenance are different services
 
@@ -402,10 +430,10 @@ Compute the attachment against the pre-read touch state; write this read's own
 `observed` touch after the query resolves. The **native** graph (edits, claims,
 relations) is log/mechanism-derived and covered by integrity; the soft layer is
 explicitly non-deterministic (timing-, cache-, and FTS-state-dependent) and
-sits outside integrity/replay. Do not paper over this — it is why the soft tier
-is soft. The rendered block is ephemeral and never persisted.
+sits outside integrity/replay. Do not paper over this — it is why the soft
+layer is soft. The rendered block is ephemeral and never persisted.
 
-### 7.5 Attachment format
+### 7.5 Attachment format: exceptions first, then density, floored
 
 Fuses three layers, cheapest-to-richest, **never generating prose on the hot
 path** — semantics are recalled (claims, commit messages), not synthesized:
@@ -417,24 +445,41 @@ path** — semantics are recalled (claims, commit messages), not synthesized:
    contradiction flags, **uncommitted-working status** ("2 uncommitted edits
    from this context"). Deterministic, high value-per-token.
 3. **Recalled semantics** — claims and **commit messages** surfaced by the
-   similarity leg, ordered by density, verbatim: a past agent's
-   already-distilled, provenance-anchored judgement at zero generation cost.
+   similarity leg, verbatim: a past agent's already-distilled,
+   provenance-anchored judgement at zero generation cost.
 
-`moderate` example:
+Two ordering/visibility rules, both consequences of the §7 behavioral
+grounding:
+
+- **Exception class sorts first, above density.** Asserted contradictions and
+  **cross-session concurrency** ("session:X has 2 uncommitted edits on this
+  file") always render, at the top, regardless of score. The warning is the
+  line the agent must not skim past — and the concurrency line is exactly the
+  context that prevents co-editing collisions.
+- **Salience floor.** Non-exception items render only above a minimum score;
+  when nothing clears it, the block is the bare one-line header — or nothing
+  at all. **Do not pad with structural filler** ("edited 3 turns ago · 2
+  sessions") just because it is available: filler on every read trains the
+  agent to skim the block, and then the good items die with it. v1's "degrades
+  gracefully to structure" is rescinded as a display policy — sparse eras get
+  thin blocks, and that is correct. (Structure is still computed and reachable
+  via `provenance()`/SQL; the floor is about what is *pushed*.)
+
+Standard example:
 
 ```
-prov · src/foo.ts (edited 3 turns ago · 2 sessions · couples with retry.ts) · 5 of 19 items
-● last commit c:9f2e "clamp the retry budget before dispatch" · 2 turns ago
-● 2 uncommitted edits on this context (yours, this session)
-● claim#42 "foo owns the retry budget" ·supports #7· 4 sessions touched it [●●●●○]
+prov · src/foo.ts · 5 of 19 items
 ● ⚠ contradicts claim#7 "retries are caller-controlled" → provenance(claim#42)
+● session:retry-rework has 2 uncommitted edits on this file
+● last commit c:9f2e "clamp the retry budget before dispatch" · 2 turns ago
+● claim#42 "foo owns the retry budget" ·supports #7· 4 sessions touched it [●●●●○]
 ● co-edited with src/retry.ts ×3 of last 5 commits [●●○○○]
   +14 more (8 claims · 4 commits · 2 files) → provenance("src/foo.ts")
 ```
 
-`deep` expands the claim-relation graph and the 2-hop neighborhood. The block
-degrades gracefully to structure early (sparse claims) and bootstraps toward
-semantics as memory accrues.
+`deep` expands the claim-relation graph and the 2-hop neighborhood. Early
+(sparse claims) the block is thin by design and fattens toward semantics as
+memory accrues — the seeding pass (§8) exists to shorten that era.
 
 ## 8. Hermeneutic claims
 
@@ -472,6 +517,35 @@ plus a new `knowledge.claims_related` kind):
   never auto-detected; the attachment's "⚠ contradicts" surfaces a previously
   asserted contradiction.
 - `revise_claim` / `retract_claim`.
+
+**Capture rides the commit flow, because voluntary bookkeeping loses.** Every
+deployed memory system has learned the same lesson: agents skip optional
+memory tools even under strong prompting — at the moment of insight the
+gradient pulls toward finishing the task, so a standalone `record_claim`
+yields single-digit claims per long session. The one moment an agent reliably
+stops and verbalizes "what I did and why" is the **mandatory commit message**.
+So:
+
+- **`vcs.commit` accepts an optional `claims: [...]`** (each a `record_claim`
+  payload, run through the same FTS dedup): recording durable insight costs
+  zero extra tool calls at the moment of maximal clarity, and the claims are
+  born linked to the commit event.
+- **The commit result nudges** when no claims were passed and the diff is
+  non-trivial: one line — "anything durable to record? (`claims:` on commit,
+  or `record_claim`)". A nudge in a tool result, at the right moment, moves
+  agent behavior more than a paragraph of system prompt.
+- **Commit messages carry the early load.** They are FTS-indexed (T3) and
+  provenance-anchored, so expect them to be the dominant semantic recall
+  source at first, with claims accreting on top. That is fine — it is the same
+  loop with a shallower artifact.
+
+**Seed the claim base at the bang.** An empty claims table means weeks of thin
+attachments — and habituation (§7) gets decided in the first days. Ship a
+**one-time distillation pass**: an agent sweep over the workspace's docs,
+design files, and recent history that records initial claims (through the
+normal `record_claim` path, so dedup and FTS indexing are exercised
+immediately). Seeded claims are ordinary claims — provenance-anchored to the
+seeding trajectory, revisable, retractable.
 
 Claim↔trajectory links are the native `invocation_id`/`trajectory_event_id`
 columns; claim↔claim relations participate in density through the views.
@@ -514,6 +588,10 @@ The rework was built for exactly our direction, but three seams need touching:
   anchored to the commit event id) at commit-projection time, so the mandatory
   messages join the recall leg. They are the cheapest high-quality semantic
   signal in the system.
+- **T4 — `claims:` on `vcs.commit`** (§8): the commit input schema accepts an
+  optional claims array, emitted through the `record_claim` path (FTS dedup
+  included) and linked to the commit event; the commit result carries the
+  one-line nudge when the diff is non-trivial and no claims were passed.
 
 Explicitly **not** tweaked: `invocation_id` stays self-asserted (the DO cannot
 verify a tool-call id; pre-release this is fine and T2 makes it mechanical);
@@ -531,24 +609,29 @@ until all of them are:
 - **Blame** — T1 + T2 (§10); `blameLines` (§5); the `provenance_for_file` view.
 - **Claims** — `record_claim` (FTS dedup-on-write) / `relate_claims` /
   `revise_claim` / `retract_claim`; `gad_claim_relations` + the
-  `knowledge.claims_related` kind; `claim_kind`/`text` columns on `gad_claims`.
+  `knowledge.claims_related` kind; `claim_kind`/`text` columns on `gad_claims`;
+  T4 (`claims:` on commit + nudge); the one-time seeding distillation pass (§8).
 - **Touches** — `gad_touches` + the read tool's coalesced `observed` upsert and
   drill-down `cited` upsert; the periodic prune pass.
 - **Recall** — T3 (commit messages into `gad_memory_fts`); `recallKeywords`
   steering.
 - **Density + attachment** — `provenanceForFile` (§6 pipeline over the views,
-  query-time degree, capped 2-hop); the mandatory ternary `provenance` read
-  arg; parallel best-effort attachment (§7.2–7.5); `provenance()` tool +
-  paging; the `edge_graph`/`claim_graph` views.
+  query-time degree, capped 2-hop); automatic `moderate` + the optional `deep`
+  escalation and mechanical re-read suppression (§7.1); the exception class +
+  salience floor (§7.5); parallel best-effort attachment (§7.2–7.5);
+  `provenance()` tool + paging; the `edge_graph`/`claim_graph` views.
 - **Speculative warm** — `gad_provenance_cache`; warm on `turn.opened` and
   during generation; degrade-to-hint on miss.
 - **Prompt** — the §13 guidance lands with the tools, not after them: the
   machinery and the behavior that exploits it are one deliverable.
+- **Instrumentation** — the four behavioral counters (§12) land with the bang:
+  they are how we find out which behavioral bet is failing.
 
 Tuning (§12) happens after the bang, on the logs the bang produces — decay λ,
 caps `K`/`M`/`N`, kind weights, `w_sim`/`w_prov`, `observed`/`cited` weights
-and the `hits` curve, density buckets, `PROV_BUDGET_MS`, warm-set heuristic;
-materialize degree/affinity only if profiling demands.
+and the `hits` curve, the salience-floor threshold, density buckets,
+`PROV_BUDGET_MS`, warm-set heuristic; materialize degree/affinity only if
+profiling demands.
 
 ## 12. Resolved decisions & remaining knobs
 
@@ -569,10 +652,22 @@ Resolved (locked for the build):
   optimization lever, not a correctness mechanism.
 - **Session identity:** trajectory-DAG position; `gad_touches.session_*` is a
   hint; forks fall back to branch-chain scoping.
-- **Attachment:** mandatory ternary tier biased toward `moderate`; item-based
-  budgets; withheld-but-advertised tails (`K of M` + paging); parallel with the
-  fs read on a standalone `PROV_BUDGET_MS`; warmed; `observed` records only
-  what was actually read.
+- **Attachment depth is automatic, not asked.** `moderate` runs on every read
+  with no argument; `deep` is the one optional agent-facing escalation; `none`
+  is mechanical re-read suppression (`touch_version`-keyed), never an agent
+  choice (§7.1). The v1 mandatory ternary is rescinded: routine decisions
+  collapse to constants in real agents, so the routine case must not be a
+  decision.
+- **Exceptions first, floored.** Contradictions and cross-session concurrency
+  always render, at the top, regardless of density; everything else clears a
+  minimum score or the block is thin/absent. No structural filler — silence
+  preserves salience (§7.5).
+- **Claim capture rides the commit** (`claims:` on `vcs.commit` + result-line
+  nudge, T4); standalone `record_claim` remains but is not the load-bearing
+  path. The claim base is seeded at the bang (§8).
+- Item-based budgets; withheld-but-advertised tails (`K of M` + paging);
+  attachment parallel with the fs read on a standalone `PROV_BUDGET_MS`;
+  warmed; `observed` records only what was actually read.
 - **Determinism:** native graph is mechanism-derived and integrity-covered;
   the soft layer is explicitly non-deterministic and outside integrity/replay.
 - **No `included`, no `probed`, no self-reinforcement from showing.**
@@ -581,36 +676,55 @@ Resolved (locked for the build):
 Remaining knobs (set defaults now, tune on real logs): λ and `K`/`M`/`N`; kind
 weights and `w_sim`/`w_prov`; the `hits` curve (default `sqrt`); whether the
 historical leg decays at all or `idf` alone discriminates (default: mild decay
-and `idf`); `PROV_BUDGET_MS`; warm-set selection; per-tier item budgets. Watch
-the tier distribution — if it collapses to `none`, fix the prompt, never add a
-silent default. Scope is the agent read tool only, never the fs RPC or
-panel/programmatic reads.
+and `idf`); the salience-floor threshold; `PROV_BUDGET_MS`; warm-set selection;
+per-depth item budgets; **exploration-sweep damping** — a grep-then-read-15-files
+sweep floods the touch-set with shallow `observed` signal, so consider weighting
+a read by whether the session later edits or cites near it, or capping the
+read-only share of the density seed. Scope is the agent read tool only, never
+the fs RPC or panel/programmatic reads.
+
+**Instrumentation (ships with the bang, §11).** Four behavioral counters tell
+us which bet is failing, and they are the tuning inputs: (1) `deep`-escalation
+rate, (2) drill-down/paging rate, (3) claims recorded per session — split
+commit-borne vs standalone, (4) **attached-claim action rate**: how often an
+item we pushed gets cited, deepened, or edited-near downstream. (4) is the
+system's real KPI — it measures whether the attachment is being read or
+skimmed. If it sags while attachments are being rendered, the salience floor
+is too low; raise it before touching anything else.
 
 ## 13. Prompting the agent
 
-The machinery pays off only if the agent wields the budget, the block, and the
-follow-ons well. Concrete guidance, phrased to the agent roughly as:
+The machinery pays off only if the agent acts on the block and feeds the
+memory. The prompt is short on exhortation and long on concrete triggers —
+abstract "use your tools wisely" guidance does nothing; named moments do.
+Phrased to the agent roughly as:
 
-**Triage every read.** `provenance` (`none` | `moderate` | `deep`) is mandatory
-and is your whole context budget for the read — a one-second judgement. **When
-in doubt, pick `moderate` — under-reading context costs you more than a few
-tokens of provenance.** `none` only for files you know cold; `deep` before you
-change a file with non-obvious ramifications or need the belief structure
-around it. Pass `recallKeywords` to steer recall beyond the file's own text.
+**Provenance arrives on its own.** Reads carry a `prov` block when there is
+something worth knowing — you never ask for the routine view. Two lines demand
+action, not skimming: a **⚠ contradiction** (reconcile it or relate the claims
+before building on either) and a **concurrent-session line** (someone else has
+uncommitted edits here — check before you collide). Escalate with
+`provenance: "deep"` only when you are about to change a file with non-obvious
+ramifications and need the belief structure around it. Pass `recallKeywords`
+when you want what we know about a _topic_ while reading a file about
+something else.
 
 **Read the block as a launchpad, not a verdict.** It is intentionally partial —
 top-ranked items plus a `K of M` count of what was withheld. Chase a thread
-(the pre-written `provenance(...)` call, or your own `gad.query`) only when a
-line flags something live — a ⚠ contradiction, a hub, a claim you cannot
-reconcile — or the count says the detail you need is in the tail.
+(the pre-written `provenance(...)` call, or your own `gad.query`) when a line
+flags something live — a ⚠ contradiction, a hub, a claim you cannot reconcile —
+or the count says the detail you need is in the tail. Do not reflexively
+expand every read.
 
-**Record what you learn as claims, and write commit messages as memory.** When
-you establish something durable — an invariant, an ownership boundary, a gotcha,
-a decision and its reason — `record_claim` it and `relate_claims` it. Your
-commit messages are recalled the same way: write them as the one-line insight a
-future session should see when it touches these files, not as a changelog. If
-`record_claim` shows a near-duplicate, revise or relate instead of recording a
-second copy — fragmented memory is weaker than one claim that accretes.
+**Commit time is memory time.** Your commit message is recalled verbatim by
+future sessions touching these files — write the one-line insight they should
+see, not a changelog. When the work taught you something durable — an
+invariant, an ownership boundary, a gotcha, a decision and its reason — put it
+in `claims:` on the commit; it costs nothing extra at the moment you are
+already summarizing. Use standalone `record_claim`/`relate_claims` when
+insight lands mid-task and won't keep until commit. If dedup shows a
+near-duplicate, revise or relate instead of recording a second copy —
+fragmented memory is weaker than one claim that accretes.
 
 **Trust but verify.** Provenance is recalled, not generated — a claim is a past
 judgement with a handle. If it matters, follow the handle to the trajectory,
