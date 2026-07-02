@@ -676,7 +676,8 @@ query for the top thread) carry over from v1 verbatim.
 
 The rework was built for exactly our direction, but this plan changes the
 substrate where it falls short rather than working around it — four tool/service
-seams (T1–T4) and three store/merge upgrades (U1–U3, specified in §5.1):
+seams (T1–T4) and five store/merge/recall upgrades (U1–U3 specified in §5.1;
+U4–U5 below):
 
 - **T1 — commit causality.** The `vcs.commit` service handler passes neither
   `invocationId` nor `turnId`, so the commit _event_ is attributable only
@@ -703,10 +704,47 @@ seams (T1–T4) and three store/merge upgrades (U1–U3, specified in §5.1):
   `diff3Merge` returns origin-annotated merge hunks vs ours and the merge
   ingest records them as `editOps`. These modify the VCS substrate itself —
   the plan upgrades the system rather than working around it.
+- **U4 — owner-derived blob pruning.** The VCS file CAS and the general
+  blobstore are **the same directory** (`getUserDataPath()/blobs` — wired to
+  both `WorkspaceVcs` and `blobstoreService`), holding GAD file versions,
+  spilled log-event payloads (whose references live in the gad-store DO's
+  `log_blob_refs`), and ad-hoc userland blobs. `blobstore.pruneUnreferenced`
+  deletes anything not in a **caller-supplied** `referenced` list — a loaded
+  gun next to the memory system: a pruner that doesn't collect the gad-store's
+  live digests deletes spilled `request`/`result`/`output` payloads that
+  durable log events still reference (hydration then fails) and can orphan
+  every FTS anchor (recall keeps its text copy and confidently hands out
+  handles that dangle — the trust-eroding failure the attachment cannot
+  afford). Nothing calls it automatically today, so the trap is latent — and
+  it gets defused now, in the bang: pruning becomes a **server-driven
+  mark-and-sweep whose referenced set is assembled from the owners** — the
+  gad-store's `log_blob_refs` + manifest/file-version digests +
+  working-edit `new_content_hash`es (exported by the DO, which already has the
+  GC machinery for this) unioned with VCS state reachability — with a creation
+  grace window, same shape as `runGadGc`. A caller-supplied `referenced` list
+  is never authority over the shared CAS.
+- **U5 — fail-loud file indexing.** `indexRepoFiles` currently skips a missing
+  CAS blob (`!bytes → continue`) and then advances the `memidx:` marker
+  unconditionally — a transient miss permanently un-indexes that file version
+  (the marker-equality fast path never revisits it) with no trace. Missing
+  blobs **abort the pass** so it retries on the next advance, and every skip
+  (256KB cap, binary sniff) is logged — no silent caps. Two adjacent seams
+  land with it: `rebuildTrajectoryProjections` triggers a file reindex kick
+  (replay wipes the `memidx:` markers but nothing re-runs the pass until the
+  next per-repo `main` advance or server restart — an empty-file-recall window
+  the recall leg must not have), and `recallMemory` dedups published copies
+  (a `message.completed` projected on both the trajectory and channel logs
+  indexes once per log and returns duplicate hits for the same text).
 
 Explicitly **not** tweaked: `invocation_id` stays self-asserted (the DO cannot
 verify a tool-call id; pre-release this is fine and T2 makes it mechanical);
-the fs-bridge stays actor-only (honest degradation).
+the fs-bridge stays actor-only (honest degradation). Also **known and
+accepted**: REFERENCE-class payloads (tool `request`/`result`/`output`/`error`,
+`blocks[*].arguments`) are never FTS-indexed — deliberate, not a gap. Raw tool
+bulk is not the recall surface; claims and commit messages are the distilled
+one. Message and claim text can never arrive as a ref (storage classes make
+block content INLINE with a hard emitter error on oversize), so the recall leg
+has no silent spill hole by construction.
 
 ## 11. Build plan — one big bang
 
@@ -728,7 +766,12 @@ until all of them are:
 - **Touches** — `gad_touches` + the read tool's coalesced `observed` upsert and
   drill-down `cited` upsert; the periodic prune pass.
 - **Recall** — T3 (commit messages into `gad_memory_fts`); `recallKeywords`
-  steering.
+  steering; U5 (fail-loud file indexing: abort-don't-advance on missing CAS
+  blobs, logged skips, the post-replay reindex kick, and `recallMemory`
+  dedup of published copies).
+- **Blob-CAS safety** — U4: owner-derived server-driven mark-and-sweep prune
+  for the shared blobs directory; caller-supplied `referenced` lists lose
+  authority.
 - **Density + attachment** — `provenanceForFile` (§6 pipeline over the views,
   query-time degree, capped 2-hop); the mandatory ternary `provenance` read
   arg with judgment-based guidance, plus mechanical re-read suppression
