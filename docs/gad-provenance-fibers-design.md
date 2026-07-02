@@ -8,11 +8,10 @@ Pre-release; **no backward compatibility** — schema is reset on bump
 but memory which wipes on every bump is not long-term memory. This spec keeps
 claims and touch signals on the reset-on-bump substrate _deliberately_: within a
 schema era they are durable working memory; across a bump they are gone. That is
-acceptable only while pre-release. Graduating the knowledge ledger to survive
-schema change — a durable sub-ledger or real migrations — is a **precondition for
-calling the memory pillar "real," not a later nicety.** V1 builds the loop; it
-does not yet claim cross-era persistence, and the prompt (§13) must not promise
-the agent more permanence than the substrate delivers.
+acceptable only while pre-release; graduating the knowledge ledger to survive
+schema change (a durable sub-ledger or real migrations) is separate follow-on
+work, and the prompt (§13) must not promise the agent more permanence than the
+substrate delivers.
 
 This spec turns GAD's ledger kernel into a single, queryable **provenance
 graph** joining the worktree VCS, the agent trajectory, and a hermeneutic claim
@@ -220,7 +219,7 @@ native repeats compound by adding rows (distinct edits/assertions).
 
 Pruning: the periodic server-driven pass (same shape as `runGadGcMark/Sweep`)
 ages out soft rows below a relevance floor. Because degree is computed at query
-time in V1 (§6.5), there is no degree counter to keep in sync on removal — the
+time (§6.5), there is no degree counter to keep in sync on removal — the
 v1 "symmetry rule" footgun is gone by construction.
 
 ## 5. Blame, on `fileHistory`
@@ -326,11 +325,11 @@ O(neighborhood), independent of total log size — two indexed join passes, not
 `RECURSIVE`, with caps that double as quality controls: seed = last `K`
 touches; per-node fan-out = top-`M` by recency; candidates = top-`N`.
 
-**Degree is computed at query time in V1**, as capped indexed
-`COUNT`s over `idx_edit_ops_path` / `idx_touches_dst` / claim-relation indexes
-— candidates number ≤ `N·M`, each count is an index-range scan, and there is no
-incremental counter to drift (v1's `gad_node_degree` + prune-symmetry rule are
-deleted from the design). If profiling on real logs shows the counts biting, a
+**Degree is computed at query time**, as capped indexed `COUNT`s over
+`idx_edit_ops_path` / `idx_touches_dst` / claim-relation indexes — candidates
+number ≤ `N·M`, each count is an index-range scan, and there is no incremental
+counter to drift (v1's `gad_node_degree` + prune-symmetry rule are deleted from
+the design). If profiling on real logs shows the counts biting, a
 `gad_node_degree` materialization by the periodic pass is the named lever — an
 optimization, not a correctness mechanism. The same periodic pass is the
 escape hatch for richer-than-2-hop affinity if 2-hop proves insufficient.
@@ -520,35 +519,36 @@ Explicitly **not** tweaked: `invocation_id` stays self-asserted (the DO cannot
 verify a tool-call id; pre-release this is fine and T2 makes it mechanical);
 the fs-bridge stays actor-only (honest degradation).
 
-## 11. Phased plan
+## 11. Build plan — one big bang
 
-1. **Blame** — T1 + T2; `blameLines` (§5); `provenance_for_file` view; surface
-   last-commit + working-edit lines through the read tool (a degenerate
-   `moderate` with no recall/density yet). _Much smaller than v1's phase 1 —
-   the keystone landed upstream._
-2. **Claims + touches** — `record_claim` (FTS dedup-on-write) / `relate_claims`
-   / `revise_claim` / `retract_claim`; `gad_claim_relations`;
-   `knowledge.claims_related` kind; `gad_touches` + the read tool's `observed`
-   upsert; T3 (commit-message FTS).
+Everything ships together, in one schema bump, as a single coherent system. No
+value gates, no bake-offs, no interim milestones: the differentiator is the
+whole loop (blame → claims → density-ranked recall → read attachment), and it
+is built and landed as one. The workstreams below are a decomposition for
+implementation order within the bang, not release phases — nothing is "done"
+until all of them are:
 
-   **Value gate before phase 3.** Phases 1–2 already deliver the
-   differentiators — blame that works, claims that return on recall, commit
-   messages in recall. Confirm that is visibly useful on real trajectories
-   before building the density engine, whose every knob (§12) can only be tuned
-   on logs that do not exist yet. The honest baseline to beat is **FTS recall +
-   working blame**; treat phase 3 as a bake-off against that baseline, not a
-   foregone build.
+- **Blame** — T1 + T2 (§10); `blameLines` (§5); the `provenance_for_file` view.
+- **Claims** — `record_claim` (FTS dedup-on-write) / `relate_claims` /
+  `revise_claim` / `retract_claim`; `gad_claim_relations` + the
+  `knowledge.claims_related` kind; `claim_kind`/`text` columns on `gad_claims`.
+- **Touches** — `gad_touches` + the read tool's coalesced `observed` upsert and
+  drill-down `cited` upsert; the periodic prune pass.
+- **Recall** — T3 (commit messages into `gad_memory_fts`); `recallKeywords`
+  steering.
+- **Density + attachment** — `provenanceForFile` (§6 pipeline over the views,
+  query-time degree, capped 2-hop); the mandatory ternary `provenance` read
+  arg; parallel best-effort attachment (§7.2–7.5); `provenance()` tool +
+  paging; the `edge_graph`/`claim_graph` views.
+- **Speculative warm** — `gad_provenance_cache`; warm on `turn.opened` and
+  during generation; degrade-to-hint on miss.
+- **Prompt** — the §13 guidance lands with the tools, not after them: the
+  machinery and the behavior that exploits it are one deliverable.
 
-3. **Recall + density attachment** — `provenanceForFile` (§6 pipeline over the
-   views, query-time degree, capped 2-hop); the mandatory ternary `provenance`
-   read arg + `recallKeywords`; parallel best-effort attachment (§7.2–7.5);
-   `provenance()` tool + paging; prompt guidance (§13).
-4. **Speculative warm** — `gad_provenance_cache`; warm on `turn.opened` and
-   during generation; degrade-to-hint on miss.
-5. **Tune** — decay λ, caps `K`/`M`/`N`, kind weights, `w_sim`/`w_prov`,
-   `observed`/`cited` weights and the `hits` curve, density buckets,
-   `PROV_BUDGET_MS`, warm-set heuristic; materialize degree/affinity only if
-   profiling demands.
+Tuning (§12) happens after the bang, on the logs the bang produces — decay λ,
+caps `K`/`M`/`N`, kind weights, `w_sim`/`w_prov`, `observed`/`cited` weights
+and the `hits` curve, density buckets, `PROV_BUDGET_MS`, warm-set heuristic;
+materialize degree/affinity only if profiling demands.
 
 ## 12. Resolved decisions & remaining knobs
 
@@ -565,7 +565,7 @@ Resolved (locked for the build):
   query-time wall clock; never global `log_events.seq`.
 - **Weighting:** flat per-kind; `idf`/`norm` discriminate; magnitude never an
   input.
-- **Degree:** query-time capped counts in V1; materialization is a named
+- **Degree:** query-time capped counts; materialization is a named
   optimization lever, not a correctness mechanism.
 - **Session identity:** trajectory-DAG position; `gad_touches.session_*` is a
   hint; forks fall back to branch-chain scoping.
