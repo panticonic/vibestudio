@@ -169,10 +169,17 @@ copy exists.
 **Soft (behavioral) edges** — signals with no native home, recorded in one
 physical table:
 
-| kind       | src → dst          | base weight | written by                                   |
-| ---------- | ------------------ | ----------- | -------------------------------------------- |
-| `observed` | invocation → file  | 0.5         | the agent read tool (every read, even suppressed-block reads) |
-| `cited`    | invocation → claim | 0.7         | drill-down on a claim; claim-id args in tools |
+| kind       | src → dst        | base weight | written by                                                    |
+| ---------- | ---------------- | ----------- | ------------------------------------------------------------- |
+| `observed` | session → file   | 0.5         | the agent read tool (every read, even suppressed-block reads) |
+| `cited`    | session → claim  | 0.7         | drill-down on a claim; claim-id args in tools                  |
+
+Soft edges are **session-anchored, not invocation-anchored** — deliberately.
+Every read is a fresh invocation, so an invocation-keyed edge could never
+coalesce: `hits` would always be 1 and the counted-upsert design would be dead
+on arrival. The session (trajectory branch) is the unit that re-reads a file
+five times; the edge belongs to it, and `last_invocation_id` on the row keeps
+the most recent producing invocation for drill-down.
 
 Soft edges are best-effort _signal_, not provenance. **The per-read DO write is
 accepted on purpose: recording that a read happened is the point.** What they
@@ -195,23 +202,29 @@ native now.
 CREATE TABLE gad_touches (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,              -- observed | cited
-  src_kind TEXT NOT NULL,          -- invocation
-  src_id TEXT NOT NULL,
+  session_log_id TEXT NOT NULL,    -- src: the trajectory branch (hint — §6.4)
+  session_head TEXT NOT NULL,
   dst_kind TEXT NOT NULL,          -- file | claim
   dst_id TEXT NOT NULL,
-  session_log_id TEXT,             -- denormalized hint: trajectory branch at creation
-  session_head TEXT,               --   (not authority — §6.4)
-  turn_seq INTEGER,                -- creating turn's ordinal in its branch (turn-decay)
+  last_invocation_id TEXT,         -- most recent producing tool call (drill-down)
+  turn_seq INTEGER,                -- latest touching turn's ordinal (turn-decay)
   hits INTEGER NOT NULL DEFAULT 1, -- coalesced repeat count
+  last_block_sig TEXT,             -- observed only: signature of the last block
+                                   -- rendered to this session for this file (§7.1)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_touches_dst ON gad_touches(dst_kind, dst_id, id);
 CREATE INDEX idx_touches_session ON gad_touches(session_log_id, session_head, id);
--- One counted row per edge identity per session: repeats bump hits/turn_seq.
+-- One counted row per (kind, session, target): repeats bump hits/turn_seq.
 CREATE UNIQUE INDEX idx_touches_coalesce
-  ON gad_touches(kind, src_kind, src_id, dst_kind, dst_id, session_log_id, session_head);
+  ON gad_touches(kind, session_log_id, session_head, dst_kind, dst_id);
 ```
+
+`last_block_sig` makes the coalesced observed row do double duty: it is also
+the re-read-suppression memory (§7.1) — the row the read upserts anyway is
+exactly the per-(session, file) slot the suppression check needs, so
+suppression costs zero extra tables and zero extra writes.
 
 Density reads a soft edge as its kind weight scaled by a _sublinear_ function
 of `hits` (default `sqrt`, a tuning knob §12) — bounded accumulation — while
@@ -222,7 +235,7 @@ ages out soft rows below a relevance floor. Because degree is computed at query
 time (§6.5), there is no degree counter to keep in sync on removal — the
 v1 "symmetry rule" footgun is gone by construction.
 
-## 5. Blame, on `fileHistory`
+## 5. Blame: the hunk chain becomes a guaranteed invariant
 
 The row set is already served: `fileHistory(repoPath, path, head)` = the path's
 committed ops in commit-lineage order (event-keyed ancestry, not global seq)
@@ -230,28 +243,77 @@ plus the uncommitted working tail. Joining `invocation_id →
 trajectory_invocations` yields turn/session; `committed_event_id` yields the
 commit and its mandatory message.
 
-**Line-level blame is an interval problem in offset space.** Hunk ranges are
-recorded against _their own base_ — a hunk that replaced offsets 400–580 no
-longer lives there once an earlier-in-file edit shifts the tail. "Who last
-changed line N at head H" is therefore **not** "the newest op whose recorded
-range contains N's offset". The composition `git blame` does must be done here,
-in a `blameLines(repoPath, path, lineRange, head)` helper — not inline SQL:
+**Line-level blame is an interval problem in offset space**, and offset
+composition is only correct if each op's base **is** the previous op's output.
+Today that chain holds within a head (working edits are CAS-serialized and
+`buildEditOpRows` derives `old_content_hash` from the composed map) but has two
+genuine holes: **merge commits record no per-file ops at all** (the merge path
+goes through `snapshotDir` → ingest with no `editOps`), and nothing *enforces*
+continuity where ops are supplied to an ingest. We do not work around those
+holes with query-time content-diff fallbacks — **we close them in the VCS**, so
+the chain is total by construction and blame is exact:
 
-1. **Materialize** the file at H (the read already has the bytes) and map the
-   query lines to character offsets.
-2. **Walk `fileHistory` newest→oldest** (working tail first), carrying each
-   query offset back through every later op's delta: a replace hunk shifts
-   offsets after it by `newText.length − (end − start)`. To test op _k_, map
-   the offset back through ops _k+1…latest_ into _k_'s post-state coordinates,
-   then check containment in `[start, start + newText.length)`. The first
-   containing op wins; its `invocation_id`/`committed_event_id` is the answer.
-3. **Barriers.** An op with `hunks_json IS NULL` (create, binary write,
-   no-diff) is a coordinate barrier: every line is "changed by" it unless an
-   on-demand `old_content_hash → new_content_hash` content diff proves a line
-   passed through. Text writes don't hit this — they carry computed hunks.
+### 5.1 VCS upgrades (the substrate changes, not just the consumer)
 
-Bounded per-file computation at query time — O(ops on this path), not stored
-state. Non-agent ops blame to actor + commit with no producing turn.
+- **U1 — hunk completeness invariant.** Every edit op that mutates an existing
+  **text** file carries `hunks_json` — enforced at insert time in the store
+  (`insertWorkingEditOps` and the ingest `editOps` path), not left to caller
+  goodwill. `hunks_json IS NULL` is legal only for `create`, `delete`, `chmod`,
+  and binary content, and binary is **marked explicitly** on the row so blame
+  can distinguish "no line structure" from "missing data". A violating insert
+  is rejected loudly.
+- **U2 — chain continuity invariant.** An op's `old_content_hash` must equal
+  the path's content at its base: for working rows this is already structural
+  (the composed working map produces it — assert it anyway); for ingest-supplied
+  `editOps` (bootstrap/merge/fork) the store validates each op against the
+  **first parent state** and rejects on mismatch. `checkGadIntegrity` gains a
+  per-path chain check — walking each path's first-parent lineage,
+  `op[k+1].old_content_hash == op[k].new_content_hash` — so a broken chain is a
+  loud integrity failure, never a silent mis-blame.
+- **U3 — provenance-preserving merges.** `diff3Merge` already computes the full
+  base/ours/theirs chunk alignment internally and throws it away, returning
+  only merged text. Extend it to also return **merge hunks against the OURS
+  side**, each annotated with origin: `{start, end, newText, origin:
+  "theirs" | "resolved", theirsStart?, theirsEnd?}` — a region theirs changed
+  and ours didn't is a `theirs` hunk carrying its source range in the other
+  parent's content; a conflict the agent resolved is `resolved` (authored by
+  the resolving session's own edit ops). The merge engine already holds
+  base/ours/theirs per file, so this is recording what it already knows. The
+  merge ingest then passes these as `editOps` (`old_content_hash` = ours,
+  `new_content_hash` = merged — satisfying U2 against the first parent), using
+  the `IngestWorktreeStateInput.editOps` path that already exists. Merges stop
+  being blame holes; they become exactly-routable nodes.
+
+### 5.2 The blame algorithm (exact, no fallback)
+
+`blameLines(repoPath, path, lineRange, head)` — a helper, not inline SQL:
+
+1. **Materialize** the file at `head` (the read already has the bytes) and map
+   the query lines to character offsets.
+2. **Walk the first-parent chain newest→oldest** (working tail first; at a
+   merge commit, first parent = ours, `gad_transition_parents.ordinal = 0`),
+   carrying each query offset back through every later op's delta: a hunk
+   shifts offsets after it by `newText.length − (end − start)`. To test op
+   _k_, map the offset through ops _k+1…latest_ into _k_'s post-state
+   coordinates, then check containment in `[start, start + newText.length)`.
+   The first containing op wins; its `invocation_id`/`committed_event_id` is
+   the answer.
+3. **Route through merges.** A hit inside a merge op's hunk resolves by
+   origin: `resolved` blames the resolving session's edit ops (which precede
+   the merge commit on the same head); `theirs` maps the offset into the other
+   parent's coordinates via the recorded `theirsStart`/`theirsEnd` and
+   **continues composing along that parent's own first-parent chain**. All
+   contexts commit to the same per-repo log, so the other branch's ops are
+   present with their true authors — routing terminates at a `create` or at
+   lines older than the log.
+4. **Semantic stops only.** `create` and binary ops end the walk because
+   identity genuinely begins there — the only remaining "barriers" are true
+   ones. There is **no content-diff fallback**: U1–U3 make the chain total,
+   and a gap is an integrity bug to fix, not a case to paper over.
+
+Bounded per-file computation at query time — O(ops reachable for this path),
+not stored state. Non-agent ops blame to actor + commit with no producing
+turn.
 
 ## 6. Retrieval: provenance ∪ recall, re-ranked by session density
 
@@ -367,11 +429,18 @@ case must not be a decision; only the exception is:
   agent is about to change with non-obvious ramifications. Rare by design.
 - **`none` is a mechanism, not a choice.** The v1 `none` case was "re-reads
   and files you know cold" — and the system detects re-reads better than the
-  agent will ever bother to: if the same session re-reads a path and the
-  attachment inputs are unchanged (same `touch_version` key the warm cache
-  already uses, §7.3), the block is **suppressed automatically**. A file
-  changed by another session re-attaches — that is exactly the re-read that
-  must not be silent.
+  agent will ever bother to. Suppression has its **own key**, not the warm
+  cache's `touch_version` (which advances on *every* touch — including the
+  `observed` touch each read writes — so a version-keyed check would never
+  fire). Define a **block signature** per (session, path): hash of (the path's
+  content hash, the path's latest edit-op id, the path's exception-item set).
+  The read tool's coalesced `observed` upsert already lands on exactly the
+  per-(session, path) row this needs, so the signature is stored there
+  (`gad_touches.last_block_sig`, §4.2): recompute is one indexed lookup, and
+  when the signature is unchanged the block is **suppressed automatically** —
+  zero extra tables, zero extra writes. A file changed by another session, or
+  one that gained an exception item, changes the signature and re-attaches —
+  exactly the re-read that must not be silent.
 
 The runtime enforces hard ceilings regardless (`PROV_BUDGET_MS`, per-tier item
 caps), so even reflexive `deep` cannot blow up compute or context.
@@ -526,10 +595,21 @@ yields single-digit claims per long session. The one moment an agent reliably
 stops and verbalizes "what I did and why" is the **mandatory commit message**.
 So:
 
-- **`vcs.commit` accepts an optional `claims: [...]`** (each a `record_claim`
-  payload, run through the same FTS dedup): recording durable insight costs
-  zero extra tool calls at the moment of maximal clarity, and the claims are
-  born linked to the commit event.
+- **The commit _tool_ accepts an optional `claims: [...]`** (each a
+  `record_claim` payload, run through the same FTS dedup): recording durable
+  insight costs zero extra tool calls at the moment of maximal clarity, and
+  the claims are born linked to the commit event.
+- **Layering is strict**: claims are projections of `knowledge.claim_*` events
+  on the agent's **trajectory** log, and `vcsService` appends only to per-repo
+  **vcs** logs — it must never write trajectory events. So `claims:` lives on
+  the **harness commit tool**, which calls `vcs.commit` and, on success, emits
+  the claim events through the agent's normal claim path (right log, right
+  causality, commit event id attached as the claim's anchor). Anyone
+  implementing claim-writing inside `vcsService` is breaking event-sourcing
+  ownership.
+- **Dedup never blocks the commit.** The commit stands regardless; near-
+  duplicate candidates come back in the tool result for the agent to revise or
+  relate on the next call.
 - **The commit result nudges** when no claims were passed and the diff is
   non-trivial: one line — "anything durable to record? (`claims:` on commit,
   or `record_claim`)". A nudge in a tool result, at the right moment, moves
@@ -571,9 +651,11 @@ a specific handle, not re-deriving the ranked block. Follow-on ergonomics
 (every line one insight + one handle; `K of M` counts; the pre-written next
 query for the top thread) carry over from v1 verbatim.
 
-## 10. Upstream tweaks required (small, surgical)
+## 10. VCS modifications this plan makes
 
-The rework was built for exactly our direction, but three seams need touching:
+The rework was built for exactly our direction, but this plan changes the
+substrate where it falls short rather than working around it — four tool/service
+seams (T1–T4) and three store/merge upgrades (U1–U3, specified in §5.1):
 
 - **T1 — commit causality.** The `vcs.commit` service handler passes neither
   `invocationId` nor `turnId`, so the commit _event_ is attributable only
@@ -588,10 +670,18 @@ The rework was built for exactly our direction, but three seams need touching:
   anchored to the commit event id) at commit-projection time, so the mandatory
   messages join the recall leg. They are the cheapest high-quality semantic
   signal in the system.
-- **T4 — `claims:` on `vcs.commit`** (§8): the commit input schema accepts an
-  optional claims array, emitted through the `record_claim` path (FTS dedup
-  included) and linked to the commit event; the commit result carries the
-  one-line nudge when the diff is non-trivial and no claims were passed.
+- **T4 — `claims:` on the commit tool** (§8): the **harness** commit tool
+  accepts an optional claims array and, after `vcs.commit` succeeds, emits the
+  claim events through the agent's own claim path (trajectory log — never via
+  `vcsService`, which must not write trajectory events); dedup never blocks
+  the commit; the tool result carries the one-line nudge when the diff is
+  non-trivial and no claims were passed.
+- **U1/U2/U3 — the blame-chain invariants and provenance-preserving merges**
+  (§5.1): hunk completeness enforced at insert with explicit binary marking;
+  chain continuity validated at ingest and checked by `checkGadIntegrity`;
+  `diff3Merge` returns origin-annotated merge hunks vs ours and the merge
+  ingest records them as `editOps`. These modify the VCS substrate itself —
+  the plan upgrades the system rather than working around it.
 
 Explicitly **not** tweaked: `invocation_id` stays self-asserted (the DO cannot
 verify a tool-call id; pre-release this is fine and T2 makes it mechanical);
@@ -606,7 +696,10 @@ is built and landed as one. The workstreams below are a decomposition for
 implementation order within the bang, not release phases — nothing is "done"
 until all of them are:
 
-- **Blame** — T1 + T2 (§10); `blameLines` (§5); the `provenance_for_file` view.
+- **Blame** — U1/U2 (insert-time invariants + the `checkGadIntegrity` chain
+  check) and U3 (`diff3Merge` origin-annotated merge hunks + merge-ingest
+  `editOps`), §5.1; T1 + T2 (§10); `blameLines` (§5.2); the
+  `provenance_for_file` view.
 - **Claims** — `record_claim` (FTS dedup-on-write) / `relate_claims` /
   `revise_claim` / `retract_claim`; `gad_claim_relations` + the
   `knowledge.claims_related` kind; `claim_kind`/`text` columns on `gad_claims`;
@@ -641,9 +734,20 @@ Resolved (locked for the build):
   tables and are read through views; exactly one physical soft table
   (`gad_touches`) for behavioral signal. No dual-writes anywhere.
 - **Anchors:** commits are identified by **event id**, never state hash.
-- **Blame:** built on `fileHistory` (event-keyed ancestry order + working
-  tail); line blame = offset-space composition in `blameLines`; barriers only
-  at hunk-less ops.
+- **Blame is exact, by invariant — not best-effort.** The hunk chain is total
+  by construction (U1 completeness + U2 continuity, enforced at insert/ingest
+  and checked by `checkGadIntegrity`); merges are provenance-preserving nodes
+  (U3 origin-annotated hunks), not barriers; line blame = offset-space
+  composition along the first-parent chain with merge routing (§5.2). There is
+  no query-time content-diff fallback — a chain gap is an integrity bug, not a
+  case.
+- **Soft touches are session-anchored** (session → file/claim) — an
+  invocation-keyed edge could never coalesce since every read is a fresh
+  invocation; `last_invocation_id` is a column, not the key.
+- **Re-read suppression is signature-keyed, on the observed row.** Block
+  signature = (path content hash, latest edit-op id, exception-item set),
+  stored in `gad_touches.last_block_sig` — never the warm cache's
+  `touch_version`, which advances on every touch and would never suppress.
 - **Decay:** logical, two clocks (turns-ago; per-anchor ordinality); never the
   query-time wall clock; never global `log_events.seq`.
 - **Weighting:** flat per-kind; `idf`/`norm` discriminate; magnitude never an
@@ -654,17 +758,19 @@ Resolved (locked for the build):
   hint; forks fall back to branch-chain scoping.
 - **Attachment depth is automatic, not asked.** `moderate` runs on every read
   with no argument; `deep` is the one optional agent-facing escalation; `none`
-  is mechanical re-read suppression (`touch_version`-keyed), never an agent
-  choice (§7.1). The v1 mandatory ternary is rescinded: routine decisions
+  is mechanical re-read suppression (block-signature-keyed, above), never an
+  agent choice (§7.1). The v1 mandatory ternary is rescinded: routine decisions
   collapse to constants in real agents, so the routine case must not be a
   decision.
 - **Exceptions first, floored.** Contradictions and cross-session concurrency
   always render, at the top, regardless of density; everything else clears a
   minimum score or the block is thin/absent. No structural filler — silence
   preserves salience (§7.5).
-- **Claim capture rides the commit** (`claims:` on `vcs.commit` + result-line
-  nudge, T4); standalone `record_claim` remains but is not the load-bearing
-  path. The claim base is seeded at the bang (§8).
+- **Claim capture rides the commit tool** (`claims:` + result-line nudge, T4),
+  emitted through the agent's trajectory claim path after `vcs.commit`
+  succeeds — `vcsService` never writes trajectory events, and dedup never
+  blocks a commit. Standalone `record_claim` remains but is not the
+  load-bearing path. The claim base is seeded at the bang (§8).
 - Item-based budgets; withheld-but-advertised tails (`K of M` + paging);
   attachment parallel with the fs read on a standalone `PROV_BUDGET_MS`;
   warmed; `observed` records only what was actually read.
