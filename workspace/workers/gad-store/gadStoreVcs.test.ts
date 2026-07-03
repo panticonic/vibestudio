@@ -211,6 +211,14 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     await expect(edit("../escape.txt")).rejects.toThrow(/escapes worktree/);
     await expect(edit(".env")).rejects.toThrow(/platform-ignored/);
     await expect(edit("node_modules/x.js")).rejects.toThrow(/platform-ignored/);
+    // Segments the tree encoder rejects must be refused at the boundary, not
+    // stored as phantom working-map keys that only throw later at encode time.
+    await expect(edit("a/./b")).rejects.toThrow(/valid tree path/);
+    await expect(edit("a//b")).rejects.toThrow(/valid tree path/);
+    await expect(edit("./a")).rejects.toThrow(/valid tree path/);
+    await expect(edit("foo/")).rejects.toThrow(/valid tree path/);
+    await expect(edit(".")).rejects.toThrow(/valid tree path/);
+    await expect(edit("a\\b")).rejects.toThrow(/valid tree path/);
     await expect(edit("main")).resolves.toBeTruthy(); // ordinary file name is fine
   });
 

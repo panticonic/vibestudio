@@ -84,10 +84,10 @@ describe("pair-server runner", () => {
     expect(output).toMatch(/Pair code:\s+PAIRING_READY_CODE_123/);
     expect(output).toMatch(/QR code:\s+PAIRING_QR_CODE_123/);
     expect(output).toContain(
-      "vibez1://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_READY_CODE_123&sig=wss%3A%2F%2Fsignal.vibez1.dev&v=1&ice=all"
+      "vibez1://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_READY_CODE_123&sig=wss%3A%2F%2Fsignal.vibez1.dev&v=2&ice=all"
     );
     expect(output).toContain(
-      "vibez1://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_QR_CODE_123&sig=wss%3A%2F%2Fsignal.vibez1.dev&v=1&ice=all"
+      "vibez1://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_QR_CODE_123&sig=wss%3A%2F%2Fsignal.vibez1.dev&v=2&ice=all"
     );
     expect(output).toContain("Pair from test.");
 
@@ -130,7 +130,7 @@ describe("pair-server runner", () => {
       const output = logText(logSpy);
       expect(output).toMatch(/Pair code:\s+PAIRING_CUSTOM_CODE_123/);
       expect(output).toContain(
-        "vibez1://connect?room=room-custom-1a2b3c4d&fp=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66&code=PAIRING_CUSTOM_CODE_123&sig=ws%3A%2F%2F127.0.0.1%3A8787&v=1&ice=all"
+        "vibez1://connect?room=room-custom-1a2b3c4d&fp=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66&code=PAIRING_CUSTOM_CODE_123&sig=ws%3A%2F%2F127.0.0.1%3A8787&v=2&ice=all"
       );
       child.emit("exit", 0, null);
       expect(fs.existsSync(readyDir)).toBe(true);
@@ -185,10 +185,10 @@ describe("pair-server runner", () => {
     expect(output).toContain("wss://signal.example.org");
     expect(output).toMatch(/Pair code:\s+PAIRING_REMOTE_CODE_123/);
     expect(output).toContain(
-      "vibez1://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_CODE_123&sig=wss%3A%2F%2Fsignal.example.org&v=1&ice=all"
+      "vibez1://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_CODE_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
     );
     expect(output).toContain(
-      "vibez1://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_QR_123&sig=wss%3A%2F%2Fsignal.example.org&v=1&ice=all"
+      "vibez1://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_QR_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
     );
 
     child.emit("exit", 0, null);
@@ -285,10 +285,10 @@ describe("pair-server runner", () => {
     await waitFor(() => logText(logSpy).includes("PAIRING_STDOUT_QR_123"));
     const output = logText(logSpy);
     expect(output).toContain(
-      "vibez1://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_CODE_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=1&ice=all"
+      "vibez1://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_CODE_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
     );
     expect(output).toContain(
-      "vibez1://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_QR_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=1&ice=all"
+      "vibez1://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_QR_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
     );
 
     child.emit("exit", 0, null);

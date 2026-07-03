@@ -19,6 +19,7 @@ import type {
   HostTargetLaunchSessionSnapshot,
 } from "@vibez1/shared/hostTargets";
 import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { isWebRtcCredential } from "./credentialStore.js";
 import { typedClient } from "./typedClients.js";
 import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";
 
@@ -36,7 +37,8 @@ export interface TerminalLaunchGateResult {
 }
 
 export async function runTerminalLaunchGate(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">,
+  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
+    Partial<Pick<DeviceCredential, "pairing">>,
   options: TerminalLaunchGateOptions = {}
 ): Promise<TerminalLaunchGateResult> {
   const target = options.target ?? "terminal";
@@ -191,9 +193,13 @@ async function createEventServerClient(
 }
 
 async function createTerminalLaunchEventClient(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">,
+  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
+    Partial<Pick<DeviceCredential, "pairing">>,
   target: HostTarget
 ): Promise<TerminalLaunchEventClient> {
+  if (isWebRtcCredential(creds)) {
+    return await createWebRtcTerminalLaunchEventClient(creds, target);
+  }
   const eventNames = HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS;
   const waiters = new Set<() => void>();
   let lastSession: HostTargetLaunchSessionSnapshot | null = null;
@@ -245,6 +251,71 @@ async function createTerminalLaunchEventClient(
     },
     close() {
       return client?.close() ?? Promise.resolve();
+    },
+  };
+}
+
+async function createWebRtcTerminalLaunchEventClient(
+  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
+    Partial<Pick<DeviceCredential, "pairing">>,
+  target: HostTarget
+): Promise<TerminalLaunchEventClient> {
+  const eventNames = HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS;
+  const waiters = new Set<() => void>();
+  let lastSession: HostTargetLaunchSessionSnapshot | null = null;
+  let revision = 0;
+  let observedRevision = 0;
+  const notify = () => {
+    revision += 1;
+    for (const waiter of [...waiters]) waiter();
+  };
+  const rpc = new RpcClient(creds);
+  const cleanups: Array<() => void> = [];
+  try {
+    for (const event of eventNames) {
+      cleanups.push(
+        await rpc.onEvent(event, (payload) => {
+          if (isLaunchSessionEventForTarget(target, event, payload)) {
+            lastSession = payload;
+            notify();
+          }
+        })
+      );
+    }
+    const subscribeAll = async () => {
+      await Promise.all(eventNames.map((event) => rpc.call("events.subscribe", [event])));
+    };
+    cleanups.push(await rpc.onRecovery(subscribeAll));
+    await subscribeAll();
+  } catch (error) {
+    for (const cleanup of cleanups.splice(0)) cleanup();
+    await rpc.close();
+    throw error;
+  }
+
+  return {
+    waitForLaunchSessionChange(sessionId, timeoutMs) {
+      if (lastSession?.sessionId === sessionId && revision !== observedRevision) {
+        observedRevision = revision;
+        return Promise.resolve(lastSession);
+      }
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          waiters.delete(done);
+          resolve(null);
+        }, timeoutMs);
+        const done = () => {
+          observedRevision = revision;
+          clearTimeout(timer);
+          waiters.delete(done);
+          resolve(lastSession?.sessionId === sessionId ? lastSession : null);
+        };
+        waiters.add(done);
+      });
+    },
+    async close() {
+      for (const cleanup of cleanups.splice(0)) cleanup();
+      await rpc.close();
     },
   };
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,6 +12,7 @@ import {
   loadCliCredentials,
   saveCliCredentials,
   credentialPath,
+  isWebRtcCredential,
 } from "./credentialStore.js";
 import {
   createPairingInvite,
@@ -20,7 +22,7 @@ import {
   type PairOptions,
   type RemoteWorkspaceEntry,
 } from "./remoteClient.js";
-import { refreshShell, type DeviceCredential } from "./rpcClient.js";
+import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { runTerminalLaunchGate } from "./terminalLaunchGate.js";
 import { agentCommands } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
@@ -36,7 +38,14 @@ import {
   type CliCommand,
   type ParsedInvocation,
 } from "./commandTable.js";
-import { AuthError, UsageError, jsonMode, printError, printResult } from "./output.js";
+import {
+  AuthError,
+  UsageError,
+  jsonMode,
+  printError,
+  printResult,
+  redactCliSecrets,
+} from "./output.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -77,6 +86,28 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
     if (!creds) throw new AuthError("not paired");
     if (!creds.workspaceName || !isSelectedWorkspaceUrl(creds.url)) {
       throw new AuthError("no remote workspace selected - run `vibez1 remote select <workspace>`");
+    }
+    if (isWebRtcCredential(creds)) {
+      const rpc = new RpcClient(creds);
+      try {
+        const info = await rpc.call<Record<string, unknown>>("auth.getConnectionInfo", []);
+        const result = {
+          url: creds.url,
+          workspaceId: typeof info["workspaceId"] === "string" ? info["workspaceId"] : undefined,
+          serverId: typeof info["serverId"] === "string" ? info["serverId"] : undefined,
+        };
+        printResult(result, {
+          json,
+          human: () => {
+            console.log(`connected: ${result.url}`);
+            if (result.workspaceId) console.log(`workspace: ${result.workspaceId}`);
+            if (result.serverId) console.log(`server: ${result.serverId}`);
+          },
+        });
+        return 0;
+      } finally {
+        await rpc.close();
+      }
     }
     const refresh = await refreshShell(creds);
     const response = await fetch(appendServerPath(creds.url, "/healthz"));
@@ -119,7 +150,8 @@ async function remoteInvite(inv: ParsedInvocation): Promise<number> {
       ttlMs = value;
     }
     if (!creds.hubUrl) throw new AuthError("stored credential is missing a hub URL; pair again");
-    const invite = await createPairingInvite({ ...creds, url: creds.hubUrl }, { ttlMs });
+    const inviteCreds = isWebRtcCredential(creds) ? creds : { ...creds, url: creds.hubUrl };
+    const invite = await createPairingInvite(inviteCreds, { ttlMs });
     printResult(invite, {
       json,
       human: () => {
@@ -232,7 +264,7 @@ async function terminalCredentials(
     const loaded = loadCliCredentials();
     if (!loaded) {
       throw new AuthError(
-        'not paired - run `vibez1 terminal start --pair "vibez1://connect?url=...&code=..."`'
+        'not paired - run `vibez1 terminal start --pair "vibez1://connect?room=...&fp=...&code=...&sig=...&v=2"`'
       );
     }
     creds = loaded;
@@ -380,7 +412,7 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "pair",
     summary: "Save a CLI device credential without launching Electron",
-    usage: 'vibez1 remote pair "vibez1://connect?url=...&code=..."',
+    usage: 'vibez1 remote pair "vibez1://connect?room=...&fp=...&code=...&sig=...&v=2"',
     flags: [
       { name: "url", takesValue: true, description: "Server URL (with --code)" },
       { name: "code", takesValue: true, description: "Pairing code (with --url)" },
@@ -524,6 +556,137 @@ const terminalCommands: CliCommand[] = [
   },
 ];
 
+function headlessHostEntryPath(): string {
+  const override = process.env["VIBEZ1_HEADLESS_HOST_ENTRY"];
+  if (override) return path.resolve(override);
+  // Root builds copy the headless host bundle to dist/headless-host so the
+  // installed CLI can import plain JS. In-repo dev falls back to app dist or
+  // TS source (the CLI runs under tsx in-repo).
+  const bundledEntry = path.join(repoRoot, "dist", "headless-host", "index.js");
+  const appDistEntry = path.join(repoRoot, "apps", "headless-host", "dist", "index.js");
+  const srcEntry = path.join(repoRoot, "apps", "headless-host", "src", "index.ts");
+  return fs.existsSync(bundledEntry)
+    ? bundledEntry
+    : fs.existsSync(appDistEntry)
+      ? appDistEntry
+      : srcEntry;
+}
+
+async function createWebRtcHeadlessHostOverrides(
+  creds: DeviceCredential & { pairing: NonNullable<DeviceCredential["pairing"]> },
+  opts: { label?: string }
+): Promise<Record<string, unknown>> {
+  const [{ WebRtcRpcClient }, { startPanelAssetFacade }, { RemoteCdpHostBridgeSocket }] =
+    await Promise.all([
+      import("./webrtcClient.js"),
+      import("../main/panelAssetFacade.js"),
+      import(pathToFileURL(headlessHostEntryPath()).href),
+    ]);
+
+  const clientSessionId = `headless-${randomUUID()}`;
+  const label = opts.label ?? "Headless";
+  const token = `refresh:${creds.deviceId}:${creds.refreshToken}`;
+  const client = new WebRtcRpcClient({
+    pairing: creds.pairing,
+    callerId: `shell:${creds.deviceId}`,
+    getToken: () => token,
+    connectionId: clientSessionId,
+    clientLabel: label,
+    logPrefix: "[headless-webrtc]",
+  });
+  await client.ready();
+
+  let facade: Awaited<ReturnType<typeof startPanelAssetFacade>> | null = null;
+  try {
+    const rpc = {
+      call<T = unknown>(
+        targetId: string,
+        method: string,
+        args: unknown[] = [],
+        options?: unknown
+      ): Promise<T> {
+        void options;
+        return targetId === "main"
+          ? client.call<T>(method, args)
+          : client.callTarget<T>(targetId, method, args);
+      },
+      stream(
+        targetId: string,
+        method: string,
+        args: unknown[] = [],
+        options?: Parameters<import("./webrtcClient.js").WebRtcRpcClient["stream"]>[3]
+      ): Promise<Response> {
+        return client.stream(targetId, method, args, options);
+      },
+    };
+    facade = await startPanelAssetFacade(
+      {
+        stream(service, method, args, options) {
+          return client.stream("main", `${service}.${method}`, args, options);
+        },
+      },
+      {
+        stateDir: path.join(
+          os.homedir(),
+          ".local",
+          "state",
+          "vibez1",
+          "headless-host",
+          "panel-asset-facade"
+        ),
+      }
+    );
+    const activeFacade = facade;
+
+    const eventListeners = new Set<(event: string, payload: unknown) => void>();
+    const recoveryHandlers = new Set<() => void | Promise<void>>();
+    const cleanups: Array<() => void> = [];
+    cleanups.push(
+      await client.onEvent("panel:runtimeLeaseChanged", (payload) => {
+        for (const listener of eventListeners) listener("panel:runtimeLeaseChanged", payload);
+      })
+    );
+    cleanups.push(
+      await client.onRecovery(async () => {
+        for (const handler of recoveryHandlers) await handler();
+      })
+    );
+
+    return {
+      serverUrl: `http://127.0.0.1:${activeFacade.port}`,
+      clientSessionId,
+      connectionFactory: async () => ({
+        rpc,
+        getToken: () => token,
+        onServerEvent(listener: (event: string, payload: unknown) => void) {
+          eventListeners.add(listener);
+        },
+        onResubscribe(handler: () => void | Promise<void>) {
+          recoveryHandlers.add(handler);
+        },
+        async close() {
+          for (const cleanup of cleanups.splice(0)) cleanup();
+          await client.close();
+        },
+      }),
+      bridgeSocketFactory: () =>
+        new RemoteCdpHostBridgeSocket({
+          rpc,
+          hostConnectionId: clientSessionId,
+        }),
+      cleanup: async () => {
+        for (const cleanup of cleanups.splice(0)) cleanup();
+        await activeFacade.close();
+        await client.close();
+      },
+    };
+  } catch (error) {
+    await facade?.close().catch(() => undefined);
+    await client.close().catch(() => undefined);
+    throw error;
+  }
+}
+
 async function remoteHost(inv: ParsedInvocation): Promise<number> {
   const flagStr = (name: string): string | undefined =>
     typeof inv.flags[name] === "string" ? (inv.flags[name] as string) : undefined;
@@ -540,11 +703,13 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
     console.error("remote host requires a selected workspace URL");
     return 3;
   }
-  let auth:
+  let configOverrides:
     | { serverUrl: string; token: string }
-    | { deviceCredential: { serverUrl: string; deviceId: string; refreshToken: string } };
+    | { deviceCredential: { serverUrl: string; deviceId: string; refreshToken: string } }
+    | Record<string, unknown>;
+  let cleanup: (() => Promise<void>) | null = null;
   if (explicitUrl && explicitToken) {
-    auth = { serverUrl: explicitUrl, token: explicitToken };
+    configOverrides = { serverUrl: explicitUrl, token: explicitToken };
   } else {
     const creds = loadCliCredentials();
     if (!creds) {
@@ -559,26 +724,31 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
       console.error("stored remote credential is not scoped to a workspace");
       return 3;
     }
-    auth = {
-      deviceCredential: {
-        serverUrl: explicitUrl ?? creds.url,
-        deviceId: creds.deviceId,
-        refreshToken: creds.refreshToken,
-      },
-    };
+    if (isWebRtcCredential(creds)) {
+      if (explicitUrl) {
+        console.error("remote host does not support overriding --url for WebRTC credentials");
+        return 3;
+      }
+      configOverrides = await createWebRtcHeadlessHostOverrides(creds, {
+        label: flagStr("label"),
+      });
+      cleanup =
+        typeof configOverrides["cleanup"] === "function"
+          ? (configOverrides["cleanup"] as () => Promise<void>)
+          : null;
+      delete configOverrides["cleanup"];
+    } else {
+      configOverrides = {
+        deviceCredential: {
+          serverUrl: explicitUrl ?? creds.url,
+          deviceId: creds.deviceId,
+          refreshToken: creds.refreshToken,
+        },
+      };
+    }
   }
 
-  // Root builds copy the headless host bundle to dist/headless-host so the
-  // installed CLI can import plain JS. In-repo dev falls back to app dist or
-  // TS source (the CLI runs under tsx in-repo).
-  const bundledEntry = path.join(repoRoot, "dist", "headless-host", "index.js");
-  const appDistEntry = path.join(repoRoot, "apps", "headless-host", "dist", "index.js");
-  const srcEntry = path.join(repoRoot, "apps", "headless-host", "src", "index.ts");
-  const entry = fs.existsSync(bundledEntry)
-    ? bundledEntry
-    : fs.existsSync(appDistEntry)
-      ? appDistEntry
-      : srcEntry;
+  const entry = headlessHostEntryPath();
   const { HeadlessHost, resolveConfig } = (await import(pathToFileURL(entry).href)) as {
     HeadlessHost: new (config: unknown) => {
       start(): Promise<void>;
@@ -589,7 +759,7 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
   };
 
   const config = resolveConfig({
-    ...auth,
+    ...configOverrides,
     label: flagStr("label"),
     maxPanels: flagStr("max-panels")
       ? Number.parseInt(flagStr("max-panels") as string, 10)
@@ -605,12 +775,16 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
   try {
     await host.start();
   } catch (error) {
+    await cleanup?.().catch(() => undefined);
     console.error(
-      `headless host failed to start: ${error instanceof Error ? error.message : String(error)}`
+      `headless host failed to start: ${redactCliSecrets(
+        error instanceof Error ? error.message : String(error)
+      )}`
     );
     return 1;
   }
   await host.done;
+  await cleanup?.().catch(() => undefined);
   return 0;
 }
 

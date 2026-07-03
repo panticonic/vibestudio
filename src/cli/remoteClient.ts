@@ -1,12 +1,21 @@
 import * as os from "node:os";
 import {
+  parseConnectLink,
   serverAuthRouteUrl,
   serverWorkspaceRouteUrl,
   PAIRING_CODE_PATTERN,
   parseConnectServerUrl,
+  selectedWorkspacePath,
+  type ConnectPairing,
 } from "@vibez1/shared/connect";
 import { AuthError } from "./output.js";
 import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
+import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import {
+  isWebRtcCredential,
+  type CliHubCredential,
+  type CliStoredPairing,
+} from "./credentialStore.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { typedClient } from "./typedClients.js";
 
@@ -31,6 +40,14 @@ export interface PairingInvite {
   expiresAt?: number;
 }
 
+interface WorkspaceSelectResult {
+  workspaceName?: string;
+  serverUrl?: string;
+  pairing?: {
+    deepLink?: string;
+  } | null;
+}
+
 export interface RemoteWorkspaceEntry {
   name: string;
   lastOpened: number;
@@ -39,6 +56,11 @@ export interface RemoteWorkspaceEntry {
 }
 
 export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {
+  if (options.link) {
+    return await pairRemoteServerViaWebRtc(options.link, {
+      label: options.label,
+    });
+  }
   const parsed = parsePairOptions(options);
   let response: Response;
   try {
@@ -76,6 +98,52 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
   };
 }
 
+async function pairRemoteServerViaWebRtc(
+  link: string,
+  options: { label?: string; workspaceName?: string; hubCredential?: CliHubCredential } = {}
+): Promise<DeviceCredential> {
+  const pairing = parsePairingLink(link);
+  const issuedRef: { current: { deviceId: string; refreshToken: string } | null } = {
+    current: null,
+  };
+  const { WebRtcRpcClient } = await import("./webrtcClient.js");
+  const client = new WebRtcRpcClient({
+    pairing,
+    callerId: "shell:pairing",
+    getToken: () => pairing.code,
+    clientLabel: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
+    onPaired: (credential) => {
+      issuedRef.current = credential;
+    },
+  });
+  try {
+    await client.ready();
+    const issued = issuedRef.current;
+    if (!issued) {
+      throw new AuthError("pairing did not return a device credential");
+    }
+    const storedPairing = storePairing(pairing);
+    const workspaceName = options.workspaceName ?? (await detectActiveWorkspace(client));
+    const url = workspaceName
+      ? webrtcSelectedUrl(storedPairing, workspaceName)
+      : webrtcBaseUrl(storedPairing);
+    return {
+      schemaVersion: 1,
+      kind: "device",
+      url,
+      hubUrl: options.hubCredential?.url ?? webrtcBaseUrl(storedPairing),
+      ...(workspaceName ? { workspaceName } : {}),
+      deviceId: issued.deviceId,
+      refreshToken: issued.refreshToken,
+      pairing: storedPairing,
+      pairedAt: Date.now(),
+      ...(options.hubCredential ? { hubCredential: options.hubCredential } : {}),
+    };
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
 async function postHubWorkspaceJson(
   creds: Pick<DeviceCredential, "hubUrl" | "deviceId" | "refreshToken">,
   route: string,
@@ -101,10 +169,23 @@ async function postHubWorkspaceJson(
 }
 
 export async function listRemoteWorkspaces(
-  creds: Pick<DeviceCredential, "hubUrl" | "deviceId" | "refreshToken">
+  creds: Pick<DeviceCredential, "url" | "hubUrl" | "deviceId" | "refreshToken"> &
+    Partial<Pick<DeviceCredential, "pairing" | "hubCredential">>
 ): Promise<RemoteWorkspaceEntry[]> {
+  if (isWebRtcCredential(creds)) {
+    const workspace = typedClient(
+      "workspace",
+      workspaceMethods,
+      new RpcClient(hubCredential(creds))
+    );
+    const result = await workspace.list();
+    return parseWorkspaceEntries(Array.isArray(result) ? result : []);
+  }
   const json = await postHubWorkspaceJson(creds, "list");
-  const workspaces = Array.isArray(json["workspaces"]) ? json["workspaces"] : [];
+  return parseWorkspaceEntries(Array.isArray(json["workspaces"]) ? json["workspaces"] : []);
+}
+
+function parseWorkspaceEntries(workspaces: unknown[]): RemoteWorkspaceEntry[] {
   const result: RemoteWorkspaceEntry[] = [];
   for (const entry of workspaces) {
     const record = entry as Record<string, unknown>;
@@ -123,6 +204,26 @@ export async function selectRemoteWorkspace(
   creds: DeviceCredential,
   name: string
 ): Promise<DeviceCredential> {
+  if (isWebRtcCredential(creds)) {
+    const hub = hubCredential(creds);
+    const workspace = typedClient("workspace", workspaceMethods, new RpcClient(hub));
+    const selected = (await workspace.select(name)) as unknown as WorkspaceSelectResult | undefined;
+    const workspaceName =
+      typeof selected?.workspaceName === "string" ? selected.workspaceName : name;
+    const deepLink =
+      selected?.pairing && typeof selected.pairing.deepLink === "string"
+        ? selected.pairing.deepLink
+        : undefined;
+    if (!deepLink) {
+      throw new AuthError(
+        `workspace "${workspaceName}" did not return a WebRTC pairing link; cannot select it remotely`
+      );
+    }
+    return await pairRemoteServerViaWebRtc(deepLink, {
+      workspaceName,
+      hubCredential: stripHubCredential(hub),
+    });
+  }
   const json = await postHubWorkspaceJson(creds, "select", { name });
   const serverUrl = typeof json["serverUrl"] === "string" ? json["serverUrl"] : null;
   const workspaceName = typeof json["workspaceName"] === "string" ? json["workspaceName"] : name;
@@ -166,14 +267,7 @@ function remoteErrorMessage(body: { error?: unknown; code?: unknown }, fallback:
 
 function parsePairOptions(options: PairOptions): { url: string; code: string } {
   if (options.link) {
-    // A vibez1://connect link now carries a WebRTC room + DTLS fingerprint, not
-    // a server URL — it is redeemed by the desktop/mobile shell over the encrypted
-    // pipe, not by the CLI's HTTP device-credential pairing. There is no origin to
-    // POST a pairing request to, so the CLI pairs against a co-located server URL.
-    throw new Error(
-      "vibez1://connect links pair the desktop/mobile app over WebRTC, not the CLI. " +
-        "Pair the CLI against a co-located server with --url <http://127.0.0.1:PORT> --code <code>."
-    );
+    throw new Error("internal error: WebRTC pairing link reached HTTP pair parser");
   }
   if (!options.url || !options.code) {
     throw new Error("pair requires --url and --code");
@@ -188,4 +282,78 @@ function parsePairOptions(options: PairOptions): { url: string; code: string } {
   // the origin-bearing result.
   if (!("url" in parsedUrl)) throw new Error("server URL did not resolve to an origin");
   return { url: parsedUrl.url, code: options.code };
+}
+
+function parsePairingLink(link: string): ConnectPairing {
+  const parsed = parseConnectLink(link);
+  if (parsed.kind === "error") throw new Error(parsed.reason);
+  const { kind: _kind, ...pairing } = parsed;
+  return pairing;
+}
+
+function storePairing(pairing: ConnectPairing): CliStoredPairing {
+  return {
+    room: pairing.room,
+    fp: pairing.fp,
+    sig: pairing.sig,
+    v: pairing.v,
+    ice: pairing.ice,
+    srv: pairing.srv,
+  };
+}
+
+function webrtcBaseUrl(pairing: Pick<CliStoredPairing, "room">): string {
+  return `webrtc://${pairing.room}`;
+}
+
+function webrtcSelectedUrl(pairing: Pick<CliStoredPairing, "room">, workspaceName: string): string {
+  return `${webrtcBaseUrl(pairing)}${selectedWorkspacePath(workspaceName)}`;
+}
+
+async function detectActiveWorkspace(client: {
+  call<T = unknown>(method: string, args?: unknown[]): Promise<T>;
+}): Promise<string | undefined> {
+  try {
+    const active = await client.call("workspace.getActive", []);
+    return typeof active === "string" && active ? active : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hubCredential(
+  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
+    Partial<Pick<DeviceCredential, "pairing" | "hubCredential">>
+): DeviceCredential {
+  if (creds.hubCredential) {
+    return {
+      schemaVersion: 1,
+      kind: "device",
+      url: creds.hubCredential.url,
+      hubUrl: creds.hubCredential.url,
+      deviceId: creds.hubCredential.deviceId,
+      refreshToken: creds.hubCredential.refreshToken,
+      ...(creds.hubCredential.pairing ? { pairing: creds.hubCredential.pairing } : {}),
+      ...(creds.hubCredential.pairedAt ? { pairedAt: creds.hubCredential.pairedAt } : {}),
+    };
+  }
+  return {
+    schemaVersion: 1,
+    kind: "device",
+    url: creds.url,
+    hubUrl: creds.url,
+    deviceId: creds.deviceId,
+    refreshToken: creds.refreshToken,
+    ...(creds.pairing ? { pairing: creds.pairing } : {}),
+  };
+}
+
+function stripHubCredential(creds: DeviceCredential): CliHubCredential {
+  return {
+    url: creds.url,
+    deviceId: creds.deviceId,
+    refreshToken: creds.refreshToken,
+    ...(creds.pairing ? { pairing: creds.pairing } : {}),
+    ...(creds.pairedAt ? { pairedAt: creds.pairedAt } : {}),
+  };
 }

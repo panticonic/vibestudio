@@ -7,7 +7,7 @@ import type { Alias } from "vite";
 // This is the single source of truth for resolving workspace/vibez1
 // package imports to source .ts files — no dist needed.
 const workspaceTsconfig = JSON.parse(
-  readFileSync(path.resolve(__dirname, "tsconfig.workspace.json"), "utf-8"),
+  readFileSync(path.resolve(__dirname, "workspace/tsconfig.json"), "utf-8"),
 );
 const tsconfigPaths: Record<string, string[]> = workspaceTsconfig.compilerOptions?.paths ?? {};
 
@@ -36,15 +36,17 @@ export default defineConfig({
   resolve: {
     alias: [
       ...sourceAliases,
-      // Resolve workspace panel dependencies from pnpm's node_modules
-      // These are needed for tests in workspace/panels/ which aren't pnpm workspace packages
+      // Resolve workspace panel dependencies from the hoisted node_modules
+      // (version-agnostic — the versioned .pnpm store paths go stale on
+      // every dependency bump). Needed for tests in workspace/panels/ which
+      // aren't pnpm workspace packages.
       {
         find: "ignore",
-        replacement: path.resolve(__dirname, "node_modules/.pnpm/ignore@5.3.2/node_modules/ignore"),
+        replacement: path.resolve(__dirname, "node_modules/ignore"),
       },
       {
         find: "picomatch",
-        replacement: path.resolve(__dirname, "node_modules/.pnpm/picomatch@4.0.3/node_modules/picomatch"),
+        replacement: path.resolve(__dirname, "node_modules/picomatch"),
       },
     ],
     // Force a single React instance across the test graph. The repo has
@@ -84,7 +86,9 @@ export default defineConfig({
       // run under vitest.browser.config.ts in a real browser instead.
       "**/*.browser.test.tsx",
     ],
-    setupFiles: ["tests/setup/vitest.setup.ts"],
+    // Absolute so vitest also works when invoked from a package subdirectory
+    // (a relative path here resolves against the invocation cwd).
+    setupFiles: [path.resolve(__dirname, "tests/setup/vitest.setup.ts")],
     server: {
       deps: {
         // Inline Radix so its imports go through Vite's transform pipeline,

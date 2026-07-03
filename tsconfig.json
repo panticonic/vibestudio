@@ -1,5 +1,48 @@
 {
-  "extends": "./tsconfig.workspace.json",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "rootDir": ".",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "bundler",
+    "types": ["node", "vitest/globals"],
+    "baseUrl": ".",
+    "paths": {
+      "@vibez1/browser-data": ["packages/browser-data/src/index.ts"],
+      "@vibez1/browser-data/client": ["packages/browser-data/src/client.ts"],
+      "@vibez1/dev-log": ["packages/dev-log/src/index.ts"],
+      "@vibez1/durable": ["packages/durable/src/index.ts"],
+      "@vibez1/durable/test-utils": ["packages/durable/src/test-utils.ts"],
+      "@vibez1/env-paths": ["packages/env-paths/src/index.ts"],
+      "@vibez1/extension": ["packages/extension/src/index.ts"],
+      "@vibez1/extension-host": ["packages/extension-host/src/index.ts"],
+      "@vibez1/extension-host/child-runtime": [
+        "packages/extension-host/src/childRuntime.ts"
+      ],
+      "@vibez1/git": ["packages/git/src/index.ts"],
+      "@vibez1/port-utils": ["packages/port-utils/src/index.ts"],
+      "@vibez1/process-adapter": ["packages/process-adapter/src/index.ts"],
+      "@vibez1/rpc": ["packages/rpc/src/index.ts"],
+      "@vibez1/rpc/*": ["packages/rpc/src/*"],
+      "@vibez1/shared/*": ["packages/shared/src/*"],
+      "@vibez1/typecheck": ["packages/typecheck/src/index.ts"],
+      "@vibez1/unit-host": ["packages/unit-host/src/index.ts"],
+      "@vibez1/types": ["packages/types/src/index.ts"]
+    }
+  },
   "include": [
     "src/**/*",
     "packages/**/*"

@@ -4,6 +4,8 @@ import type { BrowserDataClient, StoredCookie } from "@vibez1/browser-data";
 import type { ManagedService } from "@vibez1/shared/managedService";
 import { BROWSER_SESSION_PARTITION } from "@vibez1/shared/panelInterfaces";
 import type { EventService, Subscriber } from "@vibez1/shared/eventsService";
+import { browserDataBrokerPackageName } from "@vibez1/shared/workspace/configParser";
+import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
 import type { ServerClient } from "../serverClient.js";
 
 const log = createDevLogger("BrowserSessionSync");
@@ -15,6 +17,8 @@ export function createBrowserSessionSyncService(deps: {
   browserDataClient: BrowserDataClient;
 }): ManagedService {
   let destroyed = false;
+  /** Set at start() from the manifest-declared broker; null ⇒ sync disabled. */
+  let importEventName: string | null = null;
 
   const syncCookies = async () => {
     try {
@@ -29,18 +33,13 @@ export function createBrowserSessionSyncService(deps: {
     }
   };
 
-  // Browser-data import-complete is now emitted by the
-  // `@workspace-extensions/browser-data` extension. Extension events are
-  // namespaced as `extensions:<name>::<event>` on the wire.
-  const importEventName = "extensions:@workspace-extensions/browser-data::import-complete";
-
   const subscriber: Subscriber = {
     callerKind: "server",
     get isAlive() {
       return !destroyed;
     },
     send(channel, payload) {
-      if (channel !== `event:${importEventName}`) return;
+      if (!importEventName || channel !== `event:${importEventName}`) return;
       const results = Array.isArray(payload) ? payload : [];
       if (!results.some((r) => isCookieImportSuccess(r))) return;
       void syncCookies();
@@ -52,6 +51,32 @@ export function createBrowserSessionSyncService(deps: {
   return {
     name: "browser-session-sync",
     async start() {
+      // Browser-data import-complete is emitted by the manifest-declared
+      // broker extension (meta/vibez1.yml providers.browserData.extension).
+      // Extension events are namespaced as `extensions:<name>::<event>` on the
+      // wire. No broker declared ⇒ cookie session sync stays disabled.
+      try {
+        const config = (await deps.serverClient.call(
+          "workspace",
+          "getConfig",
+          []
+        )) as WorkspaceConfig | null;
+        const broker = config ? browserDataBrokerPackageName(config) : null;
+        importEventName = broker ? `extensions:${broker}::import-complete` : null;
+      } catch (err) {
+        log.warn(
+          `Failed to resolve browser-data broker from workspace manifest: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+        importEventName = null;
+      }
+      if (!importEventName) {
+        log.info(
+          "No browser-data broker declared (meta/vibez1.yml providers.browserData) — cookie session sync disabled"
+        );
+        return { syncCookies };
+      }
       deps.eventService.subscribe(importEventName as never, SUBSCRIBER_ID, subscriber);
       await deps.serverClient
         .call("events", "subscribe", [importEventName])
@@ -64,6 +89,7 @@ export function createBrowserSessionSyncService(deps: {
     },
     async stop() {
       destroyed = true;
+      if (!importEventName) return;
       deps.eventService.unsubscribe(importEventName as never, SUBSCRIBER_ID);
       await deps.serverClient.call("events", "unsubscribe", [importEventName]).catch(() => {});
     },

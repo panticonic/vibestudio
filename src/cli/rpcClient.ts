@@ -1,5 +1,11 @@
 import { AuthError } from "./output.js";
 import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibez1/shared/connect";
+import {
+  isWebRtcCredential,
+  type CliHubCredential,
+  type CliStoredPairing,
+} from "./credentialStore.js";
+import type { RpcStreamOptions } from "@vibez1/rpc";
 
 /**
  * HTTP RPC client for a paired Vibez1 server.
@@ -19,6 +25,9 @@ export interface DeviceCredential {
   workspaceName?: string;
   deviceId: string;
   refreshToken: string;
+  pairing?: CliStoredPairing;
+  pairedAt?: number;
+  hubCredential?: CliHubCredential;
 }
 
 /** Response of POST /_r/s/auth/refresh-shell (see authService.ts). */
@@ -101,8 +110,12 @@ export function clearShellTokenCache(): void {
 }
 
 export class RpcClient {
+  private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
+  private keepWebRtcOpen = false;
+
   constructor(
-    private readonly creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">
+    private readonly creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
+      Partial<Pick<DeviceCredential, "pairing">>
   ) {}
 
   /** Result of the most recent shell refresh, if one occurred. */
@@ -114,6 +127,9 @@ export class RpcClient {
    * the same token subsequent `call`s will use, instead of refreshing twice.
    */
   async getShellToken(): Promise<string> {
+    if (isWebRtcCredential(this.creds)) {
+      return `refresh:${this.creds.deviceId}:${this.creds.refreshToken}`;
+    }
     return await this.ensureShellToken();
   }
 
@@ -132,6 +148,9 @@ export class RpcClient {
 
   /** Direct service dispatch: `service.method` on the server dispatcher. */
   async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
+    if (isWebRtcCredential(this.creds)) {
+      return await this.dispatchWebRtc<T>("main", method, args);
+    }
     return await this.dispatch<T>("main", method, args);
   }
 
@@ -141,7 +160,50 @@ export class RpcClient {
     method: string,
     args: unknown[] = []
   ): Promise<T> {
+    if (isWebRtcCredential(this.creds)) {
+      return await this.dispatchWebRtc<T>(targetId, method, args);
+    }
     return await this.dispatch<T>(targetId, method, args);
+  }
+
+  async stream(
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcStreamOptions
+  ): Promise<Response> {
+    if (!isWebRtcCredential(this.creds)) {
+      throw new Error("CLI streaming requires a WebRTC remote credential");
+    }
+    const client = await this.ensureWebRtcClient();
+    return await client.stream(targetId, method, args, options);
+  }
+
+  async onEvent(
+    event: string,
+    listener: (payload: unknown, fromId: string) => void
+  ): Promise<() => void> {
+    if (!isWebRtcCredential(this.creds)) {
+      throw new Error("CLI push events require a WebRTC remote credential");
+    }
+    this.keepWebRtcOpen = true;
+    const client = await this.ensureWebRtcClient();
+    return await client.onEvent(event, listener);
+  }
+
+  async onRecovery(
+    handler: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
+  ): Promise<() => void> {
+    if (!isWebRtcCredential(this.creds)) return () => {};
+    this.keepWebRtcOpen = true;
+    const client = await this.ensureWebRtcClient();
+    return await client.onRecovery(handler);
+  }
+
+  async close(): Promise<void> {
+    const client = this.webRtcClient;
+    this.webRtcClient = null;
+    if (client) await (await client).close();
   }
 
   /** Build an `RpcEnvelope` and POST it to the envelope-native `/rpc`. */
@@ -212,4 +274,51 @@ export class RpcClient {
       body: JSON.stringify(body),
     });
   }
+
+  private async dispatchWebRtc<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
+    const client = await this.ensureWebRtcClient();
+    try {
+      return targetId === "main"
+        ? await client.call<T>(method, args)
+        : await client.callTarget<T>(targetId, method, args);
+    } catch (error) {
+      throw toRpcError(error);
+    } finally {
+      if (!this.keepWebRtcOpen) await this.close().catch(() => undefined);
+    }
+  }
+
+  private ensureWebRtcClient(): Promise<import("./webrtcClient.js").WebRtcRpcClient> {
+    if (!isWebRtcCredential(this.creds)) {
+      throw new Error("Stored credential does not contain WebRTC pairing material");
+    }
+    if (!this.webRtcClient) {
+      this.webRtcClient = import("./webrtcClient.js")
+        .then(({ WebRtcRpcClient }) => {
+          const client = new WebRtcRpcClient({
+            pairing: this.creds.pairing!,
+            callerId: `shell:${this.creds.deviceId}`,
+            getToken: () => `refresh:${this.creds.deviceId}:${this.creds.refreshToken}`,
+            clientLabel: "Vibez1 CLI",
+            onPaired: () => undefined,
+          });
+          return client;
+        })
+        .catch((error) => {
+          this.webRtcClient = null;
+          throw error;
+        });
+    }
+    return this.webRtcClient;
+  }
+}
+
+function toRpcError(error: unknown): Error {
+  if (error instanceof RpcError || error instanceof AuthError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  const code =
+    typeof (error as { code?: unknown })?.code === "string"
+      ? (error as { code?: string }).code
+      : undefined;
+  return new RpcError(message, code);
 }

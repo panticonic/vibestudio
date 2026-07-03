@@ -166,6 +166,14 @@ export function assertSafeVcsPath(p: string): void {
   ) {
     throw new Error(`vcs path escapes worktree: ${JSON.stringify(p)}`);
   }
+  // The tree encoder (splitTreePath/assertValidTreeEntryName) additionally
+  // rejects `.` segments, empty segments (`a//b`, `./a`, `foo/`, `.`), and any
+  // backslash inside a segment. Enforce the same here so such paths fail at the
+  // edit boundary rather than passing the guard, entering the working map as a
+  // phantom key, and only throwing later at tree-encode time.
+  if (p.includes("\\") || p.split("/").some((seg) => seg === "" || seg === ".")) {
+    throw new Error(`vcs path is not a valid tree path: ${JSON.stringify(p)}`);
+  }
 }
 
 let platformIgnoreMatcher: { ignores: (s: string) => boolean } | null = null;

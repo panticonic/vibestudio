@@ -8,11 +8,15 @@ import type { RpcEnvelope, RpcMessage } from "@vibez1/rpc";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
+const ipcInvokeHandlers = new Map<string, (...args: never[]) => unknown>();
 
 vi.mock("electron", () => ({
   ipcMain: {
     on: vi.fn((channel: string, handler: (...args: never[]) => void) => {
       ipcHandlers.set(channel, handler);
+    }),
+    handle: vi.fn((channel: string, handler: (...args: never[]) => unknown) => {
+      ipcInvokeHandlers.set(channel, handler);
     }),
   },
 }));
@@ -81,6 +85,7 @@ function makeDispatcher(opts: {
   ) => { runtimeEntityId: string; connectionId: string } | undefined;
 }) {
   ipcHandlers.clear();
+  ipcInvokeHandlers.clear();
   const dispatcher = new ServiceDispatcher();
   opts.configureDispatcher?.(dispatcher);
   dispatcher.markInitialized();
@@ -122,6 +127,7 @@ describe("IpcDispatcher", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     ipcHandlers.clear();
+    ipcInvokeHandlers.clear();
   });
 
   it("forwards app renderer server RPC through an app-scoped server client", async () => {
@@ -545,6 +551,312 @@ describe("IpcDispatcher", () => {
         "@workspace-apps/shell",
         expect.objectContaining({ callerKind: "app" })
       );
+    });
+  });
+
+  // §3.3: the ONLY recycle signal is a terminal isClosed(); transport status is
+  // transient (the transport auto-reopens sessions across pipe reconnects).
+  describe("panel session recycling", () => {
+    function panelEnvelope(requestId: string): RpcEnvelope {
+      return rpcEnvelope("panel-1", "panel", {
+        type: "request",
+        requestId,
+        fromId: "panel-1",
+        method: "workspace.getInfo",
+        args: [],
+      } satisfies RpcMessage);
+    }
+
+    it("reuses a session whose transport is merely reconnecting (isClosed=false)", async () => {
+      const panelWc = makeWebContents(30);
+      const panelSend = vi.fn();
+      const close = vi.fn();
+      let status: "connected" | "connecting" | "disconnected" = "connected";
+      const openPanelSession = vi.fn(async () => ({
+        send: panelSend,
+        onMessage: vi.fn(() => vi.fn()),
+        status: () => status,
+        isClosed: () => false,
+        close,
+      }));
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        openPanelSession,
+      });
+
+      ipcHandlers.get("vibez1:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("r1") as never
+      );
+      await vi.waitFor(() => expect(panelSend).toHaveBeenCalledTimes(1));
+
+      // Routine pipe reconnect: transport reads "connecting" but the session is
+      // NOT terminally closed — it must be reused, not recycled.
+      status = "connecting";
+      ipcHandlers.get("vibez1:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("r2") as never
+      );
+      await vi.waitFor(() => expect(panelSend).toHaveBeenCalledTimes(2));
+
+      expect(openPanelSession).toHaveBeenCalledTimes(1);
+      expect(close).not.toHaveBeenCalled();
+    });
+
+    it("recycles (and re-opens) only a terminally closed session", async () => {
+      const panelWc = makeWebContents(31);
+      let closed = false;
+      const firstSend = vi.fn();
+      const firstClose = vi.fn();
+      const secondSend = vi.fn();
+      const openPanelSession = vi
+        .fn()
+        .mockResolvedValueOnce({
+          send: firstSend,
+          onMessage: vi.fn(() => vi.fn()),
+          status: () => "connected" as const,
+          isClosed: () => closed,
+          close: firstClose,
+        })
+        .mockResolvedValueOnce({
+          send: secondSend,
+          onMessage: vi.fn(() => vi.fn()),
+          status: () => "connected" as const,
+          isClosed: () => false,
+          close: vi.fn(),
+        });
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        openPanelSession,
+      });
+
+      ipcHandlers.get("vibez1:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("r1") as never
+      );
+      await vi.waitFor(() => expect(firstSend).toHaveBeenCalledTimes(1));
+
+      closed = true; // lease revoke / server-side teardown: terminal
+      ipcHandlers.get("vibez1:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("r2") as never
+      );
+      await vi.waitFor(() => expect(secondSend).toHaveBeenCalledTimes(1));
+
+      expect(openPanelSession).toHaveBeenCalledTimes(2);
+      expect(firstClose).toHaveBeenCalled();
+      expect(firstSend).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // §1.6 upload hop: panel request bodies cross the bridge as chunk messages,
+  // reassemble host-side, and feed the panel session's streamReadable().
+  describe("panel bridge upload streams", () => {
+    function streamRequest(): RpcEnvelope {
+      return rpcEnvelope("panel-1", "panel", {
+        type: "stream-request",
+        requestId: "sreq-1",
+        fromId: "panel-1",
+        method: "gateway.fetch",
+        args: [{ path: "/upload" }],
+      } as RpcMessage);
+    }
+
+    async function drainStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+      const reader = stream.getReader();
+      const chunks: Uint8Array[] = [];
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) chunks.push(value);
+      }
+      const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return out;
+    }
+
+    function makeStreamingPanelWc(id: number) {
+      // Auto-ack response chunks like the panel preload does, so the host's
+      // ack-gated response pump advances.
+      const wc = makeWebContents(id);
+      wc.send.mockImplementation(
+        (channel: string, msg: { kind?: string; opId?: string; seq?: number }) => {
+          if (channel !== "vibez1:rpc:stream-message" || msg.kind !== "chunk") return;
+          queueMicrotask(() =>
+            ipcHandlers.get("vibez1:rpc:stream-ack")?.(
+              { sender: wc } as never,
+              { opId: msg.opId, seq: msg.seq } as never
+            )
+          );
+        }
+      );
+      return wc;
+    }
+
+    it("reassembles body chunks, feeds session.streamReadable, and streams the response back", async () => {
+      const panelWc = makeStreamingPanelWc(40);
+      const seen: { body?: Uint8Array; envelope?: RpcEnvelope } = {};
+      const streamReadable = vi.fn(
+        async (envelope: RpcEnvelope, _signal: AbortSignal, body: ReadableStream<Uint8Array>) => {
+          seen.envelope = envelope;
+          seen.body = await drainStream(body);
+          return {
+            status: 201,
+            statusText: "Created",
+            headers: [["content-type", "application/json"]] as [string, string][],
+            finalUrl: "http://gw/upload",
+            body: new ReadableStream<Uint8Array>({
+              start(c) {
+                c.enqueue(new Uint8Array([9, 9]));
+                c.close();
+              },
+            }),
+          };
+        }
+      );
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        openPanelSession: vi.fn(async () => ({
+          send: vi.fn(),
+          onMessage: vi.fn(() => vi.fn()),
+          status: () => "connected" as const,
+          isClosed: () => false,
+          streamReadable,
+          close: vi.fn(),
+        })),
+      });
+
+      const open = ipcInvokeHandlers.get("vibez1:rpc:stream-open");
+      const pushChunk = ipcInvokeHandlers.get("vibez1:rpc:stream-body-chunk");
+      expect(open).toBeTruthy();
+      expect(pushChunk).toBeTruthy();
+
+      await open?.(
+        { sender: panelWc } as never,
+        { opId: "op-1", envelope: streamRequest(), bodyId: "b-1" } as never
+      );
+      await pushChunk?.(
+        { sender: panelWc } as never,
+        { bodyId: "b-1", seq: 1, chunk: new Uint8Array([1, 2, 3]) } as never
+      );
+      await pushChunk?.(
+        { sender: panelWc } as never,
+        { bodyId: "b-1", seq: 2, done: true } as never
+      );
+
+      await vi.waitFor(() => {
+        expect(panelWc.send).toHaveBeenCalledWith(
+          "vibez1:rpc:stream-message",
+          expect.objectContaining({ kind: "end", opId: "op-1" })
+        );
+      });
+      expect(seen.body).toEqual(new Uint8Array([1, 2, 3]));
+      expect(seen.envelope?.message.type).toBe("stream-request");
+      expect(panelWc.send).toHaveBeenCalledWith(
+        "vibez1:rpc:stream-message",
+        expect.objectContaining({ kind: "head", opId: "op-1", status: 201 })
+      );
+      expect(panelWc.send).toHaveBeenCalledWith(
+        "vibez1:rpc:stream-message",
+        expect.objectContaining({ kind: "chunk", opId: "op-1", chunk: new Uint8Array([9, 9]) })
+      );
+    });
+
+    it("fails LOUDLY when the panel session has no streamReadable (loopback WS)", async () => {
+      const panelWc = makeStreamingPanelWc(41);
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        // Default session shape: no streamReadable — like the WS PanelSession.
+      });
+
+      await ipcInvokeHandlers.get("vibez1:rpc:stream-open")?.(
+        { sender: panelWc } as never,
+        { opId: "op-1", envelope: streamRequest(), bodyId: "b-1" } as never
+      );
+
+      await vi.waitFor(() => {
+        expect(panelWc.send).toHaveBeenCalledWith(
+          "vibez1:rpc:stream-message",
+          expect.objectContaining({
+            kind: "error",
+            opId: "op-1",
+            message: expect.stringContaining("require the WebRTC transport"),
+          })
+        );
+      });
+    });
+
+    it("rejects stream-open from non-panel senders", async () => {
+      const appWc = makeWebContents(42);
+      makeDispatcher({
+        resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+        getWebContentsForCaller: () => appWc,
+      });
+
+      // ipcMain.handle converts a synchronous throw into an invoke() rejection.
+      expect(() =>
+        ipcInvokeHandlers.get("vibez1:rpc:stream-open")?.(
+          { sender: appWc } as never,
+          { opId: "op-1", envelope: streamRequest(), bodyId: "b-1" } as never
+        )
+      ).toThrow(/non-panel sender/);
+    });
+
+    it("aborting from the panel aborts the session stream", async () => {
+      const panelWc = makeStreamingPanelWc(43);
+      let seenSignal: AbortSignal | null = null;
+      const streamReadable = vi.fn(
+        (_envelope: RpcEnvelope, signal: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            seenSignal = signal;
+            signal.addEventListener("abort", () => reject(new Error("aborted upstream")));
+          })
+      );
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+        openPanelSession: vi.fn(async () => ({
+          send: vi.fn(),
+          onMessage: vi.fn(() => vi.fn()),
+          status: () => "connected" as const,
+          isClosed: () => false,
+          streamReadable,
+          close: vi.fn(),
+        })),
+      });
+
+      await ipcInvokeHandlers.get("vibez1:rpc:stream-open")?.(
+        { sender: panelWc } as never,
+        { opId: "op-1", envelope: streamRequest(), bodyId: "b-1" } as never
+      );
+      await vi.waitFor(() => expect(streamReadable).toHaveBeenCalled());
+
+      ipcHandlers.get("vibez1:rpc:stream-abort")?.({ sender: panelWc } as never, "op-1" as never);
+      await vi.waitFor(() => expect(seenSignal?.aborted).toBe(true));
+
+      // Late body chunks for the aborted op fail loudly (op is gone).
+      await expect(
+        Promise.resolve(
+          ipcInvokeHandlers.get("vibez1:rpc:stream-body-chunk")?.(
+            { sender: panelWc } as never,
+            { bodyId: "b-1", seq: 1, chunk: new Uint8Array([1]) } as never
+          )
+        )
+      ).rejects.toThrow(/unknown bodyId/);
     });
   });
 });

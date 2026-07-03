@@ -418,10 +418,6 @@ function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
   copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
   fs.mkdirSync("dist/baked-app", { recursive: true });
-  copyDirectoryRecursive(
-    "workspace/extensions/shell/vscode-shell-integration",
-    "dist/vscode-shell-integration"
-  );
   // Bundled agent skill consumed by `vibez1 agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
   copyDirectoryRecursive("skills/vibez1-agent", "dist/cli/skills/vibez1-agent");
@@ -454,17 +450,14 @@ async function buildvibez1Packages() {
 }
 
 async function buildWorkspacePackages() {
-  console.log("Building @workspace/* packages...");
+  console.log("Building userland workspace packages...");
   try {
-    // Note: We intentionally do NOT use --parallel here because packages have
-    // inter-dependencies (e.g., @workspace/ai depends on @workspace/runtime).
-    // pnpm will automatically build in topological order (dependencies first).
-    execSync('pnpm --filter "@workspace/*" build', {
+    execSync("pnpm --dir workspace build", {
       stdio: "inherit",
     });
-    console.log("@workspace/* packages built successfully!");
+    console.log("Userland workspace packages built successfully!");
   } catch (error) {
-    console.error("Failed to build @workspace/* packages:", error);
+    console.error("Failed to build userland workspace packages:", error);
     throw error;
   }
 }

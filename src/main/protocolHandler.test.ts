@@ -18,10 +18,10 @@ vi.mock("electron", () => ({ app: mocks.app }));
 
 const FP = "AA".repeat(32);
 function pair(room: string, code: string) {
-  return { room, fp: FP, code, sig: "wss://signal.example/", v: 1, ice: "all" as const };
+  return { room, fp: FP, code, sig: "wss://signal.example/", v: 2, ice: "all" as const };
 }
 function expectedPairing(room: string, code: string) {
-  return { room, fp: FP, code, sig: "wss://signal.example/", v: 1, ice: "all", srv: undefined };
+  return { room, fp: FP, code, sig: "wss://signal.example/", v: 2, ice: "all", srv: undefined };
 }
 
 describe("protocolHandler", () => {

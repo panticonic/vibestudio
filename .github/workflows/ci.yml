@@ -22,15 +22,27 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            workspace/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install workspace dependencies
+        run: pnpm --dir workspace install --frozen-lockfile
+
       - name: Type-check
         run: pnpm type-check
+
+      - name: Host/workspace boundary
+        run: pnpm check:host-boundary
 
       - name: Lint
         run: pnpm lint
 
       - name: Check formatting
         run: pnpm format:check
+
+      - name: Unit tests
+        run: pnpm test

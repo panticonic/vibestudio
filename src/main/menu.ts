@@ -4,6 +4,10 @@ import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibez1/shared/panelInterfaces";
 import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
 import { assertPresent } from "../lintHelpers";
+// These page ids identify workspace-provided units under `about/` that the menu
+// assumes exist. The `navigate-about` payload is a page id (not a source); the
+// shell resolves it to the `about/<page>` unit and creates a privileged panel.
+import { ABOUT_PAGES } from "@vibez1/shared/workspace/aboutNamespace";
 
 // Set during initialization — always non-null after startup
 let _menuPanelLifecycle: BridgePanelLifecycle | null = null;
@@ -146,7 +150,7 @@ export function buildCommonMenuItems(
       label: "New Panel",
       accelerator: "CmdOrCtrl+T",
       click: () => {
-        eventService().emit("navigate-about", { page: "new" });
+        eventService().emit("navigate-about", { page: ABOUT_PAGES.NEW });
       },
     },
     { type: "separator" },
@@ -353,7 +357,7 @@ export function setupMenu(
           label: "New Panel",
           accelerator: "CmdOrCtrl+T",
           click: () => {
-            eventService().emit("navigate-about", { page: "new" });
+            eventService().emit("navigate-about", { page: ABOUT_PAGES.NEW });
           },
         },
         { type: "separator" },
@@ -485,20 +489,20 @@ export function setupMenu(
           label: "Keyboard Shortcuts",
           accelerator: "CmdOrCtrl+/",
           click: () => {
-            eventService().emit("navigate-about", { page: "keyboard-shortcuts" });
+            eventService().emit("navigate-about", { page: ABOUT_PAGES.KEYBOARD_SHORTCUTS });
           },
         },
         { type: "separator" },
         {
           label: "Documentation",
           click: () => {
-            eventService().emit("navigate-about", { page: "help" });
+            eventService().emit("navigate-about", { page: ABOUT_PAGES.HELP });
           },
         },
         {
           label: "About Vibez1",
           click: () => {
-            eventService().emit("navigate-about", { page: "about" });
+            eventService().emit("navigate-about", { page: ABOUT_PAGES.ABOUT });
           },
         },
       ],
