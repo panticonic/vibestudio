@@ -163,7 +163,14 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
 
   it("stays byte-identical across an edit → commit → push advance, shifting ONLY the touched unit", async () => {
     await vcs.attachGad(callerFor(gad));
-    const before = await vcs.ensureFresh();
+    // Observe the MAIN UNION (`workspaceView`), the state a pushed advance lands
+    // in. `ensureFresh` returns the ACTIVE-context view, which is a PINNED base
+    // that intentionally does NOT track another context's main pushes until it
+    // rebases (see workspaceVcs.lifecycle.test.ts: a pin reports `behind` when
+    // main moves past it). This suite pins content-store ⇄ reference hash
+    // byte-identity across a real edit→commit→push, so it asserts against the
+    // ref-composed main union where the push is actually visible.
+    const before = await vcs.workspaceView();
     const hashesBefore = await vcs.unitHashes(before.stateHash, UNIT_PATHS);
 
     // Advance panels/chat through the real flow (main only advances via push).
@@ -184,7 +191,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     });
     expect(pushed.status).toBe("pushed");
 
-    const after = await vcs.ensureFresh();
+    const after = await vcs.workspaceView();
     expect(after.stateHash).not.toBe(before.stateHash);
 
     const fromStore = await vcs.unitHashes(after.stateHash, UNIT_PATHS);

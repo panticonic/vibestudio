@@ -145,7 +145,6 @@ export const vcsMergeConflictSchema = z.object({
   path: z.string(),
   kind: z.enum(["content", "binary", "delete-vs-change", "mode"]),
 });
-export type VcsMergeConflict = z.infer<typeof vcsMergeConflictSchema>;
 
 /** Result of `vcs.edit` — a tracked WORKING edit (no commit, no build). */
 export const vcsEditResultSchema = z.object({
@@ -290,7 +289,6 @@ export const vcsWorkspaceViewResultSchema = z.object({
       "Workspace-rooted composed state hash, suitable for build.getBuild's immutable ref argument."
     ),
 });
-export type VcsWorkspaceViewResult = z.infer<typeof vcsWorkspaceViewResultSchema>;
 
 export const vcsMergeResultSchema = z.object({
   status: z.enum(["up-to-date", "merged", "conflicted"]),
@@ -835,4 +833,3 @@ export const vcsMethods = defineServiceMethods({
     examples: [{ args: [{ query: "auth flow refactor", limit: 5 }] }],
   },
 });
-export type VcsMethods = typeof vcsMethods;
