@@ -33,9 +33,7 @@ import {
   resolveTreePath,
   type TreeDiff,
 } from "../services/blobstoreService.js";
-import { isRefConflictError, type RefService, type RefChange } from "../services/refService.js";
-import { writeJsonFileAtomic } from "../services/atomicFile.js";
-import type { RefAdvanceGateContext } from "../services/mainAdvanceApproval.js";
+import { type RefService, type RefChange } from "../services/refService.js";
 import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 
 import type {
@@ -86,7 +84,6 @@ interface GadCaller {
 }
 
 type WorktreeHeadRef = NonNullable<Awaited<ReturnType<WorktreeStore["resolveWorktreeHead"]>>>;
-type VcsFileEntry = Awaited<ReturnType<WorktreeStore["localState"]>>["files"][number];
 type SnapshotResult = Awaited<ReturnType<WorktreeStore["snapshotDir"]>>;
 type DiscoveredRepo = ReturnType<typeof discoverRepos>[number];
 
@@ -114,12 +111,6 @@ const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const USER_ACTOR = { id: "user", kind: "user" } as const;
 
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
-/** Bounded in-line retry backoff for a direct `main` provenance recording. On
- *  exhaustion the record gives up and the next explicit provenance
- *  synchronization replays the durable host scan record before surfacing any
- *  remaining uncovered drift. */
-const RECORD_RETRY_DELAYS_MS = [25, 100, 400];
-const MAIN_RECORD_STORE_VERSION = 1;
 
 interface WorkspaceVcsDeps {
   blobsDir: string;
@@ -273,41 +264,6 @@ type GadMergeOutcome =
       upstreamCommits: UpstreamCommit[];
     };
 
-/** Server-internal main advances (scan/bootstrap/adoption) — ungated by design:
- *  they adopt the user's own on-disk edits or already-approved content. */
-const SYSTEM_ADVANCE: RefAdvanceGateContext = { kind: "system" };
-
-/** A locally prepared (DO-free) `main` scan candidate: the ref CAS pair, the
- *  scan's file listing (already mirrored in the content store), and the
- *  build-trigger event to emit once the ref adopts it. */
-interface PreparedMainScan {
-  /** Ref value the scan was computed against (null = ref creation). */
-  prev: string | null;
-  stateHash: string;
-  files: VcsFileEntry[];
-  fileCount: number;
-  event: StateAdvancedEvent;
-}
-
-type VcsActor = { id: string; kind: string };
-
-interface MainRecordTask {
-  id?: string;
-  repoPath: string;
-  logId: string;
-  prev: string | null;
-  next: string;
-  files: VcsFileEntry[];
-  actor: VcsActor;
-  summary: string;
-}
-
-interface DurableMainRecord extends MainRecordTask {
-  version: typeof MAIN_RECORD_STORE_VERSION;
-  id: string;
-  createdAt: number;
-}
-
 function readContentFromBytes(bytes: Buffer): VcsFileReadContent {
   try {
     const text = UTF8_DECODER.decode(bytes);
@@ -344,23 +300,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private ensureFreshInFlight: Promise<{ stateHash: string }> | null = null;
   /** Local main-head state served while the gad store is unreachable. */
   private localMain: LocalWorkspaceState | null = null;
-  /** Pending-record ids that have been written but whose ref CAS has not
-   *  returned yet in this process. Durable replay skips them so a concurrent
-   *  flush cannot discard a live pre-CAS record as stale. */
-  private readonly preCasMainRecords = new Set<string>();
-  /**
-   * In-flight direct provenance recordings, keyed by repo `logId` (P5a, narrow
-   * host). Each scan/freshness `main` advance records its ref transition in the
-   * gad DO AFTER the fact via a DIRECT ingest. The full scan payload is first
-   * persisted as a host write-ahead record before the protected ref CAS; once
-   * the CAS lands the async path either records it in the DO and deletes the
-   * file, or leaves the file for attach/on-demand replay. Fire-and-forget from
-   * the build path (which never blocks on the DO), but chained PER REPO through
-   * this map so recordings land in ref order (and independently across repos).
-   * The settled promise per repo lets lineage ops ({@link syncMainProvenance})
-   * await a record that is still landing before reading the DO's main lineage.
-   */
-  private readonly inFlightRecords = new Map<string, Promise<void>>();
   /**
    * The disk-projection FOLLOWER (P5c): the one module that writes working
    * trees. Every operation path invokes it POST-advance with the state hash
@@ -502,13 +441,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
     await this.ensureRepoLogsFromDisk();
     await this.seedMainRefsFromStore();
-    // Host scan records are host-owned write-ahead data; replay them before the
-    // DO's publish-intent heal so ordinary freshness advances never look like
-    // uncovered drift after a crash or a bounded retry exhaustion.
-    await this.replayDurableMainRecords();
-    // Attach-time publish-intent heal is GAD-owned. DO publish intents replay
-    // with full provenance; remaining no-intent ref drift is fatal, because
-    // refs alone cannot reconstruct the missing authored transition.
+    // Attach-time publish-intent heal is GAD-owned. The DO records every main
+    // advance synchronously in its publish path (push/import) and replays any
+    // parked publish intents with full provenance here; remaining no-intent ref
+    // drift is fatal, because refs alone cannot reconstruct the missing authored
+    // transition.
     await this.gad().call("vcsHealPublishDrift", {});
   }
 
@@ -531,330 +468,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   /** The authoritative `main` state of a repo, from the protected-ref store. */
   private mainRefState(repoPath: string): string | null {
     return this.deps.refs.readMain(normalizeRepoPathForLog(repoPath))?.stateHash ?? null;
-  }
-
-  /**
-   * The authoritative `main` head of a repo AS a worktree-head ref: the state
-   * comes from the protected ref; the commit event identity from the gad
-   * store's provenance row. Because scan advances record provenance
-   * ASYNCHRONOUSLY (a direct fire-and-forget DO ingest), this is a
-   * synchronization point for lineage ops: await the repo's in-flight
-   * recording, replay any durable host scan record, then — if the DO is still
-   * behind — ask the DO to heal publish-intent drift. Only a DO that STILL
-   * disagrees after reconciliation is true corruption, and that fails loudly
-   * here.
-   */
-  private async mainWorktreeHead(repoPath: string, logId: string): Promise<WorktreeHeadRef | null> {
-    const value = this.mainRefState(repoPath);
-    if (!value) return null;
-    await this.syncMainProvenance(repoPath, logId, value);
-    const doHead = await this.worktrees.resolveWorktreeHead(VCS_MAIN_HEAD, logId);
-    if (doHead && doHead.stateHash === value) return doHead;
-    throw new Error(
-      `main lineage for ${repoPath} is corrupt: protected ref is ${value} but the gad store ` +
-        `records ${doHead?.stateHash ?? "<absent>"} even after reconciliation`
-    );
-  }
-
-  /**
-   * Bring the gad DO's main lineage for a repo into lockstep with the
-   * protected ref: drain direct recordings, replay landed durable host scan
-   * records, then reconcile any remaining DO-authored publish drift. First
-   * await any in-flight direct recording for the repo (the fire-and-forget scan
-   * record may still be landing); then replay host scan records whose protected
-   * ref CAS is present in the ref log; then, if the DO's recorded main still
-   * lags the ref, drive the DO's publish-drift heal. The synchronous-DO entry
-   * gate for user-initiated lineage ops (push/merge/fork/delete) — the build
-   * path never calls this.
-   */
-  private async syncMainProvenance(
-    repoPath: string,
-    logId: string,
-    refValue?: string | null
-  ): Promise<void> {
-    const norm = normalizeRepoPathForLog(repoPath);
-    await this.awaitInFlightRecord(logId);
-    await this.replayDurableMainRecords(norm);
-    const value = refValue !== undefined ? refValue : this.mainRefState(norm);
-    if (!value) return;
-    const doState = await this.worktrees.resolveWorktreeRef(VCS_MAIN_HEAD, logId);
-    if (doState === value) return;
-    // Still behind: the DO owns the reconcile now (narrow-host P3). Its
-    // publish-drift heal completes any covering publish intent with full
-    // fidelity; uncovered drift fails closed because refs alone cannot
-    // reconstruct the missing authored transition.
-    await this.gad().call("vcsHealPublishDrift", {});
-  }
-
-  /** Await the in-flight direct provenance recording for a repo (no-op when
-   *  none is pending). Never rejects — recording failures are swallowed into
-   *  the later durable-replay/publish-drift synchronization point, where
-   *  uncovered drift is surfaced to lineage callers. */
-  private async awaitInFlightRecord(logId: string): Promise<void> {
-    await (this.inFlightRecords.get(logId) ?? Promise.resolve());
-  }
-
-  /**
-   * Await EVERY in-flight direct recording, replay durable host scan records,
-   * then heal any residual DO publish drift — the all-repos flush lineage ops
-   * that span the whole workspace (rebase) need before dispatching to the DO.
-   * Also the test oracle's drain point.
-   */
-  async flushMainProvenance(): Promise<void> {
-    await Promise.allSettled([...this.inFlightRecords.values()]);
-    if (this.attached) {
-      await this.replayDurableMainRecords();
-      await this.gad().call("vcsHealPublishDrift", {});
-    }
-  }
-
-  private durableMainRecordDir(): string {
-    return path.join(this.deps.contextsRoot, ".main-provenance-records");
-  }
-
-  private durableMainRecordPath(id: string): string {
-    if (!/^[0-9a-f-]+$/.test(id)) {
-      throw new Error(`invalid durable main provenance record id: ${id}`);
-    }
-    return path.join(this.durableMainRecordDir(), `${id}.json`);
-  }
-
-  private async createDurableMainRecord(
-    task: Omit<MainRecordTask, "id">
-  ): Promise<DurableMainRecord> {
-    const record: DurableMainRecord = {
-      ...task,
-      version: MAIN_RECORD_STORE_VERSION,
-      id: crypto.randomUUID(),
-      createdAt: Date.now(),
-    };
-    this.preCasMainRecords.add(record.id);
-    try {
-      writeJsonFileAtomic(this.durableMainRecordPath(record.id), record);
-    } catch (error) {
-      this.preCasMainRecords.delete(record.id);
-      throw error;
-    }
-    return record;
-  }
-
-  private async discardDurableMainRecord(id: string): Promise<void> {
-    this.preCasMainRecords.delete(id);
-    try {
-      await fsp.rm(this.durableMainRecordPath(id), { force: true });
-    } catch (error) {
-      console.warn(
-        `[Vcs] failed to remove durable main provenance record ${id}:`,
-        error instanceof Error ? error.message : error
-      );
-    }
-  }
-
-  private parseDurableMainRecord(value: unknown, source: string): DurableMainRecord | null {
-    if (!value || typeof value !== "object") return null;
-    const record = value as Partial<DurableMainRecord>;
-    const actor = record.actor as Partial<VcsActor> | null | undefined;
-    if (
-      record.version !== MAIN_RECORD_STORE_VERSION ||
-      typeof record.id !== "string" ||
-      typeof record.createdAt !== "number" ||
-      typeof record.repoPath !== "string" ||
-      typeof record.logId !== "string" ||
-      (record.prev !== null && typeof record.prev !== "string") ||
-      typeof record.next !== "string" ||
-      !Array.isArray(record.files) ||
-      !actor ||
-      typeof actor.id !== "string" ||
-      typeof actor.kind !== "string" ||
-      typeof record.summary !== "string"
-    ) {
-      console.warn(`[Vcs] ignoring malformed durable main provenance record: ${source}`);
-      return null;
-    }
-    return record as DurableMainRecord;
-  }
-
-  private async readDurableMainRecords(): Promise<DurableMainRecord[]> {
-    const dir = this.durableMainRecordDir();
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
-    const records: DurableMainRecord[] = [];
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const filePath = path.join(dir, entry.name);
-      try {
-        const parsed = this.parseDurableMainRecord(
-          JSON.parse(await fsp.readFile(filePath, "utf8")),
-          filePath
-        );
-        if (parsed) records.push(parsed);
-      } catch (error) {
-        console.warn(
-          `[Vcs] failed to read durable main provenance record ${filePath}:`,
-          error instanceof Error ? error.message : error
-        );
-      }
-    }
-    return records.sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
-  }
-
-  private durableMainRecordLanded(record: DurableMainRecord): boolean {
-    // PHASE-3-OWNED (host main-provenance reconciliation, slated for deletion in
-    // narrow-host-boundary-refactor Phase 3). The host main-ref LOG was removed
-    // in Phase 5 (`refService` is a semantics-free CAS with no movement log), so
-    // "did this transition land?" can no longer consult a per-repo log. Minimal
-    // compile-restoring stub: a durable record's transition is considered landed
-    // iff the protected ref now holds the record's `next` value (the CAS target).
-    // This whole durable-record replay path only ever sees records created by the
-    // freshness→main scan, which Phase 2 retargeted off `main`, so no NEW records
-    // are produced in production; the stub keeps the dormant replay compiling
-    // until Phase 3 deletes it wholesale.
-    const repoPath = normalizeRepoPathForLog(record.repoPath);
-    return this.mainRefState(repoPath) === record.next;
-  }
-
-  private async replayDurableMainRecords(repoPath?: string): Promise<void> {
-    const target = repoPath ? normalizeRepoPathForLog(repoPath) : null;
-    const blockedRepos = new Set<string>();
-    for (const record of await this.readDurableMainRecords()) {
-      const norm = normalizeRepoPathForLog(record.repoPath);
-      if (target && norm !== target) continue;
-      if (blockedRepos.has(norm)) continue;
-      if (!this.durableMainRecordLanded(record)) {
-        if (this.preCasMainRecords.has(record.id)) continue;
-        await this.discardDurableMainRecord(record.id);
-        continue;
-      }
-      const recorded = await this.recordMainAdvance(record);
-      if (!recorded) blockedRepos.add(norm);
-    }
-  }
-
-  /**
-   * Record a `main` ref advance (scan/freshness commit) in the gad DO AFTER the
-   * fact — the direct replacement for the deleted ProvenanceFollower. Launched
-   * fire-and-forget from {@link commitMainHead} and chained per repo through
-   * {@link inFlightRecords} so recordings apply in ref order. Never a blocking
-   * dependency of the build path.
-   *
-   * Payload fidelity matches the old follower path: the scan's file listing
-   * (no per-file editOps — scan advances adopt the user's on-disk tree and carry
-   * no recorded hunks), plus actor/summary/merge-parents. Idempotent: a
-   * transition the DO already holds (its head == `next`) is skipped; a DO whose
-   * head is neither `next` nor our base `prev` has DRIFTED (a prior record
-   * failed / crash gap) — we do NOT force a false-parent record. The later
-   * publish-drift synchronization either completes a covering intent or fails
-   * closed.
-   *
-   * A transient DO failure gets a small bounded retry; on exhaustion (or an
-   * unattached store) it leaves the durable record for the next explicit
-   * synchronization point.
-   */
-  private async recordMainAdvance(task: MainRecordTask): Promise<boolean> {
-    for (let attempt = 0; ; attempt += 1) {
-      const gad = this.gadCaller;
-      if (!gad) return false; // unattached (bootstrap window) — attach/replay covers it
-      try {
-        const doState =
-          (
-            await gad.call<{ stateHash: string } | null>("resolveWorktreeHead", {
-              logId: task.logId,
-              head: VCS_MAIN_HEAD,
-            })
-          )?.stateHash ?? null;
-        if (doState !== task.next) {
-          if (task.prev === null ? doState !== null : doState !== task.prev) {
-            // Drift: the DO is off the base this transition extends. Leave the
-            // mismatch visible for the next explicit synchronization point.
-            return false;
-          }
-          const result = await gad.call<{ stateHash: string }>("ingestWorktreeState", {
-            logId: task.logId,
-            head: VCS_MAIN_HEAD,
-            logKind: "vcs",
-            actor: vcsLogActor(task.actor),
-            files: task.files,
-            baseStateHash: task.prev ?? EMPTY_STATE_HASH,
-            expectedRefStateHash: task.prev ?? EMPTY_STATE_HASH,
-            eventKind: "state.snapshot_ingested",
-            summary: task.summary,
-          });
-          if (result.stateHash !== task.next) {
-            // Deterministic corruption (shared worktree hashing diverged):
-            // retrying cannot help. Scream and leave it to the heal / integrity.
-            console.error(
-              `[Vcs] main provenance for ${task.repoPath}: DO recorded ${result.stateHash} but ` +
-                `the ref advanced to ${task.next} (shared worktree hashing diverged)`
-            );
-            return false;
-          }
-        }
-        if (task.id) await this.discardDurableMainRecord(task.id);
-        return true;
-      } catch (error) {
-        if (attempt >= RECORD_RETRY_DELAYS_MS.length) {
-          console.warn(
-            `[Vcs] main provenance record for ${task.repoPath} failed after retries; ` +
-              `leaving drift for the next provenance synchronization:`,
-            error instanceof Error ? error.message : error
-          );
-          return false;
-        }
-        await new Promise((resolve) => setTimeout(resolve, RECORD_RETRY_DELAYS_MS[attempt]));
-      }
-    }
-  }
-
-  /** Launch a per-repo-ordered direct provenance recording for a `main`
-   *  advance. Fire-and-forget: the build path never awaits it, but each repo's
-   *  recordings are serialized so they apply in ref order. */
-  private enqueueMainRecord(
-    logId: string,
-    task: Parameters<WorkspaceVcs["recordMainAdvance"]>[0]
-  ): void {
-    const prior = this.inFlightRecords.get(logId) ?? Promise.resolve();
-    const next = prior.then(async () => {
-      await this.recordMainAdvance(task);
-    });
-    // A record body never rejects (it converts failure into explicit drift at
-    // the next synchronization point); guard anyway so an unexpected throw never
-    // surfaces as an unhandled rejection.
-    next.catch((error) => {
-      console.error(`[Vcs] unexpected main provenance record error for ${task.repoPath}:`, error);
-    });
-    this.inFlightRecords.set(logId, next);
-    void next.finally(() => {
-      if (this.inFlightRecords.get(logId) === next) this.inFlightRecords.delete(logId);
-    });
-  }
-
-  /** Advance a repo's protected `main` ref (CAS + injected approval gate). The
-   *  in-process host-internal advance path — the freshness/scan-adopt commit
-   *  ({@link commitMainHead}) still drives it (Phase 2 moves that to the DO).
-   *  The delete/restore/fork sagas that also used it are now DO-owned. */
-  private async advanceMainRef(input: {
-    repoPath: string;
-    expectedOld: string | null;
-    next: string;
-    actor: { id: string; kind: string };
-    reason: string;
-    context: RefAdvanceGateContext;
-  }): Promise<void> {
-    await this.deps.refs.updateMains({
-      entries: [
-        {
-          repoPath: normalizeRepoPathForLog(input.repoPath),
-          expectedOld: input.expectedOld,
-          next: input.next,
-        },
-      ],
-      gateContext: input.context,
-    });
   }
 
   // -------------------------------------------------------------------------
@@ -968,10 +581,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   /**
    * Snapshot a head's working tree. Emits `state-advanced` (with precise
-   * changed paths) when the state moved. THE single write path for both
-   * explicit commits and scan-on-demand freshness. A `main` head routes
-   * through the protected-ref CAS ({@link commitMainHead}); ctx heads
-   * snapshot directly onto their gad log.
+   * changed paths) when the state moved. THE single write path for
+   * explicit commits and scan-on-demand freshness of `ctx:*` heads. `main` is
+   * NOT commitable here — it is a pure ref that advances only through the gated
+   * push path (`refs.updateMains`, DO-driven); out-of-band disk edits adopt into
+   * the ACTIVE context head, never `main` (narrow-host boundary refactor P2/P3).
    */
   async commitHead(
     head: string,
@@ -981,14 +595,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       /** Repo the head lives on (per-repo VCS). Required in practice — there is
        *  no whole-tree log; an undefined value throws in `repoLogId`. */
       repoPath?: string;
-      /** Advance context for the protected-ref gate when `head` is main.
-       *  Defaults to the (ungated) system context — scans adopt the user's own
-       *  on-disk edits. */
-      mainAdvance?: RefAdvanceGateContext;
     } = {}
   ): Promise<CommitResult> {
     if (head === VCS_MAIN_HEAD) {
-      return this.commitMainHead(opts);
+      throw new Error(
+        "commitHead: `main` is a pure ref — it advances only via push (refs.updateMains), " +
+          "never by a host-side snapshot; adopt out-of-band disk edits into the active context head"
+      );
     }
 
     const repoPath = opts.repoPath;
@@ -1061,190 +674,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         this.emitter.emit("state-advanced", event);
       }
       return { ...snap, head, changedPaths };
-    });
-  }
-
-  /**
-   * REMAINING UNGATED disk→main door (narrow-host boundary refactor P2). This
-   * scans the workspace-root disk (now the active context's checkout) and
-   * advances the protected `main` ref ungated (SYSTEM_ADVANCE). It is NO LONGER
-   * reachable from the freshness path — `snapshotRepoLogsFromDisk`/`ensureFresh`
-   * now adopt disk drift into the ACTIVE context head, not `main`. It survives
-   * ONLY as a bootstrap/import adoption door (`commitHead(VCS_MAIN_HEAD, …)`),
-   * and the whole host main-provenance/`advanceMainRef` suite it drives is
-   * slated for deletion in P3. Do not re-route ordinary edits/scans through it.
-   *
-   * Snapshot the `main` working tree through the protected-ref path — the
-   * DO-FREE build/freshness commit (P5a): PREPARE the candidate locally
-   * (scan + shared-implementation hash + eager content-store mirror, zero DO
-   * round trips), then ADVANCE the ref (compare-and-swap against the value
-   * the candidate was computed from + the injected approval gate — a denial
-   * or a lost race aborts with zero state change and the loop re-prepares).
-   * Once the ref adopts the candidate the commit IS complete for every build
-   * consumer (trees/diffs/build sources all resolve from the content store);
-   * the gad-store provenance recording is handed to the async direct recorder,
-   * backed by the durable scan record, so a failing or slow DO can delay
-   * history, never builds.
-   *
-   * The per-head lock is NOT held across the ref advance, so a parked
-   * approval never blocks reads/scans of other repos.
-   */
-  private async commitMainHead(opts: {
-    summary?: string;
-    actor?: { id: string; kind: string };
-    repoPath?: string;
-    mainAdvance?: RefAdvanceGateContext;
-  }): Promise<CommitResult> {
-    const actor = opts.actor ?? USER_ACTOR;
-    const context = opts.mainAdvance ?? SYSTEM_ADVANCE;
-    const repoPath = normalizeRepoPathForLog(
-      opts.repoPath ??
-        (() => {
-          throw new Error("per-repo VCS: a repoPath is required to commit main");
-        })()
-    );
-    const logId = this.repoLogId(repoPath);
-    const sk = this.stateKey(logId, VCS_MAIN_HEAD);
-    let lastError: unknown = null;
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const prepared = await this.prepareMainScan(repoPath, logId, actor);
-      if (prepared.kind === "unchanged") return prepared.result;
-      const candidate = prepared.candidate;
-      const durableRecord = await this.createDurableMainRecord({
-        repoPath,
-        logId,
-        prev: candidate.prev,
-        next: candidate.stateHash,
-        files: candidate.files,
-        actor,
-        summary: opts.summary ?? "workspace scan",
-      });
-
-      try {
-        // CAS from the value the candidate was COMPUTED against (not a fresh
-        // read): a concurrent advance between prepare and here must conflict
-        // and re-prepare — a stale scan may never overwrite a newer ref.
-        await this.advanceMainRef({
-          repoPath,
-          expectedOld: candidate.prev,
-          next: candidate.stateHash,
-          actor,
-          reason: opts.summary ?? "workspace scan",
-          context,
-        });
-      } catch (error) {
-        await this.discardDurableMainRecord(durableRecord.id);
-        if (isRefConflictError(error)) {
-          lastError = error;
-          continue;
-        }
-        throw error;
-      }
-      this.preCasMainRecords.delete(durableRecord.id);
-
-      // The ref moved — the commit is complete. The `updateMains` post-advance
-      // reaction already projected main and emitted the single build-driving
-      // `state-advanced` event. Everything below is bookkeeping + ASYNC
-      // provenance; nothing here may block on the DO.
-      this.lastState.set(sk, candidate.stateHash);
-      this.enqueueMainRecord(logId, durableRecord);
-      return {
-        stateHash: candidate.stateHash,
-        // The provenance event is recorded asynchronously (direct DO ingest) —
-        // there is no DO event identity at commit time (pre-release break).
-        eventId: "",
-        headHash: "",
-        fileCount: candidate.fileCount,
-        unchanged: false,
-        head: VCS_MAIN_HEAD,
-        changedPaths: candidate.event.changedPaths,
-      };
-    }
-    throw new Error(
-      `commit main: gave up after concurrent-advance retries on ${repoPath}: ${
-        lastError instanceof Error ? lastError.message : String(lastError)
-      }`
-    );
-  }
-
-  /**
-   * Prepare a `main` scan candidate entirely locally: scan + hash the repo's
-   * working tree (shared worktree hashing; blobs + tree mirrored into the
-   * content store eagerly), diff against the protected ref, and build the
-   * state-advanced event. No gad-store involvement — the scan is fully DO-free.
-   */
-  private async prepareMainScan(
-    repoPath: string,
-    logId: string,
-    actor: { id: string; kind: string }
-  ): Promise<
-    { kind: "candidate"; candidate: PreparedMainScan } | { kind: "unchanged"; result: CommitResult }
-  > {
-    const sk = this.stateKey(logId, VCS_MAIN_HEAD);
-    return this.locked(sk, async () => {
-      // The workspace-root disk (now the active context's checkout, D1) is the
-      // source for this bootstrap/import-only main seed.
-      const dir = this.dirForRepoHead(repoPath, VCS_ACTIVE_CONTEXT_HEAD);
-      const prev = this.mainRefState(repoPath);
-
-      // Missing working dir: a no-op against the ref (sparse/unmaterialized —
-      // deletion is an explicit, gated op, never inferred from absent disk).
-      try {
-        await fsp.access(dir);
-      } catch {
-        return {
-          kind: "unchanged" as const,
-          result: {
-            stateHash: prev ?? EMPTY_STATE_HASH,
-            eventId: "",
-            headHash: "",
-            fileCount: 0,
-            unchanged: true,
-            head: VCS_MAIN_HEAD,
-            changedPaths: [],
-          },
-        };
-      }
-
-      const local = await this.worktrees.localState(dir, { updateSidecar: true });
-      // Unchanged fast path — compared against the PROTECTED REF (the
-      // authority), never the gad store's possibly-lagging head.
-      if (prev && prev === local.stateHash) {
-        this.lastState.set(sk, local.stateHash);
-        return {
-          kind: "unchanged" as const,
-          result: {
-            stateHash: local.stateHash,
-            eventId: "",
-            headHash: "",
-            fileCount: local.files.length,
-            unchanged: true,
-            head: VCS_MAIN_HEAD,
-            changedPaths: [],
-          },
-        };
-      }
-
-      const event = await this.stateAdvancedEvent({
-        head: VCS_MAIN_HEAD,
-        previousStateHash: prev,
-        stateHash: local.stateHash,
-        eventId: null,
-        headHash: null,
-        actor,
-        transitionKind: "snapshot",
-        repoPath,
-      });
-      return {
-        kind: "candidate" as const,
-        candidate: {
-          prev,
-          stateHash: local.stateHash,
-          files: local.files,
-          fileCount: local.files.length,
-          event,
-        },
-      };
     });
   }
 
@@ -1784,10 +1213,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     baseView: string;
   }> {
     const head = vcsContextHead(contextId);
-    // The DO resolves each repo's `main` through the protected ref and
-    // requires its own lineage in lockstep — await every in-flight recording
-    // (and heal crash gaps) before dispatching.
-    await this.flushMainProvenance();
+    // The DO records every main advance synchronously in its publish path, so its
+    // recorded main lineage is always in lockstep with the protected ref — no
+    // host-side provenance drain is needed before dispatching.
     const result = await this.gad().call<{
       repos: Array<{ repoPath: string; status: "up-to-date" | "merged" | "conflicted" }>;
       baseView: string;
@@ -1888,11 +1316,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * A `ctx:*` target is USERLAND SEMANTICS: the gad-store DO's `vcsMerge`
    * owns the preconditions (pending/working checks), base/tip resolution, the
    * 3-way computation, the merge commit on clean, and the parked pending
-   * merge on conflict. This host side is the disk follower: synchronize main
-   * provenance first when the SOURCE is `main` (the DO resolves main through
-   * the protected ref and requires its own lineage in lockstep), then project
-   * the returned state, acknowledge conflict materialization, write the
-   * conflict summary, and emit build/reactive events.
+   * merge on conflict. This host side is the disk follower: it projects
+   * the returned state, acknowledges conflict materialization, writes the
+   * conflict summary, and emits build/reactive events.
    *
    * `main` is NOT a mergeable target: main advances only through the gated
    * push path (`refs.updateMains`), never by merging a head into it. A `main`
@@ -1916,11 +1342,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const sk = this.stateKey(logId, targetHead);
     return this.locked(sk, async () => {
       const actor = opts.actor ?? USER_ACTOR;
-      // A `main` source resolves through the protected ref inside the DO,
-      // which requires its recorded main lineage to be in lockstep.
-      if (sourceHead === VCS_MAIN_HEAD && repoPath) {
-        await this.syncMainProvenance(repoPath, logId);
-      }
+      // A `main` source resolves through the protected ref inside the DO. The DO
+      // records every main advance synchronously in its publish path, so its
+      // recorded main lineage is already in lockstep with the ref — no host-side
+      // provenance sync is needed before the merge.
       const outcome = await this.gad().call<GadMergeOutcome>("vcsMerge", {
         logId,
         targetHead,

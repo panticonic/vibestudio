@@ -7,7 +7,11 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/testSupport.js";
 import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
-import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
+import {
+  VCS_MAIN_HEAD,
+  VCS_ACTIVE_CONTEXT_HEAD,
+  vcsContextHead,
+} from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
 import { createRefService } from "../../../src/server/services/refService.js";
 import type { StateAdvancedEvent } from "../../../src/server/buildV2/stateTrigger.js";
@@ -123,7 +127,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     expect(await vcs.resolveHead(VCS_MAIN_HEAD, "meta")).toBeTruthy();
   });
 
-  it("ensureFresh commits an EXISTING repo's out-of-band disk change (git-import case)", async () => {
+  it("ensureFresh adopts an EXISTING repo's out-of-band disk change into the ACTIVE context (git-import case; main advances only by push)", async () => {
     // `meta` already has a main from bootstrap.
     expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
       kind: "text",
@@ -139,9 +143,21 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       text: "name: test\n",
     });
 
-    // ensureFresh re-snapshots every present repo → the change reaches vcs:repo:meta.
+    // Phase 2: ensureFresh adopts out-of-band disk drift into the ACTIVE context
+    // head (a working edit on ctx:workspace via the ungated ctx path), NEVER an
+    // ungated `main` advance.
     await vcs.ensureFresh();
+
+    // `main` is UNMOVED — it advances only through the gated push path.
     expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
+      kind: "text",
+      text: "name: test\n",
+    });
+    // …but the active context now reflects the imported change (adopted as a
+    // working edit on ctx:workspace).
+    expect(
+      (await vcs.readFile(VCS_ACTIVE_CONTEXT_HEAD, "vibez1.yml", "meta"))?.content
+    ).toMatchObject({
       kind: "text",
       text: "name: imported\n",
     });
