@@ -8,6 +8,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { detectFrameworkFromDependencies } from "./platformModules.js";
 
 export interface TemplateConfig {
   framework?: string;
@@ -95,7 +96,7 @@ function readTemplateFramework(sourceRoot: string, templateName: string): string
 }
 
 function detectFrameworkFromDeps(dependencies: Record<string, string>): string {
-  if ("@workspace/react" in dependencies) return "react";
-  if ("@workspace/svelte" in dependencies) return "svelte";
-  return "vanilla";
+  // The framework ↔ dependency mapping is the platform-module contract
+  // declared in platformModules.FRAMEWORK_MODULES.
+  return detectFrameworkFromDependencies(dependencies) ?? "vanilla";
 }

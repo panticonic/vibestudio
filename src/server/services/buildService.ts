@@ -1,8 +1,15 @@
 import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import { buildMethods } from "@vibez1/shared/serviceSchemas/build";
+import { BUILDABLE_UNIT_DIRS } from "@vibez1/shared/workspace/sourceDirs";
 import type { BuildSystemV2, BuildUnitOptions } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";
+
+const SKILLS_PACKAGE_SCOPE = (() => {
+  const scope = BUILDABLE_UNIT_DIRS.find((d) => d.dir === "skills")?.scope;
+  if (!scope) throw new Error("BUILDABLE_UNIT_DIRS is missing the skills scope");
+  return scope;
+})();
 
 export function createBuildService(deps: { buildSystem: BuildSystemV2 }): ServiceDefinition {
   return {
@@ -41,6 +48,10 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
             ? { ...build.metadata, diagnostics }
             : build.metadata;
         }
+        case "validate":
+          return bs.validate(
+            args[0] as { viewHash: string; repoPaths: string[]; baseViewHash?: string }
+          );
         case "getBuildReport":
           return bs.getBuildReport(args[0] as string, args[1] as string | undefined);
         case "getEffectiveVersion":
@@ -143,7 +154,7 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
           return bs
             .getGraph()
             .allNodes()
-            .filter((n) => n.name.startsWith("@workspace-skills/"))
+            .filter((n) => n.name.startsWith(SKILLS_PACKAGE_SCOPE))
             .map((n) => ({
               name: n.name,
               path: n.relativePath,

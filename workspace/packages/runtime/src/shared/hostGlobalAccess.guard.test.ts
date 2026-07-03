@@ -33,7 +33,9 @@ const ALLOWLIST = new Set([
 // strings that name the symbol don't trip the guard.
 const ACCESS = /\[\s*['"]__vibez1Require__['"]\s*\]/;
 
-const PACKAGES_ROOT = path.join(process.cwd(), "workspace", "packages");
+// Anchored on this file's location (…/workspace/packages/runtime/src/shared)
+// rather than cwd, so the guard also runs from a package subdirectory.
+const PACKAGES_ROOT = path.resolve(__dirname, "../../..");
 
 function tsFiles(dir: string, out: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

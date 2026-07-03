@@ -1,15 +1,21 @@
+import { randomUUID } from "node:crypto";
 import type { TokenManager } from "@vibez1/shared/tokenManager";
 import { type ConnectPairing, createConnectDeepLink } from "@vibez1/shared/connect";
 import { DEFAULT_PAIRING_CODE_TTL_MS, type DeviceAuthStore } from "../deviceAuthStore.js";
 
 /**
- * The WebRTC pairing material the running server advertises (its signaling
- * `room`, DTLS `fp`, and signaling endpoint `sig`, plus optional turn policy /
- * label). `code` is minted per-invite, so it is NOT part of the seam — the
- * server-side WebRTC/signaling wiring populates this; until it does, invites
- * carry a null `deepLink`.
+ * The WebRTC pairing material the running server advertises (its DTLS `fp` and
+ * signaling endpoint `sig`, plus optional turn policy / label). `code` AND
+ * `room` are minted PER-INVITE (plan §2.1 — one signaling room per invite, not
+ * one per server), so neither is part of the seam. The server-side WebRTC
+ * wiring populates this; until it does, invites carry a null `deepLink`.
  */
-export type ConnectPairingSeam = Omit<ConnectPairing, "code" | "v">;
+export type ConnectPairingSeam = Omit<ConnectPairing, "code" | "room" | "v">;
+
+/** The ingress-pool surface invite minting needs (arm a room per invite). */
+export interface PairingRoomArmer {
+  armRoom(room: string, meta: { deviceId?: string; inviteCode?: string }): void;
+}
 
 export interface AuthConnectionInfo {
   serverUrl: string;
@@ -35,6 +41,8 @@ export interface PairingInviteResponse extends ConnectionInfoResponse {
   expiresInMs: number;
   expiresAt: number;
   deepLink: string | null;
+  /** The invite's freshly minted signaling room (null without WebRTC ingress). */
+  room: string | null;
 }
 
 export interface DeviceCredentialResponse {
@@ -71,25 +79,71 @@ export function connectionInfoResponse(deps: {
   };
 }
 
+export interface MintedPairingInvite {
+  code: string;
+  room: string | null;
+  deepLink: string | null;
+  expiresInMs: number;
+  expiresAt: number;
+}
+
+/**
+ * Mint one pairing invite: a registered pairing code plus, when WebRTC ingress
+ * is live, a FRESH signaling room (plan §2.1 — room-per-invite) armed on the
+ * pool and embedded in the `vibez1://connect` deep link. The room follows the
+ * invite's lifecycle: redemption persists it onto the device record (the store
+ * re-tags the armed room via `onPairingRoomRedeemed`); expiry unredeemed
+ * releases it (`onPairingRoomReleased` → disarm). Without ingress (loopback
+ * co-located mode) the invite is a bare code with a null deep link.
+ */
+export function mintPairingInvite(deps: {
+  deviceAuthStore: DeviceAuthStore;
+  pairing?: ConnectPairingSeam | null;
+  ingress?: PairingRoomArmer | null;
+  ttlMs?: number;
+}): MintedPairingInvite {
+  const expiresInMs = deps.ttlMs ?? DEFAULT_PAIRING_CODE_TTL_MS;
+  const { pairing, ingress } = deps;
+  if (pairing && ingress) {
+    const room = randomUUID();
+    const code = deps.deviceAuthStore.createPairingCode(expiresInMs, { room });
+    ingress.armRoom(room, { inviteCode: code });
+    return {
+      code,
+      room,
+      deepLink: createConnectDeepLink({ ...pairing, room, code }),
+      expiresInMs,
+      expiresAt: Date.now() + expiresInMs,
+    };
+  }
+  const code = deps.deviceAuthStore.createPairingCode(expiresInMs);
+  return { code, room: null, deepLink: null, expiresInMs, expiresAt: Date.now() + expiresInMs };
+}
+
 export function createPairingInviteResponse(
   deps: {
     deviceAuthStore: DeviceAuthStore;
     getServerBootId: () => string;
     getWorkspaceId: () => string | null | undefined;
     getConnectionInfo?: () => AuthConnectionInfo;
+    getWebRtcIngress?: () => PairingRoomArmer | null;
   },
   ttlMs?: number
 ): PairingInviteResponse {
-  const expiresInMs = ttlMs ?? DEFAULT_PAIRING_CODE_TTL_MS;
-  const code = deps.deviceAuthStore.createPairingCode(expiresInMs);
   const info = connectionInfoResponse(deps);
-  const pairing = deps.getConnectionInfo?.().pairing;
+  const invite = mintPairingInvite({
+    deviceAuthStore: deps.deviceAuthStore,
+    pairing: deps.getConnectionInfo?.().pairing ?? null,
+    ingress: deps.getWebRtcIngress?.() ?? null,
+    ttlMs,
+  });
   return {
     ...info,
-    code,
-    expiresInMs,
-    expiresAt: Date.now() + expiresInMs,
-    deepLink: pairing ? createConnectDeepLink({ ...pairing, code }) : null,
+    code: invite.code,
+    expiresInMs: invite.expiresInMs,
+    expiresAt: invite.expiresAt,
+    deepLink: invite.deepLink,
+    room: invite.room,
   };
 }
 

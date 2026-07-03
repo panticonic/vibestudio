@@ -49,8 +49,13 @@ const gatewayFetch = createGatewayFetch(gatewayConfig, {
   // Stream gateway fetches over the panel's RPC client; it falls back to the
   // duplex stream-frame envelope path when the host bridge has no first-class
   // stream() (mobile and desktop), so gatewayFetch no longer hard-requires one.
+  // `body` is the §1.6 upload stream — passed through so a body-capable
+  // transport pumps it on the bulk channel (others throw, fail-loud).
   rpcStream: (target, method, args, options) =>
-    runtime.rpc.stream(target, method, args, options?.signal ? { signal: options.signal } : undefined),
+    runtime.rpc.stream(target, method, args, {
+      ...(options?.signal ? { signal: options.signal } : {}),
+      ...(options?.body ? { body: options.body } : {}),
+    }),
 });
 const {
   parentId: runtimeParentId,

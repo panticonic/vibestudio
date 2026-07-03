@@ -36,7 +36,7 @@ export function createRuntime(deps: RuntimeDeps) {
   const slotId = deps.slotId ?? (entityId as unknown as PanelSlotId);
   const parentRuntimeId = deps.parentEntityId ?? deps.parentId ?? null;
   const base = createBaseRuntime({ ...deps, id: entityId });
-  const shell = (globalThis as any).__vibez1Shell ?? (globalThis as any).__vibez1Electron;
+  const shell = (globalThis as any).__vibez1Shell;
 
   _initStateArgsRuntime(slotId, (service, method, args) => base.rpc.call(service, method, args));
   exposeAgentApi(base.expose);

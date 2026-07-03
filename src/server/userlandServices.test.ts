@@ -3,7 +3,7 @@ import {
   SingletonRegistry,
   type WorkspaceDeclarations,
 } from "@vibez1/shared/workspace/singletonRegistry";
-import { resolveUserlandService } from "./userlandServices.js";
+import { resolveUserlandService, resolveVcsStoreBinding } from "./userlandServices.js";
 
 function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
   const singletons = new SingletonRegistry(
@@ -68,5 +68,43 @@ describe("resolveUserlandService — factory vs singleton DO services", () => {
     expect(() => resolveUserlandService(decls, "example.store.v1", null)).toThrow(
       /factory.*objectKey/i
     );
+  });
+});
+
+describe("resolveVcsStoreBinding — the vcs service IS the store declaration", () => {
+  const vcsDecls = (withSingleton: boolean): WorkspaceDeclarations => ({
+    singletons: new SingletonRegistry(
+      withSingleton
+        ? [{ source: "workers/gad-store", className: "GadWorkspaceDO", key: "workspace-gad" }]
+        : []
+    ),
+    services: [
+      {
+        source: "workers/gad-store",
+        name: "vcs",
+        protocols: ["vibez1.vcs.v1"],
+        policy: { allowed: ["panel", "shell", "server", "worker", "extension"] },
+        durableObject: { className: "GadWorkspaceDO" },
+      },
+    ],
+    routes: [],
+  });
+
+  it("resolves the DO binding from the `vcs` service declaration + its singleton row", () => {
+    expect(resolveVcsStoreBinding(vcsDecls(true))).toEqual({
+      source: "workers/gad-store",
+      className: "GadWorkspaceDO",
+      objectKey: "workspace-gad",
+    });
+  });
+
+  it("returns null when no vcs service is declared (durable store disabled)", () => {
+    expect(
+      resolveVcsStoreBinding({ singletons: new SingletonRegistry([]), services: [], routes: [] })
+    ).toBeNull();
+  });
+
+  it("returns null for a factory vcs DO (no singleton row names a concrete object)", () => {
+    expect(resolveVcsStoreBinding(vcsDecls(false))).toBeNull();
   });
 });

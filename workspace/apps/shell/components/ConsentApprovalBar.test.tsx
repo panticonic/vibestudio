@@ -18,6 +18,7 @@ const shellClient = vi.hoisted(() => ({
   subscribe: vi.fn(() => Promise.resolve()),
   unsubscribe: vi.fn(() => Promise.resolve()),
   onRpcEvent: vi.fn((_event: string, _listener: (event: { payload: unknown }) => void) => () => {}),
+  getText: vi.fn<(hash: string) => Promise<string | null>>(() => Promise.resolve("blob-text")),
 }));
 
 // Capture what the coordinator drives the content overlay with, and the intent
@@ -41,6 +42,7 @@ vi.mock("../shell/client", () => ({
   shellPresence: { heartbeat: shellClient.heartbeat },
   events: { subscribe: shellClient.subscribe, unsubscribe: shellClient.unsubscribe },
   onRpcEvent: shellClient.onRpcEvent,
+  blobstore: { getText: shellClient.getText },
 }));
 
 vi.mock("../shell/useShellContentOverlay", () => ({
@@ -154,6 +156,7 @@ describe("ConsentApprovalBar coordinator", () => {
     for (const fn of Object.values(shellClient)) fn.mockClear();
     shellClient.listPending.mockResolvedValue([]);
     shellClient.resolve.mockImplementation(() => Promise.resolve());
+    shellClient.getText.mockResolvedValue("blob-text");
   });
 
   afterEach(() => {
@@ -247,6 +250,66 @@ describe("ConsentApprovalBar coordinator", () => {
 
     expect(shellClient.resolve).not.toHaveBeenCalled();
     expect(overlay.options?.props?.approval?.approvalId).toBe("current");
+  });
+
+  function diffApproval(approvalId: string): PendingUserlandApproval & { diffReview: unknown } {
+    return {
+      ...userlandApproval({ approvalId, title: "Publish changes" }),
+      diffReview: [
+        {
+          repoPath: "packages/demo",
+          oldState: "state:a",
+          newState: "state:b",
+          diffStat: { filesChanged: 1, insertions: 1, deletions: 0 },
+          changedFiles: [{ path: "src/a.ts", kind: "changed", oldHash: "h-old", newHash: "h-new" }],
+        },
+      ],
+    };
+  }
+
+  it("passes the diff-review payload and appearance through to the overlay", async () => {
+    shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+    const props = overlay.options?.props as { diffReview?: unknown[]; appearance?: string; blobResults?: unknown };
+    expect(Array.isArray(props.diffReview)).toBe(true);
+    expect(props.appearance).toBe("light");
+    expect(props.blobResults).toEqual({});
+  });
+
+  it("renders as today (no diffReview) when the approval carries no diff payload", async () => {
+    shellClient.listPending.mockResolvedValueOnce([userlandApproval({ approvalId: "plain", title: "Plain" })]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+    const props = overlay.options?.props as { diffReview?: unknown };
+    expect(props.diffReview ?? null).toBeNull();
+  });
+
+  it("fetches only payload hashes on a fetch-blob intent and pushes the result down", async () => {
+    shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({ type: "fetch-blob", hash: "h-new", approvalId: "d1" } as unknown as ApprovalCardIntent);
+    await waitFor(() => {
+      expect(shellClient.getText).toHaveBeenCalledWith("h-new");
+      const props = overlay.options?.props as { blobResults?: Record<string, unknown> };
+      expect(props.blobResults?.["h-new"]).toEqual({ text: "blob-text" });
+    });
+
+    // A hash NOT present in the payload is ignored (never fetched).
+    emit({ type: "fetch-blob", hash: "not-in-payload", approvalId: "d1" } as unknown as ApprovalCardIntent);
+    await Promise.resolve();
+    expect(shellClient.getText).not.toHaveBeenCalledWith("not-in-payload");
+  });
+
+  it("keeps decisions working while a diff approval is active", async () => {
+    shellClient.resolve.mockImplementation(() => new Promise(() => undefined));
+    shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+    emit({ type: "decide", decision: "once", approvalId: "d1" });
+    expect(shellClient.resolve).toHaveBeenCalledWith("d1", "once");
   });
 
   it("surfaces a failed decision back through the overlay props", async () => {

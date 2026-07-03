@@ -34,6 +34,28 @@ describe("userland approval validation", () => {
     })).toThrow(/unique/);
   });
 
+  it("accepts newlines in multi-line summary and detail values (markdown blocks)", () => {
+    const parsed = userlandApprovalRequestSchema.parse({
+      ...validRequest,
+      summary: "Run this command:\n\n```sh\nls -la\n```",
+      details: [{ label: "Command", value: "```sh\nls -la\n```", format: "markdown" }],
+    });
+    expect(parsed.summary).toContain("\n");
+    expect(parsed.details?.[0]?.value).toContain("\n");
+  });
+
+  it("rejects non-newline control characters even in multi-line fields", () => {
+    expect(() =>
+      userlandApprovalRequestSchema.parse({ ...validRequest, summary: "bad\u0001summary" })
+    ).toThrow(/control/);
+    expect(() =>
+      userlandApprovalRequestSchema.parse({ ...validRequest, summary: "bad\rsummary" })
+    ).toThrow(/control/);
+    expect(() =>
+      userlandApprovalRequestSchema.parse({ ...validRequest, title: "multi\nline title" })
+    ).toThrow(/control/);
+  });
+
   it("rejects control characters, invalid identifiers, and reserved option values", () => {
     expect(() => userlandApprovalRequestSchema.parse({ ...validRequest, title: "bad\u0001title" }))
       .toThrow(/control/);

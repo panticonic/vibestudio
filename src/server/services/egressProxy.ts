@@ -418,15 +418,27 @@ export class EgressProxy {
       url: string;
       method: string;
       headers?: Record<string, string>;
-      body?: string | Uint8Array;
+      /**
+       * `ReadableStream` = a streamed upload from the WebRTC pipe (plan §1.6).
+       * Streams are single-shot, which is compatible with this path's
+       * no-retries contract (`maxRetries: 0` below).
+       */
+      body?: string | Uint8Array | ReadableStream<Uint8Array>;
       credentialId?: string;
     },
     sink: (frame: StreamFrame) => Promise<void> | void,
     abortSignal?: AbortSignal
   ): Promise<{ status: number; bytesIn: number }> {
     const body = params.body;
+    const bodyIsStream = typeof ReadableStream !== "undefined" && body instanceof ReadableStream;
+    // A streamed body's size is unknown until it is consumed; the audit entry
+    // records 0 bytesOut for stream uploads (length is not known up-front).
     const bytesOut =
-      body === undefined ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
+      body === undefined || bodyIsStream
+        ? 0
+        : typeof body === "string"
+          ? Buffer.byteLength(body)
+          : (body as Uint8Array).byteLength;
 
     let bytesInTotal = 0;
 
@@ -449,7 +461,9 @@ export class EgressProxy {
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
           signal: abortSignal,
-        });
+          // undici requires half-duplex to be declared for stream bodies.
+          ...(bodyIsStream ? { duplex: "half" } : {}),
+        } as RequestInit);
 
         if (upstream.status === 401 && this.canForceRefreshCredential(authorization.credential)) {
           const responseBody = new Uint8Array(await upstream.arrayBuffer());

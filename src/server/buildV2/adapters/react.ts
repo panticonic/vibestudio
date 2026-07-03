@@ -1,3 +1,4 @@
+import { REACT_FRAMEWORK_MODULE } from "../platformModules.js";
 import type { FrameworkAdapter } from "./types.js";
 
 export const reactAdapter: FrameworkAdapter = {
@@ -10,10 +11,12 @@ export const reactAdapter: FrameworkAdapter = {
   jsx: "automatic",
   tsconfigJsx: "react-jsx",
 
-  generateEntry(exposeEntryFile: string, entryFile: string): string {
+  generateEntry(exposeEntryFile: string, entryFile: string, frameworkModule?: string): string {
+    // Auto-mount contract module — see platformModules.FRAMEWORK_MODULES.
+    const mountModule = frameworkModule ?? REACT_FRAMEWORK_MODULE;
     return `import "@radix-ui/themes/styles.css";
 import ${JSON.stringify(exposeEntryFile)};
-import { autoMountReactPanel, shouldAutoMount } from "@workspace/react";
+import { autoMountReactPanel, shouldAutoMount } from ${JSON.stringify(mountModule)};
 import * as userModule from ${JSON.stringify(entryFile)};
 
 if (shouldAutoMount(userModule)) {

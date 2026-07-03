@@ -4,9 +4,11 @@ import * as os from "os";
 import * as path from "path";
 import {
   discoverExtensionPackageNames,
+  findExtensionRegistrySinks,
   renderExtensionRegistry,
   writeExtensionRegistry,
-  EXTENSION_REGISTRY_RELATIVE_PATH,
+  EXTENSION_REGISTRY_SINK_DIRECTIVE,
+  EXTENSION_REGISTRY_SINK_FILENAME,
 } from "./extensionRegistry.js";
 
 const tempDirs: string[] = [];
@@ -20,6 +22,13 @@ function tempDir(): string {
 function write(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content);
+}
+
+/** Declare a registry sink at `<root>/packages/<relPath>` (workspace-owned opt-in). */
+function writeSink(root: string, relPath: string, content?: string): string {
+  const sinkPath = path.join(root, "packages", relPath, EXTENSION_REGISTRY_SINK_FILENAME);
+  write(sinkPath, content ?? `${EXTENSION_REGISTRY_SINK_DIRECTIVE}\nexport {};\n`);
+  return sinkPath;
 }
 
 function writeExtension(
@@ -59,6 +68,13 @@ describe("renderExtensionRegistry", () => {
 
   it("emits an empty module marker when there are no extensions", () => {
     expect(renderExtensionRegistry([])).toContain("export {};");
+  });
+
+  it("starts with the sink directive so regenerated files stay sinks", () => {
+    expect(renderExtensionRegistry([]).startsWith(`${EXTENSION_REGISTRY_SINK_DIRECTIVE}\n`)).toBe(true);
+    expect(
+      renderExtensionRegistry(["@a/one"]).startsWith(`${EXTENSION_REGISTRY_SINK_DIRECTIVE}\n`),
+    ).toBe(true);
   });
 
   it("is deterministic and de-duplicates", () => {
@@ -101,22 +117,79 @@ describe("discoverExtensionPackageNames", () => {
   });
 });
 
-describe("writeExtensionRegistry", () => {
-  it("writes the barrel and is idempotent", () => {
+describe("findExtensionRegistrySinks", () => {
+  it("finds declared sinks anywhere inside a workspace package", () => {
     const root = tempDir();
-    fs.mkdirSync(path.join(root, "packages", "runtime", "src", "shared"), { recursive: true });
+    const deep = writeSink(root, path.join("runtime", "src", "shared"));
+    const flat = writeSink(root, "other");
+    expect(findExtensionRegistrySinks(root)).toEqual([deep, flat].sort());
+  });
+
+  it("ignores same-named files without the directive (workspace opt-out)", () => {
+    const root = tempDir();
+    writeSink(root, path.join("runtime", "src"), "// not a sink\nexport {};\n");
+    expect(findExtensionRegistrySinks(root)).toEqual([]);
+  });
+
+  it("does not descend into node_modules or build output dirs", () => {
+    const root = tempDir();
+    writeSink(root, path.join("runtime", "node_modules", "dep"));
+    writeSink(root, path.join("runtime", "dist"));
+    expect(findExtensionRegistrySinks(root)).toEqual([]);
+  });
+
+  it("returns [] for a workspace without a packages directory", () => {
+    expect(findExtensionRegistrySinks(tempDir())).toEqual([]);
+  });
+});
+
+describe("writeExtensionRegistry", () => {
+  it("rewrites a declared sink and is idempotent", () => {
+    const root = tempDir();
+    const sink = writeSink(root, path.join("runtime", "src", "shared"));
     writeExtension(root, "shell", "@workspace-extensions/shell");
 
     expect(writeExtensionRegistry(root)).toBe(true);
-    const barrel = path.join(root, EXTENSION_REGISTRY_RELATIVE_PATH);
-    expect(fs.readFileSync(barrel, "utf-8")).toContain("@workspace-extensions/shell");
+    const content = fs.readFileSync(sink, "utf-8");
+    expect(content).toContain("@workspace-extensions/shell");
+    // Regenerated content keeps the directive: the file stays a sink.
+    expect(content.startsWith(`${EXTENSION_REGISTRY_SINK_DIRECTIVE}\n`)).toBe(true);
     // Second run with unchanged inputs makes no write.
     expect(writeExtensionRegistry(root)).toBe(false);
   });
 
-  it("is a no-op when the workspace has no runtime package", () => {
+  it("is a no-op when the workspace declares no sink", () => {
     const root = tempDir();
     writeExtension(root, "shell", "@workspace-extensions/shell");
+    // A same-named file without the directive is workspace-owned and untouched.
+    const optedOut = writeSink(root, path.join("runtime", "src"), "// hands off\nexport {};\n");
+
     expect(writeExtensionRegistry(root)).toBe(false);
+    expect(fs.readFileSync(optedOut, "utf-8")).toBe("// hands off\nexport {};\n");
+  });
+
+  it("delivers the registry to every declared sink", () => {
+    const root = tempDir();
+    const a = writeSink(root, path.join("runtime", "src", "shared"));
+    const b = writeSink(root, path.join("alt-runtime", "typed"));
+    writeExtension(root, "shell", "@workspace-extensions/shell");
+
+    expect(writeExtensionRegistry(root)).toBe(true);
+    expect(fs.readFileSync(a, "utf-8")).toBe(fs.readFileSync(b, "utf-8"));
+    expect(fs.readFileSync(a, "utf-8")).toContain("@workspace-extensions/shell");
+  });
+
+  it("writes an empty registry when no extensions self-register", () => {
+    const root = tempDir();
+    const sink = writeSink(
+      root,
+      path.join("runtime", "src", "shared"),
+      `${EXTENSION_REGISTRY_SINK_DIRECTIVE}\nexport type { Api as Ext_stale } from "@gone/ext";\n`,
+    );
+
+    expect(writeExtensionRegistry(root)).toBe(true);
+    const content = fs.readFileSync(sink, "utf-8");
+    expect(content).toContain("export {};");
+    expect(content).not.toContain("@gone/ext");
   });
 });

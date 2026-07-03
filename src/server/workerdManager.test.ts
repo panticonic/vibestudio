@@ -428,6 +428,77 @@ describe("WorkerdManager", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Manifest-declared bootstrap main-bound DOs (the `vcs` service's DO →
+  // deps.getBootstrapMainBoundDos). The manager itself carries NO hardcoded
+  // workspace unit name: only a declared (source, className) pair gets the
+  // raw-ref bootstrap passthrough (observable as "" passed through instead of
+  // being normalized to undefined).
+  // -------------------------------------------------------------------------
+  describe("bootstrap main-bound DOs (manifest-declared)", () => {
+    it("binds a declared main-bound DO to explicit main", async () => {
+      const deps = createMockDeps({
+        getBootstrapMainBoundDos: () => [{ source: "workers/vcs-store", className: "VcsDO" }],
+      });
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/vcs-store",
+        className: "VcsDO",
+        key: "workspace-vcs",
+        contextId: "ctx-boot",
+        ref: "main",
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/vcs-store", "main");
+    });
+
+    it("passes the bootstrap ref through raw ONLY for the declared pair", async () => {
+      const deps = createMockDeps({
+        getBootstrapMainBoundDos: () => [{ source: "workers/vcs-store", className: "VcsDO" }],
+      });
+      const mgr = new WorkerdManager(deps);
+
+      // Declared pair: the raw ref ("") is used as-is.
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/vcs-store",
+        className: "VcsDO",
+        key: "workspace-vcs",
+        contextId: "ctx-boot",
+        ref: "",
+      });
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/vcs-store", "");
+
+      // A non-declared pair (including the historically hardcoded gad-store)
+      // takes the regular normalization path ("" → undefined).
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/gad-store",
+        className: "GadWorkspaceDO",
+        key: "workspace-gad",
+        contextId: "ctx-boot",
+        ref: "",
+      });
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/gad-store", undefined);
+    });
+
+    it("keeps regular build-ref validation for every DO (declared or not)", async () => {
+      const deps = createMockDeps({
+        getBootstrapMainBoundDos: () => [{ source: "workers/vcs-store", className: "VcsDO" }],
+      });
+      const mgr = new WorkerdManager(deps);
+
+      await expect(
+        mgr.ensureDurableObjectEntity({
+          source: "workers/vcs-store",
+          className: "VcsDO",
+          key: "workspace-vcs",
+          contextId: "ctx-boot",
+          ref: "not-a-valid-ref",
+        })
+      ).rejects.toThrow(/Invalid build ref/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // updateInstance (internal: codeVersion bump / ref retarget, no userland RPC)
   // -------------------------------------------------------------------------
   describe("updateInstance", () => {

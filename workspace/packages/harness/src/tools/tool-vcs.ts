@@ -7,6 +7,11 @@
  * `vcs.push`.
  */
 
+import {
+  createVcsUserlandClient,
+  type RpcCallerLike,
+} from "@vibez1/shared/userlandServiceRpc";
+
 import { resolveToCwd } from "./path-utils.js";
 
 /**
@@ -114,9 +119,16 @@ export interface ToolVcs {
   discardEdits(repoPath: string): Promise<{ discarded: number; stateHash: string }>;
 }
 
-/** Build a {@link ToolVcs} from a main-RPC call function. */
+/** Build a {@link ToolVcs} from a main-RPC call function. `pushRoute` supplies
+ *  the USERLAND dispatch for `push` (P3 flip): the build-gated main advance runs
+ *  in the gad-store DO's `vcsPush`, reached via the `vcs` manifest service on a
+ *  target-capable rpc — never the host `vcs.push` service. Client-side routing
+ *  is load-bearing (the relay mints the on-behalf-of invocation token with the
+ *  originating caller only on a direct DO call). Userland dispatch has no
+ *  caller-context resolution, so the caller supplies its own `sourceHead`. */
 export function createToolVcs(
-  callMain: <T>(method: string, args: unknown[]) => Promise<T>
+  callMain: <T>(method: string, args: unknown[]) => Promise<T>,
+  pushRoute?: { rpc: RpcCallerLike; sourceHead: string | (() => string) }
 ): ToolVcs {
   return {
     readFile: (path) =>
@@ -126,7 +138,22 @@ export function createToolVcs(
       ]),
     edit: (input) => callMain<ToolVcsEditResult>("vcs.edit", [input]),
     commit: (input) => callMain<ToolVcsCommitResult[]>("vcs.commit", [input]),
-    push: (input) => callMain<ToolVcsPushResult>("vcs.push", [input]),
+    push: (input) => {
+      if (!pushRoute) {
+        throw new Error(
+          "vcs.push is userland-dispatched (P3): createToolVcs needs a pushRoute (target-capable rpc + sourceHead)"
+        );
+      }
+      // Resolve the source head LAZILY at push time — the caller's context
+      // (subscription) may not exist while the tool surface is merely built.
+      const sourceHead =
+        typeof pushRoute.sourceHead === "function" ? pushRoute.sourceHead() : pushRoute.sourceHead;
+      return createVcsUserlandClient(pushRoute.rpc).call<ToolVcsPushResult>("vcsPush", {
+        repoPaths: input.repoPaths,
+        sourceHead,
+        ...(input.message !== undefined ? { message: input.message } : {}),
+      });
+    },
     merge: (repoPath) => callMain<ToolVcsMergeResult>("vcs.merge", [repoPath]),
     discardEdits: (repoPath) =>
       callMain<{ discarded: number; stateHash: string }>("vcs.discardEdits", [repoPath]),

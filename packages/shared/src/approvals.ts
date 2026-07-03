@@ -13,6 +13,9 @@ export type ApprovalConfigFieldType = "text" | "secret";
 export type ApprovalDetailFormat = "plain" | "markdown" | "code";
 
 const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+// Multi-line fields (summary, detail values) legitimately carry "\n" for
+// markdown code blocks; every other control character stays rejected.
+const CONTROL_CHARS_EXCEPT_NEWLINE = /[\u0000-\u0009\u000B-\u001F\u007F]/;
 const ZERO_WIDTH_CHARS = /[\u200B-\u200F]/g;
 const SUBJECT_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/;
 const OPTION_VALUE_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -20,10 +23,11 @@ export const USERLAND_APPROVAL_RESERVED_SUBJECT_PREFIXES = ["shell:", "server:",
 
 export function approvalCleanString(
   label: string,
-  opts: { min?: number; max: number; pattern?: RegExp },
+  opts: { min?: number; max: number; pattern?: RegExp; multiline?: boolean },
 ): z.ZodType<string> {
+  const controlChars = opts.multiline ? CONTROL_CHARS_EXCEPT_NEWLINE : CONTROL_CHARS;
   let schema: z.ZodType<string> = z.string()
-    .refine((value) => !CONTROL_CHARS.test(value), { message: `${label} contains control characters` })
+    .refine((value) => !controlChars.test(value), { message: `${label} contains control characters` })
     .transform((value) => value.replace(ZERO_WIDTH_CHARS, ""));
   if (opts.min !== undefined) {
     schema = schema.refine((value) => value.length >= opts.min!, { message: `${label} is too short` });
@@ -45,7 +49,7 @@ export const userlandApprovalSubjectIdSchema = approvalCleanString(
 
 export const userlandApprovalDetailSchema = z.object({
   label: approvalCleanString("detail label", { max: 40 }),
-  value: approvalCleanString("detail value", { max: 1000 }),
+  value: approvalCleanString("detail value", { max: 1000, multiline: true }),
   format: z.enum(["plain", "markdown", "code"]).optional(),
 }).strict();
 
@@ -71,7 +75,7 @@ export const userlandApprovalRequestSchema = z.object({
     label: approvalCleanString("subject label", { max: 80 }).optional(),
   }).strict(),
   title: approvalCleanString("title", { min: 1, max: 120 }),
-  summary: approvalCleanString("summary", { max: 1000 }).optional(),
+  summary: approvalCleanString("summary", { max: 1000, multiline: true }).optional(),
   warning: approvalCleanString("warning", { max: 200 }).optional(),
   details: z.array(userlandApprovalDetailSchema).max(8).optional(),
   positiveEvidence: z.array(userlandApprovalDetailSchema).max(6).optional(),
@@ -200,7 +204,7 @@ const approvalInputFieldSchema = z.object({
 
 export const secretInputRequestSchema = z.object({
   title: approvalCleanString("title", { min: 1, max: 120 }),
-  description: approvalCleanString("description", { max: 1000 }).optional(),
+  description: approvalCleanString("description", { max: 1000, multiline: true }).optional(),
   warning: approvalCleanString("warning", { max: 200 }).optional(),
   details: z.array(userlandApprovalDetailSchema).max(8).optional(),
   fields: z.array(approvalInputFieldSchema).length(1),
@@ -259,6 +263,41 @@ export interface UserlandApprovalGrant {
   scope?: UserlandApprovalGrantScope;
 }
 
+/**
+ * One file's change within a {@link DiffReviewEntry}. `oldHash`/`newHash` are
+ * content-store digests (blobstore addresses); which are present depends on
+ * `kind` (removed → `oldHash` only, added → `newHash` only, changed → both).
+ * The approval UI fetches those two trusted blobs by hash and line-diffs them
+ * client-side. `binary`/`tooLarge` mark files rendered diffstat-only.
+ */
+export interface DiffReviewFile {
+  path: string;
+  kind: "added" | "removed" | "changed";
+  oldHash?: string;
+  newHash?: string;
+  binary?: boolean;
+  tooLarge?: boolean;
+}
+
+/**
+ * One repo's worth of changes in a batch main-advance approval, host-computed
+ * from `diffTrees` (narrow-host-vcs-plan §5.1). File CONTENTS are never inlined:
+ * only content hashes travel, and the approval card lazily fetches the trusted
+ * blobs by hash. `newState` is `null` for a delete entry (all files `removed`);
+ * `insertions`/`deletions` are OPTIONAL — omitted whenever any file in the entry
+ * was skipped for line counting (binary/oversized/truncated), so `diffStat`
+ * totals are always accurate or absent, never partial. `filesChanged` is always
+ * exact even when `changedFiles` is truncated (`truncated: true`).
+ */
+export interface DiffReviewEntry {
+  repoPath: string;
+  oldState: string;
+  newState: string | null;
+  diffStat: { filesChanged: number; insertions?: number; deletions?: number };
+  changedFiles: DiffReviewFile[];
+  truncated?: boolean;
+}
+
 export interface PendingApprovalBase {
   // principal == { callerId, callerKind, repoPath, effectiveVersion }
   approvalId: string;
@@ -282,6 +321,13 @@ export interface PendingApprovalBase {
   requester?: ApprovalRequesterIdentity;
   /** Structured operation metadata used for copy, grouping, and risk display. */
   operation?: ApprovalOperationDescriptor;
+  /**
+   * Host-computed diff-review payload (narrow-host-vcs-plan §5.1). Attached by
+   * the main-advance approval gate to workspace-main-advance / repo
+   * deletion / restore prompts; absent on every other approval. Content hashes
+   * only — the approval card fetches the trusted blobs lazily by hash.
+   */
+  diffReview?: DiffReviewEntry[];
 }
 
 export interface PendingCredentialApproval extends PendingApprovalBase {

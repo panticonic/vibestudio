@@ -337,6 +337,30 @@ export const buildMethods = defineServiceMethods({
       .nullable(),
     access: READ_ACCESS,
   },
+  validate: {
+    description:
+      "Gad-facing push validation (narrow-host VCS): build + cache + classify a composed candidate workspace view. Keyed by (viewHash, repoPaths, baseViewHash) — repoPaths are the pushed repos (buildable pushed units gate absolutely; content-only skip) and baseViewHash drives the dependent regression gate (a dependent also red on the base is informational; omitted ⇒ failed dependents gate absolutely). IDEMPOTENT: never promotes the EV baseline or records provenance, so it is safe to call on candidates that are never published.",
+    args: z.tuple([
+      z
+        .object({
+          viewHash: z
+            .string()
+            .describe("Composed candidate workspace view (state:… hash) to build and classify."),
+          repoPaths: z
+            .array(z.string())
+            .describe("Workspace-relative repo roots being pushed (pushed-role units)."),
+          baseViewHash: z
+            .string()
+            .optional()
+            .describe(
+              "Composed view BEFORE the push for the dependent regression gate; omitted ⇒ failed dependents gate absolutely."
+            ),
+        })
+        .strict(),
+    ]),
+    returns: z.array(repoBuildReportSchema),
+    access: BUILD_ACCESS,
+  },
   getBuildReport: {
     description:
       "Queryable companion to the synchronous push gate: build a unit (runtime, or library targets for packages) at the given workspace state (omitted = main HEAD) and return its agent-actionable RepoBuildReport with structured esbuild + tsc diagnostics. Does NOT advance any head.",

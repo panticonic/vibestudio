@@ -64,6 +64,7 @@ import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
 } from "@vibez1/shared/approvalMarkdown";
+import { DiffViewer, type DiffContentFetcher, type DiffReviewEntry } from "@workspace/ui";
 import {
   approvalAccent,
   prettifyId,
@@ -80,10 +81,25 @@ export interface ApprovalCardProps {
   /** Queue position for the navigator; null when a single approval is pending. */
   queue: ApprovalQueueInfo | null;
   decisionError: string | null;
+  /** P3.5 diff-review payload; null/omitted → the card renders as it always has. */
+  diffReview?: DiffReviewEntry[] | null;
+  /** Lazy blob fetcher backing the diff viewer (host-served, content-addressed). */
+  fetchContent?: DiffContentFetcher;
+  /** Chrome appearance for the diff viewer's syntax theme. */
+  appearance?: "light" | "dark";
   emit: (intent: ApprovalCardIntent) => void;
 }
 
-export function ApprovalCard({ approval, caller, queue, decisionError, emit }: ApprovalCardProps) {
+export function ApprovalCard({
+  approval,
+  caller,
+  queue,
+  decisionError,
+  diffReview,
+  fetchContent,
+  appearance = "light",
+  emit,
+}: ApprovalCardProps) {
   // Secret-config / credential-input values are held locally and only leave the
   // surface on submit.
   const [secretConfigValues, setSecretConfigValues] = useState<Record<string, string>>({});
@@ -221,6 +237,14 @@ export function ApprovalCard({ approval, caller, queue, decisionError, emit }: A
               </Flex>
             ) : null}
 
+            {diffReview && diffReview.length > 0 && fetchContent ? (
+              <DiffReviewSection
+                entries={diffReview}
+                fetchContent={fetchContent}
+                appearance={appearance}
+              />
+            ) : null}
+
             <ApprovalDetails
               approval={approval}
               caller={caller}
@@ -268,6 +292,89 @@ export function ApprovalCard({ approval, caller, queue, decisionError, emit }: A
 
       <div className="approval-card-footer">{actions}</div>
     </div>
+  );
+}
+
+/**
+ * Diff-review section (P3.5). One collapsible-free block per repo entry with a
+ * per-repo header carrying the host-computed diffstat totals, plus the shared
+ * `DiffViewer`. For a multi-repo batch it also shows an aggregate header. The
+ * whole section is presentation over host-computed data and never gates the
+ * Allow/Deny controls in the footer.
+ */
+function DiffReviewSection({
+  entries,
+  fetchContent,
+  appearance,
+}: {
+  entries: DiffReviewEntry[];
+  fetchContent: DiffContentFetcher;
+  appearance: "light" | "dark";
+}) {
+  // Line totals are shown only when EVERY entry carries them — the host omits
+  // insertions/deletions for any entry with a skipped (binary/oversized/
+  // truncated) file, and a partial batch total would mislead.
+  const hasLineTotals = entries.every((entry) => entry.diffStat.insertions != null);
+  const totals = entries.reduce(
+    (acc, entry) => ({
+      filesChanged: acc.filesChanged + entry.diffStat.filesChanged,
+      insertions: acc.insertions + (entry.diffStat.insertions ?? 0),
+      deletions: acc.deletions + (entry.diffStat.deletions ?? 0),
+    }),
+    { filesChanged: 0, insertions: 0, deletions: 0 }
+  );
+  const isBatch = entries.length > 1;
+  return (
+    <Box
+      mt="1"
+      p="2"
+      style={{
+        border: "1px solid var(--gray-a6)",
+        borderRadius: 6,
+        backgroundColor: "var(--color-panel-translucent)",
+        maxWidth: 720,
+      }}
+    >
+      <Flex direction="column" gap="2" style={{ minWidth: 0 }}>
+        <Flex align="center" gap="2" wrap="wrap">
+          <Text size="1" weight="medium">
+            Review changes
+          </Text>
+          {isBatch ? (
+            <Badge color="gray" variant="soft">
+              {entries.length} repos · {totals.filesChanged} files
+            </Badge>
+          ) : null}
+          {hasLineTotals ? (
+            <Flex align="center" gap="2" style={{ marginLeft: "auto" }}>
+              <Text size="1" style={{ color: "var(--green-11)" }}>
+                +{totals.insertions}
+              </Text>
+              <Text size="1" style={{ color: "var(--red-11)" }}>
+                −{totals.deletions}
+              </Text>
+            </Flex>
+          ) : null}
+        </Flex>
+        {entries.map((entry) => (
+          <Box key={`${entry.repoPath}:${entry.newState}`} style={{ minWidth: 0 }}>
+            <Flex align="center" gap="2" mb="1" wrap="wrap">
+              <Badge color="sky" variant="soft" radius="full">
+                {entry.repoPath}
+              </Badge>
+              <Text size="1" color="gray" style={{ marginLeft: "auto" }}>
+                {entry.diffStat.filesChanged} files
+                {entry.diffStat.insertions != null
+                  ? ` · +${entry.diffStat.insertions} −${entry.diffStat.deletions ?? 0}`
+                  : ""}
+                {entry.truncated ? " · truncated" : ""}
+              </Text>
+            </Flex>
+            <DiffViewer entry={entry} fetchContent={fetchContent} appearance={appearance} />
+          </Box>
+        ))}
+      </Flex>
+    </Box>
   );
 }
 
@@ -1458,7 +1565,8 @@ function ApprovalMarkdown({
 }) {
   const blocks = parseApprovalMarkdown(source);
   if (blocks.length === 0) return null;
-  const color = tone === "danger" ? "var(--red-11)" : tone === "muted" ? "var(--gray-11)" : undefined;
+  const color =
+    tone === "danger" ? "var(--red-11)" : tone === "muted" ? "var(--gray-11)" : undefined;
   return (
     <Flex
       direction="column"

@@ -17,6 +17,7 @@ import {
   responseForCredential,
   shellCallerId,
   type AuthConnectionInfo,
+  type PairingRoomArmer,
 } from "./auth/model.js";
 import { auditPairingEvent } from "./auth/audit.js";
 import { refreshPrincipalGrantResponse } from "./auth/principalGrants.js";
@@ -139,6 +140,11 @@ export function createAuthService(deps: {
   getServerBootId: () => string;
   getWorkspaceId: () => string;
   getConnectionInfo?: () => AuthConnectionInfo;
+  /**
+   * The live WebRTC ingress pool (null when WebRTC is off). Pairing invites
+   * mint one fresh signaling room each and arm it here (plan §2.1).
+   */
+  getWebRtcIngress?: () => PairingRoomArmer | null;
   connectionGrants?: ConnectionGrantService;
   auditLog?: Pick<AuditLog, "append">;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
@@ -201,9 +207,11 @@ export function createAuthService(deps: {
       if (method === "listDevices") {
         return {
           serverId: deps.deviceAuthStore.getServerId(),
+          // Strip secrets AND the device's signaling room — knowing another
+          // device's room lets a caller squat/evict its signaling slot.
           devices: deps.deviceAuthStore
             .listDevices()
-            .map(({ refreshTokenHash: _secret, ...device }) => device),
+            .map(({ refreshTokenHash: _secret, room: _room, ...device }) => device),
         };
       }
       if (method === "revokeDevice") {
@@ -389,7 +397,7 @@ export function createAuthService(deps: {
           serverId: deps.deviceAuthStore.getServerId(),
           devices: deps.deviceAuthStore
             .listDevices()
-            .map(({ refreshTokenHash: _secret, ...device }) => device),
+            .map(({ refreshTokenHash: _secret, room: _room, ...device }) => device),
         });
       },
     },

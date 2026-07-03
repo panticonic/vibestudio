@@ -349,6 +349,16 @@ export interface AppHostDeps {
   getReactNativeAppArtifactBaseUrl(): string;
   getTerminalAppArtifactBaseUrl(): string;
   onHostTargetChanged?(target: HostTarget, reason: string): void;
+  /**
+   * The manifest-declared preferred app (and its required extensions) for a
+   * host target — `hostTargets.<target>` in meta/vibez1.yml, resolved via
+   * `resolveHostTargetDecl`. Absent (or null for a target) ⇒ no preferred
+   * app: selection falls back to generic declared/recommended candidates,
+   * never to a hardcoded unit name.
+   */
+  getHostTargetDecl?(
+    target: HostTarget
+  ): { appSource: string; requiresExtensions: string[] } | null;
 }
 
 export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
@@ -631,14 +641,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       (candidate) => candidate.compatibility.selectable
     );
     const declared = candidates.filter((candidate) => candidate.declared);
-    const preferredSource =
-      target === "electron"
-        ? "apps/shell"
-        : target === "react-native"
-          ? "apps/mobile"
-          : target === "terminal"
-            ? "apps/remote-cli"
-            : null;
+    // Manifest-declared preference (meta/vibez1.yml hostTargets.<target>.app);
+    // no declaration ⇒ no preferred source (generic fallbacks only).
+    const preferredSource = this.declaredHostTargetAppSource(target);
     const selected =
       (preferredSource
         ? (declared.find((candidate) => normalizeRepoPath(candidate.source) === preferredSource) ??
@@ -1050,9 +1055,36 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       entry &&
       isCapabilityActiveStatus(entry.status) &&
       entry.capabilities.includes(capability) &&
-      !isAuthorizedChromeAppSource(entry.source.repo)
+      !this.isTrustGatedCapabilityAuthorized(entry.source.repo, capability)
     ) {
-      const source = normalizeAppSourcePath(entry.source.repo);
+      return false;
+    }
+    if (
+      capability === "connection-management" &&
+      entry &&
+      isCapabilityActiveStatus(entry.status) &&
+      entry.capabilities.includes(capability) &&
+      !this.isTrustGatedCapabilityAuthorized(entry.source.repo, capability)
+    ) {
+      return false;
+    }
+    return (
+      !!entry && isCapabilityActiveStatus(entry.status) && entry.capabilities.includes(capability)
+    );
+  }
+
+  /**
+   * Authorization check for trust-gated capabilities. `panel-hosting` (host
+   * chrome) and `connection-management` may only be granted to app sources that
+   * appear in the corresponding trust list; any other capability is ungated and
+   * always passes through. Emits a one-time warning when a gated capability is
+   * self-declared by an unauthorized source, matching the historical
+   * `hasAppCapability` logging behavior.
+   */
+  private isTrustGatedCapabilityAuthorized(repo: string, capability: AppCapability): boolean {
+    if (capability === "panel-hosting") {
+      if (isAuthorizedChromeAppSource(repo)) return true;
+      const source = normalizeAppSourcePath(repo);
       if (!this.loggedUnauthorizedPanelHostingSources.has(source)) {
         this.loggedUnauthorizedPanelHostingSources.add(source);
         console.warn(
@@ -1061,14 +1093,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       }
       return false;
     }
-    if (
-      capability === "connection-management" &&
-      entry &&
-      isCapabilityActiveStatus(entry.status) &&
-      entry.capabilities.includes(capability) &&
-      !isAuthorizedConnectionManagementAppSource(entry.source.repo)
-    ) {
-      const source = normalizeAppSourcePath(entry.source.repo);
+    if (capability === "connection-management") {
+      if (isAuthorizedConnectionManagementAppSource(repo)) return true;
+      const source = normalizeAppSourcePath(repo);
       if (!this.loggedUnauthorizedConnectionManagementSources.has(source)) {
         this.loggedUnauthorizedConnectionManagementSources.add(source);
         console.warn(
@@ -1077,8 +1104,19 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       }
       return false;
     }
-    return (
-      !!entry && isCapabilityActiveStatus(entry.status) && entry.capabilities.includes(capability)
+    return true;
+  }
+
+  /**
+   * The server-vetted capability set for an app entry: the self-declared
+   * capabilities with trust-gated ones (panel-hosting, connection-management)
+   * removed unless the app's source is authorized. This is the set that MUST be
+   * projected onto client-facing surfaces (e.g. the `apps:available` event), so
+   * that a client can never treat an unauthorized self-declaration as granted.
+   */
+  private effectiveCapabilities(entry: AppRegistryEntry): AppCapability[] {
+    return entry.capabilities.filter((capability) =>
+      this.isTrustGatedCapabilityAuthorized(entry.source.repo, capability)
     );
   }
 
@@ -1308,13 +1346,19 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       this.stageReactNativeLaunchPreflightApproval(candidate, declared);
       const missingProvider = this.reactNativeReadinessSnapshot(candidate.source);
       if (missingProvider.ready) return missingProvider;
+      // Startup-ordering constraint from the manifest: hostTargets.react-native
+      // .requiresExtensions names the build-provider extension(s) that must be
+      // running before the app can build. No declaration ⇒ generic guidance.
+      const requiredExtensions =
+        this.deps.getHostTargetDecl?.("react-native")?.requiresExtensions ?? [];
+      const orderingDetail =
+        requiredExtensions.length > 0
+          ? `The declared extensions must start ${requiredExtensions.join(", ")} before ${candidate.source} can build.`
+          : `A React Native build-provider extension must be declared (meta/vibez1.yml hostTargets.react-native.requiresExtensions) and running before ${candidate.source} can build.`;
       return {
         ...missingProvider,
         reason: "React Native build provider is not active",
-        details: [
-          ...missingProvider.details,
-          "The declared extensions must start extensions/react-native before apps/mobile can build.",
-        ],
+        details: [...missingProvider.details, orderingDetail],
       };
     }
 
@@ -1747,7 +1791,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       launchMode: appLaunchMode(entry.target),
       artifactRoute,
       artifacts: artifactRefs,
-      capabilities: entry.capabilities,
+      capabilities: this.effectiveCapabilities(entry),
       buildKey: entry.activeBundleKey,
       effectiveVersion: entry.activeEv,
       previousBuildKey: opts.previousBuildKey ?? null,
@@ -2119,89 +2163,86 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     fs.writeFileSync(filePath, JSON.stringify({ selections }, null, 2), "utf8");
   }
 
-  private getSelectedReactNativeSource(): string | null {
-    const current = this.getHostTargetSelection("react-native");
+  /**
+   * The manifest-declared preferred app source for a host target
+   * (meta/vibez1.yml hostTargets.<target>.app), canonicalized, or null when
+   * the manifest declares none.
+   */
+  private declaredHostTargetAppSource(target: HostTarget): string | null {
+    const decl = this.deps.getHostTargetDecl?.(target);
+    return decl ? normalizeRepoPath(decl.appSource) : null;
+  }
+
+  /**
+   * Resolve the effective app source for a host target: an explicit valid
+   * selection wins; otherwise the manifest-declared preferred app among the
+   * active entries/candidates; otherwise an unambiguous single active entry or
+   * single selectable candidate. Never a hardcoded unit name.
+   */
+  private resolveSelectedHostTargetSource(
+    target: HostTarget,
+    isActiveStatus: (status: AppRegistryEntry["status"]) => boolean
+  ): string | null {
+    const current = this.getHostTargetSelection(target);
     if (current.valid && current.selection) return current.selection.source;
+    const preferred = this.declaredHostTargetAppSource(target);
     const activeEntries = this.registry
       .list()
       .filter(
         (entry) =>
-          entry.target === "react-native" && entry.status === "running" && !!entry.activeBundleKey
+          entry.target === target && isActiveStatus(entry.status) && !!entry.activeBundleKey
       );
-    const canonicalMobile = activeEntries.find(
-      (entry) => normalizeRepoPath(entry.source.repo) === "apps/mobile"
-    );
-    if (canonicalMobile) return normalizeRepoPath(canonicalMobile.source.repo);
+    const preferredActive = preferred
+      ? activeEntries.find((entry) => normalizeRepoPath(entry.source.repo) === preferred)
+      : undefined;
+    if (preferredActive) return normalizeRepoPath(preferredActive.source.repo);
     const onlyActiveEntry = activeEntries[0];
     if (activeEntries.length === 1 && onlyActiveEntry) {
       return normalizeRepoPath(onlyActiveEntry.source.repo);
     }
-    const candidates = this.listHostTargetCandidates("react-native").filter(
+    const candidates = this.listHostTargetCandidates(target).filter(
       (candidate) => candidate.compatibility.selectable
     );
+    const preferredCandidate = preferred
+      ? candidates.find((candidate) => normalizeRepoPath(candidate.source) === preferred)
+      : undefined;
+    if (preferredCandidate) return preferredCandidate.source;
     const onlyCandidate = candidates[0];
     if (candidates.length === 1 && onlyCandidate) return onlyCandidate.source;
     return null;
+  }
+
+  /**
+   * The app source currently serving (or preferred for) a host target.
+   * Public so coordinators can recognize a target's app unit (e.g. "is this
+   * building unit the react-native app?") without hardcoding unit names.
+   */
+  selectedHostTargetAppSource(target: HostTarget): string | null {
+    switch (target) {
+      case "react-native":
+        return this.getSelectedReactNativeSource();
+      case "terminal":
+        return this.getSelectedTerminalSource();
+      case "electron":
+        return this.getSelectedElectronSource();
+      default:
+        return null;
+    }
+  }
+
+  private getSelectedReactNativeSource(): string | null {
+    return this.resolveSelectedHostTargetSource("react-native", (status) => status === "running");
   }
 
   private getSelectedTerminalSource(): string | null {
-    const current = this.getHostTargetSelection("terminal");
-    if (current.valid && current.selection) return current.selection.source;
-    const activeEntries = this.registry
-      .list()
-      .filter(
-        (entry) =>
-          entry.target === "terminal" &&
-          (entry.status === "available" || entry.status === "running") &&
-          !!entry.activeBundleKey
-      );
-    const canonicalRemoteCli = activeEntries.find(
-      (entry) => normalizeRepoPath(entry.source.repo) === "apps/remote-cli"
+    return this.resolveSelectedHostTargetSource(
+      "terminal",
+      (status) => status === "available" || status === "running"
     );
-    if (canonicalRemoteCli) return normalizeRepoPath(canonicalRemoteCli.source.repo);
-    const onlyActiveEntry = activeEntries[0];
-    if (activeEntries.length === 1 && onlyActiveEntry) {
-      return normalizeRepoPath(onlyActiveEntry.source.repo);
-    }
-    const candidates = this.listHostTargetCandidates("terminal").filter(
-      (candidate) => candidate.compatibility.selectable
-    );
-    const canonicalCandidate = candidates.find(
-      (candidate) => normalizeRepoPath(candidate.source) === "apps/remote-cli"
-    );
-    if (canonicalCandidate) return canonicalCandidate.source;
-    const onlyCandidate = candidates[0];
-    if (candidates.length === 1 && onlyCandidate) return onlyCandidate.source;
-    return null;
   }
 
   private getSelectedElectronSource(): string | null {
-    const current = this.getHostTargetSelection("electron");
-    if (current.valid && current.selection) return current.selection.source;
-    const activeEntries = this.registry
-      .list()
-      .filter(
-        (entry) =>
-          entry.target === "electron" && entry.status === "running" && !!entry.activeBundleKey
-      );
-    const canonicalShell = activeEntries.find(
-      (entry) => normalizeRepoPath(entry.source.repo) === "apps/shell"
-    );
-    if (canonicalShell) return normalizeRepoPath(canonicalShell.source.repo);
-    const onlyActiveEntry = activeEntries[0];
-    if (activeEntries.length === 1 && onlyActiveEntry) {
-      return normalizeRepoPath(onlyActiveEntry.source.repo);
-    }
-    const candidates = this.listHostTargetCandidates("electron").filter(
-      (candidate) => candidate.compatibility.selectable
-    );
-    const canonicalCandidate = candidates.find(
-      (candidate) => normalizeRepoPath(candidate.source) === "apps/shell"
-    );
-    if (canonicalCandidate) return canonicalCandidate.source;
-    const onlyCandidate = candidates[0];
-    if (candidates.length === 1 && onlyCandidate) return onlyCandidate.source;
-    return null;
+    return this.resolveSelectedHostTargetSource("electron", (status) => status === "running");
   }
 
   private isSelectedForHost(entry: AppRegistryEntry): boolean | undefined {

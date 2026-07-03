@@ -10,9 +10,8 @@
  * Read/write methods (`putText`/`putBase64`/`getText`/`getRange`/`grep`/…) admit
  * `panel`/`worker`/`do` callers (BLOBSTORE_READ_POLICY), so persisting a
  * screenshot or large artifact from agent eval works. Admin methods
- * (`delete`/`list`/`pruneUnreferenced`) are shell/server-only and reject other
- * caller kinds at the service policy gate — same as any other namespaced service
- * method.
+ * (`delete`/`list`) are shell/server-only and reject other caller kinds at the
+ * service policy gate — same as any other namespaced service method.
  */
 
 import type { RpcCaller } from "@vibez1/rpc";

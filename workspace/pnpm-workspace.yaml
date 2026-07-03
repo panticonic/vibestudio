@@ -1,0 +1,9 @@
+packages:
+  - '../packages/*'
+  - 'packages/*'
+  - 'panels/*'
+  - 'about/*'
+  - 'workers/*'
+  - 'extensions/*'
+  - 'apps/*'
+  - 'skills/*'

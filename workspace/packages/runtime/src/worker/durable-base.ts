@@ -187,6 +187,7 @@ export abstract class DurableObjectBase {
   protected _currentRpcCallerPanelId: string | null = null;
   protected _currentRpcRequestId: string | null = null;
   protected _currentRpcIdempotencyKey: string | null = null;
+  protected _currentInvocationToken: string | undefined = undefined;
   private _currentVerifiedCaller: AuthenticatedCaller | null = null;
   private _panelRuntime: PanelRuntimeApi | null = null;
   private _credentials: CredentialClient | null = null;
@@ -464,6 +465,23 @@ export abstract class DurableObjectBase {
   /** Correlation id of the inbound call, when the caller stamped one. */
   protected get rpcRequestId(): string | null {
     return this._currentRpcRequestId;
+  }
+
+  /**
+   * The host-minted on-behalf-of invocation token for the dispatch currently
+   * being served (or `undefined` when the inbound call carried none). Opaque
+   * correlation nonce, NOT a credential (docs/narrow-host-vcs-plan.md §4): a DO
+   * orchestrating a host main-advance echoes it into `refs.updateMains` so the
+   * approval prompt names the originating principal.
+   *
+   * READ-AT-ENTRY CONTRACT (same as {@link caller} / {@link rpcRequestId}): the
+   * DO multiplexes dispatches, so this reflects the handler whose SYNCHRONOUS
+   * entry is executing — a concurrent inbound dispatch can rebind it at any
+   * `await`. A handler MUST capture it into a local at entry, before its first
+   * `await`. Never log it.
+   */
+  protected get invocationToken(): string | undefined {
+    return this._currentInvocationToken;
   }
 
   /** Dedup key of the inbound call, when the caller stamped one. */
@@ -896,6 +914,7 @@ export abstract class DurableObjectBase {
       callerPanelId: this._currentRpcCallerPanelId,
       requestId: this._currentRpcRequestId,
       idempotencyKey: this._currentRpcIdempotencyKey,
+      invocationToken: this._currentInvocationToken,
     };
     this._currentVerifiedCaller = caller;
     this._currentRpcCallerId = caller?.callerId ?? null;
@@ -903,6 +922,9 @@ export abstract class DurableObjectBase {
     this._currentRpcCallerPanelId = caller?.callerPanelId ?? null;
     this._currentRpcRequestId = message?.requestId ?? null;
     this._currentRpcIdempotencyKey = envelope.delivery.idempotencyKey ?? null;
+    // On-behalf-of token (§4): bound per-dispatch, read-at-entry (see the
+    // `invocationToken` getter). Restored in the finally like the caller fields.
+    this._currentInvocationToken = message?.invocationToken ?? undefined;
     try {
       const denial = this.inboundCallerDenial(message?.method, caller);
       if (denial) {
@@ -922,6 +944,7 @@ export abstract class DurableObjectBase {
       this._currentRpcCallerPanelId = prev.callerPanelId;
       this._currentRpcRequestId = prev.requestId;
       this._currentRpcIdempotencyKey = prev.idempotencyKey;
+      this._currentInvocationToken = prev.invocationToken;
     }
   }
 

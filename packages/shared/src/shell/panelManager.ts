@@ -35,6 +35,7 @@ import type {
   SlotRow,
   WorkspaceStateClient,
 } from "./workspaceStateClient.js";
+import { aboutPanelSource, isAboutSource } from "../workspace/aboutNamespace.js";
 
 const log = createDevLogger("PanelManager");
 
@@ -427,7 +428,7 @@ export class PanelManager {
   }
 
   async createAboutPanel(page: string): Promise<{ id: string; title: string }> {
-    const result = await this.create(`about/${page}`, {
+    const result = await this.create(aboutPanelSource(page), {
       name: `${page}~${Date.now().toString(36)}`,
       isRoot: true,
       addAsRoot: true,
@@ -1270,7 +1271,7 @@ export class PanelManager {
         ...manifest,
         // Privileged is gated purely by location: any unit under about/. (No `shell`
         // flag — an about page is a normal panel that lives in about/.)
-        privileged: relativePath.startsWith("about/"),
+        privileged: isAboutSource(relativePath),
       };
     } catch (error) {
       if (allowMissing) {
@@ -1292,7 +1293,7 @@ export class PanelManager {
       return {
         ...manifest,
         // Privileged is gated purely by location: any unit under about/.
-        privileged: source.startsWith("about/"),
+        privileged: isAboutSource(source),
       };
     } catch {
       return null;

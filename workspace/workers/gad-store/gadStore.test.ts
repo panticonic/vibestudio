@@ -79,6 +79,30 @@ function opaque(envelopeId: string, value: unknown, appendedAt = "2026-05-20T12:
   };
 }
 
+/**
+ * Subtree address at `path`, resolved from the DO's manifest tables via
+ * `listManifest`: a dir resolves to its child manifest hash, a file to its
+ * content hash, an absent path to null. (The dedicated `getSubtreeHash(es)`
+ * RPCs were deleted when subtree addressing moved to the server's content
+ * store; tests walk the surviving listing RPC instead.)
+ */
+async function subtreeHashAt(
+  call: <T>(method: string, ...args: unknown[]) => Promise<T>,
+  stateHash: string,
+  path: string
+): Promise<string | null> {
+  const segments = path.split("/");
+  const parent = segments.slice(0, -1).join("/");
+  const name = segments[segments.length - 1];
+  const entries = await call<any[]>("listManifest", {
+    stateHash,
+    ...(parent ? { path: parent } : {}),
+  });
+  const entry = entries.find((candidate) => candidate.name === name);
+  if (!entry) return null;
+  return entry.kind === "dir" ? entry.childManifestHash : entry.contentHash;
+}
+
 async function countRows(
   call: (method: string, ...args: unknown[]) => Promise<unknown>,
   where: string,
@@ -1977,26 +2001,22 @@ describe("recursive manifests (§3.8)", () => {
     expect(aEntry).toMatchObject({ contentHash: "blob:a1" });
 
     // structural sharing: untouched src subtree has the same manifest hash in both states
-    const srcA = await call<any>("getSubtreeHash", { stateHash: stateA.stateHash, path: "src" });
-    const srcB = await call<any>("getSubtreeHash", { stateHash: stateB.stateHash, path: "src" });
-    expect(srcA.subtreeHash).toBe(srcB.subtreeHash);
+    const srcA = await subtreeHashAt(call, stateA.stateHash, "src");
+    const srcB = await subtreeHashAt(call, stateB.stateHash, "src");
+    expect(srcA).toBe(srcB);
     const sharedNodes = await call<{ rows: Array<{ cnt: number }> }>(
       "query",
       "SELECT COUNT(*) AS cnt FROM gad_manifest_nodes WHERE manifest_hash = ?",
-      [srcA.subtreeHash]
+      [srcA]
     );
     expect(sharedNodes.rows[0]?.cnt).toBe(1);
 
     // changed subtree hash differs; file paths resolve to content hashes; missing → null
-    const docsA = await call<any>("getSubtreeHash", { stateHash: stateA.stateHash, path: "docs" });
-    const docsB = await call<any>("getSubtreeHash", { stateHash: stateB.stateHash, path: "docs" });
-    expect(docsA.subtreeHash).not.toBe(docsB.subtreeHash);
-    expect(
-      await call<any>("getSubtreeHash", { stateHash: stateA.stateHash, path: "docs/readme.md" })
-    ).toEqual({ subtreeHash: "blob:r1" });
-    expect(
-      await call<any>("getSubtreeHash", { stateHash: stateA.stateHash, path: "nope/missing" })
-    ).toEqual({ subtreeHash: null });
+    const docsA = await subtreeHashAt(call, stateA.stateHash, "docs");
+    const docsB = await subtreeHashAt(call, stateB.stateHash, "docs");
+    expect(docsA).not.toBe(docsB);
+    expect(await subtreeHashAt(call, stateA.stateHash, "docs/readme.md")).toBe("blob:r1");
+    expect(await subtreeHashAt(call, stateA.stateHash, "nope/missing")).toBeNull();
 
     // full-file round trip through the worktree head
     const branchFiles = await call<any[]>("listGadBranchFiles", {
@@ -2263,22 +2283,13 @@ describe("file mutation projection (§3.10)", () => {
     ).toMatchObject({ content_hash: "blob:a1" });
 
     // the docs subtree manifest is shared verbatim between input and output states
-    const docsBefore = await call<any>("getSubtreeHash", {
-      stateHash: base.stateHash,
-      path: "docs",
-    });
-    const docsAfter = await call<any>("getSubtreeHash", {
-      stateHash: outputStateHash,
-      path: "docs",
-    });
-    expect(docsAfter.subtreeHash).toBe(docsBefore.subtreeHash);
+    const docsBefore = await subtreeHashAt(call, base.stateHash, "docs");
+    const docsAfter = await subtreeHashAt(call, outputStateHash, "docs");
+    expect(docsAfter).toBe(docsBefore);
     // the mutated ancestor chain re-hashed
-    const srcBefore = await call<any>("getSubtreeHash", { stateHash: base.stateHash, path: "src" });
-    const srcAfter = await call<any>("getSubtreeHash", {
-      stateHash: outputStateHash,
-      path: "src",
-    });
-    expect(srcAfter.subtreeHash).not.toBe(srcBefore.subtreeHash);
+    const srcBefore = await subtreeHashAt(call, base.stateHash, "src");
+    const srcAfter = await subtreeHashAt(call, outputStateHash, "src");
+    expect(srcAfter).not.toBe(srcBefore);
   });
 });
 
@@ -3276,12 +3287,10 @@ describe("checkGadIntegrity (§3.16)", () => {
     expect(await call<{ ok: boolean }>("checkGadIntegrity", {})).toMatchObject({ ok: true });
 
     // break the recursive manifest: drop the nested dir node referenced by the root
-    const subtree = await call<any>("getSubtreeHash", {
-      stateHash: state.stateHash,
-      path: "src/lib",
-    });
-    sql.exec("DELETE FROM gad_manifest_nodes WHERE manifest_hash = ?", subtree.subtreeHash);
-    sql.exec("DELETE FROM gad_manifest_entries WHERE manifest_hash = ?", subtree.subtreeHash);
+    const subtree = await subtreeHashAt(call, state.stateHash, "src/lib");
+    expect(subtree).toMatch(/^manifest:/);
+    sql.exec("DELETE FROM gad_manifest_nodes WHERE manifest_hash = ?", subtree);
+    sql.exec("DELETE FROM gad_manifest_entries WHERE manifest_hash = ?", subtree);
 
     // dangling transition referencing states that do not exist
     sql.exec(
@@ -3298,7 +3307,7 @@ describe("checkGadIntegrity (§3.16)", () => {
     );
     expect(integrity.ok).toBe(false);
     const serialized = JSON.stringify(integrity.errors);
-    expect(serialized).toContain(subtree.subtreeHash);
+    expect(serialized).toContain(subtree);
     expect(serialized).toContain("missing-event");
   });
 
@@ -3574,6 +3583,171 @@ describe("GC reachability protections (§3.18)", () => {
     expect(blobs.rows).toHaveLength(1);
   });
 
+  it("keeps uncommitted working-edit content live and sweeps it once committed", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    // Two blobs referenced ONLY by an uncommitted working-edit op: the edit's
+    // result (new_content_hash) and its base (old_content_hash, needed by
+    // revert/inverse-patch). Neither has a gad_file_versions row yet.
+    await call("ensureBlob", "blob:edit-new", 4, "text/plain");
+    await call("ensureBlob", "blob:edit-old", 4, "text/plain");
+    sql.exec(
+      `INSERT INTO gad_worktree_edit_ops (
+         event_id, log_id, head, committed_event_id, committed_seq,
+         edit_seq, output_state_hash, ordinal, kind, path,
+         old_content_hash, new_content_hash, created_at
+       ) VALUES (?, ?, ?, NULL, NULL, 1, NULL, 0, 'modify', ?, ?, ?, ?)`,
+      "edit-evt-1",
+      "vcs:repo:demo",
+      "main",
+      "notes.txt",
+      "blob:edit-old",
+      "blob:edit-new",
+      PAST_GRACE
+    );
+    sql.exec(`UPDATE gad_blobs SET created_at = ?`, PAST_GRACE);
+    sql.exec(`UPDATE gad_worktree_states SET created_at = ?`, PAST_GRACE);
+
+    const mark = await call<{ liveBlobDigests: string[] }>("runGadGcMark");
+    // Both hashes are in the live set and out of the candidate set.
+    expect(mark.liveBlobDigests).toContain("blob:edit-new");
+    expect(mark.liveBlobDigests).toContain("blob:edit-old");
+    const candidates = await call<{ rows: Array<{ digest: string }> }>(
+      "query",
+      "SELECT digest FROM gad_gc_candidates",
+      []
+    );
+    expect(candidates.rows.map((row) => row.digest)).not.toContain("blob:edit-new");
+    expect(candidates.rows.map((row) => row.digest)).not.toContain("blob:edit-old");
+
+    // The sweep leaves the uncommitted edit's bytes intact.
+    const swept = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
+    expect(swept.digests).not.toContain("blob:edit-new");
+    expect(swept.digests).not.toContain("blob:edit-old");
+
+    // Scoping check: the edit-op protection is UNCOMMITTED-only. Once the row
+    // is re-keyed to committed (committed_event_id set — commit re-keys, never
+    // re-inserts), a committed edit's content survives via its gad_file_versions
+    // row (the canonical path), NOT the edit-op row. So with no file version
+    // present here, the previously-protected blobs become sweepable — proving
+    // the union does not over-protect committed rows.
+    sql.exec(
+      `UPDATE gad_worktree_edit_ops SET committed_event_id = 'commit-evt-1', committed_seq = 1`
+    );
+    const mark2 = await call<{ liveBlobDigests: string[] }>("runGadGcMark");
+    expect(mark2.liveBlobDigests).not.toContain("blob:edit-new");
+    expect(mark2.liveBlobDigests).not.toContain("blob:edit-old");
+    const swept2 = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
+    expect(swept2.digests).toEqual(
+      expect.arrayContaining(["blob:edit-new", "blob:edit-old"])
+    );
+  });
+
+  it("does not sweep a candidate that gained an uncommitted edit-op reference after mark", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    // A blob that is orphaned at mark time becomes a GC candidate. If an
+    // uncommitted working-edit op starts referencing it BETWEEN mark and sweep,
+    // the sweep's delete-time re-check must treat it as live — otherwise it is
+    // deleted from gad_blobs and the host CAS, dangling the edit-op reference.
+    await call("ensureBlob", "blob:toctou", 4, "text/plain");
+    sql.exec(`UPDATE gad_blobs SET created_at = ?`, PAST_GRACE);
+
+    await call("runGadGcMark");
+    // The orphan blob is a candidate after mark (no live reference yet).
+    const marked = await call<{ rows: Array<{ digest: string }> }>(
+      "query",
+      "SELECT digest FROM gad_gc_candidates WHERE digest = ?",
+      ["blob:toctou"]
+    );
+    expect(marked.rows.map((row) => row.digest)).toContain("blob:toctou");
+
+    // Race: an uncommitted edit op referencing the candidate is created after
+    // mark but before sweep.
+    sql.exec(
+      `INSERT INTO gad_worktree_edit_ops (
+         event_id, log_id, head, committed_event_id, committed_seq,
+         edit_seq, output_state_hash, ordinal, kind, path,
+         old_content_hash, new_content_hash, created_at
+       ) VALUES (?, ?, ?, NULL, NULL, 1, NULL, 0, 'modify', ?, NULL, ?, ?)`,
+      "edit-toctou",
+      "vcs:repo:demo",
+      "main",
+      "notes.txt",
+      "blob:toctou",
+      PAST_GRACE
+    );
+
+    const swept = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
+    expect(swept.digests).not.toContain("blob:toctou");
+    const blobs = await call<{ rows: Array<{ hash: string }> }>(
+      "query",
+      "SELECT hash FROM gad_blobs WHERE hash = ?",
+      ["blob:toctou"]
+    );
+    expect(blobs.rows).toHaveLength(1);
+
+    // Once the edit op no longer references it (discarded/committed away), a
+    // later mark+sweep cycle collects the now-orphaned blob.
+    sql.exec(`DELETE FROM gad_worktree_edit_ops WHERE event_id = 'edit-toctou'`);
+    await call("runGadGcMark");
+    const swept2 = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
+    expect(swept2.digests).toContain("blob:toctou");
+    const blobs2 = await call<{ rows: Array<{ hash: string }> }>(
+      "query",
+      "SELECT hash FROM gad_blobs WHERE hash = ?",
+      ["blob:toctou"]
+    );
+    expect(blobs2.rows).toHaveLength(0);
+  });
+
+  it("keeps committed-edit content live via its file-version row", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    // A committed edit op alone does not protect its content; the canonical
+    // protection is the file-version row the commit produced. Simulate a
+    // committed edit whose result blob IS backed by a file version referenced
+    // by a file observation (so the mark's orphan-sweep keeps the version).
+    await call("ensureBlob", "blob:committed", 6, "text/plain");
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-gc-committed",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "obs-committed",
+          event: event("state.file_observed", {
+            causality: { invocationId: "inv-committed" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              observationId: "obs-committed",
+              path: "committed.txt",
+              contentHash: "blob:committed",
+            } as never,
+          }),
+        },
+      ],
+    });
+    sql.exec(
+      `INSERT INTO gad_worktree_edit_ops (
+         event_id, log_id, head, committed_event_id, committed_seq,
+         edit_seq, output_state_hash, ordinal, kind, path,
+         old_content_hash, new_content_hash, created_at
+       ) VALUES (?, ?, ?, 'commit-c1', 1, 1, ?, 0, 'modify', ?, NULL, ?, ?)`,
+      "edit-committed",
+      "vcs:repo:demo",
+      "main",
+      "state:committed",
+      "committed.txt",
+      "blob:committed",
+      PAST_GRACE
+    );
+    sql.exec(`UPDATE gad_blobs SET created_at = ?`, PAST_GRACE);
+    sql.exec(`UPDATE gad_worktree_states SET created_at = ?`, PAST_GRACE);
+
+    const mark = await call<{ liveBlobDigests: string[] }>("runGadGcMark");
+    expect(mark.liveBlobDigests).toContain("blob:committed");
+    const swept = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
+    expect(swept.digests).not.toContain("blob:committed");
+  });
+
   it("protects newly staged worktree states during the creation grace window", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const staged = await call<{ stateHash: string }>("stageWorktreeState", {
@@ -3634,77 +3808,6 @@ describe("GC reachability protections (§3.18)", () => {
 });
 
 describe("per-repo state primitives (W1)", () => {
-  const wsFiles = [
-    { path: "packages/foo/src/index.ts", contentHash: "blob:foo-idx", size: 10, mode: 420 },
-    { path: "packages/foo/package.json", contentHash: "blob:foo-pkg", size: 20, mode: 420 },
-    { path: "panels/bar/index.tsx", contentHash: "blob:bar-idx", size: 30, mode: 420 },
-  ];
-
-  async function ingestWs(call: any) {
-    return call("ingestWorktreeState", {
-      files: wsFiles,
-      logId: "vcs:workspace",
-      head: "main",
-      actor: owner,
-      eventId: "ws-1",
-    });
-  }
-
-  it("getSubtreeAsState re-roots a subtree to repo-relative paths", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const ws = await ingestWs(call);
-    const foo = await call<any>("getSubtreeAsState", {
-      stateHash: ws.stateHash,
-      prefix: "packages/foo",
-    });
-    const files = await call<any[]>("listStateFiles", { stateHash: foo.stateHash });
-    expect(files.map((f) => [f.path, f.content_hash]).sort()).toEqual([
-      ["package.json", "blob:foo-pkg"],
-      ["src/index.ts", "blob:foo-idx"],
-    ]);
-  });
-
-  it("composeRepoStates is the inverse of getSubtreeAsState (content-addressed round-trip)", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const ws = await ingestWs(call);
-    const foo = await call<any>("getSubtreeAsState", {
-      stateHash: ws.stateHash,
-      prefix: "packages/foo",
-    });
-    const recomposed = await call<any>("composeRepoStates", {
-      repos: [{ repoPath: "packages/foo", stateHash: foo.stateHash }],
-    });
-    const subOfWs = await call<any>("getSubtreeHash", {
-      stateHash: ws.stateHash,
-      path: "packages/foo",
-    });
-    const subOfRecomposed = await call<any>("getSubtreeHash", {
-      stateHash: recomposed.stateHash,
-      path: "packages/foo",
-    });
-    expect(subOfRecomposed.subtreeHash).toBe(subOfWs.subtreeHash);
-  });
-
-  it("composeRepoStates of all repo subtrees reproduces the workspace state byte-identically", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const ws = await ingestWs(call);
-    const foo = await call<any>("getSubtreeAsState", {
-      stateHash: ws.stateHash,
-      prefix: "packages/foo",
-    });
-    const bar = await call<any>("getSubtreeAsState", {
-      stateHash: ws.stateHash,
-      prefix: "panels/bar",
-    });
-    const composed = await call<any>("composeRepoStates", {
-      repos: [
-        { repoPath: "packages/foo", stateHash: foo.stateHash },
-        { repoPath: "panels/bar", stateHash: bar.stateHash },
-      ],
-    });
-    expect(composed.stateHash).toBe(ws.stateHash);
-  });
-
   async function seedRepo(call: any, repoPath: string, contentHash: string, eventId: string) {
     return call("ingestWorktreeState", {
       files: [{ path: "x", contentHash, size: 1, mode: 420 }],
@@ -3714,6 +3817,60 @@ describe("per-repo state primitives (W1)", () => {
       eventId,
     });
   }
+
+  it("ref-owned main ingest accepts a KNOWN non-head predecessor (follower/reconciler recording)", async () => {
+    // P5a: `vcs:repo:* @ main` is owned by the server's protected-ref store;
+    // this DO records transitions as downstream provenance (often after the
+    // fact). The old strict head CAS would reject a legitimate recording
+    // whenever the store lags the ref — so for main, expectedRefStateHash is
+    // a KNOWN-PREDECESSOR guard: any state this store has recorded is an
+    // acceptable claimed base, only unknown lineage rejects.
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const s0 = await seedRepo(call, "packages/known", "blob:known-0", "known-0");
+    const s1 = await call<any>("ingestWorktreeState", {
+      files: [{ path: "x", contentHash: "blob:known-1", size: 1, mode: 420 }],
+      logId: "vcs:repo:packages/known",
+      head: "main",
+      actor: owner,
+      eventId: "known-1",
+      expectedRefStateHash: s0.stateHash,
+    });
+    // Claimed base = s0 (known, but NOT the current head s1) → accepted.
+    const s2 = await call<any>("ingestWorktreeState", {
+      files: [{ path: "x", contentHash: "blob:known-2", size: 1, mode: 420 }],
+      logId: "vcs:repo:packages/known",
+      head: "main",
+      actor: owner,
+      eventId: "known-2",
+      baseStateHash: s0.stateHash,
+      expectedRefStateHash: s0.stateHash,
+    });
+    expect(s2.stateHash).not.toBe(s1.stateHash);
+    const head = await call<any>("resolveWorktreeHead", {
+      logId: "vcs:repo:packages/known",
+      head: "main",
+    });
+    expect(head).toMatchObject({ stateHash: s2.stateHash });
+    // The recorded transition attaches to the CLAIMED base, honestly.
+    const transition = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT input_state_hash FROM gad_state_transitions WHERE event_id = ?",
+      ["known-2"]
+    );
+    expect(transition.rows[0]?.["input_state_hash"]).toBe(s0.stateHash);
+
+    // Non-main heads remain store-authoritative: strict CAS still applies.
+    await expect(
+      call("ingestWorktreeState", {
+        files: [{ path: "x", contentHash: "blob:known-3", size: 1, mode: 420 }],
+        logId: "vcs:repo:packages/known",
+        head: "ctx:someone",
+        actor: owner,
+        eventId: "known-3",
+        expectedRefStateHash: s0.stateHash,
+      })
+    ).rejects.toThrow(/CAS conflict/);
+  });
 
   it("ingestRepoGroup advances all heads in one transaction", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
@@ -3776,11 +3933,14 @@ describe("per-repo state primitives (W1)", () => {
             head: "main",
             actor: owner,
             eventId: "bar-x",
+            // Ref-owned main heads (P5a): the strict CAS became a known-
+            // predecessor guard — a claimed base this store never recorded is
+            // genuinely inconsistent and still rejects the whole group.
             expectedRefStateHash: "state:stale-bogus",
           },
         ],
       })
-    ).rejects.toThrow(/CAS conflict/);
+    ).rejects.toThrow(/unknown predecessor/);
 
     // Neither head advanced — both still hold their seeded content.
     const fooFiles = await call<any[]>("listGadBranchFiles", {
@@ -3793,5 +3953,200 @@ describe("per-repo state primitives (W1)", () => {
       branchId: "main",
     });
     expect(barFiles.map((f: any) => f.content_hash)).toEqual(["blob:bar-0"]);
+  });
+});
+
+describe("computeMerge (P5b — userland merge semantics)", () => {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  /** Shadow the DO's protected `contentStore()` seam with an in-memory
+   *  content store (the test harness has no RPC gateway to the host
+   *  blobstore). Mirrors the `blobstore.*` slice the MERGE engine uses;
+   *  the P5c edit/commit composition has its own full-fidelity memory store
+   *  in gadStoreVcs.test.ts. */
+  function stubContentStore(instance: GadWorkspaceDO) {
+    const blobs = new Map<string, Uint8Array>();
+    const trees = new Map<
+      string,
+      Array<{ path: string; kind: string; contentHash: string; mode: number }>
+    >();
+    let n = 0;
+    const store = {
+      async listTree(ref: string) {
+        return trees.get(ref) ?? null;
+      },
+      async getTree(ref: string) {
+        return trees.get(ref) ?? null;
+      },
+      async getBase64(digest: string) {
+        const bytes = blobs.get(digest);
+        return bytes ? btoa(String.fromCharCode(...bytes)) : null;
+      },
+      async putBase64(bytesBase64: string) {
+        const binary = atob(bytesBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+        const digest = `merged-${(n += 1)}`;
+        blobs.set(digest, bytes);
+        return { digest, size: bytes.length };
+      },
+      async putTree(): Promise<{ treeHash: string; stateHash?: string }> {
+        throw new Error("merge tests never mirror trees");
+      },
+    };
+    Object.defineProperty(instance, "contentStore", { value: () => store });
+    return {
+      blobs,
+      trees,
+      putText(text: string): string {
+        const digest = `text-${(n += 1)}`;
+        blobs.set(digest, enc.encode(text));
+        return digest;
+      },
+      textOf(digest: string): string {
+        const bytes = blobs.get(digest);
+        if (!bytes) throw new Error(`no blob ${digest}`);
+        return dec.decode(bytes);
+      },
+    };
+  }
+
+  /** Ingest base → tip on one repo log so the transition DAG carries the
+   *  ancestry both merge sides share. */
+  async function ingestLineage(
+    call: <T>(method: string, ...args: unknown[]) => Promise<T>,
+    logId: string,
+    baseFiles: Array<{ path: string; contentHash: string; mode?: number }>,
+    tipFiles: Array<{ path: string; contentHash: string; mode?: number }>,
+    tag: string
+  ): Promise<{ base: string; tip: string }> {
+    const base = await call<{ stateHash: string }>("ingestWorktreeState", {
+      files: baseFiles.map((f) => ({ size: 1, mode: 420, ...f })),
+      logId,
+      head: "main",
+      actor: owner,
+      eventId: `${tag}-base`,
+    });
+    const tip = await call<{ stateHash: string }>("ingestWorktreeState", {
+      files: tipFiles.map((f) => ({ size: 1, mode: 420, ...f })),
+      logId,
+      head: "main",
+      actor: owner,
+      eventId: `${tag}-tip`,
+    });
+    return { base: base.stateHash, tip: tip.stateHash };
+  }
+
+  it("computes a clean diff3 merge over DO-recorded states, writing the merged blob", async () => {
+    const gad = await createTestDO(GadWorkspaceDO);
+    const cas = stubContentStore(gad.instance);
+    const baseHash = cas.putText("line1\nline2\nline3\n");
+    const oursHash = cas.putText("OURS\nline2\nline3\n");
+    const theirsHash = cas.putText("line1\nline2\nTHEIRS\n");
+
+    // Two logs sharing the identical base state → getMergeBase finds it.
+    const ours = await ingestLineage(
+      gad.call,
+      "vcs:repo:panels/a",
+      [{ path: "shared.txt", contentHash: baseHash }],
+      [{ path: "shared.txt", contentHash: oursHash }],
+      "ours"
+    );
+    const theirs = await ingestLineage(
+      gad.call,
+      "vcs:repo:panels/b",
+      [{ path: "shared.txt", contentHash: baseHash }],
+      [{ path: "shared.txt", contentHash: theirsHash }],
+      "theirs"
+    );
+    expect(ours.base).toBe(theirs.base);
+
+    const result = await gad.call<any>("computeMerge", {
+      oursStateHash: ours.tip,
+      theirsStateHash: theirs.tip,
+      labels: { ours: "ctx:one", theirs: "main" },
+    });
+    expect(result.status).toBe("clean");
+    expect(result.baseStateHash).toBe(ours.base);
+    expect(result.conflicts).toEqual([]);
+    expect(result.files).toHaveLength(1);
+    expect(cas.textOf(result.files[0].contentHash)).toBe("OURS\nline2\nTHEIRS\n");
+  });
+
+  it("labels conflict markers with the caller-supplied head names", async () => {
+    const gad = await createTestDO(GadWorkspaceDO);
+    const cas = stubContentStore(gad.instance);
+    const baseHash = cas.putText("line1\nline2\n");
+    const oursHash = cas.putText("OURS\nline2\n");
+    const theirsHash = cas.putText("THEIRS\nline2\n");
+    const ours = await ingestLineage(
+      gad.call,
+      "vcs:repo:panels/a",
+      [{ path: "shared.txt", contentHash: baseHash }],
+      [{ path: "shared.txt", contentHash: oursHash }],
+      "ours"
+    );
+    const theirs = await ingestLineage(
+      gad.call,
+      "vcs:repo:panels/b",
+      [{ path: "shared.txt", contentHash: baseHash }],
+      [{ path: "shared.txt", contentHash: theirsHash }],
+      "theirs"
+    );
+
+    const result = await gad.call<any>("computeMerge", {
+      oursStateHash: ours.tip,
+      theirsStateHash: theirs.tip,
+      labels: { ours: "ctx:one", theirs: "main" },
+    });
+    expect(result.status).toBe("conflicted");
+    expect(result.conflicts).toEqual([{ path: "shared.txt", kind: "content" }]);
+    const merged = cas.textOf(result.files[0].contentHash);
+    expect(merged).toContain("<<<<<<< ctx:one");
+    expect(merged).toContain(">>>>>>> main");
+  });
+
+  it("falls back to the content store's mirrored tree for states this store never recorded", async () => {
+    const gad = await createTestDO(GadWorkspaceDO);
+    const cas = stubContentStore(gad.instance);
+    const baseHash = cas.putText("a\n");
+    const ours = await ingestLineage(
+      gad.call,
+      "vcs:repo:panels/a",
+      [{ path: "f.txt", contentHash: baseHash }],
+      [{ path: "f.txt", contentHash: baseHash }, { path: "ours.txt", contentHash: cas.putText("o\n") }],
+      "ours"
+    );
+    // `theirs` is a server-minted state: unknown to the DO, mirrored in the
+    // content store only. Unrelated lineage → merges from the empty base.
+    const theirsState = `state:${"e".repeat(64)}`;
+    cas.trees.set(theirsState, [
+      { path: "f.txt", kind: "file", contentHash: baseHash, mode: 420 },
+      { path: "theirs.txt", kind: "file", contentHash: cas.putText("t\n"), mode: 420 },
+    ]);
+
+    const result = await gad.call<any>("computeMerge", {
+      oursStateHash: ours.tip,
+      theirsStateHash: theirsState,
+      labels: { ours: "ctx:one", theirs: "main" },
+    });
+    // Unrelated histories (null base): f.txt identical on both sides, each
+    // side's addition taken — a clean union.
+    expect(result.status).toBe("clean");
+    expect(result.files.map((f: any) => f.path).sort()).toEqual([
+      "f.txt",
+      "ours.txt",
+      "theirs.txt",
+    ]);
+
+    // A state neither recorded nor mirrored fails loudly.
+    await expect(
+      gad.call("computeMerge", {
+        oursStateHash: ours.tip,
+        theirsStateHash: `state:${"f".repeat(64)}`,
+        labels: { ours: "a", theirs: "b" },
+      })
+    ).rejects.toThrow(/unknown worktree state/);
   });
 });

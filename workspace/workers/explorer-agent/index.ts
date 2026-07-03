@@ -6,6 +6,10 @@ import { defaultPolicies } from "@workspace/agent-loop";
 import type { RespondPolicy, StepPolicy } from "@workspace/agent-loop";
 import { rpc } from "@workspace/runtime/worker";
 import { taxonomyRepoForPath } from "@vibez1/shared/runtime/entitySpec";
+import {
+  createVcsUserlandClient,
+  type RpcCallerLike,
+} from "@vibez1/shared/userlandServiceRpc";
 import { EXPLORER_SYSTEM_PROMPT, SCHEDULED_SWEEP_PROMPT } from "./prompts.js";
 import {
   buildCardState,
@@ -249,8 +253,16 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
         // After committing, the findings file is the only change ahead of main —
         // refuse to push if anything UNRELATED is also ahead (scoped publish).
         await this.assertFindingsPublishScope(filePath);
-        const push = await this.rpc
-          .call<ExplorerPushResult>("main", "vcs.push", [{ repoPaths: [repoPath] }])
+        // Push is userland-dispatched (P3 flip): route to the gad-store DO's
+        // `vcsPush` via the `vcs` manifest service, with this agent's context
+        // head as the source (the head its edit/commit above landed on).
+        const push = await createVcsUserlandClient(
+          this.rpc as unknown as RpcCallerLike
+        )
+          .call<ExplorerPushResult>("vcsPush", {
+            repoPaths: [repoPath],
+            sourceHead: `ctx:${this.subscriptions.getContextId(channelId)}`,
+          })
           .catch((error: unknown) => ({ status: `error: ${String(error)}` }));
 
         // Aggregate into the (single, per-run) findings card in the chat panel.

@@ -54,6 +54,13 @@ import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibez1/shared/extensionRuntimeAb
 import { getAdapter } from "./adapters/index.js";
 import type { FrameworkAdapter } from "./adapters/types.js";
 import { resolveTemplate } from "./templateResolver.js";
+import {
+  RUNTIME_MODULE,
+  TERMINAL_SHIM_YOGA,
+  TERMINAL_SHIM_SIGNAL_EXIT,
+  TERMINAL_SHIM_TERMINAL_SIZE,
+  WORKER_RUNTIME_COMPANION_MODULES,
+} from "./platformModules.js";
 import { resolveExportSubpath } from "@vibez1/typecheck";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
@@ -712,8 +719,9 @@ function createDedupePlugin(runtimeNodeModules: string, packages: string[]): esb
 }
 
 function createAppRuntimeShimPlugin(): esbuild.Plugin {
-  const unavailable =
-    '() => { throw new Error("@workspace/runtime panel APIs are not available in workspace app renderers"); }';
+  const unavailable = `() => { throw new Error(${JSON.stringify(
+    `${RUNTIME_MODULE} panel APIs are not available in workspace app renderers`
+  )}); }`;
   const ns = `new Proxy({}, { get: () => unavailable })`;
   const contents = `const unavailable = ${unavailable};
 // --- Portable runtime surface (identical names on panel/worker/eval) ---
@@ -765,8 +773,8 @@ export default {};`;
   return {
     name: "app-runtime-shim",
     setup(build) {
-      build.onResolve({ filter: /^@workspace\/runtime$/ }, () => ({
-        path: "@workspace/runtime",
+      build.onResolve({ filter: new RegExp(`^${escapeRegex(RUNTIME_MODULE)}$`) }, () => ({
+        path: RUNTIME_MODULE,
         namespace: "app-runtime-shim",
       }));
       build.onLoad({ filter: /.*/, namespace: "app-runtime-shim" }, () => ({
@@ -864,10 +872,11 @@ export const lstatSync = unavailable;
 export default { promises, readFile, writeFile, readdir, stat, lstat, mkdir, rmdir, unlink, rename, copyFile, access, appendFile, chmod, chown, symlink, readlink, realpath, truncate, utimes, rm, open, link, mkdtemp, watch, cp, constants, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync, lstatSync };`;
           return { loader: "js", resolveDir: process.cwd(), contents };
         }
-        // @workspace/runtime exports `fs` as a Proxy object with async methods.
+        // The runtime SDK exports `fs` as a Proxy object with async methods
+        // (see platformModules.RUNTIME_MODULE for the contract).
         // We destructure individual methods from it for Node fs/promises compat.
         const contents = isPromises
-          ? `import { fs as _fs } from "@workspace/runtime";
+          ? `import { fs as _fs } from ${JSON.stringify(RUNTIME_MODULE)};
 export const readFile = (...a) => _fs.readFile(...a);
 export const writeFile = (...a) => _fs.writeFile(...a);
 export const readdir = (...a) => _fs.readdir(...a);
@@ -894,7 +903,7 @@ export const mkdtemp = () => { throw new Error("mkdtemp is not available in work
 export const watch = () => { throw new Error("watch is not available in workspace panels"); };
 export const cp = () => { throw new Error("cp is not available in workspace panels"); };
 export const constants = {};`
-          : `import { fs as _fs } from "@workspace/runtime";
+          : `import { fs as _fs } from ${JSON.stringify(RUNTIME_MODULE)};
 export const promises = _fs;
 export const readFile = (...a) => _fs.readFile(...a);
 export const writeFile = (...a) => _fs.writeFile(...a);
@@ -1253,9 +1262,9 @@ export function generateExposeModuleCode(
   target: BootstrapTarget = "panel"
 ): string {
   let effectiveExposeModules = exposeModules;
-  if (target === "worker" && exposeModules.includes("@workspace/runtime")) {
+  if (target === "worker" && exposeModules.includes(RUNTIME_MODULE)) {
     effectiveExposeModules = [...exposeModules];
-    for (const specifier of ["@workspace/cdp-client"]) {
+    for (const specifier of WORKER_RUNTIME_COMPANION_MODULES) {
       if (!effectiveExposeModules.includes(specifier)) {
         effectiveExposeModules.push(specifier);
       }
@@ -1268,11 +1277,11 @@ export function generateExposeModuleCode(
     (dep, index) => `globalThis.__vibez1ModuleMap__[${JSON.stringify(dep)}] = __mod${index}__;`
   );
 
-  // Register Node built-in shims if @workspace/runtime is exposed.
+  // Register Node built-in shims if the runtime SDK is exposed.
   // This lets eval code use `import fs from "fs"` and `import path from "path"`
-  // transparently — they delegate to @workspace/runtime's RPC-backed implementations.
+  // transparently — they delegate to the runtime's RPC-backed implementations.
   const shimLines: string[] = [];
-  const runtimeIndex = effectiveExposeModules.indexOf("@workspace/runtime");
+  const runtimeIndex = effectiveExposeModules.indexOf(RUNTIME_MODULE);
   if (runtimeIndex >= 0) {
     const rtVar = `__mod${runtimeIndex}__`;
     shimLines.push(`(function() {
@@ -1302,9 +1311,23 @@ function isSyntheticSplitEntryOutput(fileName: string): boolean {
 function generatePanelEntry(
   exposeEntryFile: string,
   entryFile: string,
-  adapter: FrameworkAdapter
+  adapter: FrameworkAdapter,
+  frameworkModule?: string
 ): string {
-  return adapter.generateEntry(exposeEntryFile, entryFile);
+  return adapter.generateEntry(exposeEntryFile, entryFile, frameworkModule);
+}
+
+/**
+ * Read the optional `vibez1.frameworkModule` manifest override: the workspace
+ * module the generated panel entry imports the framework auto-mount contract
+ * from, instead of the platform default (platformModules.FRAMEWORK_MODULES).
+ * Must be a bare specifier; anything else is ignored.
+ */
+function manifestFrameworkModule(manifest: Record<string, unknown>): string | undefined {
+  const raw = manifest["frameworkModule"];
+  if (typeof raw !== "string") return undefined;
+  const value = raw.trim();
+  return value && isBareSpecifier(value) ? value : undefined;
 }
 
 /**
@@ -1722,7 +1745,12 @@ async function buildPanel(
   const exposePath = path.join(outdir, "_expose.js");
   fs.writeFileSync(exposePath, generateExposeModuleCode(exposeModules, "panel"));
 
-  const wrapperCode = generatePanelEntry(exposePath, entryFile, adapter);
+  const wrapperCode = generatePanelEntry(
+    exposePath,
+    entryFile,
+    adapter,
+    manifestFrameworkModule(extractedManifest)
+  );
   const wrapperPath = path.join(outdir, "_entry.js");
   fs.writeFileSync(wrapperPath, wrapperCode);
 
@@ -2140,7 +2168,7 @@ function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
     setup(build) {
       // Ink's `yoga-layout` default import → the terminal-shim sync loader.
       build.onResolve({ filter: /^yoga-layout$/ }, async (args) => {
-        const r = await build.resolve("@workspace/terminal-shim/yoga", {
+        const r = await build.resolve(TERMINAL_SHIM_YOGA, {
           kind: args.kind,
           resolveDir,
         });
@@ -2156,14 +2184,14 @@ function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
       });
       // npm packages that break in workerd → terminal-shim replacements.
       build.onResolve({ filter: /^signal-exit$/ }, async (args) => {
-        const r = await build.resolve("@workspace/terminal-shim/node/signal-exit", {
+        const r = await build.resolve(TERMINAL_SHIM_SIGNAL_EXIT, {
           kind: args.kind,
           resolveDir,
         });
         return r.errors.length > 0 ? r : { path: r.path, external: r.external };
       });
       build.onResolve({ filter: /^terminal-size$/ }, async (args) => {
-        const r = await build.resolve("@workspace/terminal-shim/node/terminal-size", {
+        const r = await build.resolve(TERMINAL_SHIM_TERMINAL_SIZE, {
           kind: args.kind,
           resolveDir,
         });

@@ -20,6 +20,11 @@ import type { AppCapability, WorkspaceAppTarget } from "../unitManifest.js";
 
 export type { AppCapability, WorkspaceAppTarget };
 
+export {
+  WORKSPACE_APP_PACKAGE_SCOPE,
+  WORKSPACE_EXTENSION_PACKAGE_SCOPE,
+} from "./sourceDirs.js";
+
 /**
  * Standard model roles with fallback behavior
  */
@@ -280,6 +285,90 @@ export interface WorkspaceAppDecl {
   ref?: string;
 }
 
+/**
+ * A provider slot naming the workspace unit that fulfils one host-integrated
+ * role (eval engine, portable runtime, CDP client). `source` is the unit's
+ * build-graph identity — a package name (e.g. `"@workspace/eval"`) or a
+ * workspace-relative repo path. The host resolves it through the build
+ * service; it never hardcodes a unit name of its own.
+ */
+export interface WorkspaceUnitProviderDecl {
+  source: string;
+}
+
+/**
+ * The extension that brokers access to the credential-holding browser-data
+ * store. `extension` follows the same identity convention as `extensions[]`
+ * (`extensions/name` or `@workspace-extensions/name`) and must also appear in
+ * the declared `extensions[]` list. The host derives from it:
+ *  - the only extension callerId the BrowserDataDO accepts directly, and
+ *  - the `extensions:<name>::import-complete` event clients subscribe to.
+ * Absent ⇒ extension-mediated browser-data access is disabled.
+ */
+export interface WorkspaceBrowserDataProviderDecl {
+  extension: string;
+}
+
+/**
+ * Manifest-declared provider slots: which workspace units fulfil roles the
+ * host integrates with. The manifest (an approval-gated meta write) is the
+ * single source of truth — when a slot is absent the corresponding host
+ * feature is cleanly disabled with a diagnostic; the host NEVER falls back to
+ * a hardcoded unit name.
+ */
+export interface WorkspaceProvidersDecl {
+  /** The eval engine library the EvalDO loads (executeSandbox/ScopeManager/…). */
+  evalEngine?: WorkspaceUnitProviderDecl;
+  /**
+   * The portable runtime package backing the eval sandbox's
+   * `@workspace/runtime` surface. Contract: the unit MUST expose `./hosted`,
+   * `./panel-runtime`, and `./portable` package-export subpaths (the hosted
+   * runtime factories, panel-runtime factories, and portable helpers).
+   */
+  evalRuntime?: WorkspaceUnitProviderDecl;
+  /** The CDP client library seeded into eval runs that reference CDP. */
+  cdpClient?: WorkspaceUnitProviderDecl;
+  /** The browser-data broker extension. */
+  browserData?: WorkspaceBrowserDataProviderDecl;
+}
+
+/**
+ * Manifest-declared app trust grants. Sources use the `extensions[]`/`apps[]`
+ * identity convention (`apps/name` or `@workspace-apps/name`). Because the
+ * manifest lives in the approval-gated meta repo, editing these lists rides
+ * the existing main-advance approval flow — trust changes stay user-gated.
+ *
+ * A workspace app listed under `chromeApps` may render host chrome
+ * (panel-hosting); one under `connectionManagementApps` may mint pairing
+ * invites / manage connections. An app NOT listed here never receives the
+ * corresponding capability even if its own unit manifest requests it.
+ */
+export interface WorkspaceTrustDecl {
+  chromeApps?: string[];
+  connectionManagementApps?: string[];
+}
+
+/**
+ * Per-host-target app declaration: which declared workspace app a host target
+ * (electron / react-native / terminal) prefers to launch, plus any extensions
+ * that must be running before that app can build (used for startup-ordering
+ * diagnostics, e.g. the react-native build provider extension).
+ */
+export interface WorkspaceHostTargetDecl {
+  /** App identity: `apps/name` or `@workspace-apps/name`. */
+  app: string;
+  /** Extensions (`extensions/name` or `@workspace-extensions/name`) that must
+   *  start before this app can build. */
+  requiresExtensions?: string[];
+}
+
+/** Host targets a workspace app can serve. */
+export type WorkspaceHostTargetName = "electron" | "react-native" | "terminal";
+
+export type WorkspaceHostTargetsDecl = Partial<
+  Record<WorkspaceHostTargetName, WorkspaceHostTargetDecl>
+>;
+
 /** HTTP route declaration in `workspace/meta/vibez1.yml`. */
 export interface WorkspaceRouteDecl {
   source: string;
@@ -354,6 +443,19 @@ export interface WorkspaceConfig {
    * empty means no apps; the reconciler removes anything not declared here.
    */
   apps?: WorkspaceAppDecl[];
+  /**
+   * Provider slots: which workspace units fulfil host-integrated roles
+   * (eval engine/runtime, cdp client, vcs store, browser-data broker). A
+   * missing slot cleanly disables the corresponding host feature.
+   */
+  providers?: WorkspaceProvidersDecl;
+  /**
+   * App trust grants (chrome rendering, connection management). Approval-gated
+   * via the meta repo like every other manifest edit.
+   */
+  trust?: WorkspaceTrustDecl;
+  /** Preferred app (and startup-ordering constraints) per host target. */
+  hostTargets?: WorkspaceHostTargetsDecl;
 }
 
 /**

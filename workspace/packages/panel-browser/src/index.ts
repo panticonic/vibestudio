@@ -14,7 +14,6 @@
  * is available from `@workspace/runtime`, not this package.
  */
 import type { RpcClient } from "@vibez1/rpc";
-import { createExtensionProxy } from "@vibez1/extension";
 // Resolve the host RPC client through the module system, NOT
 // `globalThis.__vibez1Require__`. A normal import is externalized by the build
 // and resolved via the bundle's own require — which maps to the panel runtime in
@@ -24,325 +23,428 @@ import { createExtensionProxy } from "@vibez1/extension";
 // the global lookup misses there.
 import { rpc as runtimeRpc } from "@workspace/runtime";
 // ---- Types (mirrored from @vibez1/browser-data for browser context) ----
-export type BrowserName = "firefox" | "zen" | "chrome" | "chrome-beta" | "chrome-dev" | "chrome-canary" | "chromium" | "edge" | "edge-beta" | "edge-dev" | "brave" | "vivaldi" | "opera" | "opera-gx" | "arc" | "safari";
+export type BrowserName =
+  | "firefox"
+  | "zen"
+  | "chrome"
+  | "chrome-beta"
+  | "chrome-dev"
+  | "chrome-canary"
+  | "chromium"
+  | "edge"
+  | "edge-beta"
+  | "edge-dev"
+  | "brave"
+  | "vivaldi"
+  | "opera"
+  | "opera-gx"
+  | "arc"
+  | "safari";
 export type BrowserFamily = "firefox" | "chromium" | "safari";
 export interface DetectedProfile {
-    id: string;
-    displayName: string;
-    path: string;
-    isDefault: boolean;
-    avatarUrl?: string;
+  id: string;
+  displayName: string;
+  path: string;
+  isDefault: boolean;
+  avatarUrl?: string;
 }
 export interface DetectedBrowser {
-    name: BrowserName;
-    family: BrowserFamily;
-    displayName: string;
-    version?: string;
-    dataDir: string;
-    profiles: DetectedProfile[];
-    tccBlocked?: boolean;
+  name: BrowserName;
+  family: BrowserFamily;
+  displayName: string;
+  version?: string;
+  dataDir: string;
+  profiles: DetectedProfile[];
+  tccBlocked?: boolean;
 }
-export type ImportDataType = "bookmarks" | "history" | "cookies" | "passwords" | "autofill" | "searchEngines" | "extensions" | "permissions" | "settings" | "favicons";
+export type ImportDataType =
+  | "bookmarks"
+  | "history"
+  | "cookies"
+  | "passwords"
+  | "autofill"
+  | "searchEngines"
+  | "extensions"
+  | "permissions"
+  | "settings"
+  | "favicons";
 export interface ImportRequest {
-    browser: BrowserName;
-    /** Pass a DetectedProfile object or a profile path string. */
-    profile?: DetectedProfile | string;
-    dataTypes: ImportDataType[];
-    masterPassword?: string;
-    csvPasswordFile?: string;
+  browser: BrowserName;
+  /** Pass a DetectedProfile object or a profile path string. */
+  profile?: DetectedProfile | string;
+  dataTypes: ImportDataType[];
+  masterPassword?: string;
+  csvPasswordFile?: string;
 }
 export interface ImportResult {
-    dataType: ImportDataType;
-    success: boolean;
-    itemCount: number;
-    skippedCount: number;
-    error?: string;
-    warnings: string[];
+  dataType: ImportDataType;
+  success: boolean;
+  itemCount: number;
+  skippedCount: number;
+  error?: string;
+  warnings: string[];
 }
 export interface BrowserOpenTabsRequest {
-    browser: BrowserName;
-    /** Pass a DetectedProfile object or a profile path string. */
-    profile?: DetectedProfile | string;
-    /** Subset of tabs to open as panels (by window/tab index from getOpenTabs). */
-    selection?: Array<{ windowIndex: number; tabIndex: number }>;
+  browser: BrowserName;
+  /** Pass a DetectedProfile object or a profile path string. */
+  profile?: DetectedProfile | string;
+  /** Subset of tabs to open as panels (by window/tab index from getOpenTabs). */
+  selection?: Array<{ windowIndex: number; tabIndex: number }>;
 }
 export interface ImportedOpenTab {
-    url: string;
-    title?: string;
-    browser: BrowserName;
-    profilePath: string;
-    windowIndex: number;
-    tabIndex: number;
-    active: boolean;
-    pinned?: boolean;
-    lastAccessed?: number;
+  url: string;
+  title?: string;
+  browser: BrowserName;
+  profilePath: string;
+  windowIndex: number;
+  tabIndex: number;
+  active: boolean;
+  pinned?: boolean;
+  lastAccessed?: number;
 }
 export interface OpenTabsAsPanelsResult {
-    tabsFound: number;
-    panelsOpened: number;
-    panels: Array<{
-        id: string;
-        title: string;
-        url: string;
-    }>;
-    skipped: Array<{
-        url: string;
-        reason: string;
-    }>;
+  tabsFound: number;
+  panelsOpened: number;
+  panels: Array<{
+    id: string;
+    title: string;
+    url: string;
+  }>;
+  skipped: Array<{
+    url: string;
+    reason: string;
+  }>;
 }
 export interface StoredBookmark {
-    id: number;
-    title: string;
-    url: string | null;
-    folder_path: string;
-    date_added: number;
-    date_modified: number | null;
-    position: number;
-    tags: string | null;
-    keyword: string | null;
+  id: number;
+  title: string;
+  url: string | null;
+  folder_path: string;
+  date_added: number;
+  date_modified: number | null;
+  position: number;
+  tags: string | null;
+  keyword: string | null;
 }
 export interface StoredHistory {
-    id: number;
-    url: string;
-    title: string | null;
-    visit_count: number;
-    typed_count: number;
-    first_visit: number | null;
-    last_visit: number;
+  id: number;
+  url: string;
+  title: string | null;
+  visit_count: number;
+  typed_count: number;
+  first_visit: number | null;
+  last_visit: number;
 }
 export interface HistoryQuery {
-    search?: string;
-    startTime?: number;
-    endTime?: number;
-    limit?: number;
-    offset?: number;
+  search?: string;
+  startTime?: number;
+  endTime?: number;
+  limit?: number;
+  offset?: number;
 }
 export interface StoredPassword {
-    id: number;
-    origin_url: string;
-    username: string;
-    password: string;
-    action_url: string;
-    realm: string;
-    date_created: number | null;
-    date_last_used: number | null;
-    times_used: number;
+  id: number;
+  origin_url: string;
+  username: string;
+  password: string;
+  action_url: string;
+  realm: string;
+  date_created: number | null;
+  date_last_used: number | null;
+  times_used: number;
 }
 export interface StoredCookie {
-    id: number;
-    name: string;
-    value: string;
-    domain: string;
-    host_only: number;
-    path: string;
-    expiration_date: number | null;
-    secure: number;
-    http_only: number;
-    same_site: string;
+  id: number;
+  name: string;
+  value: string;
+  domain: string;
+  host_only: number;
+  path: string;
+  expiration_date: number | null;
+  secure: number;
+  http_only: number;
+  same_site: string;
 }
 export interface StoredSearchEngine {
-    id: number;
-    name: string;
-    keyword: string | null;
-    search_url: string;
-    suggest_url: string | null;
-    favicon_url: string | null;
-    is_default: number;
+  id: number;
+  name: string;
+  keyword: string | null;
+  search_url: string;
+  suggest_url: string | null;
+  favicon_url: string | null;
+  is_default: number;
 }
 export interface StoredPermission {
-    id: number;
-    origin: string;
-    permission: string;
-    setting: string;
+  id: number;
+  origin: string;
+  permission: string;
+  setting: string;
 }
 export interface StoredAutofill {
-    id: number;
-    field_name: string;
-    value: string;
-    times_used: number;
+  id: number;
+  field_name: string;
+  value: string;
+  times_used: number;
 }
 export interface ImportRunSummary {
-    id: number;
-    run_id: number;
-    data_type: string;
-    scanned: number;
-    added: number;
-    changed: number;
-    unchanged: number;
-    skipped: number;
-    errors: number;
+  id: number;
+  run_id: number;
+  data_type: string;
+  scanned: number;
+  added: number;
+  changed: number;
+  unchanged: number;
+  skipped: number;
+  errors: number;
 }
 export interface ImportRun {
-    id: number;
-    browser: string;
-    profile_path: string;
-    mode: string;
-    status: string;
-    started_at: number;
-    finished_at: number;
-    data_types: string;
-    warnings: string | null;
-    summaries: ImportRunSummary[];
+  id: number;
+  browser: string;
+  profile_path: string;
+  mode: string;
+  status: string;
+  started_at: number;
+  finished_at: number;
+  data_types: string;
+  warnings: string | null;
+  summaries: ImportRunSummary[];
 }
 export interface PreviewDiffSample {
-    status: string;
-    label: string;
-    detail?: string;
+  status: string;
+  label: string;
+  detail?: string;
 }
 export interface PreviewTypeResult {
-    dataType: string;
-    scanned: number;
-    added: number;
-    changed: number;
-    unchanged: number;
-    skipped: number;
-    samples: PreviewDiffSample[];
-    warnings: string[];
-    error?: string;
+  dataType: string;
+  scanned: number;
+  added: number;
+  changed: number;
+  unchanged: number;
+  skipped: number;
+  samples: PreviewDiffSample[];
+  warnings: string[];
+  error?: string;
 }
 export interface ProfileImportState {
-    lastRun: ImportRun | null;
-    runs: ImportRun[];
+  lastRun: ImportRun | null;
+  runs: ImportRun[];
 }
 export interface CookieDomainSummary {
-    domain: string;
-    count: number;
-    secure: number;
-    httpOnly: number;
-    sourceBrowser: string | null;
-    earliest: number | null;
-    latest: number | null;
+  domain: string;
+  count: number;
+  secure: number;
+  httpOnly: number;
+  sourceBrowser: string | null;
+  earliest: number | null;
+  latest: number | null;
 }
 export interface HistoryDomainSummary {
-    domain: string;
-    visits: number;
-    typed: number;
-    pages: number;
-    lastVisit: number;
+  domain: string;
+  visits: number;
+  typed: number;
+  pages: number;
+  lastVisit: number;
 }
 export interface PasswordOriginSummary {
-    origin: string;
-    count: number;
+  origin: string;
+  count: number;
 }
 export interface AutofillFieldSummary {
-    fieldName: string;
-    count: number;
-    timesUsed: number;
+  fieldName: string;
+  count: number;
+  timesUsed: number;
 }
 export interface DomainReadiness {
-    domain: string;
-    cookies: number;
-    password: boolean;
-    permissions: Array<{ permission: string; setting: string }>;
-    recentHistoryCount: number;
-    lastVisit: number | null;
+  domain: string;
+  cookies: number;
+  password: boolean;
+  permissions: Array<{ permission: string; setting: string }>;
+  recentHistoryCount: number;
+  lastVisit: number | null;
 }
 export interface AutocompleteDebugSuggestion {
-    url?: string;
-    title?: string;
-    keyword?: string;
-    source: "history" | "bookmark" | "search-engine";
-    score: number;
-    reasons: string[];
+  url?: string;
+  title?: string;
+  keyword?: string;
+  source: "history" | "bookmark" | "search-engine";
+  score: number;
+  reasons: string[];
 }
 export interface AutocompleteDebugResult {
-    query: string;
-    suggestions: AutocompleteDebugSuggestion[];
+  query: string;
+  suggestions: AutocompleteDebugSuggestion[];
 }
 // ---- API ----
 export interface BrowserDataApi {
-    // Detection
-    detectBrowsers(): Promise<DetectedBrowser[]>;
-    // Import
-    startImport(request: ImportRequest): Promise<ImportResult[]>;
-    previewImport(request: ImportRequest): Promise<PreviewTypeResult[]>;
-    getImportHistory(): Promise<ImportRun[]>;
-    getProfileImportState(query: { browser: string; profilePath?: string; profile?: DetectedProfile | string }): Promise<ProfileImportState>;
-    getOpenTabs(request: BrowserOpenTabsRequest): Promise<ImportedOpenTab[]>;
-    openTabsAsPanels(request: BrowserOpenTabsRequest): Promise<OpenTabsAsPanelsResult>;
-    // Secret-free views
-    getCookieDomains(): Promise<CookieDomainSummary[]>;
-    getHistoryDomains(limit?: number): Promise<HistoryDomainSummary[]>;
-    getPasswordOrigins(): Promise<PasswordOriginSummary[]>;
-    getAutofillFieldNames(): Promise<AutofillFieldSummary[]>;
-    getDomainReadiness(domain: string): Promise<DomainReadiness>;
-    // Debug (gated — returns full URLs)
-    getAutocompleteDebug(query: string): Promise<AutocompleteDebugResult>;
-    // Bookmarks
-    getBookmarks(folderPath?: string): Promise<StoredBookmark[]>;
-    addBookmark(bookmark: {
-        title: string;
-        url?: string;
-        folderPath?: string;
-        dateAdded?: number;
-        tags?: string;
-        keyword?: string;
-        position?: number;
-    }): Promise<number>;
-    updateBookmark(id: number, partial: Partial<{
-        title: string;
-        url: string;
-        folderPath: string;
-        tags: string;
-        keyword: string;
-        position: number;
-    }>): Promise<void>;
-    deleteBookmark(id: number): Promise<void>;
-    moveBookmark(id: number, folderPath: string, position: number): Promise<void>;
-    searchBookmarks(query: string): Promise<StoredBookmark[]>;
-    // History
-    getHistory(query: HistoryQuery): Promise<StoredHistory[]>;
-    deleteHistoryEntry(id: number): Promise<void>;
-    deleteHistoryRange(startTime: number, endTime: number): Promise<number>;
-    clearAllHistory(): Promise<void>;
-    searchHistory(query: string, limit?: number): Promise<StoredHistory[]>;
-    // Passwords
-    getPasswords(): Promise<StoredPassword[]>;
-    getPasswordForSite(url: string): Promise<StoredPassword[]>;
-    addPassword(password: {
-        url: string;
-        username: string;
-        password: string;
-        actionUrl?: string;
-        realm?: string;
-    }): Promise<number>;
-    updatePassword(id: number, partial: Partial<{
-        username: string;
-        password: string;
-        actionUrl: string;
-        realm: string;
-    }>): Promise<void>;
-    deletePassword(id: number): Promise<void>;
-    // Autofill
-    getAutofillSuggestions(fieldName: string, prefix?: string): Promise<StoredAutofill[]>;
-    // Search Engines
-    getSearchEngines(): Promise<StoredSearchEngine[]>;
-    setDefaultEngine(id: number): Promise<void>;
-    // Permissions
-    getPermissions(origin?: string): Promise<StoredPermission[]>;
-    setPermission(origin: string, permission: string, setting: "allow" | "block" | "ask"): Promise<void>;
-    // Cookies
-    getCookies(domain?: string): Promise<StoredCookie[]>;
-    deleteCookie(id: number): Promise<void>;
-    clearCookies(domain?: string): Promise<number>;
-    // Export
-    exportBookmarks(format: "html" | "json" | "chrome-json"): Promise<string>;
-    exportPasswords(format: "csv-chrome" | "csv-firefox" | "json"): Promise<string>;
-    exportCookies(format: "json" | "netscape-txt"): Promise<string>;
-    exportAll(): Promise<string>;
+  // Detection
+  detectBrowsers(): Promise<DetectedBrowser[]>;
+  // Import
+  startImport(request: ImportRequest): Promise<ImportResult[]>;
+  previewImport(request: ImportRequest): Promise<PreviewTypeResult[]>;
+  getImportHistory(): Promise<ImportRun[]>;
+  getProfileImportState(query: {
+    browser: string;
+    profilePath?: string;
+    profile?: DetectedProfile | string;
+  }): Promise<ProfileImportState>;
+  getOpenTabs(request: BrowserOpenTabsRequest): Promise<ImportedOpenTab[]>;
+  openTabsAsPanels(request: BrowserOpenTabsRequest): Promise<OpenTabsAsPanelsResult>;
+  // Secret-free views
+  getCookieDomains(): Promise<CookieDomainSummary[]>;
+  getHistoryDomains(limit?: number): Promise<HistoryDomainSummary[]>;
+  getPasswordOrigins(): Promise<PasswordOriginSummary[]>;
+  getAutofillFieldNames(): Promise<AutofillFieldSummary[]>;
+  getDomainReadiness(domain: string): Promise<DomainReadiness>;
+  // Debug (gated — returns full URLs)
+  getAutocompleteDebug(query: string): Promise<AutocompleteDebugResult>;
+  // Bookmarks
+  getBookmarks(folderPath?: string): Promise<StoredBookmark[]>;
+  addBookmark(bookmark: {
+    title: string;
+    url?: string;
+    folderPath?: string;
+    dateAdded?: number;
+    tags?: string;
+    keyword?: string;
+    position?: number;
+  }): Promise<number>;
+  updateBookmark(
+    id: number,
+    partial: Partial<{
+      title: string;
+      url: string;
+      folderPath: string;
+      tags: string;
+      keyword: string;
+      position: number;
+    }>
+  ): Promise<void>;
+  deleteBookmark(id: number): Promise<void>;
+  moveBookmark(id: number, folderPath: string, position: number): Promise<void>;
+  searchBookmarks(query: string): Promise<StoredBookmark[]>;
+  // History
+  getHistory(query: HistoryQuery): Promise<StoredHistory[]>;
+  deleteHistoryEntry(id: number): Promise<void>;
+  deleteHistoryRange(startTime: number, endTime: number): Promise<number>;
+  clearAllHistory(): Promise<void>;
+  searchHistory(query: string, limit?: number): Promise<StoredHistory[]>;
+  // Passwords
+  getPasswords(): Promise<StoredPassword[]>;
+  getPasswordForSite(url: string): Promise<StoredPassword[]>;
+  addPassword(password: {
+    url: string;
+    username: string;
+    password: string;
+    actionUrl?: string;
+    realm?: string;
+  }): Promise<number>;
+  updatePassword(
+    id: number,
+    partial: Partial<{
+      username: string;
+      password: string;
+      actionUrl: string;
+      realm: string;
+    }>
+  ): Promise<void>;
+  deletePassword(id: number): Promise<void>;
+  // Autofill
+  getAutofillSuggestions(fieldName: string, prefix?: string): Promise<StoredAutofill[]>;
+  // Search Engines
+  getSearchEngines(): Promise<StoredSearchEngine[]>;
+  setDefaultEngine(id: number): Promise<void>;
+  // Permissions
+  getPermissions(origin?: string): Promise<StoredPermission[]>;
+  setPermission(
+    origin: string,
+    permission: string,
+    setting: "allow" | "block" | "ask"
+  ): Promise<void>;
+  // Cookies
+  getCookies(domain?: string): Promise<StoredCookie[]>;
+  deleteCookie(id: number): Promise<void>;
+  clearCookies(domain?: string): Promise<number>;
+  // Export
+  exportBookmarks(format: "html" | "json" | "chrome-json"): Promise<string>;
+  exportPasswords(format: "csv-chrome" | "csv-firefox" | "json"): Promise<string>;
+  exportCookies(format: "json" | "netscape-txt"): Promise<string>;
+  exportAll(): Promise<string>;
 }
-const BROWSER_DATA_EXTENSION = "@workspace-extensions/browser-data";
+interface WorkspaceConfigLike {
+  providers?: {
+    browserData?: {
+      extension?: unknown;
+    };
+  };
+}
+const WORKSPACE_EXTENSION_PACKAGE_SCOPE = "@workspace-extensions/";
+const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
+  "then",
+  "constructor",
+  "inspect",
+  "toJSON",
+  Symbol.toPrimitive,
+  Symbol.toStringTag,
+]);
+function browserDataBrokerPackageName(config: WorkspaceConfigLike | null): string | null {
+  const declared = config?.providers?.browserData?.extension;
+  if (typeof declared !== "string" || declared.trim().length === 0) return null;
+  const normalized = declared
+    .trim()
+    .replace(/(^\/+|\/+$)/g, "")
+    .replace(/^workspace\//, "");
+  const identity = normalized.startsWith("extensions/")
+    ? normalized.slice("extensions/".length)
+    : normalized.startsWith(WORKSPACE_EXTENSION_PACKAGE_SCOPE)
+      ? normalized.slice(WORKSPACE_EXTENSION_PACKAGE_SCOPE.length)
+      : null;
+  if (!identity || !/^[^/\s]+$/.test(identity) || identity.endsWith(".git")) {
+    throw new Error(
+      `browser-data: providers.browserData.extension must be extensions/name or ${WORKSPACE_EXTENSION_PACKAGE_SCOPE}name (got ${JSON.stringify(declared)})`
+    );
+  }
+  return `${WORKSPACE_EXTENSION_PACKAGE_SCOPE}${identity}`;
+}
+
 export function createBrowserDataApi(rpc: Pick<RpcClient, "call" | "stream">): BrowserDataApi {
-    if (!rpc) {
-        throw new Error("createBrowserDataApi requires an RPC client. " +
-            "In eval context: import { rpc } from '@workspace/runtime'. " +
-            "In inline_ui components: use chat.rpc.");
-    }
-    // browser-data is an extension reached over the extension host. Route through
-    // the canonical extension proxy (typed against our own BrowserDataApi) rather
-    // than hand-rolling the invoke envelope. It exposes no streaming methods, so
-    // every call goes through extensions.invoke.
-    return createExtensionProxy<BrowserDataApi>(rpc, BROWSER_DATA_EXTENSION, () => false);
+  if (!rpc) {
+    throw new Error(
+      "createBrowserDataApi requires an RPC client. " +
+        "In eval context: import { rpc } from '@workspace/runtime'. " +
+        "In inline_ui components: use chat.rpc."
+    );
+  }
+  // Browser data lives in the manifest-declared broker extension
+  // (providers.browserData.extension). There is no hardcoded fallback: a
+  // workspace that does not declare the broker has no browser-data API.
+  let brokerNamePromise: Promise<string> | null = null;
+  const resolveBroker = (): Promise<string> => {
+    brokerNamePromise ??= rpc
+      .call<WorkspaceConfigLike | null>("main", "workspace.getConfig", [])
+      .then((config) => {
+        const name = browserDataBrokerPackageName(config);
+        if (!name) {
+          throw new Error(
+            "browser-data: no broker extension is declared in meta/vibez1.yml (providers.browserData.extension) — browser data is unavailable"
+          );
+        }
+        return name;
+      })
+      .catch((err: unknown) => {
+        brokerNamePromise = null;
+        throw err;
+      });
+    return brokerNamePromise;
+  };
+  return new Proxy(Object.create(null), {
+    get(_target, prop) {
+      if (typeof prop !== "string" || IGNORED_PROXY_PROPS.has(prop)) return undefined;
+      return async (...args: unknown[]) => {
+        const broker = await resolveBroker();
+        return rpc.call("main", "extensions.invoke", [broker, prop, args]);
+      };
+    },
+  }) as BrowserDataApi;
 }
 // Auto-initialize from the host runtime's RPC client (imported above). Routing
 // to the correct backend (Electron IPC vs server WebSocket vs eval DO) is handled
@@ -350,20 +452,19 @@ export function createBrowserDataApi(rpc: Pick<RpcClient, "call" | "stream">): B
 // lives. Lazy so the API is built on first use, after the runtime is ready.
 let _browserData: BrowserDataApi | undefined;
 export function getBrowserData(): BrowserDataApi {
-    if (_browserData)
-        return _browserData;
-    _browserData = createBrowserDataApi(runtimeRpc);
-    return _browserData;
+  if (_browserData) return _browserData;
+  _browserData = createBrowserDataApi(runtimeRpc);
+  return _browserData;
 }
 /** Pre-initialized browser data API (lazy, uses runtime's RPC bridge) */
 export const browserData: BrowserDataApi = new Proxy({} as BrowserDataApi, {
-    get(_target, prop: string) {
-        const api = getBrowserData() as unknown as Record<string, unknown>;
-        const value = api[prop];
-        if (value === undefined && !(prop in api)) {
-            const methods = Object.keys(api).join(", ");
-            throw new Error(`browserData.${prop} is not a method. Available methods: ${methods}`);
-        }
-        return value;
-    },
+  get(_target, prop: string) {
+    const api = getBrowserData() as unknown as Record<string, unknown>;
+    const value = api[prop];
+    if (value === undefined && !(prop in api)) {
+      const methods = Object.keys(api).join(", ");
+      throw new Error(`browserData.${prop} is not a method. Available methods: ${methods}`);
+    }
+    return value;
+  },
 });

@@ -38,7 +38,7 @@ export interface HubServerArgs {
   headlessHostAutospawn?: boolean;
 }
 
-interface WorkspaceRuntime {
+export interface WorkspaceRuntime {
   name: string;
   advertisedName: string;
   port: number;
@@ -51,7 +51,7 @@ interface PendingWorkspaceRuntime {
   promise: Promise<WorkspaceRuntime>;
 }
 
-interface HubRuntimeState {
+export interface HubRuntimeState {
   appRoot: string;
   args: HubServerArgs;
   centralData: CentralDataManager;
@@ -218,6 +218,53 @@ function isRefreshShellPath(upstreamPath: string): boolean {
   return new URL(upstreamPath, "http://workspace.local").pathname === "/_r/s/auth/refresh-shell";
 }
 
+/**
+ * Mint a pairing invite INSIDE a workspace child (over the existing loopback
+ * hub→child HTTP channel, authorized by the child's own admin token from its
+ * ready payload). Children own their WebRTC ingress + device store (§5), so
+ * the invite's per-invite room is armed — and later redeemed — entirely in the
+ * child process; the hub only surfaces the resulting deep link. Returns the
+ * child's full PairingInviteResponse, or null (logged) when minting fails —
+ * pairing surfacing must never break workspace selection.
+ */
+export async function mintChildPairingInvite(
+  runtime: Pick<WorkspaceRuntime, "port" | "ready" | "advertisedName">,
+  ttlMs?: number,
+  fetchImpl: typeof fetch = fetch
+): Promise<Record<string, unknown> | null> {
+  const adminToken =
+    typeof runtime.ready["adminToken"] === "string" ? runtime.ready["adminToken"] : null;
+  if (!adminToken) {
+    console.warn(
+      `[Hub] workspace "${runtime.advertisedName}" reported no admin token; cannot mint a pairing invite`
+    );
+    return null;
+  }
+  try {
+    const response = await fetchImpl(
+      `http://127.0.0.1:${runtime.port}/_r/s/auth/create-pairing-code`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(typeof ttlMs === "number" ? { ttlMs } : {}),
+      }
+    );
+    if (!response.ok) {
+      console.warn(
+        `[Hub] minting a pairing invite in workspace "${runtime.advertisedName}" failed: HTTP ${response.status}`
+      );
+      return null;
+    }
+    return (await response.json()) as Record<string, unknown>;
+  } catch (error) {
+    console.warn(
+      `[Hub] minting a pairing invite in workspace "${runtime.advertisedName}" failed:`,
+      error
+    );
+    return null;
+  }
+}
+
 async function readBody(req: http.IncomingMessage, maxBytes: number): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let total = 0;
@@ -248,7 +295,7 @@ async function handleAuthRoute(
         serverId: state.deviceAuthStore.getServerId(),
         devices: state.deviceAuthStore
           .listDevices()
-          .map(({ refreshTokenHash: _secret, ...device }) => device),
+          .map(({ refreshTokenHash: _secret, room: _room, ...device }) => device),
       });
       return;
     }
@@ -311,16 +358,34 @@ async function handleAuthRoute(
         return;
       }
       const ttlMs = typeof body["ttlMs"] === "number" ? body["ttlMs"] : DEFAULT_PAIRING_CODE_TTL_MS;
+      // With `workspace`, the invite is minted IN the child (its own WebRTC
+      // ingress + device store, §5): the response is the child's invite, deep
+      // link included. Without it, the code is a hub-level credential for the
+      // hub's loopback surfaces — the hub runs no WebRTC ingress, so there is
+      // no deep link to mint (`deepLink`/`room` are null).
+      const workspace = typeof body["workspace"] === "string" ? body["workspace"] : null;
+      if (workspace) {
+        const runtime = await ensureWorkspaceRuntime(state, normalizeWorkspaceName(workspace));
+        const invite = await mintChildPairingInvite(runtime, ttlMs);
+        if (!invite) {
+          sendJson(res, 502, {
+            error: `Failed to mint a pairing invite in workspace "${workspace}"`,
+            code: "WORKSPACE_INVITE_FAILED",
+          });
+          return;
+        }
+        sendJson(res, 200, invite);
+        return;
+      }
       const code = state.deviceAuthStore.createPairingCode(ttlMs);
       const info = connectionInfo(state);
-      // No `deepLink`: the pairing deep link is now the WebRTC QR (room+fp+sig),
-      // minted by the answerer (TODO(webrtc-answerer)). The pairing `code` below
-      // still authorizes the principal after the DTLS pin verifies.
       sendJson(res, 200, {
         ...info,
         code,
         expiresInMs: ttlMs,
         expiresAt: Date.now() + ttlMs,
+        deepLink: null,
+        room: null,
       });
       return;
     }
@@ -366,10 +431,15 @@ async function handleWorkspaceRoute(
     if (route === "select") {
       const name = normalizeWorkspaceName(body["name"]);
       const runtime = await ensureWorkspaceRuntime(state, name);
+      // Surface the child's pairing invite (per-invite room + v=2 deep link,
+      // minted in the child) so a remote device can pair with THIS workspace's
+      // WebRTC ingress straight from the select response.
+      const pairing = await mintChildPairingInvite(runtime);
       sendJson(res, 200, {
         workspaceName: runtime.advertisedName,
         serverUrl: runtime.publicUrl,
         running: true,
+        pairing,
       });
       return;
     }
@@ -381,7 +451,8 @@ async function handleWorkspaceRoute(
   }
 }
 
-async function handleRpc(
+/** Hub RPC dispatch (loopback `/rpc`). Exported for tests. */
+export async function handleRpc(
   state: HubRuntimeState,
   req: http.IncomingMessage,
   res: http.ServerResponse
@@ -408,11 +479,16 @@ async function handleRpc(
     if (method === "workspace.select") {
       const name = normalizeWorkspaceName(args[0]);
       const runtime = await ensureWorkspaceRuntime(state, name);
+      // Surface the child's pairing invite (per-invite room + v=2 deep link,
+      // minted in the child) so a remote device can pair with THIS workspace's
+      // WebRTC ingress straight from the select response.
+      const pairing = await mintChildPairingInvite(runtime);
       sendJson(res, 200, {
         result: {
           workspaceName: runtime.advertisedName,
           serverUrl: runtime.publicUrl,
           running: true,
+          pairing,
         },
       });
       return;
@@ -424,15 +500,33 @@ async function handleRpc(
     if (method === "auth.createPairingInvite") {
       const opts = asRecord(args[0]) ?? {};
       const ttlMs = typeof opts["ttlMs"] === "number" ? opts["ttlMs"] : DEFAULT_PAIRING_CODE_TTL_MS;
+      // With `workspace`, the invite is minted IN the child (its own WebRTC
+      // ingress + device store, §5) and the child's invite — per-invite room,
+      // v=2 deep link — is returned as-is. Without it, the code is a hub-level
+      // credential for the hub's loopback surfaces (the hub runs no WebRTC
+      // ingress ⇒ `deepLink`/`room` are null).
+      const workspace = typeof opts["workspace"] === "string" ? opts["workspace"] : null;
+      if (workspace) {
+        const runtime = await ensureWorkspaceRuntime(state, normalizeWorkspaceName(workspace));
+        const invite = await mintChildPairingInvite(runtime, ttlMs);
+        if (!invite) {
+          sendJson(res, 200, {
+            error: `Failed to mint a pairing invite in workspace "${workspace}"`,
+          });
+          return;
+        }
+        sendJson(res, 200, { result: invite });
+        return;
+      }
       const code = state.deviceAuthStore.createPairingCode(ttlMs);
-      // No `deepLink`: pairing is the WebRTC QR (room+fp+sig) minted by the
-      // answerer (TODO(webrtc-answerer)); the `code` authorizes the principal.
       sendJson(res, 200, {
         result: {
           ...connectionInfo(state),
           code,
           expiresInMs: ttlMs,
           expiresAt: Date.now() + ttlMs,
+          deepLink: null,
+          room: null,
         },
       });
       return;
@@ -443,7 +537,7 @@ async function handleRpc(
           serverId: state.deviceAuthStore.getServerId(),
           devices: state.deviceAuthStore
             .listDevices()
-            .map(({ refreshTokenHash: _secret, ...device }) => device),
+            .map(({ refreshTokenHash: _secret, room: _room, ...device }) => device),
         },
       });
       return;
@@ -623,6 +717,54 @@ async function ensureWorkspaceRuntime(
   }
 }
 
+/**
+ * Environment for a spawned workspace child. Exported for tests.
+ *
+ * §5 isolation: every child gets its OWN device-auth store and DTLS identity
+ * under its per-workspace state dir. The old wiring shared the hub's
+ * `VIBEZ1_AUTH_STORE_PATH` across hub + all children (in-memory pairing codes
+ * and device rows collided across processes — a validated bug), and left the
+ * WebRTC cert paths to their shared `<appRoot>/.vibez1/webrtc` default (every
+ * child would present the SAME DTLS fingerprint). Children mint their own
+ * invites and redeem their own pairing codes in-process.
+ */
+export function buildWorkspaceChildEnv(input: {
+  baseEnv: NodeJS.ProcessEnv;
+  appRoot: string;
+  childWorkspaceName: string;
+  hubUrl: string;
+  ephemeral: boolean;
+  autoApproveStartupUnits: boolean;
+}): NodeJS.ProcessEnv {
+  const childStateDir = path.join(getWorkspaceDir(input.childWorkspaceName), "state");
+  const env: NodeJS.ProcessEnv = {
+    ...input.baseEnv,
+    VIBEZ1_APP_ROOT: input.appRoot,
+    VIBEZ1_HOST: "127.0.0.1",
+    VIBEZ1_BIND_HOST: "127.0.0.1",
+    VIBEZ1_WORKSPACE: input.childWorkspaceName,
+    VIBEZ1_AUTH_STORE_PATH: path.join(childStateDir, "auth", "devices.json"),
+    VIBEZ1_WEBRTC_CERT: path.join(childStateDir, "webrtc", "server.pem"),
+    VIBEZ1_WEBRTC_KEY: path.join(childStateDir, "webrtc", "server.key"),
+    VIBEZ1_DISABLE_STARTUP_PAIRING: "1",
+    VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
+    VIBEZ1_HUB_URL: input.hubUrl,
+  };
+  delete env["VIBEZ1_GATEWAY_PORT"];
+  delete env["VIBEZ1_WORKSPACE_DIR"];
+  if (input.ephemeral) {
+    env["VIBEZ1_WORKSPACE_EPHEMERAL"] = "1";
+  } else {
+    delete env["VIBEZ1_WORKSPACE_EPHEMERAL"];
+  }
+  if (input.autoApproveStartupUnits) {
+    env["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"] = "1";
+  } else {
+    delete env["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"];
+  }
+  return env;
+}
+
 async function startWorkspaceRuntime(
   state: HubRuntimeState,
   advertisedName: string
@@ -659,32 +801,14 @@ async function startWorkspaceRuntime(
   if (state.args.requireMobileReady) childArgs.push("--require-mobile-ready");
   if (state.args.requireElectronReady) childArgs.push("--require-electron-ready");
 
-  const childEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    VIBEZ1_APP_ROOT: state.appRoot,
-    VIBEZ1_HOST: "127.0.0.1",
-    VIBEZ1_BIND_HOST: "127.0.0.1",
-    VIBEZ1_PROTOCOL: "http",
-    VIBEZ1_NO_VPN_DETECT: "1",
-    VIBEZ1_WORKSPACE: childWorkspaceName,
-    VIBEZ1_AUTH_STORE_PATH: state.authStorePath,
-    VIBEZ1_DISABLE_STARTUP_PAIRING: "1",
-    VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
-    VIBEZ1_HUB_URL: state.connectUrl,
-  };
-  delete childEnv["VIBEZ1_GATEWAY_PORT"];
-  delete childEnv["VIBEZ1_WORKSPACE_DIR"];
-  delete childEnv["VIBEZ1_REQUIRE_PUBLIC_URL"];
-  if (isEphemeralDevWorkspace) {
-    childEnv["VIBEZ1_WORKSPACE_EPHEMERAL"] = "1";
-  } else {
-    delete childEnv["VIBEZ1_WORKSPACE_EPHEMERAL"];
-  }
-  if (shouldAutoApproveDefaultStartup) {
-    childEnv["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"] = "1";
-  } else {
-    delete childEnv["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"];
-  }
+  const childEnv = buildWorkspaceChildEnv({
+    baseEnv: process.env,
+    appRoot: state.appRoot,
+    childWorkspaceName,
+    hubUrl: state.connectUrl,
+    ephemeral: isEphemeralDevWorkspace === true,
+    autoApproveStartupUnits: shouldAutoApproveDefaultStartup,
+  });
 
   const child = spawn(process.execPath, [...process.execArgv, ...childArgs], {
     cwd: state.appRoot,
@@ -877,8 +1001,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
   console.log(`  Pairing code: ${startupPairingCode}`);
   console.log(`  QR pairing code: ${startupQrPairingCode}`);
-  // No Pair URL: pairing is the WebRTC QR (room+fp+sig) minted by the answerer
-  // (TODO(webrtc-answerer)); the pairing codes above authorize the principal.
+  // No hub-level Pair URL: the hub runs no WebRTC ingress. Per-workspace v=2
+  // pairing links are minted in the child and surfaced through
+  // `workspace.select` / `auth.createPairingInvite { workspace }` responses.
 
   if (args.readyFile) {
     const payload = {

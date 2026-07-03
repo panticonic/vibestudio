@@ -13,6 +13,11 @@ export interface DeviceRecord {
   createdAt: number;
   lastUsedAt?: number;
   revokedAt?: number;
+  /**
+   * WebRTC signaling room (per-invite room, plan §2.1) persisted at pairing
+   * redemption so the server re-arms this device's answerer room on startup.
+   */
+  room?: string;
 }
 
 interface StoredDeviceAuthState {
@@ -24,6 +29,10 @@ interface PairingCodeRecord {
   codeHash: string;
   expiresAt: number;
   createdAt: number;
+  /** The invite's armed signaling room (moves onto the device at redemption). */
+  room?: string;
+  /** Fires the room-released hook when the invite expires unredeemed. */
+  expiryTimer?: ReturnType<typeof setTimeout>;
 }
 
 export const DEFAULT_PAIRING_CODE_TTL_MS = 60 * 60 * 1000;
@@ -38,6 +47,8 @@ export interface IssuedDeviceCredential {
 export class DeviceAuthStore {
   private state: StoredDeviceAuthState;
   private readonly pairingCodes = new Map<string, PairingCodeRecord>();
+  private roomRedeemedHandler: ((room: string, deviceId: string) => void) | null = null;
+  private roomReleasedHandler: ((room: string) => void) | null = null;
 
   constructor(
     private readonly filePath: string,
@@ -50,14 +61,38 @@ export class DeviceAuthStore {
     return this.state.serverId;
   }
 
-  createPairingCode(ttlMs = DEFAULT_PAIRING_CODE_TTL_MS): string {
+  /**
+   * Invite redemption moved the invite's room onto a device record — the
+   * WebRTC ingress re-tags the armed room with the device id.
+   */
+  onPairingRoomRedeemed(handler: (room: string, deviceId: string) => void): void {
+    this.roomRedeemedHandler = handler;
+  }
+
+  /**
+   * A room is no longer pair-able: its invite expired unredeemed, or its
+   * device was revoked — the WebRTC ingress disarms the room's pipe.
+   */
+  onPairingRoomReleased(handler: (room: string) => void): void {
+    this.roomReleasedHandler = handler;
+  }
+
+  createPairingCode(ttlMs = DEFAULT_PAIRING_CODE_TTL_MS, opts?: { room?: string }): string {
     const code = randomBase64Url(24);
     const codeHash = hashSecret(code);
-    this.pairingCodes.set(codeHash, {
+    const record: PairingCodeRecord = {
       codeHash,
       createdAt: this.now(),
       expiresAt: this.now() + ttlMs,
-    });
+      room: opts?.room,
+    };
+    if (record.room) {
+      // Proactive expiry so the ingress disarms the invite's room even if
+      // nobody ever presents the code again. unref'd: never holds the loop.
+      record.expiryTimer = setTimeout(() => this.expirePairingCode(codeHash), ttlMs);
+      record.expiryTimer.unref?.();
+    }
+    this.pairingCodes.set(codeHash, record);
     return code;
   }
 
@@ -66,7 +101,7 @@ export class DeviceAuthStore {
     const record = this.pairingCodes.get(codeHash);
     if (!record) return false;
     if (record.expiresAt < this.now()) {
-      this.pairingCodes.delete(codeHash);
+      this.expirePairingCode(codeHash);
       return false;
     }
     return true;
@@ -80,17 +115,21 @@ export class DeviceAuthStore {
     const codeHash = hashSecret(input.code);
     const record = this.pairingCodes.get(codeHash);
     if (!record || record.expiresAt < this.now()) {
-      this.pairingCodes.delete(codeHash);
+      if (record) this.expirePairingCode(codeHash);
       throw authError("PAIRING_CODE_INVALID_OR_EXPIRED", "Pairing code is invalid or expired", 401);
     }
+    if (record.expiryTimer) clearTimeout(record.expiryTimer);
     this.pairingCodes.delete(codeHash);
-    return this.issueDevice({
+    const credential = this.issueDevice({
       label: input.label ?? "Vibez1 client",
       platform: input.platform,
+      room: record.room,
     });
+    if (record.room) this.roomRedeemedHandler?.(record.room, credential.deviceId);
+    return credential;
   }
 
-  issueDevice(input: { label: string; platform?: string }): IssuedDeviceCredential {
+  issueDevice(input: { label: string; platform?: string; room?: string }): IssuedDeviceCredential {
     const deviceId = `dev_${randomBase64Url(18)}`;
     const refreshToken = randomBase64Url(32);
     const record: DeviceRecord = {
@@ -99,10 +138,20 @@ export class DeviceAuthStore {
       label: input.label,
       platform: input.platform,
       createdAt: this.now(),
+      ...(input.room ? { room: input.room } : {}),
     };
     this.state.devices.push(record);
     this.save();
     return { deviceId, refreshToken, label: record.label, platform: record.platform };
+  }
+
+  /** Delete an expired (or expiring) invite and release its armed room. */
+  private expirePairingCode(codeHash: string): void {
+    const record = this.pairingCodes.get(codeHash);
+    if (!record) return;
+    if (record.expiryTimer) clearTimeout(record.expiryTimer);
+    this.pairingCodes.delete(codeHash);
+    if (record.room) this.roomReleasedHandler?.(record.room);
   }
 
   validateRefresh(deviceId: string, refreshToken: string): DeviceRecord {
@@ -124,6 +173,8 @@ export class DeviceAuthStore {
     if (!record || record.revokedAt) return false;
     record.revokedAt = this.now();
     this.save();
+    // Revocation kills remote reach too: the ingress disarms the device's room.
+    if (record.room) this.roomReleasedHandler?.(record.room);
     return true;
   }
 
@@ -168,6 +219,7 @@ function isDeviceRecord(value: unknown): value is DeviceRecord {
     typeof record.deviceId === "string" &&
     typeof record.refreshTokenHash === "string" &&
     typeof record.label === "string" &&
-    typeof record.createdAt === "number"
+    typeof record.createdAt === "number" &&
+    (record.room === undefined || typeof record.room === "string")
   );
 }

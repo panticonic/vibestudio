@@ -147,7 +147,12 @@ export const BLOBSTORE_MEMBERS = [
   "getBase64",
   "delete",
   "list",
-  "pruneUnreferenced",
+  "putTree",
+  "getTree",
+  "listTree",
+  "readFileAtTree",
+  "diffTrees",
+  "materializeTree",
 ];
 
 export const WEBHOOKS_MEMBERS = [
@@ -205,7 +210,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   gad: namespaceEntry(GAD_MEMBERS),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,
-    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest.",
+    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees.",
     "blobstore"
   ),
   webhooks: namespaceEntry(WEBHOOKS_MEMBERS),

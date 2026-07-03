@@ -9,6 +9,19 @@ interface RpcRequest {
   args: unknown[];
 }
 
+/** The resolved DO target for the userland `vcs` manifest service (P3 push
+ *  flip): `push` dispatches here (workers.resolveService → DO vcsPush), not the
+ *  host `vcs.push` service. */
+const VCS_DO_TARGET = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+const VCS_SERVICE_RESOLUTION = {
+  kind: "durable-object",
+  name: "vcs",
+  source: "workers/gad-store",
+  className: "GadWorkspaceDO",
+  objectKey: "workspace-gad",
+  targetId: VCS_DO_TARGET,
+};
+
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
   const rpcBodies: RpcRequest[] = [];
   vi.stubGlobal(
@@ -216,7 +229,7 @@ describe("vibez1 vcs commands", () => {
     expect(logs).not.toContain("clean (in sync with main)");
   });
 
-  it("push --repo (single) calls vcs.push and returns 0 on pushed", async () => {
+  it("push --repo (single) dispatches USERLAND: resolves the vcs service, then calls the DO's vcsPush", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const result = {
@@ -233,36 +246,48 @@ describe("vibez1 vcs commands", () => {
         },
       ],
     };
-    const { rpcBodies } = stubServer(() => result);
+    const { rpcBodies } = stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : result
+    );
 
     const { main } = await import("../client.js");
     await expect(main(["vcs", "push", "--repo", "panels/notes", "--json"])).resolves.toBe(0);
 
-    expect(rpcBodies).toEqual([
-      {
-        method: "vcs.push",
-        args: [{ repoPaths: ["panels/notes"], sourceHead: "ctx:ctx_1" }],
-      },
-    ]);
+    // Hop 1: resolve the vcs manifest service (userland dispatch, P3 flip).
+    expect(rpcBodies[0]).toEqual({
+      method: "workers.resolveService",
+      args: ["vibez1.vcs.v1", null],
+    });
+    // Hop 2: the build-gated push against the resolved DO target.
+    expect(rpcBodies[1]).toEqual({
+      type: "call",
+      targetId: VCS_DO_TARGET,
+      method: "vcsPush",
+      args: [{ repoPaths: ["panels/notes"], sourceHead: "ctx:ctx_1" }],
+    });
     expect(jsonOutput()).toEqual(result);
   });
 
-  it("repeated --repo forms an atomic group push (all repos in one call)", async () => {
+  it("repeated --repo forms an atomic group push (all repos in one DO call)", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ({
-      status: "pushed",
-      repoPaths: ["packages/core", "panels/notes"],
-      reports: [],
-    }));
+    const { rpcBodies } = stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : { status: "pushed", repoPaths: ["packages/core", "panels/notes"], reports: [] }
+    );
 
     const { main } = await import("../client.js");
     await expect(
       main(["vcs", "push", "--repo", "packages/core", "--repo", "panels/notes", "--json"])
     ).resolves.toBe(0);
 
-    expect(rpcBodies[0]).toEqual({
-      method: "vcs.push",
+    expect(rpcBodies[1]).toEqual({
+      type: "call",
+      targetId: VCS_DO_TARGET,
+      method: "vcsPush",
       args: [{ repoPaths: ["packages/core", "panels/notes"], sourceHead: "ctx:ctx_1" }],
     });
   });
@@ -297,7 +322,11 @@ describe("vibez1 vcs commands", () => {
         },
       ],
     };
-    stubServer(() => result);
+    stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : result
+    );
 
     const { main } = await import("../client.js");
     await expect(main(["vcs", "push", "--repo", "panels/notes", "--json"])).resolves.toBe(1);
@@ -307,21 +336,30 @@ describe("vibez1 vcs commands", () => {
   it("a diverged push exits non-zero", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    stubServer(() => ({
-      status: "diverged",
-      divergences: [
-        {
-          repoPath: "panels/notes",
-          base: "state:base",
-          mainTip: "state:main",
-          upstreamCommits: [
-            { eventId: "evt-1", message: "main moved", stateHash: "state:main", createdAt: null },
-          ],
-          mergeable: "conflict",
-          conflictPaths: ["panels/notes/index.tsx"],
-        },
-      ],
-    }));
+    stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : {
+            status: "diverged",
+            divergences: [
+              {
+                repoPath: "panels/notes",
+                base: "state:base",
+                mainTip: "state:main",
+                upstreamCommits: [
+                  {
+                    eventId: "evt-1",
+                    message: "main moved",
+                    stateHash: "state:main",
+                    createdAt: null,
+                  },
+                ],
+                mergeable: "conflict",
+                conflictPaths: ["panels/notes/index.tsx"],
+              },
+            ],
+          }
+    );
 
     const { main } = await import("../client.js");
     await expect(main(["vcs", "push", "--repo", "panels/notes", "--json"])).resolves.toBe(1);
@@ -330,20 +368,29 @@ describe("vibez1 vcs commands", () => {
   it("diverged push human output separates clean merge from conflict commit steps", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    stubServer(() => ({
-      status: "diverged",
-      divergences: [
-        {
-          repoPath: "panels/notes",
-          base: "state:base",
-          mainTip: "state:main",
-          upstreamCommits: [
-            { eventId: "evt-1", message: "main moved", stateHash: "state:main", createdAt: null },
-          ],
-          mergeable: "clean",
-        },
-      ],
-    }));
+    stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : {
+            status: "diverged",
+            divergences: [
+              {
+                repoPath: "panels/notes",
+                base: "state:base",
+                mainTip: "state:main",
+                upstreamCommits: [
+                  {
+                    eventId: "evt-1",
+                    message: "main moved",
+                    stateHash: "state:main",
+                    createdAt: null,
+                  },
+                ],
+                mergeable: "clean",
+              },
+            ],
+          }
+    );
 
     const { main } = await import("../client.js");
     await withTtyStdout(async () => {
@@ -435,17 +482,37 @@ describe("vibez1 vcs commands", () => {
     expect(logs).not.toContain("panels/notes: clean (in sync with main)");
   });
 
-  it("log calls vcs.log scoped to a single repo", async () => {
+  it("log dispatches USERLAND: resolves the vcs manifest service, then calls the DO's vcsLog", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => [
-      { stateHash: "state:1", parent: null, message: "init", timestamp: 1 },
-    ]);
+    const { rpcBodies } = stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? {
+            kind: "durable-object",
+            name: "vcs",
+            source: "workers/gad-store",
+            className: "GadWorkspaceDO",
+            objectKey: "workspace-gad",
+            targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+          }
+        : [{ stateHash: "state:1", parent: null, message: "init", timestamp: 1 }]
+    );
 
     const { main } = await import("../client.js");
     await expect(main(["vcs", "log", "--repo", "meta", "--json"])).resolves.toBe(0);
-    // Positional (repoPath, limit?); no --limit ⇒ limit serializes to null.
-    expect(rpcBodies[0]).toEqual({ method: "vcs.log", args: ["meta", null] });
+    // Hop 1: the single typed-host bootstrap hop (resolve the manifest service).
+    expect(rpcBodies[0]).toEqual({
+      method: "workers.resolveService",
+      args: ["vibez1.vcs.v1", null],
+    });
+    // Hop 2: positional (repoPath, limit?) against the resolved DO target;
+    // no --limit ⇒ limit serializes to null.
+    expect(rpcBodies[1]).toEqual({
+      type: "call",
+      targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+      method: "vcsLog",
+      args: ["meta", null],
+    });
   });
 
   it("fork-repo forks to a new path (history-preserving)", async () => {

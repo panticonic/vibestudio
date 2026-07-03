@@ -34,6 +34,10 @@ export interface DurableObjectServiceClient {
 
 export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibez1.gad.workspace.v1";
 
+/** The userland VCS service (P5c): the gad-store DO's `vcs*` surface behind
+ *  the `vcs` manifest-service declaration. */
+export const VCS_SERVICE_PROTOCOL = "vibez1.vcs.v1";
+
 export function doTargetId(ref: DORefParam): string {
   return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
 }
@@ -58,13 +62,12 @@ export function parseDoTargetId(targetId: string): DORefParam | null {
 export async function resolveDurableObjectService(
   rpc: RpcCallerLike,
   query: string,
-  objectKey?: string | null,
+  objectKey?: string | null
 ): Promise<ResolvedDurableObjectTarget> {
-  const service = await rpc.call<ResolvedUserlandService>(
-    "main",
-    "workers.resolveService",
-    [query, objectKey ?? null],
-  );
+  const service = await rpc.call<ResolvedUserlandService>("main", "workers.resolveService", [
+    query,
+    objectKey ?? null,
+  ]);
   if (service.kind !== "durable-object") {
     throw new Error(`Service '${query}' does not expose a Durable Object RPC target`);
   }
@@ -74,11 +77,16 @@ export async function resolveDurableObjectService(
 export function createDurableObjectServiceClient(
   rpc: RpcCallerLike,
   query: string,
-  objectKey?: string | null,
+  objectKey?: string | null
 ): DurableObjectServiceClient {
   let resolvedPromise: Promise<ResolvedDurableObjectTarget> | null = null;
   const resolve = () => {
-    resolvedPromise ??= resolveDurableObjectService(rpc, query, objectKey);
+    resolvedPromise ??= resolveDurableObjectService(rpc, query, objectKey).catch(
+      (error: unknown) => {
+        resolvedPromise = null;
+        throw error;
+      }
+    );
     return resolvedPromise;
   };
   return {
@@ -92,4 +100,10 @@ export function createDurableObjectServiceClient(
 
 export function createGadServiceClient(rpc: RpcCallerLike): DurableObjectServiceClient {
   return createDurableObjectServiceClient(rpc, GAD_WORKSPACE_SERVICE_PROTOCOL);
+}
+
+/** Client for the userland `vcs` service (read/history surface on the
+ *  gad-store DO: vcsFileHistory / vcsLog / vcsCommitEdits / …). */
+export function createVcsUserlandClient(rpc: RpcCallerLike): DurableObjectServiceClient {
+  return createDurableObjectServiceClient(rpc, VCS_SERVICE_PROTOCOL);
 }
