@@ -6,14 +6,19 @@ progress in the main worktree — see §0.1; handoff to that workstream in
 Pre-release; **no backward compatibility** — schema is reset on bump
 (`GadWorkspaceDO.dropPersistenceTables`), so we add/rename freely.
 
-**Durability boundary.** Resetting on bump is free for the _runtime_ projections,
-but memory which wipes on every bump is not long-term memory. This spec keeps
-claims and touch signals on the reset-on-bump substrate _deliberately_: within a
-schema era they are durable working memory; across a bump they are gone. That is
-acceptable only while pre-release; graduating the knowledge ledger to survive
-schema change (a durable sub-ledger or real migrations) is separate follow-on
-work, and the prompt (§13) must not promise the agent more permanence than the
-substrate delivers.
+**Durability boundary (v3: the bang's wipe is the last one for memory).**
+Resetting on bump is free for the _runtime_ projections, but memory which
+wipes on every bump is not long-term memory. v2 deferred this; v3 does not:
+the bang ships a **durable knowledge ledger** (§8.1) — a small, append-only,
+separately-versioned store exempt from `dropPersistenceTables` — so the
+bang's own schema bump is the final wipe the knowledge base ever takes.
+After it, claims and their relations survive every subsequent bump; the
+runtime projections (`gad_claims`, relations, FTS rows) rebuild from the
+ledger. Era-scoped by design and acceptable to lose: touches (behavioral
+signal, prunable anyway) and past-era commit-message recall (claims are the
+durable distillation; a dead era's commit messages die with it). With that,
+the prompt (§13) may promise the agent permanence for recorded claims —
+because the substrate now delivers it.
 
 This spec turns GAD's ledger kernel into a single, queryable **provenance
 graph** joining the worktree VCS, the agent trajectory, and a hermeneutic claim
@@ -408,7 +413,10 @@ Three layers, most-exact first — unchanged from v1 in architecture:
    "ranked away."
 2. **Recall (similarity)** — FTS over `gad_memory_fts` (claims, commit
    messages once indexed, messages, committed files). Surfaces a relevant claim
-   even when no structural path reaches it. The read tool steers it with
+   even when no structural path reaches it. The choice of FTS is sequencing,
+   not conviction: `sim(C)` is a black box to the ranker, and an embedding
+   leg is the named successor when lexical recall proves the limiter —
+   swapping it touches nothing else in this architecture. The read tool steers it with
    explicit `recallKeywords` (§7.1); absent those, the query is the file path
    plus the session's recent touch anchors.
 3. **Density (re-ranking signal)** — bounded 2-hop spreading activation seeded
@@ -562,7 +570,8 @@ fetch the rest. Under-budget is recoverable, so the low default budget is safe.
 **Drill-down contract.** `provenance(target, after?)` — the tool, also
 reachable via eval (`gad.provenanceForFile({ path, head, tier, after })`) —
 returns `{ items, shown, total, nextCursor }`: unbounded paging on top of the
-cheap first page; deepen one item (`provenance("claim#42")`) or page a file.
+cheap first page; deepen one item (`provenance("claim#42")`), page a file, or
+orient on the whole session (`provenance("session")`, §7.6).
 
 **Every read leaves a trace**: one coalesced `observed` touch, at every tier,
 even when the block is suppressed. The tier is the agent's budget dial, not a
@@ -655,6 +664,35 @@ prov · src/foo.ts · 5 of 19 items
 (sparse claims) the block is thin by design and fattens toward semantics as
 memory accrues — the seeding pass (§8) exists to shorten that era.
 
+### 7.6 Session orientation: a skills-documented query, not a turn-open push
+
+The session-level view — "what should I know before I act?" — is **pull**: a
+dedicated query, not a briefing pushed at turn open. (Decision: a turn-open
+push would hit §7's habituation wall hardest of all — a block that renders
+every turn is skimmed by the third turn — and it spends its tokens before
+knowing what the turn is about. Per-file exception lines still push at read
+time, so collisions and contradictions are not solely pull-gated.)
+
+`provenance("session")` — same tool, same item/paging contract as §7.1 —
+computes over the session's touch-set instead of one file:
+
+1. **Exception class first, as always**: unreconciled contradictions among
+   session-touched claims; cross-session uncommitted edits on
+   session-touched files; main movements (host ref log, §2) on touched repos
+   since the session's base.
+2. **Density-ranked orientation**: top active claims and files in the
+   session's 2-hop neighborhood, same scoring as §6.
+3. Cheap by construction: seeds from `touch(S)` (already reconstructed
+   DO-side), served warm where the §7.3 cache covers it.
+
+Because pull surfaces only get used when the prompt names concrete moments,
+this ships with two mandatory carriers: a **workspace skill** documenting the
+query (what it returns, what each item means, the follow-on handles) and a
+**system-prompt line naming the trigger moments** — task start, before
+committing to a plan, after resume/compaction, and whenever a read-time
+exception line points beyond the file at hand (§13). The skill is the
+affordance; the named moments are what make an agent actually reach for it.
+
 ## 8. Hermeneutic claims
 
 A claim can stand as an **entity**, a **predicate**, or a full **statement**.
@@ -679,8 +717,33 @@ CREATE UNIQUE INDEX idx_claim_rel_ident
   ON gad_claim_relations(event_id, src_claim_id, relation, dst_claim_id);
 ```
 
-Agent tools (thin emitters of the already-projected `knowledge.claim_*` events
-plus a new `knowledge.claims_related` kind):
+### 8.1 The durable knowledge ledger (v3)
+
+Claims must outlive schema eras (see the durability boundary, top of doc).
+Mechanism — one system of record, small enough to migrate for real:
+
+- **`gad_knowledge_ledger`** — append-only entries for
+  `claim_recorded | claim_revised | claim_retracted | claims_related`, each
+  carrying the claim/relation payload plus an **anchor snapshot** denormalized
+  at write time (repo path, commit-message first line, actor label, ISO
+  time). It has its **own schema version**, is **exempt from
+  `dropPersistenceTables`**, and changes to it require real migrations —
+  never reset. The migratability is bought by keeping the surface tiny: one
+  table, one entry shape, no joins into the era-scoped world.
+- **Layering.** The ledger is the system of record for claim *content*; the
+  trajectory `knowledge.*` event is the *causality* record (which
+  invocation/turn/session asserted it) and stores the ledger entry id — a
+  pointer, not a copy, so there is no dual-write of content. Within an era,
+  the projection joins ledger ↔ trajectory for full provenance; after a
+  bump, dangling era anchors degrade to the stored snapshot — displayed and
+  marked historical, never a broken handle.
+- **Rebuild.** On schema bump, `gad_claims`, `gad_claim_relations`, and the
+  claims' FTS rows are re-projected by replaying the ledger. Touches and
+  past-era commit-message FTS are not resurrected (accepted, per the
+  durability boundary).
+
+Agent tools (writers to the ledger, emitting the trajectory `knowledge.claim_*`
+causality events — plus a new `knowledge.claims_related` kind — alongside):
 
 - `record_claim({ text | subject,predicate,object, kind })` — **dedup-on-write**:
   FTS the text against existing claims first; on a near-duplicate return the
@@ -704,14 +767,15 @@ So:
   `record_claim` payload, run through the same FTS dedup): recording durable
   insight costs zero extra tool calls at the moment of maximal clarity, and
   the claims are born linked to the commit event.
-- **Layering is strict**: claims are projections of `knowledge.claim_*` events
-  on the agent's **trajectory** log, and `vcsService` appends only to per-repo
-  **vcs** logs — it must never write trajectory events. So `claims:` lives on
-  the **harness commit tool**, which calls `vcs.commit` and, on success, emits
-  the claim events through the agent's normal claim path (right log, right
-  causality, commit event id attached as the claim's anchor). Anyone
-  implementing claim-writing inside `vcsService` is breaking event-sourcing
-  ownership.
+- **Layering is strict**: claim content lands in the durable ledger and its
+  causality rides `knowledge.claim_*` events on the agent's **trajectory**
+  log (§8.1), while `vcsService` appends only to per-repo **vcs** logs — it
+  must never write trajectory events or ledger entries. So `claims:` lives on
+  the **harness commit tool**, which calls `vcs.commit` and, on success,
+  records the claims through the agent's normal claim path (right ledger,
+  right log, right causality, commit event id attached as the claim's anchor
+  — and snapshotted per §8.1 so it outlives the era). Anyone implementing
+  claim-writing inside `vcsService` is breaking event-sourcing ownership.
 - **Dedup never blocks the commit.** The commit stands regardless; near-
   duplicate candidates come back in the tool result for the agent to revise or
   relate on the next call.
@@ -880,6 +944,11 @@ until all of them are:
   `revise_claim` / `retract_claim`; `gad_claim_relations` + the
   `knowledge.claims_related` kind; `claim_kind`/`text` columns on `gad_claims`;
   T4 (`claims:` on commit + nudge); the one-time seeding distillation pass (§8).
+- **Durable knowledge ledger** — `gad_knowledge_ledger` (§8.1): append-only,
+  own schema version, exempt from `dropPersistenceTables`, anchor snapshots
+  at write, projection rebuild by ledger replay. Ships **in** the bang so the
+  bang's bump is the last wipe the knowledge base takes — the claims tools
+  write through it from day one, and the seeding pass lands directly in it.
 - **Touches** — `gad_touches` + the read tool's coalesced `observed` upsert and
   drill-down `cited` upsert; the periodic prune pass.
 - **Recall** — T3 (commit messages into `gad_memory_fts`); `recallKeywords`
@@ -893,12 +962,16 @@ until all of them are:
   query-time degree, capped 2-hop); the mandatory ternary `provenance` read
   arg with judgment-based guidance, plus mechanical re-read suppression
   underneath (§7.1); the exception class + salience floor (§7.5); parallel best-effort
-  attachment (§7.2–7.5); `provenance()` tool + paging; the
+  attachment (§7.2–7.5); `provenance()` tool + paging, including the
+  `provenance("session")` orientation target (§7.6); the
   `edge_graph`/`claim_graph` views.
 - **Speculative warm** — `gad_provenance_cache`; warm on `turn.opened` and
   during generation; degrade-to-hint on miss.
-- **Prompt** — the §13 guidance lands with the tools, not after them: the
-  machinery and the behavior that exploits it are one deliverable.
+- **Prompt + skill** — the §13 guidance lands with the tools, not after them:
+  the machinery and the behavior that exploits it are one deliverable. This
+  includes the §7.6 carriers: the workspace skill documenting
+  `provenance("session")` and the system-prompt line naming its trigger
+  moments.
 - **Instrumentation** — the four behavioral counters (§12) land with the bang:
   they are how we find out which behavioral bet is failing.
 
@@ -959,6 +1032,19 @@ Resolved (locked for the build):
   succeeds — `vcsService` never writes trajectory events, and dedup never
   blocks a commit. Standalone `record_claim` remains but is not the
   load-bearing path. The claim base is seeded at the bang (§8).
+- **Session orientation is pull, never a turn-open push.**
+  `provenance("session")` (§7.6) computes exceptions-first orientation over
+  the session touch-set; it ships with a workspace skill documenting it and
+  system-prompt trigger moments. A per-turn pushed briefing is rejected for
+  the same habituation reason as structural filler — a block that renders
+  every turn is skimmed by the third turn.
+- **The knowledge ledger is durable from the bang.** `gad_knowledge_ledger`
+  (§8.1) is append-only, separately versioned, exempt from
+  `dropPersistenceTables`, migrated for real thereafter — the bang's bump is
+  the last wipe the knowledge base takes. Content's system of record is the
+  ledger; trajectory `knowledge.*` events carry causality by reference; dead
+  era anchors degrade to write-time snapshots, never dangle. Touches and
+  past-era commit-message recall stay era-scoped (accepted loss).
 - Item-based budgets; withheld-but-advertised tails (`K of M` + paging);
   attachment parallel with the fs read on a standalone `PROV_BUDGET_MS`;
   warmed; `observed` records only what was actually read.
@@ -1031,6 +1117,16 @@ Whatever the tier, two lines demand action, not skimming: a **⚠ contradiction*
 **concurrent-session line** (someone else has uncommitted edits here — check
 before you collide). Pass `recallKeywords` when you want what we know about a
 _topic_ while reading a file about something else.
+
+**Orient before you commit to a direction.** `provenance("session")` is the
+wide view the per-file blocks cannot give you: open contradictions in what
+you've touched, other sessions' uncommitted edits near your work, main
+movement on your repos since you started, and the claims most active around
+your neighborhood. Call it at task start, before you settle on a plan, after
+a resume or compaction, and whenever a per-file line hints the story is
+bigger than the file. It is one call, exceptions-first, and cheap — skipping
+it saves less than it risks. (The full contract lives in the workspace
+skill.)
 
 **Read the block as a launchpad, not a verdict.** It is intentionally partial —
 top-ranked items plus a `K of M` count of what was withheld. Chase a thread
