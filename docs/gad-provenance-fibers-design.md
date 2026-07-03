@@ -99,10 +99,18 @@ shrinks to `src/server/vcsHost/` — a mains-only ref table
 (`refs.updateMains`, batch CAS, single-writer = the gad-store DO), a
 host-minted invocation-token table for on-behalf-of attribution, build as a
 service, a batch approval gate with a diff-review UI, and disk projection.
-Audit of the working tree (2026-07-03): P1/P2/P3.5 and the P5b/c/d semantics
-migration are substantially landed; **P3 has not flipped** (host push
-pipeline, `ProvenanceFollower`, after-the-fact provenance recording still
-live); P4/P5 not started.
+**Status after the fabling merge (2026-07-03, `4437688a`): P3 has landed and
+shipped most of §10 with it.** The upstream commits implemented the handoff
+asks directly (code comments cite them by name): `gad_publish_intents`
+write-ahead intents + `healPublishDrift` replace the deleted
+`ProvenanceFollower`; the `synthetic` edit-op column with first-parent
+continuity validation at ingest (`validateFirstParentChain`) lands U2's
+ingest half; origin-annotated merge hunks exist in `diff3.ts` (U3);
+`vcs.commit` takes `invocationId` (T1); the GC mark set covers uncommitted
+edit-op hashes and `pruneUnreferencedBlobs` is deleted (U4); file indexing
+aborts without advancing the marker on a missing blob (U5). Still ours: U1
+insert-time hunk-completeness enforcement, U2's standing `checkGadIntegrity`
+chain check, T2, T3, T4, and everything from §4 onward.
 
 Consequences for this spec, folded in throughout:
 
@@ -338,12 +346,16 @@ the chain is total by construction and blame is exact:
   binary content, and **explicitly-marked synthetic ops** (below), and binary
   is **marked explicitly** on the row so blame can distinguish "no line
   structure" from "missing data". A violating insert is rejected loudly.
-  **Synthetic carve-out (v3):** the narrow-host P3 crash-heal keeps a degraded
-  fallback — a main matching no recorded publish intent is caught up by a
-  synthetic ingest of the ref's tree, which cannot carry true hunks. Those ops
-  are **stamped synthetic on the row**; blame (§5.2) and the U2 integrity
-  chain check treat them as chain restarts (like `create`), never as silent
-  gaps and never as integrity failures.
+  **Synthetic carve-out (v3, policy per the revised handoff and the landed
+  P3):** `synthetic` marks **intentional snapshot-style provenance** — import
+  publishes and explicitly-degraded ingests that cannot carry true hunks. It
+  is *not* a license to fabricate: a main matching **no recorded publish
+  intent** fails closed rather than being caught up with invented provenance.
+  Synthetic rows are stamped on the row (landed: the `synthetic` column, with
+  ingest-time continuity validation skipping them via
+  `validateFirstParentChain`); blame (§5.2) and the U2 integrity chain check
+  treat them as chain restarts (like `create`), never as silent gaps and
+  never as integrity failures.
 - **U2 — chain continuity invariant.** An op's `old_content_hash` must equal
   the path's content at its base: for working rows this is already structural
   (the composed working map produces it — assert it anyway); for ingest-supplied
@@ -828,7 +840,17 @@ query for the top thread) carry over from v1 verbatim.
 The rework was built for exactly our direction, but this plan changes the
 substrate where it falls short rather than working around it — four tool/service
 seams (T1–T4) and five store/merge/recall upgrades (U1–U3 specified in §5.1;
-U4–U5 below):
+U4–U5 below).
+
+**Status ledger after the fabling merge (§0.1):** T1 ✅, U3 ✅ (origin
+hunks in `diff3.ts`; wire-through to every merge ingest to verify at build
+time), U4 ✅ (mark union covers uncommitted edit-op hashes;
+`pruneUnreferencedBlobs` deleted — the tree-object prune variant still takes
+a caller list, keep it caller-free), U5 ✅ (abort-don't-advance landed;
+verify the post-replay reindex kick and `recallMemory` dedup halves),
+U2 ◐ (ingest-time `validateFirstParentChain` landed; the standing
+`checkGadIntegrity` per-path chain check is still ours), U1/T2/T3/T4 —
+still ours. Items below are kept in full as the specification of record:
 
 - **T1 — commit causality.** The `vcs.commit` schema carries neither
   `invocationId` nor `turnId`, so the commit _event_ is attributable only
@@ -922,15 +944,13 @@ value gates, no bake-offs, no interim milestones: the differentiator is the
 whole loop (blame → claims → density-ranked recall → read attachment), and it
 is built and landed as one.
 
-**v3 sequencing constraint: the bang lands after (or inside) the narrow-host
-P3.** P3 moves main-advance/merge provenance from the host
-`ProvenanceFollower` into the DO (write-ahead publish intents) and deletes the
-host push pipeline — the exact substrate U1–U3 bind to. Building the blame
-invariants against the follower now means building against code scheduled for
-deletion; instead, U1–U3 (and T1) are contributed *into* P3 via the handoff
-(`docs/gad-provenance-handoff-2026-07.md`, items A2/A3). Two handoff items are
-pre-bang and independent of our timeline: the GC working-edit hole (A1 — the
-urgent half of U4) and the index-marker fix (A4 — the upstream half of U5).
+**v3 sequencing constraint — resolved by the fabling merge.** P3 landed
+upstream and shipped U2's ingest half, U3, T1, U4, and U5 with it (§0.1);
+the follower is deleted and write-ahead intents are live. The bang is
+**unblocked**: its remaining VCS surface is U1 insert-time enforcement, the
+`checkGadIntegrity` chain check, T2, and T3/T4 — everything else in this
+plan (§4 touches, §6 retrieval, §7 attachment, §8 claims + ledger, §9
+surface, §12 instrumentation/tuning, §13 prompt) was always ours.
 
 The workstreams below are a decomposition for
 implementation order within the bang, not release phases — nothing is "done"
