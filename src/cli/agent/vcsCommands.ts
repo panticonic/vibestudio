@@ -434,12 +434,18 @@ async function forkRepo(inv: ParsedInvocation): Promise<number> {
       );
     }
     const { client } = resolveSessionScope(inv);
-    const result = await client.call<{
+    // Phase 4: fork is userland-dispatched to the gad-store DO's `vcsForkRepo`
+    // (like `vcsPush`), not the host `vcs.forkRepo` service — direct DO dispatch
+    // keeps the on-behalf-of attribution intact.
+    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<{
       repoPath: string;
       head: string;
       inherited: number;
       stateHash: string;
-    }>("vcs.forkRepo", [normalizeRepoPath(from), normalizeRepoPath(to)]);
+    }>("vcsForkRepo", {
+      fromPath: normalizeRepoPath(from),
+      toPath: normalizeRepoPath(to),
+    });
     printResult(result, {
       json,
       human: () => {
@@ -463,9 +469,10 @@ async function deleteRepo(inv: ParsedInvocation): Promise<number> {
     // SEVERE: the server gates this behind explicit, per-repo user approval; the
     // call blocks until the user grants or denies (a denial surfaces as an error).
     // Without --force it ERRORS if other repos depend on this one.
-    const result = await client.call<VcsDeleteRepoResult>("vcs.deleteRepo", [
-      { repoPath: repo, ...(force ? { force: true } : {}) },
-    ]);
+    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsDeleteRepoResult>(
+      "vcsDeleteRepo",
+      { repoPath: repo, ...(force ? { force: true } : {}) }
+    );
     printResult(result, {
       json,
       human: () => {
@@ -494,7 +501,10 @@ async function restoreRepo(inv: ParsedInvocation): Promise<number> {
     const repo = requireRepo(inv);
     const { client } = resolveSessionScope(inv);
     // Blocks on user approval; fails if a different repo now occupies the path.
-    const result = await client.call<VcsRestoreRepoResult>("vcs.restoreRepo", [{ repoPath: repo }]);
+    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsRestoreRepoResult>(
+      "vcsRestoreRepo",
+      { repoPath: repo }
+    );
     printResult(result, {
       json,
       human: () => {

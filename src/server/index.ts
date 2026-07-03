@@ -1279,6 +1279,9 @@ async function main() {
     container.registerRpc(
       createWorktreeService({
         scan: (repoPath, head) => workspaceVcs.scanWorktree(repoPath, head),
+        project: (repoPath, head, stateHash) =>
+          workspaceVcs.projectWorktree(repoPath, head, stateHash),
+        dependentRepos: (repoPath) => workspaceVcs.deleteDependents(repoPath),
       })
     );
     let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;

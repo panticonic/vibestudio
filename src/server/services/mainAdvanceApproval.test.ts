@@ -17,7 +17,6 @@ import {
   type MetaApprovalGrantStore,
   type RefAdvanceGateContext,
   type RepoDeletionApprovalCandidate,
-  type RepoRestoreApprovalCandidate,
 } from "./mainAdvanceApproval.js";
 
 const roots: string[] = [];
@@ -373,34 +372,10 @@ describe("createMainAdvanceApprovalGate", () => {
     });
   });
 
-  describe("approveRepoRestore", () => {
-    const restoreCandidate = {
-      caller: panelCaller(),
-      repoPath: "panels/old",
-      fileCount: 2,
-      stateHash: "state:archived",
-    };
-
-    it("prompts with the dedicated restore capability", async () => {
-      const deps = gateDeps({ decision: "once" });
-      const gate = createMainAdvanceApprovalGate(deps);
-      await gate.approveRepoRestore(restoreCandidate);
-      expect(deps.approvalQueue.request).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "capability",
-          capability: "workspace-repo-restore",
-          grantResourceKey: "workspace-repo-restore:panels/old",
-        })
-      );
-    });
-
-    it("throws when the user denies the restore", async () => {
-      const gate = createMainAdvanceApprovalGate(gateDeps({ decision: "deny" }));
-      await expect(gate.approveRepoRestore(restoreCandidate)).rejects.toThrow(
-        /Restore of panels\/old denied/
-      );
-    });
-  });
+  // Phase 4/5: `approveRepoRestore` + the dedicated restore capability are gone.
+  // A restore re-creates the ref (`expectedOld: null`) and flows through the
+  // generic advance prompt as an add-repo (see the createMainRefAdvanceGate
+  // suite's "re-creation … ordinary content advance" case).
 });
 
 describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
@@ -423,11 +398,13 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
   function refGateDeps(blobsDir: string) {
     const approvals: MainAdvanceApprovalCandidate[] = [];
     const deletions: Array<{ repoPath: string; fileCount: number; stateHash: string }> = [];
+    // Phase 4/5: restore is no longer a distinct classification — `restores`
+    // stays empty (the gate never calls a restore hook); a re-creation lands in
+    // `approvals` as an ordinary advance. Kept for the "re-creation" assertion.
     const restores: Array<{ repoPath: string; fileCount: number; stateHash: string }> = [];
     // Full candidates (incl. the diff-review payload) captured separately so the
-    // existing summary assertions on `deletions`/`restores` stay exact.
+    // existing summary assertions on `deletions` stay exact.
     const deletionCandidates: RepoDeletionApprovalCandidate[] = [];
-    const restoreCandidates: RepoRestoreApprovalCandidate[] = [];
     const gate = createMainRefAdvanceGate({
       blobsDir,
       approvalGate: {
@@ -438,10 +415,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
           deletions.push({ repoPath: c.repoPath, fileCount: c.fileCount, stateHash: c.stateHash });
           deletionCandidates.push(c);
         },
-        approveRepoRestore: async (c) => {
-          restores.push({ repoPath: c.repoPath, fileCount: c.fileCount, stateHash: c.stateHash });
-          restoreCandidates.push(c);
-        },
       },
       // Trees are staged locally above; like the real vcsHost implementation,
       // the empty state needs no store round trip — just the empty tree node.
@@ -450,7 +423,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       },
       workspaceViewWithReposAt: async () => "state:composed-fallback",
     });
-    return { gate, approvals, deletions, restores, deletionCandidates, restoreCandidates };
+    return { gate, approvals, deletions, restores, deletionCandidates };
   }
 
   type Entry = {

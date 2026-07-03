@@ -313,7 +313,6 @@ describe("vcsService", () => {
         mainAdvanceGate: {
           approve,
           approveRepoDeletion: vi.fn(async () => {}),
-          approveRepoRestore: vi.fn(async () => {}),
         },
       });
 
@@ -373,7 +372,6 @@ describe("vcsService", () => {
         mainAdvanceGate: {
           approve,
           approveRepoDeletion: vi.fn(async () => {}),
-          approveRepoRestore: vi.fn(async () => {}),
         },
       });
       const shell = createVerifiedCaller("shell:dev_cli", "shell");

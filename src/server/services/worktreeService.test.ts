@@ -58,6 +58,8 @@ describe("worktree.scan primitive", () => {
         const { stateHash, files } = await worktrees.localState(dir, { updateSidecar: true });
         return { stateHash, files };
       },
+      project: async (_repoPath, _head, stateHash) => ({ stateHash }),
+      dependentRepos: async () => [],
     });
 
     // D1/D2: the scan targets the ACTIVE context head (`ctx:workspace`), whose
@@ -90,6 +92,8 @@ describe("worktree.scan primitive", () => {
   it("rejects an unknown method", async () => {
     const service = createWorktreeService({
       scan: async () => ({ stateHash: "state:" + "0".repeat(64), files: [] }),
+      project: async (_repoPath, _head, stateHash) => ({ stateHash }),
+      dependentRepos: async () => [],
     });
     await expect(service.handler({} as never, "nope", [])).rejects.toThrow(
       /Unknown worktree method/

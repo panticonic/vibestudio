@@ -37,6 +37,11 @@ export const ScanResultSchema = z.object({
   files: z.array(ScannedFileSchema),
 });
 
+export const ProjectResultSchema = z.object({
+  /** The content-addressed state materialized onto the (repoPath, head) tree. */
+  stateHash: StateHashSchema,
+});
+
 export const worktreeMethods = defineServiceMethods({
   scan: {
     description:
@@ -45,5 +50,21 @@ export const worktreeMethods = defineServiceMethods({
     returns: ScanResultSchema,
     policy: WORKTREE_POLICY,
     access: WRITE_ACCESS,
+  },
+  project: {
+    description:
+      "Materialize a content-addressed `stateHash` onto the (repoPath, head) working tree (the disk-projection primitive, sibling of `scan`). Semantics-free: hardlinks the CAS tree onto disk and refreshes the sidecar — no commit, no ref advance, no history. The gad-store DO drives it to re-materialize a restored/forked repo into the ACTIVE context checkout (`ctx:workspace`); `main` is never projected (D1).",
+    args: z.tuple([z.string(), z.string(), StateHashSchema]),
+    returns: ProjectResultSchema,
+    policy: WORKTREE_POLICY,
+    access: WRITE_ACCESS,
+  },
+  dependentRepos: {
+    description:
+      "Workspace-relative paths of repos whose build unit directly imports `repoPath`'s unit, at the live workspace view. A content-derived build-graph read (dumb primitive, same class as `scan`): it holds no delete semantics — the gad-store DO consumes it to decide whether a deletion is refused without `force`. Empty when `repoPath` is content-only or has no dependents.",
+    args: z.tuple([z.string()]),
+    returns: z.array(z.string()),
+    policy: WORKTREE_POLICY,
+    access: { sensitivity: "read" },
   },
 });
