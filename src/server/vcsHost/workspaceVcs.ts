@@ -79,7 +79,6 @@ interface GadCaller {
   ): Promise<T>;
 }
 
-type WorktreeHeadRef = NonNullable<Awaited<ReturnType<WorktreeStore["resolveWorktreeHead"]>>>;
 type SnapshotResult = Awaited<ReturnType<WorktreeStore["snapshotDir"]>>;
 type DiscoveredRepo = ReturnType<typeof discoverRepos>[number];
 
@@ -572,25 +571,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return serializeByKey(this.snapshotLocks, key, fn);
   }
 
-  private commitEventIdForHead(ref: WorktreeHeadRef | null, label: string): string | null {
-    if (!ref || ref.stateHash === EMPTY_STATE_HASH) return null;
-    if (!ref.commitEventId) {
-      throw new Error(`${label} has state ${ref.stateHash} but no commit event identity`);
-    }
-    return ref.commitEventId;
-  }
-
   // -------------------------------------------------------------------------
   // Commit / scan
   // -------------------------------------------------------------------------
 
   /**
    * Snapshot a head's working tree. Emits `state-advanced` (with precise
-   * changed paths) when the state moved. THE single write path for
-   * explicit commits and scan-on-demand freshness of `ctx:*` heads. `main` is
-   * NOT commitable here — it is a pure ref that advances only through the gated
-   * push path (`refs.updateMains`, DO-driven); out-of-band disk edits adopt into
-   * the ACTIVE context head, never `main` (narrow-host boundary refactor P2/P3).
+   * changed paths) when the state moved. THE single write path for explicit
+   * commits to `ctx:*` heads. `main` is NOT commitable here — it is a pure ref
+   * that advances only through the gated push path (`refs.updateMains`,
+   * DO-driven).
    */
   async commitHead(
     head: string,
@@ -681,17 +671,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       return { ...snap, head, changedPaths };
     });
   }
-
-  // -------------------------------------------------------------------------
-  // Worktree ingest (FS → GAD)
-  //
-  // The internal worktree-snapshot primitive: scan a head's working tree and
-  // ingest any out-of-band changes onto the head. This is the FS→GAD boundary
-  // — needed because `main` IS the real workspace (direct edits, `git push`),
-  // and used by bootstrap, merge resolution, and tests. It is NOT exposed over
-  // RPC: sandboxed callers commit through `edit` (edit-first), never by
-  // snapshotting their context worktree behind GAD's back.
-  // -------------------------------------------------------------------------
 
   // -------------------------------------------------------------------------
   // WorkspaceStateSource (buildV2 trigger)
