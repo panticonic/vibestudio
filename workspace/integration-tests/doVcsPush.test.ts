@@ -45,7 +45,7 @@ function callerFor(gad: TestGad): GadCaller {
 
 type PushInput = {
   repoPaths: string[];
-  sourceHead: string;
+  sourceHead?: string | null;
   message?: string | null;
   actor: { id: string; kind: string };
 };
@@ -724,7 +724,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     async function pushViaEnvelope(
       caller: { callerId: string; callerKind: string },
       callerContextId: string | undefined,
-      input: { repoPaths: string[]; sourceHead: string; actor?: { id: string; kind: string } }
+      input: { repoPaths: string[]; sourceHead?: string | null; actor?: { id: string; kind: string } }
     ): Promise<{ status: string; repoPaths?: string[] }> {
       const objectKey = "workspace-gad";
       const fetchable = gad.instance as unknown as { fetch(r: Request): Promise<Response> };
@@ -769,6 +769,39 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
           actor: USER,
         })
       ).rejects.toThrow(/may only push their own context head \(ctx:c2\)/);
+      expect(readMain("packages/a")).toBe(null);
+    });
+
+    it("defaults an omitted sourceHead to the sandboxed caller's own context head", async () => {
+      const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      const result = await pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
+        repoPaths: ["packages/a"],
+        actor: USER,
+      });
+      expect(result.status).toBe("pushed");
+      expect(readMain("packages/a")).toBe(stateHash);
+    });
+
+    it("rejects an omitted sourceHead when no registered context is available", async () => {
+      await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      await expect(
+        pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, undefined, {
+          repoPaths: ["packages/a"],
+          actor: USER,
+        })
+      ).rejects.toThrow(/sourceHead is required.*no registered context/);
+      expect(readMain("packages/a")).toBe(null);
+    });
+
+    it("rejects an empty explicit sourceHead before source resolution", async () => {
+      await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      await expect(
+        pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
+          repoPaths: ["packages/a"],
+          sourceHead: "",
+          actor: USER,
+        })
+      ).rejects.toThrow(/sourceHead must be a non-empty string/);
       expect(readMain("packages/a")).toBe(null);
     });
 

@@ -6181,7 +6181,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
   async vcsPush(input: {
     repoPaths: string[];
-    sourceHead: string;
+    sourceHead?: string | null;
     message?: string | null;
     actor?: ParticipantRef | null;
   }): Promise<VcsPushResultDo> {
@@ -6196,11 +6196,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // still wins for parity with the pre-flip contract.
     const actor = input.actor ?? this.callerParticipant();
     this.ensureReady();
+    const sourceHead = this.resolvePushSourceHead(input.sourceHead, confinement);
     // Structural source-head confinement (register row 11): a sandboxed caller
     // may only push its OWN `ctx:` head. The context is HOST-VERIFIED (threaded
     // via the relay, never client-asserted); enforced BEFORE any read/publish.
-    this.assertSourceHeadConfined(input.sourceHead, confinement);
-    return this.runVcsPush({ ...input, actor }, invocationToken, false);
+    this.assertSourceHeadConfined(sourceHead, confinement);
+    return this.runVcsPush({ ...input, sourceHead, actor }, invocationToken, false);
   }
 
   /**
@@ -6213,6 +6214,31 @@ export class GadWorkspaceDO extends DurableObjectBase {
       callerKind: this.caller?.callerKind ?? null,
       callerContextId: this.callerContextId ?? null,
     };
+  }
+
+  /**
+   * Resolve the public `vcs.push({ sourceHead? })` shape at the DO boundary.
+   * Context callers may omit it and get their HOST-VERIFIED own `ctx:*` head;
+   * callers with no registered context (shell/server/mobile shell/direct DO)
+   * must name the source explicitly. This keeps the shared typed API intact
+   * without letting an omitted source fall through to a later undefined
+   * dereference.
+   */
+  private resolvePushSourceHead(
+    sourceHead: string | null | undefined,
+    confinement: { callerKind: string | null; callerContextId: string | null }
+  ): string {
+    if (sourceHead !== undefined && sourceHead !== null) {
+      if (typeof sourceHead !== "string" || sourceHead.length === 0) {
+        throw new Error("push: sourceHead must be a non-empty string when provided");
+      }
+      return sourceHead;
+    }
+    if (confinement.callerContextId) return `ctx:${confinement.callerContextId}`;
+    throw new Error(
+      "push: sourceHead is required when the caller has no registered context; " +
+        "pass sourceHead explicitly or call from a context runtime."
+    );
   }
 
   /**

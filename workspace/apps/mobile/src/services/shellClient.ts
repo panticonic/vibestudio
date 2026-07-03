@@ -114,9 +114,14 @@ function createVcsClient(transport: MobileRpcClient) {
   return {
     ...client,
     push(input: VcsPushInput): Promise<VcsPushResult> {
+      if (!input.sourceHead) {
+        throw new Error(
+          "vcs.push from the mobile shell requires sourceHead; mobile has no context head default."
+        );
+      }
       return userland.call<VcsPushResult>("vcsPush", {
         repoPaths: input.repoPaths,
-        ...(input.sourceHead !== undefined ? { sourceHead: input.sourceHead } : {}),
+        sourceHead: input.sourceHead,
         ...(input.message !== undefined ? { message: input.message } : {}),
       });
     },
