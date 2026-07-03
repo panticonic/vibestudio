@@ -156,7 +156,7 @@ function agentAFinalPrompt(repoPath: string): string {
 
 Agent B has now pushed a separate commit to main for repoPath ${repoPath}. Exercise the documented divergence recovery path:
 1. Call vcs.push for ${repoPath} before merging and record whether it returns a structured diverged result. Do not treat a returned diverged status as a tool failure.
-2. Reconcile by calling vcs.merge(${JSON.stringify(repoPath)}). If the merge leaves a pending resolution or uncommitted merge edits, resolve or seal them with vcs.commit(message). If vcs.merge already produced a clean merge commit, do not invent an extra commit.
+2. Reconcile by calling vcs.merge({ source: "main", repoPaths: [${JSON.stringify(repoPath)}] }). If the merge leaves a pending resolution or uncommitted merge edits, resolve or seal them with vcs.commit(message). If vcs.merge already produced a clean merge commit, do not invent an extra commit.
 3. Call vcs.push for ${repoPath} again and report the final structured status.
 
 Finish with exactly:

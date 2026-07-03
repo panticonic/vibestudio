@@ -3,6 +3,7 @@ import type {
   ActorRef,
   AgenticEvent,
   ApprovalPayload,
+  ChannelForkedPayload,
   CustomStartedPayload,
   ExternalEnvelopeObservedPayload,
   ExternalParticipantObservedPayload,
@@ -125,9 +126,18 @@ function sanitizePayloadParticipantRefs(kind: AgenticEvent["kind"], payload: Age
       return sanitizeExternalEnvelopeObservedPayload(payload as ExternalEnvelopeObservedPayload);
     case "external.participant_observed":
       return sanitizeExternalParticipantObservedPayload(payload as ExternalParticipantObservedPayload);
+    case "channel.forked":
+      return sanitizeChannelForkedPayload(payload as ChannelForkedPayload);
     default:
       return payload;
   }
+}
+
+function sanitizeChannelForkedPayload(payload: ChannelForkedPayload): ChannelForkedPayload {
+  return {
+    ...payload,
+    actor: publicParticipantRef(payload.actor),
+  };
 }
 
 function sanitizeInvocationPayload(payload: InvocationPayload): InvocationPayload {

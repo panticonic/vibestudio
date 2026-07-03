@@ -23,6 +23,7 @@ import type {
 } from "./derived-types.js";
 import type {
   ChannelViewState,
+  ForkProjection,
   MessageTier,
   ProjectedApproval,
   ProjectedCustomMessage,
@@ -104,6 +105,28 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   const custom = Object.values(state.customMessages).flatMap((item) =>
     projectedCustomMessageToChatMessage(item, state.messageTypes[item.typeId ?? ""])
   );
+  // Inline fork-annotation rows, positioned just after the message at their
+  // fork point. Forks carry only a `createdAtSeq`, so we anchor each to the
+  // sortTime of the newest message whose seq ≤ createdAtSeq (a tiny epsilon
+  // places the row immediately below that message).
+  const seqTimes = Object.values(state.messages)
+    .filter((message) => message.seq !== undefined)
+    .map((message) => ({
+      seq: message.seq as number,
+      time: Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0,
+    }))
+    .sort((a, b) => a.seq - b.seq);
+  const forkAnchorTime = (createdAtSeq: number): number => {
+    let time = 0;
+    for (const entry of seqTimes) {
+      if (entry.seq > createdAtSeq) break;
+      time = entry.time;
+    }
+    return time;
+  };
+  const forks = (state.forks ?? []).map((fork) =>
+    projectedForkToChatMessage(fork, forkAnchorTime(fork.createdAtSeq))
+  );
   const credentialRequests = Object.values(state.credentialRequests ?? {}).map(
     (request): ChatMessage & { sortTime: number } => ({
       id: `credential:${request.credKey}`,
@@ -134,6 +157,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     ...silentClosedTurns,
     ...inlineUi,
     ...custom,
+    ...forks,
     ...credentialRequests,
   ]
     .sort(
@@ -396,6 +420,44 @@ function deliveryFields(
   };
 }
 
+/** Project one direct-child fork into an inline "conversation forked" system
+ *  row. `anchorTime` interleaves it with the transcript at its fork point. */
+function projectedForkToChatMessage(
+  fork: ForkProjection,
+  anchorTime: number
+): ChatMessage & { sortTime: number } {
+  return {
+    id: `fork:${fork.forkId}`,
+    senderId: fork.actor.id,
+    content: fork.label || fork.reason || "forked this conversation",
+    contentType: "fork",
+    kind: "system",
+    complete: true,
+    fork: {
+      forkId: fork.forkId,
+      forkedChannelId: fork.forkedChannelId,
+      forkedContextId: fork.forkedContextId,
+      forkPointId: fork.forkPointId,
+      label: fork.label,
+      reason: fork.reason,
+      actor: {
+        kind: fork.actor.kind,
+        id: fork.actor.id,
+        ...(fork.actor.displayName ? { displayName: fork.actor.displayName } : {}),
+      },
+      createdAtSeq: fork.createdAtSeq,
+      archived: fork.archived,
+    },
+    senderMetadata: {
+      name: fork.actor.displayName ?? fork.actor.id,
+      type: fork.actor.kind,
+      handle: fork.actor.id,
+    },
+    // A tiny epsilon on the anchor keeps the row just below its fork-point message.
+    sortTime: anchorTime + 0.25,
+  } as ChatMessage & { sortTime: number };
+}
+
 function projectedMessageToChatMessages(
   message: ProjectedMessage,
   intendedRecipients: string[] = []
@@ -479,6 +541,9 @@ function projectedMessageToChatMessages(
       replyTo: message.replyTo,
       mentions: message.mentions,
       tier: messageTier(message),
+      ...(message.seq !== undefined ? { seq: message.seq } : {}),
+      ...(message.saliency ? { saliency: message.saliency } : {}),
+      ...(message.replaces ? { replaces: message.replaces } : {}),
       error:
         message.status === "failed"
           ? (failureReason ?? "Message failed")
@@ -652,6 +717,7 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
           ? invocation.outputs.map((output) => stringifyOutput(output)).join("\n")
           : undefined,
     },
+    ...(invocation.subagent ? { subagent: invocation.subagent } : {}),
   };
   return {
     id: `invocation:${invocation.invocationId}`,

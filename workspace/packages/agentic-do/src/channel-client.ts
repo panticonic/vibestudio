@@ -28,6 +28,13 @@ interface ChannelSendOptions {
      * agent-loop. Pass "secondary" to send a deliberately slight message.
      */
     tier?: MessageTier;
+    /**
+     * Salience flag: `"say"` marks the message as an explicit, deliberate
+     * utterance (the generalized `say` tool). It survives the `turn-final`
+     * wake filter and is surfaced by the chat projection. Omit for ordinary
+     * traffic.
+     */
+    saliency?: "say";
 }
 const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
 interface ResolvedService {
@@ -70,6 +77,7 @@ export class ChannelClient {
                 blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content }],
                 outcome: "completed",
                 tier: opts?.tier ?? "primary",
+                ...(opts?.saliency ? { saliency: opts.saliency } : {}),
                 mentions: opts?.mentions,
                 replyTo: opts?.replyTo as never,
                 to: opts?.to,
@@ -192,5 +200,15 @@ export class ChannelClient {
     }
     async getConfig(): Promise<Record<string, unknown> | null> {
         return this.call("getConfig") as Promise<Record<string, unknown> | null>;
+    }
+    /** Stamp task provenance on a subagent task channel so its `getProvenance`
+     *  reports `kind:"task"` (B1). Called by the spawning vessel right after the
+     *  task channel is created/subscribed. */
+    async recordTaskProvenance(args: {
+        parentChannelId: string;
+        parentContextId: string;
+        runId: string;
+    }): Promise<void> {
+        await this.call("recordTaskProvenance", args);
     }
 }

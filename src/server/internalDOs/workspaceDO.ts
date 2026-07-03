@@ -40,6 +40,14 @@ interface DbEntityRow {
   error: string | null;
 }
 
+interface DbContextEdgeRow {
+  context_id: string;
+  owner_context_id: string;
+  kind: "lifecycle" | "lineage";
+  owner_entity_id: string | null;
+  created_at: number;
+}
+
 interface DbSlotRow {
   slot_id: string;
   parent_slot_id: string | null;
@@ -157,6 +165,7 @@ const WORKSPACE_REQUIRED_TABLES = [
   "do_alarms",
   "recurring_jobs",
   "heartbeat_registry",
+  "context_edges",
 ] as const;
 
 /** One declared recurring job (see meta/vibez1.yml `recurring:`). */
@@ -258,7 +267,7 @@ function rowToHeartbeatRegistry(row: Record<string, unknown>): HeartbeatRegistry
 }
 
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 16;
+  static override schemaVersion = 17;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -419,6 +428,27 @@ export class WorkspaceDO extends DurableObjectBase {
         value TEXT NOT NULL
       )
     `);
+    // context_edges — the context-relationship registry. Two edge kinds:
+    // 'lifecycle' (subagent contexts — cascaded on destroy, cloned on recursive
+    // clone) and 'lineage' (conversation-fork provenance — access-only, never
+    // cascaded or cloned-followed). Keyed on kind so a context may carry both a
+    // lineage edge (forked from X) and lifecycle edges from other owners.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS context_edges (
+        context_id       TEXT NOT NULL,
+        owner_context_id TEXT NOT NULL,
+        kind             TEXT NOT NULL,
+        owner_entity_id  TEXT,
+        created_at       INTEGER NOT NULL,
+        PRIMARY KEY (context_id, owner_context_id, kind)
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_context_edges_owner ON context_edges(owner_context_id, kind)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_context_edges_child ON context_edges(context_id)`
+    );
     this.createLifecycleTables();
   }
 
@@ -446,6 +476,7 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(`DROP TABLE IF EXISTS do_alarms`);
     this.sql.exec(`DROP TABLE IF EXISTS recurring_jobs`);
     this.sql.exec(`DROP TABLE IF EXISTS heartbeat_registry`);
+    this.sql.exec(`DROP TABLE IF EXISTS context_edges`);
   }
 
   getWorkspaceId(): string {
@@ -1118,6 +1149,88 @@ export class WorkspaceDO extends DurableObjectBase {
       .exec(`SELECT * FROM entities WHERE status = 'active' AND kind = ? ORDER BY created_at`, kind)
       .toArray() as unknown as DbEntityRow[];
     return rows.map((row) => this.rowToEntity(row));
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // context_edges.* — context-relationship registry
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Idempotently upsert a context-relationship edge. Keyed on
+   * (context_id, owner_context_id, kind); `created_at` is preserved on conflict,
+   * `owner_entity_id` refreshed.
+   */
+  @rpc
+  contextEdgeUpsert(input: {
+    contextId: string;
+    ownerContextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId?: string;
+  }): void {
+    this.sql.exec(
+      `INSERT INTO context_edges (context_id, owner_context_id, kind, owner_entity_id, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(context_id, owner_context_id, kind)
+       DO UPDATE SET owner_entity_id = excluded.owner_entity_id`,
+      input.contextId,
+      input.ownerContextId,
+      input.kind,
+      input.ownerEntityId ?? null,
+      Date.now()
+    );
+  }
+
+  /** List edges owned BY a context (the owner side), optionally scoped to one kind. */
+  @rpc
+  contextEdgeListByOwner(input: {
+    ownerContextId: string;
+    kind?: "lifecycle" | "lineage";
+  }): Array<{ contextId: string; kind: "lifecycle" | "lineage"; ownerEntityId: string | null }> {
+    const rows = (input.kind
+      ? this.sql.exec(
+          `SELECT context_id, kind, owner_entity_id FROM context_edges
+             WHERE owner_context_id = ? AND kind = ? ORDER BY created_at`,
+          input.ownerContextId,
+          input.kind
+        )
+      : this.sql.exec(
+          `SELECT context_id, kind, owner_entity_id FROM context_edges
+             WHERE owner_context_id = ? ORDER BY created_at`,
+          input.ownerContextId
+        )
+    ).toArray() as unknown as DbContextEdgeRow[];
+    return rows.map((row) => ({
+      contextId: row.context_id,
+      kind: row.kind,
+      ownerEntityId: row.owner_entity_id ?? null,
+    }));
+  }
+
+  /** List edges INTO a context (the child side) — walk up for authz/teardown. */
+  @rpc
+  contextEdgeListByChild(contextId: string): Array<{
+    ownerContextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId: string | null;
+  }> {
+    const rows = this.sql
+      .exec(
+        `SELECT owner_context_id, kind, owner_entity_id FROM context_edges
+         WHERE context_id = ? ORDER BY created_at`,
+        contextId
+      )
+      .toArray() as unknown as DbContextEdgeRow[];
+    return rows.map((row) => ({
+      ownerContextId: row.owner_context_id,
+      kind: row.kind,
+      ownerEntityId: row.owner_entity_id ?? null,
+    }));
+  }
+
+  /** Delete every inbound edge of a context (called on teardown). */
+  @rpc
+  contextEdgeDeleteByChild(contextId: string): void {
+    this.sql.exec(`DELETE FROM context_edges WHERE context_id = ?`, contextId);
   }
 
   // ─────────────────────────────────────────────────────────────

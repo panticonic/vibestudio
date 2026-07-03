@@ -791,10 +791,15 @@ export class CallTransport {
   }
 
   /** Abandoned terminals for every pending call targeting a leaver —
-   *  peek-then-settle per call, never bulk-delete-then-append. */
+   *  peek-then-settle per call, never bulk-delete-then-append.
+   *
+   *  `aborted-by-fork` is the fork-rewiring reason (C6): a recursive clone
+   *  could not re-home a call whose target did not follow the fork, so the
+   *  parked caller is settled aborted (terminalReasonCode `aborted-by-fork`)
+   *  rather than left hanging until the deadline. */
   async failPendingCallsTargeting(
     targetId: string,
-    reason: "graceful" | "disconnect" | "replaced"
+    reason: "graceful" | "disconnect" | "replaced" | "aborted-by-fork"
   ): Promise<number> {
     const rows = this.pendingFor(targetId);
     if (rows.length === 0) return 0;
@@ -803,7 +808,9 @@ export class CallTransport {
         ? `Target ${targetId} left the channel before the call completed`
         : reason === "disconnect"
           ? `Target ${targetId} disconnected from the channel before the call completed`
-          : `Target ${targetId} was replaced by a new session before the call completed`;
+          : reason === "replaced"
+            ? `Target ${targetId} was replaced by a new session before the call completed`
+            : `Target ${targetId} did not follow the fork; its pending call was aborted`;
     for (const row of rows) {
       try {
         await this.settleCall(row.transportCallId, { error: errorMessage }, true, "abandoned", reason);

@@ -43,14 +43,17 @@ import {
   type CustomMessageDisplayMode,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
-import type { AgentTool } from "@workspace/pi-core";
+import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import { serializeByKey } from "@vibez1/shared/keyedSerializer";
+import {
+  createVcsUserlandClient,
+  type RpcCallerLike,
+} from "@vibez1/shared/userlandServiceRpc";
 import { toCredentialConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   defaultPolicies,
   derivedTurnStatus,
   ids,
-  silentPolicy,
   type AgentLoopConfig,
   type AgentState,
   type AgentTurnMetadata,
@@ -70,6 +73,11 @@ import type {
 } from "@workspace/runtime/credentials";
 import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";
+import {
+  SubagentRunStore,
+  type SubagentRunMerge,
+  type SubagentRunRow,
+} from "./subagent-runs.js";
 import { ChannelClient } from "./channel-client.js";
 import { FeedbackIngest } from "./feedback-ingest.js";
 import { CardManager } from "./custom-cards.js";
@@ -90,6 +98,14 @@ const BLOB_TEXT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
  *  history. Subclasses override getCompactionTriggerBytes for a tighter or
  *  model-sized budget. */
 const DEFAULT_COMPACTION_TRIGGER_BYTES = 256 * 1024;
+/** Subagent guardrails (overridable per-agent via config). Depth bounds the
+ *  spawn chain; concurrency bounds live children per supervisor. */
+const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
+const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 4;
+/** A subagent with no activity for this long is swept as `invocation.abandoned`
+ *  by the supervisor TTL alarm (overridable via `config.subagentTtlMs`). */
+const DEFAULT_SUBAGENT_TTL_MS = 30 * 60 * 1000;
+const SUBAGENT_TTL_ALARM_SOURCE = "subagent-ttl";
 
 export type ApprovalLevel = 0 | 1 | 2;
 
@@ -224,6 +240,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected readonly subscriptions: SubscriptionManager;
   protected readonly feedback: FeedbackIngest;
   protected readonly cards: CardManager;
+  protected readonly subagentRuns: SubagentRunStore;
   private _driver: AgentLoopDriver | null = null;
   private readonly localTools = new Map<string, Map<string, AgentTool>>();
   private readonly deltaBuffers = new Map<string, { events: AgenticEvent[]; timer: unknown }>();
@@ -275,6 +292,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       () => this.participantId()
     );
     this.subscriptions.createTables();
+    this.subagentRuns = new SubagentRunStore(this.sql);
+    this.subagentRuns.createTables();
     this.feedback = new FeedbackIngest(this.sql);
     this.cards = new CardManager({
       sql: this.sql,
@@ -288,6 +307,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       nextWakeAt: () => this._driver?.nextWakeAt() ?? this.driverNextWakeAtFromSql(),
       fire: async () => {
         await this.driver.alarm();
+      },
+    });
+    this.registerAgentAlarmSource({
+      id: SUBAGENT_TTL_ALARM_SOURCE,
+      nextWakeAt: () => this.nextSubagentTtlWakeAt(),
+      fire: async (now) => {
+        await this.sweepAbandonedSubagents(now);
       },
     });
   }
@@ -322,6 +348,28 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  (in serialized-entry bytes). */
   protected getCompactionTriggerBytes(): number {
     return DEFAULT_COMPACTION_TRIGGER_BYTES;
+  }
+
+  /** Channel publication discipline (WS-4 `publishPolicy` StepPolicy). Default
+   *  agents publish everything (`undefined` ⇒ "all"); the silent agent overrides
+   *  this to "say-only" (the old `silentPolicy` behavior). */
+  protected getPublishPolicy(_channelId: string): "all" | "turn-final" | "say-only" | undefined {
+    return undefined;
+  }
+
+  /** Max subagent nesting depth enforced at spawn. */
+  protected getMaxSubagentDepth(): number {
+    return DEFAULT_MAX_SUBAGENT_DEPTH;
+  }
+
+  /** Max concurrent live subagents enforced at spawn. */
+  protected getMaxConcurrentSubagents(): number {
+    return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+  }
+
+  /** TTL (ms) after which an idle subagent is swept as `invocation.abandoned`. */
+  protected getSubagentTtlMs(): number {
+    return DEFAULT_SUBAGENT_TTL_MS;
   }
 
   protected abstract getParticipantInfo(channelId: string, config?: unknown): ParticipantDescriptor;
@@ -783,6 +831,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           if (tool === "eval") {
             return this.runDeferredEval(channelId, invocationId, args);
           }
+          // `spawn_subagent` PARKS: the run stays OPEN until the child calls
+          // `complete` (or is aborted / TTL-swept). The driver leases the row;
+          // `onSubagentComplete` delivers the terminal out-of-band, exactly like
+          // the deferred `eval` path above.
+          if (tool === "spawn_subagent") {
+            return this.runDeferredSpawn(channelId, invocationId, args);
+          }
           const registry = await this.toolRegistry(channelId);
           const agentTool = registry.get(tool);
           if (!agentTool) {
@@ -1016,6 +1071,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private loopConfig(channelId: string): AgentLoopConfig {
     const settings = this.getAgentSettings();
+    const publishPolicy = this.getPublishPolicy(channelId);
     return {
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
@@ -1029,6 +1085,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       roster: { participants: [] }, // roster snapshots fold from system.event
       maxModelCallsPerTurn: settings.maxModelCallsPerTurn,
       modelStreamIdleTimeoutMs: settings.modelStreamIdleTimeoutMs,
+      maxSubagentDepth: this.getMaxSubagentDepth(),
+      maxConcurrentSubagents: this.getMaxConcurrentSubagents(),
+      ...(publishPolicy ? { publishPolicy } : {}),
     };
   }
 
@@ -1398,6 +1457,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // an open turn — route them BEFORE the message.completed-only gate, and skip
     // our own (the fold still enforces the author guard).
     if (await this.routeMessageMutation(channelId, event)) return;
+
+    // Wake discipline (WS-5). A channel subscribed with a non-default wakePolicy
+    // (task channels the supervisor watches, subscribed "turn-final") buffers
+    // envelopes in the durable log and wakes only on a trigger — never opening a
+    // turn per intermediate envelope. Resolved BEFORE the message.completed gate
+    // because a turn.closed trigger is not itself a message.completed. Returns
+    // true when the event was handled (buffered or drove a turn-final wake);
+    // false falls through to the default every-envelope path (say / mention).
+    const wakePolicy = this.subscriptions.getConfig(channelId)?.wakePolicy ?? "every-envelope";
+    if (wakePolicy !== "every-envelope") {
+      if (await this.resolveWake(channelId, event, wakePolicy)) return;
+    }
 
     const agentic = event.payload as AgenticEvent | null;
     if (!agentic || (agentic as { kind?: string }).kind !== "message.completed") return;
@@ -2937,15 +3008,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Fork ─────────────────────────────────────────────────────────────────
 
-  @rpc({ callers: ["worker", "server"] })
-  async canFork(): Promise<{ ok: boolean; subscriptionCount: number; reason?: string }> {
-    const count = this.subscriptions.count();
-    return count <= 1
-      ? { ok: true, subscriptionCount: count }
-      : { ok: false, subscriptionCount: count, reason: "multiple subscriptions" };
+  /** Per-channel fork preflight. Vets ONLY the named subscription (it must
+   *  exist); a multi-channel agent forks the one channel and drops the rest in
+   *  the clone (see {@link postClone}), so the old ≤1-subscription gate is gone. */
+  @rpc({ callers: ["worker", "server", "do"] })
+  async canFork(channelId: string): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.subscriptions.getParticipantId(channelId)) {
+      return { ok: false, reason: `no subscription for channel ${channelId}` };
+    }
+    return { ok: true };
   }
 
-  @rpc({ callers: ["worker", "server"] })
+  @rpc({ callers: ["worker", "server", "do"] })
   async postClone(
     _parentObjectKey: string,
     newChannelId: string,
@@ -2981,6 +3055,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.sql.exec(`DELETE FROM effect_outbox`);
     this.sql.exec(`DELETE FROM fold_cache`);
     this.subscriptions.rename(oldChannelId, newChannelId, newContextId);
+    // Per-channel fork: the clone is a NEW entity and must NOT ghost-join the
+    // parent's OTHER channels (cloneDO copied the whole subscriptions table).
+    // Drop every subscription except the forked one — delete the local row and
+    // the driver loop, but DO NOT call the channel DO to unsubscribe: the copied
+    // rows still carry the PARENT's participantId, so an unsubscribe would evict
+    // the parent from its own channels. This runs BEFORE driver.wake so the
+    // driver never wakes a loop for a channel the clone no longer holds.
+    for (const otherChannelId of this.subscriptions.listChannelIds()) {
+      if (otherChannelId === newChannelId) continue;
+      this.subscriptions.deleteSubscription(otherChannelId);
+      driver.dropLoop(otherChannelId);
+    }
     // Subclass fork cleanup/setup runs with the rename applied but BEFORE the
     // new channel is (re)subscribed, so subclasses can purge per-channel state
     // the clone copied and influence the upcoming subscribe.
@@ -3022,6 +3108,773 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       throw new Error(`Invalid trajectory fork sequence for ${trajectoryLogId}: ${String(seq)}`);
     }
     return parsed;
+  }
+
+  /**
+   * Re-root a FRESH child vessel's identity + trajectory from a parent agent's
+   * trajectory at `seq` — the sibling of {@link postClone} for the
+   * `spawn_subagent(mode:"fork")` path. No DO storage was cloned (the entity was
+   * just created), so there is nothing to wipe: outbox/fold caches start empty.
+   * The child boots knowing everything the parent knew at the fork point.
+   */
+  @rpc({ callers: ["worker", "server", "do"] })
+  async initFromTrajectoryFork(opts: {
+    parentLogId: string;
+    seq: number;
+    taskChannelId: string;
+    contextId: string;
+  }): Promise<{ ok: boolean; participantId: string }> {
+    this.ensureIdentity();
+    // Fix identity for parity with postClone (a fresh DO already has it correct).
+    this.sql.exec(
+      `INSERT OR REPLACE INTO state (key, value) VALUES ('__objectKey', ?)`,
+      this.objectKey
+    );
+    const to = ids.logIdForChannel(opts.taskChannelId);
+    // `seq` is already a TRAJECTORY seq (the parent's folded head), not a channel
+    // seq — no resolveTrajectorySeqForChannelSeq indirection needed.
+    await this.callGad("forkLog", {
+      fromLogId: opts.parentLogId,
+      fromHead: opts.parentLogId,
+      toLogId: to,
+      toHead: to,
+      atSeq: opts.seq,
+    });
+    // Subscribe to the task channel; the first task message drives the first turn
+    // via the normal intake path (no explicit driver.wake here).
+    return this.subscribeChannel({
+      channelId: opts.taskChannelId,
+      contextId: opts.contextId,
+      replay: false,
+    });
+  }
+
+  // ── Subagents ──────────────────────────────────────────────────────────────
+
+  /** This agent's own subagent identity (set in `STATE_ARGS.subagent` at spawn),
+   *  or null for a top-level agent. Drives depth accounting + the child `complete`
+   *  tool gate. */
+  protected subagentIdentity(): {
+    runId: string;
+    parentRef: string;
+    parentChannelId: string;
+    parentContextId: string;
+    depth: number;
+  } | null {
+    const stateArgs = this.env["STATE_ARGS"];
+    const raw =
+      stateArgs && typeof stateArgs === "object"
+        ? (stateArgs as Record<string, unknown>)["subagent"]
+        : undefined;
+    if (!raw || typeof raw !== "object") return null;
+    const s = raw as Record<string, unknown>;
+    if (
+      typeof s["runId"] !== "string" ||
+      typeof s["parentRef"] !== "string" ||
+      typeof s["parentChannelId"] !== "string"
+    ) {
+      return null;
+    }
+    return {
+      runId: s["runId"],
+      parentRef: s["parentRef"],
+      parentChannelId: s["parentChannelId"],
+      parentContextId: typeof s["parentContextId"] === "string" ? s["parentContextId"] : "",
+      depth: typeof s["depth"] === "number" ? s["depth"] : 0,
+    };
+  }
+
+  /** True when this agent was spawned as a subagent (advertises `complete`). */
+  protected isSubagent(): boolean {
+    return this.subagentIdentity() !== null;
+  }
+
+  private currentSubagentDepth(): number {
+    return this.subagentIdentity()?.depth ?? 0;
+  }
+
+  private toolText(
+    text: string,
+    details?: Record<string, unknown>
+  ): AgentToolResult<Record<string, unknown>> {
+    return { content: [{ type: "text", text }], details: details ?? {} };
+  }
+
+  private async trajectoryHeadSeq(channelId: string): Promise<number> {
+    try {
+      const loop = await this.driver.loop(channelId);
+      return loop.state.lastSeq;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * The deferral half of `spawn_subagent` (mirrors {@link runDeferredEval}). Mints
+   * the child context (deterministic under `targetKey`) + child agent entity, wires
+   * the task channel (parent watches turn-final, child subscribes / trajectory-forks),
+   * seeds the task, records the run + the parent-trajectory invocation card, then
+   * PARKS. Guarded by depth/fan-out. Any failure settles inline as a tool error.
+   */
+  private async runDeferredSpawn(
+    channelId: string,
+    invocationId: string,
+    args: unknown
+  ): Promise<{ deferred: true } | { result: unknown; isError: boolean }> {
+    try {
+      const p = (args ?? {}) as {
+        mode?: unknown;
+        task?: unknown;
+        source?: unknown;
+        config?: unknown;
+        label?: unknown;
+      };
+      const mode: "fresh" | "fork" = p.mode === "fork" ? "fork" : "fresh";
+      const task = typeof p.task === "string" ? p.task : "";
+      if (mode === "fresh" && !task.trim()) {
+        return { result: "spawn_subagent(mode:'fresh') requires a non-empty task", isError: true };
+      }
+      // Idempotency: a re-driven spawn returns the SAME parked run.
+      if (this.subagentRuns.get(invocationId)) return { deferred: true };
+
+      const loopConfig = this.loopConfig(channelId);
+      const maxDepth = loopConfig.maxSubagentDepth ?? DEFAULT_MAX_SUBAGENT_DEPTH;
+      const maxConcurrent = loopConfig.maxConcurrentSubagents ?? DEFAULT_MAX_CONCURRENT_SUBAGENTS;
+      const childDepth = this.currentSubagentDepth() + 1;
+      if (childDepth > maxDepth) {
+        return { result: `subagent depth limit reached (max ${maxDepth})`, isError: true };
+      }
+      if (this.subagentRuns.countRunning() >= maxConcurrent) {
+        return { result: `concurrent subagent limit reached (max ${maxConcurrent})`, isError: true };
+      }
+
+      const runId = invocationId;
+      const targetKey = `subagent:${runId}`;
+      const taskChannelId = `task-${runId}`;
+      const label =
+        typeof p.label === "string" && p.label.trim()
+          ? p.label
+          : mode === "fork"
+            ? "forked subagent"
+            : "subagent";
+      const childConfig =
+        p.config && typeof p.config === "object" ? (p.config as Record<string, unknown>) : undefined;
+      const source =
+        typeof p.source === "string" && p.source ? p.source : String(this.env["WORKER_SOURCE"] ?? "");
+      const className =
+        childConfig && typeof childConfig["className"] === "string"
+          ? String(childConfig["className"])
+          : String(this.env["WORKER_CLASS_NAME"] ?? this.constructor.name);
+      if (!source) {
+        return { result: "spawn_subagent could not resolve a child source", isError: true };
+      }
+
+      const parentContextId = this.subscriptions.getContextId(channelId);
+      const ownerEntityId = this.participantId();
+
+      // 1) Child context (deterministic; runtime records the lifecycle edge).
+      const { contextId } = await this.rpc.call<{ contextId: string }>(
+        "main",
+        "runtime.createSubagentContext",
+        [{ parentContextId, ownerEntityId, targetKey }]
+      );
+
+      // 2) Child agent entity in that context. createEntity derives parentId from
+      //    the verified caller (this vessel) → the entity→entity edge lands.
+      const childHandle = await this.rpc.call<{ id: string; targetId: string }>(
+        "main",
+        "runtime.createEntity",
+        [
+          {
+            kind: "do",
+            source,
+            className,
+            key: targetKey,
+            contextId,
+            stateArgs: {
+              ...(childConfig ? { agentConfig: childConfig } : {}),
+              subagent: {
+                runId,
+                parentRef: ownerEntityId,
+                parentChannelId: channelId,
+                parentContextId,
+                depth: childDepth,
+              },
+            },
+          },
+        ]
+      );
+
+      // 3) Record the run BEFORE any wake so replay + teardown can find it.
+      const now = Date.now();
+      const run: SubagentRunRow = {
+        runId,
+        taskChannelId,
+        childContextId: contextId,
+        childEntityId: childHandle.id,
+        parentChannelId: channelId,
+        mode,
+        label,
+        depth: childDepth,
+        status: "running",
+        merge: null,
+        startedAt: now,
+        lastActivityAt: now,
+      };
+      this.subagentRuns.insert(run);
+
+      // 4) Parent watches the task channel turn-final (buffered, log-derived).
+      await this.subscribeChannel({
+        channelId: taskChannelId,
+        contextId,
+        config: { wakePolicy: "turn-final" },
+        replay: false,
+      });
+
+      // 5) Bring the child online on the task channel.
+      if (mode === "fork") {
+        const parentSeq = await this.trajectoryHeadSeq(channelId);
+        await this.rpc.call(childHandle.targetId, "initFromTrajectoryFork", [
+          {
+            parentLogId: ids.logIdForChannel(channelId),
+            seq: parentSeq,
+            taskChannelId,
+            contextId,
+          },
+        ]);
+      } else {
+        await this.rpc.call(childHandle.targetId, "subscribeChannel", [
+          { channelId: taskChannelId, contextId, config: {}, replay: false },
+        ]);
+      }
+
+      // 5b) Stamp task provenance on the task channel so its getProvenance
+      //     reports kind:"task" (B1) — parent home channel + context + runId.
+      await this.createChannelClient(taskChannelId).recordTaskProvenance({
+        parentChannelId: channelId,
+        parentContextId: parentContextId ?? "",
+        runId,
+      });
+
+      // 6) Seed the task prompt (both modes, when provided).
+      if (task.trim()) {
+        const participantId =
+          this.subscriptions.getParticipantId(taskChannelId) ?? this.participantId();
+        await this.createChannelClient(taskChannelId).send(
+          participantId,
+          `subagent-seed:${runId}`,
+          task,
+          { senderMetadata: { type: "agent", name: participantId } }
+        );
+      }
+
+      // 7) Durable run record on the parent's home channel (the subagent card).
+      await this.publishSubagentStarted(run);
+
+      // PARK: the terminal arrives via onSubagentComplete / abort / TTL.
+      return { deferred: true };
+    } catch (err) {
+      return { result: err instanceof Error ? err.message : String(err), isError: true };
+    }
+  }
+
+  /** Post a message into a subagent's task channel (parent → child). */
+  protected async sendToSubagent(
+    toolCallId: string,
+    runId: string,
+    message: string
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const run = this.subagentRuns.get(runId);
+    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    if (typeof message !== "string" || !message.trim()) {
+      throw new Error("send_to_subagent requires a non-empty message");
+    }
+    const participantId =
+      this.subscriptions.getParticipantId(run.taskChannelId) ?? this.participantId();
+    const messageId = `subagent-msg:${toolCallId}`;
+    await this.createChannelClient(run.taskChannelId).send(participantId, messageId, message, {
+      senderMetadata: { type: "agent", name: participantId },
+    });
+    this.subagentRuns.touch(runId, Date.now());
+    return this.toolText(`sent to subagent ${runId}`, { runId, messageId });
+  }
+
+  /** Inspect a subagent's CHILD-CONTEXT working tree via the host vcs.* read
+   *  surfaces (authorized cross-context by WS-2's ownership check). `query` is
+   *  `status` | `diff` | `log` | a file path. */
+  protected async inspectSubagent(
+    runId: string,
+    query: string
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const run = this.subagentRuns.get(runId);
+    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    const context = { contextId: run.childContextId };
+    const q = (query ?? "status").trim() || "status";
+    let result: unknown;
+    if (q === "status") {
+      result = await this.rpc.call<unknown>("main", "vcs.contextStatus", [context]);
+    } else if (q === "diff") {
+      result = await this.rpc.call<unknown>("main", "vcs.contextDiff", [
+        { contextId: run.childContextId, against: "fork-base" },
+      ]);
+    } else if (q === "log") {
+      // `vcs.log` is per-repo and USERLAND-dispatched (P5c) — it carries no
+      // host caller-context head resolution, so a bare call reads the CALLER's
+      // head. Authorize the cross-context read + enumerate the child's touched
+      // repos through the host (throw-not-prompt, WS-2's ownership gate), then
+      // read each repo's commit log at the CHILD's ctx head from the userland
+      // `vcs` service.
+      const repos = await this.rpc.call<Array<{ repoPath: string }>>(
+        "main",
+        "vcs.contextStatus",
+        [context]
+      );
+      const childHead = `ctx:${run.childContextId}`;
+      const vcsUserland = createVcsUserlandClient(this.rpc as unknown as RpcCallerLike);
+      result = await Promise.all(
+        repos.map(async (r) => ({
+          repoPath: r.repoPath,
+          log: await vcsUserland.call<unknown>("vcsLog", r.repoPath, null, childHead),
+        }))
+      );
+    } else {
+      result = await this.rpc.call<unknown>("main", "vcs.readFile", ["", q, undefined, context]);
+    }
+    return this.toolText(
+      typeof result === "string" ? result : JSON.stringify(result, null, 2),
+      { runId, query: q }
+    );
+  }
+
+  /** Take EVERYTHING from a subagent: merge its child context into ours
+   *  (commit-gated both sides — WS-1's source-side dirty gate surfaces here). */
+  protected async mergeSubagent(
+    runId: string
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const run = this.subagentRuns.get(runId);
+    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    const result = await this.rpc.call<unknown>("main", "vcs.merge", [
+      { source: { contextId: run.childContextId } },
+    ]);
+    const merge = this.mergeStatusFromResult(result);
+    this.subagentRuns.setMerge(runId, merge);
+    this.subagentRuns.touch(runId, Date.now());
+    return this.toolText(`merged subagent ${runId}: ${merge}`, {
+      runId,
+      merge,
+      result: result as Record<string, unknown>,
+    });
+  }
+
+  /** Selectively cherry-pick commits/paths from a subagent's child context. */
+  protected async pickFromSubagent(
+    runId: string,
+    picks: unknown
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const run = this.subagentRuns.get(runId);
+    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    if (!Array.isArray(picks) || picks.length === 0) {
+      throw new Error("pick_from_subagent requires a non-empty picks array");
+    }
+    const result = await this.rpc.call<unknown>("main", "vcs.pick", [
+      { source: { contextId: run.childContextId }, picks },
+    ]);
+    this.subagentRuns.setMerge(runId, "merged");
+    this.subagentRuns.touch(runId, Date.now());
+    return this.toolText(`picked from subagent ${runId}`, {
+      runId,
+      result: result as Record<string, unknown>,
+    });
+  }
+
+  /** Read a subagent's task-channel envelopes since a cursor (the `manual`-wake
+   *  read path). Returns the child's messages + the next cursor. */
+  protected async readSubagent(
+    runId: string,
+    afterSeq: number
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const run = this.subagentRuns.get(runId);
+    if (!run) throw new Error(`unknown subagent run ${runId}`);
+    const envelope = await this.createChannelClient(run.taskChannelId).getReplayAfter(
+      Number.isFinite(afterSeq) ? afterSeq : 0
+    );
+    let nextSeq = Number.isFinite(afterSeq) ? afterSeq : 0;
+    const messages: Array<{ seq: number; author: string; text: string }> = [];
+    for (const event of envelope.logEvents) {
+      nextSeq = Math.max(nextSeq, event.id ?? 0);
+      if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) continue;
+      const agentic = event.payload as AgenticEvent | null;
+      if ((agentic as { kind?: string } | null)?.kind !== "message.completed") continue;
+      const text = this.extractMessageText(agentic);
+      if (!text) continue;
+      messages.push({ seq: event.id ?? 0, author: event.senderId ?? "unknown", text });
+    }
+    const rendered = messages.length
+      ? messages.map((m) => `[#${m.seq} ${m.author}]\n${m.text}`).join("\n\n")
+      : "(no new subagent messages)";
+    return this.toolText(rendered, { runId, nextSeq, messages });
+  }
+
+  /** Close a subagent run: cancel it if still open, tear down its context
+   *  (recursive lifecycle subtree), and drop the parent's task subscription. */
+  protected async closeSubagent(
+    runId: string,
+    discard: boolean
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const run = this.subagentRuns.get(runId);
+    if (!run) return this.toolText(`subagent ${runId} already closed`, { runId });
+    if (discard && run.merge === null) this.subagentRuns.setMerge(runId, "discarded");
+    const refreshed = this.subagentRuns.get(runId)!;
+    if (refreshed.status === "running") {
+      await this.settleSubagentTerminal(
+        refreshed,
+        "cancelled",
+        "closed by parent",
+        refreshed.merge ?? undefined
+      );
+    }
+    await this.teardownRun(refreshed);
+    return this.toolText(`closed subagent ${runId}`, { runId, discarded: discard });
+  }
+
+  /** CHILD side of the terminal trigger: notify the owning parent that this run
+   *  is done. Routes to the parent's {@link onSubagentComplete}. */
+  protected async completeAsSubagent(
+    report: string,
+    outcome: "success" | "failed"
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const sub = this.subagentIdentity();
+    if (!sub) throw new Error("complete is only available to subagents");
+    await this.rpc.call(sub.parentRef, "onSubagentComplete", [
+      { runId: sub.runId, channelId: sub.parentChannelId, report, outcome },
+    ]);
+    return this.toolText("subagent run completed", { runId: sub.runId, outcome });
+  }
+
+  /**
+   * Parent-side terminal delivery, driven by the child's `complete` tool. Gated to
+   * the OWNING subagent (caller id must equal the recorded child entity) — an open
+   * relay otherwise lets any DO forge a completion and drive the parent loop.
+   * Idempotent: a duplicate / post-terminal call no-ops.
+   */
+  @rpc({ callers: ["do"] })
+  async onSubagentComplete(payload: {
+    runId: string;
+    channelId?: string;
+    report?: unknown;
+    outcome?: "success" | "failed";
+  }): Promise<void> {
+    const run = this.subagentRuns.get(payload.runId);
+    if (!run) return; // unknown / already torn down — idempotent
+    if (this.rpcCallerId !== run.childEntityId) {
+      throw new Error(
+        `onSubagentComplete: refusing caller ${this.rpcCallerId ?? "unknown"} — not the owning subagent for ${payload.runId}`
+      );
+    }
+    if (run.status !== "running") return; // already terminal
+    const outcome: "completed" | "failed" = payload.outcome === "failed" ? "failed" : "completed";
+    const reportText =
+      typeof payload.report === "string" ? payload.report : JSON.stringify(payload.report ?? null);
+    this.subagentRuns.touch(payload.runId, Date.now());
+    await this.settleSubagentTerminal(run, outcome, reportText, run.merge ?? undefined);
+  }
+
+  /** Settle a run's PARKED spawn invocation on the parent trajectory AND publish
+   *  the terminal subagent card to the parent's home channel. `completed` is
+   *  success-only; every other outcome is an error. */
+  private async settleSubagentTerminal(
+    run: SubagentRunRow,
+    outcome: "completed" | "failed" | "cancelled" | "abandoned",
+    text: string,
+    merge?: SubagentRunMerge
+  ): Promise<void> {
+    this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
+    await this.driver.deliverEffectOutcome(
+      ids.invocationEffect(run.runId),
+      {
+        kind: "tool",
+        result: text,
+        isError: outcome !== "completed",
+        ...(outcome !== "completed" ? { reason: text } : {}),
+      },
+      { channelId: run.parentChannelId }
+    );
+    await this.publishSubagentTerminal(run, outcome, text, merge);
+  }
+
+  private mergeStatusFromResult(result: unknown): SubagentRunMerge {
+    if (result && typeof result === "object") {
+      const r = result as Record<string, unknown>;
+      const conflicts = r["conflicts"] ?? r["conflicted"] ?? r["conflictedRepos"];
+      if (
+        r["conflicted"] === true ||
+        (Array.isArray(conflicts) && conflicts.length > 0) ||
+        (Array.isArray((r["results"] as unknown[]) ?? undefined) &&
+          (r["results"] as Array<{ conflicted?: boolean }>).some((x) => x?.conflicted === true))
+      ) {
+        return "conflicted";
+      }
+    }
+    return "merged";
+  }
+
+  private async publishSubagentStarted(run: SubagentRunRow): Promise<void> {
+    const participantId =
+      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
+    const actor = this.cardActor(run.parentChannelId, participantId);
+    const event = {
+      kind: "invocation.started",
+      actor,
+      causality: { invocationId: run.runId as never },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "spawn_subagent",
+        invocationType: "agent",
+        userVisible: true,
+        summary: run.label,
+        subagent: {
+          runId: run.runId,
+          mode: run.mode,
+          taskChannelId: run.taskChannelId,
+          contextId: run.childContextId,
+          label: run.label,
+        },
+      },
+      createdAt: new Date().toISOString(),
+    } as unknown as AgenticEvent;
+    await this.createChannelClient(run.parentChannelId)
+      .publishAgenticEvent(participantId, event, {
+        idempotencyKey: `subagent-started:${run.runId}`,
+        senderMetadata: actor.metadata,
+      })
+      .catch((err) => {
+        console.error(`[AgentVessel] subagent started emit failed for ${run.runId}:`, err);
+      });
+  }
+
+  private async publishSubagentTerminal(
+    run: SubagentRunRow,
+    outcome: "completed" | "failed" | "cancelled" | "abandoned",
+    text: string,
+    merge?: SubagentRunMerge
+  ): Promise<void> {
+    const kindByOutcome = {
+      completed: "invocation.completed",
+      failed: "invocation.failed",
+      cancelled: "invocation.cancelled",
+      abandoned: "invocation.abandoned",
+    } as const;
+    const terminalOutcomeByOutcome = {
+      completed: "success",
+      failed: "tool_error",
+      cancelled: "cancelled",
+      abandoned: "abandoned",
+    } as const;
+    const participantId =
+      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
+    const actor = this.cardActor(run.parentChannelId, participantId);
+    const subagent = merge ? { merge } : {};
+    const payload: Record<string, unknown> =
+      outcome === "completed"
+        ? {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            terminalOutcome: "success",
+            summary: text,
+            subagent,
+          }
+        : {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            reason: text,
+            terminalOutcome: terminalOutcomeByOutcome[outcome],
+            subagent,
+          };
+    const event = {
+      kind: kindByOutcome[outcome],
+      actor,
+      causality: { invocationId: run.runId as never },
+      payload,
+      createdAt: new Date().toISOString(),
+    } as unknown as AgenticEvent;
+    await this.createChannelClient(run.parentChannelId)
+      .publishAgenticEvent(participantId, event, {
+        idempotencyKey: `subagent-terminal:${run.runId}`,
+        senderMetadata: actor.metadata,
+      })
+      .catch((err) => {
+        console.error(`[AgentVessel] subagent terminal emit failed for ${run.runId}:`, err);
+      });
+  }
+
+  /** Tear down a run: drop the parent's task subscription + wake cursor and
+   *  recursively destroy the child's lifecycle context subtree. */
+  private async teardownRun(run: SubagentRunRow): Promise<void> {
+    try {
+      await this.unsubscribeChannel(run.taskChannelId);
+    } catch {
+      /* already gone */
+    }
+    this.subagentRuns.deleteWakeCursor(run.taskChannelId);
+    try {
+      await this.rpc.call("main", "runtime.destroyContext", [
+        { contextId: run.childContextId, recursive: true },
+      ]);
+    } catch (err) {
+      console.error(`[AgentVessel] destroyContext for subagent ${run.runId} failed:`, err);
+    }
+    this.subagentRuns.delete(run.runId);
+  }
+
+  private nextSubagentTtlWakeAt(): number | null {
+    const ttl = this.getSubagentTtlMs();
+    let earliest: number | null = null;
+    for (const run of this.subagentRuns.listByStatus("running")) {
+      const due = run.lastActivityAt + ttl;
+      if (earliest === null || due < earliest) earliest = due;
+    }
+    return earliest;
+  }
+
+  /** Supervisor TTL sweep: any run idle past the TTL is closed as
+   *  `invocation.abandoned` and torn down. Rides the agent alarm. */
+  private async sweepAbandonedSubagents(now: number): Promise<void> {
+    const ttl = this.getSubagentTtlMs();
+    for (const run of this.subagentRuns.listByStatus("running")) {
+      if (now - run.lastActivityAt <= ttl) continue;
+      await this.settleSubagentTerminal(
+        run,
+        "abandoned",
+        `subagent idle > ${ttl}ms`,
+        run.merge ?? undefined
+      ).catch((err) => {
+        console.error(`[AgentVessel] abandoned settle for subagent ${run.runId} failed:`, err);
+      });
+      await this.teardownRun(run).catch(() => undefined);
+    }
+  }
+
+  // ── Wake discipline (turn-final buffering / manual) ─────────────────────────
+
+  private extractMessageText(agentic: AgenticEvent | null): string {
+    const blocks =
+      (agentic as { payload?: { blocks?: unknown[] } } | null)?.payload?.blocks ?? [];
+    return blocks
+      .map((block) =>
+        block &&
+        typeof block === "object" &&
+        typeof (block as { content?: unknown }).content === "string"
+          ? (block as { content: string }).content
+          : ""
+      )
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  private eventAddressesSelf(
+    channelId: string,
+    payload: {
+      mentions?: string[];
+      to?: Array<{ kind?: string; participantId?: string }>;
+    }
+  ): boolean {
+    const selfPid = this.subscriptions.getParticipantId(channelId) ?? this.participantId();
+    if (Array.isArray(payload.mentions) && payload.mentions.includes(selfPid)) return true;
+    if (Array.isArray(payload.to)) {
+      for (const target of payload.to) {
+        if (target?.kind === "all") return true;
+        if (target?.participantId === selfPid) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Resolve whether an inbound envelope wakes the loop NOW, per the channel's
+   * wakePolicy. Returns true when the event was HANDLED here (buffered, or drove a
+   * turn-final wake) so the caller returns; false to fall through to the default
+   * every-envelope path (used for say-flagged / addressed messages). Buffering is
+   * log-derived (a durable wake cursor in SQLite), never an in-memory queue — so
+   * it survives DO hibernation.
+   */
+  private async resolveWake(
+    channelId: string,
+    event: ChannelEvent,
+    wakePolicy: "turn-final" | "manual"
+  ): Promise<boolean> {
+    if (wakePolicy === "manual") {
+      // Never auto-wake; the supervisor reads via the read_subagent tool.
+      return true;
+    }
+    // turn-final
+    if (event.senderId === this.participantId()) return true; // our own traffic never wakes us
+    const agentic = event.payload as AgenticEvent | null;
+    const kind = (agentic as { kind?: string } | null)?.kind ?? "";
+    if (kind === "message.completed") {
+      const payload =
+        ((agentic as AgenticEvent).payload as {
+          saliency?: string;
+          mentions?: string[];
+          to?: Array<{ kind?: string; participantId?: string }>;
+        }) ?? {};
+      if (payload.saliency === "say" || this.eventAddressesSelf(channelId, payload)) {
+        // Explicit surface: advance the cursor past it (so a subsequent
+        // turn.closed fold doesn't double-count it) and take the normal path.
+        this.subagentRuns.setWakeCursor(
+          channelId,
+          Math.max(this.subagentRuns.getWakeCursor(channelId), event.id ?? 0)
+        );
+        return false;
+      }
+      return true; // ordinary child turn output → buffer (the log is the buffer)
+    }
+    if (kind === "turn.closed") {
+      await this.wakeTurnFinal(channelId);
+      return true;
+    }
+    return true; // invocation.* / presence / … buffer
+  }
+
+  /** Fold the child's buffered task-channel messages (since the wake cursor) into
+   *  a single prompt and drive one parent turn. Log-derived + replay-safe. */
+  private async wakeTurnFinal(channelId: string): Promise<void> {
+    const cursor = this.subagentRuns.getWakeCursor(channelId);
+    let envelope: ChannelReplayEnvelope;
+    try {
+      envelope = await this.createChannelClient(channelId).getReplayAfter(cursor);
+    } catch {
+      return;
+    }
+    let maxId = cursor;
+    const parts: string[] = [];
+    let senderRef: ParticipantRef | undefined;
+    let lastMessageId: string | undefined;
+    for (const event of envelope.logEvents) {
+      maxId = Math.max(maxId, event.id ?? 0);
+      if (event.senderId === this.participantId()) continue;
+      if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) continue;
+      const agentic = event.payload as AgenticEvent | null;
+      if ((agentic as { kind?: string } | null)?.kind !== "message.completed") continue;
+      const text = this.extractMessageText(agentic);
+      if (text) parts.push(text);
+      senderRef = (agentic as AgenticEvent).actor;
+      lastMessageId =
+        ((agentic as AgenticEvent).causality?.messageId as string | undefined) ?? event.messageId;
+    }
+    this.subagentRuns.setWakeCursor(channelId, maxId);
+    if (parts.length === 0 || !senderRef) return;
+    const run = this.subagentRuns.getByTaskChannel(channelId);
+    if (run) this.subagentRuns.touch(run.runId, Date.now());
+    await this.ensurePromptArtifacts(channelId);
+    await this.driver.handleIncoming(channelId, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId,
+        source: { envelopeId: `turn-final:${channelId}:${maxId}` },
+        ...(lastMessageId ? { sourceMessageId: lastMessageId } : {}),
+        content: parts.join("\n\n"),
+        senderRef,
+      },
+    });
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────────

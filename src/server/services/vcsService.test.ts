@@ -36,8 +36,9 @@ describe("vcsService", () => {
   describe("status / write authorization", () => {
     it("rejects explicit foreign heads for context-bound callers", async () => {
       // The head-write gate is shared by every write method; exercise it
-      // through `merge`. In the new model merge(repoPath, head?) pulls main INTO
-      // the named ctx head, so the `head` arg is the head being written.
+      // through `merge`. merge({ source, head? }) pulls the source INTO the
+      // named ctx head, so `head` is the head being written — a foreign one is
+      // rejected before the source is even resolved.
       const mergeHeads = vi.fn();
       const service = createVcsService({
         workspaceVcs: { mergeHeads } as never,
@@ -45,7 +46,7 @@ describe("vcsService", () => {
       });
 
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source", "ctx:ctx-2"])
+        service.handler({ caller: panelCaller() }, "merge", [{ source: "main", head: "ctx:ctx-2" }])
       ).rejects.toThrow("Callers may only write their own context head (ctx:ctx-1)");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -124,7 +125,11 @@ describe("vcsService", () => {
       expect(result).toEqual({ head: "main", stateHash: "state:mainhead" });
     });
 
-    it("allows context callers to inspect an explicit (foreign) head", async () => {
+    it("allows context callers to inspect a foreign head they own/forked", async () => {
+      // WS-2 tightened cross-context reads to DENY-not-prompt: a context caller
+      // may inspect a FOREIGN ctx head ONLY when the runtime ownership/lineage
+      // registry authorizes it (a child it owns or a fork off it). Here ctx-1
+      // owns/forked ctx-2, so the explicit-head read is allowed.
       const statusHead = vi.fn(async () => ({
         stateHash: "state:foreign",
         dirty: false,
@@ -135,6 +140,7 @@ describe("vcsService", () => {
       const service = createVcsService({
         workspaceVcs: { statusHead } as never,
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [{ contextId: "ctx-2" }] }),
       });
 
       const result = await service.handler({ caller: panelCaller() }, "status", [
@@ -144,6 +150,24 @@ describe("vcsService", () => {
 
       expect(statusHead).toHaveBeenCalledWith("ctx:ctx-2", "panels/source");
       expect(result).toMatchObject({ stateHash: "state:foreign", dirty: false });
+    });
+
+    it("denies context callers inspecting an unowned foreign head", async () => {
+      // The dual of the test above: without an ownership/lineage grant, a
+      // foreign ctx head read is DENIED (thrown, never prompted). This is the
+      // intended tighter WS-2 rule — the old permissive "any explicit head is
+      // inspectable" allowance is gone.
+      const statusHead = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { statusHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [] }),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "status", ["panels/source", "ctx:ctx-2"])
+      ).rejects.toThrow("is not owned or forked");
+      expect(statusHead).not.toHaveBeenCalled();
     });
 
     it("rejects an invalid repo path arg to status", async () => {
@@ -223,9 +247,10 @@ describe("vcsService", () => {
   });
 
   describe("merge authorization", () => {
-    // New model: `merge(repoPath, head?)` RECONCILES — it pulls `main` INTO the
-    // named ctx head (a merge commit), it never merges INTO main. So the `head`
-    // arg is the head being written; main as a target is rejected outright.
+    // New model: `merge({ source, repoPaths?, head? })` RECONCILES — it pulls a
+    // SOURCE (`main` or a context you own/forked) INTO the target ctx head (a
+    // merge commit per repo), never INTO main. `head` is the head being
+    // written; main as a target is rejected outright.
     function mergeService(opts: { entityCache?: EntityCache } = {}) {
       const mergeHeads = vi.fn(async () => ({
         status: "merged" as const,
@@ -246,10 +271,10 @@ describe("vcsService", () => {
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
-      // A privileged-looking explicit `main` target: the write-head gate first
+      // A panel naming an explicit `main` target: the write-head gate first
       // confines the panel to its own ctx head, so it never reaches main.
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source", "main"])
+        service.handler({ caller: panelCaller() }, "merge", [{ source: "main", head: "main" }])
       ).rejects.toThrow("Callers may only write their own context head (ctx:ctx-1)");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -258,7 +283,7 @@ describe("vcsService", () => {
       const { service, mergeHeads } = mergeService({ entityCache: new EntityCache() });
 
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source"])
+        service.handler({ caller: panelCaller() }, "merge", [{ source: "main" }])
       ).rejects.toThrow("vcs head writes require a context");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -269,7 +294,9 @@ describe("vcsService", () => {
       });
 
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source", "ctx:ctx-other"])
+        service.handler({ caller: panelCaller() }, "merge", [
+          { source: "main", head: "ctx:ctx-other" },
+        ])
       ).rejects.toThrow("Callers may only write their own context head (ctx:ctx-1)");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -279,12 +306,11 @@ describe("vcsService", () => {
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
-      // repoPath only → the head defaults to the caller's own ctx head.
+      // Omit head → defaults to the caller's own ctx head; source is main.
+      // merge returns one result per repo.
       const result = (await service.handler({ caller: panelCaller() }, "merge", [
-        "panels/source",
-      ])) as {
-        status: string;
-      };
+        { source: "main", repoPaths: ["panels/source"] },
+      ])) as Array<{ repoPath: string; status: string }>;
 
       // mergeHeads(targetCtxHead, "main", { actor, repoPath }) — main pulled INTO ctx.
       expect(mergeHeads).toHaveBeenCalledWith(
@@ -295,7 +321,7 @@ describe("vcsService", () => {
           repoPath: "panels/source",
         })
       );
-      expect(result.status).toBe("merged");
+      expect(result[0]!.status).toBe("merged");
     });
 
     it("does NOT pass a main-advance context into merge (a ctx reconcile never advances main)", async () => {
@@ -316,7 +342,9 @@ describe("vcsService", () => {
         },
       });
 
-      await service.handler({ caller: panelCaller() }, "merge", ["panels/source"]);
+      await service.handler({ caller: panelCaller() }, "merge", [
+        { source: "main", repoPaths: ["panels/source"] },
+      ]);
 
       const [, , mergeOpts] = mergeHeads.mock.calls[0] as unknown as [
         string,
@@ -333,16 +361,15 @@ describe("vcsService", () => {
       const caller = createVerifiedCaller("shell:dev_cli", "shell");
 
       const result = (await service.handler({ caller }, "merge", [
-        "panels/source",
-        "ctx:ctx-1",
-      ])) as { status: string };
+        { source: "main", head: "ctx:ctx-1", repoPaths: ["panels/source"] },
+      ])) as Array<{ repoPath: string; status: string }>;
 
       expect(mergeHeads).toHaveBeenCalledWith(
         "ctx:ctx-1",
         "main",
         expect.objectContaining({ repoPath: "panels/source" })
       );
-      expect(result.status).toBe("merged");
+      expect(result[0]!.status).toBe("merged");
     });
   });
 

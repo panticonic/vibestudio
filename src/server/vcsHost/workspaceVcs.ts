@@ -1097,19 +1097,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /**
-   * Fork a context's FILE state for {@link runtime.cloneContext}: snapshot the
-   * SOURCE's full working view (every edited repo at its committed ctx head
-   * COMPOSED WITH its uncommitted edits; unedited repos at the pinned base) and
-   * pin it as the TARGET context's base. The target materializes the source's
-   * exact files and then diverges with its own ctx heads.
+   * Fork a context's FILE state, LINEAGE-TRUE, for {@link runtime.cloneContext}
+   * and subagent spawns — a thin wrapper over the gad-store DO `vcsForkContext`.
    *
-   * Trade-off (intended): the target reads the snapshot as a CLEAN base — it does
-   * NOT inherit the source's per-repo ctx-head lineage or ahead/behind/uncommitted
-   * status. The file CONTENT is identical; the VCS history is flattened to a pin.
+   * The DO pins the child to the parent's inherited base, shares the parent's
+   * committed state node per touched repo (so `getMergeBase` finds it for free),
+   * copies the working (uncommitted) edit rows onto the child head, and records
+   * fork provenance. Unlike the former snapshot-and-pin flatten, the child
+   * INHERITS the source's per-repo ctx-head lineage: uncommitted stays
+   * uncommitted, and a later merge back to the parent has a real merge-base.
    */
   async forkContext(sourceContextId: string, targetContextId: string): Promise<void> {
-    const snapshot = await this.resolveContextView(sourceContextId);
-    await this.pinContext(targetContextId, snapshot);
+    await this.gad().call("vcsForkContext", { sourceContextId, targetContextId });
   }
 
   /** The context's pinned base view state, or null if never pinned. */
@@ -1863,6 +1862,54 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       });
       return await this.followWorkingAdvance(logId, input.head, repoPath, input.actor, result);
     });
+  }
+
+  /**
+   * PICK — the forward dual of {@link revert}: land a selected change onto a
+   * `ctx:*` head as UNCOMMITTED working edits (never a head advance). A `commit`
+   * pick 3-way-applies a commit's patch; a `paths` pick injects another
+   * context's working content at repo-relative paths. Computed ENTIRELY in the
+   * gad-store DO (`vcsPick`), which tags the resulting rows with `pickedFrom`
+   * provenance; this host side follows with the disk projection and the
+   * `working-advanced` event, exactly like {@link revert}.
+   */
+  async pick(input: {
+    head: string;
+    repoPath: string;
+    actor: { id: string; kind: string };
+    pick:
+      | { kind: "commit"; eventId: string }
+      | { kind: "paths"; sourceContextId: string; paths: string[] };
+  }): Promise<RecordEditResult> {
+    const repoPath = input.repoPath;
+    const logId = this.repoLogId(repoPath);
+    const sk = this.stateKey(logId, input.head);
+    return this.locked(sk, async () => {
+      const result = await this.gad().call<AppliedEditOpsResult>("vcsPick", {
+        logId,
+        head: input.head,
+        actor: vcsLogActor(input.actor),
+        pick: input.pick,
+      });
+      return await this.followWorkingAdvance(logId, input.head, repoPath, input.actor, result);
+    });
+  }
+
+  /**
+   * Context diff — the added/removed/changed files a context's branch
+   * introduced relative to a baseline: its `fork-base` (the pinned state it
+   * inherited when forked) or the current workspace `main`. A pure content-store
+   * projection: resolve the context's composed working view and the baseline
+   * state, then {@link diffStates}. The DO is consulted only for the view/base
+   * resolution.
+   */
+  async contextDiff(contextId: string, against: "fork-base" | "main"): Promise<TreeDiff> {
+    const right = await this.resolveContextView(contextId);
+    const left =
+      against === "main"
+        ? (await this.workspaceView()).stateHash
+        : ((await this.contextBaseView(contextId)) ?? EMPTY_STATE_HASH);
+    return this.diffStates(left, right);
   }
 
   /**

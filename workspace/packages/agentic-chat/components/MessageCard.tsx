@@ -1,8 +1,9 @@
 import React, { useCallback, useState } from "react";
-import { Badge, Box, Button, Card, Code, Flex, IconButton, Text } from "@radix-ui/themes";
-import { CopyIcon, CheckIcon, ChatBubbleIcon, ReloadIcon, Cross2Icon } from "@radix-ui/react-icons";
+import { Badge, Box, Button, Card, Code, Dialog, DropdownMenu, Flex, IconButton, Text, TextArea } from "@radix-ui/themes";
+import { CopyIcon, CheckIcon, ChatBubbleIcon, ReloadIcon, Cross2Icon, DotsHorizontalIcon } from "@radix-ui/react-icons";
 import { CONTENT_TYPE_INLINE_UI, isClientParticipantType } from "@workspace/pubsub";
 import type { Participant } from "@workspace/pubsub";
+import { useOptionalChatContext } from "../context/ChatContext";
 import { TypingIndicator } from "./TypingIndicator";
 import { MessageContent } from "./MessageContent";
 import { ImageGallery } from "./ImageGallery";
@@ -123,6 +124,36 @@ export const MessageCard = React.memo(function MessageCard({
       setResumeScheduleState("failed");
     }
   }, [chat, msg.diagnostic, msg.senderId]);
+
+  // Fork/edit affordances read fork state + the outbox editor from context.
+  // Read optionally so the card still renders provider-less (tests, standalone
+  // transcript views); the affordances simply stay hidden without a provider.
+  const chatContext = useOptionalChatContext();
+  const forkState = chatContext?.forkState;
+  const editPendingMessage = chatContext?.editPendingMessage;
+  // Edit dialog: "outbox" edits the unread message in place; "fork" seeds an
+  // edit-fork (own read messages) or a steer-fork (agent messages).
+  const [editMode, setEditMode] = useState<null | "outbox" | "fork">(null);
+  const [editText, setEditText] = useState("");
+  const openEdit = useCallback((mode: "outbox" | "fork") => {
+    setEditText(msg.content);
+    setEditMode(mode);
+  }, [msg.content]);
+  const submitEdit = useCallback(async () => {
+    const text = editText;
+    const mode = editMode;
+    setEditMode(null);
+    if (!text.trim()) return;
+    try {
+      if (mode === "outbox") {
+        await editPendingMessage?.(msg.id, text);
+      } else if (mode === "fork") {
+        await forkState?.actions.editAndForkMessage(msg, text);
+      }
+    } catch (err) {
+      console.error("[MessageCard] edit failed:", err);
+    }
+  }, [editText, editMode, editPendingMessage, forkState, msg]);
 
   // Handle inline_ui messages
   if (msg.contentType === CONTENT_TYPE_INLINE_UI) {
@@ -330,6 +361,11 @@ export const MessageCard = React.memo(function MessageCard({
     );
   }
 
+  // Inline "conversation forked" annotation row (from ChannelViewState.forks).
+  if (msg.contentType === "fork" && msg.fork) {
+    return <ForkRow key={key} fork={msg.fork} />;
+  }
+
   const custom = msg.contentType === "custom" ? msg.custom : undefined;
   if (custom && custom.displayMode !== "inline") {
     return (
@@ -355,6 +391,14 @@ export const MessageCard = React.memo(function MessageCard({
   const isEdited = msg.revision !== undefined || msg.editedAt !== undefined;
   // Show a delivery badge for the user's own non-retracted real messages.
   const showAckBadge = isSelfAuthored && !msg.retracted && !hasError && Boolean(msg.receipts);
+  // An unread own message keeps the in-place outbox edit; a READ own message or
+  // an agent message can only be forked (the `message.edited` reducer drops
+  // edits once a recipient has read the message).
+  const isUnreadOutbox =
+    isSelfAuthored && (!msg.receipts || msg.receipts.aggregate === "pending");
+  // Fork/edit menu available only once the message has a durable seq (fork point).
+  const canFork = Boolean(forkState) && msg.seq !== undefined && !isStreaming && !msg.pending;
+  const showForkMenu = canFork && msg.kind === "message";
 
   // A retracted message collapses to a slim tombstone — no content, actions,
   // or badge. The author canceled it before any recipient read it.
@@ -455,8 +499,41 @@ export const MessageCard = React.memo(function MessageCard({
                   <ChatBubbleIcon />
                 </IconButton>
               )}
+              {showForkMenu && (
+                <DropdownMenu.Root>
+                  <DropdownMenu.Trigger>
+                    <IconButton
+                      className="copy-button"
+                      size="1"
+                      variant="ghost"
+                      color="gray"
+                      title="Message actions"
+                      aria-label="Message actions"
+                    >
+                      <DotsHorizontalIcon />
+                    </IconButton>
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Content align="end">
+                    <DropdownMenu.Item onSelect={() => void forkState?.actions.forkFromMessage(msg)}>
+                      Fork from here
+                    </DropdownMenu.Item>
+                    {isUnreadOutbox ? (
+                      <DropdownMenu.Item onSelect={() => openEdit("outbox")}>Edit</DropdownMenu.Item>
+                    ) : (
+                      <DropdownMenu.Item onSelect={() => openEdit("fork")}>
+                        {isSelfAuthored ? "Edit & fork" : "Edit & fork (steer)"}
+                      </DropdownMenu.Item>
+                    )}
+                  </DropdownMenu.Content>
+                </DropdownMenu.Root>
+              )}
             </Flex>
           </Flex>
+          {msg.replaces && (
+            <Text size="1" color="gray" className="message-edited-marker">
+              ⑂ substituted this turn
+            </Text>
+          )}
           {replyContext && (
             <Box
               asChild
@@ -506,6 +583,79 @@ export const MessageCard = React.memo(function MessageCard({
           )}
         </Flex>
       </Card>
+      <Dialog.Root open={editMode !== null} onOpenChange={(open) => !open && setEditMode(null)}>
+        <Dialog.Content maxWidth="560px">
+          <Dialog.Title>
+            {editMode === "outbox" ? "Edit message" : "Edit & fork from here"}
+          </Dialog.Title>
+          <Dialog.Description size="1" color="gray">
+            {editMode === "outbox"
+              ? "Rewrite this unread message in place."
+              : "Branches a new conversation seeded with your edited text; the original stays intact."}
+          </Dialog.Description>
+          <Box mt="3">
+            <TextArea
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              rows={5}
+              autoFocus
+            />
+          </Box>
+          <Flex justify="end" gap="2" mt="3">
+            <Dialog.Close>
+              <Button variant="soft" color="gray">
+                Cancel
+              </Button>
+            </Dialog.Close>
+            <Button onClick={() => void submitEdit()}>
+              {editMode === "outbox" ? "Save" : "Edit & fork"}
+            </Button>
+          </Flex>
+        </Dialog.Content>
+      </Dialog.Root>
     </Box>
   );
 });
+
+/** Inline "conversation forked" annotation row + a Switch affordance. */
+function ForkRow({ fork }: { fork: NonNullable<ChatMessage["fork"]> }) {
+  const forkState = useOptionalChatContext()?.forkState;
+  if (fork.archived) return null;
+  const actorName = fork.actor.displayName ?? fork.actor.id;
+  return (
+    <Box className="message-row message-row-system">
+      <Card className="message-card message-card-lifecycle">
+        <Flex align="center" gap="2" wrap="wrap">
+          <Text size="1" aria-hidden="true">
+            ⑂
+          </Text>
+          <Text size="1" color="gray" style={{ minWidth: 0 }}>
+            {actorName} forked this conversation from message {fork.forkPointId}
+            {fork.label ? ` — ${fork.label}` : ""}
+          </Text>
+          <Button
+            size="1"
+            variant="ghost"
+            onClick={() => forkState?.actions.switchTo(fork.forkedChannelId, fork.forkedContextId)}
+          >
+            Switch
+          </Button>
+          <Button
+            size="1"
+            variant="ghost"
+            color="gray"
+            onClick={() =>
+              forkState?.actions.reviewContext({
+                kind: "fork",
+                contextId: fork.forkedContextId,
+                label: fork.label || "Fork",
+              })
+            }
+          >
+            Review &amp; pick
+          </Button>
+        </Flex>
+      </Card>
+    </Box>
+  );
+}

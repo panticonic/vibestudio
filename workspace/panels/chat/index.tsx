@@ -6,13 +6,13 @@
  * directly — no cross-context navigation needed.
  */
 
-import { contextId, rpc, panel, buildPanelLink, createDurableObjectServiceClient } from "@workspace/runtime";
+import { contextId, rpc, panel, buildPanelLink, createDurableObjectServiceClient, openPanel, notifications } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Flex, Text, Theme } from "@radix-ui/themes";
-import { AgenticChat, ErrorBoundary } from "@workspace/agentic-chat";
-import type { ConnectionConfig, AgenticChatActions, ToolProvider } from "@workspace/agentic-chat";
+import { AgenticChat, ErrorBoundary, ReviewAndPickSurface } from "@workspace/agentic-chat";
+import type { ConnectionConfig, AgenticChatActions, ToolProvider, ForkNavHandlers, ReviewTarget } from "@workspace/agentic-chat";
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
@@ -175,6 +175,8 @@ interface ChatStateArgs {
   actionBarProps?: Record<string, unknown> | null;
   /** Preferred max height for actionBarFile */
   actionBarMaxHeight?: number | null;
+  /** Per-fork read cursors (channelId → last-seen head seq) for live badges. */
+  forkCursors?: Record<string, number>;
 }
 
 /** Unsubscribe a DO from a channel via unified RPC. */
@@ -643,6 +645,58 @@ export default function ChatPanel() {
     onReloadPanel: handleReloadPanel,
   }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, workspaceDefaultAgentConfig, connectedModelRefs, handleFocusPanel, handleReloadPanel]);
 
+  // --- Fork navigation + review overlay ---------------------------------
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
+
+  // In-place fork switch: rebind the panel's channel + context and let the
+  // useChatCore bootstrap effect (keyed on channelName/contextId) reconnect.
+  const handleForkSwitch = useCallback((forkChannelId: string, forkContextId: string) => {
+    initialPromptCaptured.current = undefined;
+    rehydrationCheckedRef.current = false;
+    void panel.stateArgs.set({ channelName: forkChannelId, contextId: forkContextId });
+  }, []);
+
+  // Side-by-side: open the fork in a fresh chat panel (news-panel shape).
+  const handleOpenForkPanel = useCallback((forkChannelId: string, forkContextId: string) => {
+    void openPanel("panels/chat", {
+      focus: true,
+      stateArgs: { channelName: forkChannelId, contextId: forkContextId },
+    });
+  }, []);
+
+  const handleReviewContext = useCallback((target: ReviewTarget) => {
+    setReviewTarget(target);
+  }, []);
+
+  // Shell toast when a fork the user didn't initiate lands while unfocused.
+  const handleExternalFork = useCallback(
+    (fork: { forkedChannelId: string; forkedContextId: string; actorName: string; forkPointId: number }) => {
+      void notifications.show({
+        type: "info",
+        title: "Conversation forked",
+        message: `${fork.actorName} forked from message ${fork.forkPointId}`,
+        actions: [
+          {
+            label: "Switch",
+            variant: "solid",
+            onClick: () => handleForkSwitch(fork.forkedChannelId, fork.forkedContextId),
+          },
+        ],
+      });
+    },
+    [handleForkSwitch]
+  );
+
+  const forkNav: ForkNavHandlers = useMemo(
+    () => ({
+      switchTo: handleForkSwitch,
+      openInNewPanel: handleOpenForkPanel,
+      reviewContext: handleReviewContext,
+      onExternalFork: handleExternalFork,
+    }),
+    [handleForkSwitch, handleOpenForkPanel, handleReviewContext, handleExternalFork]
+  );
+
   // Sandbox config — provides RPC and import loading to agentic-chat.
   const sandboxConfig = useMemo(() => createPanelSandboxConfig(rpc), []);
 
@@ -693,12 +747,24 @@ export default function ChatPanel() {
         installedAgents={installedAgents}
         initialPrompt={initialPromptCaptured.current}
         forceInitialPrompt={stateArgs.forceInitialPrompt}
+        forkNav={forkNav}
         sandbox={sandboxConfig}
         initialActionBarFile={stateArgs.actionBarFile ?? undefined}
         initialActionBarProps={stateArgs.actionBarProps ?? undefined}
         initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
         onActionBarFileChange={handleActionBarFileChange}
       />
+      {reviewTarget && (
+        <Theme appearance={theme} {...appTheme}>
+          <ReviewAndPickSurface
+            rpc={rpc}
+            target={reviewTarget}
+            appearance={theme}
+            open
+            onClose={() => setReviewTarget(null)}
+          />
+        </Theme>
+      )}
     </>
   );
 }

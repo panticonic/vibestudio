@@ -111,14 +111,17 @@ export interface PublishVcs {
    */
   pushStatus(repoPaths: string[]): Promise<PublishRepoStatus[]>;
   /**
-   * Reconcile divergence on a repo: pull `main` into the caller's context head,
-   * producing a merge commit. `repoPath` is REQUIRED and comes FIRST (per-repo
-   * VCS); `head` is positional-optional (omit to default to the caller's own ctx
-   * head — the vault head, which is what Publish wants). Signature matches the
-   * generated `VcsClient.merge(repoPath, head?)` so the real client structurally
-   * satisfies this surface (no cast).
+   * Reconcile divergence: pull a SOURCE (`"main"` for Publish) into the caller's
+   * context head, producing a merge commit per repo. `repoPaths` scopes it to
+   * the vault repo (omit to reconcile every touched repo). Signature matches the
+   * generated `VcsClient.merge({ source, repoPaths? })` so the real client
+   * structurally satisfies this surface (no cast); Publish reads the single
+   * vault-repo element of the returned array.
    */
-  merge(repoPath: string, head?: string): Promise<PublishMergeResult>;
+  merge(input: {
+    source: "main" | { contextId: string };
+    repoPaths?: string[];
+  }): Promise<PublishMergeResult[]>;
   /**
    * Build-gated, fast-forward-only push of the caller's ctx head into each
    * repo's `main`. For Spectrolite this is always the single vault repo. Returns
@@ -375,10 +378,10 @@ export class PublishController {
       // retry, bounded. A `build-failed` push (rare for a content-only vault repo,
       // but handled) advanced no head — surface the report and stop.
       for (let attempt = 0; attempt < 3; attempt++) {
-        // Pull main into the vault's own ctx head (repo-first signature; head
-        // omitted = the caller's vault head). Reconciles divergence before push.
-        const pull = await this.vcs.merge(this.vaultRepo);
-        if (pull.status === "conflicted") {
+        // Pull main into the vault's own ctx head (scoped to the vault repo).
+        // Reconciles divergence before push; read the single vault-repo element.
+        const [pull] = await this.vcs.merge({ source: "main", repoPaths: [this.vaultRepo] });
+        if (pull?.status === "conflicted") {
           const pending = await this.vcs.pendingMerge(this.vaultRepo);
           this.set({ pending });
           return { status: "needs-resolve" };

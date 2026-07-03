@@ -19,7 +19,7 @@ function fakeVcs(overrides: Partial<PublishVcs> = {}): PublishVcs {
         files: [],
       }))
     ),
-    merge: vi.fn(async () => ({ status: "merged" as const, conflicts: [] })),
+    merge: vi.fn(async () => [{ repoPath: VAULT_REPO, status: "merged" as const, conflicts: [] }]),
     push: vi.fn(
       async (): Promise<PublishPushResult> => ({
         status: "pushed",
@@ -155,7 +155,7 @@ describe("PublishController", () => {
     const vcs = fakeVcs();
     const c = makeController(vcs);
     const outcome = await c.publish();
-    expect(vcs.merge).toHaveBeenCalledWith(VAULT_REPO);
+    expect(vcs.merge).toHaveBeenCalledWith({ source: "main", repoPaths: [VAULT_REPO] });
     expect(vcs.push).toHaveBeenCalledWith({ repoPaths: [VAULT_REPO] });
     expect(outcome).toEqual({ status: "published" });
     expect(c.getSnapshot().publishing).toBe(false);
@@ -219,7 +219,7 @@ describe("PublishController", () => {
 
     expect(outcome).toEqual({ status: "published" });
     expect(commitWorkingCopy).toHaveBeenCalledWith("Resolve merge");
-    expect(vcs.merge).toHaveBeenCalledWith(VAULT_REPO);
+    expect(vcs.merge).toHaveBeenCalledWith({ source: "main", repoPaths: [VAULT_REPO] });
     expect(vcs.push).toHaveBeenCalledWith({ repoPaths: [VAULT_REPO] });
     expect(c.getSnapshot().pending).toBeNull();
   });
@@ -265,10 +265,13 @@ describe("PublishController", () => {
 
   it("a conflicting pull surfaces a pending merge in the panel's own head — push is NOT called", async () => {
     const vcs = fakeVcs({
-      merge: vi.fn(async () => ({
-        status: "conflicted" as const,
-        conflicts: [{ path: "A.mdx", kind: "content" }],
-      })),
+      merge: vi.fn(async () => [
+        {
+          repoPath: VAULT_REPO,
+          status: "conflicted" as const,
+          conflicts: [{ path: "A.mdx", kind: "content" }],
+        },
+      ]),
       pendingMerge: vi.fn(async () => ({
         theirsHead: "main",
         conflicts: [{ path: "A.mdx", kind: "content" }],
@@ -284,7 +287,9 @@ describe("PublishController", () => {
 
   it("up-to-date push reports up-to-date", async () => {
     const vcs = fakeVcs({
-      merge: vi.fn(async () => ({ status: "up-to-date" as const, conflicts: [] })),
+      merge: vi.fn(async () => [
+        { repoPath: VAULT_REPO, status: "up-to-date" as const, conflicts: [] },
+      ]),
       push: vi.fn(
         async (): Promise<PublishPushResult> => ({
           status: "up-to-date",

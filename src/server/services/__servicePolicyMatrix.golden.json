@@ -262,8 +262,11 @@
       "cloneContext": null,
       "createContext": ["app", "do", "panel", "server", "shell", "worker"],
       "createEntity": null,
+      "createSubagentContext": ["do", "panel", "server", "shell", "worker"],
       "destroyContext": null,
       "listEntities": null,
+      "listOwnedContexts": null,
+      "recordContextEdge": ["do", "panel", "server", "shell", "worker"],
       "resolveContext": null,
       "retireEntity": null,
       "setTitle": ["app", "do", "panel", "worker"]
@@ -313,6 +316,7 @@
     "methods": {
       "abortMerge": null,
       "commit": null,
+      "contextDiff": null,
       "contextStatus": null,
       "deleteRepo": null,
       "diff": null,
@@ -322,6 +326,7 @@
       "listFiles": null,
       "merge": null,
       "pendingMerge": null,
+      "pick": null,
       "previewBuild": null,
       "pushStatus": null,
       "readFile": null,

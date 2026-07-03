@@ -716,29 +716,34 @@ async function merge(inv: ParsedInvocation): Promise<number> {
     const repo = requireRepo(inv);
     const { client, contextId } = resolveSessionScope(inv);
     const head = headForContext(contextId);
-    const result = await client.call<{
-      status: string;
-      mergeable: "clean" | "conflict";
-      upstreamCommits: Array<{ stateHash: string; message: string }>;
-      conflictPaths?: string[];
-    }>("vcs.merge", [repo, head]);
-    printResult(result, {
+    const results = await client.call<
+      Array<{
+        repoPath: string;
+        status: string;
+        mergeable: "clean" | "conflict";
+        upstreamCommits: Array<{ stateHash: string; message: string }>;
+        conflictPaths?: string[];
+      }>
+    >("vcs.merge", [{ source: "main", repoPaths: [repo], head }]);
+    printResult(results, {
       json,
       human: () => {
-        const n = result.upstreamCommits.length;
-        console.log(
-          `merged ${repo}: pulled ${n} upstream commit(s) from main (${result.mergeable})`
-        );
-        for (const c of result.upstreamCommits) console.log(`  ${c.stateHash}  ${c.message}`);
-        if (result.mergeable === "conflict") {
+        for (const result of results) {
+          const n = result.upstreamCommits.length;
           console.log(
-            `\nconflict markers written to: ${(result.conflictPaths ?? []).join(", ") || "(see status)"}`
+            `merged ${result.repoPath}: pulled ${n} upstream commit(s) from main (${result.mergeable})`
           );
-          console.log(
-            "resolve them with `vcs edit`, then `vcs commit` to seal the merge, then push."
-          );
-        } else {
-          console.log("\nclean merge committed — push now fast-forwards.");
+          for (const c of result.upstreamCommits) console.log(`  ${c.stateHash}  ${c.message}`);
+          if (result.mergeable === "conflict") {
+            console.log(
+              `\nconflict markers written to: ${(result.conflictPaths ?? []).join(", ") || "(see status)"}`
+            );
+            console.log(
+              "resolve them with `vcs edit`, then `vcs commit` to seal the merge, then push."
+            );
+          } else {
+            console.log("\nclean merge committed — push now fast-forwards.");
+          }
         }
       },
     });

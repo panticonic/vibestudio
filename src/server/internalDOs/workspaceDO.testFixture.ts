@@ -157,6 +157,20 @@ export class WorkspaceDOTestable extends WorkspaceDO {
       )
     `);
     sql.exec(`
+      CREATE TABLE IF NOT EXISTS context_edges (
+        context_id       TEXT NOT NULL,
+        owner_context_id TEXT NOT NULL,
+        kind             TEXT NOT NULL,
+        owner_entity_id  TEXT,
+        created_at       INTEGER NOT NULL,
+        PRIMARY KEY (context_id, owner_context_id, kind)
+      )
+    `);
+    sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_context_edges_owner ON context_edges(owner_context_id, kind)`
+    );
+    sql.exec(`CREATE INDEX IF NOT EXISTS idx_context_edges_child ON context_edges(context_id)`);
+    sql.exec(`
       CREATE TABLE IF NOT EXISTS heartbeat_registry (
         name TEXT NOT NULL,
         source TEXT NOT NULL,

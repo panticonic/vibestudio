@@ -11,6 +11,7 @@ import { PendingAgentBadge } from "./PendingAgentBadge";
 import { ToolPermissionsDropdown } from "./ToolPermissionsDropdown";
 import { AgentLauncher } from "./AgentLauncher";
 import { AgentDialog } from "./AgentDialog";
+import { ForkSwitcher } from "./ForkSwitcher";
 
 const NOOP = () => {};
 
@@ -179,6 +180,9 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
         </Flex>
         <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
           <Badge color={connected ? "green" : "gray"}>{connected ? "Connected" : status}</Badge>
+          {/* Fork switcher — current branch + siblings/children, next to roster.
+              Self-subscribes to ChatContext.forkState (renders null when absent). */}
+          <ForkSwitcher />
           {Object.values(participants).map((p) => {
             const hasActive = participantActiveStatus.get(p.id) ?? false;
 
@@ -232,6 +236,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
             title={connected ? "Connected" : status}
             aria-label={connected ? "Connected" : status}
           />
+          <ForkSwitcher />
         </Flex>
         <ChatHeaderOverflowMenu
           channelId={channelId}

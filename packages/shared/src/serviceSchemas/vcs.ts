@@ -303,6 +303,45 @@ export const vcsMergeResultSchema = z.object({
 });
 export type VcsMergeResult = z.infer<typeof vcsMergeResultSchema>;
 
+/**
+ * Merge / pick SOURCE selector: the protected workspace `main`, or another
+ * context's committed head (`{ contextId }` → `ctx:{contextId}`, which requires
+ * cross-context read authorization). The merge/pick TARGET is always the
+ * caller's own context head — a source is pulled INTO it, never the reverse.
+ */
+export const vcsMergeSourceSchema = z.union([
+  z.literal("main"),
+  z.object({ contextId: z.string() }),
+]);
+export type VcsMergeSource = z.infer<typeof vcsMergeSourceSchema>;
+
+/** One repo's reconcile in the `vcs.merge` result array (merge loops repos). */
+export const vcsMergeRepoResultSchema = vcsMergeResultSchema.extend({
+  repoPath: z.string(),
+});
+export type VcsMergeRepoResult = z.infer<typeof vcsMergeRepoResultSchema>;
+
+/** A single cherry-pick entry for `vcs.pick`: a whole COMMIT's patch (3-way
+ *  applied on the target repo's head) or a source context's working content at
+ *  specific PATHS (routed to their owning repos, injected as write ops). */
+export const vcsPickSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("commit"),
+    repoPath: z.string().describe("Repo whose log the commit lives on (workspace-relative)."),
+    eventId: z.string().describe("The commit's log event id (its patch is 3-way applied)."),
+  }),
+  z.object({
+    kind: z.literal("paths"),
+    paths: z
+      .array(z.string())
+      .min(1)
+      .describe(
+        "Workspace-relative paths whose content is copied from the source context (routed to their owning repos). Requires source:{contextId}."
+      ),
+  }),
+]);
+export type VcsPick = z.infer<typeof vcsPickSchema>;
+
 export const vcsPendingMergeSchema = z
   .object({
     theirsHead: z.string(),
@@ -583,6 +622,21 @@ const repoPathArgOptional = z
     "Workspace-relative repo path scoping this read to one repo's head. Omit to route by path (readFile) or read the whole composed context view (listFiles)."
   );
 
+/**
+ * Optional cross-context read scope for the head-resolving reads
+ * (status/readFile/listFiles/pendingMerge/contextStatus): when set, the read
+ * resolves the NAMED context's `ctx:*` head instead of the caller's own. The
+ * caller must OWN (lifecycle child) or have FORKED (lineage descendant) that
+ * context per the runtime relationship registry — otherwise the read THROWS
+ * (this is a deny gate, never a prompt). Omit to read the caller's own head.
+ */
+const contextScopeArg = z
+  .object({ contextId: z.string() })
+  .optional()
+  .describe(
+    "Inspect another context you own or forked (resolves that context's ctx:* head). Unauthorized cross-context reads throw."
+  );
+
 // NOTE (P5c): the read/history traversals — commitEdits, fileHistory,
 // commitAncestors, editsByActor, editsByTurn, editsByInvocation, log — are
 // USERLAND-dispatched: they run in the gad-store DO behind the `vcs` manifest
@@ -646,7 +700,7 @@ export const vcsMethods = defineServiceMethods({
   readFile: {
     description:
       "Read one file's content (text or base64 bytes) at a VCS ref, with its state/content hashes and mode; returns null if the path is absent. Empty ref ⇒ the caller's current head. Pass repoPath to read from a specific repo's head (path repo-relative).",
-    args: z.tuple([z.string(), z.string(), repoPathArgOptional]),
+    args: z.tuple([z.string(), z.string(), repoPathArgOptional, contextScopeArg]),
     returns: vcsFileContentSchema.nullable(),
     access: READ_ACCESS,
     examples: [{ args: ["", "notes.md", "panels/chat"] }],
@@ -654,7 +708,7 @@ export const vcsMethods = defineServiceMethods({
   listFiles: {
     description:
       "List every file (path, content hash, mode) at a VCS ref; omit the ref for the caller's current head. Pass repoPath to list a single repo's head.",
-    args: z.tuple([z.string().optional(), repoPathArgOptional]),
+    args: z.tuple([z.string().optional(), repoPathArgOptional, contextScopeArg]),
     returns: z.array(vcsFileListEntrySchema),
     access: READ_ACCESS,
   },
@@ -689,7 +743,7 @@ export const vcsMethods = defineServiceMethods({
   status: {
     description:
       "Unpushed changes on a repo's head relative to that repo's main: the added/removed/changed paths plus the head state and whether it is ahead of main. Not a filesystem scan. repoPath is required (per-repo VCS).",
-    args: z.tuple([repoPathArg, z.string().optional()]),
+    args: z.tuple([repoPathArg, z.string().optional(), contextScopeArg]),
     returns: vcsStatusResultSchema,
     access: READ_ACCESS,
     examples: [{ args: ["panels/chat"] }],
@@ -719,11 +773,75 @@ export const vcsMethods = defineServiceMethods({
   },
   merge: {
     description:
-      "Reconcile divergence: pull `main` into the caller's context head on a repo, producing a MERGE COMMIT. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Returns the upstream commits + clean/conflict + conflictPaths. After merging, the context head descends from main so push fast-forwards.",
-    args: z.tuple([repoPathArg, z.string().optional()]),
-    returns: vcsMergeResultSchema,
+      "Reconcile divergence: pull a SOURCE (`main`, or a context you own/forked) INTO the caller's context head, producing a MERGE COMMIT per repo. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Commit-gated on BOTH sides: uncommitted edits on the source (or target) are rejected before any merge. Omit repoPaths to reconcile every repo your context branch touches. Returns one result per repo. After merging main, the context head descends from main so push fast-forwards.",
+    args: z.tuple([
+      z.object({
+        source: vcsMergeSourceSchema.describe(
+          'Merge source: `"main"` (the protected workspace baseline) or `{ contextId }` for another context you own/forked.'
+        ),
+        repoPaths: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Repos to reconcile (workspace-relative). Omit to reconcile every repo the target context branch touches."
+          ),
+        head: z
+          .string()
+          .optional()
+          .describe(
+            "Target context head to merge into. Omit for the caller's own context head; entity callers may only merge their own `ctx:…` head."
+          ),
+      }),
+    ]),
+    returns: z.array(vcsMergeRepoResultSchema),
     access: { ...WRITE_ACCESS },
-    examples: [{ args: ["panels/chat"] }],
+    examples: [{ args: [{ source: "main", repoPaths: ["panels/chat"] }] }],
+  },
+  pick: {
+    description:
+      "Cherry-pick selected changes from a SOURCE (`main`, or a context you own/forked) onto the caller's context head as UNCOMMITTED working edits (never a head advance): a `commit` pick 3-way-applies a whole commit's patch; a `paths` pick injects the source context's working content at specific paths (source must be `{ contextId }`). Review the result, then vcs.commit to seal it. Returns one working-edit result per repo touched.",
+    args: z.tuple([
+      z.object({
+        source: vcsMergeSourceSchema.describe(
+          'Pick source: `"main"` (commit picks only) or `{ contextId }` for a context you own/forked.'
+        ),
+        picks: z
+          .array(vcsPickSchema)
+          .min(1)
+          .describe("The changes to pick: whole commits and/or path-level content injections."),
+        head: z
+          .string()
+          .optional()
+          .describe(
+            "Target context head to pick onto. Omit for the caller's own context head; entity callers may only write their own `ctx:…` head."
+          ),
+      }),
+    ]),
+    returns: z.array(vcsEditResultSchema),
+    access: { ...WRITE_ACCESS },
+    examples: [
+      {
+        args: [
+          { source: { contextId: "ctx_42" }, picks: [{ kind: "paths", paths: ["panels/chat/x.ts"] }] },
+        ],
+      },
+    ],
+  },
+  contextDiff: {
+    description:
+      "Diff a context you own or forked against a baseline — its `fork-base` (the state it inherited when forked; the default) or the current workspace `main` — returning the added/removed/changed files its branch introduced. The read is authorized against the runtime ownership/lineage registry; an unowned context throws.",
+    args: z.tuple([
+      z.object({
+        contextId: z.string().describe("The context to diff (must be one you own or forked)."),
+        against: z
+          .enum(["fork-base", "main"])
+          .optional()
+          .describe("Baseline to diff against — `fork-base` (default) or `main`."),
+      }),
+    ]),
+    returns: vcsDiffResultSchema,
+    access: READ_ACCESS,
+    examples: [{ args: [{ contextId: "ctx_42", against: "fork-base" }] }],
   },
   abortMerge: {
     description:
@@ -736,7 +854,7 @@ export const vcsMethods = defineServiceMethods({
   pendingMerge: {
     description:
       "Inspect a repo head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. repoPath is required; omit head for the caller's own context head.",
-    args: z.tuple([repoPathArg, z.string().optional()]),
+    args: z.tuple([repoPathArg, z.string().optional(), contextScopeArg]),
     returns: vcsPendingMergeSchema,
     access: READ_ACCESS,
     examples: [{ args: ["panels/chat"] }],
@@ -795,8 +913,8 @@ export const vcsMethods = defineServiceMethods({
   },
   contextStatus: {
     description:
-      "Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace (vcs.deleteRepo) while your branch still references it — a push will be refused, so drop/rebase your context or restore the repo. Only repos with changes or drift are returned.",
-    args: z.tuple([]),
+      "Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace (vcs.deleteRepo) while your branch still references it — a push will be refused, so drop/rebase your context or restore the repo. Only repos with changes or drift are returned. Pass a context you own/forked to summarize ITS branch instead of your own.",
+    args: z.tuple([contextScopeArg]),
     returns: z.array(
       z.object({
         repoPath: z.string(),
