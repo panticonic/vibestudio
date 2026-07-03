@@ -1,10 +1,10 @@
 /**
  * Attach-time crash-window heal wiring (narrow-host P3). The host reconciler
  * `reconcileMainProvenanceFromRefs` was deleted; `attachGad` now drives the
- * DO's `vcsHealPublishDrift` RPC so a main ref that is AHEAD of the DO's
- * recorded lineage (the crash window between a ref CAS and its provenance) is
- * caught up on attach. With NO covering publish intent the DO falls back to a
- * SYNTHETIC catch-up ingest of the ref's tree.
+ * DO's `vcsHealPublishDrift` RPC. Ref advances covered by a parked publish
+ * intent are completed with full provenance; a main ref that is AHEAD of the
+ * DO's recorded lineage with NO covering publish intent fails loudly instead of
+ * inventing a catch-up commit.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fsp from "node:fs/promises";
@@ -13,7 +13,7 @@ import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { attachLocalHostBridges } from "../../../src/server/vcsHost/testSupport.js";
-import { GadWorkspaceDO } from "../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead, logIdForRepo } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
@@ -73,7 +73,7 @@ describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
     await fsp.rm(root, { recursive: true, force: true });
   });
 
-  it("catches the DO's main lineage up to a ref that ran ahead (synthetic, no intent)", async () => {
+  it("rejects a ref that ran ahead of the DO with no covering publish intent", async () => {
     const vcs = newVcs();
     await vcs.attachGad(callerFor(gad));
 
@@ -109,7 +109,7 @@ describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
 
     // Crash window: advance the protected ref to v2 directly (a system advance),
     // WITHOUT the DO recording provenance and WITHOUT a publish intent — the
-    // exact drift the attach heal must close.
+    // exact drift attach must now reject.
     await refs.updateMains({
       entries: [{ repoPath: REPO, expectedOld: v1, next: v2 }],
       operation: "push",
@@ -123,16 +123,15 @@ describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
     );
 
     // Re-attach a fresh host over the same refs + DO: attachGad drives
-    // vcsHealPublishDrift, which synthetically catches the DO up to the ref.
+    // vcsHealPublishDrift, which fails closed because no publish intent carries
+    // the missing parent/hunk/attribution data.
     const vcs2 = newVcs();
-    await vcs2.attachGad(callerFor(gad));
+    await expect(vcs2.attachGad(callerFor(gad))).rejects.toThrow(/no publish intent covers it/);
 
     expect(doInstance().resolveWorktreeHeadInternal(logIdForRepo(REPO), VCS_MAIN_HEAD)?.stateHash).toBe(
-      v2
+      v1
     );
     const log = await doInstance().vcsLog(REPO, 3, VCS_MAIN_HEAD);
-    expect(log[0]?.outputStateHash).toBe(v2);
-    // No covering intent ⇒ the heal is a SYNTHETIC catch-up of the ref's tree.
-    expect(log[0]?.summary).toMatch(/synthetic catch-up .* to ref state/);
+    expect(log[0]?.outputStateHash).toBe(v1);
   });
 });

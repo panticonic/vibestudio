@@ -2,7 +2,7 @@
  * forkRepo (history-preserving) against a real gad-store DO. Split out of the
  * former workspaceVcs.push.test.ts when the host push pipeline was deleted
  * (narrow-host P3): the push scenarios moved to the DO suite
- * (integration-tests/doVcsPush.test.ts); forkRepo stays a host lifecycle
+ * (tests/workspace-integration/doVcsPush.test.ts); forkRepo stays a host lifecycle
  * responsibility (P4). Main is seeded via the real edit → commit → push flow,
  * now driven through the DO's vcsPush (`pushToMain`).
  */
@@ -13,7 +13,7 @@ import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/testSupport.js";
-import { GadWorkspaceDO } from "../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";

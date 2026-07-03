@@ -33,7 +33,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../src/server/vcsHost/paths.js";
@@ -165,7 +165,12 @@ describe("full-gateway attribution (rows 11-12)", () => {
   }): Promise<{ status: string }> {
     const minted = opts.noToken
       ? null
-      : invocations.mint({ caller: opts.caller, via: WRITER_ID, method: "vcs.push" });
+      : invocations.mint({
+          caller: opts.caller,
+          via: WRITER_ID,
+          method: "vcsPush",
+          operation: "push",
+        });
     try {
       const objectKey = "workspace-gad";
       const fetchable = gad.instance as unknown as { fetch(r: Request): Promise<Response> };
@@ -340,10 +345,13 @@ describe("full-gateway attribution (rows 11-12)", () => {
       };
       await vcs.attachGad(capturingGad);
 
-      await vcs.mergeGroup([{ repoPath: "packages/a", sourceHead: vcsContextHead("chat-1"), targetHead: "main" }], {
-        actor: USER,
-        mainAdvance: { kind: "caller", caller: shell, operation: "merge" },
-      });
+      await vcs.mergeGroup(
+        [{ repoPath: "packages/a", sourceHead: vcsContextHead("chat-1"), targetHead: "main" }],
+        {
+          actor: USER,
+          mainAdvance: { kind: "caller", caller: shell, operation: "merge" },
+        }
+      );
 
       expect(threadedToken).toBeTruthy();
       expect(resolvedDuringDispatch?.runtime).toEqual({ id: "shell", kind: "shell" });

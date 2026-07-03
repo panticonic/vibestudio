@@ -19,7 +19,7 @@ import { buildWorkspaceDeclarations } from "@vibez1/shared/workspace/singletonRe
 import { VCS_SERVICE_PROTOCOL } from "@vibez1/shared/userlandServiceRpc";
 import { vcsMethods } from "@vibez1/shared/serviceSchemas/vcs";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { resolveUserlandService } from "../../src/server/userlandServices.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
@@ -58,7 +58,7 @@ function dispatchTo(gad: TestGad) {
 describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
   it("the workspace manifest declares `vcs` as a DO service on the gad-store singleton", async () => {
     const yml = await fsp.readFile(
-      path.resolve(__dirname, "../meta/vibez1.yml"),
+      path.resolve(__dirname, "../../workspace/meta/vibez1.yml"),
       "utf8"
     );
     const config = parseWorkspaceConfigContentWithId(yml, "test");
@@ -86,11 +86,14 @@ describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
       "editsByTurn",
       "editsByInvocation",
       "log",
+      // Publishing is no longer a public host RPC: push dispatches userland to
+      // the gad-store DO's vcsPush (runtime VcsClient.push / `vibez1 vcs push`).
+      "push",
     ]) {
       expect(hostMethods.has(moved)).toBe(false);
     }
     // The host remnant keeps the operations that need host resources.
-    for (const kept of ["push", "forkRepo", "deleteRepo", "restoreRepo", "edit", "commit"]) {
+    for (const kept of ["forkRepo", "deleteRepo", "restoreRepo", "edit", "commit"]) {
       expect(hostMethods.has(kept)).toBe(true);
     }
   });

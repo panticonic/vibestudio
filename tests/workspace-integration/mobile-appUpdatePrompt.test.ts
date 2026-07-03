@@ -4,11 +4,13 @@ vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
 }));
 
-vi.mock("../apps/mobile/src/services/appBootstrap", () => ({
+vi.mock("../../workspace/apps/mobile/src/services/appBootstrap", () => ({
   ensureNativeWorkspaceAppBundle: vi.fn(async () => ({ reloading: true })),
 }));
 
-const { handleMobileAppLifecycleEvent } = await import("../apps/mobile/src/services/appUpdatePrompt");
+const { handleMobileAppLifecycleEvent } = await import(
+  "../../workspace/apps/mobile/src/services/appUpdatePrompt"
+);
 
 describe("mobile app update prompt", () => {
   it("prompts once for a mobile app update and installs on request", async () => {

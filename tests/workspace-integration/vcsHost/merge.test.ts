@@ -29,7 +29,7 @@ import * as path from "node:path";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { treeHashDigest } from "@vibez1/shared/contentTree/treeObjects";
 import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/testSupport.js";
-import { GadWorkspaceDO } from "../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead, logIdForRepo } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
@@ -423,8 +423,12 @@ describe("WorkspaceVcs merge", () => {
       throw new Error("simulated crash after CAS");
     };
 
+    // Main-target merge is INTERNAL-only: the public `mergeHeads`/`vcs.merge`
+    // surfaces reject a main target, so drive the host's internal merge path.
     await expect(
-      vcs.mergeHeads(VCS_MAIN_HEAD, CTX_HEAD, { actor: USER, repoPath: REPO })
+      vcs.mergeGroup([{ repoPath: REPO, sourceHead: CTX_HEAD, targetHead: VCS_MAIN_HEAD }], {
+        actor: USER,
+      })
     ).rejects.toThrow(/simulated crash/);
 
     // Write-ahead: the protected ref advanced past `before`, intent still pending.
@@ -436,6 +440,29 @@ describe("WorkspaceVcs merge", () => {
     const healed = await inst.vcsHealPublishDrift({});
     expect(healed.pendingIntents).toBe(0);
     expect(inst.resolveWorktreeHeadInternal(REPO_LOG, "main")?.stateHash).toBe(advanced);
+  });
+
+  it("a clean main-target merge advance records a MERGE transition (not snapshot)", async () => {
+    // The internal main-merge publishes through refs.updateMains(operation:
+    // "merge"); the host's post-advance reaction must emit a `merge` transition
+    // kind so provenance/attribution consumers see a merge, not a plain snapshot.
+    await seedMain([{ kind: "create", path: "a.txt", content: text("A\n") }]);
+    await commitCtx([{ kind: "create", path: "b.txt", content: text("B\n") }], "add b");
+
+    const events: Array<{ head: string; transitionKind: string }> = [];
+    const off = vcs.onStateAdvanced((e) => events.push(e));
+    try {
+      const [merged] = await vcs.mergeGroup(
+        [{ repoPath: REPO, sourceHead: CTX_HEAD, targetHead: VCS_MAIN_HEAD }],
+        { actor: USER }
+      );
+      expect(merged!.status).toBe("merged");
+    } finally {
+      off();
+    }
+    const mainAdvance = events.find((e) => e.head === VCS_MAIN_HEAD);
+    expect(mainAdvance).toBeDefined();
+    expect(mainAdvance!.transitionKind).toBe("merge");
   });
 
   it("conflicted merge: parks a pending merge and materializes markers onto the ctx worktree", async () => {
@@ -561,10 +588,14 @@ describe("WorkspaceVcs merge", () => {
 
   it("abortMerge on a main-head merge (no working rows) still clears the pending", async () => {
     await divergedSetup({ conflict: true });
-    // Merge INTO main parks a pending merge on the `main` head (a main head
-    // never carries working edit rows — applyEditOps rejects main edits).
-    const merge = await vcs.mergeHeads(VCS_MAIN_HEAD, CTX_HEAD, { actor: USER, repoPath: REPO });
-    expect(merge.status).toBe("conflicted");
+    // Merge INTO main (INTERNAL host path — the public surfaces reject a main
+    // target) parks a pending merge on the `main` head (a main head never
+    // carries working edit rows — applyEditOps rejects main edits).
+    const [merge] = await vcs.mergeGroup(
+      [{ repoPath: REPO, sourceHead: CTX_HEAD, targetHead: VCS_MAIN_HEAD }],
+      { actor: USER }
+    );
+    expect(merge!.status).toBe("conflicted");
     expect(await vcs.pendingMerge(VCS_MAIN_HEAD, REPO)).not.toBeNull();
     expect(
       gad.instance.listWorkingEdits({ logId: REPO_LOG, head: VCS_MAIN_HEAD })
