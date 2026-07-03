@@ -1,10 +1,13 @@
 import type {
   ToolVcs,
   ToolVcsCommitResult,
+  ToolVcsDiffResult,
   ToolVcsEditOp,
   ToolVcsEditResult,
   ToolVcsMergeResult,
+  ToolVcsPick,
   ToolVcsPushResult,
+  ToolVcsSource,
 } from "../tool-vcs.js";
 
 export interface StubVcsInit {
@@ -112,14 +115,32 @@ export class StubVcs implements ToolVcs {
     return { status: "pushed", repoPaths: input.repoPaths, reports: [] };
   }
 
-  async merge(_repoPath: string): Promise<ToolVcsMergeResult> {
-    return {
+  async merge(input: {
+    source: ToolVcsSource;
+    repoPaths?: string[];
+  }): Promise<ToolVcsMergeResult[]> {
+    return (input.repoPaths ?? ["stub-repo"]).map((repoPath) => ({
+      repoPath,
       status: "up-to-date",
       stateHash: `state-${this.version}`,
       conflicts: [],
       mergeable: "clean",
       upstreamCommits: [],
-    };
+    }));
+  }
+
+  async pick(input: {
+    source: ToolVcsSource;
+    picks: ToolVcsPick[];
+  }): Promise<ToolVcsEditResult[]> {
+    return input.picks.map((_pick, i) => editResult([], `state-${this.version}`, i));
+  }
+
+  async contextDiff(_input: {
+    contextId: string;
+    against?: "fork-base" | "main";
+  }): Promise<ToolVcsDiffResult> {
+    return { added: [], removed: [], changed: [] };
   }
 
   async discardEdits(_repoPath: string): Promise<{ discarded: number; stateHash: string }> {

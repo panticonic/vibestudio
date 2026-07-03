@@ -23,6 +23,12 @@ export type {
   InlineUiComponentEntry,
   ActionBarData,
   ActionBarState,
+  ForkNavHandlers,
+  ForkUiState,
+  ForkEntry,
+  ForkTreeNode,
+  ReviewTarget,
+  ChannelProvenance,
 } from "./types";
 
 // --- Context ---
@@ -62,6 +68,13 @@ export type { AgenticChatProps } from "./components/AgenticChat";
 // --- Layout components (composable) ---
 export { ChatLayout } from "./components/ChatLayout";
 export { ChatHeader } from "./components/ChatHeader";
+export { ForkSwitcher } from "./components/ForkSwitcher";
+export { ForkTreeView } from "./components/ForkTreeView";
+export { SubagentRunCard } from "./components/SubagentRunCard";
+export { ReviewAndPickSurface } from "./components/ReviewAndPickSurface";
+export type { ReviewAndPickSurfaceProps } from "./components/ReviewAndPickSurface";
+export { useForkLineage } from "./hooks/useForkLineage";
+export type { UseForkLineageOptions } from "./hooks/useForkLineage";
 export { ChatMessageArea } from "./components/ChatMessageArea";
 export type { ChatMessageAreaProps } from "./components/ChatMessageArea";
 export { ChatFeedbackArea } from "./components/ChatFeedbackArea";

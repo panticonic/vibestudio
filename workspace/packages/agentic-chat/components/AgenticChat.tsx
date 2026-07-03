@@ -5,7 +5,7 @@ import { ChatLayout } from "./ChatLayout";
 import { ChatPaletteCommands } from "./ChatPaletteCommands";
 import { ChatProvider } from "../context/ChatProvider";
 import { useAgenticChat } from "../hooks/useAgenticChat";
-import type { ChatParticipantMetadata, ConnectionConfig, AgenticChatActions, ToolProvider, SandboxConfig } from "../types";
+import type { ChatParticipantMetadata, ConnectionConfig, AgenticChatActions, ToolProvider, SandboxConfig, ForkNavHandlers } from "../types";
 
 export interface AgenticChatProps {
   /** Connection configuration (server URL, token, client ID) */
@@ -30,6 +30,9 @@ export interface AgenticChatProps {
   initialPrompt?: string;
   /** Send initialPrompt even if the channel already has history (idempotent). */
   forceInitialPrompt?: boolean;
+  /** Panel-supplied fork navigation + review overlay handlers (fork switcher,
+   *  inline fork rows, subagent review). Omit to disable the fork UI. */
+  forkNav?: ForkNavHandlers;
   /** Sandbox config — provides RPC and import loading */
   sandbox: SandboxConfig;
   /** Context-relative TSX file to load into the panel-local action bar on mount */
@@ -61,6 +64,7 @@ export function AgenticChat({
   installedAgents: installedAgentInfos,
   initialPrompt,
   forceInitialPrompt,
+  forkNav,
   sandbox,
   initialActionBarFile,
   initialActionBarProps,
@@ -79,6 +83,7 @@ export function AgenticChat({
     installedAgentInfos,
     initialPrompt,
     forceInitialPrompt,
+    forkNav,
     sandbox,
     initialActionBarFile,
     initialActionBarProps,

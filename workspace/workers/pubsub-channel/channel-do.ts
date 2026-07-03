@@ -21,11 +21,17 @@ import type { BootstrapSnapshot, ParticipantSnapshot } from "@workspace/pubsub";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  createInitialChannelViewState,
   participantRefFromMetadata,
   publicParticipantMetadata,
+  reduceChannelView,
   type AgenticEvent,
   type AppendIdempotency,
+  type ChannelEnvelope,
+  type ForkProjection,
   type InvocationOutcome,
+  type LogEnvelope,
+  type MessageBlockInput,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
@@ -70,6 +76,105 @@ const PENDING_REDELIVERY_SWEPT_AT_KEY = "pendingRedeliverySweptAt";
 
 const DEFAULT_POLICY_NAME = "agentic.conversation.v1";
 
+/** Service protocol the channel DO resolves for sibling channels (fork parent,
+ *  lineage forwarding). */
+const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
+/** Debounce window before a durable head advance fans out up the lineage. */
+const LINEAGE_REPORT_DEBOUNCE_MS = 500;
+/** Signal contentType for the ephemeral fork.head_changed lineage badge. */
+const FORK_HEAD_CHANGED_SIGNAL = "fork.head_changed";
+/** How long an interrupted fork op waits before the alarm reconciler resumes
+ *  or rolls it back. */
+const FORK_OP_RECONCILE_MS = 5_000;
+
+/** Ordered fork-op phases; a resume skips everything at or below the recorded
+ *  phase. `rolledback` is terminal (the op was torn down). */
+const FORK_PHASES = [
+  "journaled",
+  "cloned",
+  "postcloned",
+  "seeded",
+  "announced",
+  "done",
+] as const;
+type ForkPhase = (typeof FORK_PHASES)[number] | "rolledback";
+function forkPhaseReached(phase: string, target: ForkPhase): boolean {
+  const a = FORK_PHASES.indexOf(phase as (typeof FORK_PHASES)[number]);
+  const b = FORK_PHASES.indexOf(target as (typeof FORK_PHASES)[number]);
+  return a >= 0 && b >= 0 && a >= b;
+}
+
+/** A resolvable durable-object reference. */
+interface DORef {
+  source: string;
+  className: string;
+  objectKey: string;
+}
+
+/** Build a DO RPC target id from a DORef: "do:{source}:{className}:{objectKey}". */
+function doTarget(ref: DORef): string {
+  return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+}
+
+/** The human-attributed seed of an edit-/deep-dive fork. `blocks` is authored
+ *  as a PRIMARY user message on the child channel by `appendSeed`. */
+interface ForkSeed {
+  author: ParticipantRef;
+  blocks: MessageBlockInput[];
+  replaces?: { messageId: string; seq: number };
+}
+
+/** Options for the durable `fork()` RPC. `include` scopes which forkable agents
+ *  are cloned (root-context entity scope → cloneContext.include); omit to clone
+ *  every agent vessel in the roster. `exclude`/`replace` are REMOVED (C7). */
+interface ForkOpts {
+  forkPointPubsubId: number;
+  seed?: ForkSeed;
+  label?: string;
+  reason: string;
+  include?: string[];
+}
+
+/** Result of a fork — the fresh channel + context and the cloned agents, so the
+ *  caller can address them without re-resolving the new roster. */
+interface ForkResult {
+  forkId: string;
+  forkedChannelId: string;
+  forkedContextId: string;
+  clonedParticipants: string[];
+  clonedAgents: Array<{ participantId: string } & DORef>;
+  seededMessageId?: string;
+}
+
+/** Provenance of a channel in the fork/task tree. */
+type ChannelProvenance =
+  | { kind: "root" }
+  | { kind: "fork"; forkedFrom: string; forkPointId: number; rootChannelId: string }
+  | { kind: "task"; parentChannelId: string; parentContextId: string; runId: string };
+
+/** Authorization the parent hands the child at postClone, licensing exactly one
+ *  human-attributed seed append (consumed by `appendSeed`). */
+interface ForkSeedAuthorization {
+  forkId: string;
+  seed: ForkSeed;
+}
+
+/** Subset of `runtime.cloneContext`'s result the fork op consumes. */
+interface ClonedEntityView {
+  sourceId: string;
+  newId: string;
+  kind: "do" | "worker";
+  source: string;
+  className?: string;
+  sourceKey: string;
+  newKey: string;
+  targetId: string;
+}
+interface CloneContextResultView {
+  contextId: string;
+  entities: ClonedEntityView[];
+}
+
 function parseDOParticipantId(
   participantId: string
 ): { source: string; className: string; objectKey: string } | null {
@@ -83,7 +188,7 @@ function parseDOParticipantId(
 }
 
 export class PubSubChannel extends DurableObjectBase {
-  static override schemaVersion = 105;
+  static override schemaVersion = 106;
   private _channelLog: ChannelLog | null = null;
   private _policyHost: PolicyHost | null = null;
   private _calls: CallTransport | null = null;
@@ -146,6 +251,35 @@ export class PubSubChannel extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_dedup_keys_created ON dedup_keys(created_at)`);
+    // Fork-operation journal (single-writer: this parent channel DO). The op's
+    // durability lives HERE — the row is written BEFORE any host/DO call, and its
+    // `phase` advances after each idempotent step so a crash resumes (or rolls
+    // back) from the alarm reconciler. The `opts` blob carries the seed/label/
+    // reason; `forked_*` are recorded once the clone exists (WS2 §fork).
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS fork_ops (
+        fork_id TEXT PRIMARY KEY,
+        fork_point_id INTEGER NOT NULL,
+        opts TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        forked_channel_id TEXT,
+        forked_context_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_fork_ops_phase ON fork_ops(phase)`);
+    // Lineage subscribers (held on the ROOT channel of a fork tree). A
+    // signal-only roster — NO durable replay — that the head-advance hub fans
+    // `fork.head_changed` out to. Distinct from `participants` so it never
+    // pollutes the presence/roster projection.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS lineage_subscribers (
+        id TEXT PRIMARY KEY,
+        metadata TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    `);
   }
 
   protected override migrate(_fromVersion: number, _toVersion: number): void {
@@ -157,6 +291,8 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DROP TABLE IF EXISTS participants`);
     this.sql.exec(`DROP TABLE IF EXISTS pending_calls`);
     this.sql.exec(`DROP TABLE IF EXISTS dedup_keys`);
+    this.sql.exec(`DROP TABLE IF EXISTS fork_ops`);
+    this.sql.exec(`DROP TABLE IF EXISTS lineage_subscribers`);
     // Channel-side registry cache deleted for good — GAD's
     // channel_message_types projection is the only copy.
     this.sql.exec(`DROP TABLE IF EXISTS message_types`);
@@ -290,6 +426,9 @@ export class PubSubChannel extends DurableObjectBase {
       attachments: input.attachments,
     });
     this.policyHost.foldAppended(this.policyViewFromChannelEvent(event));
+    // Report the head advance up the fork lineage (debounced) so live badges on
+    // the root fan out. Cheap: records a pending seq + arms the alarm.
+    this.noteLineageHeadAdvance(event.id);
     return event;
   }
 
@@ -750,10 +889,11 @@ export class PubSubChannel extends DurableObjectBase {
     this.scheduleNextAlarm();
   }
 
-  /** Abandoned terminals for every pending call targeting a leaver. */
+  /** Abandoned terminals for every pending call targeting a leaver (or, on a
+   *  fork that could not re-home the call, `aborted-by-fork` — C6). */
   async failPendingCallsTargeting(
     targetId: string,
-    reason: "graceful" | "disconnect" | "replaced"
+    reason: "graceful" | "disconnect" | "replaced" | "aborted-by-fork"
   ): Promise<void> {
     await this.calls.failPendingCallsTargeting(targetId, reason);
   }
@@ -1093,7 +1233,13 @@ export class PubSubChannel extends DurableObjectBase {
   @rpc({ callers: ["server", "shell"] })
   async adminInspectSchema() {
     this.assertAdminCaller("adminInspectSchema");
-    const tableNames = ["participants", "pending_calls", "dedup_keys"];
+    const tableNames = [
+      "participants",
+      "pending_calls",
+      "dedup_keys",
+      "fork_ops",
+      "lineage_subscribers",
+    ];
     const tables = tableNames.map((table) => ({
       table,
       columns: this.sql.exec(`PRAGMA table_info(${table})`).toArray(),
@@ -1415,6 +1561,9 @@ export class PubSubChannel extends DurableObjectBase {
       // lost-delivery redelivery sweep (at-least-once within seconds, not
       // only at the 5-minute expiry).
       this.nextPendingRedeliveryAt(now),
+      // Fork-op crash-recovery reconcile + debounced lineage head fan-out.
+      this.nextForkOpReconcileAt(now),
+      this.nextLineageReportAt(),
     ].filter((value): value is number => typeof value === "number");
     if (sources.length === 0) {
       this.deleteAlarm();
@@ -1486,6 +1635,19 @@ export class PubSubChannel extends DurableObjectBase {
       console.warn(`[Channel] pending-call redelivery sweep failed:`, err);
     }
 
+    // Debounced lineage head fan-out (root → lineage subscribers) and
+    // fork-op crash reconcile (resume or roll back an interrupted fork).
+    try {
+      await this.flushLineageHeadReport();
+    } catch (err) {
+      console.warn(`[Channel] lineage head report failed:`, err);
+    }
+    try {
+      await this.reconcileForkOps();
+    } catch (err) {
+      console.warn(`[Channel] fork-op reconcile failed:`, err);
+    }
+
     this.scheduleNextAlarm();
   }
 
@@ -1536,15 +1698,548 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
+  // ── Provenance ────────────────────────────────────────────────────────────
+
+  /**
+   * The channel's place in the fork/task tree, read from durable state (NOT the
+   * old `getState()` dump peek). Fork provenance is written at `postClone`; task
+   * provenance at task-channel creation (B1, WS-5) — until that lands a task
+   * channel reads as `root`/`fork`.
+   */
+  @rpc({ callers: ["panel", "do", "server", "shell"] })
+  async getProvenance(): Promise<ChannelProvenance> {
+    return this.computeProvenance();
+  }
+
+  /**
+   * Record task provenance for a subagent task channel (B1, WS-5). Written by
+   * the spawning vessel right after the task channel is created/subscribed so
+   * {@link getProvenance} reports `kind:"task"` instead of `root`. Durable state
+   * keys, mirroring how fork provenance is stamped at `postClone`.
+   */
+  @rpc({ callers: ["worker", "server", "do"] })
+  async recordTaskProvenance(args: {
+    parentChannelId: string;
+    parentContextId: string;
+    runId: string;
+  }): Promise<void> {
+    this.setStateValue("taskParentChannelId", args.parentChannelId);
+    this.setStateValue("taskParentContextId", args.parentContextId);
+    this.setStateValue("taskRunId", args.runId);
+  }
+
+  private computeProvenance(): ChannelProvenance {
+    const taskParent = this.getStateValue("taskParentChannelId");
+    if (taskParent) {
+      return {
+        kind: "task",
+        parentChannelId: taskParent,
+        parentContextId: this.getStateValue("taskParentContextId") ?? "",
+        runId: this.getStateValue("taskRunId") ?? "",
+      };
+    }
+    const forkedFrom = this.getStateValue("forkedFrom");
+    if (forkedFrom) {
+      return {
+        kind: "fork",
+        forkedFrom,
+        forkPointId: Number(this.getStateValue("forkPointId") ?? 0),
+        rootChannelId: this.getStateValue("rootChannelId") ?? forkedFrom,
+      };
+    }
+    return { kind: "root" };
+  }
+
+  // ── Fork operation (durable, journaled, owned by THIS parent channel) ──────
+  //
+  // The op's durability lives in `fork_ops`: the row is journaled BEFORE any
+  // host/DO call and its `phase` advances after each idempotent step. Order:
+  //   journal → clone (targetKey=`fork:{forkId}`) → postClones → appendSeed →
+  //   channel.forked → done.
+  // Every phase is idempotent (deterministic clone targetKey + deterministic
+  // envelopeIds `fork-seed:{forkId}` / `fork-event:{forkId}`), so a crash resumes
+  // from `reconcileForkOps()` (or rolls back via destroyContext).
+
+  /** Thin host-call wrapper (the DO drives runtime.cloneContext/destroyContext).
+   *  Host runtime services take exactly ONE opts object, positional. */
+  private callMain<T>(method: string, arg: unknown): Promise<T> {
+    return this.rpc.call<T>("main", method, [arg]);
+  }
+
+  /** Resolve a sibling channel's DO ref (fork parent / lineage forwarding). */
+  private async resolveChannelRef(channelId: string): Promise<DORef> {
+    const svc = await this.rpc.call<DORef>("main", "workers.resolveService", [
+      CHANNEL_SERVICE_PROTOCOL,
+      channelId,
+    ]);
+    return { source: svc.source, className: svc.className, objectKey: svc.objectKey };
+  }
+
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  async fork(opts: ForkOpts): Promise<ForkResult> {
+    const forkId = crypto.randomUUID();
+    const now = Date.now();
+    // Journal FIRST — before any host/DO call — so a crash is always recoverable.
+    this.sql.exec(
+      `INSERT INTO fork_ops (fork_id, fork_point_id, opts, phase, created_at, updated_at)
+         VALUES (?, ?, ?, 'journaled', ?, ?)`,
+      forkId,
+      opts.forkPointPubsubId,
+      JSON.stringify(opts),
+      now,
+      now
+    );
+    // Arm the reconcile alarm now (durable) so a hard crash mid-saga still gets
+    // resumed/rolled back even if no other RPC re-arms the DO.
+    this.scheduleNextAlarm();
+    return this.runForkOp(forkId);
+  }
+
+  private getForkOpRow(forkId: string): Record<string, unknown> | null {
+    const rows = this.sql.exec(`SELECT * FROM fork_ops WHERE fork_id = ?`, forkId).toArray();
+    return rows.length > 0 ? (rows[0] as Record<string, unknown>) : null;
+  }
+
+  private setForkOpPhase(
+    forkId: string,
+    phase: ForkPhase,
+    fields?: { forkedChannelId?: string; forkedContextId?: string }
+  ): void {
+    this.sql.exec(
+      `UPDATE fork_ops SET phase = ?,
+         forked_channel_id = COALESCE(?, forked_channel_id),
+         forked_context_id = COALESCE(?, forked_context_id),
+         updated_at = ?
+       WHERE fork_id = ?`,
+      phase,
+      fields?.forkedChannelId ?? null,
+      fields?.forkedContextId ?? null,
+      Date.now(),
+      forkId
+    );
+  }
+
+  /** Drive an interrupted/fresh fork op from its recorded phase to `done`,
+   *  rolling back on unrecoverable failure. Idempotent under retry. */
+  private async runForkOp(forkId: string): Promise<ForkResult> {
+    const row = this.getForkOpRow(forkId);
+    if (!row) throw new Error(`fork op ${forkId} not found`);
+    const phase = row["phase"] as string;
+    const opts = JSON.parse(row["opts"] as string) as ForkOpts;
+
+    const sourceContextId = this.getStateValue("contextId");
+    if (!sourceContextId) throw new Error(`Channel ${this.objectKey} has no contextId`);
+
+    // Classify the (stable) parent roster: forkable = agent vessels with a doRef,
+    // scoped by opts.include when given (C7 entity scope).
+    const includeScope = opts.include ? new Set(opts.include) : null;
+    const selfRef = await this.resolveChannelRef(this.objectKey);
+    const keptAgents: Array<{ participantId: string; ref: DORef }> = [];
+    for (const p of await this.getParticipants()) {
+      if (p.metadata?.["receivesChannelEnvelopes"] !== true || !p.doRef) continue;
+      if (includeScope && !includeScope.has(doTarget(p.doRef))) continue;
+      keptAgents.push({ participantId: p.participantId, ref: p.doRef });
+    }
+
+    try {
+      // Preflight canFork on the kept agents (WS-5 per-channel shape).
+      for (const agent of keptAgents) {
+        const r = await this.rpc.call<{ ok: boolean; reason?: string }>(
+          doTarget(agent.ref),
+          "canFork",
+          [this.objectKey]
+        );
+        if (!r.ok) {
+          throw new Error(`Cannot fork participant ${agent.participantId}: ${r.reason ?? "canFork=false"}`);
+        }
+      }
+
+      // 1. CLONE — idempotent via targetKey; a resumed op gets the SAME child.
+      //    Recursive so a live-subagent context clones its lifecycle subtree in
+      //    full (include scopes the ROOT context only); lineage edges are never
+      //    followed.
+      const include = [doTarget(selfRef), ...keptAgents.map((a) => doTarget(a.ref))];
+      const clone = await this.callMain<CloneContextResultView>("runtime.cloneContext", {
+        sourceContextId,
+        include,
+        recursive: true,
+        targetKey: `fork:${forkId}`,
+      });
+      const findClone = (ref: DORef): ClonedEntityView => {
+        const id = doTarget(ref);
+        const entity = clone.entities.find((e) => e.sourceId === id);
+        if (!entity) throw new Error(`cloneContext did not clone ${id}`);
+        return entity;
+      };
+      const channelClone = findClone(selfRef);
+      const forkedChannelId = channelClone.newKey;
+      const forkedContextId = clone.contextId;
+      const forkedChannelRef: DORef = {
+        source: channelClone.source,
+        className: channelClone.className!,
+        objectKey: forkedChannelId,
+      };
+      const homeableTargets = clone.entities.map((e) => e.sourceId);
+      if (!forkPhaseReached(phase, "cloned")) {
+        this.setForkOpPhase(forkId, "cloned", { forkedChannelId, forkedContextId });
+      }
+
+      const clonedAgents: Array<{ participantId: string } & DORef> = [];
+      const clonedParticipants: string[] = [];
+
+      // 2. POSTCLONES — re-root the cloned channel's log at the fork point, hand
+      //    it its provenance + one-shot seed authorization, then re-home each
+      //    cloned agent. Skipped on a resume that already passed this phase.
+      const parentProvenance = this.computeProvenance();
+      const rootChannelId =
+        parentProvenance.kind === "fork" ? parentProvenance.rootChannelId : this.objectKey;
+      if (!forkPhaseReached(phase, "postcloned")) {
+        await this.rpc.call(doTarget(forkedChannelRef), "postClone", [
+          this.objectKey,
+          opts.forkPointPubsubId,
+          forkedContextId,
+          {
+            forkId,
+            rootChannelId,
+            ...(opts.seed ? { seed: opts.seed } : {}),
+            homeableTargets,
+          },
+        ]);
+        for (const agent of keptAgents) {
+          const ce = findClone(agent.ref);
+          const clonedRef: DORef = {
+            source: ce.source,
+            className: ce.className!,
+            objectKey: ce.newKey,
+          };
+          await this.rpc.call(doTarget(clonedRef), "postClone", [
+            agent.ref.objectKey,
+            forkedChannelId,
+            this.objectKey,
+            opts.forkPointPubsubId,
+            forkedContextId,
+          ]);
+          clonedParticipants.push(agent.participantId);
+          clonedAgents.push({ participantId: agent.participantId, ...clonedRef });
+        }
+        this.setForkOpPhase(forkId, "postcloned");
+      } else {
+        for (const agent of keptAgents) {
+          const ce = findClone(agent.ref);
+          clonedParticipants.push(agent.participantId);
+          clonedAgents.push({
+            participantId: agent.participantId,
+            source: ce.source,
+            className: ce.className!,
+            objectKey: ce.newKey,
+          });
+        }
+      }
+
+      // 3. SEED — forge the human-attributed opening message on the child.
+      let seededMessageId: string | undefined;
+      if (opts.seed) {
+        seededMessageId = `fork-seed:${forkId}`;
+        if (!forkPhaseReached(phase, "seeded")) {
+          await this.rpc.call(doTarget(forkedChannelRef), "appendSeed", [
+            { forkId },
+            opts.seed,
+          ]);
+        }
+      }
+      if (!forkPhaseReached(phase, "seeded")) this.setForkOpPhase(forkId, "seeded");
+
+      // 4. ANNOUNCE — channel.forked on THIS (parent) log; the parent's `forks`
+      //    projection enumerates its direct children.
+      if (!forkPhaseReached(phase, "announced")) {
+        await this.appendForkEvent(forkId, opts, {
+          forkedChannelId,
+          forkedContextId,
+          rootChannelId,
+          seededMessageId,
+        });
+        this.setForkOpPhase(forkId, "announced");
+      }
+
+      this.setForkOpPhase(forkId, "done");
+      return {
+        forkId,
+        forkedChannelId,
+        forkedContextId,
+        clonedParticipants,
+        clonedAgents,
+        ...(seededMessageId ? { seededMessageId } : {}),
+      };
+    } catch (err) {
+      await this.rollbackForkOp(forkId);
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Fork failed: ${message}`);
+    }
+  }
+
+  /** Tear down a failed fork: destroy the cloned context (we own it) and mark
+   *  the journal `rolledback` so the reconciler leaves it alone. */
+  private async rollbackForkOp(forkId: string): Promise<void> {
+    const row = this.getForkOpRow(forkId);
+    const forkedContextId = row?.["forked_context_id"] as string | null | undefined;
+    if (forkedContextId) {
+      try {
+        await this.callMain("runtime.destroyContext", { contextId: forkedContextId });
+      } catch (e) {
+        console.error(`[Channel] fork rollback destroyContext failed for ${forkedContextId}:`, e);
+      }
+    }
+    this.setForkOpPhase(forkId, "rolledback");
+  }
+
+  /** Append the durable `channel.forked` event to the parent log (this channel).
+   *  Deterministic envelopeId makes a reconcile re-append a no-op. */
+  private async appendForkEvent(
+    forkId: string,
+    opts: ForkOpts,
+    fork: {
+      forkedChannelId: string;
+      forkedContextId: string;
+      rootChannelId: string;
+      seededMessageId?: string;
+    }
+  ): Promise<void> {
+    void fork.rootChannelId;
+    const actor = opts.seed?.author ?? this.participantRef(this.rpcCallerId ?? "system");
+    const event: AgenticEvent<"channel.forked"> = {
+      kind: "channel.forked",
+      actor,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        forkId,
+        forkedChannelId: fork.forkedChannelId,
+        forkedContextId: fork.forkedContextId,
+        forkPointId: opts.forkPointPubsubId,
+        label: opts.label ?? opts.reason,
+        reason: opts.reason,
+        actor,
+        ...(fork.seededMessageId ? { seededMessageId: fork.seededMessageId } : {}),
+      },
+      createdAt: new Date().toISOString(),
+    };
+    const logged = await this.appendDurable({
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: event,
+      senderId: "system",
+      messageId: `fork-event:${forkId}`,
+      idempotency: "idempotent-by-id",
+    });
+    broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, "system");
+  }
+
+  /** Rename a direct child fork (durable `channel.fork_renamed` on this log). */
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  async renameFork(forkId: string, label: string): Promise<void> {
+    const event: AgenticEvent<"channel.fork_renamed"> = {
+      kind: "channel.fork_renamed",
+      actor: this.participantRef(this.rpcCallerId ?? "system"),
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, forkId, label },
+      createdAt: new Date().toISOString(),
+    };
+    const logged = await this.appendDurable({
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: event,
+      senderId: "system",
+    });
+    broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, "system");
+  }
+
+  /** Archive a direct child fork (durable `channel.fork_archived` latch). */
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  async archiveFork(forkId: string): Promise<void> {
+    const event: AgenticEvent<"channel.fork_archived"> = {
+      kind: "channel.fork_archived",
+      actor: this.participantRef(this.rpcCallerId ?? "system"),
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, forkId },
+      createdAt: new Date().toISOString(),
+    };
+    const logged = await this.appendDurable({
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: event,
+      senderId: "system",
+    });
+    broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, "system");
+  }
+
+  /**
+   * List the DIRECT-CHILD forks rooted off THIS channel — folded from this
+   * channel's OWN durable log (`channel.forked` / `channel.fork_renamed` /
+   * `channel.fork_archived` envelopes) through the SAME reducer fold the client
+   * uses, so the projection can never drift from the UI's. Archived forks are
+   * returned too (the UI filters). A pure read — no writes. The fork switcher
+   * shows SIBLING forks by reading the PARENT channel's `listForks` (WS-8
+   * deferred this for lack of a cheap getForks RPC).
+   */
+  @rpc({ callers: ["panel", "worker", "server", "do"] })
+  async listForks(): Promise<{ forks: ForkProjection[] }> {
+    const PAGE = 500;
+    let view = createInitialChannelViewState();
+    let afterSeq = 0;
+    for (;;) {
+      const envelopes = await this.channelLog.read({
+        afterSeq,
+        limit: PAGE,
+        payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      });
+      if (envelopes.length === 0) break;
+      for (const envelope of envelopes) {
+        afterSeq = envelope.seq;
+        const kind = (envelope.payload as AgenticEvent | null)?.kind;
+        if (
+          kind === "channel.forked" ||
+          kind === "channel.fork_renamed" ||
+          kind === "channel.fork_archived"
+        ) {
+          view = reduceChannelView(view, this.forkFoldEnvelope(envelope));
+        }
+      }
+      if (envelopes.length < PAGE) break;
+    }
+    return { forks: view.forks };
+  }
+
+  /** Map a durable log envelope onto the `ChannelEnvelope` shape the reducer
+   *  fold consumes (fork payloads carry no blob-spilled fields, so the
+   *  non-hydrated `read()` payload is fed directly). */
+  private forkFoldEnvelope(envelope: LogEnvelope): ChannelEnvelope {
+    return {
+      envelopeId: String(envelope.envelopeId) as ChannelEnvelope["envelopeId"],
+      channelId: this.objectKey as ChannelEnvelope["channelId"],
+      seq: envelope.seq,
+      from: envelope.actor,
+      payload: envelope.payload,
+      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      publishedAt: envelope.appendedAt,
+    };
+  }
+
+  /** Resume or roll back any interrupted fork op (multiplexed onto alarm()). */
+  private async reconcileForkOps(): Promise<void> {
+    const stale = Date.now() - FORK_OP_RECONCILE_MS;
+    const rows = this.sql
+      .exec(
+        `SELECT fork_id FROM fork_ops
+           WHERE phase NOT IN ('done', 'rolledback') AND updated_at < ?`,
+        stale
+      )
+      .toArray();
+    for (const row of rows) {
+      const forkId = row["fork_id"] as string;
+      try {
+        await this.runForkOp(forkId);
+      } catch (err) {
+        console.warn(`[Channel] fork op ${forkId} reconcile failed:`, err);
+      }
+    }
+  }
+
+  private nextForkOpReconcileAt(now: number): number | null {
+    const oldest = this.sql
+      .exec(
+        `SELECT MIN(updated_at) AS oldest FROM fork_ops WHERE phase NOT IN ('done', 'rolledback')`
+      )
+      .toArray()[0]?.["oldest"];
+    void now;
+    return typeof oldest === "number" ? oldest + FORK_OP_RECONCILE_MS : null;
+  }
+
+  // ── appendSeed — the forged, human-attributed PRIMARY (SECURITY surface) ───
+
+  /**
+   * Author the fork's opening message on the CHILD channel AS the human, with
+   * NO roster entry — the first path that forges a human-attributed primary
+   * append. Hard-scoped to the owning fork op (§E3): it succeeds ONLY when THIS
+   * channel holds a one-shot seed authorization (handed to it by its parent at
+   * postClone) matching the forkId AND the exact seed, and the forging caller is
+   * that parent. A userland agent guessing a forkId finds no authorization.
+   */
+  @rpc({ callers: ["worker", "server", "do"] })
+  async appendSeed(
+    forkOpRef: { forkId: string },
+    envelope: ForkSeed
+  ): Promise<{ messageId: string; seq: number }> {
+    const forkId = forkOpRef.forkId;
+    const messageId = `fork-seed:${forkId}`;
+    // Idempotent: a re-drive after the message is durable returns it — even once
+    // the one-shot authorization has been consumed.
+    const existing = await this.channelLog.getEventByEnvelopeId(messageId);
+    if (existing) return { messageId, seq: existing.id };
+
+    const auth = this.readForkSeedAuth();
+    if (!auth || auth.forkId !== forkId) {
+      throw new Error(
+        `appendSeed: no in-flight fork-seed authorization for fork ${forkId} on this channel`
+      );
+    }
+    const parent = this.getStateValue("forkedFrom");
+    if (this.rpcCallerKind === "do" && this.rpcCallerId !== parent) {
+      throw new Error(
+        `appendSeed: caller ${this.rpcCallerId ?? "unknown"} is not the owning fork parent`
+      );
+    }
+    if (JSON.stringify(envelope.author) !== JSON.stringify(auth.seed.author)) {
+      throw new Error(`appendSeed: envelope author does not match the authorized fork seed`);
+    }
+
+    const author = envelope.author;
+    const seedEvent: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: author,
+      causality: { messageId: messageId as never },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "user",
+        blocks: envelope.blocks,
+        outcome: "completed",
+        tier: "primary",
+        ...(envelope.replaces
+          ? { replaces: { messageId: envelope.replaces.messageId as never, seq: envelope.replaces.seq } }
+          : {}),
+      },
+      createdAt: new Date().toISOString(),
+    };
+    const logged = await this.appendDurable({
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: seedEvent,
+      senderId: author.participantId ?? author.id,
+      senderMetadata: author.metadata,
+      messageId,
+      idempotency: "idempotent-by-id",
+    });
+    broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, logged.senderId);
+    this.clearForkSeedAuth();
+    return { messageId, seq: logged.id };
+  }
+
+  private readForkSeedAuth(): ForkSeedAuthorization | null {
+    const raw = this.getStateValue("forkSeedAuth");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as ForkSeedAuthorization;
+    } catch {
+      return null;
+    }
+  }
+
+  private clearForkSeedAuth(): void {
+    this.deleteStateValue("forkSeedAuth");
+  }
+
   // ── Fork support ────────────────────────────────────────────────────────
 
   /**
    * Called after cloneDO() copies the parent's SQLite. Forks the durable
    * channel log (no-copy), clears operational state, and REBUILDS the policy
    * caches by replaying the forked lineage — conversation state survives the
-   * fork (WS2 §4.5).
+   * fork (WS2 §4.5). Also lands the clone's fork provenance + one-shot seed
+   * authorization from the owning parent fork op (`forkAuth`).
    */
-  @rpc({ callers: ["worker", "server"] })
+  @rpc({ callers: ["worker", "server", "do"] })
   async postClone(
     parentChannelId: string,
     forkPointId: number,
@@ -1552,7 +2247,17 @@ export class PubSubChannel extends DurableObjectBase {
     // the clone in a fresh, isolated context; thread it so the channel's stored
     // contextId re-homes (matching the clone's entity record). Omit for a legacy
     // same-context clone (keeps the inherited contextId).
-    newContextId?: string
+    newContextId?: string,
+    // Provenance + seed authorization from the owning parent fork op. `rootChannelId`
+    // roots the lineage tree; `seed` licenses exactly one `appendSeed`;
+    // `homeableTargets` are the cloned entity ids — a pending call whose target is
+    // NOT among them could not follow the fork and is settled `aborted-by-fork` (C6).
+    forkAuth?: {
+      forkId: string;
+      rootChannelId: string;
+      seed?: ForkSeed;
+      homeableTargets?: string[];
+    }
   ): Promise<void> {
     // Fix identity: cloneDO copies parent's __objectKey; overwrite with our actual key
     this.sql.exec(
@@ -1566,7 +2271,22 @@ export class PubSubChannel extends DurableObjectBase {
     }
     this.setStateValue("forkedFrom", parentChannelId);
     this.setStateValue("forkPointId", String(forkPointId));
+    if (forkAuth) {
+      this.setStateValue("rootChannelId", forkAuth.rootChannelId);
+      this.setStateValue("forkId", forkAuth.forkId);
+      if (forkAuth.seed) {
+        this.setStateValue(
+          "forkSeedAuth",
+          JSON.stringify({ forkId: forkAuth.forkId, seed: forkAuth.seed })
+        );
+      }
+    }
     await this.channelLog.forkFrom(parentChannelId, forkPointId);
+    // The child must NOT inherit the parent's fork journal or lineage roster —
+    // it runs neither the parent's reconciler nor its head fan-out.
+    this.sql.exec(`DELETE FROM fork_ops`);
+    this.sql.exec(`DELETE FROM lineage_subscribers`);
+    this.deleteStateValue("lineageDirtyAt");
     // Clear operational state + caches
     this.sql.exec(`DELETE FROM participants`);
     this.sql.exec(`DELETE FROM pending_calls`);
@@ -1575,6 +2295,140 @@ export class PubSubChannel extends DurableObjectBase {
     // Rebuild pending_calls for any started-without-terminal in the inherited
     // prefix (they will be abandoned/redelivered by normal roster flow).
     await this.calls.reconcilePendingCalls(true);
+    // Settle calls that could not follow the fork (target not cloned) —
+    // aborted-by-fork rather than left hanging until deadline (C6).
+    if (forkAuth?.homeableTargets) {
+      await this.settleUnhomeablePendingCalls(new Set(forkAuth.homeableTargets));
+    }
+  }
+
+  private async settleUnhomeablePendingCalls(homeable: Set<string>): Promise<void> {
+    const targets = new Set<string>();
+    for (const row of this.sql.exec(`SELECT DISTINCT target_id FROM pending_calls`).toArray()) {
+      targets.add(String((row as Record<string, unknown>)["target_id"]));
+    }
+    for (const targetId of targets) {
+      if (homeable.has(targetId)) continue;
+      await this.calls.failPendingCallsTargeting(targetId, "aborted-by-fork");
+    }
+  }
+
+  // ── Lineage subscriptions + fork.head_changed hub ─────────────────────────
+  //
+  // A NEW signal-only subscription MODE: unlike `subscribe` (always durable
+  // replay), `subscribeLineage` registers a lightweight roster that the root of
+  // a fork tree fans ephemeral `fork.head_changed` signals to. Each channel, on
+  // a durable head advance, reports up its `forkedFrom` chain (debounced) to the
+  // root; the root fans out to its lineage subscribers. Badges reconcile from
+  // durable state on open (§H) — a missed signal is not durable.
+
+  @rpc({ callers: ["panel", "do"] })
+  async subscribeLineage(
+    participantId: string,
+    metadata: Record<string, unknown> = {}
+  ): Promise<{ ok: true }> {
+    if (!this.isAuthorizedParticipantCaller(participantId)) {
+      const caller = this.caller;
+      throw new Error(
+        `Participant ${participantId} cannot subscribe to lineage by caller ${caller?.callerId ?? "unknown"}`
+      );
+    }
+    this.sql.exec(
+      `INSERT OR REPLACE INTO lineage_subscribers (id, metadata, created_at) VALUES (?, ?, ?)`,
+      participantId,
+      JSON.stringify(metadata),
+      Date.now()
+    );
+    return { ok: true };
+  }
+
+  @rpc({ callers: ["panel", "do"] })
+  async unsubscribeLineage(participantId: string): Promise<void> {
+    this.assertParticipantCaller(participantId, "unsubscribeLineage");
+    this.sql.exec(`DELETE FROM lineage_subscribers WHERE id = ?`, participantId);
+  }
+
+  /** Relay point for a head advance reported up the chain from a descendant. */
+  @rpc({ callers: ["do", "worker", "server"] })
+  async reportLineageHead(report: { channelId: string; headSeq: number }): Promise<void> {
+    await this.relayLineageHead(report.channelId, report.headSeq);
+  }
+
+  /** Record a local durable head advance for the debounced fan-out. */
+  private noteLineageHeadAdvance(seq: number): void {
+    const pending = Number(this.getStateValue("lineagePendingHead") ?? 0);
+    if (seq <= pending) return;
+    this.setStateValue("lineagePendingHead", String(seq));
+    if (!this.getStateValue("lineageDirtyAt")) {
+      this.setStateValue("lineageDirtyAt", String(Date.now()));
+      this.scheduleNextAlarm();
+    }
+  }
+
+  private nextLineageReportAt(): number | null {
+    const dirtyAt = this.getStateValue("lineageDirtyAt");
+    return dirtyAt ? Number(dirtyAt) + LINEAGE_REPORT_DEBOUNCE_MS : null;
+  }
+
+  private async flushLineageHeadReport(): Promise<void> {
+    if (!this.getStateValue("lineageDirtyAt")) return;
+    const head = Number(this.getStateValue("lineagePendingHead") ?? 0);
+    this.deleteStateValue("lineageDirtyAt");
+    await this.relayLineageHead(this.objectKey, head);
+  }
+
+  /** Root → fan out to lineage subscribers; otherwise forward up to the parent. */
+  private async relayLineageHead(originChannelId: string, headSeq: number): Promise<void> {
+    const provenance = this.computeProvenance();
+    if (provenance.kind === "fork") {
+      try {
+        const parentRef = await this.resolveChannelRef(provenance.forkedFrom);
+        await this.rpc.call(doTarget(parentRef), "reportLineageHead", [
+          { channelId: originChannelId, headSeq },
+        ]);
+      } catch (err) {
+        console.warn(`[Channel] lineage head forward to ${provenance.forkedFrom} failed:`, err);
+      }
+      return;
+    }
+    this.fanoutLineageHead(originChannelId, headSeq);
+  }
+
+  private fanoutLineageHead(originChannelId: string, headSeq: number): void {
+    const subs = this.sql.exec(`SELECT id FROM lineage_subscribers`).toArray();
+    if (subs.length === 0) return;
+    const event = buildChannelEvent(
+      0,
+      `linsig_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      "signal",
+      JSON.stringify({
+        content: JSON.stringify({ channelId: originChannelId, headSeq }),
+        contentType: FORK_HEAD_CHANGED_SIGNAL,
+      }),
+      "system",
+      undefined,
+      Date.now()
+    );
+    const signal = channelEventToRpcSignal(event);
+    for (const row of subs) {
+      const pid = (row as Record<string, unknown>)["id"] as string;
+      void queueEmit(
+        this.broadcastDeps,
+        pid,
+        { channelId: this.objectKey, message: signal },
+        (err) => {
+          if (
+            err?.code === "TARGET_NOT_REACHABLE" ||
+            err?.code === "RECONNECT_GRACE_EXPIRED" ||
+            err?.code === "DO_NOT_CREATED"
+          ) {
+            this.sql.exec(`DELETE FROM lineage_subscribers WHERE id = ?`, pid);
+            return true;
+          }
+          return false;
+        }
+      );
+    }
   }
 
   // ── State introspection ─────────────────────────────────────────────────

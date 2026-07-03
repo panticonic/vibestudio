@@ -78,7 +78,6 @@
       "@workspace-skills/system-testing": ["workspace/skills/system-testing/index.ts"],
       "@workspace-workers/agent-worker": ["workspace/workers/agent-worker/index.ts"],
       "@workspace-workers/email-sync": ["workspace/workers/email-sync/index.ts"],
-      "@workspace-workers/fork": ["workspace/workers/fork/index.ts"],
       "@workspace-workers/hello": ["workspace/workers/hello/index.ts"],
       "@workspace-workers/test-agent": ["workspace/workers/test-agent/index.ts"],
       "@workspace/about-shared/types": ["workspace/packages/about-shared/types.ts"],

@@ -74,6 +74,7 @@ export type {
   InlineUiCardPayload,
   ActionBarPayload,
   ApprovalCardPayload,
+  ForkRowPayload,
   CustomMessageCardPayload,
   CustomMessageDisplayMode,
   CustomMessageUpdatePayload,
@@ -106,7 +107,7 @@ export type {
 } from "./custom-message-types.js";
 
 // --- Invocation card payload (derived UI shape for invocation events) ---
-export type { InvocationCardPayload, ToolExecutionState } from "./invocation-card-payload.js";
+export type { InvocationCardPayload, ToolExecutionState, SubagentRunState } from "./invocation-card-payload.js";
 export { parseInvocationCardPayload } from "./invocation-card-payload.js";
 
 // --- Shared wire-event → ChatMessage merge helpers ---

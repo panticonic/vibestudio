@@ -303,6 +303,21 @@ describe("new event kinds", () => {
     expect(storedAgenticEventSchema.safeParse(event).success).toBe(true);
   });
 
+  it("parses memory.recalled", () => {
+    const event = {
+      ...base,
+      kind: "memory.recalled",
+      payload: {
+        protocol: "agentic.trajectory.v1",
+        query: "what changed in the build system",
+        results: [{ score: 0.9 }],
+        anchors: ["env-1"],
+        metadata: { recallRun: 1 },
+      },
+    };
+    expect(storedAgenticEventSchema.safeParse(event).success).toBe(true);
+  });
+
   it("parses build.completed", () => {
     const event = {
       ...base,

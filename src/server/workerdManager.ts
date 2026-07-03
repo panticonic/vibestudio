@@ -2510,6 +2510,12 @@ export default { fetch() { return new Response("universal-do host"); } };
     const tgtHash = this.universalHostHash({ ...ref, objectKey: newObjectKey });
 
     const files = await fs.promises.readdir(dir).catch(() => [] as string[]);
+    // Upsert-safe (idempotent) for cloneContext targetKey retries: if the target
+    // already has facet storage, a prior clone attempt succeeded — skip rather
+    // than double-write (which could clobber a clone that has since diverged).
+    if (files.some((f) => f.startsWith(`${tgtHash}.`))) {
+      return { source: ref.source, className: ref.className, objectKey: newObjectKey };
+    }
     const srcFiles = files.filter((f) => f.startsWith(`${srcHash}.`));
     if (srcFiles.length === 0) {
       throw new Error(

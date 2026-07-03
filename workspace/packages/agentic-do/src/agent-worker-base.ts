@@ -281,7 +281,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         sourceHead: () => `ctx:${this.subscriptions.getContextId(channelId)}`,
       }
     );
-    return [
+    const base = [
       createReadTool(cwd, fs),
       createLsTool(cwd, fs),
       createGrepTool(cwd, fs),
@@ -320,6 +320,245 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         },
       }),
     ] as unknown as AgentTool[];
+    // The generalized `say` tool (carries saliency:"say"; the config-level
+    // publishPolicy governs whether model narration also publishes) + the
+    // subagent supervision surface. The child-side `complete` tool is added
+    // ONLY when this agent is itself a subagent.
+    return [...base, this.createSayTool(channelId), ...this.createSubagentTools()];
+  }
+
+  /** The generalized `say` tool: an explicit, deliberate channel utterance
+   *  (saliency:"say"). Its messageId is derived from the tool-call id, so a
+   *  redriven invocation re-sends the SAME message (dedup), never a duplicate. */
+  private createSayTool(channelId: string): AgentTool<never> {
+    return {
+      name: "say",
+      label: "say",
+      description:
+        "Send a concise, deliberate message to the channel. This is the explicit way to surface text to participants (e.g. when the agent publishes only on demand).",
+      parameters: {
+        type: "object",
+        properties: {
+          content: { type: "string", description: "Message text to send to the channel." },
+          replyTo: { type: "string", description: "Optional message id this is replying to." },
+          mentions: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional participant IDs to mention.",
+          },
+        },
+        required: ["content"],
+      } as never,
+      execute: async (toolCallId, params) => {
+        const input = params as { content?: unknown; replyTo?: unknown; mentions?: unknown };
+        if (typeof input.content !== "string" || input.content.trim().length === 0) {
+          throw new Error("say requires non-empty content");
+        }
+        const participantId = this.subscriptions.getParticipantId(channelId);
+        if (!participantId) throw new Error("agent is not subscribed to the channel");
+        const descriptor = this.getParticipantInfo(
+          channelId,
+          this.subscriptions.getConfig(channelId)
+        );
+        const messageId = `say:${toolCallId}`;
+        await this.createChannelClient(channelId).send(participantId, messageId, input.content, {
+          saliency: "say",
+          senderMetadata: {
+            ...descriptor.metadata,
+            name: descriptor.name,
+            type: descriptor.type,
+            handle: descriptor.handle,
+          },
+          replyTo: typeof input.replyTo === "string" ? input.replyTo : undefined,
+          mentions: Array.isArray(input.mentions)
+            ? input.mentions.filter((mention): mention is string => typeof mention === "string")
+            : undefined,
+        });
+        return {
+          content: [{ type: "text", text: `sent message ${messageId}` }],
+          details: { messageId },
+        };
+      },
+    };
+  }
+
+  /** The subagent tool surface: parent-side supervision (spawn/send/inspect/
+   *  merge/pick/read/close) plus the child-side `complete` terminal trigger
+   *  (advertised only to subagents). The vessel implements the mechanics;
+   *  `spawn_subagent` PARKS via the local-tool executor (it never reaches the
+   *  `execute` below — see AgentVesselBase.runDeferredSpawn). */
+  private createSubagentTools(): AgentTool[] {
+    const tools: AgentTool[] = [
+      {
+        name: "spawn_subagent",
+        label: "spawn_subagent",
+        description:
+          "Delegate a sub-task to a child agent in its own forked context. mode:'fresh' seeds a new agent with `task`; mode:'fork' re-roots a child from your current trajectory. Returns once the child completes; inspect/merge/pick its work with the other *_subagent tools.",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              enum: ["fresh", "fork"],
+              description: "'fresh' = new agent seeded via the task; 'fork' = branch from your trajectory.",
+            },
+            task: {
+              type: "string",
+              description: "The task/instruction for the subagent (required for 'fresh').",
+            },
+            source: { type: "string", description: "Optional agent source repo path (defaults to your own)." },
+            config: { type: "object", description: "Optional child agent config (model/handle/etc.)." },
+            label: { type: "string", description: "Optional short label for the run." },
+          },
+          required: ["mode"],
+        } as never,
+        execute: async () => {
+          throw new Error("spawn_subagent is handled by the local-tool executor");
+        },
+      } as AgentTool,
+      {
+        name: "send_to_subagent",
+        label: "send_to_subagent",
+        description: "Post a message into a running subagent's task channel.",
+        parameters: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The subagent run id." },
+            message: { type: "string", description: "Message to send to the subagent." },
+          },
+          required: ["runId", "message"],
+        } as never,
+        execute: async (toolCallId, params) => {
+          const p = params as { runId?: unknown; message?: unknown };
+          return this.sendToSubagent(toolCallId, String(p.runId ?? ""), String(p.message ?? ""));
+        },
+      } as AgentTool,
+      {
+        name: "inspect_subagent",
+        label: "inspect_subagent",
+        description:
+          "Inspect a subagent's working tree (child context) via vcs: query 'status', 'diff', 'log', or a file path.",
+        parameters: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The subagent run id." },
+            query: {
+              type: "string",
+              description: "'status' | 'diff' | 'log' | a file path (default 'status').",
+            },
+          },
+          required: ["runId"],
+        } as never,
+        execute: async (_toolCallId, params) => {
+          const p = params as { runId?: unknown; query?: unknown };
+          return this.inspectSubagent(String(p.runId ?? ""), String(p.query ?? "status"));
+        },
+      } as AgentTool,
+      {
+        name: "merge_subagent",
+        label: "merge_subagent",
+        description:
+          "Take EVERYTHING from a subagent: merge its child context into yours (commit-gated on both sides).",
+        parameters: {
+          type: "object",
+          properties: { runId: { type: "string", description: "The subagent run id." } },
+          required: ["runId"],
+        } as never,
+        execute: async (_toolCallId, params) => {
+          const p = params as { runId?: unknown };
+          return this.mergeSubagent(String(p.runId ?? ""));
+        },
+      } as AgentTool,
+      {
+        name: "pick_from_subagent",
+        label: "pick_from_subagent",
+        description:
+          "Selectively cherry-pick commits/paths from a subagent's child context (see vcs.pick picks).",
+        parameters: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The subagent run id." },
+            picks: {
+              type: "array",
+              description: "Pick specs: {kind:'commit',repoPath,eventId} | {kind:'paths',paths:[…]}.",
+              items: { type: "object" },
+            },
+          },
+          required: ["runId", "picks"],
+        } as never,
+        execute: async (_toolCallId, params) => {
+          const p = params as { runId?: unknown; picks?: unknown };
+          return this.pickFromSubagent(String(p.runId ?? ""), p.picks);
+        },
+      } as AgentTool,
+      {
+        name: "read_subagent",
+        label: "read_subagent",
+        description:
+          "Read a subagent's task-channel messages since a cursor. Returns the child's messages + the next cursor.",
+        parameters: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The subagent run id." },
+            afterSeq: { type: "number", description: "Return messages after this channel seq (default 0)." },
+          },
+          required: ["runId"],
+        } as never,
+        execute: async (_toolCallId, params) => {
+          const p = params as { runId?: unknown; afterSeq?: unknown };
+          return this.readSubagent(
+            String(p.runId ?? ""),
+            typeof p.afterSeq === "number" ? p.afterSeq : 0
+          );
+        },
+      } as AgentTool,
+      {
+        name: "close_subagent",
+        label: "close_subagent",
+        description:
+          "Close a subagent run: cancels it if still open, then tears down its context (and its own subagents).",
+        parameters: {
+          type: "object",
+          properties: {
+            runId: { type: "string", description: "The subagent run id." },
+            discard: { type: "boolean", description: "Discard the child's work (record it as discarded)." },
+          },
+          required: ["runId"],
+        } as never,
+        execute: async (_toolCallId, params) => {
+          const p = params as { runId?: unknown; discard?: unknown };
+          return this.closeSubagent(String(p.runId ?? ""), p.discard === true);
+        },
+      } as AgentTool,
+    ];
+    if (this.isSubagent()) {
+      tools.push({
+        name: "complete",
+        label: "complete",
+        description:
+          "Finish this subagent run and hand your report back to the parent. This is the explicit terminal trigger (turn closure and idle are NOT terminal).",
+        parameters: {
+          type: "object",
+          properties: {
+            report: { type: "string", description: "Your final report to the parent." },
+            outcome: {
+              type: "string",
+              enum: ["success", "failed"],
+              description: "Run outcome (default 'success').",
+            },
+          },
+          required: ["report"],
+        } as never,
+        execute: async (_toolCallId, params) => {
+          const p = params as { report?: unknown; outcome?: unknown };
+          return this.completeAsSubagent(
+            String(p.report ?? ""),
+            p.outcome === "failed" ? "failed" : "success"
+          );
+        },
+      } as AgentTool);
+    }
+    return tools;
   }
 
   private createAskUserTool(): AgentTool {

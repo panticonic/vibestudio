@@ -411,20 +411,26 @@ describe("vibez1 vcs commands", () => {
   it("merge human output distinguishes clean and conflicting resolution steps", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ({
-      status: "merged",
-      mergeable: "clean",
-      upstreamCommits: [
-        { eventId: "evt-1", message: "main moved", stateHash: "state:main", createdAt: null },
-      ],
-    }));
+    const { rpcBodies } = stubServer(() => [
+      {
+        repoPath: "panels/notes",
+        status: "merged",
+        mergeable: "clean",
+        upstreamCommits: [
+          { eventId: "evt-1", message: "main moved", stateHash: "state:main", createdAt: null },
+        ],
+      },
+    ]);
 
     const { main } = await import("../client.js");
     await withTtyStdout(async () => {
       await expect(main(["vcs", "merge", "--repo", "panels/notes"])).resolves.toBe(0);
     });
 
-    expect(rpcBodies[0]).toEqual({ method: "vcs.merge", args: ["panels/notes", "ctx:ctx_1"] });
+    expect(rpcBodies[0]).toEqual({
+      method: "vcs.merge",
+      args: [{ source: "main", repoPaths: ["panels/notes"], head: "ctx:ctx_1" }],
+    });
     const logs = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
     expect(
       logs.some((line) => line.includes("clean merge committed — push now fast-forwards."))

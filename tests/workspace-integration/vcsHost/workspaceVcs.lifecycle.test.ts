@@ -352,34 +352,90 @@ describe("WorkspaceVcs — full context lifecycle (e2e)", () => {
     ).toMatchObject({ kind: "text", text: expect.stringContaining("x = 20") });
   });
 
-  it("forkContext snapshots the source's working files as the target's isolated base", async () => {
+  it("forkContext is LINEAGE-TRUE: shares the source's committed base and copies its uncommitted working edits", async () => {
     const src = "fork-src";
     const dst = "fork-dst";
+    const srcHead = vcsContextHead(src);
+    const dstHead = vcsContextHead(dst);
     await vcs.pinContext(src);
-    // Give the source divergent committed content.
-    await editCtx(src, "packages/foo", "index.ts", "export const x = 99;\n");
+
+    // The source carries BOTH kinds of state that fork must preserve distinctly:
+    //  • a COMMITTED edit on foo — a real committed ctx-head state node, and
+    //  • an UNCOMMITTED working edit on bar — a dirty row with no head yet.
+    const srcCommit = await editCtx(src, "packages/foo", "index.ts", "export const x = 99;\n");
+    expect(srcCommit.status).toBe("committed");
+    const srcFooState = srcCommit.stateHash;
+    expect(await vcs.resolveHead(srcHead, "packages/foo")).toBe(srcFooState);
+    await vcs.recordEdit({
+      head: srcHead,
+      actor: USER,
+      repoPath: "packages/bar",
+      edits: [{ kind: "write", path: "index.ts", content: text("export const y = 42;\n") }],
+    });
     const srcView = await vcs.resolveContextView(src);
 
-    // Fork the source's full working snapshot into a fresh context.
+    // Fork — lineage-true, not a snapshot flatten.
     await vcs.forkContext(src, dst);
 
-    // The target pins exactly the source's composed view…
-    expect(await vcs.contextBaseView(dst)).toBe(srcView);
-    // …so it reads the source's edited content (file-state isolation), and it
-    // starts CLEAN (no inherited ctx heads — the snapshot is its base).
-    expect(
-      (await vcs.readFile(await vcs.resolveContextView(dst), "packages/foo/index.ts"))?.content
-    ).toMatchObject({ kind: "text", text: expect.stringContaining("x = 99") });
-    expect(await ctxHeadRefs(dst)).toEqual([]);
+    // (base) The child inherits the source's PINNED base — NOT a flattened
+    // snapshot of the source's composed view (that was the OLD semantics, and
+    // is exactly what would bake the uncommitted edit into a clean base).
+    const srcBase = await vcs.contextBaseView(src);
+    expect(await vcs.contextBaseView(dst)).toBe(srcBase);
+    expect(await vcs.contextBaseView(dst)).not.toBe(srcView);
 
-    // Editing the fork diverges without touching the source.
-    await editCtx(dst, "packages/foo", "index.ts", "export const x = 1234;\n");
+    // (a) The child's committed foo base IS the source's committed state node —
+    // same state hash AND same commit event id, i.e. the SHARED ancestor node
+    // (content-addressed) that getMergeBase relies on. Only the committed head
+    // is inherited into gad_worktree_heads; bar (working-only) has no head row.
+    expect(await vcs.resolveHead(dstHead, "packages/foo")).toBe(srcFooState);
+    const dstHeadRefs = await ctxHeadRefs(dst);
+    expect(dstHeadRefs.length).toBe(1);
+    const [fooLogId] = dstHeadRefs;
+    const srcRef = await caller.call<{ stateHash: string; commitEventId: string | null }>(
+      "resolveWorktreeHead",
+      { logId: fooLogId, head: srcHead }
+    );
+    const dstRef = await caller.call<{ stateHash: string; commitEventId: string | null }>(
+      "resolveWorktreeHead",
+      { logId: fooLogId, head: dstHead }
+    );
+    expect(dstRef.stateHash).toBe(srcRef.stateHash);
+    expect(dstRef.commitEventId).toBe(srcRef.commitEventId); // shared commit identity
+
+    // (b) The source's UNCOMMITTED bar edit is copied as the child's OWN
+    // uncommitted working edit — visible in the composed view and reported
+    // UNCOMMITTED (forked:false, no head), while foo reports committed+ahead.
+    expect(
+      (await vcs.readFile(await vcs.resolveContextView(dst), "packages/bar/index.ts"))?.content
+    ).toMatchObject({ kind: "text", text: expect.stringContaining("y = 42") });
+    const dstStatus = await vcs.contextStatus(dst);
+    expect(dstStatus.find((s) => s.repoPath === "packages/bar")).toMatchObject({
+      forked: false,
+      uncommitted: true,
+    });
+    expect(dstStatus.find((s) => s.repoPath === "packages/foo")).toMatchObject({
+      forked: true,
+      uncommitted: false,
+      ahead: true,
+    });
+
+    // (isolation + real merge-base) Committing a NEW edit on the fork diverges
+    // without touching the source, and getMergeBase walks both foo tips back to
+    // the SHARED committed ancestor — the lineage a later merge-back reconciles
+    // against (a flattened base would leave the histories unrelated → null).
+    const dstCommit = await editCtx(dst, "packages/foo", "index.ts", "export const x = 1234;\n");
     expect(
       (await vcs.readFile(await vcs.resolveContextView(dst), "packages/foo/index.ts"))?.content
     ).toMatchObject({ kind: "text", text: expect.stringContaining("x = 1234") });
     expect(
       (await vcs.readFile(await vcs.resolveContextView(src), "packages/foo/index.ts"))?.content
     ).toMatchObject({ kind: "text", text: expect.stringContaining("x = 99") });
+    const mergeBase = await caller.call<{ baseStateHash: string | null }>("getMergeBase", {
+      leftStateHash: srcFooState,
+      rightStateHash: dstCommit.stateHash,
+    });
+    expect(mergeBase.baseStateHash).toBe(srcFooState);
   });
 
   it("records working edits then commits, exposing WORKING content before commit and committed content after", async () => {

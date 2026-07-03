@@ -59,6 +59,10 @@ export type {
   ApprovalPayload,
   BranchPayload,
   BuildCompletedPayload,
+  ChannelForkArchivedPayload,
+  ChannelForkRenamedPayload,
+  ChannelForkedPayload,
+  MemoryRecalledPayload,
   CompactionPayload,
   CustomMessageDisplayMode,
   CustomStartedPayload,
@@ -196,6 +200,7 @@ export {
 export type {
   ChannelTimelineEntry,
   ChannelViewState,
+  ForkProjection,
   ProjectedCredentialRequest,
   ProjectedCustomMessage,
   ProjectedCustomMessageUpdate,

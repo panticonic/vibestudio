@@ -1308,6 +1308,17 @@ async function main() {
           mainAdvanceGate,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          // Cross-context READ authz (throw-not-prompt): back it with WS-3's
+          // relationship registry so a caller may inspect only the contexts it
+          // owns (lifecycle) or forked (lineage). Resolved lazily per call — the
+          // entity store needs the DO dispatch, wired by the time reads run.
+          listOwnedContexts: async ({ contextId }) => {
+            const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+            const contexts = await ensureEntityStore(doDispatch).listContextEdgesByOwner({
+              ownerContextId: contextId,
+            });
+            return { contexts };
+          },
         });
       },
     });

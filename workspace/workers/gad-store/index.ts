@@ -142,6 +142,7 @@ const GAD_REQUIRED_TABLES = [
   "log_blob_refs",
   "gad_worktree_heads",
   "vcs_context_bases",
+  "vcs_context_provenance",
   "refs",
   "ref_log",
   "trajectory_turns",
@@ -1069,9 +1070,20 @@ interface ProjectionKey {
 }
 
 export class GadWorkspaceDO extends DurableObjectBase {
-  // v22: schema cut removes dead file mutation/observation projections
-  // (gad_file_observations, gad_file_mutations, gad_file_change_hunks) and the
-  // orphaned state.file_* projection paths that fed them.
+  // v24: merge of the local v23 schema cut and origin/fabling's v23 lineage
+  // schema. Both physical layouts used version 23, so the unified schema needs
+  // a fresh version to force the big-bang rebuild below.
+  // v23 (origin/fabling): lineage-true context fork + cherry-pick provenance:
+  // vcs_context_provenance (fork breadcrumb {parent, forkPoint}) and a
+  // `picked_from_json` column on gad_worktree_edit_ops (which commit / paths a
+  // working row was cherry-picked from; UX-only provenance).
+  // v23 (local gad-system-review): merge of the two v22 lines below; both cuts,
+  // one schema.
+  // v22 (fabling): P3 narrow-host push/merge orchestration moves into the DO:
+  // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
+  // `synthetic` column on gad_worktree_edit_ops (import snapshot chain restarts).
+  // v22 (gad-system-review): removes the dead file-mutation/observation
+  // projections and their state.file_* event kinds.
   // v21: worktree heads carry explicit commit_event_id, so commit ancestry is
   // keyed by event identity instead of reverse-looking-up a producer by state
   // hash.
@@ -1088,13 +1100,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // identical content states don't conflate).
   // v18: schema cut removes unimplemented knowledge sidecar projection tables.
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
-  // v22 (fabling): P3 narrow-host push/merge orchestration moves into the DO —
-  // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
-  // `synthetic` column on gad_worktree_edit_ops (import snapshot chain restarts).
-  // v22 (gad-system-review): removes the dead file-mutation/observation
-  // projections and their state.file_* event kinds.
-  // v23: the merge of the two v22 lines above — both cuts, one schema.
-  static override schemaVersion = 23;
+  static override schemaVersion = 24;
 
   /**
    * IntentIds of publish intents this live instance is actively driving — added
@@ -1138,7 +1144,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
            AND (
              name LIKE 'trajectory_%' OR name LIKE 'channel_%' OR name LIKE 'gad_%'
              OR name LIKE 'log_%'
-             OR name IN ('vcs_context_bases', 'refs', 'ref_log', 'branches', 'sessions', 'conversation_turns',
+             OR name IN ('vcs_context_bases', 'vcs_context_provenance', 'refs', 'ref_log', 'branches', 'sessions', 'conversation_turns',
                          'tool_calls', 'file_versions', 'tracked_files', 'blobs')
            )`
       )
@@ -1251,6 +1257,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
         context_id TEXT PRIMARY KEY,
         state_hash TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      )
+    `);
+    // v24: a child context's fork breadcrumb — which context it forked from and
+    // the shared base view (forkPoint) at the fork. Metadata only (UX lineage);
+    // the true merge-base connection is the shared committed state node in the
+    // transition DAG, not this row. NOT replay-rebuildable — dropped on a schema
+    // bump like every other projection (acceptable: UX-only, big-bang pre-release).
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS vcs_context_provenance (
+        context_id TEXT PRIMARY KEY,
+        parent_context_id TEXT NOT NULL,
+        fork_point_json TEXT,
+        created_at TEXT NOT NULL
       )
     `);
     this.sql.exec(`
@@ -1514,7 +1533,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
         -- example an import snapshot). Blame treats synthetic
         -- rows as chain RESTARTS (like create), never mis-blaming or tripping
         -- the first-parent chain-continuity check.
-        synthetic INTEGER
+        synthetic INTEGER,
+        -- v24: cherry-pick provenance — the source a working row was picked
+        -- from (JSON {kind:"commit",logId,eventId} or {kind:"paths",
+        -- sourceContextId}). UX breadcrumb only, never load-bearing for replay.
+        picked_from_json TEXT
       )
     `);
     // Two sequencing orders: edit_seq is per edit CALL on a (log_id, head) and
@@ -2099,6 +2122,29 @@ export class GadWorkspaceDO extends DurableObjectBase {
       forkHash: asString(row["fork_hash"]),
       parentLogId: asString(row["parent_log_id"]),
       parentHead: asString(row["parent_head"]),
+    };
+  }
+
+  /**
+   * The fork lineage recorded on a `log_heads` row: its parent log and the
+   * `(seq, hash)` it forked at (all null for a root / un-forked head). A pure
+   * read of the `parent_log_id`/`fork_seq`/`fork_hash` columns {@link forkLog}
+   * populates — the LOG lineage surface (trajectory-fork provenance), distinct
+   * from the state-DAG merge base a context fork shares. `head` defaults to the
+   * log's primary head.
+   */
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  getLogLineage(input: { logId: string; head?: string }): {
+    parentLogId: string | null;
+    forkSeq: number | null;
+    forkHash: string | null;
+  } {
+    this.ensureReady();
+    const row = this.logHeadRow(input.logId, input.head ?? CHANNEL_LOG_HEAD);
+    return {
+      parentLogId: row ? asString(row["parent_log_id"]) : null,
+      forkSeq: row && row["fork_seq"] != null ? asNumber(row["fork_seq"]) : null,
+      forkHash: row ? asString(row["fork_hash"]) : null,
     };
   }
 
@@ -4762,6 +4808,181 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
+  /** Forward edit ops that carry `fromState` to `toState` (the dual of the
+   *  inverse ops {@link revertWorking} builds): added/changed → write the AFTER
+   *  content by blob digest, removed → delete. `write` create-if-absent so a
+   *  pick over divergent content lands cleanly. */
+  private forwardEditsBetween(fromState: string, toState: string): VcsEditOp[] {
+    const diff = this.diffGadStates({ leftStateHash: fromState, rightStateHash: toState });
+    const edits: VcsEditOp[] = [];
+    for (const file of diff.added) {
+      edits.push({
+        kind: "write",
+        path: String(file["path"]),
+        content: { kind: "blob", contentHash: String(file["content_hash"]) },
+        mode: asNumber(file["mode"]),
+      });
+    }
+    for (const file of diff.removed) edits.push({ kind: "delete", path: String(file["path"]) });
+    for (const file of diff.changed) {
+      const after = file["after"] as JsonRecord;
+      edits.push({
+        kind: "write",
+        path: String(file["path"]),
+        content: { kind: "blob", contentHash: String(after["content_hash"]) },
+        mode: asNumber(after["mode"]),
+      });
+    }
+    return edits;
+  }
+
+  /**
+   * Cherry-pick edits for a commit: a 3-way against an EXPLICIT base — base =
+   * the commit's parent state, theirs = the commit's output state, ours = the
+   * caller head's CURRENT working content — so the pick lands the commit's
+   * change adapted to where the caller actually is (not a naive forward-apply
+   * of the raw diff). The merged file set is diffed back against `ours` to yield
+   * the working edits {@link vcsPick} records; conflict-marked content (if the
+   * 3-way conflicted) lands in the working tree for the caller to resolve, just
+   * as a merge resolution does.
+   */
+  private async pickCommitEdits(
+    store: HostContentStore,
+    logId: string,
+    head: string,
+    eventId: string
+  ): Promise<VcsEditOp[]> {
+    const transition = this.getGadStateTransition({ eventId });
+    const theirsState = transition?.["output_state_hash"];
+    if (typeof theirsState !== "string" || !theirsState) {
+      throw new Error(`pick: commit ${eventId} produced no output state`);
+    }
+    const inputState = transition?.["input_state_hash"];
+    const baseState = typeof inputState === "string" && inputState ? inputState : EMPTY_STATE_HASH;
+    // ours = the caller head's current working content (compose base + rows).
+    const { baseStateHash } = await this.resolveComposeBase(store, logId, head);
+    const working = await this.composeWorkingFiles(store, logId, head, baseStateHash);
+    const oursState = await this.stageAndMirror(
+      store,
+      [...working.files.values()],
+      `pick base for ${head}`
+    );
+    const result = await this.mergeEngineFor(store).compute3(
+      { base: baseState, ours: oursState, theirs: theirsState },
+      { ours: head, theirs: `commit:${eventId}` }
+    );
+    if (result.status === "up-to-date") return [];
+    const mergedState = await this.stageAndMirror(
+      store,
+      result.files.map((file) => ({
+        path: file.path,
+        contentHash: file.contentHash,
+        mode: file.mode,
+      })),
+      `pick ${eventId} into ${head}`
+    );
+    return this.forwardEditsBetween(oursState, mergedState);
+  }
+
+  /** Path-injection edits: copy the source context's WORKING content at the
+   *  requested repo-relative paths as write ops (create-if-absent). Paths absent
+   *  in the source are skipped (nothing to copy). */
+  private async pickPathEdits(
+    store: HostContentStore,
+    logId: string,
+    sourceContextId: string,
+    paths: string[]
+  ): Promise<VcsEditOp[]> {
+    const sourceState = (await this.resolveWorkingState({ logId, head: `ctx:${sourceContextId}` }))
+      .stateHash;
+    const byPath = new Map(
+      (sourceState ? await this.stateFilesFor(store, sourceState) : []).map(
+        (file) => [file.path, file] as const
+      )
+    );
+    const edits: VcsEditOp[] = [];
+    for (const path of paths) {
+      const file = byPath.get(normalizePath(path));
+      if (!file) continue;
+      edits.push({
+        kind: "write",
+        path: file.path,
+        content: { kind: "blob", contentHash: file.contentHash },
+        mode: file.mode,
+      });
+    }
+    return edits;
+  }
+
+  /**
+   * PICK — the forward dual of {@link revertWorking}. Lands a selected change
+   * onto a `ctx:*` head as UNCOMMITTED working edits (never a head advance): a
+   * `commit` pick 3-way-applies a commit's patch (see {@link pickCommitEdits});
+   * a `paths` pick injects another context's working content at specific paths.
+   * Both feed {@link applyEditOps} (revert-parity), then tag the just-created
+   * working rows with `pickedFrom` provenance (UX breadcrumb). The caller
+   * reviews and commits deliberately.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsPick(input: {
+    logId: string;
+    head: string;
+    actor: ParticipantRef;
+    pick:
+      | { kind: "commit"; eventId: string }
+      | { kind: "paths"; sourceContextId: string; paths: string[] };
+  }): Promise<{
+    editSeq: number;
+    stateHash: string;
+    baseStateHash: string;
+    changedPaths: string[];
+  }> {
+    this.ensureReady();
+    const { logId, head } = input;
+    if (head === "main" || !head.startsWith("ctx:")) {
+      throw new Error(`pick: '${head}' — picks target a ctx:* head`);
+    }
+    const store = this.contentStore();
+    const edits =
+      input.pick.kind === "commit"
+        ? await this.pickCommitEdits(store, logId, head, input.pick.eventId)
+        : await this.pickPathEdits(store, logId, input.pick.sourceContextId, input.pick.paths);
+    if (edits.length === 0) {
+      const { baseStateHash } = await this.resolveComposeBase(store, logId, head);
+      return {
+        editSeq: this.workingEditRows(logId, head).reduce(
+          (max, row) => Math.max(max, Number(row["edit_seq"] ?? 0)),
+          0
+        ),
+        stateHash: this.resolveCommittedHeadState(logId, head) ?? baseStateHash,
+        baseStateHash,
+        changedPaths: [],
+      };
+    }
+    const actorId = asString((input.actor as unknown as Record<string, unknown>)?.["id"]) ?? "";
+    const result = await this.applyEditOps({
+      logId,
+      head,
+      actorId,
+      actorJson: JSON.stringify(input.actor),
+      edits,
+    });
+    // Tag the working rows this pick just created with their provenance.
+    const provenance =
+      input.pick.kind === "commit"
+        ? { kind: "commit", logId, eventId: input.pick.eventId }
+        : { kind: "paths", sourceContextId: input.pick.sourceContextId };
+    this.sql.exec(
+      `UPDATE gad_worktree_edit_ops SET picked_from_json = ?
+       WHERE log_id = ? AND head = ? AND edit_seq = ? AND committed_event_id IS NULL`,
+      JSON.stringify(provenance),
+      logId,
+      head,
+      result.editSeq
+    );
+    return result;
+  }
+
   /**
    * The WORKING content state for a `(logId, head)` — compose base +
    * uncommitted ops — staged locally and mirrored into the content store.
@@ -6949,6 +7170,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
         `uncommitted edits on ${targetHead} — vcs.commit or vcs.discardEdits before merge`
       );
     }
+    // Commit-gated on the SOURCE side too: a ctx source with uncommitted edits
+    // has content that is NOT part of any commit, so merging it would either
+    // silently drop those edits (only committed state moves) or fold half-done
+    // work into the target. `main` sources carry no working rows. Names the
+    // source side + repo (the target gate above names the target side).
+    if (sourceHead.startsWith("ctx:") && this.workingEditRows(logId, sourceHead).length > 0) {
+      throw new Error(
+        `uncommitted edits on merge source ${sourceHead} (${this.repoPathOfLog(logId) ?? logId}) — ` +
+          `commit or discard them before merge`
+      );
+    }
     const store = this.contentStore();
     const repoPath = this.repoPathOfLog(logId);
 
@@ -7312,6 +7544,104 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.setContextBase({ contextId: input.contextId, stateHash: baseView });
     this.contextComposedViewCache.delete(input.contextId);
     return { baseView };
+  }
+
+  /** Record (or refresh) a child context's fork breadcrumb — UX lineage only,
+   *  never consulted by merge. Idempotent upsert on `context_id`. */
+  private recordContextForkProvenance(
+    contextId: string,
+    parentContextId: string,
+    forkPoint: string
+  ): void {
+    this.sql.exec(
+      `INSERT INTO vcs_context_provenance (context_id, parent_context_id, fork_point_json, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(context_id) DO UPDATE SET
+         parent_context_id = excluded.parent_context_id,
+         fork_point_json = excluded.fork_point_json,
+         created_at = excluded.created_at`,
+      contextId,
+      parentContextId,
+      JSON.stringify({ baseStateHash: forkPoint }),
+      nowIso()
+    );
+  }
+
+  /**
+   * LINEAGE-TRUE context fork — the real locus of fork (host `forkContext` is a
+   * thin wrapper). For every repo the source context touches:
+   *  1. Inherit the source's PINNED base view (or, if the source is unpinned,
+   *     pin the current workspace view — mirrors {@link vcsPinContext} create).
+   *     Unedited repos resolve against the same base.
+   *  2. SHARE the parent's committed state node — the child `ctx:<target>` head
+   *     is set to the SAME committed state hash + SAME commit event id as the
+   *     parent's committed ctx head. Because states are content-addressed and
+   *     that node already lives in `gad_state_transitions`, parent and child
+   *     literally share the ancestor, so {@link getMergeBase} connects for free
+   *     when either side later commits (its transition's first parent is the
+   *     shared state). A source ctx head with only working edits (null commit
+   *     event id) has no committed state to share → the child gets the base pin
+   *     + copied working rows for that repo, no ctx-head row.
+   *  3. COPY the source's uncommitted WORKING edit rows to the child head, so
+   *     the child's uncommitted stays uncommitted (contrast: the old snapshot
+   *     pin baked them into the child's clean base).
+   *  4. Record the fork breadcrumb.
+   * Idempotent (crash-retry / cloneContext targetKey re-run): every write is an
+   * upsert and the working-row copy delete-then-inserts, so a re-run converges.
+   * NB: this does NOT call forkLog on a ctx head — those `log_heads` fork
+   * columns are not read by getMergeBase; the state-DAG share above is the link.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsForkContext(input: { sourceContextId: string; targetContextId: string }): Promise<void> {
+    this.ensureReady();
+    const { sourceContextId, targetContextId } = input;
+    const sourceHead = `ctx:${sourceContextId}`;
+    const targetHead = `ctx:${targetContextId}`;
+    const store = this.contentStore();
+    // Resolve the base to inherit BEFORE the sync txn (workspaceViewFromRefs is
+    // async + mirrors). Inherit the source pin, else pin the live workspace view.
+    const baseStateHash =
+      this.getContextBase({ contextId: sourceContextId })?.stateHash ??
+      (await this.workspaceViewFromRefs(store));
+    // The union of repos the source touches (committed ctx heads ∪ working-only).
+    const repoPaths = this.contextWorkingFingerprint(sourceContextId).map((f) => f.repoPath);
+    this.transaction(() => {
+      this.setContextBase({ contextId: targetContextId, stateHash: baseStateHash });
+      for (const repoPath of repoPaths) {
+        const logId = logIdForRepoPath(repoPath);
+        // 2. Share the parent's committed state node (only when it has a commit
+        //    event identity — an un-committed working-only repo has no node).
+        const srcHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
+        if (srcHeadRef && srcHeadRef.commitEventId) {
+          this.setWorktreeHead(logId, targetHead, srcHeadRef.stateHash, srcHeadRef.commitEventId);
+        }
+        // 3. Copy the WORKING (uncommitted) edit rows — idempotent via
+        //    delete-then-insert so a retried fork never duplicates rows.
+        this.deleteUncommittedWorkingEdits(logId, targetHead);
+        this.sql.exec(
+          `INSERT INTO gad_worktree_edit_ops (
+             event_id, log_id, head, committed_event_id, committed_seq,
+             edit_seq, output_state_hash, ordinal, kind, path,
+             old_content_hash, new_content_hash, hunks_json, mode,
+             actor_id, actor_json, invocation_id, turn_id, created_at, synthetic,
+             picked_from_json
+           )
+           SELECT event_id, log_id, ?, NULL, NULL,
+             edit_seq, NULL, ordinal, kind, path,
+             old_content_hash, new_content_hash, hunks_json, mode,
+             actor_id, actor_json, invocation_id, turn_id, created_at, synthetic,
+             picked_from_json
+           FROM gad_worktree_edit_ops
+           WHERE log_id = ? AND head = ? AND committed_event_id IS NULL`,
+          targetHead,
+          logId,
+          sourceHead
+        );
+      }
+      // 4. Fork breadcrumb (UX lineage only).
+      this.recordContextForkProvenance(targetContextId, sourceContextId, baseStateHash);
+    });
+    this.contextComposedViewCache.delete(targetContextId);
   }
 
   /**
@@ -7756,15 +8086,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * store, and returns the merged (or conflict-marked provisional) file set —
    * no refs move and nothing is appended; callers commit the result.
    */
-  @rpc({ callers: ["do", "server"] })
-  async computeMerge(input: {
-    oursStateHash: string;
-    theirsStateHash: string;
-    labels: { ours: string; theirs: string };
-  }): Promise<MergeComputation> {
-    this.ensureReady();
-    const store = this.contentStore();
-    const engine = new MergeEngine({
+  /** The 3-way merge engine over this store's transition DAG + the content
+   *  store's blob bytes — shared by {@link computeMerge} (base auto-discovered)
+   *  and {@link vcsPick} (cherry-pick against an explicit base via compute3). */
+  private mergeEngineFor(store: HostContentStore): MergeEngine {
+    return new MergeEngine({
       listStateFiles: (stateHash) => this.stateFilesFor(store, stateHash),
       getMergeBase: async (leftStateHash, rightStateHash) =>
         this.getMergeBase({ leftStateHash, rightStateHash }).baseStateHash,
@@ -7777,6 +8103,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
         return { digest: result.digest, size: result.size };
       },
     });
+  }
+
+  @rpc({ callers: ["do", "server"] })
+  async computeMerge(input: {
+    oursStateHash: string;
+    theirsStateHash: string;
+    labels: { ours: string; theirs: string };
+  }): Promise<MergeComputation> {
+    this.ensureReady();
+    const engine = this.mergeEngineFor(this.contentStore());
     return engine.compute(input.oursStateHash, input.theirsStateHash, input.labels);
   }
 
@@ -10063,12 +10399,16 @@ const STORED_EVENT_KINDS = new Set<string>([
   "state.transition_recorded",
   "state.snapshot_ingested",
   "state.merge_applied",
+  "memory.recalled",
   "external.envelope_published",
   "external.envelope_observed",
   "external.participant_observed",
   "branch.created",
   "branch.forked",
   "branch.head_changed",
+  "channel.forked",
+  "channel.fork_renamed",
+  "channel.fork_archived",
   "turn.opened",
   "turn.waiting",
   "turn.closed",

@@ -1064,6 +1064,18 @@ async function seedConversation(
   return { ch, agent };
 }
 
+/** Seed a single agent DO in `contextId` with an explicit key. */
+async function seedDO(
+  service: Awaited<ReturnType<typeof buildDeps>>["service"],
+  contextId: string,
+  key: string,
+  parent = serverCaller
+) {
+  return (await service.handler({ caller: parent }, "createEntity", [
+    { kind: "do", source: "workers/agent", className: "AgentDO", key, contextId },
+  ])) as { id: string };
+}
+
 interface CloneEntity {
   sourceId: string;
   newId: string;
@@ -1073,6 +1085,21 @@ interface CloneEntity {
   sourceKey: string;
   newKey: string;
   targetId: string;
+}
+
+interface CloneResult {
+  contextId: string;
+  entities: CloneEntity[];
+  contexts: Array<{
+    sourceContextId: string;
+    newContextId: string;
+    ownerNewContextId: string | null;
+  }>;
+  rewired: Array<{ sourceEntityId: string; newEntityId: string }>;
+}
+
+interface OwnedContexts {
+  contexts: Array<{ contextId: string; kind: string; ownerEntityId: string | null }>;
 }
 
 describe("runtimeService.cloneContext", () => {
@@ -1233,6 +1260,95 @@ describe("runtimeService.cloneContext", () => {
     // The first DO's already-cloned storage was reclaimed.
     expect(destroyDurableStorage).toHaveBeenCalledTimes(1);
   });
+
+  it("returns the context + entity rewiring maps (non-recursive)", async () => {
+    const { service } = await buildDeps({ vcsContexts: { forkContext: vi.fn(async () => {}) } });
+    await seedConversation(service, "ctx-maps");
+    const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "ctx-maps" },
+    ])) as CloneResult;
+
+    expect(result.contexts).toEqual([
+      { sourceContextId: "ctx-maps", newContextId: result.contextId, ownerNewContextId: null },
+    ]);
+    expect(result.rewired.map((r) => r.newEntityId).sort()).toEqual(
+      result.entities.map((e) => e.newId).sort()
+    );
+    // Runtime is channel-agnostic — channel fields are absent.
+    for (const r of result.rewired) {
+      expect(r).not.toHaveProperty("sourceChannelId");
+    }
+  });
+
+  it("is idempotent under targetKey (same child + deterministic keys) and records a lineage edge", async () => {
+    const { service } = await buildDeps({ vcsContexts: { forkContext: vi.fn(async () => {}) } });
+    await seedConversation(service, "ctx-idem");
+
+    const first = (await service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "ctx-idem", targetKey: "fork:f1" },
+    ])) as CloneResult;
+    expect(first.contextId).toMatch(/^ctx-[0-9a-f]{32}$/);
+
+    const second = (await service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "ctx-idem", targetKey: "fork:f1" },
+    ])) as CloneResult;
+    // Same child context + same deterministic clone keys/ids on retry.
+    expect(second.contextId).toBe(first.contextId);
+    expect(new Set(second.entities.map((e) => e.newKey))).toEqual(
+      new Set(first.entities.map((e) => e.newKey))
+    );
+    expect(new Set(second.entities.map((e) => e.newId))).toEqual(
+      new Set(first.entities.map((e) => e.newId))
+    );
+
+    // The top-level fork records a LINEAGE (provenance) edge clone → source.
+    const lineage = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-idem", kind: "lineage" },
+    ])) as OwnedContexts;
+    expect(lineage.contexts.map((c) => c.contextId)).toEqual([first.contextId]);
+  });
+
+  it("recursively clones the LIFECYCLE subtree, re-parenting cloned children (never following lineage)", async () => {
+    const { service } = await buildDeps({ vcsContexts: { forkContext: vi.fn(async () => {}) } });
+    const rootAgent = await seedDO(service, "ctx-root", "root-agent");
+    await seedDO(service, "ctx-child", "child-agent");
+    await seedDO(service, "ctx-lineage", "lineage-agent");
+    await service.handler({ caller: serverCaller }, "recordContextEdge", [
+      {
+        contextId: "ctx-child",
+        ownerContextId: "ctx-root",
+        kind: "lifecycle",
+        ownerEntityId: rootAgent.id,
+      },
+    ]);
+    await service.handler({ caller: serverCaller }, "recordContextEdge", [
+      { contextId: "ctx-lineage", ownerContextId: "ctx-root", kind: "lineage" },
+    ]);
+
+    // Non-recursive clone of a context WITH lifecycle children → error.
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [{ sourceContextId: "ctx-root" }])
+    ).rejects.toThrow(/lifecycle|recursive/i);
+
+    const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "ctx-root", recursive: true, targetKey: "fork:rec" },
+    ])) as CloneResult;
+
+    const cloned = new Map(result.contexts.map((c) => [c.sourceContextId, c]));
+    // Root + lifecycle child cloned; lineage context NOT followed.
+    expect(cloned.has("ctx-root")).toBe(true);
+    expect(cloned.has("ctx-child")).toBe(true);
+    expect(cloned.has("ctx-lineage")).toBe(false);
+    expect(cloned.get("ctx-root")!.ownerNewContextId).toBeNull();
+    expect(cloned.get("ctx-child")!.ownerNewContextId).toBe(cloned.get("ctx-root")!.newContextId);
+
+    // The cloned child carries a lifecycle edge under the cloned root.
+    const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: cloned.get("ctx-root")!.newContextId, kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(owned.contexts.map((c) => c.contextId)).toEqual([cloned.get("ctx-child")!.newContextId]);
+    expect(result.rewired).toHaveLength(2);
+  });
 });
 
 describe("runtimeService.destroyContext", () => {
@@ -1299,5 +1415,130 @@ describe("runtimeService.destroyContext", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({ capability: "context.boundary", severity: "severe" })
     );
+  });
+
+  it("recursively tears down the LIFECYCLE subtree post-order, never crossing lineage", async () => {
+    const dropContext = vi.fn(async () => {});
+    const { service, instance } = await buildDeps({ vcsContexts: { dropContext } });
+    const rootAgent = await seedDO(service, "ctx-r", "r-agent");
+    const childAgent = await seedDO(service, "ctx-c", "c-agent");
+    const lineageAgent = await seedDO(service, "ctx-l", "l-agent");
+    await service.handler({ caller: serverCaller }, "recordContextEdge", [
+      { contextId: "ctx-c", ownerContextId: "ctx-r", kind: "lifecycle" },
+    ]);
+    await service.handler({ caller: serverCaller }, "recordContextEdge", [
+      { contextId: "ctx-l", ownerContextId: "ctx-r", kind: "lineage" },
+    ]);
+
+    await service.handler({ caller: serverCaller }, "destroyContext", [{ contextId: "ctx-r" }]);
+
+    // Root + lifecycle child destroyed; lineage (fork) context untouched.
+    expect(instance.entityResolve(rootAgent.id)?.status).toBe("retired");
+    expect(instance.entityResolve(childAgent.id)?.status).toBe("retired");
+    expect(instance.entityResolve(lineageAgent.id)?.status).toBe("active");
+    expect(dropContext).toHaveBeenCalledWith("ctx-c");
+    expect(dropContext).toHaveBeenCalledWith("ctx-r");
+    expect(dropContext).not.toHaveBeenCalledWith("ctx-l");
+    // Registry edges for the destroyed lifecycle child were cleared.
+    const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-r", kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(owned.contexts).toHaveLength(0);
+  });
+
+  it("recursive:false destroys only this context, leaving lifecycle children", async () => {
+    const { service, instance } = await buildDeps();
+    const rootAgent = await seedDO(service, "ctx-r2", "r2-agent");
+    const childAgent = await seedDO(service, "ctx-c2", "c2-agent");
+    await service.handler({ caller: serverCaller }, "recordContextEdge", [
+      { contextId: "ctx-c2", ownerContextId: "ctx-r2", kind: "lifecycle" },
+    ]);
+
+    await service.handler({ caller: serverCaller }, "destroyContext", [
+      { contextId: "ctx-r2", recursive: false },
+    ]);
+
+    expect(instance.entityResolve(rootAgent.id)?.status).toBe("retired");
+    expect(instance.entityResolve(childAgent.id)?.status).toBe("active");
+  });
+});
+
+describe("runtimeService context-relationship registry", () => {
+  it("records and lists lifecycle/lineage edges, scoped by kind", async () => {
+    const { service } = await buildDeps();
+    await service.handler({ caller: serverCaller }, "recordContextEdge", [
+      {
+        contextId: "ctx-child-a",
+        ownerContextId: "ctx-owner",
+        kind: "lifecycle",
+        ownerEntityId: "do:agent:x",
+      },
+    ]);
+    await service.handler({ caller: serverCaller }, "recordContextEdge", [
+      { contextId: "ctx-child-b", ownerContextId: "ctx-owner", kind: "lineage" },
+    ]);
+
+    const all = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-owner" },
+    ])) as OwnedContexts;
+    expect(all.contexts).toHaveLength(2);
+
+    const life = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-owner", kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(life.contexts).toEqual([
+      { contextId: "ctx-child-a", kind: "lifecycle", ownerEntityId: "do:agent:x" },
+    ]);
+    const lineage = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-owner", kind: "lineage" },
+    ])) as OwnedContexts;
+    expect(lineage.contexts).toEqual([
+      { contextId: "ctx-child-b", kind: "lineage", ownerEntityId: null },
+    ]);
+  });
+
+  it("recordContextEdge is an idempotent upsert (last write wins, no duplicate rows)", async () => {
+    const { service } = await buildDeps();
+    for (let i = 0; i < 3; i++) {
+      await service.handler({ caller: serverCaller }, "recordContextEdge", [
+        { contextId: "c", ownerContextId: "o", kind: "lifecycle", ownerEntityId: `e${i}` },
+      ]);
+    }
+    const res = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "o", kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(res.contexts).toHaveLength(1);
+    expect(res.contexts[0]!.ownerEntityId).toBe("e2");
+  });
+});
+
+describe("runtimeService.createSubagentContext", () => {
+  it("forks the parent, materializes the folder, records a lifecycle edge, idempotent under targetKey", async () => {
+    const forkContext = vi.fn(async () => {});
+    const { service, contextFolders } = await buildDeps({ vcsContexts: { forkContext } });
+
+    const out1 = (await service.handler({ caller: serverCaller }, "createSubagentContext", [
+      { parentContextId: "ctx-parent", ownerEntityId: "do:agent:a1", targetKey: "run:r1" },
+    ])) as { contextId: string };
+    expect(out1.contextId).toMatch(/^ctx-[0-9a-f]{32}$/);
+    expect(forkContext).toHaveBeenCalledWith("ctx-parent", out1.contextId);
+    expect(contextFolders.existing.has(out1.contextId)).toBe(true);
+
+    const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-parent", kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(owned.contexts).toEqual([
+      { contextId: out1.contextId, kind: "lifecycle", ownerEntityId: "do:agent:a1" },
+    ]);
+
+    // Idempotent retry returns the same child, no duplicate edge.
+    const out2 = (await service.handler({ caller: serverCaller }, "createSubagentContext", [
+      { parentContextId: "ctx-parent", ownerEntityId: "do:agent:a1", targetKey: "run:r1" },
+    ])) as { contextId: string };
+    expect(out2.contextId).toBe(out1.contextId);
+    const owned2 = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-parent", kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(owned2.contexts).toHaveLength(1);
   });
 });

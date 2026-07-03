@@ -26,6 +26,11 @@ import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import type { DODispatch } from "./doDispatch.js";
 import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord, EntitySource } from "@vibez1/shared/runtime/entitySpec";
+import type {
+  ContextEdge,
+  ContextEdgeByChild,
+  ContextEdgeKind,
+} from "@vibez1/shared/runtime/contextEdges";
 
 const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
@@ -113,6 +118,36 @@ export class WorkspaceEntityStore {
     return kind
       ? this.dispatch<EntityRecord[]>("entityListActiveByKind", kind)
       : this.dispatch<EntityRecord[]>("entityListActive");
+  }
+
+  // --- context-relationship registry (durable edges, no cache mirror) ---
+
+  /** Idempotently upsert a context-relationship edge. */
+  recordContextEdge(input: {
+    contextId: string;
+    ownerContextId: string;
+    kind: ContextEdgeKind;
+    ownerEntityId?: string;
+  }): Promise<void> {
+    return this.dispatch<undefined>("contextEdgeUpsert", input);
+  }
+
+  /** List edges owned BY a context, optionally scoped to one kind. */
+  listContextEdgesByOwner(input: {
+    ownerContextId: string;
+    kind?: ContextEdgeKind;
+  }): Promise<ContextEdge[]> {
+    return this.dispatch<ContextEdge[]>("contextEdgeListByOwner", input);
+  }
+
+  /** List edges INTO a context (child side) — walk up for authz/teardown. */
+  listContextEdgesByChild(contextId: string): Promise<ContextEdgeByChild[]> {
+    return this.dispatch<ContextEdgeByChild[]>("contextEdgeListByChild", contextId);
+  }
+
+  /** Delete every inbound edge of a context (teardown). */
+  deleteContextEdges(contextId: string): Promise<void> {
+    return this.dispatch<undefined>("contextEdgeDeleteByChild", contextId);
   }
 
   /** The hot cache, for synchronous reads (resolve/resolveActive/resolveContext/…). */

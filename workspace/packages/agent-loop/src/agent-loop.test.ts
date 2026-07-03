@@ -10,7 +10,7 @@ import {
 } from "./scenario.js";
 import { initialAgentState, overlayInputConfig, type AgentLoopConfig } from "./state.js";
 import { derivePendingEffects } from "./effects.js";
-import { defaultPolicies, silentPolicy } from "./policies/index.js";
+import { defaultPolicies, publishPolicyPolicy } from "./policies/index.js";
 import { ids } from "./ids.js";
 import type { StepPolicy } from "./step.js";
 
@@ -30,6 +30,7 @@ function scenario(opts: {
   forkSeq?: number;
   roster?: AgentLoopConfig["roster"];
   maxModelCallsPerTurn?: number | null;
+  publishPolicy?: AgentLoopConfig["publishPolicy"];
 } = {}): Scenario {
   return createScenario({
     state: initialAgentState({
@@ -41,6 +42,7 @@ function scenario(opts: {
         ...(opts.maxModelCallsPerTurn !== undefined
           ? { maxModelCallsPerTurn: opts.maxModelCallsPerTurn }
           : {}),
+        ...(opts.publishPolicy !== undefined ? { publishPolicy: opts.publishPolicy } : {}),
       },
       forkSeq: opts.forkSeq,
     }),
@@ -789,9 +791,9 @@ describe("fork policy", () => {
   });
 });
 
-describe("silent policy", () => {
+describe("publish policy: say-only", () => {
   it("suppresses publication of everything except turn open/close", () => {
-    const s = scenario({ policies: [...defaultPolicies(), silentPolicy()] });
+    const s = scenario({ publishPolicy: "say-only" });
     prompt(s);
     resolveEffect(s, ids.modelEffect(msg0), {
       kind: "model",
@@ -808,10 +810,10 @@ describe("silent policy", () => {
   });
 
   it("suppresses executor-side ephemeral signals", () => {
-    const silent = silentPolicy();
+    const policy = publishPolicyPolicy();
     expect(
-      silent.filterEphemeral?.({
-        state: {} as never,
+      policy.filterEphemeral?.({
+        state: { config: { publishPolicy: "say-only" } } as never,
         emit: {
           kind: "signal-event",
           channelId: "chan-1",
@@ -819,6 +821,42 @@ describe("silent policy", () => {
         },
       })
     ).toBeNull();
+  });
+});
+
+describe("publish policy: turn-final", () => {
+  it("publishes only the primary end-of-turn message, suppressing intermediate steps", () => {
+    const s = scenario({ publishPolicy: "turn-final" });
+    prompt(s);
+    // intermediate model round: carries a tool call ⇒ tier "secondary".
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [{ type: "toolCall", id: "tc-1", name: "read", arguments: {} }],
+      stopReason: "completed",
+    });
+    resolveEffect(s, ids.invocationEffect("tc-1"), { kind: "tool", result: null, isError: false });
+    // final model round: text-only ⇒ tier "primary".
+    const msg1 = ids.messageId(turn1, 1);
+    resolveEffect(s, ids.modelEffect(msg1), {
+      kind: "model",
+      blocks: [{ type: "text", content: "done" }],
+      stopReason: "completed",
+    });
+    const published = (kind: string, tier?: string) =>
+      s.log.filter(
+        (row) =>
+          row.payloadKind === kind &&
+          (tier === undefined || (row.payload as { tier?: string }).tier === tier) &&
+          row.publish === true
+      );
+    // no message.started publishes; the secondary (tool-call) completion is suppressed.
+    expect(s.log.filter((row) => row.payloadKind === "message.started" && row.publish === true))
+      .toHaveLength(0);
+    expect(published("message.completed", "secondary")).toHaveLength(0);
+    // the primary headline + turn boundaries + invocation outcome still publish.
+    expect(published("message.completed", "primary")).toHaveLength(1);
+    expect(published("turn.closed")).toHaveLength(1);
+    expect(published("invocation.completed")).toHaveLength(1);
   });
 });
 

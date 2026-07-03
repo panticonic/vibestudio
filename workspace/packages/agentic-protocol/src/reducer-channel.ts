@@ -2,11 +2,15 @@ import { AGENTIC_EVENT_PAYLOAD_KIND, CREDENTIAL_CONNECT_PAYLOAD_KIND } from "./c
 import type {
   ActorRef,
   AgenticEvent,
+  ChannelForkArchivedPayload,
+  ChannelForkRenamedPayload,
+  ChannelForkedPayload,
   CustomStartedPayload,
   CustomUpdatedPayload,
   CustomMessageDisplayMode,
   MessageTypeClearedPayload,
   MessageTypeRegisteredPayload,
+  ParticipantRef,
   SandboxSourcePayload,
 } from "./events.js";
 import type { ChannelEnvelope, ChannelRosterEntry } from "./envelopes.js";
@@ -87,6 +91,24 @@ export interface ProjectedCredentialRequest {
   publishedAt?: string;
 }
 
+/**
+ * A conversation fork rooted off this channel, folded from a durable
+ * `channel.forked` envelope on the PARENT channel. `createdAtSeq` and `archived`
+ * are synthesized by the reducer (from the envelope seq and the
+ * `channel.fork_archived` latch), NOT carried on the payload.
+ */
+export interface ForkProjection {
+  forkId: string;
+  forkedChannelId: string;
+  forkedContextId: string;
+  forkPointId: number;
+  label: string;
+  reason: string;
+  actor: ParticipantRef;
+  createdAtSeq: number;
+  archived: boolean;
+}
+
 export interface ChannelViewState {
   channelId?: string;
   cursor?: number;
@@ -98,6 +120,8 @@ export interface ChannelViewState {
   actionBars: Record<string, ProjectedActionBar | undefined>;
   messageTypes: Record<string, ProjectedMessageTypeDefinition>;
   customMessages: Record<string, ProjectedCustomMessage>;
+  /** Direct-child forks rooted off this channel, in append (seq) order. */
+  forks: ForkProjection[];
   turns: TurnMap;
   /** Intended-recipient snapshot per message, resolved against the roster AT
    *  the moment the message was first projected (send time) and never
@@ -121,6 +145,7 @@ export function createInitialChannelViewState(): ChannelViewState {
     actionBars: {},
     messageTypes: {},
     customMessages: {},
+    forks: [],
     turns: {},
     intendedRecipientsByMessage: {},
     roster: {},
@@ -460,6 +485,47 @@ export function reduceChannelView(
         },
       };
     }
+  } else if (event.kind === "channel.forked") {
+    // Direct-child fork rooted off this channel. Dedup by forkId (the journaled
+    // fork op appends by deterministic envelopeId, but a distinct replay path
+    // could still re-present it); `createdAtSeq`/`archived` are synthesized here.
+    const payload = event.payload as ChannelForkedPayload;
+    if (!next.forks.some((fork) => fork.forkId === payload.forkId)) {
+      next = {
+        ...next,
+        forks: [
+          ...next.forks,
+          {
+            forkId: payload.forkId,
+            forkedChannelId: payload.forkedChannelId,
+            forkedContextId: payload.forkedContextId,
+            forkPointId: payload.forkPointId,
+            label: payload.label,
+            reason: payload.reason,
+            actor: payload.actor,
+            createdAtSeq: parsed.seq,
+            archived: false,
+          },
+        ],
+      };
+    }
+  } else if (event.kind === "channel.fork_renamed") {
+    const payload = event.payload as ChannelForkRenamedPayload;
+    next = {
+      ...next,
+      forks: next.forks.map((fork) =>
+        fork.forkId === payload.forkId ? { ...fork, label: payload.label } : fork
+      ),
+    };
+  } else if (event.kind === "channel.fork_archived") {
+    // One-way latch: archived can never flip back.
+    const payload = event.payload as ChannelForkArchivedPayload;
+    next = {
+      ...next,
+      forks: next.forks.map((fork) =>
+        fork.forkId === payload.forkId ? { ...fork, archived: true } : fork
+      ),
+    };
   }
 
   if (event.turnId && event.kind !== "turn.closed" && event.kind !== "turn.waiting") {

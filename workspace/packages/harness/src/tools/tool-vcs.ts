@@ -78,14 +78,31 @@ export type ToolVcsPushResult =
   | { status: "diverged"; divergences: unknown[] }
   | { status: "build-failed"; reports: unknown[] };
 
-/** Result of `vcs.merge` — a reconcile commit pulling `main` into the head. */
+/** Per-repo result of `vcs.merge` — one reconcile commit pulling a source into
+ *  the caller's context head. */
 export interface ToolVcsMergeResult {
+  repoPath: string;
   status: "up-to-date" | "merged" | "conflicted";
   stateHash: string | null;
   conflicts: Array<{ path: string; kind: string }>;
   mergeable: "clean" | "conflict";
   upstreamCommits: Array<{ eventId: string; message: string; stateHash: string }>;
   conflictPaths?: string[];
+}
+
+/** Merge/pick SOURCE selector — `"main"` or another context you own/forked. */
+export type ToolVcsSource = "main" | { contextId: string };
+
+/** A single `vcs.pick` entry: a whole commit's patch or path-level injection. */
+export type ToolVcsPick =
+  | { kind: "commit"; repoPath: string; eventId: string }
+  | { kind: "paths"; paths: string[] };
+
+/** Result of `vcs.contextDiff` — files a context's branch introduced. */
+export interface ToolVcsDiffResult {
+  added: unknown[];
+  removed: unknown[];
+  changed: unknown[];
 }
 
 export interface ToolVcs {
@@ -113,8 +130,21 @@ export interface ToolVcs {
   }): Promise<ToolVcsCommitResult[]>;
   /** Build-gate one or more repos' committed snapshots into `main` (atomic group). */
   push(input: { repoPaths: string[]; message?: string }): Promise<ToolVcsPushResult>;
-  /** Pull `main` into the caller's head on a repo (reconcile divergence). */
-  merge(repoPath: string): Promise<ToolVcsMergeResult>;
+  /** Reconcile a source (`main`, or a context you own/forked) INTO the caller's
+   *  context head; one merge commit per repo. Omit repoPaths to reconcile every
+   *  repo the context branch touches. */
+  merge(input: {
+    source: ToolVcsSource;
+    repoPaths?: string[];
+  }): Promise<ToolVcsMergeResult[]>;
+  /** Cherry-pick selected changes from a source onto the caller's head as
+   *  uncommitted working edits (one result per repo touched). */
+  pick(input: { source: ToolVcsSource; picks: ToolVcsPick[] }): Promise<ToolVcsEditResult[]>;
+  /** Diff a context you own/forked against its `fork-base` (default) or `main`. */
+  contextDiff(input: {
+    contextId: string;
+    against?: "fork-base" | "main";
+  }): Promise<ToolVcsDiffResult>;
   /** Drop a repo's uncommitted working edits + any pending merge on the caller's head. */
   discardEdits(repoPath: string): Promise<{ discarded: number; stateHash: string }>;
 }
@@ -154,7 +184,9 @@ export function createToolVcs(
         ...(input.message !== undefined ? { message: input.message } : {}),
       });
     },
-    merge: (repoPath) => callMain<ToolVcsMergeResult>("vcs.merge", [repoPath]),
+    merge: (input) => callMain<ToolVcsMergeResult[]>("vcs.merge", [input]),
+    pick: (input) => callMain<ToolVcsEditResult[]>("vcs.pick", [input]),
+    contextDiff: (input) => callMain<ToolVcsDiffResult>("vcs.contextDiff", [input]),
     discardEdits: (repoPath) =>
       callMain<{ discarded: number; stateHash: string }>("vcs.discardEdits", [repoPath]),
   };
