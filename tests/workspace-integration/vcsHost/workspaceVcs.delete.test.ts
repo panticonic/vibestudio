@@ -86,6 +86,10 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       contextsRoot: path.join(root, ".contexts"),
       buildSourcesRoot: path.join(root, "build-sources"),
       refs,
+      // Dev extraction on: a deletion (main removal) drops the repo subtree from
+      // the source dir, and pushes extract their state out — the on-disk
+      // assertions below exercise that gated bridge.
+      extractMainToSource: true,
     });
     attachLocalHostBridges(gad.instance, {
       blobsDir: path.join(root, "blobs"),

@@ -7,11 +7,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/testSupport.js";
 import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
-import {
-  VCS_MAIN_HEAD,
-  VCS_ACTIVE_CONTEXT_HEAD,
-  vcsContextHead,
-} from "../../../src/server/vcsHost/paths.js";
+import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
 import { createRefService } from "../../../src/server/services/refService.js";
 import type { StateAdvancedEvent } from "../../../src/server/buildV2/stateTrigger.js";
@@ -127,40 +123,35 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     expect(await vcs.resolveHead(VCS_MAIN_HEAD, "meta")).toBeTruthy();
   });
 
-  it("ensureFresh adopts an EXISTING repo's out-of-band disk change into the ACTIVE context (git-import case; main advances only by push)", async () => {
-    // `meta` already has a main from bootstrap.
-    expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
-      kind: "text",
-      text: "name: test\n",
-    });
+  it("ensureFresh returns the current main view (no disk scan, no ctx:workspace adoption)", async () => {
+    // Phase-2 revision §2/§7: `ensureFresh` is the composed `main` union — refs +
+    // CAS, no freshness scan. Out-of-band disk edits to the source dir are NOT
+    // adopted (the source dir is write-only + boot seed).
+    const fresh = await vcs.ensureFresh();
+    const view = await vcs.workspaceView();
+    expect(fresh.stateHash).toBe(view.stateHash);
 
-    // A git import rewrites meta/vibez1.yml on disk.
+    // A raw disk edit to the source dir does NOT change the main view: no scan
+    // adopts it, and `main` advances only through the gated push path.
     await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: imported\n");
-
-    // ensureRepoLogsFromDisk SKIPS repos that already have a main → still stale.
-    await vcs.ensureRepoLogsFromDisk();
-    expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
-      text: "name: test\n",
-    });
-
-    // Phase 2: ensureFresh adopts out-of-band disk drift into the ACTIVE context
-    // head (a working edit on ctx:workspace via the ungated ctx path), NEVER an
-    // ungated `main` advance.
-    await vcs.ensureFresh();
-
-    // `main` is UNMOVED — it advances only through the gated push path.
+    await vcs.ensureRepoLogsFromDisk(); // skips repos that already have a main
+    const after = await vcs.ensureFresh();
+    expect(after.stateHash).toBe(fresh.stateHash);
     expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
       kind: "text",
       text: "name: test\n",
     });
-    // …but the active context now reflects the imported change (adopted as a
-    // working edit on ctx:workspace).
-    expect(
-      (await vcs.readFile(VCS_ACTIVE_CONTEXT_HEAD, "vibez1.yml", "meta"))?.content
-    ).toMatchObject({
-      kind: "text",
-      text: "name: imported\n",
-    });
+  });
+
+  it("discoverRepos reflects the ref table — a repo added via push is enumerated without a disk rescan", async () => {
+    // Discovery is sourced from `refs.listMains()` (composed view), not a disk
+    // scan: a brand-new repo whose `main` is created by push shows up with no
+    // change to the on-disk source tree.
+    const before = (await vcs.discoverRepos()).map((r) => r.repoPath);
+    expect(before).not.toContain("packages/added");
+    await advanceMain("packages/added", "index.ts", "export const added = 1;\n");
+    const after = (await vcs.discoverRepos()).map((r) => r.repoPath);
+    expect(after).toContain("packages/added");
   });
 
   it("seed-on-attach is idempotent across restart and never moves an advanced ref", async () => {

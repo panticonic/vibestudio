@@ -11,7 +11,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
-import { MERGE_CONFLICTS_FILE, VCS_ACTIVE_CONTEXT_HEAD, VCS_MAIN_HEAD } from "./paths.js";
+import { MERGE_CONFLICTS_FILE, VCS_MAIN_HEAD, vcsContextHead } from "./paths.js";
+
+const CTX_HEAD = vcsContextHead("work");
 import { WorktreeStore } from "./worktreeStore.js";
 import { DiskProjector } from "./diskProjector.js";
 
@@ -57,46 +59,41 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
     return (await mirrorWorktreeTree(blobsDir, entries)).stateHash;
   }
 
-  it("projects a state onto the active-context workspace-root tree and re-projects with clean", async () => {
-    // D1/D2: `main` has no checkout; the workspace root IS the active context's
-    // (`ctx:workspace`) working tree, so the follower projects that head onto it.
+  it("exportMainToSource writes a repo's main state OUT to the source dir (write-only, clean)", async () => {
+    // §3: `main` has no checkout; the only main→disk effect is the write-only
+    // export to the source dir (`workspaceRoot/{repoPath}`), a dedicated path
+    // NOT reachable via dirForRepoHead(main).
     const s1 = await mintState([
       { path: "a.txt", text: "A\n" },
       { path: "sub/b.txt", text: "B\n" },
     ]);
-    await projector.project({ repoPath: REPO, head: VCS_ACTIVE_CONTEXT_HEAD, stateHash: s1 });
+    await projector.exportMainToSource(REPO, s1);
     const repoDir = path.join(root, "workspace", ...REPO.split("/"));
     expect(await fsp.readFile(path.join(repoDir, "a.txt"), "utf8")).toBe("A\n");
     expect(await fsp.readFile(path.join(repoDir, "sub/b.txt"), "utf8")).toBe("B\n");
 
-    // An untracked scratch file survives a plain (incremental) projection…
+    // The export is clean: an untracked scratch file and stale tracked files are
+    // both removed so the source dir mirrors main exactly.
     await fsp.writeFile(path.join(repoDir, "scratch.txt"), "untracked\n");
     const s2 = await mintState([{ path: "a.txt", text: "A2\n" }]);
-    await projector.project({ repoPath: REPO, head: VCS_ACTIVE_CONTEXT_HEAD, stateHash: s2 });
+    await projector.exportMainToSource(REPO, s2);
     expect(await fsp.readFile(path.join(repoDir, "a.txt"), "utf8")).toBe("A2\n");
     await expect(fsp.access(path.join(repoDir, "sub/b.txt"))).rejects.toThrow(); // stale, removed
-    expect(await fsp.readFile(path.join(repoDir, "scratch.txt"), "utf8")).toBe("untracked\n");
-
-    // …and is removed by a clean re-projection (working-content reset).
-    await projector.project({
-      repoPath: REPO,
-      head: VCS_ACTIVE_CONTEXT_HEAD,
-      stateHash: s2,
-      clean: true,
-    });
-    await expect(fsp.access(path.join(repoDir, "scratch.txt"))).rejects.toThrow();
+    await expect(fsp.access(path.join(repoDir, "scratch.txt"))).rejects.toThrow(); // untracked, removed
   });
 
-  it("projects context heads under .contexts/<id>/<repo> and removes repos", async () => {
+  it("projects context heads under .contexts/<id>/<repo>; main has no checkout; removeRepo drops the source subtree", async () => {
     const s = await mintState([{ path: "x.txt", text: "X\n" }]);
-    await projector.project({ repoPath: REPO, head: "ctx:work", stateHash: s });
+    await projector.project({ repoPath: REPO, head: CTX_HEAD, stateHash: s });
     const ctxFile = path.join(root, ".contexts", "work", ...REPO.split("/"), "x.txt");
     expect(await fsp.readFile(ctxFile, "utf8")).toBe("X\n");
     expect(() => projector.dirForRepoHead(REPO, "state:abc")).toThrow(/No working tree/);
     // `main` is a pure ref (D1): it has no checkout, so asking for its dir throws.
     expect(() => projector.dirForRepoHead(REPO, VCS_MAIN_HEAD)).toThrow(/main is a pure ref/);
 
-    await projector.project({ repoPath: REPO, head: VCS_ACTIVE_CONTEXT_HEAD, stateHash: s });
+    // removeRepo drops the repo's subtree from the source dir (the export
+    // counterpart), regardless of any context checkout.
+    await projector.exportMainToSource(REPO, s);
     await projector.removeRepo(REPO);
     await expect(fsp.access(path.join(root, "workspace", ...REPO.split("/")))).rejects.toThrow();
   });
@@ -113,12 +110,12 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
   it("bestEffort swallows projection failures; strict mode throws", async () => {
     const missing = `state:${"0".repeat(64)}`;
     await expect(
-      projector.project({ repoPath: REPO, head: VCS_ACTIVE_CONTEXT_HEAD, stateHash: missing })
+      projector.project({ repoPath: REPO, head: CTX_HEAD, stateHash: missing })
     ).rejects.toThrow();
     await expect(
       projector.project({
         repoPath: REPO,
-        head: VCS_ACTIVE_CONTEXT_HEAD,
+        head: CTX_HEAD,
         stateHash: missing,
         bestEffort: true,
       })
@@ -127,10 +124,10 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
 
   it("writes and removes the worktree conflict summary from pending data", async () => {
     const s = await mintState([{ path: "a.txt", text: "A\n" }]);
-    await projector.project({ repoPath: REPO, head: VCS_ACTIVE_CONTEXT_HEAD, stateHash: s });
+    await projector.project({ repoPath: REPO, head: CTX_HEAD, stateHash: s });
     await projector.writeConflictSummary({
       repoPath: REPO,
-      head: VCS_ACTIVE_CONTEXT_HEAD,
+      head: CTX_HEAD,
       pending: {
         theirsHead: "ctx:other",
         conflicts: [
@@ -139,7 +136,7 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
         ],
       },
     });
-    const file = path.join(root, "workspace", ...REPO.split("/"), MERGE_CONFLICTS_FILE);
+    const file = path.join(root, ".contexts", "work", ...REPO.split("/"), MERGE_CONFLICTS_FILE);
     const text = await fsp.readFile(file, "utf8");
     expect(text).toContain("Merging `ctx:other`");
     expect(text).toContain("**content** `a.txt`");
@@ -147,7 +144,7 @@ describe("DiskProjector (P5c disk-projection follower)", () => {
 
     await projector.writeConflictSummary({
       repoPath: REPO,
-      head: VCS_ACTIVE_CONTEXT_HEAD,
+      head: CTX_HEAD,
       pending: null,
     });
     await expect(fsp.access(file)).rejects.toThrow();

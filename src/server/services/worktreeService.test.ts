@@ -11,8 +11,10 @@ import * as path from "node:path";
 
 import { WorktreeStore } from "../vcsHost/worktreeStore.js";
 import { DiskProjector } from "../vcsHost/diskProjector.js";
-import { VCS_ACTIVE_CONTEXT_HEAD } from "../vcsHost/paths.js";
+import { vcsContextHead } from "../vcsHost/paths.js";
 import { createWorktreeService } from "./worktreeService.js";
+
+const CTX_HEAD = vcsContextHead("demo");
 
 const REPO = "packages/demo";
 
@@ -47,7 +49,9 @@ describe("worktree.scan primitive", () => {
   });
 
   it("returns a stateHash byte-identical to a direct localState on the same dir", async () => {
-    const repoDir = path.join(root, "workspace", ...REPO.split("/"));
+    // Only `ctx:*` heads have a checkout (under `.contexts/<id>/<repo>`); `main`
+    // is a pure ref. The scan targets a context head here.
+    const repoDir = path.join(root, ".contexts", "demo", ...REPO.split("/"));
     await fsp.mkdir(path.join(repoDir, "sub"), { recursive: true });
     await fsp.writeFile(path.join(repoDir, "a.txt"), "A\n");
     await fsp.writeFile(path.join(repoDir, "sub/b.txt"), "B\n");
@@ -62,12 +66,7 @@ describe("worktree.scan primitive", () => {
       dependentRepos: async () => [],
     });
 
-    // D1/D2: the scan targets the ACTIVE context head (`ctx:workspace`), whose
-    // checkout is the workspace root; `main` is a pure ref with no working tree.
-    const result = (await service.handler({} as never, "scan", [
-      REPO,
-      VCS_ACTIVE_CONTEXT_HEAD,
-    ])) as {
+    const result = (await service.handler({} as never, "scan", [REPO, CTX_HEAD])) as {
       stateHash: string;
       files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
     };
