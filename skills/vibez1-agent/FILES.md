@@ -299,7 +299,6 @@ shapes (mind which are positional vs object):
 | `vcs.merge` | `["panels/notes"]` — positional `(repoPath, head?)`; pull `main` in (merge commit) |
 | `vcs.status` | `["panels/notes", "ctx:<id>"]` — **positional** `(repoPath, head?)`; result includes `uncommitted` |
 | `vcs.log` | `["panels/notes", 10]` — positional `(repoPath, limit?, head?)`; commits only |
-| `vcs.push` | `[{"repoPaths":["panels/notes"],"sourceHead":"ctx:<id>"}]` |
 | `vcs.pushStatus` | `[["panels/notes"]]` — one array arg; each result has `uncommitted` + `diverged` |
 | `vcs.previewBuild` | `[{"repoPaths":["panels/notes"]}]` — dev build of working content (no baseline write) |
 | `vcs.fileHistory` | `["panels/notes","src/index.tsx"]` — positional `(repoPath, path, head?, limit?)` |
@@ -307,6 +306,9 @@ shapes (mind which are positional vs object):
 | `vcs.forkRepo` | `["panels/chat","panels/mychat"]` — positional `(fromPath, toPath)` |
 | `vcs.contextStatus` | `[]` — per-repo `{repoPath, forked, ahead, behind, deleted}` for your context |
 | `vcs.rebaseContext` | `[]` — pull latest `main` into your edits + re-pin your base |
+
+Push is intentionally not a raw host `vcs.*` RPC. Use `vibez1 vcs push --repo <p>`;
+the CLI resolves the userland `vcs` service and calls the gad-store DO's `vcsPush`.
 
 `--target ID` relays the call to a runtime
 entity (panel/worker/DO) instead of the server; relayed methods are
