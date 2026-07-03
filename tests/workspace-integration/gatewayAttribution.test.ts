@@ -60,7 +60,7 @@ function inProcessGadCaller(gad: TestGad): GadCaller {
   };
 }
 
-describe("full-gateway attribution (rows 11-12)", () => {
+describe("full-gateway attribution (row 11)", () => {
   let root: string;
   let gad: TestGad;
   let vcs: WorkspaceVcs;
@@ -303,72 +303,5 @@ describe("full-gateway attribution (rows 11-12)", () => {
     expect(String(respEnv.message?.error)).toMatch(/invalid or expired invocation token/);
     // Fail-closed: main never moved, no gate context attributed.
     expect(refs.readMain("packages/a")).toBeNull();
-  });
-
-  // Row-12: the HOST-side merge-to-main mint (the piece that was missing — a
-  // host-dispatched merge previously carried NO token → DO-attributed). This
-  // exercises WorkspaceVcs.mergeIntoMainHead minting for the VERIFIED chrome
-  // caller and threading it to the DO's vcsMerge. The DO→refsService resolution
-  // of that token is identical to push (proven above).
-  describe("chrome merge-to-main attribution (row 12)", () => {
-    it("mints + threads an on-behalf-of token for the verified caller, released after", async () => {
-      const shell = createVerifiedCaller("shell", "shell");
-      let threadedToken: string | undefined;
-      let resolvedDuringDispatch: VerifiedCaller | undefined;
-      let sizeDuringDispatch = -1;
-
-      // A gad caller that captures the token WorkspaceVcs threads for vcsMerge,
-      // resolves it against the REAL table while the dispatch is in flight, and
-      // returns up-to-date (no ref write needed to observe attribution wiring).
-      const capturingGad: GadCaller = {
-        async call<T>(method: string, _input: unknown, opts?: { invocationToken?: string }) {
-          if (method === "vcsMerge") {
-            threadedToken = opts?.invocationToken;
-            if (threadedToken) {
-              resolvedDuringDispatch = invocations.resolve(threadedToken)?.caller;
-              sizeDuringDispatch = invocations.size();
-            }
-            return { status: "up-to-date", stateHash: "state:x", upstreamCommits: [] } as T;
-          }
-          // Delegate everything else (attach bootstrap, etc.) to the real DO.
-          return inProcessGadCaller(gad).call<T>(method, _input, opts);
-        },
-      };
-      await vcs.attachGad(capturingGad);
-
-      await vcs.mergeGroup(
-        [{ repoPath: "packages/a", sourceHead: vcsContextHead("chat-1"), targetHead: "main" }],
-        {
-          actor: USER,
-          mainAdvance: { kind: "caller", caller: shell },
-        }
-      );
-
-      expect(threadedToken).toBeTruthy();
-      expect(resolvedDuringDispatch?.runtime).toEqual({ id: "shell", kind: "shell" });
-      expect(sizeDuringDispatch).toBe(1);
-      // Released after the dispatch settles (no leak; replay fails closed).
-      expect(invocations.size()).toBe(0);
-    });
-
-    it("threads NO token when the advance carries no caller-kind context", async () => {
-      let threadedToken: string | undefined = "unset";
-      const capturingGad: GadCaller = {
-        async call<T>(method: string, _input: unknown, opts?: { invocationToken?: string }) {
-          if (method === "vcsMerge") {
-            threadedToken = opts?.invocationToken;
-            return { status: "up-to-date", stateHash: "state:x", upstreamCommits: [] } as T;
-          }
-          return inProcessGadCaller(gad).call<T>(method, _input, opts);
-        },
-      };
-      await vcs.attachGad(capturingGad);
-      await vcs.mergeGroup(
-        [{ repoPath: "packages/a", sourceHead: vcsContextHead("chat-1"), targetHead: "main" }],
-        { actor: USER }
-      );
-      expect(threadedToken).toBeUndefined();
-      expect(invocations.size()).toBe(0);
-    });
   });
 });

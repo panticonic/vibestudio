@@ -22,12 +22,24 @@ first-parent chain. Every step depends on something the merge system records.
 1. **Every commit-producing merge path records per-file `editOps` with
    origin-annotated hunks vs OURS.** `mergeHunksVsOurs` already computes
    `{start, end, newText, origin: "theirs"|"resolved", theirsStart?,
-   theirsEnd?}` inside `MergeEngine` (`mergeEngine.ts:~247`). The contract is
+theirsEnd?}` inside `MergeEngine` (`mergeEngine.ts:~247`). The contract is
    that this reaches the ingest `editOps` on every path that mints a merge
    commit — `vcsMerge` clean commits, group/push-side merges, import merges.
    A merge commit with no ops is a blame hole. (This end-to-end wire-through
    is the one thing we have NOT yet verified — if your rework touches it,
    you own confirming it holds.)
+
+   > **OBSOLETE (2026-07-03, narrow-host-boundary Phase 0): the "group/push-side
+   > merges" path is DELETED.** `main` is no longer a mergeable target — it
+   > advances only by fast-forward push (`refs.updateMains`). The main-target
+   > merge subsystem is gone: `runVcsMergeMain` (DO), `vcsMerge(targetHead:
+"main")`, and the host `mergeGroup`/`mergeIntoMainHead`/`callMainTargetMerge`
+   > have been removed, along with `operation:"merge"` and the `main`
+   > pending-merge machinery. The commit-producing merge paths that remain — and
+   > that this whole note's blame invariants still govern unchanged — are the
+   > **ctx-target `vcsMerge`** (pull a source, incl. `main`, into a `ctx:*` head)
+   > and **import merges**. All ctx-merge / blame guidance below stands.
+
 2. **First parent = OURS, always.** `gad_transition_parents.ordinal = 0` is
    the side whose chain blame walks by default, and merge-op
    `old_content_hash` = the OURS content (that is what

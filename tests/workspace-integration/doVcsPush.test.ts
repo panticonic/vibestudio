@@ -162,17 +162,26 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
 
   it("pushes a brand-new repo to main and records provenance (intent cleared)", async () => {
     const stateHash = await seedCommit("c1", "packages/a", "a.txt", "hello\n");
-    const result = await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
+    const result = await push({
+      repoPaths: ["packages/a"],
+      sourceHead: vcsContextHead("c1"),
+      actor: USER,
+    });
     expect(result.status).toBe("pushed");
     expect(readMain("packages/a")).toBe(stateHash);
     // Provenance: the DO's recorded main head matches the ref (commit recorded).
-    const head = (gad.instance as unknown as {
-      resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
-    }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
+    const head = (
+      gad.instance as unknown as {
+        resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
+      }
+    ).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
     expect(head?.stateHash).toBe(stateHash);
     // No pending intent left behind (completed + deleted).
-    const pending = (gad.instance as unknown as { sql: { exec: (s: string) => { toArray: () => unknown[] } } })
-      .sql.exec("SELECT * FROM gad_publish_intents").toArray();
+    const pending = (
+      gad.instance as unknown as { sql: { exec: (s: string) => { toArray: () => unknown[] } } }
+    ).sql
+      .exec("SELECT * FROM gad_publish_intents")
+      .toArray();
     expect(pending).toHaveLength(0);
   });
 
@@ -192,7 +201,11 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
   it("returns up-to-date when nothing to advance", async () => {
     await seedCommit("c1", "packages/a", "a.txt", "A\n");
     await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
-    const again = await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
+    const again = await push({
+      repoPaths: ["packages/a"],
+      sourceHead: vcsContextHead("c1"),
+      actor: USER,
+    });
     expect(again.status).toBe("up-to-date");
   });
 
@@ -210,7 +223,11 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     expect(readMain("packages/a")).not.toBe(mainX);
     const mainZ = readMain("packages/a");
     // pushing c2 now diverges
-    const diverged = await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c2"), actor: USER });
+    const diverged = await push({
+      repoPaths: ["packages/a"],
+      sourceHead: vcsContextHead("c2"),
+      actor: USER,
+    });
     expect(diverged.status).toBe("diverged");
     if (diverged.status === "diverged") {
       expect(diverged.divergences[0]?.repoPath).toBe("packages/a");
@@ -221,11 +238,18 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
   it("aborts on a required build failure (no publish, no intent)", async () => {
     await seedCommit("c1", "packages/a", "a.txt", "A\n");
     buildFail = true;
-    const result = await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
+    const result = await push({
+      repoPaths: ["packages/a"],
+      sourceHead: vcsContextHead("c1"),
+      actor: USER,
+    });
     expect(result.status).toBe("build-failed");
     expect(readMain("packages/a")).toBe(null);
-    const pending = (gad.instance as unknown as { sql: { exec: (s: string) => { toArray: () => unknown[] } } })
-      .sql.exec("SELECT * FROM gad_publish_intents").toArray();
+    const pending = (
+      gad.instance as unknown as { sql: { exec: (s: string) => { toArray: () => unknown[] } } }
+    ).sql
+      .exec("SELECT * FROM gad_publish_intents")
+      .toArray();
     expect(pending).toHaveLength(0);
   });
 
@@ -242,27 +266,38 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     ).rejects.toThrow(/simulated crash/);
     // Ref moved, intent still pending.
     expect(readMain("packages/a")).toBe(stateHash);
-    const pendingBefore = (gad.instance as unknown as { sql: { exec: (s: string) => { toArray: () => unknown[] } } })
-      .sql.exec("SELECT * FROM gad_publish_intents").toArray();
+    const pendingBefore = (
+      gad.instance as unknown as { sql: { exec: (s: string) => { toArray: () => unknown[] } } }
+    ).sql
+      .exec("SELECT * FROM gad_publish_intents")
+      .toArray();
     expect(pendingBefore).toHaveLength(1);
     // Restart: restore provenance recording and heal.
     inst.completePublishIntent = original;
     const healed = await doInstance().vcsHealPublishDrift({});
     expect(healed).toMatchObject({ pendingIntents: 0 });
     // Provenance recorded: DO main head now matches the ref.
-    const head = (gad.instance as unknown as {
-      resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
-    }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
+    const head = (
+      gad.instance as unknown as {
+        resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
+      }
+    ).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
     expect(head?.stateHash).toBe(stateHash);
   });
 
   it("does not stale-reap a concurrent op's in-flight intent, but reaps a genuine orphan", async () => {
     const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
-    const sql = (gad.instance as unknown as {
-      sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
-    }).sql;
-    const pendingIntents = () => sql.exec("SELECT intent_id FROM gad_publish_intents").toArray() as Array<{ intent_id: string }>;
-    const inFlight = (gad.instance as unknown as { inFlightPublishIntents: Set<string> }).inFlightPublishIntents;
+    const sql = (
+      gad.instance as unknown as {
+        sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+      }
+    ).sql;
+    const pendingIntents = () =>
+      sql.exec("SELECT intent_id FROM gad_publish_intents").toArray() as Array<{
+        intent_id: string;
+      }>;
+    const inFlight = (gad.instance as unknown as { inFlightPublishIntents: Set<string> })
+      .inFlightPublishIntents;
 
     // Park a push inside `refs.updateMains`' approval gate: intent recorded and
     // marked in-flight, but the CAS not yet applied (main still at expectedOld,
@@ -272,7 +307,11 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       releaseGate = resolve;
     });
     gateOverride = () => gateBlocked;
-    const pushPromise = push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
+    const pushPromise = push({
+      repoPaths: ["packages/a"],
+      sourceHead: vcsContextHead("c1"),
+      actor: USER,
+    });
     // Wait until the push has recorded its intent and parked on the gate.
     for (let i = 0; i < 100 && pendingIntents().length === 0; i++) {
       await new Promise((r) => setTimeout(r, 0));
@@ -340,7 +379,9 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     // Ingest a main provenance commit whose editOp claims a WRONG first-parent
     // old_content_hash (base is `stateHash`, but the op claims a bogus old).
     const ingest = () =>
-      (gad.instance as unknown as { ingestWorktreeState: (i: unknown) => Promise<unknown> }).ingestWorktreeState({
+      (
+        gad.instance as unknown as { ingestWorktreeState: (i: unknown) => Promise<unknown> }
+      ).ingestWorktreeState({
         logId: "vcs:repo:packages/a",
         head: "main",
         logKind: "vcs",
@@ -380,9 +421,11 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     })) as { status: string; eventId?: string };
     expect(merged.status).toBe("merged");
     // The merge commit owns per-file edit ops (not an op-less commit).
-    const ops = (gad.instance as unknown as {
-      sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
-    }).sql
+    const ops = (
+      gad.instance as unknown as {
+        sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+      }
+    ).sql
       .exec(
         "SELECT kind, path, hunks_json FROM gad_worktree_edit_ops WHERE committed_event_id = ?",
         merged.eventId
@@ -410,60 +453,6 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     };
     const wsView = await inst.workspaceViewFromRefs(inst.contentStore());
     expect(inst.getContextBase({ contextId: "c1" })?.stateHash).toBe(wsView);
-  });
-
-  it("merges a diverged ctx into main through the DO executor (clean publish-class merge)", async () => {
-    // main = base via c1; c2 diverges (line 1), main advances (line 3) → clean.
-    await seedCommit("c1", "packages/a", "a.txt", "l1\nl2\nl3\n");
-    await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
-    await editCommit("c2", "packages/a", "a.txt", "L1\nl2\nl3\n");
-    await editCommit("c1", "packages/a", "a.txt", "l1\nl2\nL3\n");
-    await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
-    const mainBefore = readMain("packages/a");
-    // Merge c2 INTO main (chrome-class advance) → clean, main advances via the
-    // DO's write-ahead-intent → updateMains(operation:"merge") machinery.
-    const merged = (await doInstance().vcsMerge({
-      logId: "vcs:repo:packages/a",
-      targetHead: "main",
-      sourceHead: vcsContextHead("c2"),
-      actor: USER,
-    })) as { status: string; stateHash?: string };
-    expect(merged.status).toBe("merged");
-    expect(readMain("packages/a")).not.toBe(mainBefore);
-    expect(readMain("packages/a")).toBe(merged.stateHash);
-    // Provenance recorded and intent cleared (write-ahead completed).
-    const head = (gad.instance as unknown as {
-      resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
-    }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
-    expect(head?.stateHash).toBe(merged.stateHash);
-    const pending = (gad.instance as unknown as { sql: { exec: (s: string) => { toArray: () => unknown[] } } })
-      .sql.exec("SELECT * FROM gad_publish_intents").toArray();
-    expect(pending).toHaveLength(0);
-  });
-
-  it("parks a pending merge on main for a conflicted publish-class merge (no ref advance)", async () => {
-    await seedCommit("c1", "packages/a", "a.txt", "base\n");
-    await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
-    // c2 and c1 edit the SAME line → overlapping conflict.
-    await editCommit("c2", "packages/a", "a.txt", "c2-change\n");
-    await editCommit("c1", "packages/a", "a.txt", "c1-change\n");
-    await push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
-    const mainBefore = readMain("packages/a");
-    const conflicted = (await doInstance().vcsMerge({
-      logId: "vcs:repo:packages/a",
-      targetHead: "main",
-      sourceHead: vcsContextHead("c2"),
-      actor: USER,
-    })) as { status: string; conflictPaths?: string[] };
-    expect(conflicted.status).toBe("conflicted");
-    expect(conflicted.conflictPaths).toContain("a.txt");
-    // No ref advance on conflict — the resolution lands through the host.
-    expect(readMain("packages/a")).toBe(mainBefore);
-    // Pending merge parked on `main`.
-    const pending = (gad.instance as unknown as {
-      getPendingMerge: (i: { logId: string; head: string }) => { info: unknown };
-    }).getPendingMerge({ logId: "vcs:repo:packages/a", head: "main" });
-    expect(pending.info).toBeTruthy();
   });
 
   it("protects a pending intent's candidate state from GC", async () => {
@@ -497,8 +486,12 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     );
     const mark = inst.runGadGcMark({});
     // The candidate state survives the mark (rooted by the intent).
-    const kept = (gad.instance as unknown as { sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } } })
-      .sql.exec("SELECT state_hash FROM gad_worktree_states WHERE state_hash = ?", stateHash)
+    const kept = (
+      gad.instance as unknown as {
+        sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+      }
+    ).sql
+      .exec("SELECT state_hash FROM gad_worktree_states WHERE state_hash = ?", stateHash)
       .toArray();
     expect(kept).toHaveLength(1);
     expect(mark.keptStates).toBeGreaterThan(0);
@@ -617,18 +610,22 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
 
   it("completes provenance from the parked intent when a lost-response retry surfaces as a conflict (own CAS landed)", async () => {
     const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
-    const sql = (gad.instance as unknown as {
-      sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
-    }).sql;
+    const sql = (
+      gad.instance as unknown as {
+        sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+      }
+    ).sql;
     // Simulate the httpClient auto-retry hazard: attempt 1 commits host-side but
     // its response is lost, so the DO re-POSTs and hits the ref it ALREADY
     // advanced → a compare-and-swap conflict. The intent must NOT be discarded
     // before that conflict is classified; the CAS landed, so provenance must be
     // recorded with full fidelity (NOT a spurious success with the intent thrown
     // away, and NOT an unrecoverable no-intent drift).
-    const refsBridge = (gad.instance as unknown as {
-      refsStore: () => { updateMains: (i: unknown) => Promise<unknown> };
-    }).refsStore();
+    const refsBridge = (
+      gad.instance as unknown as {
+        refsStore: () => { updateMains: (i: unknown) => Promise<unknown> };
+      }
+    ).refsStore();
     const originalUpdate = refsBridge.updateMains.bind(refsBridge);
     let applied = false;
     refsBridge.updateMains = async (input: unknown) => {
@@ -651,12 +648,14 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     expect(readMain("packages/a")).toBe(stateHash);
 
     // Provenance recorded with full fidelity: the DO main head matches the ref.
-    const head = (gad.instance as unknown as {
-      resolveWorktreeHeadInternal: (
-        l: string,
-        h: string
-      ) => { stateHash: string; commitEventId: string | null } | null;
-    }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
+    const head = (
+      gad.instance as unknown as {
+        resolveWorktreeHeadInternal: (
+          l: string,
+          h: string
+        ) => { stateHash: string; commitEventId: string | null } | null;
+      }
+    ).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
     expect(head?.stateHash).toBe(stateHash);
     // The main commit's ops are REAL (from the parked intent), not an invented
     // no-intent recovery.
@@ -676,9 +675,11 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
 
   it("parks then heal-reaps the write-ahead intent on a pre-CAS approval denial (no ref move)", async () => {
     await seedCommit("c1", "packages/a", "a.txt", "A\n");
-    const sql = (gad.instance as unknown as {
-      sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
-    }).sql;
+    const sql = (
+      gad.instance as unknown as {
+        sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+      }
+    ).sql;
     // The approval gate denies INSIDE updateMains, before the swap: no ref moves.
     // This surfaces to the DO as a non-conflict throw — indistinguishable by error
     // type from a post-apply transport error — so the DO does NOT eagerly delete;
@@ -707,9 +708,11 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     expect(sql.exec("SELECT * FROM gad_publish_intents").toArray()).toHaveLength(0);
     // No recovery commit was fabricated for a main that never moved.
     expect(readMain("packages/a")).toBe(null);
-    const head = (gad.instance as unknown as {
-      resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
-    }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
+    const head = (
+      gad.instance as unknown as {
+        resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
+      }
+    ).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
     expect(head).toBeNull();
   });
 
@@ -724,7 +727,11 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     async function pushViaEnvelope(
       caller: { callerId: string; callerKind: string },
       callerContextId: string | undefined,
-      input: { repoPaths: string[]; sourceHead?: string | null; actor?: { id: string; kind: string } }
+      input: {
+        repoPaths: string[];
+        sourceHead?: string | null;
+        actor?: { id: string; kind: string };
+      }
     ): Promise<{ status: string; repoPaths?: string[] }> {
       const objectKey = "workspace-gad";
       const fetchable = gad.instance as unknown as { fetch(r: Request): Promise<Response> };
