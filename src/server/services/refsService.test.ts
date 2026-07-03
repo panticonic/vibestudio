@@ -134,7 +134,12 @@ describe("refsService", () => {
     it("resolves a token to the originating principal (writer=DO, onBehalfOf=panel, via=DO)", async () => {
       const { service, refs, invocations, gateBatches } = makeService();
       const upstream = panelCaller();
-      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcs.push" });
+      const { token } = invocations.mint({
+        caller: upstream,
+        via: WRITER_ID,
+        method: "vcsPush",
+        operation: "push",
+      });
 
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), operation: "push", invocationToken: token },
@@ -160,7 +165,8 @@ describe("refsService", () => {
       const { token } = invocations.mint({
         caller: extension,
         via: WRITER_ID,
-        method: "vcs.import",
+        method: "vcsImportPublish",
+        operation: "import",
       });
 
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
@@ -178,7 +184,12 @@ describe("refsService", () => {
     it("may be presented on MULTIPLE attempts within the dispatch window (CAS retry)", async () => {
       const { service, invocations, gateBatches } = makeService();
       const upstream = panelCaller();
-      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcs.push" });
+      const { token } = invocations.mint({
+        caller: upstream,
+        via: WRITER_ID,
+        method: "vcsPush",
+        operation: "push",
+      });
 
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
         {
@@ -204,12 +215,45 @@ describe("refsService", () => {
       }
     });
 
+    it("rejects a token used for a different operation", async () => {
+      const { service, invocations } = makeService();
+      const { token } = invocations.mint({
+        caller: panelCaller(),
+        via: WRITER_ID,
+        method: "vcsPush",
+        operation: "push",
+      });
+
+      await expect(
+        service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+          { entries: oneAdvance(), operation: "merge", invocationToken: token },
+        ])
+      ).rejects.toThrow(/scoped to push, not merge/);
+    });
+
+    it("rejects a token minted for a different VCS writer identity", async () => {
+      const { service, invocations } = makeService();
+      const { token } = invocations.mint({
+        caller: panelCaller(),
+        via: "do:workers/gad-store:GadStore:other",
+        method: "vcsPush",
+        operation: "push",
+      });
+
+      await expect(
+        service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+          { entries: oneAdvance(), operation: "push", invocationToken: token },
+        ])
+      ).rejects.toThrow(/different VCS writer/);
+    });
+
     it("rejects a token replayed AFTER the dispatch completes (release clears it)", async () => {
       const { service, invocations } = makeService();
       const { token, release } = invocations.mint({
         caller: panelCaller(),
         via: WRITER_ID,
-        method: "vcs.push",
+        method: "vcsPush",
+        operation: "push",
       });
       release();
       await expect(

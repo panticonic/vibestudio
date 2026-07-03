@@ -254,7 +254,7 @@
       "listMains": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "readMain": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "readMainLog": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-      "updateMains": ["app", "do", "extension", "panel", "server", "shell", "worker"]
+      "updateMains": ["do"]
     }
   },
   "runtime": {
@@ -322,10 +322,8 @@
       "forkRepo": null,
       "listFiles": null,
       "merge": null,
-      "mergeGroup": null,
       "pendingMerge": null,
       "previewBuild": null,
-      "push": null,
       "pushStatus": null,
       "readFile": null,
       "rebaseContext": null,

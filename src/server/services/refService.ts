@@ -5,8 +5,8 @@
  * `repoPath → { stateHash, seq, updatedAt }`. There is no generic `(repo, ref)`
  * namespace. The public write surface is a single atomic group compare-and-swap
  * — `updateMains` — plus movement-limited host-internal seeding
- * (`seedMain`, set-if-absent). Repo retirement is a `next: null` entry through
- * `updateMains` (approval-gated). Advancement
+ * (`seedMain`, set-if-absent, implemented through `updateMains`). Repo retirement
+ * is a `next: null` entry through `updateMains` (approval-gated). Advancement
  * policy is injected as a `gate` hook that runs once per batch, before the swap;
  * this module stays policy- and content-free (a wiring phase attaches the
  * main-advance approval + a content-store validity check as deps).
@@ -176,8 +176,10 @@ export interface RefService {
   /**
    * One-time adoption of a repo's `main`: set it only if absent (bootstrap
    * seeding). Idempotent — an existing main is left untouched (even if `value`
-   * differs) and returned. Deliberately NOT gated and movement-limited by
-   * construction: it can never MOVE an existing main.
+   * differs) and returned. Implemented through `updateMains`, so it gets the
+   * same tree validation, store/log write path, and post-advance reaction as
+   * every other protected-main creation. Movement-limited by construction: it
+   * can never MOVE an existing main.
    */
   seedMain(input: { repoPath: string; value: string }): Promise<{
     created: boolean;
@@ -400,7 +402,7 @@ export function createRefService(deps: RefServiceDeps): RefService {
     return latest !== null && latest.new === null;
   };
 
-  return {
+  const service: RefService = {
     readMain(repoPath) {
       validateRepoPath(repoPath);
       const record = mains.get(repoPath);
@@ -564,38 +566,26 @@ export function createRefService(deps: RefServiceDeps): RefService {
     async seedMain(input) {
       validateRepoPath(input.repoPath);
       validateValue("value", input.value);
-      return serializeByKey(chains, input.repoPath, async () => {
-        const current = mains.get(input.repoPath);
-        if (current) return { created: false, record: { ...current } };
-        const timestamp = now();
-        const seq = maxSeqForRepo(input.repoPath) + 1;
-        const record: MainRefRecord = {
-          repoPath: input.repoPath,
-          stateHash: input.value,
-          updatedAt: timestamp,
-          seq,
-        };
-        const nextMains = new Map(mains);
-        nextMains.set(input.repoPath, record);
-        const nextLog = [
-          ...log,
-          {
-            repoPath: input.repoPath,
-            seq,
-            old: null,
-            new: input.value,
-            writer: "system:seed",
-            onBehalfOf: null,
-            reason: "seedMain: adopt pre-existing head",
-            operation: "import" as const,
-            timestamp,
-          },
-        ];
-        persistStore(nextMains.values(), nextLog);
-        mains.set(input.repoPath, record);
-        log.push(nextLog[nextLog.length - 1]!);
-        return { created: true, record: { ...record } };
-      });
+      const current = mains.get(input.repoPath);
+      if (current) return { created: false, record: { ...current } };
+      try {
+        await service.updateMains({
+          entries: [{ repoPath: input.repoPath, expectedOld: null, next: input.value }],
+          operation: "import",
+          reason: "seedMain: adopt pre-existing head",
+          writer: "system:seed",
+          gateContext: { kind: "system", actor: { id: "seed", kind: "system" } },
+        });
+      } catch (error) {
+        if (!isRefConflictError(error)) throw error;
+        const afterConflict = mains.get(input.repoPath);
+        if (afterConflict) return { created: false, record: { ...afterConflict } };
+        throw error;
+      }
+      const record = mains.get(input.repoPath);
+      if (!record) throw new RefValidationError(`seedMain failed to create ${input.repoPath}`);
+      return { created: true, record: { ...record } };
     },
   };
+  return service;
 }

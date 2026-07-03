@@ -49,6 +49,7 @@ import {
   ServiceDispatcher,
   type CallerKind,
   type ServiceContext,
+  type VerifiedCodeIdentity,
   type WsClientInfo,
   type VerifiedCaller,
 } from "@vibez1/shared/serviceDispatcher";
@@ -63,6 +64,7 @@ import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
 import type { ClientPlatform } from "@vibez1/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
+import { vcsInvocationOperationForMethod } from "./services/vcsInvocationTable.js";
 
 const log = createDevLogger("RpcServer");
 const RPC_RUNTIME_ID_HEADER = "x-vibez1-runtime-id";
@@ -151,6 +153,21 @@ type RelayCallMeta = {
   requestId?: string;
   idempotencyKey?: string;
   readOnly?: boolean;
+};
+
+type RelayCallerScope = {
+  /** Host-resolved parent caller to record in a VCS invocation token. */
+  invocationCaller: VerifiedCaller;
+  /** Caller id whose context registration should scope a routed VCS dispatch. */
+  contextCallerId: string;
+  /** Already-resolved context id, when the parent invocation carried one. */
+  callerContextId?: string;
+};
+
+type ResolvedExtensionParentCaller = {
+  caller: VerifiedCaller;
+  code: VerifiedCodeIdentity;
+  contextId?: string;
 };
 
 function relayCallOptions(
@@ -567,33 +584,70 @@ export class RpcServer {
       wsClient: client,
       ...extras,
     };
+    const parent = this.resolveExtensionParentCaller(client, message);
+    if (parent) ctx.chainCaller = parent.code;
+    return ctx;
+  }
+
+  private resolveExtensionParentCaller(
+    client: WsClientState,
+    message: Pick<RpcRequest | import("@vibez1/rpc").RpcStreamRequest, "parentInvocationToken">
+  ): ResolvedExtensionParentCaller | null {
     if (client.caller.runtime.kind !== "extension" || !message.parentInvocationToken) {
-      return ctx;
+      return null;
     }
     const invocation = this.deps.resolveExtensionInvocation?.(
       client.caller.runtime.id,
       message.parentInvocationToken
     );
     if (invocation?.chainCaller) {
-      ctx.chainCaller = invocation.chainCaller;
-    } else {
-      const caller = invocation?.caller;
-      if (
-        caller?.callerKind !== "panel" &&
-        caller?.callerKind !== "app" &&
-        caller?.callerKind !== "worker" &&
-        caller?.callerKind !== "do"
-      ) {
-        return ctx;
-      }
-      ctx.chainCaller = {
-        callerId: caller.callerId,
-        callerKind: caller.callerKind,
-        repoPath: "",
-        effectiveVersion: "",
+      const code: VerifiedCodeIdentity = {
+        callerId: invocation.chainCaller.callerId,
+        callerKind: invocation.chainCaller.callerKind,
+        repoPath: invocation.chainCaller.repoPath,
+        effectiveVersion: invocation.chainCaller.effectiveVersion,
+      };
+      return {
+        caller: createVerifiedCaller(code.callerId, code.callerKind, code),
+        code,
+        ...(invocation.chainCaller.contextId
+          ? { contextId: invocation.chainCaller.contextId }
+          : {}),
       };
     }
-    return ctx;
+    const caller = invocation?.caller;
+    if (
+      caller?.callerKind !== "panel" &&
+      caller?.callerKind !== "app" &&
+      caller?.callerKind !== "worker" &&
+      caller?.callerKind !== "do"
+    ) {
+      return null;
+    }
+    const code: VerifiedCodeIdentity = {
+      callerId: caller.callerId,
+      callerKind: caller.callerKind,
+      repoPath: "",
+      effectiveVersion: "",
+    };
+    return {
+      caller: createVerifiedCaller(code.callerId, code.callerKind, code),
+      code,
+      ...(caller.contextId ? { contextId: caller.contextId } : {}),
+    };
+  }
+
+  private relayCallerScopeForRpcMessage(
+    client: WsClientState,
+    message: Pick<RpcRequest, "parentInvocationToken">
+  ): RelayCallerScope | undefined {
+    const parent = this.resolveExtensionParentCaller(client, message);
+    if (!parent) return undefined;
+    return {
+      invocationCaller: parent.caller,
+      contextCallerId: parent.code.callerId,
+      ...(parent.contextId ? { callerContextId: parent.contextId } : {}),
+    };
   }
 
   private connectionKey(callerId: string, connectionId: string): string {
@@ -1209,6 +1263,7 @@ export class RpcServer {
       // and shell targets fail fast when unreachable.
       if (message.type === "request") {
         const { requestId, method: reqMethod, args: reqArgs } = message;
+        const relayCallerScope = this.relayCallerScopeForRpcMessage(client, message);
         this.recordRoutedRequestOrigin(requestId, client);
         void this.relayCall(
           client.caller.runtime.id,
@@ -1217,7 +1272,8 @@ export class RpcServer {
           reqMethod,
           reqArgs ?? [],
           targetConnectionId,
-          relayMetaFromEnvelope(routeEnvelope)
+          relayMetaFromEnvelope(routeEnvelope),
+          relayCallerScope
         ).then(
           (result) => {
             void this.sendRoutedResponseToOrigin(
@@ -2646,7 +2702,8 @@ export class RpcServer {
     method: string,
     args: unknown[],
     targetConnectionId?: string,
-    meta?: RelayCallMeta
+    meta?: RelayCallMeta,
+    relayCallerScope?: RelayCallerScope
   ): Promise<unknown> {
     const isPanelOrShellTarget = !targetId.startsWith("do:") && !targetId.startsWith("worker:");
     if (isPanelOrShellTarget) {
@@ -2696,7 +2753,15 @@ export class RpcServer {
     }
 
     if (targetId.startsWith("do:")) {
-      return await this.relayToDO(callerId, callerKind, targetId, method, args, meta);
+      return await this.relayToDO(
+        callerId,
+        callerKind,
+        targetId,
+        method,
+        args,
+        meta,
+        relayCallerScope
+      );
     }
 
     if (targetId.startsWith("worker:")) {
@@ -2729,7 +2794,8 @@ export class RpcServer {
     targetId: string,
     method: string,
     args: unknown[],
-    meta?: RelayCallMeta
+    meta?: RelayCallMeta,
+    relayCallerScope?: RelayCallerScope
   ): Promise<unknown> {
     const ref = parseDOTarget(targetId);
     // Assertion-only: the concrete DO entity must exist before dispatch.
@@ -2753,26 +2819,32 @@ export class RpcServer {
     // retries) within this dispatch's lifetime; the record is cleared when the
     // relayed call settles, so later replay fails closed.
     const vcsWriterIdentity = this.deps.getVcsWriterIdentity?.() ?? null;
+    const targetsVcsWriter = vcsWriterIdentity !== null && targetId === vcsWriterIdentity;
+    const vcsOperation = targetsVcsWriter ? vcsInvocationOperationForMethod(method) : null;
     const vcsInvocations =
-      vcsWriterIdentity !== null && targetId === vcsWriterIdentity
-        ? this.deps.vcsInvocations
-        : undefined;
-    const targetsVcsWriter = vcsInvocations !== undefined;
-    const invocation = vcsInvocations
-      ? vcsInvocations.mint({
-          caller: this.verifiedCallerFor(callerId, callerKind),
-          via: targetId,
-          method,
-          ...(meta?.requestId ? { requestId: meta.requestId } : {}),
-        })
-      : null;
+      vcsOperation !== null && targetsVcsWriter ? this.deps.vcsInvocations : undefined;
+    const invocation =
+      vcsInvocations && vcsOperation !== null
+        ? vcsInvocations.mint({
+            caller:
+              relayCallerScope?.invocationCaller ?? this.verifiedCallerFor(callerId, callerKind),
+            via: targetId,
+            method,
+            operation: vcsOperation,
+            ...(meta?.requestId ? { requestId: meta.requestId } : {}),
+          })
+        : null;
     // Source-head confinement (register row 11): thread the caller's
     // HOST-RESOLVED context registration id alongside the token so the writer DO
     // can reject a sandboxed push proposing a FOREIGN `ctx:` source head. Never
     // client-asserted — resolved here at the same chokepoint that mints the
     // token. Absent when the caller has no context (chrome/server) or the target
     // is not the writer DO.
-    const callerContextId = targetsVcsWriter ? (cache?.resolveContext(callerId) ?? null) : null;
+    const callerContextId = targetsVcsWriter
+      ? (relayCallerScope?.callerContextId ??
+        cache?.resolveContext(relayCallerScope?.contextCallerId ?? callerId) ??
+        null)
+      : null;
 
     const dispatch = async () => {
       if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {

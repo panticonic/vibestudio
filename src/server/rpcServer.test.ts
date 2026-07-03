@@ -767,6 +767,90 @@ describe("RpcServer relay behavior", () => {
     expect(vcsInvocations.resolve(tokenSeen!)).toBeNull();
   });
 
+  it("attributes routed extension VCS writer dispatches to the parent invocation caller", async () => {
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const parentCaller = {
+      callerId: "@workspace-apps/shell",
+      callerKind: "app" as const,
+      repoPath: "apps/shell",
+      effectiveVersion: "ev-parent",
+      contextId: "ctx-parent",
+    };
+    const resolveExtensionInvocation = vi.fn(() => ({
+      caller: {
+        callerId: "@workspace-extensions/git-bridge",
+        callerKind: "extension" as const,
+      },
+      chainCaller: parentCaller,
+    }));
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => targetId,
+      resolveExtensionInvocation,
+    });
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    entityCache._onActivate(
+      makeRecord(parentCaller.callerId, "app", {
+        contextId: parentCaller.contextId,
+        repoPath: parentCaller.repoPath,
+        effectiveVersion: parentCaller.effectiveVersion,
+      })
+    );
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let tokenSeen: string | undefined;
+    let contextSeen: string | undefined;
+    let resolvedCallerId: string | undefined;
+    let resolvedRepoPath: string | undefined;
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as {
+        message?: { invocationToken?: string; callerContextId?: string };
+      };
+      tokenSeen = envelope.message?.invocationToken;
+      contextSeen = envelope.message?.callerContextId;
+      const record = tokenSeen ? vcsInvocations.resolve(tokenSeen) : null;
+      resolvedCallerId = record?.caller.runtime.id;
+      resolvedRepoPath = record?.caller.code?.repoPath;
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "req-ext-vcs", result: { status: "pushed" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const extensionClient = createClient("@workspace-extensions/git-bridge");
+    extensionClient.caller = createVerifiedCaller("@workspace-extensions/git-bridge", "extension");
+
+    handleRoute(server, extensionClient, targetId, {
+      type: "request",
+      requestId: "req-ext-vcs",
+      fromId: extensionClient.caller.runtime.id,
+      method: "vcsPush",
+      args: [{ repoPaths: ["packages/a"], sourceHead: "ctx:ctx-parent" }],
+      parentInvocationToken: "parent-token",
+    });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(resolveExtensionInvocation).toHaveBeenCalledWith(
+      "@workspace-extensions/git-bridge",
+      "parent-token"
+    );
+    expect(tokenSeen).toBeTruthy();
+    expect(resolvedCallerId).toBe(parentCaller.callerId);
+    expect(resolvedRepoPath).toBe(parentCaller.repoPath);
+    expect(contextSeen).toBe(parentCaller.contextId);
+    await vi.waitFor(() => expect(vcsInvocations.size()).toBe(0));
+  });
+
   it("threads the caller's HOST-RESOLVED context id to the writer DO (row 11)", async () => {
     // Source-head confinement: the relay resolves the ORIGINATING caller's
     // context registration (`entityCache.resolveContext`) at the same chokepoint

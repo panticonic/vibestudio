@@ -434,12 +434,36 @@ describe("refService.updateMains", () => {
   });
 
   describe("seedMain", () => {
-    it("creates the main when absent, without consulting the gate", async () => {
+    it("creates the main when absent through the updateMains path", async () => {
       const { service, gateCalls } = makeService();
+      const reactions: RefGateBatch[] = [];
+      service.setOnMainsUpdated(async (event) => {
+        reactions.push({
+          entries: event.entries.map((entry) => ({
+            repoPath: entry.repoPath,
+            old: entry.oldState,
+            next: entry.newState,
+            priorDeleted: false,
+          })),
+          operation: event.operation,
+          reason: event.reason,
+          writer: event.writer,
+          onBehalfOf: event.onBehalfOf,
+        });
+      });
       const seeded = await service.seedMain({ repoPath: "notes/journal", value: STATE_A });
       expect(seeded.created).toBe(true);
       expect(seeded.record).toMatchObject({ stateHash: STATE_A, seq: 1 });
-      expect(gateCalls).toEqual([]);
+      expect(gateCalls).toHaveLength(1);
+      expect(gateCalls[0]).toMatchObject({
+        entries: [{ repoPath: "notes/journal", old: null, next: STATE_A }],
+        writer: "system:seed",
+      });
+      expect(reactions).toHaveLength(1);
+      expect(reactions[0]).toMatchObject({
+        entries: [{ repoPath: "notes/journal", old: null, next: STATE_A }],
+        writer: "system:seed",
+      });
       const log = service.readMainLog({ repoPath: "notes/journal" });
       expect(log[0]).toMatchObject({ old: null, new: STATE_A, writer: "system:seed" });
     });

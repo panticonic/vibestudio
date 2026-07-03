@@ -79,7 +79,6 @@ export const VCS_MEMBERS = [
   "resolveHead",
   "workspaceViewWithRepoAt",
   "merge",
-  "mergeGroup",
   "abortMerge",
   "pendingMerge",
   "push",

@@ -104,7 +104,7 @@ function createVcsClient(transport: MobileRpcClient) {
   );
   // Push is USERLAND-dispatched (P3 flip): the build-gated main advance runs in
   // the gad-store DO's `vcsPush`, reached via the `vcs` manifest service — NOT
-  // the host `vcs.push` service (which now throws a directed error). Mirror
+  // a public host `vcs.push` service. Mirror
   // packages/runtime vcsClient.ts and route directly to the DO so the relay
   // mints the on-behalf-of invocation token with the originating caller; a host
   // forward would erase it. The mobile transport is `RpcCallerLike`

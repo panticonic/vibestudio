@@ -24,7 +24,8 @@ const WORKSPACE_REPO_DELETE_CAPABILITY = "workspace-repo-delete";
 // so it is gated too, but as a standard (recovery) action rather than severe.
 const WORKSPACE_REPO_RESTORE_CAPABILITY = "workspace-repo-restore";
 
-/** The operations that advance a repo's protected `main` ref. */
+/** The user-visible operations that advance a repo's protected `main` ref.
+ *  Import/delete/restore frame as push-class approval at the gate. */
 export type MainAdvanceOperation = "push" | "merge";
 
 /**
@@ -816,8 +817,7 @@ function metaChangeDescription(units: UnitBatchEntry[]): string {
 }
 
 function mainAdvanceTitle(candidate: MainAdvanceApprovalCandidate): string {
-  if (candidate.operation === "push") return "Push workspace changes";
-  return "Merge into workspace main";
+  return candidate.operation === "merge" ? "Merge into workspace main" : "Push workspace changes";
 }
 
 function mainAdvanceDescription(candidate: MainAdvanceApprovalCandidate): string {
@@ -863,10 +863,10 @@ async function resolveBuildStatusLine(
 
 function operationLabel(operation: MainAdvanceOperation): string {
   switch (operation) {
-    case "merge":
-      return "vcs merge";
     case "push":
       return "vcs push";
+    case "merge":
+      return "vcs merge";
   }
 }
 
