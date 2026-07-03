@@ -67,6 +67,19 @@ export function attachLocalHostBridges(
      *  stands in for approval). The host CAS is now semantics-free (Phase 5), so
      *  the context no longer carries an operation. */
     gateContext?: () => unknown;
+    /** Disk-projection + build-graph primitives the DO's delete/restore/fork
+     *  sagas drive (`worktree.project` / `worktree.dependentRepos`). In
+     *  production these are host RPCs; in-process tests wire them to the real
+     *  `WorkspaceVcs.projectWorktree` / `deleteDependents`. Defaults are inert
+     *  (projection no-op, no dependents) for suites that never delete/restore. */
+    worktree?: {
+      project?: (
+        repoPath: string,
+        head: string,
+        stateHash: string
+      ) => Promise<{ stateHash: string }>;
+      dependentRepos?: (repoPath: string) => Promise<string[]>;
+    };
   }
 ): void {
   const { blobsDir } = opts;
@@ -142,6 +155,19 @@ export function attachLocalHostBridges(
     },
   };
   Object.defineProperty(instance, "refsStore", { value: () => refsStore, configurable: true });
+  const worktreeStore = {
+    scan: () => {
+      throw new Error("attachLocalHostBridges: worktree.scan is not wired for this test");
+    },
+    project: (repoPath: string, head: string, stateHash: string) =>
+      opts.worktree?.project?.(repoPath, head, stateHash) ?? Promise.resolve({ stateHash }),
+    dependentRepos: (repoPath: string) =>
+      opts.worktree?.dependentRepos?.(repoPath) ?? Promise.resolve([]),
+  };
+  Object.defineProperty(instance, "worktreeStore", {
+    value: () => worktreeStore,
+    configurable: true,
+  });
   const buildStore = {
     validate: (input: { viewHash: string; repoPaths: string[]; baseViewHash?: string }) =>
       opts.buildValidate ? opts.buildValidate(input) : Promise.resolve([] as RepoBuildReport[]),

@@ -556,10 +556,12 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 
 ## `worktree`
 
-Host disk-scan primitive: read a working tree into the CAS (worktree.scan).
+Host disk primitives: scan a working tree into the CAS (worktree.scan), project a state onto disk (worktree.project), and read build-graph dependents (worktree.dependentRepos).
 
 Allowed callers: `do`, `shell`, `server`
 
 | Method | Description |
 |--------|-------------|
 | `worktree.scan` | Scan a working tree into the content store and return its content-addressed state. Resolves the (repoPath, head) directory, hashes+mirrors every file into the CAS (refreshing the .gad sidecar), and returns { stateHash, files }. A pure disk→CAS primitive: no commit, no ref advance, no history — the caller (the gad-store DO) owns all VCS semantics. |
+| `worktree.project` | Materialize a content-addressed `stateHash` onto the (repoPath, head) working tree (the disk-projection primitive, sibling of `scan`). Semantics-free: hardlinks the CAS tree onto disk and refreshes the sidecar — no commit, no ref advance, no history. The gad-store DO drives it to re-materialize a restored/forked repo into the ACTIVE context checkout (`ctx:workspace`); `main` is never projected (D1). |
+| `worktree.dependentRepos` | Workspace-relative paths of repos whose build unit directly imports `repoPath`'s unit, at the live workspace view. A content-derived build-graph read (dumb primitive, same class as `scan`): it holds no delete semantics — the gad-store DO consumes it to decide whether a deletion is refused without `force`. Empty when `repoPath` is content-only or has no dependents. |

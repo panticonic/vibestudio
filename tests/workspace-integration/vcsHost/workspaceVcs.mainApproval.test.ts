@@ -235,7 +235,6 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
           approvals.push(candidate);
         },
         approveRepoDeletion: async () => {},
-        approveRepoRestore: async () => {},
       },
       ensureStateMirrored: (stateHash) => vcs.worktrees.ensureStateMirrored(stateHash),
       workspaceViewWithReposAt: (overrides) => vcs.workspaceViewWithReposAt(overrides),
@@ -278,7 +277,6 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
           approvals.push(candidate);
         },
         approveRepoDeletion: async () => {},
-        approveRepoRestore: async () => {},
       },
       ensureStateMirrored: (stateHash) => vcs.worktrees.ensureStateMirrored(stateHash),
       workspaceViewWithReposAt: (overrides) => vcs.workspaceViewWithReposAt(overrides),

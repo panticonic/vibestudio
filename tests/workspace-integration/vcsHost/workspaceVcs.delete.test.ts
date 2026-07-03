@@ -12,10 +12,7 @@ import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
 import { createRefService } from "../../../src/server/services/refService.js";
 import type { RefGateBatch } from "../../../src/server/services/refService.js";
 import { createMainRefAdvanceGate } from "../../../src/server/services/mainAdvanceApproval.js";
-import type {
-  RepoDeletionApprovalCandidate,
-  RepoRestoreApprovalCandidate,
-} from "../../../src/server/services/mainAdvanceApproval.js";
+import type { RepoDeletionApprovalCandidate } from "../../../src/server/services/mainAdvanceApproval.js";
 import type { StateAdvancedEvent } from "../../../src/server/buildV2/stateTrigger.js";
 import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 
@@ -78,13 +75,26 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       statePath: path.join(root, "refs"),
       gate: (batch) => gateHook(batch),
     });
-    attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
+    // Phase 4: the delete/restore/fork SAGAS run in the DO, driving host
+    // primitives. Construct `vcs` first so the bridge can wire the DO's
+    // `worktree.project` / `worktree.dependentRepos` to the REAL projector +
+    // build graph, and supply the `{ kind: "caller" }` gate context the DO's
+    // updateMains would otherwise receive from the relay's on-behalf-of token.
     vcs = new WorkspaceVcs({
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),
       buildSourcesRoot: path.join(root, "build-sources"),
       refs,
+    });
+    attachLocalHostBridges(gad.instance, {
+      blobsDir: path.join(root, "blobs"),
+      refs,
+      gateContext: () => ({ kind: "caller", caller: CALLER }),
+      worktree: {
+        project: (repoPath, head, stateHash) => vcs.projectWorktree(repoPath, head, stateHash),
+        dependentRepos: (repoPath) => vcs.deleteDependents(repoPath),
+      },
     });
     await vcs.attachGad(caller); // bootstraps per-repo mains from disk
   });
@@ -145,18 +155,26 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     await expect(fsp.access(path.join(workspaceRoot, "packages/foo"))).rejects.toThrow();
   });
 
-  it("restores the protected ref when archive fails after ref deletion", async () => {
+  it("leaves the protected ref intact when the DO archive step fails", async () => {
+    // Phase 4: the archive is a DO-INTERNAL step of `vcsDeleteRepo`, ordered
+    // BEFORE the ref CAS (Fork D). Fail it and the ref is never touched — no
+    // gated compensation is needed. Stub the DO's own `archiveRepoMain` (it is
+    // no longer reached over the `caller.call` boundary).
     const before = refs.readMain("packages/foo");
     expect(before).not.toBeNull();
-    const originalCall = caller.call.bind(caller);
-    caller.call = async <T>(method: string, input: unknown): Promise<T> => {
-      if (method === "archiveRepoMain") throw new Error("archive unavailable");
-      return originalCall<T>(method, input);
+    const instance = gad.instance as unknown as { archiveRepoMain: (arg: unknown) => unknown };
+    const originalArchive = instance.archiveRepoMain.bind(instance);
+    instance.archiveRepoMain = () => {
+      throw new Error("archive unavailable");
     };
 
-    await expect(
-      vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
-    ).rejects.toThrow(/archive unavailable/);
+    try {
+      await expect(
+        vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
+      ).rejects.toThrow(/archive unavailable/);
+    } finally {
+      instance.archiveRepoMain = originalArchive;
+    }
 
     expect(refs.readMain("packages/foo")?.stateHash).toBe(before!.stateHash);
     expect(await worktreeHead("packages/foo", VCS_MAIN_HEAD)).not.toBeNull();
@@ -357,22 +375,23 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     expect(await worktreeHead("packages/foo", VCS_MAIN_HEAD)).toBeNull();
   });
 
-  it("raises exactly ONE deletion/restore prompt through the REAL ref gate (host-computed fileCount + dependents)", async () => {
-    // Wire the production ref gate: delete/restore now flow through its
-    // classification, so there is exactly one host-owned prompt per lifecycle
-    // op — no separate beforeDelete/beforeRestore prompt.
+  it("raises ONE severe deletion prompt on delete, and a plain add-repo advance prompt on restore, through the REAL ref gate", async () => {
+    // Wire the production ref gate. The gate is SEMANTICS-FREE (Phase 5 / D3):
+    // it classifies ONLY a removal (`next === null`) as the severe deletion; a
+    // restore re-creates the ref (`old === null, next = tree`) and flows through
+    // the GENERIC advance prompt (`approve`) as an add-repo — there is no longer
+    // a distinct restore classification. Restore semantics are DO-owned.
     const deletions: RepoDeletionApprovalCandidate[] = [];
-    const restores: RepoRestoreApprovalCandidate[] = [];
+    const advances: Array<{ repoPath: string; changedPaths: string[] }> = [];
     let dependentsCalls = 0;
     const realGate = createMainRefAdvanceGate({
       blobsDir: path.join(root, "blobs"),
       approvalGate: {
-        approve: async () => {},
+        approve: async (c) => {
+          advances.push({ repoPath: c.repoPath, changedPaths: c.changedPaths });
+        },
         approveRepoDeletion: async (c) => {
           deletions.push(c);
-        },
-        approveRepoRestore: async (c) => {
-          restores.push(c);
         },
       },
       ensureStateMirrored: (stateHash) => vcs.worktrees.ensureStateMirrored(stateHash),
@@ -386,17 +405,18 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
 
     await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
     // Exactly one severe deletion prompt, carrying host-computed file count and
-    // the (host-computed, empty here) dependents list.
+    // the (host-computed, empty here) dependents list. No advance prompt.
     expect(deletions).toHaveLength(1);
     expect(deletions[0]).toMatchObject({ repoPath: "packages/foo", fileCount: 1, dependents: [] });
     expect(dependentsCalls).toBe(1);
-    expect(restores).toHaveLength(0);
+    expect(advances).toHaveLength(0);
 
     await vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
-    // Exactly one restore prompt; the deletion prompt count is unchanged (no
-    // double prompting across the lifecycle).
-    expect(restores).toHaveLength(1);
-    expect(restores[0]).toMatchObject({ repoPath: "packages/foo", fileCount: 1 });
+    // Restore raised a plain add-repo advance prompt (the re-created ref's tree,
+    // all files added) — NOT a second deletion prompt.
+    expect(advances).toHaveLength(1);
+    expect(advances[0]).toMatchObject({ repoPath: "packages/foo" });
+    expect(advances[0]!.changedPaths).toContain("packages/foo/index.ts");
     expect(deletions).toHaveLength(1);
   });
 

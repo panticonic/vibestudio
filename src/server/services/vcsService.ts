@@ -454,46 +454,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const [input] = args as [VcsRecallInput];
           return await vcs.recallMemory(input);
         }
-        case "forkRepo": {
-          const [fromPath, toPath] = args as [string, string];
-          return await vcs.forkRepo(
-            normalizeWorkspaceRepoPath(fromPath),
-            normalizeWorkspaceRepoPath(toPath),
-            actor
-          );
-        }
-        case "deleteRepo": {
-          // Severe, global-state action: archive a repo's history and remove it
-          // from workspace main. The SEVERE per-repo deletion approval is raised
-          // exactly ONCE by the ref gate when `updateMains` classifies the
-          // null-next entry (narrow-host-vcs-plan §5) — the caller is threaded
-          // through so that one prompt attributes to the originating principal.
-          const [input] = args as [{ repoPath: string; force?: boolean }];
-          const repoPath = normalizeWorkspaceRepoPath(input.repoPath);
-          const result = await vcs.deleteRepo({
-            repoPath,
-            actor,
-            caller: ctx.caller,
-            ...(input.force ? { force: true } : {}),
-          });
-          await deps.getBuildSystem?.()?.whenSettled();
-          return result;
-        }
-        case "restoreRepo": {
-          // Recover a deleted repo: re-point main at its archive head. Fails if a
-          // different repo now occupies the path. The restore approval is raised
-          // exactly ONCE by the ref gate when `updateMains` classifies the
-          // previously-deleted re-creation (narrow-host-vcs-plan §5).
-          const [input] = args as [{ repoPath: string }];
-          const repoPath = normalizeWorkspaceRepoPath(input.repoPath);
-          const result = await vcs.restoreRepo({
-            repoPath,
-            actor,
-            caller: ctx.caller,
-          });
-          await deps.getBuildSystem?.()?.whenSettled();
-          return result;
-        }
+        // forkRepo / deleteRepo / restoreRepo are no longer host-serviced:
+        // Phase 4 moved the sagas into the gad-store DO (`vcsForkRepo` /
+        // `vcsDeleteRepo` / `vcsRestoreRepo`) and userland routes to them
+        // DIRECTLY (like `vcs.push` → `vcsPush`) so the relay mints the
+        // on-behalf-of token attributing the severe prompt to the originating
+        // caller (D3). A host forward would erase that attribution.
         case "contextStatus": {
           const contextId = callerContextId(ctx, deps);
           if (!contextId) throw new Error("vcs.contextStatus requires an active context");

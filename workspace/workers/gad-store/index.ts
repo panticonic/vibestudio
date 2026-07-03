@@ -638,6 +638,41 @@ function logIdForRepoPath(repoPath: string): string {
   return `vcs:repo:${normalizeRepoPathArg(repoPath)}`;
 }
 
+/** Protected `main` head + the active-context checkout head (`ctx:workspace`,
+ *  D1/D2) + the archived-lineage prefix — the head names the delete/restore/fork
+ *  DO sagas drive against the host primitives. */
+const VCS_MAIN = "main";
+const VCS_ACTIVE_CONTEXT_HEAD = "ctx:workspace";
+const VCS_ARCHIVE_HEAD_PREFIX = "archived:";
+
+/** Re-root a repo-relative path under its workspace repo prefix (kept identical
+ *  to the host's `joinRepoPrefix`). */
+function joinRepoPrefixPath(repoPath: string, relPath: string): string {
+  const norm = normalizeRepoPathArg(repoPath);
+  return relPath ? `${norm}/${relPath}` : norm;
+}
+
+/**
+ * Rewrite a `package.json` `name` leaf to the fork's destination path, preserving
+ * the existing scope (e.g. `"@workspace-panels/chat"` + `"panels/mychat"` →
+ * `"@workspace-panels/mychat"`). Returns the new JSON text, or `null` if it can't
+ * parse or has no string `name`. Ported from the host so the fork rename is a
+ * DO-owned bootstrap commit (narrow-host boundary refactor Phase 4).
+ */
+function renameWorkspacePackage(jsonText: string, toPath: string): string | null {
+  let pkg: { name?: unknown } & Record<string, unknown>;
+  try {
+    pkg = JSON.parse(jsonText) as { name?: unknown } & Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (typeof pkg.name !== "string") return null;
+  const leaf = toPath.split("/").pop() ?? toPath;
+  const slash = pkg.name.lastIndexOf("/");
+  pkg.name = slash >= 0 ? `${pkg.name.slice(0, slash + 1)}${leaf}` : leaf;
+  return `${JSON.stringify(pkg, null, 2)}\n`;
+}
+
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
@@ -727,6 +762,13 @@ interface HostWorktreeStore {
     stateHash: string;
     files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
   }>;
+  /** CAS→disk projection primitive — materialize `stateHash` onto the
+   *  (repoPath, head) working tree (restore/fork re-materialize into
+   *  `ctx:workspace`). Semantics-free; `main` is never projected (D1). */
+  project(repoPath: string, head: string, stateHash: string): Promise<{ stateHash: string }>;
+  /** Build-graph dependents of `repoPath` (host-computed, content-derived) —
+   *  the DO consumes this to gate a deletion without `force`. Dumb data. */
+  dependentRepos(repoPath: string): Promise<string[]>;
 }
 
 /** listTree caps results; a silently truncated listing would compose/merge as
@@ -5890,6 +5932,266 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.runVcsPush({ ...input, sourceHead, actor }, invocationToken, false);
   }
 
+  // -------------------------------------------------------------------------
+  // Delete / restore / fork — DO-owned lifecycle sagas (narrow-host boundary
+  // refactor Phase 4). The `refs.updateMains` CAS stays a host PRIMITIVE the DO
+  // drives (approval-gated host-side, D3 — attribution rides the relay-minted
+  // on-behalf-of token). Archive/restore lineage moves, the dependent-gate
+  // DECISION (over the host `worktree.dependentRepos` primitive), the fork
+  // rename bootstrap commit, and disk (re)projection (`worktree.project`) are
+  // orchestrated HERE. The CAS is the FINAL step, so a pre-CAS failure rolls
+  // back only DO-internal state (no gated ref-compensation, Fork D).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Archive a repo's history and drop it from the workspace. Orchestration:
+   * gate on host-computed build-graph dependents (refuse without `force`),
+   * archive the log lineage (DO-internal), THEN retire the protected `main` ref
+   * (the host-gated `updateMains{next:null}` — the severe deletion prompt fires
+   * host-side, classified from the null-next CAS shape). Disk removal is the
+   * host's exactly-once `onMainsUpdated` reaction. A gate denial / CAS conflict
+   * rolls the archive back (un-archive) — DO-internal, ungated.
+   */
+  @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
+  async vcsDeleteRepo(input: {
+    repoPath: string;
+    actor?: ParticipantRef | null;
+    force?: boolean;
+  }): Promise<{
+    repoPath: string;
+    archived: boolean;
+    archiveHead: string | null;
+    removedPaths: string[];
+    dependents: string[];
+    stateHash: string;
+  }> {
+    // READ-AT-ENTRY (durable token contract): capture the on-behalf-of token
+    // synchronously before any await.
+    const invocationToken = this.invocationToken;
+    this.ensureReady();
+    const repoPath = normalizeRepoPathArg(input.repoPath);
+    if (repoPath === "meta") {
+      throw new Error("Refusing to delete the `meta` repo (workspace configuration).");
+    }
+    const logId = logIdForRepoPath(repoPath);
+    const store = this.contentStore();
+    const mainWorktree = this.resolveWorktreeHeadInternal(logId, VCS_MAIN);
+    if (!mainWorktree) {
+      throw new Error(
+        `Cannot delete ${repoPath}: it has no committed \`main\` (not a tracked repo).`
+      );
+    }
+    const mainState = mainWorktree.stateHash;
+    const removedPaths = (await this.stateFilesFor(store, mainState)).map((f) =>
+      joinRepoPrefixPath(repoPath, f.path)
+    );
+
+    // Dependent gate (Fork B): the DO owns only the DECISION; the build graph is
+    // a dumb host primitive (`worktree.dependentRepos`). Refuse unless `force`.
+    const dependents = await this.worktreeStore().dependentRepos(repoPath);
+    if (dependents.length > 0 && !input.force) {
+      throw new Error(
+        `Cannot delete ${repoPath}: ${dependents.length} repo(s) depend on it ` +
+          `(${dependents.join(", ")}). Their builds will break — pass force to delete anyway.`
+      );
+    }
+
+    // Archive FIRST (DO-internal), ref CAS LAST (Fork D): a pre-CAS failure
+    // needs no gated ref-compensation.
+    const archive = this.archiveRepoMain({
+      logId,
+      archiveHead: `${VCS_ARCHIVE_HEAD_PREFIX}${mainState}`,
+    });
+    try {
+      await this.refsStore().updateMains({
+        entries: [{ repoPath, expectedOld: mainState, next: null }],
+        operation: "delete",
+        ...(invocationToken ? { invocationToken } : {}),
+      });
+    } catch (error) {
+      // The gated ref delete was denied / conflicted before it landed — roll the
+      // archive back onto `main` (DO-internal, ungated) so the repo is intact.
+      if (archive.archived && archive.archiveHead) {
+        this.restoreRepoMain({ logId, archiveHead: archive.archiveHead });
+      }
+      throw error;
+    }
+    return {
+      repoPath,
+      archived: archive.archived,
+      archiveHead: archive.archiveHead,
+      removedPaths,
+      dependents,
+      stateHash: await this.workspaceViewFromRefs(store),
+    };
+  }
+
+  /**
+   * Recover a deleted repo: re-point `main` at its newest archive head and
+   * re-materialize it on disk. Orchestration: guard the path is free, un-archive
+   * the lineage (DO-internal), THEN re-create the protected `main` ref (the
+   * host-gated `updateMains{expectedOld:null}` — an add-repo prompt classified
+   * from the CAS shape, D3), THEN re-project the repo into the ACTIVE context
+   * checkout (`ctx:workspace`) via the `worktree.project` primitive so it
+   * re-appears on disk (D1/D2 — `main` has no checkout). A gate denial / CAS
+   * conflict re-archives the lineage (DO-internal, ungated).
+   */
+  @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
+  async vcsRestoreRepo(input: { repoPath: string; actor?: ParticipantRef | null }): Promise<{
+    repoPath: string;
+    restored: boolean;
+    fromArchiveHead: string | null;
+    restoredPaths: string[];
+    stateHash: string;
+  }> {
+    const invocationToken = this.invocationToken;
+    this.ensureReady();
+    const repoPath = normalizeRepoPathArg(input.repoPath);
+    const logId = logIdForRepoPath(repoPath);
+    const store = this.contentStore();
+    // Occupancy guard: a live main (a different repo re-created at the path)
+    // must not be clobbered.
+    if (this.resolveWorktreeHeadInternal(logId, VCS_MAIN)) {
+      throw new Error(
+        `Cannot restore ${repoPath}: a repo already occupies that path (it was re-created since deletion).`
+      );
+    }
+    const archives = this.listWorktreeHeads({ logId })
+      .filter((h) => h.head.startsWith(VCS_ARCHIVE_HEAD_PREFIX))
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    const newest = archives[0];
+    if (!newest) {
+      throw new Error(`Cannot restore ${repoPath}: no archived history found at that path.`);
+    }
+    const restoredPaths = (await this.stateFilesFor(store, newest.stateHash)).map((f) =>
+      joinRepoPrefixPath(repoPath, f.path)
+    );
+
+    // Un-archive FIRST (DO-internal), ref CAS LAST (Fork D).
+    const restore = this.restoreRepoMain({ logId, archiveHead: newest.head });
+    try {
+      await this.refsStore().updateMains({
+        entries: [{ repoPath, expectedOld: null, next: newest.stateHash }],
+        operation: "restore",
+        ...(invocationToken ? { invocationToken } : {}),
+      });
+    } catch (error) {
+      // Re-archive (DO-internal, ungated) so nothing is left half-restored.
+      this.archiveRepoMain({ logId, archiveHead: newest.head });
+      throw error;
+    }
+    // Re-materialize into the ACTIVE context checkout so the repo re-appears on
+    // disk (D1/D2 — never a `main` checkout).
+    await this.worktreeStore().project(repoPath, VCS_ACTIVE_CONTEXT_HEAD, newest.stateHash);
+    return {
+      repoPath,
+      restored: restore.restored,
+      fromArchiveHead: restore.archiveHead,
+      restoredPaths,
+      stateHash: await this.workspaceViewFromRefs(store),
+    };
+  }
+
+  /**
+   * Fork a repo's entire `main` history into a NEW repo at `toPath` — a no-copy
+   * lineage fork. Orchestration: `forkLog` (DO-internal lineage descent), a
+   * `package.json` `name` rewrite as a bootstrap commit (blob put / tree mirror
+   * / provenance ingest over the content-store primitives), the ONE host-gated
+   * `main` ref creation (`updateMains{expectedOld:null}`, the add-repo prompt),
+   * THEN disk projection into the ACTIVE context. Errors if the source has no
+   * history or the destination exists.
+   */
+  @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
+  async vcsForkRepo(input: {
+    fromPath: string;
+    toPath: string;
+    actor?: ParticipantRef | null;
+  }): Promise<{ repoPath: string; head: string; inherited: number; stateHash: string }> {
+    const invocationToken = this.invocationToken;
+    this.ensureReady();
+    const actor = input.actor ?? this.callerParticipant();
+    const from = normalizeRepoPathArg(input.fromPath);
+    const to = normalizeRepoPathArg(input.toPath);
+    if (from === to) throw new Error(`forkRepo: source and destination are the same (${from})`);
+    const fromLogId = logIdForRepoPath(from);
+    const toLogId = logIdForRepoPath(to);
+
+    const fromMainWorktree = this.resolveWorktreeHeadInternal(fromLogId, VCS_MAIN);
+    if (!fromMainWorktree) {
+      throw new Error(`forkRepo: source repo "${from}" has no history to fork`);
+    }
+    const fromMain = fromMainWorktree.stateHash;
+    if (this.resolveWorktreeHeadInternal(toLogId, VCS_MAIN)) {
+      throw new Error(`forkRepo: destination repo "${to}" already exists`);
+    }
+    const store = this.contentStore();
+
+    // 1. No-copy lineage fork: vcs:repo:<from> @ main → vcs:repo:<to> @ main.
+    const fork = this.forkLog({
+      fromLogId,
+      fromHead: VCS_MAIN,
+      toLogId,
+      toHead: VCS_MAIN,
+    });
+
+    // 2. Rewrite package.json `name` (when present) so the fork is build-valid —
+    //    a direct main-bootstrap commit on the inherited lineage (history +
+    //    rename). Uses the private ingest (the public surface refuses non-do main
+    //    ingests; this IS the DO's own publish path).
+    let finalState = fromMain;
+    const baseFiles = await this.stateFilesFor(store, fromMain);
+    const pkgEntry = baseFiles.find((f) => f.path === "package.json");
+    if (pkgEntry) {
+      const pkgBase64 = await store.getBase64(pkgEntry.contentHash);
+      const pkgText = pkgBase64 !== null ? decodeUtf8Text(base64ToBytes(pkgBase64)) : null;
+      const renamed = pkgText !== null ? renameWorkspacePackage(pkgText, to) : null;
+      if (renamed && renamed !== pkgText) {
+        const put = await store.putBase64(bytesToBase64(new TextEncoder().encode(renamed)));
+        const files = baseFiles.map((f) =>
+          f.path === "package.json" ? { ...f, contentHash: put.digest } : f
+        );
+        const ingest = this.transaction(() =>
+          this.ingestWorktreeStateInTxn({
+            logId: toLogId,
+            head: VCS_MAIN,
+            logKind: "vcs",
+            actor,
+            files,
+            baseStateHash: fromMain,
+            expectedRefStateHash: fromMain,
+            eventKind: "state.snapshot_ingested",
+            summary: `forkRepo: rename package to ${to}`,
+            editOps: [
+              {
+                kind: "write",
+                path: "package.json",
+                oldContentHash: pkgEntry.contentHash,
+                newContentHash: put.digest,
+              },
+            ],
+          })
+        );
+        finalState = ingest.stateHash;
+        // Mirror the composed state so the handed-out hash resolves in the
+        // content store (projection materializes from there).
+        await this.mirrorStateToContentStore(store, files, finalState);
+      }
+    }
+
+    // 3. The ONE host-gated main-ref change: create the new repo's protected
+    //    `main` (expectedOld:null = an add-repo prompt from the CAS shape).
+    await this.refsStore().updateMains({
+      entries: [{ repoPath: to, expectedOld: null, next: finalState }],
+      operation: "import",
+      ...(invocationToken ? { invocationToken } : {}),
+    });
+
+    // 4. Project the fork onto the ACTIVE context's checkout so it appears on
+    //    disk (D1/D2 — `main` has no checkout).
+    await this.worktreeStore().project(to, VCS_ACTIVE_CONTEXT_HEAD, finalState);
+    return { repoPath: to, head: VCS_MAIN, inherited: fork.inherited, stateHash: finalState };
+  }
+
   /**
    * Snapshot the source-head confinement inputs read-at-entry: the caller kind
    * (sandboxed vs privileged) and the HOST-RESOLVED context id threaded on the
@@ -7403,6 +7705,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
   protected worktreeStore(): HostWorktreeStore {
     return {
       scan: (repoPath, head) => this.rpc.call("main", "worktree.scan", [repoPath, head]),
+      project: (repoPath, head, stateHash) =>
+        this.rpc.call("main", "worktree.project", [repoPath, head, stateHash]),
+      dependentRepos: (repoPath) => this.rpc.call("main", "worktree.dependentRepos", [repoPath]),
     };
   }
 

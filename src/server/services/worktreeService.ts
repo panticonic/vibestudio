@@ -21,18 +21,28 @@ export interface WorktreeServiceDeps {
     stateHash: string;
     files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
   }>;
+  /** The pure CAS→disk projection primitive (WorkspaceVcs.projectWorktree). */
+  project(repoPath: string, head: string, stateHash: string): Promise<{ stateHash: string }>;
+  /** Content-derived build-graph read: repos whose unit imports `repoPath`
+   *  (WorkspaceVcs.deleteDependents). Dumb data — holds no delete semantics. */
+  dependentRepos(repoPath: string): Promise<string[]>;
 }
 
 export function createWorktreeService(deps: WorktreeServiceDeps): ServiceDefinition {
   return {
     name: "worktree",
-    description: "Host disk-scan primitive: read a working tree into the CAS (worktree.scan).",
+    description:
+      "Host disk primitives: scan a working tree into the CAS (worktree.scan), project a state onto disk (worktree.project), and read build-graph dependents (worktree.dependentRepos).",
     policy: { allowed: ["do", "shell", "server"] },
     methods: worktreeMethods,
     handler: async (_ctx, method, args) => {
       switch (method) {
         case "scan":
           return deps.scan(args[0] as string, args[1] as string);
+        case "project":
+          return deps.project(args[0] as string, args[1] as string, args[2] as string);
+        case "dependentRepos":
+          return deps.dependentRepos(args[0] as string);
         default:
           throw new Error(`Unknown worktree method: ${method}`);
       }

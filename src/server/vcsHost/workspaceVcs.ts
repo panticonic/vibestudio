@@ -29,7 +29,6 @@ import {
   materializeTree,
   mirrorWorktreeTree,
   pruneUnreferencedTreeObjects,
-  putBytes,
   readFileAtTree,
   resolveTreePath,
   type TreeDiff,
@@ -57,7 +56,6 @@ import {
   VCS_MAIN_HEAD,
   VCS_ACTIVE_CONTEXT_ID,
   VCS_ACTIVE_CONTEXT_HEAD,
-  VCS_ARCHIVE_HEAD_PREFIX,
   VCS_REPO_LOG_PREFIX,
   contextIdFromVcsHead,
   logIdForRepo,
@@ -335,26 +333,6 @@ interface LocalWorkspaceState {
  * state hash is unchanged by construction, so no EV churn and no rebuilds
  * happen at the handover.
  */
-/**
- * Rewrite a `package.json`'s `name` leaf to match a forked repo's new path,
- * preserving the existing scope (e.g. `"@workspace-panels/chat"` + `"panels/mychat"`
- * → `"@workspace-panels/mychat"`). Returns the new JSON text, or `null` if it
- * can't parse or has no string `name`.
- */
-function renameWorkspacePackage(jsonText: string, toPath: string): string | null {
-  let pkg: { name?: unknown } & Record<string, unknown>;
-  try {
-    pkg = JSON.parse(jsonText) as { name?: unknown } & Record<string, unknown>;
-  } catch {
-    return null;
-  }
-  if (typeof pkg.name !== "string") return null;
-  const leaf = toPath.split("/").pop() ?? toPath;
-  const slash = pkg.name.lastIndexOf("/");
-  pkg.name = slash >= 0 ? `${pkg.name.slice(0, slash + 1)}${leaf}` : leaf;
-  return `${JSON.stringify(pkg, null, 2)}\n`;
-}
-
 export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   readonly worktrees: WorktreeStore;
   private gadCaller: GadCaller | null = null;
@@ -855,7 +833,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
-  /** Advance a repo's protected `main` ref (CAS + injected approval gate). */
+  /** Advance a repo's protected `main` ref (CAS + injected approval gate). The
+   *  in-process host-internal advance path — the freshness/scan-adopt commit
+   *  ({@link commitMainHead}) still drives it (Phase 2 moves that to the DO).
+   *  The delete/restore/fork sagas that also used it are now DO-owned. */
   private async advanceMainRef(input: {
     repoPath: string;
     expectedOld: string | null;
@@ -864,10 +845,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     reason: string;
     context: RefAdvanceGateContext;
   }): Promise<void> {
-    // In-process, caller-context write through the single batch primitive (P1
-    // proves prompt parity; the RPC surface never admits this path). Each
-    // host-internal advance is a one-entry atomic batch. Host-internal main
-    // advances are always push-class (scans/freshness); merge-into-main is gone.
     await this.deps.refs.updateMains({
       entries: [
         {
@@ -877,25 +854,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         },
       ],
       gateContext: input.context,
-    });
-  }
-
-  private async compensateMainRef(input: {
-    repoPath: string;
-    expectedCurrent: string | null;
-    next: string | null;
-    actor: { id: string; kind: string };
-    reason: string;
-  }): Promise<void> {
-    await this.deps.refs.updateMains({
-      entries: [
-        {
-          repoPath: normalizeRepoPathForLog(input.repoPath),
-          expectedOld: input.expectedCurrent,
-          next: input.next,
-        },
-      ],
-      gateContext: SYSTEM_ADVANCE,
     });
   }
 
@@ -965,6 +923,26 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const dir = this.dirForRepoHead(repoPath, head);
     const { stateHash, files } = await this.worktrees.localState(dir, { updateSidecar: true });
     return { stateHash, files };
+  }
+
+  /**
+   * The disk-projection PRIMITIVE (host `worktree.project` RPC) — materialize a
+   * content-addressed `stateHash` onto the (repoPath, head) working tree. Pure
+   * and semantics-free: composes {@link DiskProjector.dirForRepoHead} with
+   * {@link WorktreeStore.materializeState} (hardlink CAS tree onto disk) and
+   * NOTHING ELSE — no commit, no ref advance, no gad-log append. The gad-store
+   * DO drives it to re-materialize a restored/forked repo into the ACTIVE
+   * context checkout (`ctx:workspace`); `main` is never projected (D1). Best
+   * effort (a disk hiccup never fails the DO saga — the checkout re-syncs on the
+   * next ctx edit/scan).
+   */
+  async projectWorktree(
+    repoPath: string,
+    head: string,
+    stateHash: string
+  ): Promise<{ stateHash: string }> {
+    await this.projector.project({ repoPath, head, stateHash, bestEffort: true });
+    return { stateHash };
   }
 
   /** Compose a per-repo state key for `lastState` / lock maps. */
@@ -1892,124 +1870,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     toPath: string,
     actor: { id: string; kind: string } = USER_ACTOR
   ): Promise<{ repoPath: string; head: string; inherited: number; stateHash: string }> {
-    const from = normalizeRepoPathForLog(fromPath);
-    const to = normalizeRepoPathForLog(toPath);
-    if (from === to) throw new Error(`forkRepo: source and destination are the same (${from})`);
-    const fromLogId = logIdForRepo(from);
-    const toLogId = logIdForRepo(to);
-
-    const fromMain = this.mainRefState(from);
-    if (!fromMain) throw new Error(`forkRepo: source repo "${from}" has no history to fork`);
-    if (
-      this.mainRefState(to) ||
-      (await this.worktrees.resolveWorktreeRef(VCS_MAIN_HEAD, toLogId))
-    ) {
-      throw new Error(`forkRepo: destination repo "${to}" already exists`);
-    }
-    // Lineage op: the DO fork below copies the SOURCE's recorded main, so main
-    // provenance must be synchronized first.
-    await this.syncMainProvenance(from, fromLogId, fromMain);
-
-    // 1. No-copy lineage fork: vcs:repo:<from> @ main → vcs:repo:<to> @ main.
-    const fork = await this.gad().call<{ inherited: number }>("forkLog", {
-      fromLogId,
-      fromHead: VCS_MAIN_HEAD,
-      toLogId,
-      toHead: VCS_MAIN_HEAD,
-    });
-    // Adopt the fork into the protected-ref store: the forked content is the
-    // source's ALREADY-APPROVED main, so this is a seed (adoption), not a
-    // gated advance. The mechanical package-rename below advances it further
-    // as a system (repo-creation) operation.
-    await this.deps.refs.seedMain({ repoPath: to, value: fromMain });
-
-    // 2. Rewrite package.json `name` (when present) so the fork is build-valid —
-    //    a direct main-bootstrap commit on top of the inherited lineage (history
-    //    preserved + rename). `main` advances only via push or bootstrap; this
-    //    repo-creation rename is a bootstrap-class op, so it ingests directly
-    //    (not through recordEdit, which targets ctx heads).
-    let stateHash = fromMain;
-    const pkg = await this.readFile(VCS_MAIN_HEAD, "package.json", to);
-    if (pkg && pkg.content.kind === "text") {
-      const renamed = renameWorkspacePackage(pkg.content.text, to);
-      if (renamed && renamed !== pkg.content.text) {
-        const baseFiles = await this.worktrees.listStateFiles(fromMain);
-        const { digest } = await putBytes(this.deps.blobsDir, Buffer.from(renamed, "utf8"));
-        const files = baseFiles.map((f) =>
-          f.path === "package.json"
-            ? { path: f.path, contentHash: digest, mode: f.mode }
-            : { path: f.path, contentHash: f.content_hash, mode: f.mode }
-        );
-        // Mirror first (computes the candidate state hash), advance the
-        // protected ref, THEN ingest the provenance commit — the ref swap is
-        // the authoritative move. Repo-creation rename is a system op
-        // (bootstrap-class; forkRepo is not approval-gated today).
-        const mirrored = await mirrorWorktreeTree(this.deps.blobsDir, files);
-        await this.advanceMainRef({
-          repoPath: to,
-          expectedOld: fromMain,
-          next: mirrored.stateHash,
-          actor,
-          reason: `forkRepo: rename package to ${to}`,
-          context: SYSTEM_ADVANCE,
-        });
-        const ingest = await this.gad().call<{
-          stateHash: string;
-          eventId: string;
-          headHash: string;
-        }>("ingestWorktreeState", {
-          logId: toLogId,
-          head: VCS_MAIN_HEAD,
-          logKind: "vcs",
-          actor: vcsLogActor(actor),
-          files,
-          baseStateHash: fromMain,
-          expectedRefStateHash: fromMain,
-          eventKind: "state.snapshot_ingested",
-          summary: `forkRepo: rename package to ${to}`,
-          editOps: [
-            {
-              kind: "write",
-              path: "package.json",
-              oldContentHash: pkg.contentHash,
-              newContentHash: digest,
-            },
-          ],
-        });
-        if (ingest.stateHash !== mirrored.stateHash) {
-          throw new Error(
-            `forkRepo: store disagreed on the renamed state (${ingest.stateHash} != ${mirrored.stateHash})`
-          );
-        }
-        stateHash = ingest.stateHash;
-        this.emitter.emit(
-          "state-advanced",
-          await this.stateAdvancedEvent({
-            head: VCS_MAIN_HEAD,
-            previousStateHash: fromMain,
-            stateHash,
-            eventId: ingest.eventId,
-            headHash: ingest.headHash,
-            actor,
-            transitionKind: "snapshot",
-            repoPath: to,
-          })
-        );
-      }
-    }
-
-    // D1/D2: `main` has no checkout — project the fork onto the ACTIVE context's
-    // working tree (the workspace root) so the new repo appears on disk. (main is
-    // a pure ref; `dirForRepoHead(main)` throws even under bestEffort, since the
-    // dir resolves before materialize.)
-    await this.projector.project({
-      repoPath: to,
-      head: VCS_ACTIVE_CONTEXT_HEAD,
-      stateHash,
-      bestEffort: true,
-    });
-    this.lastState.set(this.stateKey(toLogId, VCS_MAIN_HEAD), stateHash);
-    return { repoPath: to, head: VCS_MAIN_HEAD, inherited: fork.inherited, stateHash };
+    // Phase 4: the fork SAGA is DO-owned (`vcsForkRepo`) — lineage fork, the
+    // package-rename bootstrap commit, the gated ref creation, and disk
+    // projection all run in the gad-store DO over the host primitives. In-process
+    // shim ONLY for the host integration tests; production routes userland → DO.
+    return this.gad().call("vcsForkRepo", { fromPath, toPath, actor });
   }
 
   // -------------------------------------------------------------------------
@@ -2874,128 +2739,26 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async deleteRepo(input: {
     repoPath: string;
     actor: { id: string; kind: string };
-    /** The originating verified caller — the approval principal for the SEVERE
-     *  deletion prompt the ref gate raises when it classifies the null-next
-     *  entry (narrow-host-vcs-plan §5). */
     caller: VerifiedCaller;
-    /** Delete even when other repos still depend on this one (their builds may
-     *  break). Without it, a repo with dependents is refused. */
     force?: boolean;
   }): Promise<{
     repoPath: string;
     archived: boolean;
     archiveHead: string | null;
     removedPaths: string[];
-    /** Live repos that depended on the deleted one (non-empty only under force). */
     dependents: string[];
     stateHash: string;
   }> {
-    if (!this.attached) throw new Error("deleteRepo requires an attached gad store");
-    const repoPath = normalizeRepoPathForLog(input.repoPath);
-    if (repoPath === "meta") {
-      throw new Error("Refusing to delete the `meta` repo (workspace configuration).");
-    }
-    const logId = this.repoLogId(repoPath);
-    return this.locked(this.stateKey(logId, VCS_MAIN_HEAD), async () => {
-      const repoMainState = this.mainRefState(repoPath);
-      if (!repoMainState) {
-        throw new Error(
-          `Cannot delete ${repoPath}: it has no committed \`main\` (not a tracked repo).`
-        );
-      }
-      // Lineage op: drain/heal the DO's main provenance BEFORE archiving, so
-      // the archived head preserves the full ref lineage.
-      await this.syncMainProvenance(repoPath, logId, repoMainState);
-      // The paths that leave the workspace (re-rooted), for the emitted advance.
-      const removedPaths = (await this.worktrees.listStateFiles(repoMainState)).map((f) =>
-        joinRepoPrefix(repoPath, f.path)
-      );
-
-      const prevView = await this.workspaceView();
-
-      // Dependent gate: other live repos that import this one would have their
-      // builds broken by the removal (deletion bypasses the push build-gate).
-      // Refuse and list them unless `force` is set.
-      const dependents = await this.dependentRepoPaths(repoPath, prevView.stateHash);
-      if (dependents.length > 0 && !input.force) {
-        throw new Error(
-          `Cannot delete ${repoPath}: ${dependents.length} repo(s) depend on it ` +
-            `(${dependents.join(", ")}). Their builds will break — pass force to delete anyway.`
-        );
-      }
-
-      // Publish the deletion through the SINGLE-WRITER updateMains path
-      // (narrow-host P4): the ref gate CLASSIFIES the null-next entry as a
-      // SEVERE per-repo deletion (host-computed fileCount + dependents) and
-      // raises exactly ONE prompt for the resolved caller — there is no separate
-      // beforeDelete prompt. Retire the protected ref FIRST (the authority stops
-      // serving the repo; a crash before the archive heals at the next attach's
-      // seed pass, which re-adopts the still-live store main = repo intact),
-      // then archive the store lineage (gad-owned tombstone semantics). An
-      // archive failure compensates the ref so the repo never vanishes from
-      // refs while its store main remains live. Disk cleanup + the
-      // build-rediscovery advance are the exactly-once reaction in
-      // onMainsUpdated, fired by this updateMains before the archive runs.
-      await this.deps.refs.updateMains({
-        entries: [{ repoPath, expectedOld: repoMainState, next: null }],
-        gateContext: { kind: "caller", caller: input.caller },
-      });
-
-      let archive: { archived: boolean; archiveHead: string | null };
-      try {
-        archive = await this.gad().call<{ archived: boolean; archiveHead: string | null }>(
-          "archiveRepoMain",
-          { logId, archiveHead: `${VCS_ARCHIVE_HEAD_PREFIX}${repoMainState}` }
-        );
-      } catch (error) {
-        try {
-          await this.compensateMainRef({
-            repoPath,
-            expectedCurrent: null,
-            next: repoMainState,
-            actor: input.actor,
-            reason: `rollback failed delete of ${repoPath}`,
-          });
-        } catch (rollbackError) {
-          throw new Error(
-            `deleteRepo failed after deleting ${repoPath} main and rollback also failed: ${
-              rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
-            }; original: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-        throw error;
-      }
-
-      const nextView = await this.workspaceView();
-      return {
-        repoPath,
-        archived: archive.archived,
-        archiveHead: archive.archiveHead,
-        removedPaths,
-        dependents,
-        stateHash: nextView.stateHash,
-      };
+    // Phase 4: the delete SAGA is DO-owned (`vcsDeleteRepo`). The severe deletion
+    // prompt still fires HOST-side, classified from the null-next CAS shape (D3);
+    // production attributes it to the originating caller via the relay-minted
+    // token. `caller` is dropped here — this in-process shim exists ONLY for the
+    // host integration tests, which supply the gate caller through the bridge.
+    return this.gad().call("vcsDeleteRepo", {
+      repoPath: input.repoPath,
+      actor: input.actor,
+      ...(input.force ? { force: true } : {}),
     });
-  }
-
-  /** Archived (deleted) heads for a repo log, newest first by ref update time.
-   *  Non-empty iff the repo was retired via {@link deleteRepo}. */
-  private async repoArchiveHeads(
-    logId: string
-  ): Promise<Array<{ head: string; stateHash: string }>> {
-    const heads = await this.gad().call<
-      Array<{ logId: string; head: string; stateHash: string; updatedAt?: string }>
-    >("listWorktreeHeads", { logId });
-    return heads
-      .filter((head) => head.head.startsWith(VCS_ARCHIVE_HEAD_PREFIX))
-      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
-      .map((head) => ({ head: head.head, stateHash: head.stateHash }));
-  }
-
-  /** True if this repo log was retired via {@link deleteRepo} (has an archive
-   *  head) — used to refuse silent resurrection by a stale-context push. */
-  private async repoWasArchived(logId: string): Promise<boolean> {
-    return (await this.repoArchiveHeads(logId)).length > 0;
   }
 
   /**
@@ -3011,9 +2774,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async restoreRepo(input: {
     repoPath: string;
     actor: { id: string; kind: string };
-    /** The originating verified caller — the approval principal for the restore
-     *  prompt the ref gate raises when it classifies the previously-deleted
-     *  re-creation (narrow-host-vcs-plan §5). */
     caller: VerifiedCaller;
   }): Promise<{
     repoPath: string;
@@ -3022,76 +2782,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     restoredPaths: string[];
     stateHash: string;
   }> {
-    if (!this.attached) throw new Error("restoreRepo requires an attached gad store");
-    const repoPath = normalizeRepoPathForLog(input.repoPath);
-    const logId = this.repoLogId(repoPath);
-    return this.locked(this.stateKey(logId, VCS_MAIN_HEAD), async () => {
-      // Concurrency guard: a different repo now occupies the path (either
-      // authority — the protected ref, or a store main awaiting adoption).
-      if (
-        this.mainRefState(repoPath) ||
-        (await this.worktrees.resolveWorktreeRef(VCS_MAIN_HEAD, logId))
-      ) {
-        throw new Error(
-          `Cannot restore ${repoPath}: a repo already occupies that path (it was re-created since deletion).`
-        );
-      }
-      const archives = await this.repoArchiveHeads(logId);
-      const newest = archives[0];
-      if (!newest) {
-        throw new Error(`Cannot restore ${repoPath}: no archived history found at that path.`);
-      }
-      const restoredPaths = (await this.worktrees.listStateFiles(newest.stateHash)).map((f) =>
-        joinRepoPrefix(repoPath, f.path)
-      );
-
-      // Publish the restore through the SINGLE-WRITER updateMains path
-      // (narrow-host P4): with a null `expectedOld` on a repo the HOST ref log
-      // shows was previously deleted, the gate CLASSIFIES it as a restore and
-      // raises exactly ONE (restore-capability) prompt — no separate
-      // beforeRestore prompt. Re-create the ref FIRST (approval), then un-archive
-      // the store lineage (gad-owned); a failure compensates the ref so we never
-      // leave a ref with no store lineage. Disk re-projection + the
-      // build-rediscovery advance are the exactly-once reaction in
-      // onMainsUpdated, fired by this updateMains.
-      await this.deps.refs.updateMains({
-        entries: [{ repoPath, expectedOld: null, next: newest.stateHash }],
-        gateContext: { kind: "caller", caller: input.caller },
-      });
-
-      let restore: { restored: boolean; archiveHead: string | null };
-      try {
-        restore = await this.gad().call<{ restored: boolean; archiveHead: string | null }>(
-          "restoreRepoMain",
-          { logId, archiveHead: newest.head }
-        );
-      } catch (error) {
-        try {
-          await this.compensateMainRef({
-            repoPath,
-            expectedCurrent: newest.stateHash,
-            next: null,
-            actor: input.actor,
-            reason: `rollback failed restore of ${repoPath}`,
-          });
-        } catch (rollbackError) {
-          throw new Error(
-            `restoreRepo failed after re-creating ${repoPath} main and rollback also failed: ${
-              rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
-            }; original: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-        throw error;
-      }
-
-      const nextView = await this.workspaceView();
-      return {
-        repoPath,
-        restored: restore.restored,
-        fromArchiveHead: restore.archiveHead,
-        restoredPaths,
-        stateHash: nextView.stateHash,
-      };
+    // Phase 4: the restore SAGA is DO-owned (`vcsRestoreRepo`) — un-archive, the
+    // gated ref re-creation (an add-repo prompt classified from the CAS shape,
+    // D3), and disk re-projection into `ctx:workspace`. In-process shim ONLY for
+    // the host integration tests (which drive the DO via `this.gad()` and supply
+    // the gate caller through the bridge); production routes userland → DO.
+    return this.gad().call("vcsRestoreRepo", {
+      repoPath: input.repoPath,
+      actor: input.actor,
     });
   }
 
