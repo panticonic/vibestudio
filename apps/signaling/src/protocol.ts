@@ -5,8 +5,8 @@
  *
  * The room is deliberately DUMB: it blind-relays `description`/`candidate`
  * between the two peers and emits room-lifecycle events (`peer-joined`,
- * `peer-left`, `room-full`). It NEVER inspects SDP/ICE content — security lives
- * in the QR DTLS-fingerprint pin, not in this box (plan §2/§6).
+ * `peer-left`). It NEVER inspects SDP/ICE content — security lives in the QR
+ * DTLS-fingerprint pin, not in this box (plan §2/§6).
  *
  * These structural types are duplicated (not imported from `@vibez1/rpc`)
  * because `apps/signaling` is a standalone Cloudflare Worker with its own build
@@ -69,10 +69,13 @@ export interface PeerLeftMessage {
   peers: number;
 }
 
-/** A third joiner was refused — a room holds exactly two peers (plan §2). */
-export interface RoomFullMessage {
-  t: "room-full";
-}
+/**
+ * The two rendezvous slots. A join must declare which one it fills via the
+ * required `?role=` query param; a same-role rejoin EVICTS the incumbent (plan
+ * §4 — with one room per paired device a same-role joiner is, by construction,
+ * the same party reconnecting).
+ */
+export type SignalingRole = "offerer" | "answerer";
 
 /** Frames a peer may send to the room over the WebSocket. */
 export type SignalingClientMessage = DescriptionMessage | CandidateMessage;
@@ -82,8 +85,7 @@ export type SignalingServerMessage =
   | DescriptionMessage
   | CandidateMessage
   | PeerJoinedMessage
-  | PeerLeftMessage
-  | RoomFullMessage;
+  | PeerLeftMessage;
 
 /** The only message types the room relays peer-to-peer (everything else dropped). */
 export const RELAYED_TYPES: ReadonlySet<string> = new Set(["description", "candidate"]);

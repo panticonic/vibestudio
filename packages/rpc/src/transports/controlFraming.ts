@@ -17,12 +17,46 @@
  *
  * Symmetric: both pipe ends (offerer `webrtcClient`, answerer `webrtcAnswerer`)
  * frame on send and defragment on receive.
+ *
+ * Eviction is still deliberately ABSENT: an incomplete fragment set is held until
+ * it completes (a reliable ordered channel cannot half-deliver one), and reset()
+ * drops all in-flight sets on reconnect. The `maxPendingSets`/`maxBufferedBytes`
+ * caps below are NOT eviction — they are a protocol-violation tripwire that bounds
+ * a broken/hostile peer's memory damage. A conforming peer never approaches them;
+ * a peer that breaches one throws {@link ControlProtocolViolation}, which the
+ * transport catches to drop the pipe.
  */
 
 const TAG_WHOLE = 0x00;
 const TAG_FRAGMENT = 0x01;
 /** [tag:1][frameId:u32][index:u16][total:u16] */
 const FRAGMENT_HEADER = 9;
+
+/** Default cap on concurrently-pending (incomplete) fragment sets per pipe. */
+const DEFAULT_MAX_PENDING_SETS = 32;
+/** Default cap on total buffered fragment bytes across all pending sets (64 MiB). */
+const DEFAULT_MAX_BUFFERED_BYTES = 64 * 1024 * 1024;
+
+export interface ControlDefragmenterOptions {
+  /** Max concurrently-pending fragment sets before a protocol violation (default 32). */
+  maxPendingSets?: number;
+  /** Max total buffered fragment bytes across all pending sets (default 64 MiB). */
+  maxBufferedBytes?: number;
+}
+
+/**
+ * A peer sent a control-channel stream that a conforming peer cannot produce:
+ * more pending fragment sets, or more total buffered fragment bytes, than the
+ * defragmenter's caps allow. This is not eviction — it is a fail-loud tripwire
+ * on a broken/hostile peer. The transport catches it and drops the pipe.
+ */
+export class ControlProtocolViolation extends Error {
+  readonly code = "CONTROL_PROTOCOL_VIOLATION" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "ControlProtocolViolation";
+  }
+}
 
 /**
  * Split an encoded control frame into one or more channel messages, each within
@@ -77,13 +111,22 @@ export interface ControlDefragmenter {
   reset(): void;
 }
 
-export function createControlDefragmenter(): ControlDefragmenter {
+export function createControlDefragmenter(
+  options?: ControlDefragmenterOptions
+): ControlDefragmenter {
   // Incomplete fragment sets are retained here until they complete. On the SCTP
   // ordered+reliable control channel a set never half-arrives, and reset() drops
   // all in-flight sets on reconnect — so there is deliberately no eviction/timeout
   // (adding one would mask a "lost" fragment the reliable channel cannot lose; see
-  // the module header).
+  // the module header). The caps below are a protocol-violation tripwire, NOT
+  // eviction: they bound a broken/hostile peer's memory damage, and a conforming
+  // peer never hits them.
+  const maxPendingSets = options?.maxPendingSets ?? DEFAULT_MAX_PENDING_SETS;
+  const maxBufferedBytes = options?.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES;
   let pending = new Map<number, { chunks: Uint8Array[]; received: number; total: number }>();
+  // Total buffered fragment bytes across every pending set (whole messages and
+  // completed sets do not count — their bytes leave the buffer immediately).
+  let bufferedBytes = 0;
   return {
     accept(message) {
       if (message.byteLength < 1) return null;
@@ -102,17 +145,33 @@ export function createControlDefragmenter(): ControlDefragmenter {
       if (total === 0 || index >= total) return null;
       let entry = pending.get(id);
       if (!entry) {
+        // A new fragment set: fail loud if we already hold the max concurrent sets.
+        if (pending.size >= maxPendingSets) {
+          throw new ControlProtocolViolation(
+            `control defragmenter exceeded max pending fragment sets (${maxPendingSets})`
+          );
+        }
         entry = { chunks: new Array(total), received: 0, total };
         pending.set(id, entry);
       }
       if (entry.total !== total || entry.chunks[index]) return null; // malformed / duplicate
       // Copy: this chunk is held across messages until the set completes.
-      entry.chunks[index] = message.slice(FRAGMENT_HEADER);
+      const incoming = message.slice(FRAGMENT_HEADER);
+      // Fail loud if accepting this fragment would breach the total-bytes budget.
+      if (bufferedBytes + incoming.byteLength > maxBufferedBytes) {
+        throw new ControlProtocolViolation(
+          `control defragmenter exceeded max buffered fragment bytes (${maxBufferedBytes})`
+        );
+      }
+      entry.chunks[index] = incoming;
       entry.received++;
+      bufferedBytes += incoming.byteLength;
       if (entry.received < entry.total) return null;
       pending.delete(id);
       let size = 0;
       for (const chunk of entry.chunks) size += chunk.byteLength;
+      // The set completed and leaves the buffer — release its bytes from the budget.
+      bufferedBytes -= size;
       const out = new Uint8Array(size);
       let offset = 0;
       for (const chunk of entry.chunks) {
@@ -123,6 +182,7 @@ export function createControlDefragmenter(): ControlDefragmenter {
     },
     reset() {
       pending = new Map();
+      bufferedBytes = 0;
     },
   };
 }
@@ -144,9 +204,9 @@ export interface ControlCodec {
  * receive). Create one per pipe generation; `reset()` it (or recreate it) on
  * reconnect so a fresh pipe never reassembles against a dead pipe's fragments.
  */
-export function createControlCodec(): ControlCodec {
+export function createControlCodec(options?: ControlDefragmenterOptions): ControlCodec {
   let seq = 0;
-  const defrag = createControlDefragmenter();
+  const defrag = createControlDefragmenter(options);
   return {
     frame(bytes, maxMessageSize) {
       seq = (seq + 1) >>> 0;

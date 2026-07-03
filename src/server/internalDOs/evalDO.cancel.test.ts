@@ -360,6 +360,26 @@ describe("EvalDO cancellation + forced recovery", () => {
     // `runLocked` reads `this.rpc` for the binding closures — stub it.
     Object.defineProperty(instance, "rpc", { get: () => fakeRpc, configurable: true });
 
+    // The runtime factories are loaded dynamically from the manifest-declared
+    // runtime unit (providers.evalRuntime → EVAL_RUNTIME_SOURCE binding); the
+    // host bundle carries no static workspace imports. Declare the provider on
+    // the env and stub the loaded module with minimal factories — the rt's
+    // `rpc` is the host's option-threading proxy, which is what this test pins.
+    (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] =
+      "@workspace/runtime";
+    setPriv(instance, "ensureRuntimeSupport", () =>
+      Promise.resolve({
+        createHostedRuntime: (host: Record<string, unknown>) => ({ rpc: host["rpc"] }),
+        createPanelRuntime: () => ({ getPanelHandle: () => null }),
+        createRuntimeSelfHandle: () => ({}),
+        createGatewayFetch: () => () => {},
+        createRpcFs: () => ({}),
+        createRuntimeParentHandle: () => null,
+        createServicesProxy: () => ({}),
+        createWorkerdClient: () => ({}),
+      })
+    );
+
     // Stub the heavy engine path: capture the bindings, then invoke the eval's rpc binding ourselves.
     const fakeScope = {
       current: {},

@@ -22,7 +22,7 @@ const PAIR: ConnectPairing = {
   fp: FP,
   code: "A".repeat(24),
   sig: "wss://signal.example/",
-  v: 1,
+  v: 2,
   ice: "all",
 };
 
@@ -35,10 +35,30 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       fp: PAIR.fp,
       code: PAIR.code,
       sig: "wss://signal.example/",
-      v: 1,
+      v: 2,
       ice: "all",
       srv: undefined,
     });
+  });
+
+  it("emits v=2 by default and requires exactly v=2 on parse (no old-form tolerance)", () => {
+    // The builder defaults to the current protocol version.
+    const { v: _unversioned, ...withoutVersion } = PAIR;
+    expect(createConnectDeepLink(withoutVersion)).toContain("v=2");
+
+    // v1 (per-server singleton rooms) and any other version reject with an
+    // actionable message — existing pairings are invalidated by design.
+    for (const stale of [
+      createConnectDeepLink({ ...PAIR, v: 1 }),
+      createConnectDeepLink({ ...PAIR, v: 3 }),
+      `vibez1://connect?room=${PAIR.room}&fp=${FP}&code=${PAIR.code}&sig=${encodeURIComponent(PAIR.sig)}`, // no v at all
+    ]) {
+      const parsed = parseConnectLink(stale);
+      expect(parsed.kind).toBe("error");
+      if (parsed.kind === "error") {
+        expect(parsed.reason).toMatch(/re-pair with a current link/i);
+      }
+    }
   });
 
   it("carries the optional srv label and relay policy", () => {
@@ -164,6 +184,7 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
         createConnectDeepLink({ ...PAIR, fp: "DE:AD:BE:EF" }),
         createConnectDeepLink({ ...PAIR, code: "short" }),
         createConnectDeepLink({ ...PAIR, sig: "ws://signal.example/" }),
+        createConnectDeepLink({ ...PAIR, v: 1 }), // stale protocol version → re-pair
       ]) {
         expect(mirror.parseConnectLink(bad)).toEqual(parseConnectLink(bad));
       }

@@ -1,136 +1,146 @@
 /**
- * WebRTC RPC client for the CLI — the peer-to-peer counterpart of the HTTP
- * `RpcClient` (`rpcClient.ts`). Where the HTTP client `POST`s envelopes to a
- * co-located loopback `/rpc`, this client dials the server over the WebRTC pipe:
- * it joins the signaling room from the pairing link (`room`/`sig`), establishes a
- * real DTLS pipe pinning the server's fingerprint (`fp`), opens a `shell` session
- * with the device-derived shell token, and round-trips RPC envelopes over the
- * session.
+ * WebRTC RPC client for the CLI.
  *
- * It exposes the SAME `call(method,args)` / `callTarget(targetId,method,args)`
- * surface as the HTTP `RpcClient`, so `typedClient(...)` and every CLI command
- * work unchanged — only the transport differs. node-datachannel is loaded lazily
- * (only when a WebRTC connection is actually opened), so plain HTTP CLI usage
- * never touches the native module.
+ * This is the Node/CLI binding for the shared paired-connection bootstrap used
+ * by desktop and mobile. It dials the signaling room from a `vibez1://connect`
+ * link, pins the server DTLS fingerprint, opens the main shell session, and
+ * exposes the same `call("service.method", args)` / `callTarget(...)` surface as
+ * the HTTP CLI client.
  */
 
 import { randomUUID } from "node:crypto";
-import { createRpcClient, type RpcClient as RpcCore, type RpcEnvelope } from "@vibez1/rpc";
-import { type WebRtcSession, type WebRtcTransport } from "@vibez1/rpc/transports/webrtcClient";
-import { createOffererTransport } from "@vibez1/rpc/transports/offererTransport";
+import {
+  createRpcClient,
+  type RpcClient as CoreRpcClient,
+  type RpcStreamOptions,
+} from "@vibez1/rpc";
+import {
+  createPairedConnection,
+  type PairedConnection,
+} from "@vibez1/rpc/transports/pairedConnection";
+import type { RecoveryKind } from "@vibez1/rpc/protocol/recoveryCoordinator";
 import type { ConnectPairing } from "@vibez1/shared/connect";
-import { RpcError } from "./rpcClient.js";
+
+export type CliWebRtcPairing = Omit<ConnectPairing, "code"> & { code?: string };
 
 export interface WebRtcClientConfig {
-  /** The parsed pairing link (room/fp/sig/ice). */
-  pairing: ConnectPairing;
-  /** The CLI's caller id (e.g. `shell:<deviceId>`). */
+  pairing: CliWebRtcPairing;
   callerId: string;
-  /** Supplies the (short-lived) shell token for each session (re)open. */
   getToken: () => Promise<string> | string;
-  /** Stable connection id binding this client's session (defaults to a uuid). */
   connectionId?: string;
+  clientLabel?: string;
+  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void | Promise<void>;
+  onPersistError?: (error: Error) => void;
+  logPrefix?: string;
+}
+
+interface ConnectedClient {
+  paired: PairedConnection;
+  core: CoreRpcClient;
+  callerId: string;
 }
 
 export class WebRtcRpcClient {
-  private transport: WebRtcTransport | null = null;
-  private session: WebRtcSession | null = null;
-  private core: RpcCore | null = null;
-  private readonly connectionId: string;
+  private connected: Promise<ConnectedClient> | null = null;
 
-  constructor(private readonly config: WebRtcClientConfig) {
-    this.connectionId = config.connectionId ?? randomUUID();
+  constructor(private readonly config: WebRtcClientConfig) {}
+
+  async ready(): Promise<void> {
+    await this.ensureConnected();
   }
 
-  /** Direct service dispatch: `service.method` on the server dispatcher (target "main"). */
+  async callerId(): Promise<string> {
+    return (await this.ensureConnected()).callerId;
+  }
+
   async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
-    return this.dispatch<T>("main", method, args);
+    const { core } = await this.ensureConnected();
+    return await core.call<T>("main", method, args);
   }
 
-  /** Relay call to a runtime target (worker, DO, panel) by entity/target id. */
   async callTarget<T = unknown>(
     targetId: string,
     method: string,
     args: unknown[] = []
   ): Promise<T> {
-    return this.dispatch<T>(targetId, method, args);
+    const { core } = await this.ensureConnected();
+    return await core.call<T>(targetId, method, args);
+  }
+
+  async stream(
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcStreamOptions
+  ): Promise<Response> {
+    const { core } = await this.ensureConnected();
+    return await core.stream(targetId, method, args, options);
+  }
+
+  async onEvent(
+    event: string,
+    listener: (payload: unknown, fromId: string) => void
+  ): Promise<() => void> {
+    const { core } = await this.ensureConnected();
+    return core.on(event, (ctx) => listener(ctx.payload, ctx.caller.callerId));
+  }
+
+  async onRecovery(handler: (kind: RecoveryKind) => void | Promise<void>): Promise<() => void> {
+    const { paired } = await this.ensureConnected();
+    return paired.onRecovery((kind) => {
+      void handler(kind);
+    });
   }
 
   async close(): Promise<void> {
-    this.session?.close();
-    await this.transport?.close();
-    this.session = null;
-    this.transport = null;
-    this.core = null;
+    const connected = this.connected;
+    this.connected = null;
+    if (!connected) return;
+    await (await connected).paired.close();
   }
 
-  /** Establish the pipe + session lazily; reuse across calls. */
-  private async ensureSession(): Promise<RpcCore> {
-    if (this.core) return this.core;
-    // Lazy: createNodeDatachannelProvider loads the native module only here.
+  private ensureConnected(): Promise<ConnectedClient> {
+    if (!this.connected) {
+      this.connected = this.connect().catch((error) => {
+        this.connected = null;
+        throw error;
+      });
+    }
+    return this.connected;
+  }
+
+  private async connect(): Promise<ConnectedClient> {
     const { createNodeDatachannelProvider } = await import("../main/webrtc/nodeDatachannelPeer.js");
     const { default: WS } = (await import("ws")) as unknown as {
       default: new (url: string) => unknown;
     };
-
-    const transport = createOffererTransport({
+    const paired = await createPairedConnection({
       provider: createNodeDatachannelProvider({ peerName: "cli" }),
-      pairing: this.config.pairing,
       webSocketImpl: WS,
       fetchImpl: fetch,
-    });
-    await transport.connect();
-    const session = transport.openSession({
-      connectionId: this.connectionId,
+      pairing: {
+        room: this.config.pairing.room,
+        fingerprint: this.config.pairing.fp,
+        iceTransportPolicy: this.config.pairing.ice,
+      },
+      sig: this.config.pairing.sig,
+      getShellToken: this.config.getToken,
+      connectionId: this.config.connectionId ?? randomUUID(),
       callerKind: "shell",
-      clientPlatform: "desktop",
-      getToken: this.config.getToken,
+      clientLabel: this.config.clientLabel ?? "Vibez1 CLI",
+      clientPlatform: "headless",
+      platform: "headless",
+      logPrefix: this.config.logPrefix ?? "[cli-webrtc]",
+      ...(this.config.onPaired ? { onPaired: this.config.onPaired } : {}),
+      ...(this.config.onPersistError ? { onPersistError: this.config.onPersistError } : {}),
     });
-    await session.ready!();
+    const callerId = paired.mainSession.callerId() ?? this.config.callerId;
     const core = createRpcClient({
-      selfId: this.config.callerId,
-      transport: session,
+      selfId: callerId,
       callerKind: "shell",
+      transport: paired.mainSession,
+      onRecovery: (handler) => paired.onRecovery(handler),
     });
-    this.transport = transport;
-    this.session = session;
-    this.core = core;
-    return core;
+    return { paired, core, callerId };
   }
-
-  /** Streaming call (e.g. credentials.proxyFetch) over the bulk channel. */
-  async stream(targetId: string, method: string, args: unknown[] = []): Promise<Response> {
-    const core = await this.ensureSession();
-    return core.stream(targetId, method, args);
-  }
-
-  private async dispatch<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
-    const core = await this.ensureSession();
-    try {
-      // The core correlates the request/response by id over the session and
-      // returns the unwrapped result (or throws on an error response).
-      return await core.call<T>(targetId, method, args);
-    } catch (error) {
-      throw error instanceof RpcError
-        ? error
-        : new RpcError(error instanceof Error ? error.message : String(error));
-    }
-  }
-}
-
-/** Build a one-shot request envelope (used when the core is not yet available). */
-export function buildRequestEnvelope(
-  callerId: string,
-  targetId: string,
-  method: string,
-  args: unknown[]
-): RpcEnvelope {
-  const caller = { callerId, callerKind: "shell" as const };
-  return {
-    from: callerId,
-    target: targetId,
-    delivery: { caller },
-    provenance: [caller],
-    message: { type: "request", requestId: randomUUID(), fromId: callerId, method, args },
-  };
 }

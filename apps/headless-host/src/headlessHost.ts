@@ -20,8 +20,8 @@ import {
   selectIdlePanelVictims,
   type LoadedPanelSnapshot,
 } from "@vibez1/shared/panel/panelGc";
-import type { HeadlessHostConfig } from "./config.js";
-import { connectToServer, type ServerConnection } from "./serverConnection.js";
+import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
+import { connectToServer } from "./serverConnection.js";
 import { PanelInitClient } from "./panelInitClient.js";
 import { resolveChromium } from "./browser/acquire.js";
 import { launchChromium, type LaunchedChromium } from "./browser/launch.js";
@@ -35,7 +35,7 @@ const log = createDevLogger("HeadlessHost");
 const IDLE_CHECK_INTERVAL_MS = 30_000;
 
 export class HeadlessHost implements PanelHost {
-  private connection: ServerConnection | null = null;
+  private connection: HeadlessHostServerConnection | null = null;
   private panelInit: PanelInitClient | null = null;
   private tracker: LeaseTracker;
   private browser: LaunchedChromium | null = null;
@@ -72,7 +72,7 @@ export class HeadlessHost implements PanelHost {
   }
 
   async start(): Promise<void> {
-    const connection = await connectToServer(this.config);
+    const connection = await (this.config.connectionFactory?.() ?? connectToServer(this.config));
     this.connection = connection;
     this.panelInit = new PanelInitClient(
       connection.rpc,
@@ -209,6 +209,9 @@ export class HeadlessHost implements PanelHost {
       serverUrl: this.config.serverUrl,
       hostConnectionId: this.config.clientSessionId,
       getToken: () => this.connection!.getToken(),
+      ...(this.config.bridgeSocketFactory
+        ? { socketFactory: this.config.bridgeSocketFactory }
+        : {}),
       handlers: {
         cdpCommand: (targetId, method, params, sessionId) =>
           this.pages!.relaySend(targetId, method, params, sessionId),
@@ -297,11 +300,7 @@ export class HeadlessHost implements PanelHost {
         const delta = args[0] === -1 || args[0] === 1 ? args[0] : 0;
         if (!delta) throw new Error("navigatePanelHistory requires delta -1 or 1");
         const connectionId = `history-${slotId}-${randomUUID()}`;
-        const result = await this.panelInit!.navigatePanelHistory(
-          panelSlotId,
-          delta,
-          connectionId
-        );
+        const result = await this.panelInit!.navigatePanelHistory(panelSlotId, delta, connectionId);
         await this.reconcile();
         return result;
       }

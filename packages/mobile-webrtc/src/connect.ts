@@ -15,12 +15,14 @@
 // MUST be first: installs TextDecoder/ReadableStream on Hermes before any
 // `@vibez1/rpc` module (the streamCodec) loads, or it throws on init.
 import "./polyfills.js";
+import { AppState, type AppStateStatus } from "react-native";
+import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Keychain from "react-native-keychain";
 import { createRpcClient } from "@vibez1/rpc";
 import type { RpcClient } from "@vibez1/rpc";
 import type { WebRtcTransport, WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
-import { createOffererTransport } from "@vibez1/rpc/transports/offererTransport";
+import { createPairedConnection } from "@vibez1/rpc/transports/pairedConnection";
 import { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 
 /** Legacy AsyncStorage key (plaintext) — kept only to migrate off it on load. */
@@ -78,7 +80,13 @@ export interface ShellTokenProvider {
 }
 
 export interface WebRtcConnectionHandlers {
-  onPaired?: (credential: ShellCredential) => void;
+  /** Persist the freshly issued device credential. AWAITED with retry by the
+   * shared bootstrap; a persistent failure surfaces via {@link onPersistError},
+   * never a void'd rejection. */
+  onPaired?: (credential: ShellCredential) => void | Promise<void>;
+  /** The credential persist exhausted its retries — surface it (log/telemetry),
+   * never swallow it. */
+  onPersistError?: (error: Error) => void;
   onServerEvent?: (event: string, payload: unknown) => void;
   /**
    * Post-auth recovery signal raised by the session on (re)open: `"resubscribe"`
@@ -186,7 +194,61 @@ export function deviceIdFromCallerId(callerId: string | undefined): string | nul
 }
 
 /**
- * Build the WebRTC pipe + a `shell` session and wrap it in an RPC client.
+ * Register the mobile event-driven reconnect triggers on a live transport:
+ * `nudge()` on active-foreground and on network-type change, so a drop is
+ * detected in SECONDS instead of waiting out the ~45 s keepalive (RN suspends JS
+ * timers in the background, so the keepalive alone can't notice a resume). Both
+ * are guarded — `nudge()` is a no-op unless the pipe is up and no recovery is in
+ * flight — and each listener is optional (NetInfo degrades to AppState-only if
+ * unavailable). Returns a cleanup that removes every listener.
+ */
+function registerReconnectTriggers(transport: WebRtcTransport): () => void {
+  const cleanups: Array<() => void> = [];
+  // Foreground resume: probe liveness immediately (the background may have
+  // silently killed the pipe while timers were frozen).
+  try {
+    let last: AppStateStatus = AppState.currentState;
+    const sub = AppState.addEventListener("change", (next: AppStateStatus) => {
+      const cameToForeground = next === "active" && last !== "active";
+      last = next;
+      if (cameToForeground) transport.nudge();
+    });
+    cleanups.push(() => sub.remove());
+  } catch (error) {
+    console.warn("[mobile-rtc] AppState reconnect trigger unavailable", error);
+  }
+  // Network-type change (wifi↔cellular / new IP): the old ICE path is almost
+  // certainly dead — nudge to fail fast and re-establish over the new interface.
+  try {
+    let lastType: string | null = null;
+    const unsub = NetInfo.addEventListener((state) => {
+      const type = state.type ?? null;
+      // The first event is the current state on subscribe — record it, no nudge.
+      if (lastType !== null && type !== lastType) transport.nudge();
+      lastType = type;
+    });
+    cleanups.push(() => unsub());
+  } catch (error) {
+    console.warn("[mobile-rtc] NetInfo reconnect trigger unavailable (AppState-only)", error);
+  }
+  return () => {
+    for (const cleanup of cleanups) {
+      try {
+        cleanup();
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+}
+
+/**
+ * Build the WebRTC pipe + a `shell` session and wrap it in an RPC client — over
+ * the ONE shared client bootstrap (`createPairedConnection`, plan §3.1): it owns
+ * connect-with-timeout, main-session auth, close-on-ANY-failure (incl. a
+ * session-auth rejection), and the onPaired await-retry. This file adds only the
+ * mobile-specific concerns: the RN peer provider and the AppState/NetInfo
+ * reconnect triggers.
  */
 export async function establishWebRtcConnection(
   pairing: ShellPairing,
@@ -194,24 +256,35 @@ export async function establishWebRtcConnection(
   handlers: WebRtcConnectionHandlers = {}
 ): Promise<WebRtcConnection> {
   const connectionId = randomRequestId("mobile-shell");
-  // createOffererTransport omits webSocketImpl/fetchImpl, so the signaling client
-  // falls back to the React Native WebSocket + fetch globals.
-  const transport = createOffererTransport({
+  // No webSocketImpl/fetchImpl → the signaling client uses the RN WebSocket +
+  // fetch globals.
+  const paired = await createPairedConnection({
     provider: createReactNativeWebRtcProvider({ logPrefix: "[mobile-rtc]" }),
-    pairing,
+    pairing: {
+      room: pairing.room,
+      fingerprint: pairing.fp,
+      iceTransportPolicy: pairing.ice as "all" | "relay" | undefined,
+    },
+    sig: pairing.sig,
+    getShellToken: () => tokenProvider.getToken(),
+    connectionId,
+    callerKind: "shell",
+    clientLabel: "Mobile device",
+    clientPlatform: "mobile",
+    platform: "mobile",
+    logPrefix: "[mobile-rtc]",
+    ...(handlers.onPaired ? { onPaired: handlers.onPaired } : {}),
+    ...(handlers.onPersistError ? { onPersistError: handlers.onPersistError } : {}),
+    ...(handlers.onRecovery
+      ? {
+          onRecovery: (kind) => {
+            void handlers.onRecovery!(kind);
+          },
+        }
+      : {}),
   });
+  const { transport, mainSession: session } = paired;
   try {
-    await transport.connect();
-    const session = transport.openSession({
-      connectionId,
-      callerKind: "shell",
-      clientPlatform: "mobile",
-      clientLabel: "Mobile device",
-      getToken: () => tokenProvider.getToken(),
-      onPaired: handlers.onPaired,
-      onRecovery: handlers.onRecovery,
-    });
-    await session.ready?.();
     const callerId = session.callerId() || "shell:pending";
     if (handlers.onServerEvent) {
       session.onMessage((envelope) => {
@@ -222,31 +295,32 @@ export async function establishWebRtcConnection(
         }
       });
     }
-    const client = createRpcClient({ selfId: callerId, callerKind: "shell", transport: session });
+    const client = createRpcClient({
+      selfId: callerId,
+      callerKind: "shell",
+      transport: session,
+      // §3.4 pending-call policy: reject routed pendings on a cold-recover.
+      onRecovery: (handler) => paired.onRecovery(handler),
+    });
+    const removeTriggers = registerReconnectTriggers(transport);
     return {
       rpc: client,
       session,
       transport,
       callerId,
       async close() {
+        removeTriggers();
         try {
-          session.close();
-        } catch {
-          // already closed
-        }
-        try {
-          await transport.close();
+          await paired.close();
         } catch {
           // already closed
         }
       },
     };
   } catch (error) {
-    try {
-      await transport.close();
-    } catch {
-      // already closed
-    }
+    // Any post-connect setup failure closes the (connected) pipe too — no leaked
+    // keepalive/reconnect loop (createPairedConnection already guards connect/auth).
+    await paired.close().catch(() => undefined);
     throw error;
   }
 }
@@ -262,10 +336,16 @@ export async function reconnectViaWebRtc(
     refreshToken: stored.refreshToken,
   });
   const connection = await establishWebRtcConnection(pairing, tokenProvider, {
-    onPaired: (credential) => {
+    onPaired: async (credential) => {
       // The server may rotate the refresh secret on reconnect; persist the latest.
+      // RETURNED (not void'd) so the shared bootstrap AWAITS it with retry — a
+      // dropped rotation would otherwise leave the device unable to reconnect.
       tokenProvider.setCredential(credential);
-      void persistShellCredential(credential, pairing);
+      await persistShellCredential(credential, pairing);
+    },
+    onPersistError: (error) => {
+      // Surfaced, never swallowed: the rotated secret did not reach the Keychain.
+      console.warn("[mobile-rtc] failed to persist rotated shell credential", error);
     },
     onRecovery,
   });

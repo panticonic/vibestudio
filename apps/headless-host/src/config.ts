@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { RpcClient } from "@vibez1/rpc";
+import type { CdpHostBridgeSocket } from "./hostBridge.js";
 
 export interface DeviceCredentialAuth {
   kind: "device";
@@ -15,10 +17,23 @@ export interface TokenAuth {
   token: string;
 }
 
+export interface InjectedAuth {
+  kind: "injected";
+}
+
+export interface HeadlessHostServerConnection {
+  rpc: Pick<RpcClient, "call" | "stream">;
+  /** Current auth token, when the transport has one. */
+  getToken(): string;
+  onServerEvent(listener: (event: string, payload: unknown) => void): void;
+  onResubscribe(handler: () => void | Promise<void>): void;
+  close(): Promise<void>;
+}
+
 export interface HeadlessHostConfig {
   /** Base server URL, e.g. http://127.0.0.1:3030 */
   serverUrl: string;
-  auth: TokenAuth | DeviceCredentialAuth;
+  auth: TokenAuth | DeviceCredentialAuth | InjectedAuth;
   label: string;
   clientSessionId: string;
   maxPanels: number;
@@ -30,6 +45,10 @@ export interface HeadlessHostConfig {
   profileDir: string;
   /** Prefer chrome-headless-shell over full Chrome when downloading. */
   leanBrowser?: boolean;
+  /** Inject a non-WS management-plane connection, e.g. CLI WebRTC. */
+  connectionFactory?: () => Promise<HeadlessHostServerConnection>;
+  /** Override the CDP host-provider bridge transport, e.g. RPC stream over WebRTC. */
+  bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
 }
 
 export interface ConfigOverrides {
@@ -45,6 +64,8 @@ export interface ConfigOverrides {
   cacheDir?: string;
   profileDir?: string;
   leanBrowser?: boolean;
+  connectionFactory?: () => Promise<HeadlessHostServerConnection>;
+  bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
 }
 
 // Parse an optional non-negative integer env var, honoring an explicit 0 (so `|| undefined`
@@ -55,7 +76,10 @@ function parseOptionalNonNegativeInt(value: string | undefined): number | undefi
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-export function resolveConfig(overrides: ConfigOverrides = {}, env = process.env): HeadlessHostConfig {
+export function resolveConfig(
+  overrides: ConfigOverrides = {},
+  env = process.env
+): HeadlessHostConfig {
   const serverUrl =
     overrides.serverUrl ?? overrides.deviceCredential?.serverUrl ?? env["VIBEZ1_SERVER_URL"];
   if (!serverUrl) {
@@ -66,9 +90,13 @@ export function resolveConfig(overrides: ConfigOverrides = {}, env = process.env
     ? { kind: "device", ...overrides.deviceCredential }
     : token
       ? { kind: "token", token }
-      : (() => {
-          throw new Error("headless-host: auth is required (--token or a paired device credential)");
-        })();
+      : overrides.connectionFactory
+        ? { kind: "injected" }
+        : (() => {
+            throw new Error(
+              "headless-host: auth is required (--token or a paired device credential)"
+            );
+          })();
 
   const idleExitEnv = env["VIBEZ1_HEADLESS_IDLE_EXIT_MS"];
   return {
@@ -82,8 +110,9 @@ export function resolveConfig(overrides: ConfigOverrides = {}, env = process.env
     chromiumPath: overrides.chromiumPath ?? env["VIBEZ1_CHROMIUM_PATH"],
     cacheDir: overrides.cacheDir ?? path.join(os.homedir(), ".cache", "vibez1", "chromium"),
     profileDir:
-      overrides.profileDir ??
-      path.join(os.homedir(), ".local", "state", "vibez1", "headless-host"),
+      overrides.profileDir ?? path.join(os.homedir(), ".local", "state", "vibez1", "headless-host"),
     leanBrowser: overrides.leanBrowser ?? false,
+    connectionFactory: overrides.connectionFactory,
+    bridgeSocketFactory: overrides.bridgeSocketFactory,
   };
 }

@@ -27,11 +27,27 @@ import type {
 } from "./types.js";
 import { originOfEnvelope, responseEnvelopeFor } from "./envelope.js";
 import { bytesToBase64, base64ToBytes } from "./base64.js";
+import { SESSION_CONNECTION_LOST_CODE } from "./protocol/sessionNegotiation.js";
+import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 
 const FRAME_HEAD = 0x01;
 const FRAME_DATA = 0x02;
 const FRAME_END = 0x03;
 const FRAME_ERROR = 0x04;
+
+/** Human-readable reason attached to CONNECTION_LOST rejections (§3.4). */
+const CONNECTION_LOST_MESSAGE = "Connection lost before the response arrived";
+
+/**
+ * The server principal is addressed as `"main"` (SESSION_SERVER_RESPONDER) or
+ * `"server"`. A direct client→server call's response is never inboxed, so it is
+ * unrecoverable after any pipe drop. Every other target is a routed
+ * caller↔caller call, whose response the server inbox can replay after a clean
+ * reconnect.
+ */
+function isServerTarget(target: string): boolean {
+  return target === "main" || target === "server";
+}
 
 function generateRequestId(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
@@ -75,7 +91,31 @@ export function defineContract<const TContract extends Record<string, unknown>>(
   return contract;
 }
 
-export function createRpcClient(config: RpcClientConfig): RpcClient {
+/**
+ * Optional wiring for the pending-call policy (§3.4). The core needs to know
+ * whether a reconnect was a `cold-recover` (server session state gone → routed
+ * responses are unrecoverable) or a `resubscribe` (the inbox will replay them),
+ * a distinction only the transport's recovery signal carries. Production
+ * callers wire this from `createPairedConnection`'s recovery fan-out, e.g.
+ *
+ * ```ts
+ * const paired = await createPairedConnection({ ... });
+ * createRpcClient({
+ *   selfId, transport: paired.mainSession,
+ *   onRecovery: (handler) => paired.onRecovery(handler),
+ * });
+ * ```
+ *
+ * It is optional and additive: transports that cannot distinguish recovery kinds
+ * omit it, and routed pendings are then settled only by a response, inbox
+ * replay, or an explicit per-call deadline. (Kept local to the client rather
+ * than baked into `RpcClientConfig` so the transport package owns the seam.)
+ */
+export interface RpcClientRecoveryOptions {
+  onRecovery?: (handler: (kind: RecoveryKind) => void) => (() => void) | void;
+}
+
+export function createRpcClient(config: RpcClientConfig & RpcClientRecoveryOptions): RpcClient {
   const selfCaller = callerForSelf(config.selfId, config.callerKind);
   const baseProvenance = config.provenance?.length ? config.provenance : [selfCaller];
   const exposedMethods = new Map<
@@ -91,6 +131,8 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
       reject: (error: Error) => void;
       timeout: ReturnType<typeof setTimeout> | null;
       abortCleanup: (() => void) | null;
+      /** Envelope target — drives the direct-server vs routed rejection policy (§3.4). */
+      target: string;
     }
   >();
   const pendingStreams = new Map<
@@ -210,6 +252,26 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
       }
       pendingStreams.delete(requestId);
     }, streamIdleTimeoutMs);
+  }
+
+  function makeConnectionLostError(): NodeJS.ErrnoException {
+    const err = new Error(CONNECTION_LOST_MESSAGE) as NodeJS.ErrnoException;
+    err.code = SESSION_CONNECTION_LOST_CODE;
+    return err;
+  }
+
+  // Reject + remove every pending request whose target matches `predicate`,
+  // clearing its deadline timer and abort wiring. The pending-call policy
+  // (§3.4) uses it twice: direct-server pendings on pipe-down, routed pendings
+  // on cold-recover.
+  function rejectPendingRequests(predicate: (target: string) => boolean, error: Error): void {
+    for (const [requestId, pending] of [...pendingRequests]) {
+      if (!predicate(pending.target)) continue;
+      pendingRequests.delete(requestId);
+      if (pending.timeout) clearTimeout(pending.timeout);
+      pending.abortCleanup?.();
+      pending.reject(error);
+    }
   }
 
   function handleResponse(response: RpcResponse): void {
@@ -443,14 +505,13 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
         pending.abortCleanup?.();
         pending.reject(err);
       };
-      // No default deadline: agentic runtimes vary too wildly for a timeout to
-      // be anything but an arbitrary guillotine. Only an EXPLICIT per-call
-      // timeoutMs arms one; a dropped response is surfaced by genuine-failure
-      // rejection (connection close / routed-error frames), never by a clock.
-      if (typeof options?.timeoutMs === "number" && options.timeoutMs >= 0) {
+      // No implicit deadline: callers opt in with a positive timeoutMs when a
+      // specific operation should be time-bounded.
+      const effectiveTimeoutMs = options?.timeoutMs;
+      if (effectiveTimeoutMs !== undefined && effectiveTimeoutMs > 0) {
         timeout = setTimeout(
-          () => rejectPending(new Error(`RPC call timed out after ${options.timeoutMs}ms`)),
-          options.timeoutMs
+          () => rejectPending(new Error(`RPC call timed out after ${effectiveTimeoutMs}ms`)),
+          effectiveTimeoutMs
         );
       }
       if (options?.signal) {
@@ -463,6 +524,7 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
         reject,
         timeout,
         abortCleanup,
+        target: targetId,
       });
       void send(targetId, request, options, provenance).catch((error) => {
         const pending = pendingRequests.get(requestId);
@@ -508,7 +570,35 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
         options,
         provenance
       );
-      return config.transport.stream(envelope, options?.signal ?? null);
+      // Body-capable transports (the WebRTC session) pump the request body on
+      // the bulk channel; transports that can't THROW (plan §1.6 — fail loud,
+      // never a silent base64 fallback).
+      return config.transport.stream(envelope, options?.signal ?? null, options?.body ?? null);
+    }
+    if (options?.body) {
+      // The duplex stream-request/stream-frame envelope path (plain WS, panel
+      // postMessage bridges) has no request-body channel at all — but a panel
+      // shell bridge can still carry uploads through its dedicated upload hop
+      // (`streamBody`, plan §1.6): the panel pumps the body across the bridge
+      // as chunk messages and the HOST feeds it to its WebRTC session.
+      if (config.transport.streamBody) {
+        const envelope = makeEnvelope(
+          targetId,
+          {
+            type: "stream-request",
+            requestId: generateRequestId(),
+            fromId: config.selfId,
+            method,
+            args,
+          },
+          options,
+          provenance
+        );
+        return config.transport.streamBody(envelope, options?.signal ?? null, options.body);
+      }
+      throw new Error(
+        "Streaming request bodies (uploads) require the WebRTC transport; this transport cannot stream a request body"
+      );
     }
     return streamImpl(provenance, targetId, method, args, options);
   }
@@ -538,7 +628,11 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
       options,
       provenance
     );
-    return config.transport.streamReadable(envelope, options?.signal ?? null);
+    return config.transport.streamReadable(
+      envelope,
+      options?.signal ?? null,
+      options?.body ?? null
+    );
   }
 
   function peer<
@@ -738,5 +832,40 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
   };
 
   config.transport.onMessage(handleEnvelope);
+
+  // Pending-call policy (§3.4) — "nothing hangs, ever".
+  //
+  // Direct client→server responses are NEVER inboxed server-side, so any pipe
+  // drop makes an in-flight direct-server call permanently unrecoverable. Reject
+  // those pendings the instant the transport reports `disconnected`. Routed
+  // caller↔caller pendings survive this flip: the server inbox can still replay
+  // their responses across a clean reconnect. The one case inbox replay cannot
+  // cover — a routed REQUEST or RESPONSE that was queued but never hit the
+  // wire at pipe-down (nothing server-side to replay; a lost response strands
+  // the REMOTE caller, whose pipe never went down) — is closed at the
+  // TRANSPORT layer: the WebRTC transport re-drives undelivered routed frames
+  // on a `resubscribe` recovery (webrtcClient.ts, unflushedRouted), so every
+  // surviving routed pending is guaranteed its request AND response delivery.
+  // The remaining case — the request WAS delivered but the callee then
+  // terminally dies (grace expiry / lease revoke), so no response will ever
+  // exist — is closed SERVER-side: rpcServer tracks the callee per in-flight
+  // routed request and, at the callee's terminal departure, sends the caller
+  // a `routed-response-error` (RECONNECT_GRACE_EXPIRED), which the transport
+  // turns into a rejecting response here.
+  config.transport.onStatusChange?.((status) => {
+    if (status === "disconnected") {
+      rejectPendingRequests(isServerTarget, makeConnectionLostError());
+    }
+  });
+
+  // A routed pending is only truly lost on `cold-recover` (server session state
+  // gone → no inbox to replay from); reject the remaining routed pendings then.
+  // On `resubscribe` the inbox replay settles them, so leave them alone.
+  config.onRecovery?.((kind) => {
+    if (kind === "cold-recover") {
+      rejectPendingRequests((target) => !isServerTarget(target), makeConnectionLostError());
+    }
+  });
+
   return client;
 }

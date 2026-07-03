@@ -35,17 +35,26 @@ interface HistoryVisitWrite {
 
 /**
  * Direct callers permitted at BrowserDataDO (Layer A). Shell + shell-side server
- * services, PLUS the `@workspace-extensions/browser-data` extension — the
+ * services, PLUS the manifest-declared browser-data broker extension — the
  * designated mediator panel/agent access goes through (it gates its own callers
  * to shell and runs in the server-managed extension host, so its
  * server-authenticated `callerId` is trustworthy). Every OTHER extension and
- * every other caller kind is refused (this DO holds user credentials). Exported
- * so the policy is unit-testable without the FTS5 schema the DO itself needs.
+ * every other caller kind is refused (this DO holds user credentials).
+ *
+ * `brokerCallerId` is the package name of the extension declared in
+ * `workspace/meta/vibez1.yml` under `providers.browserData.extension` (the
+ * server injects it as the `BROWSER_DATA_BROKER_ID` env binding). When no
+ * broker is declared, NO extension is accepted — the host never falls back to
+ * a hardcoded extension name. Exported so the policy is unit-testable without
+ * the FTS5 schema the DO itself needs.
  */
-export function isBrowserDataDirectCaller(caller: AuthenticatedCaller | null): boolean {
+export function isBrowserDataDirectCaller(
+  caller: AuthenticatedCaller | null,
+  brokerCallerId: string | null
+): boolean {
   const kind = caller?.callerKind;
   if (kind === "server" || kind === "shell") return true;
-  return kind === "extension" && caller?.callerId === "@workspace-extensions/browser-data";
+  return brokerCallerId !== null && kind === "extension" && caller?.callerId === brokerCallerId;
 }
 
 export class BrowserDataDO extends DurableObjectBase {
@@ -57,24 +66,41 @@ export class BrowserDataDO extends DurableObjectBase {
   }
 
   /**
+   * The manifest-declared broker extension's callerId, injected by the server
+   * as the `BROWSER_DATA_BROKER_ID` env binding (derived from
+   * `providers.browserData.extension` in meta/vibez1.yml). Null when the
+   * workspace declares no broker — extension access is then disabled.
+   */
+  private brokerCallerId(): string | null {
+    const value = this.env["BROWSER_DATA_BROKER_ID"];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  }
+
+  /**
    * Receiver-side authorization (Layer A). BrowserDataDO holds user
    * credentials/passwords/cookies/history. Direct callers are the Electron shell
-   * and shell-side server services, plus the `@workspace-extensions/browser-data`
-   * extension — the designated mediator that panel/agent access goes through. That
-   * extension gates its OWN callers to shell and runs in the server-managed
-   * extension host (so its server-authenticated `callerId` is trustworthy), hence
-   * it is whitelisted by id. Refuse every other caller kind — and every OTHER
-   * extension — so the open relay cannot read user secrets by addressing the DO
-   * directly. Events are owner-scoped push notifications — accept them.
+   * and shell-side server services, plus the manifest-declared browser-data
+   * broker extension — the designated mediator that panel/agent access goes
+   * through. That extension gates its OWN callers to shell and runs in the
+   * server-managed extension host (so its server-authenticated `callerId` is
+   * trustworthy), hence it is whitelisted by its declared id. Refuse every other
+   * caller kind — and every OTHER extension — so the open relay cannot read user
+   * secrets by addressing the DO directly. Events are owner-scoped push
+   * notifications — accept them.
    */
   protected override assertInboundAllowed(
     caller: AuthenticatedCaller | null,
     kind: "call" | "event"
   ): void {
     if (kind === "event") return;
-    if (!isBrowserDataDirectCaller(caller)) {
+    const broker = this.brokerCallerId();
+    if (!isBrowserDataDirectCaller(caller, broker)) {
+      const detail =
+        caller?.callerKind === "extension" && broker === null
+          ? " (no browser-data broker extension is declared in meta/vibez1.yml providers.browserData)"
+          : "";
       throw new Error(
-        `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}`
+        `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}${detail}`
       );
     }
   }

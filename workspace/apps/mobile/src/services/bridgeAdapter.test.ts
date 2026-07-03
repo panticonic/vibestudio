@@ -191,6 +191,186 @@ describe("bridgeAdapter panel session relay", () => {
   });
 });
 
+// §1.6 upload hop: a panel's streaming request body crosses the postMessage
+// bridge as base64 chunk messages, reassembles host-side, and feeds the panel
+// session's streamReadable(); the response streams back through deliverToPanel
+// tagged __vibez1BridgeStream, ack-gated.
+describe("bridgeAdapter upload streams", () => {
+  const PANEL = "panel:tree/panel-a";
+
+  function streamRequestEnvelope() {
+    const caller = { callerId: "panel:runtime-a", callerKind: "panel" as const };
+    return {
+      from: "panel:runtime-a",
+      target: "main",
+      delivery: { caller },
+      provenance: [caller],
+      message: {
+        type: "stream-request",
+        requestId: "sreq-1",
+        fromId: "panel:runtime-a",
+        method: "gateway.fetch",
+        args: [{ path: "/upload" }],
+      },
+    };
+  }
+
+  function base64Of(bytes: Uint8Array): string {
+    return Buffer.from(bytes).toString("base64");
+  }
+
+  async function drainStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    return Uint8Array.from(chunks.flatMap((chunk) => [...chunk]));
+  }
+
+  function makeUploadFixture(overrides?: {
+    streamReadable?: jest.Mock;
+    session?: Partial<WebRtcSession>;
+  }) {
+    const seen: { body?: Uint8Array; envelope?: unknown } = {};
+    const streamReadable =
+      overrides?.streamReadable ??
+      jest.fn(async (envelope: unknown, _signal: AbortSignal, body: ReadableStream<Uint8Array>) => {
+        seen.envelope = envelope;
+        seen.body = await drainStream(body);
+        return {
+          status: 201,
+          statusText: "Created",
+          headers: [["content-type", "application/json"]],
+          finalUrl: "http://gw/upload",
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new Uint8Array([9, 9]));
+              controller.close();
+            },
+          }),
+        };
+      });
+    const session = makePanelSession({ streamReadable, ...overrides?.session } as never);
+    const delivered: Array<{ __vibez1BridgeStream: boolean; msg: { kind: string; opId?: string; seq?: number } }> = [];
+    // Auto-ack response chunks like the injected panel bootstrap does.
+    const adapterBox: { current?: ReturnType<typeof createAdapter> } = {};
+    const deliverToPanel = jest.fn((_panelId: string, payload: unknown) => {
+      const tagged = payload as (typeof delivered)[number];
+      delivered.push(tagged);
+      if (tagged?.msg?.kind === "chunk") {
+        void adapterBox.current?.handle(PANEL, "streamAck", [tagged.msg.opId, tagged.msg.seq]);
+      }
+    });
+    const adapter = createAdapter({
+      panelManager: {} as never,
+      transport: { openPanelSession: jest.fn(async () => session) } as never,
+      callbacks: { navigateToPanel: jest.fn() },
+      deliverToPanel,
+      getPanelLease: jest.fn(() => ({
+        runtimeEntityId: "panel:runtime-a" as PanelEntityId,
+        connectionId: "conn-a",
+      })),
+    });
+    adapterBox.current = adapter;
+    return { adapter, delivered, seen, streamReadable };
+  }
+
+  it("relays an upload: base64 body in, tagged ack-gated response out", async () => {
+    const { adapter, delivered, seen, streamReadable } = makeUploadFixture();
+
+    await adapter.handle(PANEL, "streamOpen", [
+      { opId: "op-1", envelope: streamRequestEnvelope(), bodyId: "b-1" },
+    ]);
+    await adapter.handle(PANEL, "streamBodyChunk", [
+      { bodyId: "b-1", seq: 1, chunk: base64Of(new Uint8Array([1, 2, 3])) },
+    ]);
+    await adapter.handle(PANEL, "streamBodyChunk", [{ bodyId: "b-1", seq: 2, done: true }]);
+
+    await waitFor(() => expect(delivered.at(-1)?.msg.kind).toBe("end"));
+    expect(streamReadable).toHaveBeenCalledTimes(1);
+    expect(seen.body).toEqual(new Uint8Array([1, 2, 3]));
+    expect(delivered[0]).toMatchObject({
+      __vibez1BridgeStream: true,
+      msg: { kind: "head", opId: "op-1", status: 201 },
+    });
+    const chunk = delivered.find((entry) => entry.msg.kind === "chunk");
+    expect(chunk?.msg).toMatchObject({
+      opId: "op-1",
+      seq: 1,
+      chunk: base64Of(new Uint8Array([9, 9])),
+    });
+  });
+
+  it("rejects body chunks with no open upload stream (fail-loud ack)", async () => {
+    const { adapter } = makeUploadFixture();
+    await expect(
+      adapter.handle(PANEL, "streamBodyChunk", [{ bodyId: "nope", seq: 1, chunk: base64Of(new Uint8Array([1])) }])
+    ).rejects.toThrow(/No open bridge upload stream/);
+  });
+
+  it("streamAbort aborts the in-flight session stream", async () => {
+    let seenSignal: AbortSignal | null = null;
+    const streamReadable = jest.fn(
+      (_envelope: unknown, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          seenSignal = signal;
+          signal.addEventListener("abort", () => reject(new Error("aborted upstream")));
+        })
+    );
+    const { adapter } = makeUploadFixture({ streamReadable });
+
+    await adapter.handle(PANEL, "streamOpen", [
+      { opId: "op-1", envelope: streamRequestEnvelope(), bodyId: "b-1" },
+    ]);
+    await waitFor(() => expect(streamReadable).toHaveBeenCalled());
+    await adapter.handle(PANEL, "streamAbort", ["op-1"]);
+
+    await waitFor(() => expect(seenSignal?.aborted).toBe(true));
+    await expect(
+      adapter.handle(PANEL, "streamBodyChunk", [{ bodyId: "b-1", seq: 1, chunk: base64Of(new Uint8Array([1])) }])
+    ).rejects.toThrow(/unknown bodyId/);
+  });
+
+  it("fails loudly when the panel session cannot stream a request body", async () => {
+    const { adapter, delivered } = makeUploadFixture({
+      streamReadable: undefined as never,
+      session: { streamReadable: undefined },
+    });
+
+    await adapter.handle(PANEL, "streamOpen", [
+      { opId: "op-1", envelope: streamRequestEnvelope(), bodyId: "b-1" },
+    ]);
+
+    await waitFor(() => expect(delivered.at(-1)?.msg.kind).toBe("error"));
+    expect((delivered.at(-1)?.msg as { message?: string }).message).toMatch(
+      /require the WebRTC transport/
+    );
+  });
+
+  it("closePanelSession tears down the panel's upload relay", async () => {
+    const streamReadable = jest.fn(
+      (_envelope: unknown, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("closed")));
+        })
+    );
+    const { adapter } = makeUploadFixture({ streamReadable });
+
+    await adapter.handle(PANEL, "streamOpen", [
+      { opId: "op-1", envelope: streamRequestEnvelope(), bodyId: "b-1" },
+    ]);
+    await waitFor(() => expect(streamReadable).toHaveBeenCalled());
+    adapter.closePanelSession(PANEL);
+
+    await expect(
+      adapter.handle(PANEL, "streamBodyChunk", [{ bodyId: "b-1", seq: 1, chunk: base64Of(new Uint8Array([1])) }])
+    ).rejects.toThrow(/No open bridge upload stream/);
+  });
+});
+
 async function waitFor(assertion: () => void): Promise<void> {
   const deadline = Date.now() + 1_000;
   let lastError: unknown;

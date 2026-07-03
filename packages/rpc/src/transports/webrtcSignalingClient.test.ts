@@ -1,9 +1,10 @@
 /**
  * Signaling client tests — drive `createSignalingClient` against an in-memory
  * fake WebSocket fabric (a stand-in for the `apps/signaling` DO) and a fake
- * fetch. Proven: two peers exchange offer/answer + candidates; ice-servers are
- * pulled over HTTP and fail loud on a non-200; a third joiner is refused; frames
- * that arrive before a handler is registered are buffered and flushed.
+ * fetch. Proven: two role-tagged peers exchange offer/answer + candidates;
+ * ice-servers are pulled over HTTP and fail loud on a non-200; a same-role
+ * rejoin evicts the incumbent; frames that arrive before a handler is registered
+ * are buffered and flushed; out-of-band keepalive pings and reaps a dead socket.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -11,52 +12,79 @@ import { describe, expect, it, vi } from "vitest";
 import type { RtcIceCandidate, RtcSessionDescription } from "./webrtcPeer.js";
 import {
   createSignalingClient,
+  type SignalingRole,
   type WebSocketCtor,
   type WebSocketLike,
 } from "./webrtcSignalingClient.js";
 
 // --- In-memory signaling fabric (stands in for the SignalingRoom DO) --------
+//
+// Mirrors the new DO semantics: role-keyed slots (`?role=offerer|answerer`), a
+// same-role join EVICTS the incumbent (close 4001), and the DO auto-responds to
+// `{"t":"ping"}` with `{"t":"pong"}` (never relaying ping/pong to the peer).
 
 class FakeSignalingHub {
-  private rooms = new Map<string, FakeClientWS[]>();
-  join(ws: FakeClientWS): void {
-    const list = this.rooms.get(ws.roomKey) ?? [];
-    if (list.length >= 2) {
-      // Refuse the third joiner, exactly like the DO.
-      queueMicrotask(() => {
-        ws.fireOpen();
-        ws.deliver(JSON.stringify({ t: "room-full" }));
-        ws.fireClose(1013, "room full");
-      });
-      return;
+  private rooms = new Map<string, Map<SignalingRole, FakeClientWS>>();
+
+  private roomOf(ws: FakeClientWS): Map<SignalingRole, FakeClientWS> {
+    let room = this.rooms.get(ws.roomKey);
+    if (!room) {
+      room = new Map();
+      this.rooms.set(ws.roomKey, room);
     }
-    list.push(ws);
-    this.rooms.set(ws.roomKey, list);
-    const peers = list.length;
+    return room;
+  }
+
+  join(ws: FakeClientWS): void {
+    const room = this.roomOf(ws);
+    const incumbent = room.get(ws.role);
+    if (incumbent && incumbent !== ws) {
+      // Same-role join = the same party reconnecting → evict the incumbent.
+      queueMicrotask(() => incumbent.fireClose(4001, `superseded by new ${ws.role}`));
+    }
+    room.set(ws.role, ws);
     queueMicrotask(() => {
       ws.fireOpen();
-      for (const other of list) {
-        if (other !== ws) other.deliver(JSON.stringify({ t: "peer-joined", peers }));
+      for (const [, other] of room) {
+        if (other !== ws && other.readyState === 1) {
+          other.deliver(JSON.stringify({ t: "peer-joined", peers: room.size }));
+        }
       }
     });
   }
+
   relay(from: FakeClientWS, data: string): void {
-    for (const ws of this.rooms.get(from.roomKey) ?? []) {
-      if (ws !== from) ws.deliver(data);
+    let t: unknown;
+    try {
+      t = (JSON.parse(data) as { t?: unknown }).t;
+    } catch {
+      t = undefined;
+    }
+    if (t === "ping") {
+      // DO auto-response: pong the sender, never relay ping/pong to the peer.
+      from.deliver(JSON.stringify({ t: "pong" }));
+      return;
+    }
+    for (const [, ws] of this.roomOf(from)) {
+      if (ws !== from && ws.readyState === 1) ws.deliver(data);
     }
   }
+
   leave(ws: FakeClientWS): void {
-    const list = this.rooms.get(ws.roomKey);
-    if (list) this.rooms.set(ws.roomKey, list.filter((w) => w !== ws));
+    const room = this.rooms.get(ws.roomKey);
+    if (room && room.get(ws.role) === ws) room.delete(ws.role);
   }
 }
 
 class FakeClientWS implements WebSocketLike {
   readyState = 0;
   readonly roomKey: string;
+  readonly role: SignalingRole;
   private readonly listeners = new Map<string, Set<(ev: unknown) => void>>();
   constructor(url: string, private readonly hub: FakeSignalingHub) {
-    this.roomKey = new URL(url).pathname;
+    const parsed = new URL(url);
+    this.roomKey = parsed.pathname;
+    this.role = parsed.searchParams.get("role") as SignalingRole;
     hub.join(this);
   }
   send(data: string): void {
@@ -100,6 +128,54 @@ function wsCtorFor(hub: FakeSignalingHub): WebSocketCtor {
   } as unknown as WebSocketCtor;
 }
 
+// --- Controllable fake WS (no fabric) — for the keepalive timer tests -------
+
+class ControllableWS implements WebSocketLike {
+  readyState = 0;
+  readonly sent: string[] = [];
+  readonly closeCalls: Array<{ code?: number; reason?: string }> = [];
+  private readonly listeners = new Map<string, Set<(ev: unknown) => void>>();
+  constructor(readonly url: string) {}
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(code?: number, reason?: string): void {
+    if (this.readyState === 3) return;
+    this.closeCalls.push({ code, reason });
+    this.readyState = 3;
+    this.emit("close", { code, reason });
+  }
+  addEventListener(type: string, handler: (ev: never) => void): void {
+    let set = this.listeners.get(type);
+    if (!set) {
+      set = new Set();
+      this.listeners.set(type, set);
+    }
+    set.add(handler as (ev: unknown) => void);
+  }
+  fireOpen(): void {
+    this.readyState = 1;
+    this.emit("open", {});
+  }
+  deliver(data: string): void {
+    this.emit("message", { data });
+  }
+  private emit(type: string, ev: unknown): void {
+    for (const handler of this.listeners.get(type) ?? []) handler(ev);
+  }
+}
+
+function controllableWsCtor(): { WS: WebSocketCtor; instances: ControllableWS[] } {
+  const instances: ControllableWS[] = [];
+  const WS = class extends ControllableWS {
+    constructor(url: string) {
+      super(url);
+      instances.push(this);
+    }
+  } as unknown as WebSocketCtor;
+  return { WS, instances };
+}
+
 function okIceFetch(iceServers: unknown): typeof fetch {
   return vi.fn(async () => ({
     ok: true,
@@ -109,15 +185,17 @@ function okIceFetch(iceServers: unknown): typeof fetch {
   })) as unknown as typeof fetch;
 }
 
+const PING = JSON.stringify({ t: "ping" });
+
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("createSignalingClient", () => {
-  it("relays offer/answer and candidates between two peers", async () => {
+  it("relays offer/answer and candidates between the two role-tagged peers", async () => {
     const hub = new FakeSignalingHub();
     const WS = wsCtorFor(hub);
-    const opts = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
-    const a = createSignalingClient(opts);
-    const b = createSignalingClient(opts);
+    const base = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
+    const a = createSignalingClient({ ...base, role: "offerer" });
+    const b = createSignalingClient({ ...base, role: "answerer" });
 
     const aDescs: RtcSessionDescription[] = [];
     const bDescs: RtcSessionDescription[] = [];
@@ -147,12 +225,32 @@ describe("createSignalingClient", () => {
     b.close();
   });
 
+  it("appends the role to the join URL", async () => {
+    const hub = new FakeSignalingHub();
+    let observedUrl = "";
+    const WS = class extends FakeClientWS {
+      constructor(url: string) {
+        observedUrl = url;
+        super(url, hub);
+      }
+    } as unknown as WebSocketCtor;
+    const client = createSignalingClient({
+      room: "abc-123",
+      role: "answerer",
+      sig: "https://sig.test/base",
+      WebSocketImpl: WS,
+      fetchImpl: okIceFetch([]),
+    });
+    expect(observedUrl).toBe("wss://sig.test/base/room/abc-123?role=answerer");
+    client.close();
+  });
+
   it("buffers inbound frames that arrive before a handler is registered", async () => {
     const hub = new FakeSignalingHub();
     const WS = wsCtorFor(hub);
-    const opts = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
-    const a = createSignalingClient(opts);
-    const b = createSignalingClient(opts);
+    const base = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
+    const a = createSignalingClient({ ...base, role: "offerer" });
+    const b = createSignalingClient({ ...base, role: "answerer" });
 
     // B sends before A has subscribed — the frame must not be lost.
     await b.sendDescription({ type: "offer", sdp: "EARLY" });
@@ -169,10 +267,11 @@ describe("createSignalingClient", () => {
       { urls: ["stun:stun.cloudflare.com:3478", "turn:turn.cloudflare.com:3478?transport=tcp"], username: "u", credential: "c" },
     ];
     const fetchImpl = okIceFetch(iceServers);
-    const client = createSignalingClient({ room: "r1", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl });
+    const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl });
 
     const servers = await client.fetchIceServers!();
     expect(servers).toEqual(iceServers);
+    // The ice-servers URL carries NO role (it is a plain HTTP GET, not a join).
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://sig.test/room/r1/ice-servers",
       expect.objectContaining({ method: "GET" }),
@@ -188,29 +287,43 @@ describe("createSignalingClient", () => {
       text: async () => "turn mint failed",
       json: async () => ({}),
     })) as unknown as typeof fetch;
-    const client = createSignalingClient({ room: "r1", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl });
+    const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl });
 
     await expect(client.fetchIceServers!()).rejects.toThrow(/502/);
     client.close();
   });
 
-  it("surfaces a room-full refusal as a close (third peer) — negative test", async () => {
+  it("evicts the incumbent when a same-role peer rejoins the room", async () => {
     const hub = new FakeSignalingHub();
     const WS = wsCtorFor(hub);
-    const opts = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
-    createSignalingClient(opts);
-    createSignalingClient(opts);
-    const third = createSignalingClient(opts);
+    const base = { room: "r1", sig: "https://sig.test", WebSocketImpl: WS, fetchImpl: okIceFetch([]) };
+    const first = createSignalingClient({ ...base, role: "offerer" });
 
-    let closedReason: string | undefined;
-    let closedCalls = 0;
-    third.onClosed((reason) => {
-      closedReason = reason;
-      closedCalls++;
+    let firstClosed: string | undefined;
+    let firstCloses = 0;
+    first.onClosed((reason) => {
+      firstClosed = reason;
+      firstCloses++;
     });
     await flush();
-    expect(closedReason).toBe("room-full");
-    expect(closedCalls).toBe(1);
+
+    // A second OFFERER joins the same room — the incumbent is evicted (close 4001).
+    const second = createSignalingClient({ ...base, role: "offerer" });
+    await flush();
+    expect(firstCloses).toBe(1);
+    expect(firstClosed).toContain("superseded");
+
+    // The replacement is live and can still relay to the answerer.
+    const answerer = createSignalingClient({ ...base, role: "answerer" });
+    await flush(); // let the answerer's socket open before the live relay
+    const got: RtcSessionDescription[] = [];
+    answerer.onDescription((d) => got.push(d));
+    await second.sendDescription({ type: "offer", sdp: "FRESH" });
+    await flush();
+    expect(got).toEqual([{ type: "offer", sdp: "FRESH" }]);
+
+    second.close();
+    answerer.close();
   });
 
   it("derives ws/wss and http/https endpoints from the sig scheme", async () => {
@@ -223,9 +336,9 @@ describe("createSignalingClient", () => {
       }
     } as unknown as WebSocketCtor;
     const fetchImpl = okIceFetch([]);
-    const client = createSignalingClient({ room: "abc-123", sig: "https://sig.test/base", WebSocketImpl: WS, fetchImpl });
+    const client = createSignalingClient({ room: "abc-123", role: "offerer", sig: "https://sig.test/base", WebSocketImpl: WS, fetchImpl });
 
-    expect(observedUrl).toBe("wss://sig.test/base/room/abc-123");
+    expect(observedUrl).toBe("wss://sig.test/base/room/abc-123?role=offerer");
     await client.fetchIceServers!();
     expect(fetchImpl).toHaveBeenCalledWith(
       "https://sig.test/base/room/abc-123/ice-servers",
@@ -236,7 +349,7 @@ describe("createSignalingClient", () => {
 
   it("close() fires onClosed exactly once", async () => {
     const hub = new FakeSignalingHub();
-    const client = createSignalingClient({ room: "r1", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl: okIceFetch([]) });
+    const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: wsCtorFor(hub), fetchImpl: okIceFetch([]) });
     let calls = 0;
     let reason: string | undefined;
     client.onClosed((r) => {
@@ -247,5 +360,59 @@ describe("createSignalingClient", () => {
     await flush();
     expect(calls).toBe(1);
     expect(reason).toBe("client-closed");
+  });
+
+  it("pings on the keepalive interval and stays open while pongs arrive", () => {
+    vi.useFakeTimers();
+    try {
+      const { WS, instances } = controllableWsCtor();
+      const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: WS });
+      const sock = instances[0]!;
+      let closed = false;
+      client.onClosed(() => {
+        closed = true;
+      });
+      sock.fireOpen();
+
+      // Five 20s intervals, each answered with a pong: the socket stays alive.
+      for (let i = 0; i < 5; i++) {
+        vi.advanceTimersByTime(20_000);
+        sock.deliver(JSON.stringify({ t: "pong" }));
+      }
+      expect(sock.sent.filter((s) => s === PING)).toHaveLength(5);
+      expect(closed).toBe(false);
+      client.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reaps a socket that goes 40s without a pong — dead-socket detection", () => {
+    vi.useFakeTimers();
+    try {
+      const { WS, instances } = controllableWsCtor();
+      const client = createSignalingClient({ room: "r1", role: "offerer", sig: "https://sig.test", WebSocketImpl: WS });
+      const sock = instances[0]!;
+      let closedReason: string | undefined;
+      let closes = 0;
+      client.onClosed((r) => {
+        closedReason = r;
+        closes++;
+      });
+      sock.fireOpen();
+
+      // First ping goes out at 20s; still within the deadline, not yet reaped.
+      vi.advanceTimersByTime(20_000);
+      expect(sock.sent).toContain(PING);
+      expect(closedReason).toBeUndefined();
+
+      // Past 40s of pong silence → the socket is a ghost: reaped with 4002.
+      vi.advanceTimersByTime(40_000);
+      expect(closes).toBe(1);
+      expect(closedReason).toBe("keepalive-timeout");
+      expect(sock.closeCalls.some((c) => c.code === 4002)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

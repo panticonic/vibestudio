@@ -4,7 +4,6 @@ import path from "path";
 import process from "process";
 import net from "net";
 import { spawn } from "child_process";
-import { randomBytes, randomUUID } from "crypto";
 import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
 import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";
@@ -435,11 +434,9 @@ async function main() {
     startedChildren.push(signalingChild);
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // The server runs as a WebRTC answerer. We pick the room + pairing code; the
-    // server presents its persistent DTLS cert and logs the vibez1://connect
-    // link whose `fp` pins that cert.
-    const room = randomUUID();
-    const pairingCode = randomBytes(18).toString("base64url");
+    // The server runs as a WebRTC answerer. It mints the per-invite room +
+    // pairing code itself, presents its persistent DTLS cert, and logs the
+    // vibez1://connect link whose `fp` pins that cert.
     const serverArgs = [
       serverEntryArg(),
       "--app-root",
@@ -455,8 +452,6 @@ async function main() {
         ...process.env,
         NODE_ENV: process.env.NODE_ENV ?? "development",
         VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
-        VIBEZ1_WEBRTC_ROOM: room,
-        VIBEZ1_PAIRING_CODE: pairingCode,
       },
       label: "server",
     });

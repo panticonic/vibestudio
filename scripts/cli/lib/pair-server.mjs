@@ -144,12 +144,16 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   const env = hooks.buildEnv ? hooks.buildEnv(baseEnv, { options, serverArgs }) : baseEnv;
 
   // WebRTC pairing material advertised by the running server (the seam between
-  // the server's WebRTC cert + signaling room and this banner). `room`/`fp`/
+  // the server's WebRTC cert + per-invite rooms and this banner). `room`/`fp`/
   // `sig` come from the server; until all three plus a pairing code arrive the
-  // banner waits.
+  // banner waits. `deepLink`/`qrDeepLink` are the server's OWN per-invite links
+  // (v=2: each invite has its own room, so codes must not be recombined with
+  // another invite's room locally).
   let pairing = { room: null, fp: null, sig: null };
   let pairingCode = null;
   let qrPairingCode = null;
+  let deepLink = null;
+  let qrDeepLink = null;
   let bannerPrinted = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
@@ -175,6 +179,8 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       pairing = { room: null, fp: null, sig: null };
       pairingCode = null;
       qrPairingCode = null;
+      deepLink = null;
+      qrDeepLink = null;
       bannerPrinted = false;
       if (ownedReadyDir) {
         try {
@@ -204,6 +210,12 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       if (typeof advertised.room === "string" && advertised.room) pairing.room = advertised.room;
       if (typeof advertised.fp === "string" && advertised.fp) pairing.fp = advertised.fp;
       if (typeof advertised.sig === "string" && advertised.sig) pairing.sig = advertised.sig;
+      if (typeof advertised.deepLink === "string" && advertised.deepLink) {
+        deepLink = advertised.deepLink;
+      }
+      if (typeof advertised.qrDeepLink === "string" && advertised.qrDeepLink) {
+        qrDeepLink = advertised.qrDeepLink;
+      }
     }
     if (typeof payload?.pairingCode === "string" && payload.pairingCode) {
       pairingCode = payload.pairingCode;
@@ -245,6 +257,8 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       title: config.bannerTitle,
       pairing: { room: pairing.room, fp: pairing.fp, sig: pairing.sig, code: pairingCode },
       qrPairingCode,
+      deepLink,
+      qrDeepLink,
       deepLinkLabel: config.deepLinkLabel,
       instructions: config.instructions,
     });

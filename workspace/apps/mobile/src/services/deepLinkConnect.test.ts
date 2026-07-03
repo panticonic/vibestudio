@@ -3,7 +3,7 @@ import { parseConnectDeepLink } from "./deepLinkConnect";
 const FP = "AA".repeat(32);
 const CODE = "a".repeat(24);
 function makeLink(sig = "wss://signal.example/"): string {
-  return `vibez1://connect?room=room-1111-2222&fp=${FP}&code=${CODE}&sig=${encodeURIComponent(sig)}`;
+  return `vibez1://connect?room=room-1111-2222&fp=${FP}&code=${CODE}&sig=${encodeURIComponent(sig)}&v=2`;
 }
 
 describe("deepLinkConnect", () => {
@@ -14,7 +14,7 @@ describe("deepLinkConnect", () => {
       fp: FP,
       code: CODE,
       sig: "wss://signal.example/",
-      v: 1,
+      v: 2,
       ice: "all",
       srv: undefined,
     });

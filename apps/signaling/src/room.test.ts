@@ -1,12 +1,16 @@
 /**
  * SignalingRoom DO tests — prove the dumb two-peer relay with in-memory fakes
  * for the Cloudflare Hibernation API (`acceptWebSocket`/`getWebSockets`/
- * `getTags`), `WebSocketPair`, and `Response` (Node's undici `Response` throws
- * on status 101, so it is stubbed).
+ * `setWebSocketAutoResponse`), `WebSocketPair`, `WebSocketRequestResponsePair`,
+ * and `Response` (Node's undici `Response` throws on status 101, so it is
+ * stubbed).
  *
- * Proven here: two peers exchange offer/answer + candidates; a third joiner is
- * refused; ice-servers serves the STUN baseline and FAILS LOUD (502) when TURN
- * is provisioned but minting breaks; a dropped peer frees its slot for rejoin.
+ * Proven here: two role-tagged peers exchange offer/answer + candidates; a join
+ * without a role is a 400 (no upgrade); a same-role rejoin EVICTS the incumbent
+ * (close 4001) while a different-role join fills the other slot; ice-servers
+ * serves the STUN baseline and FAILS LOUD (502) when TURN is provisioned but
+ * minting breaks; a dropped peer frees its slot for rejoin; the keepalive ping
+ * auto-response is armed on construction.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -20,19 +24,35 @@ class FakeWS {
   accepted = false;
   closed = false;
   closeCode?: number;
+  closeReason?: string;
   accept(): void {
     this.accepted = true;
   }
   send(data: string): void {
     this.sent.push(data);
   }
-  close(code?: number, _reason?: string): void {
+  close(code?: number, reason?: string): void {
     this.closed = true;
     this.closeCode = code;
+    this.closeReason = reason;
   }
   last<T = { t: string; [k: string]: unknown }>(): T | undefined {
     const s = this.sent[this.sent.length - 1];
     return s === undefined ? undefined : (JSON.parse(s) as T);
+  }
+}
+
+/** Stand-in for the runtime `WebSocketRequestResponsePair` global. */
+class FakeReqRespPair {
+  constructor(
+    private readonly _request: string,
+    private readonly _response: string
+  ) {}
+  get request(): string {
+    return this._request;
+  }
+  get response(): string {
+    return this._response;
   }
 }
 
@@ -56,7 +76,7 @@ class FakeResponse {
   private readonly bodyText: string;
   constructor(
     body: unknown,
-    init?: { status?: number; headers?: HeadersInit; webSocket?: unknown },
+    init?: { status?: number; headers?: HeadersInit; webSocket?: unknown }
   ) {
     this.status = init?.status ?? 200;
     this.webSocket = init?.webSocket;
@@ -113,14 +133,26 @@ class FakeStorage {
 class FakeState {
   private entries: Array<{ ws: FakeWS; tags: string[] }> = [];
   readonly storage = new FakeStorage();
+  /** Captures the arg to `setWebSocketAutoResponse` (the ping/pong keepalive). */
+  autoResponse?: FakeReqRespPair;
   acceptWebSocket(ws: FakeWS, tags: string[]): void {
     this.entries.push({ ws, tags });
   }
-  getWebSockets(): FakeWS[] {
-    return this.entries.map((e) => e.ws);
+  /**
+   * Mirror the runtime: a CLOSED socket leaves the roster (so `close()` on an
+   * evicted incumbent genuinely reclaims its slot), and an optional `tag` filters
+   * to sockets accepted with that tag.
+   */
+  getWebSockets(tag?: string): FakeWS[] {
+    return this.entries
+      .filter((e) => !e.ws.closed && (tag === undefined || e.tags.includes(tag)))
+      .map((e) => e.ws);
   }
   getTags(ws: FakeWS): string[] {
     return this.entries.find((e) => e.ws === ws)?.tags ?? [];
+  }
+  setWebSocketAutoResponse(pair: FakeReqRespPair): void {
+    this.autoResponse = pair;
   }
   /** Mirror the runtime dropping a closed socket from the roster. */
   remove(ws: FakeWS): void {
@@ -147,7 +179,18 @@ const deliver = (room: SignalingRoom, ws: FakeWS, data: string): Promise<void> =
 const drop = (room: SignalingRoom, ws: FakeWS, code: number): Promise<void> =>
   room.webSocketClose(ws as unknown as WebSocket, code, "", false);
 
-function upgradeRequest(roomId = "r1"): Request {
+type Role = "offerer" | "answerer";
+
+function upgradeRequest(role: Role, roomId = "r1"): Request {
+  return {
+    url: `https://sig.test/room/${roomId}?role=${role}`,
+    method: "GET",
+    headers: new Headers({ Upgrade: "websocket" }),
+  } as unknown as Request;
+}
+
+/** A join upgrade WITHOUT the required `?role=` — the room must reject it 400. */
+function upgradeRequestNoRole(roomId = "r1"): Request {
   return {
     url: `https://sig.test/room/${roomId}`,
     method: "GET",
@@ -165,11 +208,15 @@ function iceRequest(roomId = "r1"): Request {
 
 const offer = JSON.stringify({ t: "description", desc: { type: "offer", sdp: "OFFER-SDP" } });
 const answer = JSON.stringify({ t: "description", desc: { type: "answer", sdp: "ANSWER-SDP" } });
-const candidate = JSON.stringify({ t: "candidate", cand: { candidate: "candidate:1 udp", sdpMid: "0" } });
+const candidate = JSON.stringify({
+  t: "candidate",
+  cand: { candidate: "candidate:1 udp", sdpMid: "0" },
+});
 
 beforeEach(() => {
   createdServers = [];
   vi.stubGlobal("WebSocketPair", FakeWebSocketPair);
+  vi.stubGlobal("WebSocketRequestResponsePair", FakeReqRespPair);
   vi.stubGlobal("Response", FakeResponse);
 });
 
@@ -179,15 +226,17 @@ afterEach(() => {
 });
 
 describe("SignalingRoom", () => {
-  it("relays an offer/answer and candidates between exactly two peers", async () => {
-    const { room } = makeRoom();
+  it("relays an offer/answer and candidates between the two role-tagged peers", async () => {
+    const { room, state } = makeRoom();
 
-    // Peer A joins (slot a), then peer B joins (slot b).
-    await room.fetch(upgradeRequest());
-    await room.fetch(upgradeRequest());
+    // The offerer joins its slot, then the answerer fills the other slot.
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("answerer"));
     const [peerA, peerB] = createdServers;
     expect(peerA).toBeDefined();
     expect(peerB).toBeDefined();
+    // Both slots are filled — a different-role join fills the second slot.
+    expect(state.getWebSockets()).toHaveLength(2);
 
     // B's arrival notifies the already-present A.
     expect(peerA!.last()).toMatchObject({ t: "peer-joined", peers: 2 });
@@ -213,7 +262,7 @@ describe("SignalingRoom", () => {
 
     // Only the offerer (peer A) is in the room — the answerer is still scanning
     // the pairing QR and has not joined yet.
-    await room.fetch(upgradeRequest());
+    await room.fetch(upgradeRequest("offerer"));
     const [peerA] = createdServers;
     expect(peerA).toBeDefined();
 
@@ -231,7 +280,7 @@ describe("SignalingRoom", () => {
 
     // The answerer (peer B) joins. The buffered frames flush onto B's socket in
     // the exact order A sent them — and nothing else leaks onto it.
-    await room.fetch(upgradeRequest());
+    await room.fetch(upgradeRequest("answerer"));
     const peerB = createdServers[1]!;
     expect(peerB).toBeDefined();
     expect(peerB.sent).toEqual([offer, candidate, candidate2]);
@@ -249,7 +298,7 @@ describe("SignalingRoom", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     // Only peer A is present; it floods candidates far past the cap while alone.
-    await room.fetch(upgradeRequest());
+    await room.fetch(upgradeRequest("offerer"));
     const [peerA] = createdServers;
     const FLOOD = 200;
     const candAt = (i: number): string =>
@@ -262,33 +311,104 @@ describe("SignalingRoom", () => {
     // Peer B joins: it receives a bounded backlog (never the whole flood),
     // and the frames it does get are the in-order EARLIEST prefix — so the
     // offer and first candidates, the ones that matter, always survive.
-    await room.fetch(upgradeRequest());
+    await room.fetch(upgradeRequest("answerer"));
     const peerB = createdServers[1]!;
     expect(peerB.sent.length).toBeGreaterThan(0);
     expect(peerB.sent.length).toBeLessThan(FLOOD);
     peerB.sent.forEach((frame, i) => expect(frame).toBe(candAt(i)));
   });
 
-  it("refuses a third joiner (room holds exactly two) — negative test", async () => {
+  it("rejects a join without a role — 400, no upgrade (negative test)", async () => {
+    const { room, state } = makeRoom();
+    const res = await room.fetch(upgradeRequestNoRole());
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain("role");
+    // No socket entered the roster — the upgrade never happened.
+    expect(state.getWebSockets()).toHaveLength(0);
+    expect(createdServers).toHaveLength(0);
+  });
+
+  it("rejects a join with an invalid role — 400 (negative test)", async () => {
+    const { room } = makeRoom();
+    const res = await room.fetch(upgradeRequest("spectator" as Role));
+    expect(res.status).toBe(400);
+    expect(createdServers).toHaveLength(0);
+  });
+
+  it("evicts the same-role incumbent and accepts the new socket (last-writer-wins)", async () => {
     const { room, state } = makeRoom();
 
-    await room.fetch(upgradeRequest());
-    await room.fetch(upgradeRequest());
-    await room.fetch(upgradeRequest()); // the third
+    // First offerer joins, then a SECOND offerer joins the same room.
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("offerer"));
+    const [first, second] = createdServers;
 
-    const third = createdServers[2]!;
-    expect(third.accepted).toBe(true); // accepted only to deliver the refusal
-    expect(third.last()).toMatchObject({ t: "room-full" });
-    expect(third.closed).toBe(true);
-    expect(third.closeCode).toBe(1013);
-    // The third socket never entered the hibernation roster.
-    expect(state.getWebSockets()).toHaveLength(2);
+    // The incumbent is evicted with 4001 "superseded by new offerer".
+    expect(first!.closed).toBe(true);
+    expect(first!.closeCode).toBe(4001);
+    expect(first!.closeReason).toBe("superseded by new offerer");
+    // The fresh socket takes the slot and is NOT closed; only it remains.
+    expect(second!.closed).toBe(false);
+    expect(state.getWebSockets()).toEqual([second]);
+
+    // The replacement is a working member: a different-role join now pairs with
+    // IT (not the evicted ghost) and relay flows.
+    await room.fetch(upgradeRequest("answerer"));
+    const answerer = createdServers[2]!;
+    expect(second!.last()).toMatchObject({ t: "peer-joined", peers: 2 });
+    deliver(room, second!, offer);
+    expect(answerer.sent).toContain(offer);
+  });
+
+  it("relays only to the opposite role when a same-role socket is still rostered", async () => {
+    const { room, state } = makeRoom();
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("answerer"));
+    const [offerer, answerer] = createdServers;
+    const staleOfferer = new FakeWS();
+    state.acceptWebSocket(staleOfferer, ["role:offerer"]);
+
+    await deliver(room, offerer!, offer);
+
+    expect(answerer!.sent).toContain(offer);
+    expect(staleOfferer.sent).not.toContain(offer);
+  });
+
+  it("an eviction with buffered frames pending still flushes them to a genuine second joiner", async () => {
+    const { room } = makeRoom();
+
+    // Offerer A joins alone and buffers an offer + candidate (no counterpart).
+    await room.fetch(upgradeRequest("offerer"));
+    const [peerA] = createdServers;
+    await deliver(room, peerA!, offer);
+    await deliver(room, peerA!, candidate);
+
+    // A same-role offerer A' evicts A — the pre-join buffer must NOT be dropped
+    // (the eviction is a reconnect of the same party, not the room emptying).
+    await room.fetch(upgradeRequest("offerer"));
+    const peerAPrime = createdServers[1]!;
+    expect(peerA!.closed).toBe(true);
+    expect(peerAPrime.closed).toBe(false);
+
+    // The genuine second joiner (the answerer) still receives the buffered
+    // frames, in order, on join.
+    await room.fetch(upgradeRequest("answerer"));
+    const peerB = createdServers[2]!;
+    expect(peerB.sent).toEqual([offer, candidate]);
+  });
+
+  it("arms the ping auto-response on construction so dead sockets reap without waking the DO", () => {
+    const { state } = makeRoom();
+    expect(state.autoResponse).toBeDefined();
+    expect(state.autoResponse!.request).toBe('{"t":"ping"}');
+    expect(state.autoResponse!.response).toBe('{"t":"pong"}');
   });
 
   it("never relays a frame it does not understand (stays a dumb SDP/ICE pipe)", async () => {
     const { room } = makeRoom();
-    await room.fetch(upgradeRequest());
-    await room.fetch(upgradeRequest());
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("answerer"));
     const [peerA, peerB] = createdServers;
     const before = peerB!.sent.length;
 
@@ -300,20 +420,22 @@ describe("SignalingRoom", () => {
 
   it("frees a dropped peer's slot so it can rejoin for ICE-restart", async () => {
     const { room, state } = makeRoom();
-    await room.fetch(upgradeRequest());
-    await room.fetch(upgradeRequest());
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("answerer"));
     const [peerA, peerB] = createdServers;
 
-    // Peer A's signaling socket drops.
+    // Peer A's (offerer) signaling socket drops.
     drop(room, peerA!, 1006);
     expect(peerB!.last()).toMatchObject({ t: "peer-left", peers: 1 });
     state.remove(peerA!); // runtime drops the closed socket from the roster
 
-    // The room persists; a rejoin succeeds (room is no longer full).
-    await room.fetch(upgradeRequest());
+    // The room persists; the offerer rejoins its now-free slot (no eviction of
+    // the surviving answerer, which is a different role).
+    await room.fetch(upgradeRequest("offerer"));
     expect(state.getWebSockets()).toHaveLength(2);
     const rejoined = createdServers[2]!;
     expect(rejoined.closed).toBe(false); // accepted, not refused
+    expect(peerB!.closed).toBe(false); // the answerer was untouched
   });
 
   it("serves the free STUN baseline when TURN is not provisioned", async () => {
@@ -355,7 +477,7 @@ describe("SignalingRoom", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ ttl: 86400 }),
-      }),
+      })
     );
     const body = (await res.json()) as { iceServers: Array<{ urls: string[] }> };
     expect(body.iceServers[0]).toMatchObject({
@@ -373,7 +495,7 @@ describe("SignalingRoom", () => {
         status: 500,
         statusText: "Server Error",
         text: async () => "upstream down",
-      })),
+      }))
     );
     const { room } = makeRoom({
       ENVIRONMENT: "test",

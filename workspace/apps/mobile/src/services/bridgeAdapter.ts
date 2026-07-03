@@ -3,7 +3,13 @@ import { asPanelSlotId, type PanelEntityId } from "@vibez1/shared/panel/ids";
 import type { OpenExternalOptions } from "@vibez1/shared/externalOpen";
 import { externalOpenMethods } from "@vibez1/shared/serviceSchemas/externalOpen";
 import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import type { RpcEnvelope } from "@vibez1/rpc";
+import {
+  createBridgeStreamRelay,
+  type BridgeBodyChunk,
+  type BridgeStreamOpen,
+  type BridgeStreamRelay,
+  type RpcEnvelope,
+} from "@vibez1/rpc";
 import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
 import type { MobileRpcClient } from "./mobileTransport";
 
@@ -96,11 +102,46 @@ export function createBridgeAdapter(deps: {
     return { session, leaseKey: panelLeaseKey(lease) };
   }
 
+  // §1.6 upload relays, one per panel (see @vibez1/rpc bridgeStream.ts). The
+  // RN postMessage bridge is string-only, so chunks cross as base64 (~256 KiB);
+  // the relay reassembles the request body (8 MiB cap, fail-loud) and feeds the
+  // panel's WebRTC session streamReadable(). Response head/chunks/end go back
+  // through deliverToPanel tagged `__vibez1BridgeStream` (the injected bootstrap
+  // demuxes them off the envelope path), ack-gated so the webview buffer stays
+  // bounded.
+  const streamRelays = new Map<string, BridgeStreamRelay>();
+
   function closePanelSession(panelId: string): void {
+    const relay = streamRelays.get(panelId);
+    if (relay) {
+      streamRelays.delete(panelId);
+      relay.destroy(`panel ${panelId} session closed`);
+    }
     const pending = panelSessions.get(panelId);
     if (!pending) return;
     panelSessions.delete(panelId);
     void pending.then((entry) => entry.session.close()).catch(() => {});
+  }
+
+  function ensureStreamRelay(panelId: string): BridgeStreamRelay {
+    const existing = streamRelays.get(panelId);
+    if (existing) return existing;
+    const relay = createBridgeStreamRelay({
+      chunkFormat: "base64",
+      openStream: async (envelope, signal, body) => {
+        const session = await ensurePanelSession(panelId);
+        if (typeof session.streamReadable !== "function") {
+          throw new Error(
+            "Streaming request bodies (uploads) require the WebRTC transport; " +
+              "this panel's host session cannot stream a request body"
+          );
+        }
+        return session.streamReadable(envelope, signal, body);
+      },
+      sendToPanel: (msg) => deps.deliverToPanel(panelId, { __vibez1BridgeStream: true, msg }),
+    });
+    streamRelays.set(panelId, relay);
+    return relay;
   }
 
   return {
@@ -170,6 +211,32 @@ export function createBridgeAdapter(deps: {
             .catch((err) =>
               console.warn(`[bridgeAdapter] postEnvelope relay failed (panel ${panelId}):`, err)
             );
+          return;
+        }
+        // §1.6 upload hop — a panel's streaming request body crosses the
+        // postMessage bridge as sequenced base64 chunk messages. Rejections
+        // propagate to the panel's awaited callHost (fail-loud, no silent drop).
+        case "streamOpen": {
+          const [msg] = args as [BridgeStreamOpen];
+          ensureStreamRelay(panelId).open(msg);
+          return;
+        }
+        case "streamBodyChunk": {
+          const [msg] = args as [BridgeBodyChunk];
+          const relay = streamRelays.get(panelId);
+          if (!relay) throw new Error(`No open bridge upload stream for panel ${panelId}`);
+          // The returned promise IS the backpressure: it resolves (→ the panel's
+          // pending callHost ack) once the reassembly buffer is under the watermark.
+          return relay.pushBodyChunk(msg);
+        }
+        case "streamAbort": {
+          const [opId] = args as [string];
+          streamRelays.get(panelId)?.abort(String(opId));
+          return;
+        }
+        case "streamAck": {
+          const [opId, seq] = args as [string, number];
+          streamRelays.get(panelId)?.ack(String(opId), Number(seq));
           return;
         }
         default:

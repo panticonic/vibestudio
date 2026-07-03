@@ -1,5 +1,7 @@
 # WebRTC RPC Transport — Implementation Plan
 
+> **Superseded:** for the transport internals (wire protocol, rooms, pairing, mux, reconnect) see [webrtc-rpc-v2-plan.md](./webrtc-rpc-v2-plan.md).
+
 **Status:** Committed plan (supersedes the earlier draft/proposal)
 **Branch:** `claude/webrtc-rpc-transport-2ek0fw`
 
@@ -29,7 +31,7 @@ Two small public services remain, and we are honest about what they are:
 
 - **Signaling** — genuinely dumb: a UUID-addressed rendezvous that blind-relays
   SDP/ICE. Security lives in the QR, not the box.
-- **Callback relay** — *two profiles on one backhaul* (§7): a **stateful**
+- **Callback relay** — _two profiles on one backhaul_ (§7): a **stateful**
   webhook relay (durable buffering/queue/retry, sees webhook plaintext) and a
   deliberately **dumb, ephemeral** OAuth relay (a public landing + universal-link
   host doing a `state`-keyed handoff, no buffering). Both backhaul to a home
@@ -40,7 +42,7 @@ A backhauled WS-relay + end-to-end-encryption alternative was evaluated and
 
 ### Design rule: fail loud, never mask
 
-Redundancy that *hides* a failure is worse than no redundancy: if a second layer
+Redundancy that _hides_ a failure is worse than no redundancy: if a second layer
 silently covers for a broken first one, the system looks healthy while carrying
 dead infrastructure, and the first layer never gets fixed. The test for any layer
 is "**if it silently broke, would we find out?**" If no, it is a
@@ -65,11 +67,11 @@ failure-concealment device, not protection. So:
 ## Why this is the right lever (corrected problem statement)
 
 The remote-mode complexity is almost entirely downstream of **bucket 1: panels
-loading from a remote HTTP origin**. The control plane is *already* 100% RPC over
+loading from a remote HTTP origin**. The control plane is _already_ 100% RPC over
 the `EnvelopeRpcTransport` abstraction (`packages/rpc/src/types.ts:285`,
 verified). So the lever is not "swap WS for WebRTC"; it is **"serve panels from a
 local origin and backhaul everything over one pipe,"** with WebRTC chosen because
-DTLS gives end-to-end confidentiality *even when relayed through TURN* and STUN
+DTLS gives end-to-end confidentiality _even when relayed through TURN_ and STUN
 gives a true-P2P fast path with zero per-byte cost on traversable networks.
 
 Traffic inventory (re-verified against `src/server/gateway.ts`; note `/_r/*`
@@ -78,7 +80,7 @@ not enumerated in the gateway):
 
 1. **Needs a URL/origin** — panel HTML/JS/CSS/assets, blobstore bytes, app
    artifacts (`/_a/`, gateway.ts:470), bootstrap `/__loader.js` + `/__transport.js`
-   (`panelHttpServer.ts:537`). Cannot be `rpc.call()`, but the *bytes* ride any
+   (`panelHttpServer.ts:537`). Cannot be `rpc.call()`, but the _bytes_ ride any
    transport.
 2. **Inbound from third parties** — OAuth redirects, webhooks. An external IdP or
    GitHub must hit a public HTTPS URL; never P2P.
@@ -94,7 +96,7 @@ not enumerated in the gateway):
 - The original leaned on a TLS-pinning "trust-on-first-use" analogy.
   `tlsPinning.ts` actually **enforces a pre-configured fingerprint**
   (`VIBEZ1_REMOTE_FINGERPRINT`), not TOFU. The QR-fingerprint model below is a
-  *pre-configured pin delivered out-of-band*, which is the stronger posture; TOFU
+  _pre-configured pin delivered out-of-band_, which is the stronger posture; TOFU
   is offered only with explicit out-of-band confirmation.
 - "Reuse `composeTransports` for fallback" / "reuse the stream codec unchanged" /
   "relocate `PanelHttpServer`" were all over-optimistic. The real seams are
@@ -102,19 +104,19 @@ not enumerated in the gateway):
 
 ## What actually carries over vs. what is new
 
-| Existing machinery | Reuse verdict |
-| --- | --- |
-| `EnvelopeRpcTransport` interface (`types.ts:285`) | **Carries over** — WebRTC is a new implementer. |
-| `composeTransports` (`transports/compose.ts:9`) | **Does NOT do failover** — static predicate routing only; `status`/`ready` follow the fallback transport. **Deleted** — one remote transport means no routing/failover; a thin `TransportManager` owns only the single transport's lifecycle (§1). |
-| `wsClient` recovery (`wsClient.ts:87‑126`, `recoveryCoordinator.ts`) — backoff+jitter, socket generations, auth refresh, cold-recover vs resubscribe | **Pattern carries over; code does not** — re-implemented for the RTC connection lifecycle (ICE/DTLS/channel states). |
-| `streamCodec` (HEAD/DATA/END/ERROR) | **Frame *shape* carries over** — but base64 lives at the JSON layer (`client.ts:385`), there are **no stream IDs** (no multiplexing), and **no keepalive**. We ship a binary v2 (§1). |
+| Existing machinery                                                                                                                                                                                                            | Reuse verdict                                                                                                                                                                                                                                                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EnvelopeRpcTransport` interface (`types.ts:285`)                                                                                                                                                                             | **Carries over** — WebRTC is a new implementer.                                                                                                                                                                                                                           |
+| `composeTransports` (`transports/compose.ts:9`)                                                                                                                                                                               | **Does NOT do failover** — static predicate routing only; `status`/`ready` follow the fallback transport. **Deleted** — one remote transport means no routing/failover; a thin `TransportManager` owns only the single transport's lifecycle (§1).                        |
+| `wsClient` recovery (`wsClient.ts:87‑126`, `recoveryCoordinator.ts`) — backoff+jitter, socket generations, auth refresh, cold-recover vs resubscribe                                                                          | **Pattern carries over; code does not** — re-implemented for the RTC connection lifecycle (ICE/DTLS/channel states).                                                                                                                                                      |
+| `streamCodec` (HEAD/DATA/END/ERROR)                                                                                                                                                                                           | **Frame _shape_ carries over** — but base64 lives at the JSON layer (`client.ts:385`), there are **no stream IDs** (no multiplexing), and **no keepalive**. We ship a binary v2 (§1).                                                                                     |
 | Server `ws:auth` does grants, leases, `SessionRegistry`, inbox replay, event-session registration, reconnect waiters, server→client bridge + close-time failure synthesis (`rpcServer.ts:633‑821`, `wsServerTransport.ts:64`) | **A whole per-connection server transport, WS-bound.** Becomes `SessionNegotiation` (handshake) **+ a per-logical-session server transport** (§1) — all of it made per-session for N panels on one pipe. The biggest under-counted piece; a server refactor, not a frame. |
-| Per-panel principal grants (`panelManager.ts:849`, redeemed `rpcServer.ts:698`) | **Carries over and dictates design** — each panel is its own principal; the pipe must multiplex N logical sessions (§3). |
-| PanelHttpServer (`panelHttpServer.ts`) — build cache, mgmt API, `getBuild` callback, direct artifact serving | **Stays server-side.** The client gets a thin **loopback façade** that backhauls `getBuild`/asset requests over the bulk channel (§4). |
-| Panel HTTP auth — `validateManagementAuth` gates **only `/api/*`** (`panelHttpServer.ts:648`); HTML/assets/loaders are unauthenticated today | **Unchanged posture** — loopback serves only non-secret assets (no per-request token); panel RPC rides the shell bridge, not a loopback socket (§3/§4). |
-| Webhook relay data model — `delivery.mode:"relay"`, `relayPublicBaseUrl`, `/i/{id}`, `verifyRelayEnvelope` (`webhookIngressService.ts:98,419`) | **Carries over.** Backhaul + multi-tenancy + buffering are new (§7). |
-| OAuth PKCE (`codeVerifier=randomBytes(32)`, server-side, `credentialService.ts:742`), `state` (`randomBytes(16)`), `client-forwarded`/`client-loopback` callback modes (`credentialService.ts:292`) | **Carries over.** PKCE makes a *dumb* OAuth relay safe; `client-forwarded` carries the code app→server over the pipe (§7). |
-| Device-credential / connection-grant pairing (`deviceAuthStore.ts`, `mobileTransport.ts`, `serverClient.ts:176`) | **Carries over** — authorizes the *principal* after DTLS authenticates the *pipe*. |
+| Per-panel principal grants (`panelManager.ts:849`, redeemed `rpcServer.ts:698`)                                                                                                                                               | **Carries over and dictates design** — each panel is its own principal; the pipe must multiplex N logical sessions (§3).                                                                                                                                                  |
+| PanelHttpServer (`panelHttpServer.ts`) — build cache, mgmt API, `getBuild` callback, direct artifact serving                                                                                                                  | **Stays server-side.** The client gets a thin **loopback façade** that backhauls `getBuild`/asset requests over the bulk channel (§4).                                                                                                                                    |
+| Panel HTTP auth — `validateManagementAuth` gates **only `/api/*`** (`panelHttpServer.ts:648`); HTML/assets/loaders are unauthenticated today                                                                                  | **Unchanged posture** — loopback serves only non-secret assets (no per-request token); panel RPC rides the shell bridge, not a loopback socket (§3/§4).                                                                                                                   |
+| Webhook relay data model — `delivery.mode:"relay"`, `relayPublicBaseUrl`, `/i/{id}`, `verifyRelayEnvelope` (`webhookIngressService.ts:98,419`)                                                                                | **Carries over.** Backhaul + multi-tenancy + buffering are new (§7).                                                                                                                                                                                                      |
+| OAuth PKCE (`codeVerifier=randomBytes(32)`, server-side, `credentialService.ts:742`), `state` (`randomBytes(16)`), `client-forwarded`/`client-loopback` callback modes (`credentialService.ts:292`)                           | **Carries over.** PKCE makes a _dumb_ OAuth relay safe; `client-forwarded` carries the code app→server over the pipe (§7).                                                                                                                                                |
+| Device-credential / connection-grant pairing (`deviceAuthStore.ts`, `mobileTransport.ts`, `serverClient.ts:176`)                                                                                                              | **Carries over** — authorizes the _principal_ after DTLS authenticates the _pipe_.                                                                                                                                                                                        |
 
 ```
                  ┌──────────────────────────────┐
@@ -152,7 +154,7 @@ so `createRpcClient`/`createHostedRuntime` are unchanged.
   `SessionNegotiation` frames. Binary framing (no base64).
 - **Bulk channel** — reliable/ordered SCTP. Asset bytes, blob downloads,
   proxyFetch streams. **Stream IDs in the frame header** multiplex many concurrent
-  streams over the single bulk channel — we do *not* open a channel per stream.
+  streams over the single bulk channel — we do _not_ open a channel per stream.
 - Backpressure via `bufferedAmount` + `bufferedAmountLowThreshold`. Chunk under
   the measured **256 KB** `maxMessageSize` (spike §11). Application-level
   **keepalive** (data channels have no WS ping; we heartbeat on control and lean
@@ -180,13 +182,13 @@ whose transport **synthesizes failures for in-flight server→client calls on cl
 So this is **not** "extract a handshake frame" — it is two pieces:
 
 1. **`SessionNegotiation`** — the transport-neutral handshake (grant, identity,
-   `connectionId`, `bootId`, dirty flag) running as the first frames over *any*
+   `connectionId`, `bootId`, dirty flag) running as the first frames over _any_
    transport.
 2. **A logical-session server transport** — everything above made **per logical
    session** instead of per socket, since N panels multiplex over one pipe. Each
    session gets its own `SessionRegistry` entry, event session, inbox, reconnect
    waiters, and bridge, with **independent close-time failure synthesis** (one panel
-   dropping must fail only *its* in-flight server→client calls, never tear down the
+   dropping must fail only _its_ in-flight server→client calls, never tear down the
    pipe or the other sessions). Identity stays in the envelope's immutable
    `caller`/`provenance`; the channel never sets `delivery.caller`.
 
@@ -228,7 +230,7 @@ options so TURN-over-TLS:443 is always reachable.
 The `url`+`code` link and its parser (`connect.ts:107`, mobile
 `deepLinkConnect.ts:25`) are **replaced outright** — `url`-style links are deleted
 with remote mode (§8), and the parser is **rewritten to accept only the new form**
-(no versioned shim, no old-link handling, nothing to fall back to). New link: 
+(no versioned shim, no old-link handling, nothing to fall back to). New link:
 
 ```
 vibez1://connect?room=<uuid>&fp=<dtls-sha256>&code=<pairing-secret>
@@ -262,7 +264,7 @@ a `sessionId`; the host de-muxes N panels onto the one control channel.
 
 **This is what deletes TLS pinning, and it unifies the two platforms.** Today
 desktop panels build `ws://…/rpc` in `__loader.js` and open a **direct TLS
-WebSocket to the remote server** (`browserTransportEntry.ts`) — which is *why*
+WebSocket to the remote server** (`browserTransportEntry.ts`) — which is _why_
 pinning is installed on every `persist:panel:*` partition (`tlsPinning.ts:194`).
 Desktop moves to the shell-bridge transport (mobile already works this way:
 `PanelWebView`→postMessage→`bridgeAdapter.handle()`→`transport.call("main",…)`),
@@ -292,9 +294,9 @@ channel** and caching results. Panel RPC never touches it (§3).
   **failing closed** (no valid grant ⇒ no session ⇒ no RPC); a grant can't be
   obtained by a local process (it is handed to the webview over preload/RN, not the
   network). Bind `127.0.0.1` only, never `0.0.0.0`. **CSP** (`buildPanelCsp`,
-  `constants.ts:71`, loopback-only) stays as an *independent* panel-egress control,
+  `constants.ts:71`, loopback-only) stays as an _independent_ panel-egress control,
   justified on its own — not a backstop.
-- **The full gateway HTTP surface, route by route — verified there are *zero*
+- **The full gateway HTTP surface, route by route — verified there are _zero_
   browser-initiated authenticated subresource loads, so assets-only loopback holds
   with one explicit contract: authenticated access moves to the pipe, never a
   loopback HTTP route.**
@@ -337,7 +339,7 @@ electron-builder `^25`, mobile is **bare React Native 0.79.2 (no Expo)**.
   Expo config plugin (we are bare RN).
 - **The server side commits to `node-datachannel`** (throughput). `werift`
   (pure-TS, same certificate/fingerprint surface) is noted only as the path for a
-  target that genuinely *cannot* run the native module — not a general fallback kept
+  target that genuinely _cannot_ run the native module — not a general fallback kept
   warm.
 
 ## 6. Security model — proven, with creds gated behind the pin
@@ -350,10 +352,10 @@ electron-builder `^25`, mobile is **bare React Native 0.79.2 (no Expo)**.
 2. **Credentials never traverse the channel until the pin verifies.** The device
    credential / connection-grant exchange (`mobileTransport.ts`,
    `serverClient.ts:176`) runs only **after** the fingerprint check passes and the
-   data channel is authenticated. DTLS authenticates the *pipe*; grants authorize
-   the *principal*.
+   data channel is authenticated. DTLS authenticates the _pipe_; grants authorize
+   the _principal_.
 3. **TOFU only with out-of-band confirmation.** Auth-free signaling means TOFU is
-   *not* safe silently (the broker could substitute a fingerprint on first use).
+   _not_ safe silently (the broker could substitute a fingerprint on first use).
    If no pin is pre-shared, surface the observed fingerprint for explicit
    user/out-of-band confirmation before pinning.
 4. **Privacy, stated plainly.** The signaling DO sees peer IPs (inherent to ICE);
@@ -384,7 +386,7 @@ fallback):
 - **mobile → deep-link:** the landing is an App Site Association / App Links host,
   so the OS hands the `code` into the already-connected app, which forwards
   `{state, code}` over the pipe. This also closes the auth session and returns the
-  user to the app — so it is the *only* sensible mobile path, not an optimization.
+  user to the app — so it is the _only_ sensible mobile path, not an optimization.
 - **desktop → backhaul-forward:** the relay pushes `{state, code}` down the
   server's persistent backhaul to the live process.
 
@@ -406,9 +408,9 @@ the design specifies: (1) the transaction is created with the **relay's** host a
 `redirectUri` so redirect-matching succeeds; (2) lookup is by explicit
 **`transactionId`** carried through the landing, not a `state`-scan; (3) `state` and
 `code` are relayed **verbatim** — the relay never re-signs (`state` is the CSRF
-token); (4) **two binding paths** — *mobile deep-link* delivers to the app, which
+token); (4) **two binding paths** — _mobile deep-link_ delivers to the app, which
 forwards as its own authenticated principal (`deliveryCaller` binding, like
-`client-loopback`); *desktop backhaul* is a **new trusted server-side delivery
+`client-loopback`); _desktop backhaul_ is a **new trusted server-side delivery
 strategy** where the authenticated server↔relay backhaul is the trust anchor,
 bypassing per-caller binding. PKCE still makes an intercepted `code` useless.
 
@@ -418,7 +420,7 @@ per-subscription buffering, TTL, provider-retry semantics, response handling,
 replay controls, rate limiting. Multi-tenant routing replaces the single
 hard-coded `VIBEZ1_SERVER_BASE_URL` (`apps/webhook-relay/src/index.ts:59`) with
 `subscriptionId → server`. It sees webhook plaintext (HMAC/OIDC give integrity,
-not confidentiality) — decidedly *not* "dumb."
+not confidentiality) — decidedly _not_ "dumb."
 
 **Shared by both:** the authenticated **persistent backhaul** (server → relay DO)
 and **first-writer-wins registration** bound to that backhaul identity (the shared
@@ -463,7 +465,7 @@ against the tree, in three groups.
   issuance/storage core (it authorizes the principal); delete all
   fingerprint/TLS probing (`probePeerFingerprint`, `probeRemoteTrust`,
   `probeTrustAtUrl`, `healthProbe`, the duplicate `sha256Fingerprint`) and the
-  `fetchPeerFingerprint`/`pickCaFile` handlers. Its pairing *UX* is replaced by the
+  `fetchPeerFingerprint`/`pickCaFile` handlers. Its pairing _UX_ is replaced by the
   WebRTC QR room+fp flow (§2).
 - **Delete the TLS-pinning UI** in
   `workspace/apps/shell/components/ConnectionSettingsDialog.tsx`: the `UrlFields`
@@ -501,6 +503,7 @@ against the tree, in three groups.
   Device credentials/grants are **kept**.
 
 **Reconciliations:**
+
 - `VIBEZ1_REMOTE_URL` (point the shell at a remote https server) is **deleted**,
   not repointed — the shell reaches its server over WebRTC, paired by QR. The
   relay hostname (§7) is separate config used only for callback construction; the
@@ -523,20 +526,20 @@ integrate at the end against agreed interfaces, not in sequence.
   `TransportManager`, WebRTC transport (control+bulk), binary stream codec v2
   (stream IDs), `SessionNegotiation` + the **per-logical-session server transport**
   (grants, leases, `SessionRegistry`, event sessions, inbox, bridge, close-time
-  failure synthesis), ICE-restart/recovery. *Contract:* `EnvelopeRpcTransport`
+  failure synthesis), ICE-restart/recovery. _Contract:_ `EnvelopeRpcTransport`
   upward + the `SessionNegotiation` frame spec + the per-session server-transport
   responsibilities. This track is a **server refactor**, not just a client transport.
 - **B — Signaling + pairing** (`apps/signaling` CF DO, `connect.ts`): persistent
   UUID-room DO, extended pairing payload, TURN cred minting, fingerprint-pin
-  verify helper. *Contract:* signaling message schema + pairing-URL grammar.
+  verify helper. _Contract:_ signaling message schema + pairing-URL grammar.
 - **C — Native stacks** (Electron main, mobile): node-datachannel + packaging,
   react-native-webrtc linking, **persistent-cert management + fingerprint export**.
-  *Contract:* a `PeerConnection`/cert provider interface A codes against.
+  _Contract:_ a `PeerConnection`/cert provider interface A codes against.
 - **D — Loopback origin + panel RPC bridge** (`panelHttpServer` façade, `src/main`
   preload, mobile `PanelWebView`/`panelUrls`): loopback façade serving **non-secret
   assets only** over the bulk channel; panel RPC over the **shell bridge** (Electron
   `contextBridge` / RN `postMessage`) → host → control-channel logical session;
-  content-addressed cache. *Contract:* the bulk-channel `getBuild`/asset request
+  content-addressed cache. _Contract:_ the bulk-channel `getBuild`/asset request
   schema + the shell-bridge `EnvelopeRpcTransport` (envelope post + `stream()`).
 - **E — Callback relay** (`apps/webhook-relay`, `credentialService`,
   `webhookIngressService`): shared multi-tenant routing + authenticated backhaul
@@ -545,7 +548,7 @@ integrate at the end against agreed interfaces, not in sequence.
   universal-link host** (`state`-keyed handoff, no buffering). **Net-new high-risk
   infra** — only the relay envelope/signing model carries over; durable buffering,
   registration, first-writer-wins identity, and the persistent backhaul are all new
-  protocol surface. *Contract:* registration + backhaul-delivery protocol + OAuth
+  protocol surface. _Contract:_ registration + backhaul-delivery protocol + OAuth
   landing/universal-link association + the `transactionId`/redirect-URL/trusted-backhaul
   OAuth trust model (§7), each with its own tests.
 - **F — Cutover/deletion** (`startupMode`, `tlsPinning`, `publicUrl`,
@@ -559,7 +562,7 @@ authenticated panel RPC sessions → proxyFetch stream → webhook backhaul**.
 A home server holds one outbound WS to a CF DO; the client connects to the same
 DO; the DO pipes envelopes. This reuses `wsClientTransport` wholesale and deletes
 ICE/TURN/signaling and the native WebRTC stacks. **Why not chosen:** a CF WS-relay
-*terminates* TLS, so the operator sees plaintext RPC + asset bytes; matching
+_terminates_ TLS, so the operator sees plaintext RPC + asset bytes; matching
 WebRTC's confidentiality requires an app-level E2E layer (Noise/libsodium keyed
 off the pairing secret) — and you still pay CF egress for **every** byte forever.
 WebRTC's DTLS is end-to-end **even through TURN** (TURN relays ciphertext, never
@@ -589,7 +592,7 @@ relay, persistent ECDSA P-256 cert via `certificatePemFile`/`keyPemFile`:
 
 - **iOS embedded loopback server** — GCDWebServer-style native dep,
   foreground-only; confirm App Store review + panel lifecycle. (Subresource
-  token-auth is *not* a question — §4 serves only non-secret assets, so the
+  token-auth is _not_ a question — §4 serves only non-secret assets, so the
   WKWebView Service-Worker / `*.localhost` limitations never bite. The razor in
   the fail-loud rule deleted this spike.)
 - **Logical-session multiplexing fairness** — N panels over one control channel
@@ -608,9 +611,10 @@ relay, persistent ECDSA P-256 cert via `certificatePemFile`/`keyPemFile`:
 
 ## Touch points
 
-- `packages/rpc/src/transports/webrtcClient.ts` — new transport.
-- `packages/rpc/src/transports/transportManager.ts` — new (replaces compose for remote).
-- `packages/rpc/src/protocol/streamCodec.ts` — binary v2 + stream IDs.
+- `packages/rpc/src/transports/webrtcClient.ts` — WebRTC transport with control + bulk channels.
+- `packages/rpc/src/transports/pairedConnection.ts` — shared desktop/mobile/CLI pairing bootstrap.
+- `packages/rpc/src/protocol/bulkMux.ts` — WebRTC stream multiplexing over the bulk channel.
+- `packages/rpc/src/protocol/streamCodec.ts` — shared stream-frame constants and HTTP/WS stream decoder.
 - `packages/rpc/src/protocol/sessionNegotiation.ts` + a per-logical-session server transport — new; extracted/generalized from `rpcServer.ts:633‑821` and `wsServerTransport.ts:64` (close-time failure synthesis).
 - `src/server/rpcServer.ts`, `src/server/wsServerTransport.ts` — make auth/session + server→client bridge per-logical-session, not per-socket.
 - `workspace/packages/runtime/src/shared/gatewayFetch.ts` — rewrite to tunnel over the bridge (no loopback HTTP); `src/server/serviceWithHttpRoutes.ts` — panel-facing routes retired for RPC, third-party-facing routes move to the relay.

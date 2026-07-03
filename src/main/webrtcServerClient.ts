@@ -20,9 +20,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createRpcClient, type RpcClient, type RpcCallOptions } from "@vibez1/rpc";
+import {
+  createRpcClient,
+  type RpcClient,
+  type RpcCallOptions,
+  type RpcStreamOptions,
+} from "@vibez1/rpc";
 import { type WebRtcSession, type WebRtcTransport } from "@vibez1/rpc/transports/webrtcClient";
-import { createOffererTransport } from "@vibez1/rpc/transports/offererTransport";
+import { createPairedConnection } from "@vibez1/rpc/transports/pairedConnection";
+import type { PeerConnectionProvider, RtcCandidateType } from "@vibez1/rpc/transports/webrtcPeer";
 import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
 import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
 import type { ConnectPairing } from "@vibez1/shared/connect";
@@ -63,32 +69,63 @@ export interface WebRtcServerClientArgs {
   transport?: WebRtcTransport;
 }
 
+/**
+ * The desktop shell's `ServerClient` over the WebRTC pipe, plus additive
+ * transport observability the loopback WS client has no equivalent for.
+ */
+export interface WebRtcServerClient extends ServerClient {
+  /**
+   * Last selected ICE candidate-pair type of the pipe — `'relay'` means TURN
+   * engaged (the §9.8 relay alarm), `null` while the pipe is down. Additive
+   * observability so the shell can surface the path (e.g. a "relayed" badge)
+   * without re-plumbing the transport.
+   */
+  candidateType(): RtcCandidateType | null;
+}
+
 export async function createWebRtcServerClient(
   args: WebRtcServerClientArgs
-): Promise<ServerClient> {
-  const transport = args.transport ?? (await buildTransport(args.pairing));
-  transport.onStatusChange((status) => args.onConnectionStatusChanged?.(status));
-  // connect() now rejects on an unreachable peer (transport connect timeout) rather
-  // than hanging the "connecting" spinner forever. Close the transport on failure so
-  // its background reconnect loop stops instead of re-dialing a dead pairing.
-  try {
-    await transport.connect();
-  } catch (error) {
-    await transport.close().catch(() => {});
-    throw error;
-  }
-
-  const mainSession = transport.openSession({
+): Promise<WebRtcServerClient> {
+  // The ONE shared bootstrap (plan §3.1): connect-with-timeout + main-session
+  // auth + close-on-ANY-failure (incl. mainSession.ready() rejection) + onPaired
+  // await-retry all live in createPairedConnection now — this file no longer
+  // hand-rolls (and can no longer re-diverge on) that sequence.
+  const nativePipe = args.transport ? null : await buildNativePipe();
+  const paired = await createPairedConnection({
+    pairing: {
+      room: args.pairing.room,
+      fingerprint: args.pairing.fp,
+      iceTransportPolicy: args.pairing.ice,
+    },
+    sig: args.pairing.sig,
+    ...(nativePipe
+      ? { provider: nativePipe.provider, webSocketImpl: nativePipe.webSocketImpl, fetchImpl: fetch }
+      : {}),
+    ...(args.transport ? { transport: args.transport } : {}),
+    getShellToken: args.getShellToken,
     connectionId: args.connectionId ?? randomUUID(),
     callerKind: "shell",
     clientPlatform: "desktop",
-    getToken: args.getShellToken,
-    onPaired: args.onPaired,
+    platform: "desktop",
+    ...(args.onPaired ? { onPaired: args.onPaired } : {}),
+    // App-level recovery passthrough (subscriptions/state replay). Registered on
+    // the session before its first open, so it catches the first-open recovery.
     onRecovery: (kind) => {
       void args.onRecovery?.(kind);
     },
   });
-  await mainSession.ready?.();
+  const transport = paired.transport;
+  const mainSession = paired.mainSession;
+  transport.onStatusChange((status) => args.onConnectionStatusChanged?.(status));
+  // Relay alarm (§9.8): remember the selected path for the shell and warn loud
+  // when TURN engages — a relayed pipe works but P2P failed (or was forced).
+  let lastCandidateType: RtcCandidateType | null = transport.candidateType();
+  transport.onCandidateType((type) => {
+    lastCandidateType = type;
+    if (type === "relay") {
+      console.warn("[webrtc-client] TURN relay engaged — P2P failed or forced");
+    }
+  });
   if (args.onServerEvent) {
     mainSession.onMessage((envelope) => {
       const message = envelope.message;
@@ -99,6 +136,10 @@ export async function createWebRtcServerClient(
     selfId: args.callerId,
     callerKind: "shell",
     transport: mainSession,
+    // §3.4 pending-call policy: on a cold-recover, the core rejects routed
+    // pendings (server session state gone). Fed from the paired connection's
+    // recovery fan-out (the same signal that drives the app-level onRecovery).
+    onRecovery: (handler) => paired.onRecovery(handler),
   });
   const authClient = createTypedServiceClient("auth", authMethods, (service, method, callArgs) =>
     rpc.call("main", `${service}.${method}`, callArgs)
@@ -106,11 +147,14 @@ export async function createWebRtcServerClient(
 
   type ScopedClient = { session: WebRtcSession; rpc: RpcClient; close(): void };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
+  const materializedScopedClients = new Set<ScopedClient>();
   const scopedListeners = new Map<string, Set<ServerMessageListener>>();
   const scopedKey = (caller: ScopedServerCaller): string =>
     `${caller.callerKind}\x00${caller.callerId}`;
+  let closing = false;
 
   const createScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
+    if (closing) throw new Error("WebRTC server client is closing");
     // Only app principals get a scoped runtime connection (mirrors the WS path:
     // a panel holds its own lease; native `shell` callers use call()).
     if (caller.callerKind !== "app") {
@@ -127,6 +171,10 @@ export async function createWebRtcServerClient(
       getToken: async () => (await authClient.grantConnection(caller.callerId)).token,
     });
     await session.ready?.();
+    if (closing) {
+      session.close();
+      throw new Error("WebRTC server client is closing");
+    }
     const scopedRpc = createRpcClient({
       selfId: caller.callerId,
       callerKind: caller.callerKind,
@@ -135,10 +183,20 @@ export async function createWebRtcServerClient(
     session.onMessage((envelope) => {
       for (const listener of scopedListeners.get(scopedKey(caller)) ?? []) listener(envelope);
     });
-    return { session, rpc: scopedRpc, close: () => session.close() };
+    const client: ScopedClient = {
+      session,
+      rpc: scopedRpc,
+      close: () => {
+        materializedScopedClients.delete(client);
+        session.close();
+      },
+    };
+    materializedScopedClients.add(client);
+    return client;
   };
 
   const getScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
+    if (closing) throw new Error("WebRTC server client is closing");
     const key = scopedKey(caller);
     const existing = scopedClients.get(key);
     if (existing) {
@@ -179,6 +237,16 @@ export async function createWebRtcServerClient(
       onMessage: (listener) => session.onMessage(listener),
       status: () => session.status?.() ?? transport.status(),
       isClosed: () => session.isClosed(),
+      // First-class duplex stream with the §1.6 upload body: the panel bridge
+      // relay (ipcDispatcher) feeds a panel's reassembled request body here and
+      // it rides the bulk channel as DATA frames keyed by the stream-open's
+      // bodyStreamId.
+      streamReadable: (envelope, signal, body) => {
+        if (typeof session.streamReadable !== "function") {
+          throw new Error("WebRTC panel session does not implement streamReadable");
+        }
+        return session.streamReadable(envelope, signal, body);
+      },
       close: () => session.close(),
     };
   };
@@ -187,10 +255,11 @@ export async function createWebRtcServerClient(
     call(service, method, callArgs, options?: RpcCallOptions): Promise<unknown> {
       return rpc.call("main", `${service}.${method}`, callArgs, options);
     },
-    stream(service, method, callArgs): Promise<Response> {
+    stream(service, method, callArgs, options?: RpcStreamOptions): Promise<Response> {
       // Streamed over the main shell session's bulk channel (chunked) — for
-      // large bodies like gateway.fetch panel assets.
-      return rpc.stream("main", `${service}.${method}`, callArgs);
+      // large bodies like gateway.fetch panel assets. `options.body` streams a
+      // REQUEST body out on the same channel (plan §1.6).
+      return rpc.stream("main", `${service}.${method}`, callArgs, options);
     },
     async callAs(caller, service, method, callArgs, options?: RpcCallOptions): Promise<unknown> {
       const client = await getScopedClient(caller);
@@ -216,27 +285,31 @@ export async function createWebRtcServerClient(
     getConnectionStatus(): ConnectionStatus {
       return transport.status();
     },
+    candidateType(): RtcCandidateType | null {
+      return lastCandidateType;
+    },
     async close(): Promise<void> {
-      await Promise.allSettled(
-        [...scopedClients.values()].map(async (client) => (await client).close())
-      );
+      closing = true;
+      const scoped = [...materializedScopedClients];
       scopedClients.clear();
-      mainSession.close();
-      await transport.close();
+      // Closes the main session AND the transport (createPairedConnection owns both).
+      await paired.close();
+      for (const client of scoped) client.close();
+      materializedScopedClients.clear();
     },
   };
 }
 
-/** The real pipe: lazy-load the native peer + signaling, dial as the offerer. */
-async function buildTransport(pairing: ConnectPairing): Promise<WebRtcTransport> {
+/** Lazy-load the native peer + Node `ws` for the real pipe (createPairedConnection
+ * builds the transport + signaling from these). Non-remote shells never touch
+ * node-datachannel — it loads only when a real pipe is actually built. */
+async function buildNativePipe(): Promise<{
+  provider: PeerConnectionProvider;
+  webSocketImpl: unknown;
+}> {
   const { createNodeDatachannelProvider } = await import("./webrtc/nodeDatachannelPeer.js");
   const { default: WS } = (await import("ws")) as unknown as {
     default: new (url: string) => unknown;
   };
-  return createOffererTransport({
-    provider: createNodeDatachannelProvider({ peerName: "shell" }),
-    pairing,
-    webSocketImpl: WS,
-    fetchImpl: fetch,
-  });
+  return { provider: createNodeDatachannelProvider({ peerName: "shell" }), webSocketImpl: WS };
 }

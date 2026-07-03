@@ -70,7 +70,7 @@ export interface RtcDataChannelLike {
 
 export interface RtcDataChannelInit {
   ordered?: boolean;
-  /** Pre-negotiated channel id so both peers agree without `ondatachannel`. */
+  /** Pre-negotiated channel id so both peers open matching channels. */
   negotiated?: boolean;
   id?: number;
 }
@@ -82,8 +82,6 @@ export interface RtcPeerConnectionLike {
   setLocalDescription(desc?: RtcSessionDescription): Promise<void>;
   setRemoteDescription(desc: RtcSessionDescription): Promise<void>;
   addRemoteCandidate(candidate: RtcIceCandidate): Promise<void>;
-  /** Trigger an ICE restart (recovery when the pipe is fully down, plan §1). */
-  restartIce(): void;
   /**
    * DTLS SHA-256 fingerprint of the *remote* peer's certificate, observed on the
    * live wire — the value compared against the QR pin (`fp`). Null until DTLS is
@@ -98,8 +96,6 @@ export interface RtcPeerConnectionLike {
   onLocalDescription(handler: (desc: RtcSessionDescription) => void): () => void;
   /** A local ICE candidate is ready to send to the peer via signaling. */
   onLocalCandidate(handler: (candidate: RtcIceCandidate) => void): () => void;
-  /** Inbound data channel (answerer side, when channels are not pre-negotiated). */
-  onDataChannel(handler: (channel: RtcDataChannelLike) => void): () => void;
   close(): void;
 }
 
@@ -163,9 +159,8 @@ export function parseSdpFingerprint(sdp: string): string | null {
 
 // --- Wire contract --------------------------------------------------------
 // The offerer and answerer MUST open the two pre-negotiated channels with the
-// SAME labels + ids (a mismatch silently breaks pairing — there is no
-// `ondatachannel` fallback) and frame under the SAME chunk size. Single source
-// here so the two ends cannot drift.
+// SAME labels + ids (a mismatch silently breaks pairing) and frame under the
+// SAME chunk size. Single source here so the two ends cannot drift.
 
 /** Control channel (RPC envelopes + events + session handshake). */
 export const CONTROL_LABEL = "control";
