@@ -19,9 +19,6 @@ export const VCS_MAIN_HEAD = "main";
  *  silent resurrection of a deleted repo by a stale-context push. */
 export const VCS_ARCHIVE_HEAD_PREFIX = "archived:";
 
-/** Log-id prefix for per-repo VCS logs (`vcs:repo:<path>`). */
-export const VCS_REPO_LOG_PREFIX = "vcs:repo:";
-
 /**
  * Per-repo VCS log id. Each workspace repo (`packages/foo`, `panels/chat`,
  * `projects/<vault>`, `meta`) is a first-class versioned unit with its own GAD
@@ -31,12 +28,6 @@ export const VCS_REPO_LOG_PREFIX = "vcs:repo:";
  */
 export function logIdForRepo(repoPath: string): string {
   return `vcs:repo:${normalizeRepoPathForLog(repoPath)}`;
-}
-
-/** Inverse of {@link logIdForRepo}: the repo path for a `vcs:repo:<path>` log id,
- *  or null for a non-repo log id. */
-export function repoPathFromLogId(logId: string): string | null {
-  return logId.startsWith(VCS_REPO_LOG_PREFIX) ? logId.slice(VCS_REPO_LOG_PREFIX.length) : null;
 }
 
 /**
