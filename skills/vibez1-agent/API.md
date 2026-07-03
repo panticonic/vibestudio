@@ -554,3 +554,13 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 | `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |
 | `workspace-state.panel.incrementAccess` | Bump the access counter for a panel entity. |
 | `workspace-state.panel.rebuildIndex` | Rebuild the panel-search index from active panel entities. |
+
+## `worktree`
+
+Host disk-scan primitive: read a working tree into the CAS (worktree.scan).
+
+Allowed callers: `do`, `shell`, `server`
+
+| Method | Description |
+|--------|-------------|
+| `worktree.scan` | Scan a working tree into the content store and return its content-addressed state. Resolves the (repoPath, head) directory, hashes+mirrors every file into the CAS (refreshing the .gad sidecar), and returns { stateHash, files }. A pure disk→CAS primitive: no commit, no ref advance, no history — the caller (the gad-store DO) owns all VCS semantics. |

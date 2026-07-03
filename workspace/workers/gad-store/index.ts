@@ -718,6 +718,21 @@ interface HostBuildStore {
   }): Promise<Array<{ required?: boolean; status: string; [k: string]: unknown }>>;
 }
 
+/** The slice of the host `worktree.*` RPC surface: the pure disk-scan
+ *  primitive. `scan` reads a (repoPath, head) working tree into the CAS and
+ *  returns its content-addressed `{ stateHash, files }` — no commit, no ref
+ *  advance, no history. The DO composes it with the content/refs primitives to
+ *  own the scan-adopt semantics itself. */
+interface HostWorktreeStore {
+  scan(
+    repoPath: string,
+    head: string
+  ): Promise<{
+    stateHash: string;
+    files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
+  }>;
+}
+
 /** listTree caps results; a silently truncated listing would compose/merge as
  *  mass deletions, so overflow is a loud error. */
 const MERGE_LIST_TREE_LIMIT = 100_000;
@@ -7895,6 +7910,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
   protected buildStore(): HostBuildStore {
     return {
       validate: (input) => this.rpc.call("main", "build.validate", [input]),
+    };
+  }
+
+  /**
+   * Disk-scan primitive access — the host `worktree.scan` RPC (narrow-host
+   * boundary refactor P1). Reads a (repoPath, head) working tree into the CAS
+   * and returns its content-addressed `{ stateHash, files }`, DO-free and
+   * semantics-free. Protected SEAM like {@link contentStore}: host unit tests
+   * override it with a local scanner. No consumer yet — the scan-adopt path
+   * that drives it lands in a later phase.
+   */
+  protected worktreeStore(): HostWorktreeStore {
+    return {
+      scan: (repoPath, head) => this.rpc.call("main", "worktree.scan", [repoPath, head]),
     };
   }
 

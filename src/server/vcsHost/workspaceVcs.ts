@@ -942,6 +942,28 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return this.projector.dirForRepoHead(repoPath, head);
   }
 
+  /**
+   * The disk-scan PRIMITIVE (host `worktree.scan` RPC) — resolve the
+   * (repoPath, head) working tree and read it into the content store, returning
+   * its content-addressed `{ stateHash, files }`. Pure and semantics-free: it
+   * composes {@link DiskProjector.dirForRepoHead} with
+   * {@link WorktreeStore.localState} (scan + hash + CAS-mirror + sidecar
+   * refresh) and NOTHING ELSE — no commit, no ref advance, no gad-log append, no
+   * DO round trip. The gad-store DO drives it to capture external disk drift and
+   * owns every VCS decision made from the result.
+   */
+  async scanWorktree(
+    repoPath: string,
+    head: string
+  ): Promise<{
+    stateHash: string;
+    files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
+  }> {
+    const dir = this.dirForRepoHead(repoPath, head);
+    const { stateHash, files } = await this.worktrees.localState(dir, { updateSidecar: true });
+    return { stateHash, files };
+  }
+
   /** Compose a per-repo state key for `lastState` / lock maps. */
   private stateKey(logId: string, head: string): string {
     return `${logId}\x00${head}`;

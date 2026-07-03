@@ -36,6 +36,7 @@ import { viewMethods } from "./view.js";
 import { workerLogMethods } from "./workerLog.js";
 import { workspaceMethods } from "./workspace.js";
 import { workspaceStateMethods } from "./workspaceState.js";
+import { worktreeMethods } from "./worktree.js";
 
 type ServiceTable = {
   service: string;
@@ -77,6 +78,7 @@ const serviceTables: ServiceTable[] = [
   { service: "workerLog", file: "workerLog.ts", methods: workerLogMethods },
   { service: "workspace", file: "workspace.ts", methods: workspaceMethods },
   { service: "workspace-state", file: "workspaceState.ts", methods: workspaceStateMethods },
+  { service: "worktree", file: "worktree.ts", methods: worktreeMethods },
 ];
 
 const approvedReturnlessMethods = new Set([
