@@ -442,6 +442,8 @@
   "worktree": {
     "service": ["do", "server", "shell"],
     "methods": {
+      "dependentRepos": ["do", "server", "shell"],
+      "project": ["do", "server", "shell"],
       "scan": ["do", "server", "shell"]
     }
   }
