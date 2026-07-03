@@ -130,12 +130,10 @@ export interface StateChangedUnit {
 
 export interface WorkspaceStateSource {
   /**
-   * Scan-on-demand: adopt any out-of-band disk edits into the ACTIVE context
-   * (D2 — the workspace root is that context's checkout, not `main`), then
-   * return its composed view (the live union of repo mains overlaid with the
-   * context's working edits). This is what a default (`main`/no-ref)
-   * `bindRuntimeImage`/`getBuild` builds — the active-context view, not the
-   * plain `main` union. With no drift the two are identical.
+   * The current `main` view — the composed union of every repo's `main`, from
+   * refs + CAS (no disk scan, no commit). This is what a default (`main`/no-ref)
+   * `bindRuntimeImage`/`getBuild` builds; per-entity builds serve
+   * `resolveContextView(ctx:{id})` instead.
    */
   ensureFresh(): Promise<{ stateHash: string }>;
   /** Batch manifest subtree hashes for unit-relative paths at a state. */
