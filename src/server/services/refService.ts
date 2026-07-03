@@ -1,23 +1,33 @@
 /**
- * RefService — the host's protected MAIN-ref table (narrow-host-vcs §2.1).
+ * RefService — the host's protected MAIN-ref table, reduced to a semantics-free
+ * content compare-and-swap (narrow-host-boundary-refactor Phase 5).
  *
  * The host tracks exactly one canonical `main` state per repo path:
- * `repoPath → { stateHash, seq, updatedAt }`. There is no generic `(repo, ref)`
- * namespace. The public write surface is a single atomic group compare-and-swap
- * — `updateMains` — plus movement-limited host-internal seeding
- * (`seedMain`, set-if-absent, implemented through `updateMains`). Repo retirement
- * is a `next: null` entry through `updateMains` (approval-gated). Advancement
- * policy is injected as a `gate` hook that runs once per batch, before the swap;
- * this module stays policy- and content-free (a wiring phase attaches the
- * main-advance approval + a content-store validity check as deps).
+ * `repoPath → { stateHash, updatedAt }`. There is no generic `(repo, ref)`
+ * namespace, no VCS-operation awareness, no movement log, and no provenance.
+ * The whole write surface is a single atomic group compare-and-swap —
+ * `updateMains` — plus movement-limited host-internal seeding (`seedMain`,
+ * set-if-absent, implemented through `updateMains`). `next === null` removes the
+ * ref.
  *
- * DURABILITY: the whole store (main table + append-only log) lives in ONE JSON
- * file replaced atomically via writeJsonFileAtomic (temp file + fsync + rename
- * + best-effort dir fsync). The single rename is the sole commit point, so the
- * table and its log can never disagree on disk, and a crash at any moment
- * leaves either the complete old store or the complete new store. A batch
- * writes ALL its entries in that one replace: there is no partial persist and
- * nothing to roll back.
+ * `updateMains` is CONTENT-only: it validates every non-null `next` is fully
+ * present in the content store (`assertTreeComplete`), runs the injected
+ * approval gate once (host-enforced user consent, D3), then swaps. It knows
+ * nothing about push/merge/delete/restore and records no writer/reason/seq —
+ * those semantics all live in the userland gad-store DO.
+ *
+ * After a successful swap it emits a DUMB `onRefsChanged` signal — just the
+ * changed `repoPath → stateHash` pairs (null = removed), no operation label, no
+ * transition kind, no diff. The host subscribes to drive its own semantics-free
+ * post-advance effects (build EV-baseline promotion, memory-index reaction);
+ * the CAS neither knows nor cares what they are.
+ *
+ * DURABILITY: the whole main table lives in ONE JSON file replaced atomically
+ * via writeJsonFileAtomic (temp file + fsync + rename + best-effort dir fsync).
+ * The single rename is the sole commit point, so a crash at any moment leaves
+ * either the complete old table or the complete new table. A batch writes ALL
+ * its entries in that one replace: there is no partial persist and nothing to
+ * roll back.
  *
  * CONCURRENCY: a single server process owns the store, so an in-process
  * per-repoPath queue (serializeByKey) is sufficient. A batch acquires every
@@ -30,7 +40,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { serializeByKey } from "@vibez1/shared/keyedSerializer";
-import type { MainUpdateOperation } from "@vibez1/shared/serviceSchemas/refs";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 
 // ---------------------------------------------------------------------------
@@ -43,25 +52,6 @@ export interface MainRefRecord {
   stateHash: string;
   /** Clock timestamp (ms) of the last successful movement/seed. */
   updatedAt: number;
-  /** Per-repoPath sequence number, strictly increasing across the repo's
-   *  whole movement history (survives delete → re-create). */
-  seq: number;
-}
-
-export interface MainRefLogEntry {
-  repoPath: string;
-  /** The seq this movement reached (strictly increasing per repoPath). */
-  seq: number;
-  old: string | null;
-  /** NULLABLE: a delete records `new: null`; a re-creation records `old: null`. */
-  new: string | null;
-  /** Principal that performed the CAS (e.g. `do:workers/gad-store:…`). */
-  writer: string;
-  /** Host-resolved originating principal (invocation-token table, §4). */
-  onBehalfOf: string | null;
-  reason: string;
-  operation: MainUpdateOperation;
-  timestamp: number;
 }
 
 /** One repo's requested main movement. `next: null` deletes the main. */
@@ -73,74 +63,56 @@ export interface MainUpdateEntry {
 
 export interface UpdateMainsInput {
   entries: MainUpdateEntry[];
-  operation: MainUpdateOperation;
-  reason: string;
-  /** Principal string recorded as the log `writer`. */
-  writer: string;
-  /** Host-resolved originating principal for the log `onBehalfOf`. */
-  onBehalfOf?: string | null;
   /**
    * Opaque policy-layer context forwarded VERBATIM to the gate (the resolved
-   * caller + operation an approval prompt needs). RefService never inspects or
-   * persists it — advancement policy stays injected.
+   * caller an approval prompt needs). RefService never inspects or persists it
+   * — advancement policy stays injected.
    */
   gateContext?: unknown;
 }
 
 export interface UpdateMainsResult {
-  updated: Array<{ repoPath: string; stateHash: string | null; seq: number }>;
+  updated: Array<{ repoPath: string; stateHash: string | null }>;
 }
-
-/**
- * A committed main movement, delivered to the {@link RefService.setOnMainsUpdated}
- * reaction AFTER the atomic swap lands. Carries the per-repo old/new state so the
- * reaction can project the new trees to disk and drive the build trigger without
- * re-reading. `newState: null` is a delete.
- */
-export interface MainsUpdatedEvent {
-  entries: Array<{ repoPath: string; oldState: string | null; newState: string | null }>;
-  operation: MainUpdateOperation;
-  writer: string;
-  onBehalfOf: string | null;
-  reason: string;
-}
-
-/**
- * Reaction invoked ONCE per successful `updateMains` batch, AFTER the swap has
- * committed and the per-repoPath queues have been released (so it may do slow
- * disk I/O without holding the critical section). This is the SINGLE host source
- * of post-advance effects (disk projection + build state trigger); it never
- * writes refs. Awaited by `updateMains` so callers observe a fully-projected
- * workspace on return. Must be internally best-effort — a reaction failure never
- * fails the (already-committed) advance.
- */
-export type OnMainsUpdated = (event: MainsUpdatedEvent) => Promise<void>;
 
 /** Per-repo view the gate receives: the ACTUAL current value (validated equal
- *  to the entry's `expectedOld`), the requested `next` (null = delete), and
- *  whether the host's own ref log shows this repo was previously deleted (its
- *  latest log entry recorded `new: null`) — the restore-classification input. */
+ *  to the entry's `expectedOld`) and the requested `next` (null = removal). The
+ *  gate computes its own content diff from these; it derives a removal from
+ *  `next === null` and needs no VCS-operation label. */
 export interface RefGateBatchEntry {
   repoPath: string;
   old: string | null;
   next: string | null;
-  priorDeleted: boolean;
 }
 
 export interface RefGateBatch {
   entries: RefGateBatchEntry[];
-  operation: MainUpdateOperation;
-  reason: string;
-  writer: string;
-  onBehalfOf: string | null;
   gateContext?: unknown;
 }
+
+/** One committed ref change delivered to an {@link OnRefsChanged} listener:
+ *  which repoPath now points at which stateHash (`null` = the ref was removed).
+ *  Deliberately semantics-free — no operation, no transition kind, no diff. */
+export interface RefChange {
+  repoPath: string;
+  stateHash: string | null;
+}
+
+/**
+ * Post-commit notification invoked AFTER a successful `updateMains` swap has
+ * committed and the per-repoPath queues have been released (so a listener may
+ * do slow work without holding the critical section). It carries ONLY the
+ * changed refs; it is not part of the CAS and never writes refs. Awaited by
+ * `updateMains` so callers observe a fully-reacted host on return, but
+ * best-effort — a listener failure never fails the (already-committed) advance.
+ */
+export type OnRefsChanged = (changes: RefChange[]) => void | Promise<void>;
 
 /**
  * Approval hook run ONCE per batch, BEFORE the swap, inside the batch's
  * critical section (all touched repoPath queues held). Throwing aborts the
  * whole batch with zero state change. This is where the wiring phase plugs in
- * the main-advance approval; this module stays policy-free.
+ * the host-enforced main-advance approval; this module stays policy-free.
  */
 export type RefGate = (batch: RefGateBatch) => Promise<void>;
 
@@ -163,36 +135,32 @@ export interface RefServiceDeps {
 export interface RefService {
   readMain(repoPath: string): MainRefRecord | null;
   listMains(): MainRefRecord[];
-  /** Chronological (oldest→newest) log for one repo; `limit` keeps the newest N. */
-  readMainLog(query: { repoPath: string; limit?: number }): MainRefLogEntry[];
   /**
    * Atomic group compare-and-swap. Every entry's `expectedOld` must match the
    * current value (null = must-not-exist) or the WHOLE batch fails with a
    * {@link RefBatchConflictError}. Non-null `next` values are validity-checked
    * against the content store, then the injected gate runs once, then all
-   * entries persist in ONE atomic file replace (`next: null` deletes).
+   * entries persist in ONE atomic file replace (`next: null` removes the ref).
    */
   updateMains(input: UpdateMainsInput): Promise<UpdateMainsResult>;
   /**
    * One-time adoption of a repo's `main`: set it only if absent (bootstrap
    * seeding). Idempotent — an existing main is left untouched (even if `value`
    * differs) and returned. Implemented through `updateMains`, so it gets the
-   * same tree validation, store/log write path, and post-advance reaction as
-   * every other protected-main creation. Movement-limited by construction: it
-   * can never MOVE an existing main.
+   * same tree validation and swap path as every other protected-main creation.
+   * Movement-limited by construction: it can never MOVE an existing main.
    */
   seedMain(input: { repoPath: string; value: string }): Promise<{
     created: boolean;
     record: MainRefRecord;
   }>;
   /**
-   * Register (or clear with `null`) the single post-advance reaction (§ item 1
-   * of the narrow-host P3 flip). Wired once — WorkspaceVcs registers its
-   * projection + state-trigger reaction here in its constructor, covering BOTH
-   * the in-process host push path and the DO's `refs.updateMains` RPC path, so
-   * post-advance effects fire exactly once from one place.
+   * Subscribe to the dumb post-commit "refs changed" signal. The listener fires
+   * after every successful `updateMains` swap with the changed refs only.
+   * Returns an unsubscribe function. Multiple listeners are supported and fire
+   * in registration order.
    */
-  setOnMainsUpdated(reaction: OnMainsUpdated | null): void;
+  onRefsChanged(listener: OnRefsChanged): () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,8 +213,6 @@ const REF_VALUE_RE = /^(state|manifest):[0-9a-f]{64}$/;
 /** One path segment: no separators, no control chars, no whitespace. */
 const SAFE_NAME_SEGMENT = /^[A-Za-z0-9._@-]+$/;
 const MAX_NAME_LENGTH = 256;
-const MAX_WRITER_LENGTH = 500;
-const MAX_REASON_LENGTH = 2000;
 
 function validateRepoPath(name: unknown): asserts name is string {
   if (typeof name !== "string" || name.length === 0) {
@@ -270,29 +236,16 @@ function validateValue(label: string, value: unknown): asserts value is string {
   }
 }
 
-function validateWriter(writer: unknown): asserts writer is string {
-  if (typeof writer !== "string" || writer.length === 0 || writer.length > MAX_WRITER_LENGTH) {
-    throw new RefValidationError("writer must be a non-empty string");
-  }
-}
-
-function validateReason(reason: unknown): asserts reason is string {
-  if (typeof reason !== "string" || reason.length > MAX_REASON_LENGTH) {
-    throw new RefValidationError("reason must be a string");
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
 
-const STORE_VERSION = 2;
+const STORE_VERSION = 3;
 const STORE_FILE_NAME = "refs.json";
 
 interface StoredRefStore {
   version: number;
   mains: MainRefRecord[];
-  log: MainRefLogEntry[];
 }
 
 function isMainRefRecord(value: unknown): value is MainRefRecord {
@@ -301,32 +254,11 @@ function isMainRefRecord(value: unknown): value is MainRefRecord {
   return (
     typeof record.repoPath === "string" &&
     typeof record.stateHash === "string" &&
-    typeof record.updatedAt === "number" &&
-    typeof record.seq === "number"
+    typeof record.updatedAt === "number"
   );
 }
 
-function isMainRefLogEntry(value: unknown): value is MainRefLogEntry {
-  if (!value || typeof value !== "object") return false;
-  const entry = value as Partial<MainRefLogEntry>;
-  return (
-    typeof entry.repoPath === "string" &&
-    typeof entry.seq === "number" &&
-    (entry.old === null || typeof entry.old === "string") &&
-    (entry.new === null || typeof entry.new === "string") &&
-    typeof entry.writer === "string" &&
-    (entry.onBehalfOf === null || typeof entry.onBehalfOf === "string") &&
-    typeof entry.reason === "string" &&
-    typeof entry.operation === "string" &&
-    typeof entry.timestamp === "number"
-  );
-}
-
-function loadStore(
-  filePath: string,
-  mains: Map<string, MainRefRecord>,
-  log: MainRefLogEntry[]
-): void {
+function loadStore(filePath: string, mains: Map<string, MainRefRecord>): void {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf8");
@@ -336,7 +268,7 @@ function loadStore(
   }
   // Corruption is fatal by design: a protected-ref store that silently reset to
   // empty would let any caller re-create mains via expectedOld:null CAS,
-  // erasing protection and history. Fail loudly instead.
+  // erasing protection. Fail loudly instead.
   let parsed: Partial<StoredRefStore>;
   try {
     parsed = JSON.parse(raw) as Partial<StoredRefStore>;
@@ -350,10 +282,6 @@ function loadStore(
     if (!isMainRefRecord(record)) throw new Error(`Corrupt main-ref record in ${filePath}`);
     mains.set(record.repoPath, { ...record });
   }
-  for (const entry of parsed.log ?? []) {
-    if (!isMainRefLogEntry(entry)) throw new Error(`Corrupt main-ref log entry in ${filePath}`);
-    log.push({ ...entry });
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -364,42 +292,19 @@ export function createRefService(deps: RefServiceDeps): RefService {
   const now = deps.now ?? (() => Date.now());
   const filePath = path.join(deps.statePath, STORE_FILE_NAME);
   const mains = new Map<string, MainRefRecord>();
-  const log: MainRefLogEntry[] = [];
   const chains = new Map<string, Promise<unknown>>();
-  let onMainsUpdated: OnMainsUpdated | null = null;
+  const refsChangedListeners = new Set<OnRefsChanged>();
 
-  loadStore(filePath, mains, log);
+  loadStore(filePath, mains);
 
   /** Write the full store atomically. The rename is the sole commit point;
    *  callers adopt into memory only after this returns. */
-  const persistStore = (nextMains: Iterable<MainRefRecord>, nextLog: MainRefLogEntry[]): void => {
+  const persistStore = (nextMains: Iterable<MainRefRecord>): void => {
     fs.mkdirSync(deps.statePath, { recursive: true, mode: 0o700 });
     writeJsonFileAtomic(filePath, {
       version: STORE_VERSION,
       mains: [...nextMains],
-      log: nextLog,
     } satisfies StoredRefStore);
-  };
-
-  /** Highest seq ever recorded for a repoPath (across its whole log), so a
-   *  repo's movement history is strictly increasing even across delete →
-   *  re-create. Falls back to the live record's seq. */
-  const maxSeqForRepo = (repoPath: string): number => {
-    let max = mains.get(repoPath)?.seq ?? 0;
-    for (const entry of log) {
-      if (entry.repoPath === repoPath && entry.seq > max) max = entry.seq;
-    }
-    return max;
-  };
-
-  /** Whether the repo's latest log entry recorded a delete (`new: null`). */
-  const priorDeleted = (repoPath: string): boolean => {
-    let latest: MainRefLogEntry | null = null;
-    for (const entry of log) {
-      if (entry.repoPath !== repoPath) continue;
-      if (!latest || entry.seq > latest.seq) latest = entry;
-    }
-    return latest !== null && latest.new === null;
   };
 
   const service: RefService = {
@@ -415,23 +320,7 @@ export function createRefService(deps: RefServiceDeps): RefService {
         .map((record) => ({ ...record }));
     },
 
-    readMainLog(query) {
-      validateRepoPath(query.repoPath);
-      const limit = query.limit;
-      if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
-        throw new RefValidationError("limit must be a positive integer");
-      }
-      const entries = log.filter((entry) => entry.repoPath === query.repoPath);
-      const tail = limit === undefined ? entries : entries.slice(-limit);
-      return tail.map((entry) => ({ ...entry }));
-    },
-
     async updateMains(input) {
-      validateReason(input.reason);
-      validateWriter(input.writer);
-      if (input.onBehalfOf != null && typeof input.onBehalfOf !== "string") {
-        throw new RefValidationError("onBehalfOf must be a string");
-      }
       if (input.entries.length === 0) {
         throw new RefValidationError("updateMains requires at least one entry");
       }
@@ -449,9 +338,9 @@ export function createRefService(deps: RefServiceDeps): RefService {
       // Acquire every touched repoPath queue (sorted → deadlock-free), then run
       // the whole critical section holding all of them.
       const keys = [...input.entries.map((e) => e.repoPath)].sort();
-      // Movements captured inside the critical section, replayed to the
-      // post-advance reaction AFTER the queues release (below).
-      let movements: MainsUpdatedEvent["entries"] = [];
+      // Genuine ref changes captured inside the critical section, emitted to the
+      // dumb refs-changed listeners AFTER the queues release (below).
+      let changes: RefChange[] = [];
 
       const runBatch = async (): Promise<UpdateMainsResult> => {
         // 1) CAS validity: every expectedOld must match the current value.
@@ -472,34 +361,29 @@ export function createRefService(deps: RefServiceDeps): RefService {
           }
         }
 
-        // 3) Approval gate (once per batch), inside the critical section.
+        // 3) Approval gate (once per batch), inside the critical section. The
+        //    gate computes its own content diff (current → next) and classifies
+        //    a removal from `next === null`; RefService supplies no semantics.
         await deps.gate({
           entries: input.entries.map((entry) => ({
             repoPath: entry.repoPath,
             old: mains.get(entry.repoPath)?.stateHash ?? null,
             next: entry.next,
-            priorDeleted: priorDeleted(entry.repoPath),
           })),
-          operation: input.operation,
-          reason: input.reason,
-          writer: input.writer,
-          onBehalfOf: input.onBehalfOf ?? null,
           ...(input.gateContext !== undefined ? { gateContext: input.gateContext } : {}),
         });
 
         // 4) Swap: build the full next store and persist in ONE atomic replace.
         const timestamp = now();
         const nextMains = new Map(mains);
-        const nextLog = [...log];
         const updated: UpdateMainsResult["updated"] = [];
-        const batchMovements: MainsUpdatedEvent["entries"] = [];
+        const batchChanges: RefChange[] = [];
         for (const entry of input.entries) {
           const current = mains.get(entry.repoPath) ?? null;
-          const seq = maxSeqForRepo(entry.repoPath) + 1;
           if (entry.next === null) {
-            // Delete. A no-op delete of an absent main records nothing.
+            // Removal. A no-op removal of an absent main records nothing.
             if (!current) {
-              updated.push({ repoPath: entry.repoPath, stateHash: null, seq: 0 });
+              updated.push({ repoPath: entry.repoPath, stateHash: null });
               continue;
             }
             nextMains.delete(entry.repoPath);
@@ -508,34 +392,16 @@ export function createRefService(deps: RefServiceDeps): RefService {
               repoPath: entry.repoPath,
               stateHash: entry.next,
               updatedAt: timestamp,
-              seq,
             });
           }
-          nextLog.push({
-            repoPath: entry.repoPath,
-            seq,
-            old: current?.stateHash ?? null,
-            new: entry.next,
-            writer: input.writer,
-            onBehalfOf: input.onBehalfOf ?? null,
-            reason: input.reason,
-            operation: input.operation,
-            timestamp,
-          });
-          updated.push({ repoPath: entry.repoPath, stateHash: entry.next, seq });
-          batchMovements.push({
-            repoPath: entry.repoPath,
-            oldState: current?.stateHash ?? null,
-            newState: entry.next,
-          });
+          updated.push({ repoPath: entry.repoPath, stateHash: entry.next });
+          batchChanges.push({ repoPath: entry.repoPath, stateHash: entry.next });
         }
-        persistStore(nextMains.values(), nextLog);
+        persistStore(nextMains.values());
         // Only reached when the rename succeeded — adopt into memory.
         mains.clear();
         for (const record of nextMains.values()) mains.set(record.repoPath, record);
-        log.length = 0;
-        log.push(...nextLog);
-        movements = batchMovements;
+        changes = batchChanges;
         return { updated };
       };
 
@@ -544,23 +410,26 @@ export function createRefService(deps: RefServiceDeps): RefService {
           ? runBatch()
           : serializeByKey(chains, keys[index]!, () => acquire(index + 1));
       const result = await acquire(0);
-      // Post-advance reaction — the SINGLE source of projection + build-trigger
-      // effects — runs after the swap committed and the queues released, and is
-      // awaited so callers observe a fully-projected workspace on return.
-      if (onMainsUpdated && movements.length > 0) {
-        await onMainsUpdated({
-          entries: movements,
-          operation: input.operation,
-          writer: input.writer,
-          onBehalfOf: input.onBehalfOf ?? null,
-          reason: input.reason,
-        });
+      // Dumb post-commit signal — fired after the swap committed and the queues
+      // released, awaited so callers observe a fully-reacted host on return.
+      // Best-effort: a listener failure never fails the committed advance.
+      if (changes.length > 0 && refsChangedListeners.size > 0) {
+        for (const listener of refsChangedListeners) {
+          try {
+            await listener(changes);
+          } catch (error) {
+            console.error("[refService] onRefsChanged listener failed:", error);
+          }
+        }
       }
       return result;
     },
 
-    setOnMainsUpdated(reaction) {
-      onMainsUpdated = reaction;
+    onRefsChanged(listener) {
+      refsChangedListeners.add(listener);
+      return () => {
+        refsChangedListeners.delete(listener);
+      };
     },
 
     async seedMain(input) {
@@ -571,9 +440,6 @@ export function createRefService(deps: RefServiceDeps): RefService {
       try {
         await service.updateMains({
           entries: [{ repoPath: input.repoPath, expectedOld: null, next: input.value }],
-          operation: "import",
-          reason: "seedMain: adopt pre-existing head",
-          writer: "system:seed",
           gateContext: { kind: "system", actor: { id: "seed", kind: "system" } },
         });
       } catch (error) {

@@ -55,13 +55,12 @@ const unit: UnitBatchEntry = {
 };
 
 /** A protected-ref advance candidate as the ref gate produces it: caller +
- *  operation + repo + SERVER-COMPUTED changed paths + candidate view. */
+ *  repo + SERVER-COMPUTED changed paths + candidate view. */
 function candidate(
   overrides: Partial<MainAdvanceApprovalCandidate> = {}
 ): MainAdvanceApprovalCandidate {
   return {
     caller: panelCaller(),
-    operation: "push",
     repoPath: "meta",
     changedPaths: ["meta/vibez1.yml"],
     stateHash: "state:next",
@@ -179,15 +178,14 @@ describe("createMainAdvanceApprovalGate", () => {
         effectiveVersion: "ev-panel",
         capability: "workspace-repo-write",
         grantResourceKey: "workspace-source-change:main",
-        title: "Push workspace changes",
-        description: "This vcs push moves workspace main and changes 1 path.",
+        title: "Update workspace main",
+        description: "This advance moves workspace main and changes 1 path.",
         resource: {
           type: "vcs-head",
           label: "Head",
           value: "workspace main",
         },
         details: [
-          { label: "Operation", value: "vcs push" },
           { label: "Repo", value: "apps/shell" },
           { label: "Source", value: "ctx:ctx-1" },
           { label: "State", value: "state:next" },
@@ -321,7 +319,6 @@ describe("createMainAdvanceApprovalGate", () => {
         candidate({
           repoPath: "panels/spectrolite",
           changedPaths: ["panels/spectrolite/index.tsx"],
-          operation: "merge",
         })
       )
     ).rejects.toThrow("Workspace main update denied");
@@ -517,7 +514,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const context: RefAdvanceGateContext = {
       kind: "caller",
       caller: panelCaller(),
-      operation: "push",
       sourceHead: "ctx:ctx-1",
     };
 
@@ -533,7 +529,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       "panels/x/removed.txt",
     ]);
     expect(candidate.repoPath).toBe("panels/x");
-    expect(candidate.operation).toBe("push");
     expect(candidate.sourceHead).toBe("ctx:ctx-1");
     // No candidate view supplied → the gate composes one itself.
     expect(candidate.stateHash).toBe("state:composed-fallback");
@@ -551,7 +546,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       batch([{ old: null, next }], {
         kind: "caller",
         caller: panelCaller(),
-        operation: "push",
       } satisfies RefAdvanceGateContext)
     );
 
@@ -568,7 +562,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       batch([{ next }], {
         kind: "caller",
         caller: panelCaller(),
-        operation: "push",
         candidateWorkspaceState: "state:group-candidate",
       } satisfies RefAdvanceGateContext)
     );
@@ -588,7 +581,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
       batch([{ repoPath: "panels/old", old: oldState, next: null }], {
         kind: "caller",
         caller: panelCaller(),
-        operation: "push",
       } satisfies RefAdvanceGateContext)
     );
 
@@ -596,23 +588,25 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     expect(deletions).toEqual([{ repoPath: "panels/old", fileCount: 2, stateHash: oldState }]);
   });
 
-  it("classifies a re-creation of a previously deleted repo as a restore from the host ref log", async () => {
+  it("treats a re-creation (old null, non-null next) as an ordinary content advance", async () => {
+    // Phase 5: the host no longer classifies restores. A previously-deleted
+    // repo's re-creation is just an expectedOld:null → tree advance; the
+    // restore saga (archive lookup, restore capability) lives in the DO now.
     const blobsDir = path.join(tempStatePath(), "blobs");
     const { gate, approvals, restores } = refGateDeps(blobsDir);
     const next = await stageTree(blobsDir, [{ path: "a.txt", body: "a\n" }]);
 
-    // old: null (must-not-exist) + priorDeleted: true → restore, regardless of
-    // the caller's claimed operation (fail closed to the stricter prompt).
     await gate(
-      batch([{ repoPath: "panels/old", old: null, next, priorDeleted: true }], {
+      batch([{ repoPath: "panels/old", old: null, next }], {
         kind: "caller",
         caller: panelCaller(),
-        operation: "push",
       } satisfies RefAdvanceGateContext)
     );
 
-    expect(approvals).toHaveLength(0);
-    expect(restores).toEqual([{ repoPath: "panels/old", fileCount: 1, stateHash: next }]);
+    expect(restores).toHaveLength(0);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]!.repoPath).toBe("panels/old");
+    expect([...approvals[0]!.changedPaths]).toEqual(["panels/old/a.txt"]);
   });
 
   it("a mixed batch (advance + delete) yields one advance prompt and one deletion prompt", async () => {
@@ -630,7 +624,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
         {
           kind: "caller",
           caller: panelCaller(),
-          operation: "push",
           candidateWorkspaceState: "state:batch-view",
         } satisfies RefAdvanceGateContext
       )
@@ -648,7 +641,6 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     ): RefAdvanceGateContext => ({
       kind: "caller",
       caller: panelCaller(),
-      operation: "push",
       ...extra,
     });
 

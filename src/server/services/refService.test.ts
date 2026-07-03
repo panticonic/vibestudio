@@ -8,6 +8,7 @@ import {
   isRefConflictError,
   RefBatchConflictError,
   RefValidationError,
+  type RefChange,
   type RefGate,
   type RefGateBatch,
   type UpdateMainsInput,
@@ -49,9 +50,6 @@ function makeService(
 function update(overrides: Partial<UpdateMainsInput> = {}): UpdateMainsInput {
   return {
     entries: [{ repoPath: "notes/journal", expectedOld: null, next: STATE_A }],
-    operation: "push",
-    reason: "initial import",
-    writer: "do:workers/gad-store:GadStore:vcs",
     ...overrides,
   };
 }
@@ -62,26 +60,24 @@ describe("refService.updateMains", () => {
     expect(service.readMain("notes/journal")).toBeNull();
 
     const result = await service.updateMains(update());
-    expect(result.updated).toEqual([{ repoPath: "notes/journal", stateHash: STATE_A, seq: 1 }]);
+    expect(result.updated).toEqual([{ repoPath: "notes/journal", stateHash: STATE_A }]);
     expect(service.readMain("notes/journal")).toEqual({
       repoPath: "notes/journal",
       stateHash: STATE_A,
       updatedAt: 1_001,
-      seq: 1,
     });
   });
 
-  it("advances with matching expectedOld, bumping seq and using the injected clock", async () => {
+  it("advances with matching expectedOld, using the injected clock", async () => {
     const { service } = makeService();
     await service.updateMains(update());
     const result = await service.updateMains(
       update({
         entries: [{ repoPath: "notes/journal", expectedOld: STATE_A, next: STATE_B }],
-        reason: "second commit",
       })
     );
-    expect(result.updated[0]).toMatchObject({ stateHash: STATE_B, seq: 2 });
-    expect(service.readMain("notes/journal")).toMatchObject({ updatedAt: 1_002, seq: 2 });
+    expect(result.updated[0]).toMatchObject({ stateHash: STATE_B });
+    expect(service.readMain("notes/journal")).toMatchObject({ updatedAt: 1_002 });
   });
 
   it("accepts manifest: values as well as state: values", async () => {
@@ -92,7 +88,7 @@ describe("refService.updateMains", () => {
     expect(service.readMain("r")?.stateHash).toBe(MANIFEST_D);
   });
 
-  it("rejects a stale CAS with per-entry conflict data and leaves state + log untouched", async () => {
+  it("rejects a stale CAS with per-entry conflict data and leaves state untouched", async () => {
     const { service } = makeService();
     await service.updateMains(update());
 
@@ -107,7 +103,6 @@ describe("refService.updateMains", () => {
     });
 
     expect(service.readMain("notes/journal")?.stateHash).toBe(STATE_A);
-    expect(service.readMainLog({ repoPath: "notes/journal" })).toHaveLength(1);
   });
 
   it("conflicts when expectedOld is set but the main is absent", async () => {
@@ -129,58 +124,6 @@ describe("refService.updateMains", () => {
     ).rejects.toMatchObject({ code: "REF_CONFLICT" });
   });
 
-  it("appends a log entry per movement with seq/old/new/writer/operation/onBehalfOf/timestamp", async () => {
-    const { service } = makeService();
-    await service.updateMains(update());
-    await service.updateMains(
-      update({
-        entries: [{ repoPath: "notes/journal", expectedOld: STATE_A, next: STATE_B }],
-        writer: "do:vcs",
-        onBehalfOf: "panel:chat-1",
-        reason: "merge context",
-        operation: "merge",
-      })
-    );
-
-    expect(service.readMainLog({ repoPath: "notes/journal" })).toEqual([
-      {
-        repoPath: "notes/journal",
-        seq: 1,
-        old: null,
-        new: STATE_A,
-        writer: "do:workers/gad-store:GadStore:vcs",
-        onBehalfOf: null,
-        reason: "initial import",
-        operation: "push",
-        timestamp: 1_001,
-      },
-      {
-        repoPath: "notes/journal",
-        seq: 2,
-        old: STATE_A,
-        new: STATE_B,
-        writer: "do:vcs",
-        onBehalfOf: "panel:chat-1",
-        reason: "merge context",
-        operation: "merge",
-        timestamp: 1_002,
-      },
-    ]);
-  });
-
-  it("readMainLog keeps the newest entries when limit is given", async () => {
-    const { service } = makeService();
-    await service.updateMains(update());
-    await service.updateMains(
-      update({ entries: [{ repoPath: "notes/journal", expectedOld: STATE_A, next: STATE_B }] })
-    );
-    await service.updateMains(
-      update({ entries: [{ repoPath: "notes/journal", expectedOld: STATE_B, next: STATE_C }] })
-    );
-    const tail = service.readMainLog({ repoPath: "notes/journal", limit: 2 });
-    expect(tail.map((entry) => entry.seq)).toEqual([2, 3]);
-  });
-
   it("listMains returns every repo's main, sorted by repoPath", async () => {
     const { service } = makeService();
     await service.updateMains(
@@ -193,7 +136,7 @@ describe("refService.updateMains", () => {
   });
 
   describe("atomic batch", () => {
-    it("commits a mixed batch (advance + delete) in one persist", async () => {
+    it("commits a mixed batch (advance + removal) in one persist", async () => {
       const { service, statePath } = makeService();
       await service.updateMains(
         update({ entries: [{ repoPath: "a", expectedOld: null, next: STATE_A }] })
@@ -211,8 +154,8 @@ describe("refService.updateMains", () => {
         })
       );
       expect(result.updated).toEqual([
-        { repoPath: "a", stateHash: STATE_C, seq: 2 },
-        { repoPath: "b", stateHash: null, seq: 2 },
+        { repoPath: "a", stateHash: STATE_C },
+        { repoPath: "b", stateHash: null },
       ]);
       expect(service.readMain("a")?.stateHash).toBe(STATE_C);
       expect(service.readMain("b")).toBeNull();
@@ -263,33 +206,20 @@ describe("refService.updateMains", () => {
     });
   });
 
-  describe("nullable-new log / delete + re-create", () => {
-    it("a delete records new:null and a re-creation records old:null in the retained log", async () => {
+  describe("removal + re-create", () => {
+    it("a removal drops the ref and a re-creation is an ordinary expectedOld:null CAS", async () => {
       const { service } = makeService();
       await service.updateMains(
         update({ entries: [{ repoPath: "r", expectedOld: null, next: STATE_A }] })
       );
       await service.updateMains(
-        update({
-          entries: [{ repoPath: "r", expectedOld: STATE_A, next: null }],
-          operation: "delete",
-        })
+        update({ entries: [{ repoPath: "r", expectedOld: STATE_A, next: null }] })
       );
+      expect(service.readMain("r")).toBeNull();
       await service.updateMains(
-        update({
-          entries: [{ repoPath: "r", expectedOld: null, next: STATE_B }],
-          operation: "restore",
-        })
+        update({ entries: [{ repoPath: "r", expectedOld: null, next: STATE_B }] })
       );
-
-      const log = service.readMainLog({ repoPath: "r" });
-      expect(log.map((e) => [e.old, e.new, e.operation])).toEqual([
-        [null, STATE_A, "push"],
-        [STATE_A, null, "delete"],
-        [null, STATE_B, "restore"],
-      ]);
-      // seq is strictly increasing across the whole retained history.
-      expect(log.map((e) => e.seq)).toEqual([1, 2, 3]);
+      expect(service.readMain("r")?.stateHash).toBe(STATE_B);
     });
   });
 
@@ -317,29 +247,24 @@ describe("refService.updateMains", () => {
   });
 
   describe("gate", () => {
-    it("runs the gate once per batch with resolved old + priorDeleted per entry", async () => {
+    it("runs the gate once per batch with resolved old + next per entry (no VCS semantics)", async () => {
       const { service, gateCalls } = makeService();
       await service.updateMains(
         update({ entries: [{ repoPath: "r", expectedOld: null, next: STATE_A }] })
       );
-      await service.updateMains(
-        update({
-          entries: [{ repoPath: "r", expectedOld: STATE_A, next: null }],
-          operation: "delete",
-        })
-      );
       gateCalls.length = 0;
       await service.updateMains(
-        update({
-          entries: [{ repoPath: "r", expectedOld: null, next: STATE_B }],
-          operation: "restore",
-        })
+        update({ entries: [{ repoPath: "r", expectedOld: STATE_A, next: STATE_B }] })
       );
       expect(gateCalls).toHaveLength(1);
-      expect(gateCalls[0]!.entries).toEqual([
-        { repoPath: "r", old: null, next: STATE_B, priorDeleted: true },
-      ]);
-      expect(gateCalls[0]!.operation).toBe("restore");
+      expect(gateCalls[0]!.entries).toEqual([{ repoPath: "r", old: STATE_A, next: STATE_B }]);
+    });
+
+    it("forwards the opaque gateContext verbatim", async () => {
+      const { service, gateCalls } = makeService();
+      const gateContext = { kind: "caller", token: "opaque" };
+      await service.updateMains(update({ gateContext }));
+      expect(gateCalls[0]!.gateContext).toEqual(gateContext);
     });
 
     it("aborts the batch with no state change when the gate throws", async () => {
@@ -350,7 +275,6 @@ describe("refService.updateMains", () => {
       });
       await expect(service.updateMains(update())).rejects.toThrow("denied by user");
       expect(service.readMain("notes/journal")).toBeNull();
-      expect(service.readMainLog({ repoPath: "notes/journal" })).toEqual([]);
     });
 
     it("does not consult the gate before the CAS check fails", async () => {
@@ -386,16 +310,74 @@ describe("refService.updateMains", () => {
     });
   });
 
+  describe("onRefsChanged (dumb post-commit signal)", () => {
+    it("emits only the changed repoPath→stateHash pairs after a successful commit", async () => {
+      const { service } = makeService();
+      const seen: RefChange[][] = [];
+      service.onRefsChanged((changes) => {
+        seen.push(changes);
+      });
+      await service.updateMains(update());
+      await service.updateMains(
+        update({
+          entries: [
+            { repoPath: "notes/journal", expectedOld: STATE_A, next: null },
+            { repoPath: "panels/todo", expectedOld: null, next: STATE_B },
+          ],
+        })
+      );
+      expect(seen).toEqual([
+        [{ repoPath: "notes/journal", stateHash: STATE_A }],
+        [
+          { repoPath: "notes/journal", stateHash: null },
+          { repoPath: "panels/todo", stateHash: STATE_B },
+        ],
+      ]);
+    });
+
+    it("does not fire when the batch produced no genuine change (no-op removal)", async () => {
+      const { service } = makeService();
+      const seen: RefChange[][] = [];
+      service.onRefsChanged((changes) => {
+        seen.push(changes);
+      });
+      await service.updateMains(
+        update({ entries: [{ repoPath: "absent", expectedOld: null, next: null }] })
+      );
+      expect(seen).toEqual([]);
+    });
+
+    it("a listener failure never fails the committed advance; unsubscribe stops delivery", async () => {
+      const { service } = makeService();
+      const seen: RefChange[][] = [];
+      const unsub = service.onRefsChanged(() => {
+        throw new Error("listener boom");
+      });
+      service.onRefsChanged((changes) => {
+        seen.push(changes);
+      });
+      await expect(service.updateMains(update())).resolves.toBeDefined();
+      expect(seen).toHaveLength(1);
+      expect(service.readMain("notes/journal")?.stateHash).toBe(STATE_A);
+
+      unsub();
+      seen.length = 0;
+      await service.updateMains(
+        update({ entries: [{ repoPath: "notes/journal", expectedOld: STATE_A, next: STATE_B }] })
+      );
+      expect(seen).toHaveLength(1); // only the surviving listener fires
+    });
+  });
+
   describe("concurrency", () => {
     it("exactly one of N concurrent same-expectedOld advances wins; the rest conflict", async () => {
       const { service } = makeService();
       await service.updateMains(update());
       const results = await Promise.allSettled(
-        Array.from({ length: 8 }, (_, i) =>
+        Array.from({ length: 8 }, () =>
           service.updateMains(
             update({
               entries: [{ repoPath: "notes/journal", expectedOld: STATE_A, next: STATE_B }],
-              reason: `race ${i}`,
             })
           )
         )
@@ -404,7 +386,7 @@ describe("refService.updateMains", () => {
       for (const r of results.filter((r) => r.status === "rejected")) {
         expect(isRefConflictError((r as PromiseRejectedResult).reason)).toBe(true);
       }
-      expect(service.readMain("notes/journal")).toMatchObject({ stateHash: STATE_B, seq: 2 });
+      expect(service.readMain("notes/journal")).toMatchObject({ stateHash: STATE_B });
     });
 
     it("concurrent pushes to DISJOINT repos both succeed (serialized per-repo, no cross-repo conflict)", async () => {
@@ -414,16 +396,10 @@ describe("refService.updateMains", () => {
       const { service } = makeService();
       const [a, b] = await Promise.all([
         service.updateMains(
-          update({
-            entries: [{ repoPath: "packages/a", expectedOld: null, next: STATE_A }],
-            reason: "push a",
-          })
+          update({ entries: [{ repoPath: "packages/a", expectedOld: null, next: STATE_A }] })
         ),
         service.updateMains(
-          update({
-            entries: [{ repoPath: "packages/b", expectedOld: null, next: STATE_B }],
-            reason: "push b",
-          })
+          update({ entries: [{ repoPath: "packages/b", expectedOld: null, next: STATE_B }] })
         ),
       ]);
       expect(a.updated[0]).toMatchObject({ repoPath: "packages/a", stateHash: STATE_A });
@@ -434,38 +410,16 @@ describe("refService.updateMains", () => {
   });
 
   describe("seedMain", () => {
-    it("creates the main when absent through the updateMains path", async () => {
+    it("creates the main when absent through the updateMains path, gated as a system advance", async () => {
       const { service, gateCalls } = makeService();
-      const reactions: RefGateBatch[] = [];
-      service.setOnMainsUpdated(async (event) => {
-        reactions.push({
-          entries: event.entries.map((entry) => ({
-            repoPath: entry.repoPath,
-            old: entry.oldState,
-            next: entry.newState,
-            priorDeleted: false,
-          })),
-          operation: event.operation,
-          reason: event.reason,
-          writer: event.writer,
-          onBehalfOf: event.onBehalfOf,
-        });
-      });
       const seeded = await service.seedMain({ repoPath: "notes/journal", value: STATE_A });
       expect(seeded.created).toBe(true);
-      expect(seeded.record).toMatchObject({ stateHash: STATE_A, seq: 1 });
+      expect(seeded.record).toMatchObject({ stateHash: STATE_A });
       expect(gateCalls).toHaveLength(1);
       expect(gateCalls[0]).toMatchObject({
         entries: [{ repoPath: "notes/journal", old: null, next: STATE_A }],
-        writer: "system:seed",
+        gateContext: { kind: "system" },
       });
-      expect(reactions).toHaveLength(1);
-      expect(reactions[0]).toMatchObject({
-        entries: [{ repoPath: "notes/journal", old: null, next: STATE_A }],
-        writer: "system:seed",
-      });
-      const log = service.readMainLog({ repoPath: "notes/journal" });
-      expect(log[0]).toMatchObject({ old: null, new: STATE_A, writer: "system:seed" });
     });
 
     it("is a no-op when the main already exists (never moves it)", async () => {
@@ -474,7 +428,6 @@ describe("refService.updateMains", () => {
       const again = await service.seedMain({ repoPath: "notes/journal", value: STATE_B });
       expect(again.created).toBe(false);
       expect(again.record.stateHash).toBe(STATE_A);
-      expect(service.readMainLog({ repoPath: "notes/journal" })).toHaveLength(1);
     });
 
     it("validates the seeded value", async () => {
@@ -486,7 +439,7 @@ describe("refService.updateMains", () => {
   });
 
   describe("durability", () => {
-    it("survives a restart: mains and log reload identically", async () => {
+    it("survives a restart: mains reload identically", async () => {
       const { service, statePath } = makeService();
       await service.updateMains(update());
       await service.updateMains(
@@ -496,9 +449,6 @@ describe("refService.updateMains", () => {
 
       const reloaded = makeService({ statePath }).service;
       expect(reloaded.listMains()).toEqual(service.listMains());
-      expect(reloaded.readMainLog({ repoPath: "notes/journal" })).toEqual(
-        service.readMainLog({ repoPath: "notes/journal" })
-      );
       // CAS semantics survive the reload.
       await expect(
         reloaded.updateMains(
@@ -554,12 +504,9 @@ describe("refService.updateMains", () => {
       }
     );
 
-    it("rejects an empty writer and a non-positive log limit", async () => {
+    it("rejects an empty batch", async () => {
       const { service } = makeService();
-      await expect(service.updateMains(update({ writer: "" }))).rejects.toBeInstanceOf(
-        RefValidationError
-      );
-      expect(() => service.readMainLog({ repoPath: "notes/journal", limit: 0 })).toThrow(
+      await expect(service.updateMains(update({ entries: [] }))).rejects.toBeInstanceOf(
         RefValidationError
       );
     });

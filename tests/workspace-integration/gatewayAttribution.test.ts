@@ -83,21 +83,17 @@ describe("full-gateway attribution (rows 11-12)", () => {
       async listMains() {
         return refs.listMains().map((r) => ({ repoPath: r.repoPath, stateHash: r.stateHash }));
       },
-      async readMainLog(repoPath: string, limit?: number) {
-        return refs
-          .readMainLog({ repoPath, ...(limit !== undefined ? { limit } : {}) })
-          .map((e) => ({ seq: e.seq, old: e.old, new: e.new, operation: e.operation }));
-      },
+      // Phase 5: the host ref movement LOG is gone (semantics-free CAS). The DO
+      // consults `readMainLog` only via optional chaining, so the bridge omits
+      // it and the DO falls back to current-value comparison.
       async updateMains(input: {
         entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
-        reason?: string;
-        operation: "push" | "merge" | "import" | "delete" | "restore";
         invocationToken?: string;
       }) {
         // The production RPC hop: the DO calls refs.updateMains; the host
         // resolves attribution from the token in the refsService handler.
         return (await refsService.handler(writerCtx as never, "updateMains", [input])) as {
-          updated: Array<{ repoPath: string; stateHash: string | null; seq: number }>;
+          updated: Array<{ repoPath: string; stateHash: string | null }>;
         };
       },
     };
@@ -169,7 +165,6 @@ describe("full-gateway attribution (rows 11-12)", () => {
           caller: opts.caller,
           via: WRITER_ID,
           method: "vcsPush",
-          operation: "push",
         });
     try {
       const objectKey = "workspace-gad";
@@ -239,10 +234,10 @@ describe("full-gateway attribution (rows 11-12)", () => {
     const gateCaller = lastGateCaller();
     expect(gateCaller.runtime).toEqual({ id: "chat-1", kind: "panel" });
     expect(isAuthorizedChrome(gateCaller)).toBe(false);
-    // Ref log records DO writer + panel on-behalf-of.
-    const log = refs.readMainLog({ repoPath: "packages/a" });
-    expect(log[0]).toMatchObject({ writer: `do:${WRITER_ID}`, onBehalfOf: "panel:chat-1" });
-    // The token window closed after the dispatch (replay fails closed).
+    // Phase 5: the host ref movement LOG is gone; on-behalf-of attribution now
+    // rides the invocation token, resolved at the gate (asserted above) and
+    // recorded DO-side. The token window closed after the dispatch (replay
+    // fails closed).
     expect(invocations.size()).toBe(0);
   });
 
@@ -261,9 +256,6 @@ describe("full-gateway attribution (rows 11-12)", () => {
     const gateCaller = lastGateCaller();
     expect(gateCaller.runtime).toEqual({ id: "shell", kind: "shell" });
     expect(isAuthorizedChrome(gateCaller)).toBe(true);
-    expect(refs.readMainLog({ repoPath: "packages/a" })[0]).toMatchObject({
-      onBehalfOf: "shell:shell",
-    });
   });
 
   it("a DO-self push (no token) attributes to the DO itself — full prompt, no bypass", async () => {
@@ -278,7 +270,6 @@ describe("full-gateway attribution (rows 11-12)", () => {
     const gateCaller = lastGateCaller();
     expect(gateCaller.runtime.kind).toBe("do");
     expect(isAuthorizedChrome(gateCaller)).toBe(false);
-    expect(refs.readMainLog({ repoPath: "packages/a" })[0]?.onBehalfOf).toBeNull();
   });
 
   it("rejects a forged token at the host (never silently attributes to the DO)", async () => {
@@ -349,7 +340,7 @@ describe("full-gateway attribution (rows 11-12)", () => {
         [{ repoPath: "packages/a", sourceHead: vcsContextHead("chat-1"), targetHead: "main" }],
         {
           actor: USER,
-          mainAdvance: { kind: "caller", caller: shell, operation: "merge" },
+          mainAdvance: { kind: "caller", caller: shell },
         }
       );
 

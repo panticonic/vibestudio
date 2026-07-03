@@ -13,7 +13,8 @@
  * Entry points:
  *  - {@link project}: materialize a (repoPath, head) at a state (the follower
  *    step after edit/commit/merge/push/restore advances).
- *  - {@link removeRepo}: drop a repo's main-worktree projection (deleteRepo).
+ *  - {@link removeRepo}: drop a repo's subtree from the active context's
+ *    workspace-root checkout (deleteRepo).
  *  - {@link writeConflictSummary}: sync the worktree-visible merge-conflict
  *    summary file from pending-merge DATA passed in by the caller.
  */
@@ -23,7 +24,7 @@ import * as path from "node:path";
 
 import {
   MERGE_CONFLICTS_FILE,
-  VCS_MAIN_HEAD,
+  VCS_ACTIVE_CONTEXT_ID,
   contextIdFromVcsHead,
   normalizeRepoPathForLog,
   validateVcsContextId,
@@ -32,10 +33,15 @@ import type { WorktreeStore } from "./worktreeStore.js";
 
 interface DiskProjectorDeps {
   worktrees: WorktreeStore;
-  /** The user's live workspace directory (main head working tree). */
+  /** The user's live workspace directory — the ACTIVE context's working tree
+   *  (D2: `main` has no checkout; the workspace root IS `ctx:{activeContextId}`). */
   workspaceRoot: string;
   /** Root for context-folder working trees (`{contextsRoot}/{contextId}`). */
   contextsRoot: string;
+  /** The context whose checkout is the workspace root (defaults to the
+   *  well-known {@link VCS_ACTIVE_CONTEXT_ID}). Every OTHER `ctx:*` head lives
+   *  under `{contextsRoot}/{contextId}`. */
+  activeContextId?: string;
 }
 
 /** A pending merge's disk-visible facts (data in, disk out — no store reads here). */
@@ -89,17 +95,35 @@ export class DiskProjector {
     return dir;
   }
 
-  /** Working-tree dir for a (repoPath, head): a repo's subtree under the
-   *  workspace root (main) or under its context folder (`ctx:*`). */
+  private get activeContextId(): string {
+    return this.deps.activeContextId ?? VCS_ACTIVE_CONTEXT_ID;
+  }
+
+  /**
+   * Working-tree dir for a (repoPath, head). ONLY `ctx:*` heads have a checkout:
+   * the ACTIVE context's subtree lives under the workspace root, every other
+   * context under its `{contextsRoot}/{contextId}` folder. `main` is a pure ref
+   * with no working tree (D1) — asking for its dir is a programming error.
+   *
+   * Single-context sync rule (D2): the workspace root is the active context's
+   * ONE checkout, fed by two channels — DO working rows (`vcs.edit`) and the
+   * disk scan. The DO working state is authoritative; {@link project} keeps this
+   * checkout in sync with it; a scan (`snapshotDir`/`worktree.scan`) diffs disk
+   * against the last projected state (the `.gad` sidecar baseline) so it adopts
+   * only genuine EXTERNAL drift and never misreads an un-projected DO edit as a
+   * deletion. Callers must therefore project after every `vcs.edit` before a
+   * subsequent scan.
+   */
   dirForRepoHead(repoPath: string | undefined, head: string): string {
-    const base =
-      head === VCS_MAIN_HEAD
+    const base = head.startsWith("ctx:")
+      ? contextIdFromVcsHead(head) === this.activeContextId
         ? this.deps.workspaceRoot
-        : head.startsWith("ctx:")
-          ? this.contextDir(contextIdFromVcsHead(head))
-          : (() => {
-              throw new Error(`No working tree for head: ${head}`);
-            })();
+        : this.contextDir(contextIdFromVcsHead(head))
+      : (() => {
+          throw new Error(
+            `No working tree for head: ${head} (main is a pure ref; only ctx:* heads have checkouts)`
+          );
+        })();
     return repoPath ? path.join(base, ...normalizeRepoPathForLog(repoPath).split("/")) : base;
   }
 
@@ -130,9 +154,13 @@ export class DiskProjector {
     await run;
   }
 
-  /** Remove a repo's projection under the workspace root (repo deletion). */
+  /** Remove a repo's projection from the workspace root — the ACTIVE context's
+   *  checkout (repo deletion drops the subtree from the live workspace tree). */
   async removeRepo(repoPath: string): Promise<void> {
-    await fsp.rm(this.dirForRepoHead(repoPath, VCS_MAIN_HEAD), { recursive: true, force: true });
+    await fsp.rm(this.dirForRepoHead(repoPath, `ctx:${this.activeContextId}`), {
+      recursive: true,
+      force: true,
+    });
   }
 
   /**

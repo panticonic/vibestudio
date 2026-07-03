@@ -154,9 +154,9 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       return originalCall<T>(method, input);
     };
 
-    await expect(vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })).rejects.toThrow(
-      /archive unavailable/
-    );
+    await expect(
+      vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
+    ).rejects.toThrow(/archive unavailable/);
 
     expect(refs.readMain("packages/foo")?.stateHash).toBe(before!.stateHash);
     expect(await worktreeHead("packages/foo", VCS_MAIN_HEAD)).not.toBeNull();
@@ -169,22 +169,18 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   it("removes the repo's main on delete (retaining a delete log entry) and re-adopts it on restore", async () => {
     // Bootstrap seeded the repo's main into the protected-ref store.
     expect(refs.readMain("packages/foo")).toMatchObject({
-      seq: 1,
       stateHash: expect.stringMatching(/^state:/),
     });
 
     await vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
 
-    // The main is removed, but the movement log is RETAINED with a nullable
-    // delete entry (new: null) — the restore-classification source (§2.1).
+    // The main ref is REMOVED (a null-next CAS). The host keeps no movement log
+    // (Phase 5: semantics-free CAS); delete/restore classification is DO-owned.
     expect(refs.readMain("packages/foo")).toBeNull();
-    const log = refs.readMainLog({ repoPath: "packages/foo" });
-    expect(log[log.length - 1]).toMatchObject({ new: null, operation: "delete" });
     // Other repos' mains are untouched.
     expect(refs.readMain("packages/bar")).not.toBeNull();
 
-    // Restore re-adopts the archived head; seq keeps increasing across the
-    // retained history (delete then re-create).
+    // Restore re-adopts the archived head onto a freshly re-created main ref.
     await vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
     const restored = refs.readMain("packages/foo");
     expect(restored?.stateHash).toBe(await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo"));
@@ -224,9 +220,9 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       vcs.deleteRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
     ).rejects.toThrow(/denied by user/);
 
-    // The gate saw exactly one delete-shaped entry (next: null) for the target.
+    // The gate saw exactly one delete-shaped entry (next: null) for the target —
+    // the removal is classified from the CAS shape, not an operation label.
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.operation).toBe("delete");
     expect(seen[0]!.entries).toEqual([
       expect.objectContaining({ repoPath: "packages/foo", next: null }),
     ]);
@@ -237,10 +233,12 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   });
 
   it("refuses to delete the meta repo and unknown repos", async () => {
-    await expect(vcs.deleteRepo({ repoPath: "meta", actor: USER, caller: CALLER })).rejects.toThrow(/meta/);
-    await expect(vcs.deleteRepo({ repoPath: "packages/ghost", actor: USER, caller: CALLER })).rejects.toThrow(
-      /no committed `main`/
+    await expect(vcs.deleteRepo({ repoPath: "meta", actor: USER, caller: CALLER })).rejects.toThrow(
+      /meta/
     );
+    await expect(
+      vcs.deleteRepo({ repoPath: "packages/ghost", actor: USER, caller: CALLER })
+    ).rejects.toThrow(/no committed `main`/);
   });
 
   it("refuses to resurrect a deleted repo via a stale context's push", async () => {
@@ -315,9 +313,9 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     );
     await vcs.ensureRepoLogsFromDisk();
 
-    await expect(vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })).rejects.toThrow(
-      /already occupies that path/
-    );
+    await expect(
+      vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
+    ).rejects.toThrow(/already occupies that path/);
     // The occupant is untouched.
     const view = await vcs.workspaceView();
     expect((await vcs.readFile(view.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({
@@ -329,9 +327,9 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
   it("fails to restore a path with no archived history", async () => {
     // A path that never existed: no live main (passes the occupancy guard) and
     // nothing archived to recover.
-    await expect(vcs.restoreRepo({ repoPath: "packages/ghost", actor: USER, caller: CALLER })).rejects.toThrow(
-      /no archived history/
-    );
+    await expect(
+      vcs.restoreRepo({ repoPath: "packages/ghost", actor: USER, caller: CALLER })
+    ).rejects.toThrow(/no archived history/);
   });
 
   it("classifies the restore at the ref gate and aborts on denial", async () => {
@@ -346,13 +344,13 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     await expect(
       vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER })
     ).rejects.toThrow(/restore denied/);
-    // The gate saw a restore-shaped entry: null old on a previously-deleted repo.
+    // The gate saw a restore-shaped entry: null old (a new ref) with a non-null
+    // next on a previously-deleted repo. Restore classification is DO-owned; the
+    // host CAS only sees the null-old create shape.
     expect(seen).toHaveLength(1);
-    expect(seen[0]!.operation).toBe("restore");
     expect(seen[0]!.entries[0]).toMatchObject({
       repoPath: "packages/foo",
       old: null,
-      priorDeleted: true,
     });
     // Still deleted — the denial left nothing half-restored.
     expect(await repoPaths()).not.toContain("packages/foo");
@@ -416,7 +414,11 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
       expect(gc.liveBlobDigests).toContain(f.content_hash);
     }
     // And it stays restorable after a mark pass.
-    const restored = await vcs.restoreRepo({ repoPath: "packages/foo", actor: USER, caller: CALLER });
+    const restored = await vcs.restoreRepo({
+      repoPath: "packages/foo",
+      actor: USER,
+      caller: CALLER,
+    });
     expect(restored.restored).toBe(true);
     const view = await vcs.workspaceView();
     expect((await vcs.readFile(view.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({

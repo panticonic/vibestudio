@@ -34,11 +34,7 @@ import {
   resolveTreePath,
   type TreeDiff,
 } from "../services/blobstoreService.js";
-import {
-  isRefConflictError,
-  type RefService,
-  type MainsUpdatedEvent,
-} from "../services/refService.js";
+import { isRefConflictError, type RefService, type RefChange } from "../services/refService.js";
 import { writeJsonFileAtomic } from "../services/atomicFile.js";
 import type { RefAdvanceGateContext } from "../services/mainAdvanceApproval.js";
 import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
@@ -59,6 +55,8 @@ import {
 import { CONTAINER_SECTIONS, FLAT_SECTIONS } from "@vibez1/shared/runtime/entitySpec";
 import {
   VCS_MAIN_HEAD,
+  VCS_ACTIVE_CONTEXT_ID,
+  VCS_ACTIVE_CONTEXT_HEAD,
   VCS_ARCHIVE_HEAD_PREFIX,
   VCS_REPO_LOG_PREFIX,
   contextIdFromVcsHead,
@@ -117,17 +115,6 @@ const BUILDS_LOG_ID = "builds:workspace";
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const USER_ACTOR = { id: "user", kind: "user" } as const;
 
-/** Parse a `kind:id` ref-log principal label (writer / onBehalfOf) into a
- *  state-advanced actor. The label is display metadata only (the id may itself
- *  contain colons — split on the first). Returns null for an empty label. */
-function participantFromLabel(
-  label: string | null | undefined
-): { id: string; kind: string } | null {
-  if (!label) return null;
-  const idx = label.indexOf(":");
-  if (idx < 0) return { kind: "unknown", id: label };
-  return { kind: label.slice(0, idx), id: label.slice(idx + 1) };
-}
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 /** Bounded in-line retry backoff for a direct `main` provenance recording. On
  *  exhaustion the record gives up and the next explicit provenance
@@ -422,12 +409,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       worktrees: this.worktrees,
       workspaceRoot: deps.workspaceRoot,
       contextsRoot: deps.contextsRoot,
+      // D2: the workspace root is the ACTIVE context's checkout, not `main`.
+      activeContextId: VCS_ACTIVE_CONTEXT_ID,
     });
     // Register the SINGLE post-advance reaction on the shared protected-ref
     // store (narrow-host P3): every successful updateMains — the in-process host
     // push path AND the DO's refs.updateMains RPC — projects + drives the build
     // trigger from HERE, exactly once. No operation path re-does these effects.
-    this.deps.refs.setOnMainsUpdated((event) => this.onMainsUpdated(event));
+    this.deps.refs.onRefsChanged((changes) => this.onMainsUpdated(changes));
   }
 
   /**
@@ -442,7 +431,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * events now carry null commit identity. Best-effort per repo: a projection
    * failure is logged and never fails the already-committed advance.
    */
-  private async onMainsUpdated(event: MainsUpdatedEvent): Promise<void> {
+  private async onMainsUpdated(changes: RefChange[]): Promise<void> {
     if (!this.attached) return;
     let workspaceStateHash: string | undefined;
     try {
@@ -450,18 +439,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     } catch {
       workspaceStateHash = undefined;
     }
-    const actor = participantFromLabel(event.onBehalfOf ?? event.writer);
-    // Record the transition kind that matches the batch's operation: a
-    // main-target merge (refs.updateMains operation:"merge") is a MERGE
-    // transition, not a snapshot; push/import/delete/restore keep snapshot
-    // semantics (a plain state replacement from the consumer's view).
-    const transitionKind: StateAdvancedEvent["transitionKind"] =
-      event.operation === "merge" ? "merge" : "snapshot";
-    for (const move of event.entries) {
-      const repoPath = normalizeRepoPathForLog(move.repoPath);
+    // `main` is a pure ref (D1): a main advance is always a plain state
+    // replacement from the consumer's view. Operation classification (the old
+    // `operation → transitionKind` shard) is DO-owned semantics the host no
+    // longer inspects — every main advance is a snapshot transition here.
+    // Provenance/attribution (writer/onBehalfOf) also moved to the DO; the dumb
+    // `onRefsChanged` signal carries no principal, so the host emits a neutral
+    // (null) actor and the DO owns advance attribution.
+    const transitionKind: StateAdvancedEvent["transitionKind"] = "snapshot";
+    for (const change of changes) {
+      const repoPath = normalizeRepoPathForLog(change.repoPath);
       const logId = logIdForRepo(repoPath);
+      const sk = this.stateKey(logId, VCS_MAIN_HEAD);
+      // The dumb signal carries only the NEW value; recover the prior state from
+      // the local cache (updated below) so the emitted diff is precise. Absent
+      // (cold cache) ⇒ null, which stateAdvancedEvent treats as an all-added diff.
+      const previousStateHash = this.lastState.get(sk) ?? null;
       try {
-        if (move.newState === null) {
+        if (change.stateHash === null) {
           // Delete: the repo left the workspace. This reaction is THE
           // exactly-once host effect for a committed deletion (narrow-host P4):
           // drop the state cache, remove the on-disk projection, and emit a
@@ -469,15 +464,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           // build trigger / tree scanner re-discover without it. The gad-owned
           // archive of the store lineage happens in the deleteRepo lifecycle
           // AFTER this ref delete; disk/build effects never wait on it.
-          this.lastState.delete(this.stateKey(logId, VCS_MAIN_HEAD));
+          this.lastState.delete(sk);
           await this.projector.removeRepo(repoPath);
           const removalEvent = await this.stateAdvancedEvent({
             head: VCS_MAIN_HEAD,
-            previousStateHash: move.oldState,
+            previousStateHash,
             stateHash: EMPTY_STATE_HASH,
             eventId: null,
             headHash: null,
-            actor,
+            actor: null,
             transitionKind,
             repoPath,
             ...(workspaceStateHash ? { workspaceStateHash } : {}),
@@ -485,20 +480,19 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           this.emitter.emit("state-advanced", removalEvent);
           continue;
         }
-        this.lastState.set(this.stateKey(logId, VCS_MAIN_HEAD), move.newState);
-        await this.projector.project({
-          repoPath,
-          head: VCS_MAIN_HEAD,
-          stateHash: move.newState,
-          bestEffort: true,
-        });
+        this.lastState.set(sk, change.stateHash);
+        // D1: `main` has NO on-disk checkout — do not project it. The workspace
+        // root is the ACTIVE context's checkout, kept in sync through the ctx
+        // edit/commit/scan paths (not from main advances). We still emit the
+        // build-driving `state-advanced` event so a push (main advance) promotes
+        // the recorded EV baseline reactively via the build trigger.
         const advanceEvent = await this.stateAdvancedEvent({
           head: VCS_MAIN_HEAD,
-          previousStateHash: move.oldState,
-          stateHash: move.newState,
+          previousStateHash,
+          stateHash: change.stateHash,
           eventId: null,
           headHash: null,
-          actor,
+          actor: null,
           transitionKind,
           repoPath,
           ...(workspaceStateHash ? { workspaceStateHash } : {}),
@@ -732,10 +726,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private durableMainRecordLanded(record: DurableMainRecord): boolean {
+    // PHASE-3-OWNED (host main-provenance reconciliation, slated for deletion in
+    // narrow-host-boundary-refactor Phase 3). The host main-ref LOG was removed
+    // in Phase 5 (`refService` is a semantics-free CAS with no movement log), so
+    // "did this transition land?" can no longer consult a per-repo log. Minimal
+    // compile-restoring stub: a durable record's transition is considered landed
+    // iff the protected ref now holds the record's `next` value (the CAS target).
+    // This whole durable-record replay path only ever sees records created by the
+    // freshness→main scan, which Phase 2 retargeted off `main`, so no NEW records
+    // are produced in production; the stub keeps the dormant replay compiling
+    // until Phase 3 deletes it wholesale.
     const repoPath = normalizeRepoPathForLog(record.repoPath);
-    return this.deps.refs
-      .readMainLog({ repoPath })
-      .some((entry) => entry.old === record.prev && entry.new === record.next);
+    return this.mainRefState(repoPath) === record.next;
   }
 
   private async replayDurableMainRecords(repoPath?: string): Promise<void> {
@@ -874,9 +876,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           next: input.next,
         },
       ],
-      operation: "push",
-      reason: input.reason,
-      writer: `${input.actor.kind}:${input.actor.id}`,
       gateContext: input.context,
     });
   }
@@ -896,10 +895,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           next: input.next,
         },
       ],
-      operation:
-        input.next === null ? "delete" : input.expectedCurrent === null ? "restore" : "push",
-      reason: `compensate: ${input.reason}`,
-      writer: `${input.actor.kind}:${input.actor.id}`,
       gateContext: SYSTEM_ADVANCE,
     });
   }
@@ -951,6 +946,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * refresh) and NOTHING ELSE — no commit, no ref advance, no gad-log append, no
    * DO round trip. The gad-store DO drives it to capture external disk drift and
    * owns every VCS decision made from the result.
+   *
+   * Single-context sync rule (D2): for the active context head this resolves to
+   * the workspace root — the context's ONE checkout. `updateSidecar` refreshes
+   * the `.gad` baseline against which the NEXT scan diffs, so the scan reports
+   * only genuine external drift. Un-projected DO working edits must be projected
+   * to disk BEFORE a scan (the DO working state is authoritative); otherwise the
+   * scan would read stale disk and misattribute the projected-but-not-yet-written
+   * edits as deletions.
    */
   async scanWorktree(
     repoPath: string,
@@ -1084,6 +1087,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /**
+   * REMAINING UNGATED disk→main door (narrow-host boundary refactor P2). This
+   * scans the workspace-root disk (now the active context's checkout) and
+   * advances the protected `main` ref ungated (SYSTEM_ADVANCE). It is NO LONGER
+   * reachable from the freshness path — `snapshotRepoLogsFromDisk`/`ensureFresh`
+   * now adopt disk drift into the ACTIVE context head, not `main`. It survives
+   * ONLY as a bootstrap/import adoption door (`commitHead(VCS_MAIN_HEAD, …)`),
+   * and the whole host main-provenance/`advanceMainRef` suite it drives is
+   * slated for deletion in P3. Do not re-route ordinary edits/scans through it.
+   *
    * Snapshot the `main` working tree through the protected-ref path — the
    * DO-FREE build/freshness commit (P5a): PREPARE the candidate locally
    * (scan + shared-implementation hash + eager content-store mirror, zero DO
@@ -1192,7 +1204,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   > {
     const sk = this.stateKey(logId, VCS_MAIN_HEAD);
     return this.locked(sk, async () => {
-      const dir = this.dirForRepoHead(repoPath, VCS_MAIN_HEAD);
+      // The workspace-root disk (now the active context's checkout, D1) is the
+      // source for this bootstrap/import-only main seed.
+      const dir = this.dirForRepoHead(repoPath, VCS_ACTIVE_CONTEXT_HEAD);
       const prev = this.mainRefState(repoPath);
 
       // Missing working dir: a no-op against the ref (sparse/unmaterialized —
@@ -1292,8 +1306,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       this.lastState.set(VCS_MAIN_HEAD, local.stateHash);
       return { stateHash: local.stateHash };
     }
+    // D2: freshness adopts out-of-band disk drift into the ACTIVE context
+    // (working edits on its `ctx:*` heads via the ungated ctx path), NOT an
+    // ungated `main` advance. The fresh state consumers build against is the
+    // active context's composed view (the live union of repo mains overlaid
+    // with this context's working edits), not the plain `main` union.
     await this.snapshotRepoLogsFromDisk();
-    return await this.workspaceView();
+    return { stateHash: await this.resolveContextView(VCS_ACTIVE_CONTEXT_ID) };
   }
 
   /**
@@ -1979,9 +1998,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
     }
 
+    // D1/D2: `main` has no checkout — project the fork onto the ACTIVE context's
+    // working tree (the workspace root) so the new repo appears on disk. (main is
+    // a pure ref; `dirForRepoHead(main)` throws even under bestEffort, since the
+    // dir resolves before materialize.)
     await this.projector.project({
       repoPath: to,
-      head: VCS_MAIN_HEAD,
+      head: VCS_ACTIVE_CONTEXT_HEAD,
       stateHash,
       bestEffort: true,
     });
@@ -2132,7 +2155,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       caller: input.mainAdvance.caller,
       via,
       method: "vcsMerge",
-      operation: "merge",
     });
     try {
       return await call(invocation.token);
@@ -2437,6 +2459,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         changedPaths: [],
       };
     }
+    // Single-context sync rule (D2): the DO working state is authoritative, so
+    // project it to disk immediately. For the active context this writes the
+    // workspace root; a subsequent freshness scan then diffs disk against this
+    // just-projected baseline and sees no drift, so it never misreads this DO
+    // edit as an external change (or, worse, a deletion).
     await this.projector.project({
       repoPath,
       head,
@@ -3005,10 +3032,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // onMainsUpdated, fired by this updateMains before the archive runs.
       await this.deps.refs.updateMains({
         entries: [{ repoPath, expectedOld: repoMainState, next: null }],
-        operation: "delete",
-        reason: `delete repo ${repoPath}`,
-        writer: `${input.actor.kind}:${input.actor.id}`,
-        gateContext: { kind: "caller", caller: input.caller, operation: "push" },
+        gateContext: { kind: "caller", caller: input.caller },
       });
 
       let archive: { archived: boolean; archiveHead: string | null };
@@ -3126,10 +3150,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // onMainsUpdated, fired by this updateMains.
       await this.deps.refs.updateMains({
         entries: [{ repoPath, expectedOld: null, next: newest.stateHash }],
-        operation: "restore",
-        reason: `restore repo ${repoPath}`,
-        writer: `${input.actor.kind}:${input.actor.id}`,
-        gateContext: { kind: "caller", caller: input.caller, operation: "push" },
+        gateContext: { kind: "caller", caller: input.caller },
       });
 
       let restore: { restored: boolean; archiveHead: string | null };
@@ -3246,7 +3267,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         await this.deps.refs.seedMain({ repoPath, value: existing });
         continue;
       }
-      const dir = this.dirForRepoHead(repoPath, VCS_MAIN_HEAD);
+      // BOOTSTRAP/ADOPTION DOOR (the one remaining disk→main seed): read the
+      // repo subtree from the workspace root — which is now the ACTIVE context's
+      // checkout (D1: `main` has no dir of its own) — and seed the repo's `main`
+      // log + protected ref from it. This is a set-if-absent bootstrap, not the
+      // freshness path (freshness adopts into the active context, above); it
+      // runs only for repos with no `main` yet.
+      const dir = this.dirForRepoHead(repoPath, VCS_ACTIVE_CONTEXT_HEAD);
       const snap = await this.locked(this.stateKey(logId, VCS_MAIN_HEAD), () =>
         this.worktrees.snapshotDir(dir, {
           head: VCS_MAIN_HEAD,
@@ -3262,10 +3289,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /**
-   * Snapshot every present on-disk repo subtree onto that repo's `main` log.
-   * Unlike {@link ensureRepoLogsFromDisk}, this does not skip repos that already
-   * have `main`, so it captures out-of-band disk mutations such as Git import
-   * config writes in `meta/vibez1.yml`.
+   * Snapshot every present on-disk repo subtree onto the ACTIVE context's
+   * `ctx:*` head (D2). The workspace root IS that context's checkout, so this
+   * is the freshness-adopt of out-of-band disk drift: it captures external
+   * edits (direct edits, `git pull`, import config writes in `meta/vibez1.yml`)
+   * as WORKING edits on the active context — never an ungated `main` advance.
+   *
+   * Routes through {@link commitHead}'s ctx branch: it snapshots directly onto
+   * the gad log with NO protected-ref CAS and NO approval gate, preserving the
+   * `.gad` sidecar (size/mtime) fast path (`snapshotDir` reads + refreshes it),
+   * so a clean workspace scan re-produces the ctx head's last projected state
+   * and is a cheap no-op (single-context sync rule — projected DO edits are not
+   * re-adopted).
    */
   async snapshotRepoLogsFromDisk(
     opts: {
@@ -3275,7 +3310,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ): Promise<void> {
     if (!this.attached) return;
     for (const repo of await this.discoverReposFromDisk()) {
-      await this.commitHead(VCS_MAIN_HEAD, {
+      await this.commitHead(VCS_ACTIVE_CONTEXT_HEAD, {
         summary: opts.summary ?? "workspace scan",
         actor: opts.actor ?? SYSTEM_ACTOR,
         repoPath: repo.repoPath,

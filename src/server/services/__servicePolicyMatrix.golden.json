@@ -253,7 +253,6 @@
     "methods": {
       "listMains": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "readMain": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-      "readMainLog": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "updateMains": ["do"]
     }
   },
@@ -438,6 +437,12 @@
       "slot.setParent": ["app", "server", "shell"],
       "slot.setPosition": ["app", "server", "shell"],
       "slot.updateCurrentStateArgs": ["app", "server", "shell"]
+    }
+  },
+  "worktree": {
+    "service": ["do", "server", "shell"],
+    "methods": {
+      "scan": ["do", "server", "shell"]
     }
   }
 }
