@@ -974,12 +974,19 @@ until all of them are:
   moments.
 - **Instrumentation** — the four behavioral counters (§12) land with the bang:
   they are how we find out which behavioral bet is failing.
+- **Tuning skill** — the workspace skill that operationalizes §12's tuning:
+  an agent surveys the stored trajectories (counters, tier distribution,
+  attachment→action traces) and proposes knob changes for human sign-off.
+  The skill document ships with the bang; the first tuning run happens once
+  the bang has produced real logs.
 
 Tuning (§12) happens after the bang, on the logs the bang produces — decay λ,
 caps `K`/`M`/`N`, kind weights, `w_sim`/`w_prov`, `observed`/`cited` weights
 and the `hits` curve, the salience-floor threshold, density buckets,
 `PROV_BUDGET_MS`, warm-set heuristic; materialize degree/affinity only if
-profiling demands.
+profiling demands. It is not ad-hoc: the **tuning skill** (§12.1) is the
+procedure, run periodically by an agent with a human signing off on every
+knob change.
 
 ## 12. Resolved decisions & remaining knobs
 
@@ -1079,7 +1086,41 @@ attachment is being read or skimmed. If it sags while attachments are being
 rendered, the salience floor is too low; raise it before touching anything
 else.
 
-## 13. Prompting the agent
+### 12.1 The tuning skill: agent-surveyed, human-approved
+
+Tuning is a recurring procedure, not a one-off calibration — so it ships as
+a **workspace skill** an agent runs against the stored trajectories, with a
+human in the loop on every change:
+
+1. **Survey.** Read the behavioral counters, then go past them into the
+   trajectories themselves: sample real read moments and trace what the
+   agent did next — did a rendered item get cited, deepened, or edited-near
+   (the action rate, per item kind and rank position)? Which tier was chosen
+   in which situation, and did `deep` ever surface something `moderate`
+   missed? Which suppressed blocks were followed by a `provenance()` call
+   (suppression too aggressive) and which rendered blocks were followed by
+   nothing, ever (floor too low)? Where did recall return a claim the agent
+   plainly needed but ranked below the fold?
+2. **Diagnose against the named bets.** Each §12 knob exists to serve a
+   stated behavioral bet (§7); the skill maps each observed failure to the
+   knob that owns it — action rate sagging → salience floor first (per the
+   KPI rule above), tier collapsed to a constant → prompt pressure before
+   any default, exploration sweeps flooding density → the sweep-damping
+   knob — and explicitly resists tuning knobs whose counters look healthy.
+3. **Propose, never apply.** The output is a proposal: current value, new
+   value, the trajectory evidence (with handles), the expected counter
+   movement, and a rollback trigger. A human approves or rejects each item;
+   nothing self-applies.
+4. **Record the decision as claims.** Approved changes are recorded through
+   the ordinary claim path (`record_claim` + `relate_claims`, anchored to
+   the tuning trajectory) — the tuning history becomes durable memory in the
+   same ledger the system serves, and the next tuning run starts by
+   recalling the last one's reasoning.
+
+The skill document lands with the bang (§11) so the procedure is defined
+before the first data exists; the first run waits for real logs. Cadence is
+judgment — after the first week of real use, then when counters drift or the
+substrate changes, not on a timer.
 
 The machinery pays off only if the agent acts on the block and feeds the
 memory. The prompt is short on exhortation and long on concrete triggers —
