@@ -23,7 +23,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
@@ -586,11 +585,9 @@ async function main() {
     children.push(signalingChild);
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // 2. The disposable server, as a WebRTC answerer. We pick the room + pairing
-    //    code; the server presents its persistent DTLS cert and logs the
-    //    vibez1://connect link whose `fp` pins that cert.
-    const room = randomUUID();
-    const pairingCode = randomBytes(18).toString("base64url");
+    // 2. The disposable server, as a WebRTC answerer. The server mints the
+    //    per-invite room + pairing code itself and logs the vibez1://connect
+    //    link whose `fp` pins its persistent DTLS cert.
     const serverArgs = createServerArgs(options.readyFile);
     const serverInvocation = createServerInvocation(serverArgs);
     const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
@@ -604,8 +601,6 @@ async function main() {
         // workspace server. The hub→workspace remote-selection flow is separate.
         VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
         VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
-        VIBEZ1_WEBRTC_ROOM: room,
-        VIBEZ1_PAIRING_CODE: pairingCode,
       },
       label: "server",
     });

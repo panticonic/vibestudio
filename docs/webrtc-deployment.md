@@ -58,11 +58,12 @@ loopback co-located mode is unchanged):
 
 ```bash
 VIBEZ1_WEBRTC_SIGNAL_URL=wss://vibez1-signaling.<account>.workers.dev \
-VIBEZ1_WEBRTC_ROOM=$(uuidgen) \
-VIBEZ1_PAIRING_CODE=$(openssl rand -base64 18 | tr -d '=+/' | head -c 24) \
   vibez1-server --serve-panels --print-credentials
-# logs:  [webrtc-answerer] pairing link: vibez1://connect?room=…&fp=…&code=…&sig=…
+# logs:  Pairing link: vibez1://connect?room=…&fp=…&code=…&sig=…&v=2
 ```
+
+The server mints the per-invite signaling room and pairing code itself (one
+fresh room per invite; paired devices keep their own rooms).
 
 - The server presents a **persistent DTLS cert** at `<appRoot>/.vibez1/webrtc/server.{pem,key}`
   (override with `VIBEZ1_WEBRTC_CERT`/`VIBEZ1_WEBRTC_KEY`). Its SHA-256 is the
@@ -76,8 +77,8 @@ once with `pnpm rebuild node-datachannel`.
 
 ## 4. Pair a client
 
-Scan/open the printed `vibez1://connect?…` link from the desktop bootstrap
-chooser, the mobile app, or the CLI. The client redeems the one-time `code` over
+Scan/open the printed `vibez1://connect?…` link from the desktop chooser, the
+mobile app, or the CLI. The client redeems the one-time `code` over
 the pipe, receives a durable device credential, and persists it (encrypted) for
 reconnects — see [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) for the
 protocol and [webrtc-local-e2e.md](./webrtc-local-e2e.md) for a fully local

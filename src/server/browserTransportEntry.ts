@@ -46,14 +46,11 @@ function isRuntimeEventMessage(message: unknown): message is RuntimeEventMessage
 // back to the panel's logical session. This early listener applies them before
 // the panel bundle's runtime takes over; applyStateArgsSnapshot is idempotent.
 
-const shell = ((
+const shell = (
   globalThis as typeof globalThis & {
     __vibez1Shell?: ShellEnvelopeBridge;
-    __vibez1Electron?: ShellEnvelopeBridge;
   }
-).__vibez1Shell ??
-  (globalThis as typeof globalThis & { __vibez1Electron?: ShellEnvelopeBridge })
-    .__vibez1Electron) as ShellEnvelopeBridge | undefined;
+).__vibez1Shell as ShellEnvelopeBridge | undefined;
 
 shell?.onEnvelope?.((envelope) => {
   const message = envelope.message;

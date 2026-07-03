@@ -1,0 +1,67 @@
+import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
+import type { RpcClient } from "@vibez1/rpc";
+import { RemoteCdpHostBridgeSocket } from "./remoteCdpHostBridgeSocket.js";
+
+function once<T>(
+  target: { once(event: string, listener: (value: T) => void): unknown },
+  event: string
+) {
+  return new Promise<T>((resolve) => target.once(event, resolve));
+}
+
+describe("RemoteCdpHostBridgeSocket", () => {
+  it("opens a panelCdp provider stream and forwards frames in both directions", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const streamResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        start(nextController) {
+          controller = nextController;
+        },
+      })
+    );
+    const rpc = {
+      stream: vi.fn(async () => streamResponse),
+      call: vi.fn(async () => undefined),
+    } as unknown as Pick<RpcClient, "call" | "stream"> & {
+      stream: ReturnType<typeof vi.fn>;
+      call: ReturnType<typeof vi.fn>;
+    };
+
+    const socket = new RemoteCdpHostBridgeSocket({
+      rpc,
+      hostConnectionId: "headless-host",
+      sessionId: "provider-session",
+    });
+
+    await once<unknown>(socket, "open");
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    expect(rpc.stream).toHaveBeenCalledWith("main", "panelCdp.hostProvider.open", [
+      "provider-session",
+      "headless-host",
+    ]);
+
+    const messagePromise = once<string>(socket, "message");
+    controller.enqueue(
+      new TextEncoder().encode(
+        `${JSON.stringify(JSON.stringify({ type: "vibez1:cdp-auth-ok" }))}\n`
+      )
+    );
+    await expect(messagePromise).resolves.toBe(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+
+    const outbound = JSON.stringify({ type: "cdp:register", targetId: "panel-1", tabId: 1 });
+    socket.send(outbound);
+    await vi.waitFor(() => {
+      expect(rpc.call).toHaveBeenCalledWith("main", "panelCdp.hostProvider.send", [
+        "provider-session",
+        outbound,
+      ]);
+    });
+
+    socket.close();
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(rpc.call).toHaveBeenCalledWith("main", "panelCdp.hostProvider.close", [
+      "provider-session",
+    ]);
+  });
+});

@@ -1,5 +1,7 @@
 # WebRTC RPC Transport — Implementation Log
 
+> **Superseded:** this is the v1 implementation log; the transport was redesigned and rebuilt — see [webrtc-rpc-v2-plan.md](./webrtc-rpc-v2-plan.md).
+
 Tracks the build of the plan in `docs/webrtc-rpc-transport.md`. This is a
 **big-bang cutover with zero backward-compat** (delete-and-replace, never shim).
 Because the change is tightly coupled across the RPC core, the live server, the
@@ -10,18 +12,19 @@ until it lands — that is the nature of a multi-day cutover, not a regression).
 
 ## Status at a glance
 
-| Workstream | State |
-| --- | --- |
-| **A — Transport core** (`packages/rpc`) | ✅ **Done + tested** (client + server), type-clean |
-| **B — Pairing link** (`connect.ts`) | ✅ **Done + tested** (grammar + `isLoopbackHost`) |
-| **B — Signaling DO** (`apps/signaling`) | ✅ Built + tested (DO 7, client 7) — verify deploy/TURN |
-| **E — Callback relay** (`apps/webhook-relay`) | ✅ Rebuilt + tested (registry 13, index 8) — server repoint remains |
-| **C — Native adapter** (`node-datachannel`) | ✅ Adapter + cert + packaging deps wired (32 tests); RN linking documented |
-| **A-server wiring** into `rpcServer.ts` | ✅ `attachWebRtcPipe` + `SessionWebSocketShim` (10 tests) — reuses all per-connection machinery |
+| Workstream                                    | State                                                                                           |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| **A — Transport core** (`packages/rpc`)       | ✅ **Done + tested** (client + server), type-clean                                              |
+| **B — Pairing link** (`connect.ts`)           | ✅ **Done + tested** (grammar + `isLoopbackHost`)                                               |
+| **B — Signaling DO** (`apps/signaling`)       | ✅ Built + tested (DO 7, client 7) — verify deploy/TURN                                         |
+| **E — Callback relay** (`apps/webhook-relay`) | ✅ Rebuilt + tested (registry 13, index 8) — server repoint remains                             |
+| **C — Native adapter** (`node-datachannel`)   | ✅ Adapter + cert + packaging deps wired (32 tests); RN linking documented                      |
+| **A-server wiring** into `rpcServer.ts`       | ✅ `attachWebRtcPipe` + `SessionWebSocketShim` (10 tests) — reuses all per-connection machinery |
 
 Total: **150 tests + 1 todo green** across the new surface; all new files `tsc`-clean.
 The only `tsc` errors (20) are the F-scope `connect.ts` callers in §4 below. Open
 issues flagged by the parallel build (verify before production):
+
 - **TURN API unverified** — `apps/signaling/src/turn.ts` Cloudflare Realtime TURN
   call is from docs, not a live key; STUN-only baseline, fails loud if TURN is
   provisioned but minting breaks. Confirm endpoint/response shape.
@@ -34,12 +37,12 @@ issues flagged by the parallel build (verify before production):
 - **Relay backhaul auth + OAuth tx-store** — the shared signing secret gates access
   but not subscription ownership; the in-memory OAuth tx map needs DO-storage
   durability against hibernation eviction.
-| **D — Loopback origin + shell-bridge panel RPC** | ◻ **Remaining** |
-| **F — Decommission** (TLS-pin / Tailscale / public-URL) | ◻ **Remaining** |
+  | **D — Loopback origin + shell-bridge panel RPC** | ◻ **Remaining** |
+  | **F — Decommission** (TLS-pin / Tailscale / public-URL) | ◻ **Remaining** |
 
 ## What is built and tested (Workstream A — `packages/rpc`)
 
-The entire transport protocol layer is implemented and green (36 new tests).
+The transport protocol layer is implemented and covered by focused unit tests.
 
 - **`protocol/streamCodec.ts`** — binary stream codec **v2**. Adds a 4-byte
   `streamId` (`[streamId:4][type:1][len:4][payload]`) so many concurrent streams
@@ -68,11 +71,11 @@ The entire transport protocol layer is implemented and green (36 new tests).
   is an `EnvelopeRpcTransport`, so `createRpcClient` is unchanged. Tests:
   `webrtcClient.test.ts` (7, incl. the **fingerprint-mismatch negative test**),
   driven by an in-memory fake fabric (no native module).
-- **`transports/transportManager.ts`** — the thin single-transport lifecycle
-  owner that REPLACES `composeTransports` (deleted; zero importers). Drives a
-  `DefaultRecoveryCoordinator` from the transport's recovery signal. No second
-  transport stacked as a backstop (fail-loud rule). Tests:
-  `transportManager.test.ts` (3).
+- **`transports/pairedConnection.ts`** — the shared desktop/mobile/CLI bootstrap
+  for dialing a paired server. It owns connect timeout, close-on-failure,
+  authenticated main-session setup, pairing credential persistence, and recovery
+  fan-out. No second transport is stacked as a backstop (fail-loud rule). Tests:
+  `pairedConnection.test.ts`.
 - **`src/server/webrtcSessionShim.ts` + `RpcServer.attachWebRtcPipe`** — the
   **per-logical-session SERVER adapter**. Each WebRTC `open` frame stands up a
   `SessionWebSocketShim`, then drives the existing `handleConnection`/`handleAuth`
@@ -102,6 +105,7 @@ rewrite, which is entangled with the Tailscale CLI deletion in §8a).
 This is the work that makes the repo build green end-to-end. Ordered:
 
 ### 1. Wire WebRTC sessions into `src/server/rpcServer.ts`
+
 - Done through `RpcServer.attachWebRtcPipe`: each logical WebRTC session gets a
   `SessionWebSocketShim` that feeds the existing per-connection server machinery.
   The deleted `serverSessionTransport` parallel implementation is intentionally
@@ -114,6 +118,7 @@ This is the work that makes the repo build green end-to-end. Ordered:
   `wsServerTransport.test.ts` assertions per session.
 
 ### 2. Workstream D — loopback origin + shell-bridge panel RPC
+
 - Repoint `workspace/packages/runtime/src/panel/transport.ts:createPanelTransport`
   so ALL non-electron-local RPC rides the **shell bridge** (`__vibez1Shell`)
   instead of `globalThis.__vibez1Transport` (the direct WS). The host forwards
@@ -128,14 +133,16 @@ This is the work that makes the repo build green end-to-end. Ordered:
   the bridge `stream()` (no loopback HTTP `Authorization` header).
 
 ### 3. Workstream C — native packaging
+
 - Add `node-datachannel` to root `package.json` `pnpm.onlyBuiltDependencies`
   (currently `["electron","esbuild","node-pty"]`) + as a dependency; `@electron/
-  rebuild` + `asarUnpack` for the `.node`. `react-native-webrtc` bare-RN linking
+rebuild` + `asarUnpack` for the `.node`. `react-native-webrtc` bare-RN linking
   (iOS Pod + `NSAllowsLocalNetworking`, Android `minSdk 24`). See
   `docs/webrtc-native-packaging.md`. Wire `src/main/webrtc/` (the adapter) into
   the host's transport selection (`src/main/serverClient.ts`).
 
 ### 4. Workstream F — decommission (breaks then fixes the `connect.ts` callers)
+
 - The `connect.ts` grammar change breaks ~13 remote-mode callers — ALL in F's
   scope: `src/server/hubServer.ts`, `src/cli/remoteClient.ts`,
   `workspace/apps/remote-cli/index.ts`, `src/server/pairingBanner.ts`,
@@ -152,6 +159,7 @@ This is the work that makes the repo build green end-to-end. Ordered:
   `credentialService.buildPublicUrl` to the relay host.
 
 ### 5. Integration seam test
+
 End-to-end: pair → connect (pin verified) → load panel from loopback → N
 authenticated panel RPC sessions → `proxyFetch` stream over bulk → webhook
 backhaul. Add the fail-loud negative tests (un-authed open rejected; silent-TURN
@@ -161,7 +169,7 @@ relay flagged).
 
 ```
 tsc --noEmit -p tsconfig.json            # 0 errors
-tsc --noEmit -p tsconfig.workspace.json  # 0 errors
+tsc --noEmit -p workspace/tsconfig.json  # 0 errors
 vitest run                               # 4543 passed, 8 failed, 5 skipped (515 files)
 ```
 
@@ -171,6 +179,7 @@ vitest run                               # 4543 passed, 8 failed, 5 skipped (515
 not in the diff, import nothing changed, last commits predate the cutover.
 
 Cutover-caused test changes, all now green:
+
 - `credentialService.test.ts` 55/55 — OAuth redirect default moved loopback→relay
   (§7); tests set `VIBEZ1_RELAY_OAUTH_BASE_URL` and opt into the server-local
   `loopback` redirect for in-process callback round-trips.
@@ -182,6 +191,7 @@ removed `getPublicUrl`/`listPanels`, mobile `serverUrl`, pairing-banner grammar)
 reconciled by the orchestrator.
 
 ### Server answerer (now built + tested)
+
 - `src/server/rpcServer.ts:attachWebRtcPipe` + `src/server/webrtcSessionShim.ts` —
   the pipe reuses the entire per-connection machinery per session (10 shim tests).
 - `packages/rpc/src/transports/webrtcAnswerer.ts` — the server's `PipeChannels`
@@ -191,6 +201,7 @@ reconciled by the orchestrator.
   `src/server`→`src/main` boundary).
 
 ### Remaining (deployment / runtime, not code-blocking)
+
 - Install `node-datachannel`; deploy `apps/signaling` + the rebuilt relay; set
   `VIBEZ1_RELAY_OAUTH_BASE_URL`, TURN, and relay secrets.
 - Wire the answerer bootstrap with an injected native provider; mobile

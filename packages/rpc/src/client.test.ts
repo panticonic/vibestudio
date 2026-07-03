@@ -1,5 +1,76 @@
 import { createRpcClient, defineContract } from "./client.js";
 import { createInProcessNetwork, inProcessTransport } from "./transports/inProcess.js";
+import type { EnvelopeRpcTransport, RpcConnectionStatus, RpcEnvelope } from "./types.js";
+import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
+
+/**
+ * A fake transport whose status + recovery signals can be driven by the test,
+ * and whose `send` never produces a response — so calls stay pending until the
+ * pending-call policy (§3.4) settles them. Mirrors the real transport surface:
+ * `onStatusChange` lives on the transport; the recovery registration is the
+ * separate `onRecovery` option `createRpcClient` accepts (wired from
+ * `createPairedConnection`'s recovery fan-out in production).
+ */
+function controllableTransport(): {
+  transport: EnvelopeRpcTransport;
+  sent: RpcEnvelope[];
+  emitStatus: (status: RpcConnectionStatus) => void;
+  onRecovery: (handler: (kind: RecoveryKind) => void) => () => void;
+  emitRecovery: (kind: RecoveryKind) => void;
+} {
+  const sent: RpcEnvelope[] = [];
+  let statusHandler: ((status: RpcConnectionStatus) => void) | null = null;
+  let recoveryHandler: ((kind: RecoveryKind) => void) | null = null;
+  return {
+    sent,
+    transport: {
+      send: async (envelope) => {
+        sent.push(envelope);
+      },
+      onMessage: () => () => {},
+      status: () => "connected",
+      onStatusChange: (handler) => {
+        statusHandler = handler;
+        return () => {
+          if (statusHandler === handler) statusHandler = null;
+        };
+      },
+    },
+    emitStatus: (status) => statusHandler?.(status),
+    onRecovery: (handler) => {
+      recoveryHandler = handler;
+      return () => {
+        if (recoveryHandler === handler) recoveryHandler = null;
+      };
+    },
+    emitRecovery: (kind) => recoveryHandler?.(kind),
+  };
+}
+
+/** Snapshot a promise's settlement without awaiting it (for "still pending" checks). */
+function track<T>(promise: Promise<T>): { settled: boolean; reason?: unknown; value?: T } {
+  const state: { settled: boolean; reason?: unknown; value?: T } = { settled: false };
+  promise.then(
+    (value) => {
+      state.settled = true;
+      state.value = value;
+    },
+    (reason) => {
+      state.settled = true;
+      state.reason = reason;
+    }
+  );
+  return state;
+}
+
+/**
+ * Let queued microtasks flush so `track` observes a synchronous rejection. A few
+ * ticks are needed because `rpc.call` is an async wrapper: the inner pending
+ * rejection is adopted by the outer promise one microtask hop later.
+ */
+const flushMicrotasks = async (): Promise<void> => {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+};
 
 describe("createRpcClient", () => {
   it("does local dispatch without using the transport", async () => {
@@ -220,5 +291,192 @@ describe("createRpcClient", () => {
     expect(streamCalls[0]!.message).not.toHaveProperty("readOnly");
     expect(response.status).toBe(206);
     await expect(response.text()).resolves.toBe("streamed-bytes");
+  });
+});
+
+describe("createRpcClient — pending-call policy (§3.4)", () => {
+  it("rejects direct-server pendings with CONNECTION_LOST when the transport disconnects", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+    });
+
+    const call = rpc.call("main", "fs.readFile", ["/x"]);
+    const state = track(call);
+    await flushMicrotasks();
+    expect(state.settled).toBe(false); // still in flight before the drop
+
+    fake.emitStatus("disconnected");
+
+    const err = (await call.catch((e) => e)) as NodeJS.ErrnoException;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe("Connection lost before the response arrived");
+    expect(err.code).toBe("CONNECTION_LOST");
+  });
+
+  it("also treats target 'server' as a direct-server call", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+    });
+
+    const call = rpc.call("server", "ping", []);
+    fake.emitStatus("disconnected");
+
+    const err = (await call.catch((e) => e)) as NodeJS.ErrnoException;
+    expect(err.code).toBe("CONNECTION_LOST");
+  });
+
+  it("leaves routed pendings alive on disconnect, then rejects them on cold-recover", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+      onRecovery: fake.onRecovery,
+    });
+
+    const directCall = rpc.call("main", "fs.readFile", ["/x"]);
+    const routedCall = rpc.call("panel:2", "peerMethod", []);
+    const directState = track(directCall);
+    const routedState = track(routedCall);
+
+    fake.emitStatus("disconnected");
+    await flushMicrotasks();
+
+    // Direct-server call is unrecoverable → rejected; routed call survives the flip.
+    expect(directState.settled).toBe(true);
+    expect((directState.reason as NodeJS.ErrnoException).code).toBe("CONNECTION_LOST");
+    expect(routedState.settled).toBe(false);
+
+    fake.emitRecovery("cold-recover");
+
+    const routedErr = (await routedCall.catch((e) => e)) as NodeJS.ErrnoException;
+    expect(routedErr.message).toBe("Connection lost before the response arrived");
+    expect(routedErr.code).toBe("CONNECTION_LOST");
+
+    // Silence the already-rejected direct promise for the runner.
+    await directCall.catch(() => undefined);
+  });
+
+  it("does NOT reject routed pendings on resubscribe (inbox replay settles them)", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+      onRecovery: fake.onRecovery,
+    });
+
+    const routedCall = rpc.call("panel:2", "peerMethod", []);
+    const routedState = track(routedCall);
+
+    fake.emitRecovery("resubscribe");
+    await flushMicrotasks();
+
+    expect(routedState.settled).toBe(false);
+  });
+});
+
+describe("createRpcClient — explicit call deadlines", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("does not arm an implicit deadline when timeoutMs is omitted", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+    });
+
+    const call = rpc.call("main", "slow", []);
+    const state = track(call);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(state.settled).toBe(false);
+  });
+
+  it("respects an explicit timeoutMs", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+    });
+
+    const call = rpc.call("main", "slow", [], { timeoutMs: 5_000 });
+    const state = track(call);
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(state.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const err = (await call.catch((e) => e)) as Error;
+    expect(err.message).toBe("RPC call timed out after 5000ms");
+  });
+
+  it("never fires when timeoutMs is 0 (opt out)", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+    });
+
+    const call = rpc.call("main", "forever", [], { timeoutMs: 0 });
+    const state = track(call);
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(state.settled).toBe(false);
+  });
+});
+
+describe("stream() request bodies (§1.6 uploads)", () => {
+  it("THROWS when a body is passed over a transport with no body-capable stream path", async () => {
+    // The in-process transport (like plain WS and panel postMessage bridges)
+    // has no first-class `stream()` — the duplex envelope fallback cannot carry
+    // a request body, and it must never silently drop or base64 it.
+    const network = createInProcessNetwork();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: inProcessTransport("panel:1", network),
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array([1, 2, 3]));
+        c.close();
+      },
+    });
+    await expect(rpc.stream("main", "gateway.fetch", [{ path: "/x" }], { body })).rejects.toThrow(
+      /require the WebRTC transport/
+    );
+  });
+
+  it("passes the body through to a body-capable transport's stream hook", async () => {
+    const network = createInProcessNetwork();
+    const base = inProcessTransport("panel:1", network);
+    const seen: unknown[] = [];
+    const transport: EnvelopeRpcTransport = {
+      ...base,
+      stream: async (_envelope, _signal, body) => {
+        seen.push(body);
+        return new Response("ok", { status: 200 });
+      },
+    };
+    const rpc = createRpcClient({ selfId: "panel:1", callerKind: "panel", transport });
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.close();
+      },
+    });
+    const resp = await rpc.stream("main", "gateway.fetch", [{ path: "/x" }], { body });
+    expect(resp.status).toBe(200);
+    expect(seen).toEqual([body]);
   });
 });

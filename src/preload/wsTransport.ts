@@ -24,7 +24,6 @@ type PanelInitProvider = {
 
 type vibez1TransportGlobals = typeof globalThis & {
   __vibez1Shell?: PanelInitProvider;
-  __vibez1Electron?: PanelInitProvider;
   __vibez1GatewayToken?: string;
 };
 
@@ -149,7 +148,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
 
   const refreshAuthToken = async (): Promise<string> => {
     const globals = globalThis as vibez1TransportGlobals;
-    const shell = globals.__vibez1Shell ?? globals.__vibez1Electron;
+    const shell = globals.__vibez1Shell;
     if (!shell || typeof shell.getPanelInit !== "function") return authToken;
     const panelInit = await shell.getPanelInit();
     const nextToken = panelInit?.gatewayConfig?.token;

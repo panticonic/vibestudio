@@ -127,6 +127,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
       const pending = new Map();
       const listeners = new Map();
       const envelopeListeners = new Set();
+      const streamListeners = new Set();
       let nextListenerId = 1;
       const enableDebug = ${enableDebug ? "true" : "false"};
 
@@ -264,7 +265,16 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
       }
 
       // Inbound RPC envelopes the host demuxes for this panel's logical session.
+      // Bridge-stream messages (§1.6 upload hop: response head/chunk/end/error)
+      // ride the same injection channel tagged __vibez1BridgeStream and demux to
+      // the stream listeners instead.
       function deliverEnvelope(envelope) {
+        if (envelope && envelope.__vibez1BridgeStream === true) {
+          for (const handler of streamListeners) {
+            try { handler(envelope.msg); } catch (_) {}
+          }
+          return;
+        }
         for (const handler of envelopeListeners) {
           try { handler(envelope); } catch (_) {}
         }
@@ -308,6 +318,24 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
           envelopeListeners.add(handler);
           return () => envelopeListeners.delete(handler);
         },
+        // §1.6 upload hop (see @vibez1/rpc bridgeStream.ts): the postMessage
+        // bridge is string-only, so body chunks cross as base64 (~256 KiB).
+        // streamBodyChunk resolves via the host's resolvePending ack — awaiting
+        // it is the pump's backpressure. Response messages arrive through
+        // deliverEnvelope tagged __vibez1BridgeStream → onStreamMessage.
+        streamChunkFormat: "base64",
+        streamOpen: (msg) => callHost("streamOpen", [msg]),
+        streamBodyChunk: (msg) => callHost("streamBodyChunk", [msg]),
+        streamAbort: (opId) => {
+          callHost("streamAbort", [opId]).catch(function () {});
+        },
+        streamAck: (opId, seq) => {
+          callHost("streamAck", [opId, seq]).catch(function () {});
+        },
+        onStreamMessage: (handler) => {
+          streamListeners.add(handler);
+          return () => streamListeners.delete(handler);
+        },
         getPanelInit: () => callHost("getPanelInit", []),
         getBootstrapConfig: () => callHost("getPanelInit", []),
         getInfo: () => callHost("getInfo", []),
@@ -337,7 +365,6 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         deliverEnvelope,
       };
       globalThis.__vibez1Shell = shell;
-      globalThis.__vibez1Electron = shell;
     })();
     true;
   `;

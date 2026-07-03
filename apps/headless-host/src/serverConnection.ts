@@ -8,7 +8,7 @@ import { createRpcClient, type RpcClient } from "@vibez1/rpc";
 import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
 import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
 import { createDevLogger } from "@vibez1/dev-log";
-import type { HeadlessHostConfig } from "./config.js";
+import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
 import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibez1/shared/connect";
 
 const log = createDevLogger("HeadlessHost:rpc");
@@ -35,7 +35,7 @@ async function refreshShellToken(auth: {
   return body["shellToken"];
 }
 
-export interface ServerConnection {
+export interface ServerConnection extends HeadlessHostServerConnection {
   rpc: RpcClient;
   /** Current auth token (refreshed for device credentials). */
   getToken(): string;
@@ -49,6 +49,9 @@ export function normalizeServerEventName(event: string): string {
 }
 
 export async function connectToServer(config: HeadlessHostConfig): Promise<ServerConnection> {
+  if (config.auth.kind === "injected") {
+    throw new Error("headless-host: injected auth requires connectionFactory");
+  }
   let currentToken =
     config.auth.kind === "token" ? config.auth.token : await refreshShellToken(config.auth);
   const eventListeners = new Set<(event: string, payload: unknown) => void>();

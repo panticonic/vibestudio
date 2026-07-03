@@ -6,8 +6,13 @@
  *
  * Two surfaces, one job each (no redundancy):
  *   - **WebSocket** (`WebSocketImpl`) — blind-relays our SDP/ICE to the peer and
- *     delivers the peer's back, plus room lifecycle (`peer-joined`/`peer-left`/
- *     `room-full`). The room PERSISTS, so the same socket carries ICE-restart.
+ *     delivers the peer's back, plus room lifecycle
+ *     (`peer-joined`/`peer-left`). The room PERSISTS, so the same socket carries
+ *     ICE-restart. A join declares its slot via a required `role=offerer|answerer`
+ *     query param; a same-role reconnect evicts our own ghost (§4). Keepalive is
+ *     out-of-band: we ping every 20s (the DO auto-responds with a pong without
+ *     waking) and reap a socket that goes 40s without a pong. ping/pong never
+ *     relay to the peer.
  *   - **HTTP GET** (`fetchImpl`) — `fetchIceServers()` pulls the room's
  *     per-session ICE config. A request/response cred fetch maps onto an HTTP
  *     GET and fails loud on a non-200 (no racy push waiter on the relay socket).
@@ -27,6 +32,9 @@ import type { SignalingClient } from "./webrtcSignaling.js";
 // foundational package. The wire contract IS the JSON shape; both ends declare
 // it locally. Any change here MUST be mirrored in the room's protocol.ts.
 
+/** Which rendezvous slot a peer fills (mirrors `SignalingRole` in the room). */
+export type SignalingRole = "offerer" | "answerer";
+
 interface DescriptionMessage {
   t: "description";
   desc: RtcSessionDescription;
@@ -39,14 +47,15 @@ interface PeerLifecycleMessage {
   t: "peer-joined" | "peer-left";
   peers: number;
 }
-interface RoomFullMessage {
-  t: "room-full";
+/** Reply the DO auto-responds with to our keepalive `{"t":"ping"}`. */
+interface PongMessage {
+  t: "pong";
 }
 type SignalingServerMessage =
   | DescriptionMessage
   | CandidateMessage
   | PeerLifecycleMessage
-  | RoomFullMessage;
+  | PongMessage;
 
 interface IceServersResponse {
   iceServers: RtcIceServer[];
@@ -70,6 +79,13 @@ export interface WebSocketCtor {
 export interface SignalingClientOptions {
   /** Rendezvous room id (the unguessable UUID from the pairing link `room=`). */
   room: string;
+  /**
+   * Which rendezvous slot this peer fills. Appended to the join URL as
+   * `?role=`; the DO requires it (missing → HTTP 400) and evicts an incumbent
+   * holding the same role (§4). The offerer (client/device) uses `"offerer"`,
+   * the paired server's answerer pipe uses `"answerer"`.
+   */
+  role: SignalingRole;
   /** Signaling endpoint base from the pairing link `sig=` (http(s) or ws(s)). */
   sig: string;
   /** Injected `fetch` (defaults to `globalThis.fetch`). Used by `fetchIceServers()`. */
@@ -82,6 +98,10 @@ export interface SignalingClientOptions {
 
 const READY_STATE_OPEN = 1;
 
+/** Out-of-band keepalive: ping cadence and the pong-silence deadline. */
+const PING_INTERVAL_MS = 20_000;
+const PONG_TIMEOUT_MS = 40_000;
+
 /** Apply the `/room/:roomId{suffix}` path to the `sig` base — shared by both builders. */
 function roomUrl(sig: string, room: string, suffix: string): URL {
   const url = new URL(sig);
@@ -89,14 +109,17 @@ function roomUrl(sig: string, room: string, suffix: string): URL {
   return url;
 }
 
-/** Build the `ws(s)://…/room/:roomId` URL from the `sig` endpoint base. */
-function toRoomWsUrl(sig: string, room: string): string {
+/** Build the `ws(s)://…/room/:roomId?role=<role>` URL from the `sig` base. */
+function toRoomWsUrl(sig: string, room: string, role: SignalingRole): string {
   const url = roomUrl(sig, room, "");
   if (url.protocol === "http:") url.protocol = "ws:";
   else if (url.protocol === "https:") url.protocol = "wss:";
   else if (url.protocol !== "ws:" && url.protocol !== "wss:") {
     throw new Error(`Unsupported signaling scheme: ${url.protocol} (expected http(s)/ws(s))`);
   }
+  // The DO requires the role to slot/evict the join; it is part of the join URL,
+  // not a WS frame (the upgrade must be rejected with 400 before any socket).
+  url.searchParams.set("role", role);
   return url.toString();
 }
 
@@ -121,7 +144,7 @@ function decodeMessageData(data: unknown): string | null {
 }
 
 export function createSignalingClient(options: SignalingClientOptions): SignalingClient {
-  const { room, sig } = options;
+  const { room, sig, role } = options;
   const log = options.logPrefix ?? "[signaling-client]";
   const WebSocketImpl = options.WebSocketImpl ?? (globalThis as { WebSocket?: WebSocketCtor }).WebSocket;
   if (!WebSocketImpl) {
@@ -129,7 +152,7 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
   }
   const fetchImpl = options.fetchImpl ?? (globalThis as { fetch?: typeof fetch }).fetch;
 
-  const wsUrl = toRoomWsUrl(sig, room);
+  const wsUrl = toRoomWsUrl(sig, room, role);
   const iceUrl = toIceServersHttpUrl(sig, room);
 
   const descriptionHandlers = new Set<(desc: RtcSessionDescription) => void>();
@@ -145,7 +168,48 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
   let closed = false;
   let closeReason: string | undefined;
 
+  // Out-of-band keepalive state. The DO auto-responds to `{"t":"ping"}` with a
+  // pong even while hibernated, so a live socket always answers within the
+  // window; `lastPongAt` older than the deadline means the socket is a ghost.
+  let pingTimer: ReturnType<typeof setInterval> | undefined;
+  let lastPongAt = 0;
+
   const ws = new WebSocketImpl(wsUrl);
+
+  function stopKeepalive(): void {
+    if (pingTimer !== undefined) {
+      clearInterval(pingTimer);
+      pingTimer = undefined;
+    }
+  }
+
+  function startKeepalive(): void {
+    lastPongAt = Date.now();
+    pingTimer = setInterval(() => {
+      if (closed) return;
+      if (ws.readyState !== READY_STATE_OPEN) return;
+      if (Date.now() - lastPongAt > PONG_TIMEOUT_MS) {
+        // No pong within the deadline — the socket is dead (hibernated-but-alive
+        // sockets answer via auto-response). Reap it and fire closed handling so
+        // the transport re-establishes instead of waiting on TCP to notice.
+        closeReason = closeReason ?? "keepalive-timeout";
+        try {
+          ws.close(4002, "keepalive timeout");
+        } catch {
+          /* already closing */
+        }
+        fireClosed(closeReason);
+        return;
+      }
+      try {
+        ws.send(JSON.stringify({ t: "ping" }));
+      } catch {
+        /* a broken send surfaces via the error/close handlers */
+      }
+    }, PING_INTERVAL_MS);
+    // Don't hold the Node event loop open just to ping an otherwise idle room.
+    (pingTimer as unknown as { unref?: () => void }).unref?.();
+  }
 
   let resolveOpen!: () => void;
   let rejectOpen!: (error: unknown) => void;
@@ -161,6 +225,7 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
 
   ws.addEventListener("open", () => {
     opened = true;
+    startKeepalive();
     resolveOpen();
   });
 
@@ -195,16 +260,10 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
       case "candidate":
         emitCandidate((message as CandidateMessage).cand);
         return;
-      case "room-full":
-        // A third peer was refused — fail loud: surface as a room close so the
-        // transport stops trying (a fourth attempt would also be refused).
-        closeReason = "room-full";
-        try {
-          ws.close(1000, "room-full");
-        } catch {
-          /* already closing */
-        }
-        fireClosed("room-full");
+      case "pong":
+        // Keepalive reply (auto-responded by the DO). Proof of life — reset the
+        // liveness deadline. Never relayed; the transport never sees it.
+        lastPongAt = Date.now();
         return;
       case "peer-joined":
       case "peer-left":
@@ -247,6 +306,7 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
   function fireClosed(reason?: string): void {
     if (closed) return;
     closed = true;
+    stopKeepalive();
     for (const handler of closedHandlers) {
       try {
         handler(reason);

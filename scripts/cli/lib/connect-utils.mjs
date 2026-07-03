@@ -13,7 +13,9 @@ const qrcode = require("qrcode-terminal");
 const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{16,512}$/;
 const PAIRING_ROOM_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
-const PAIRING_PROTOCOL_VERSION = 1;
+// v2 = room-per-invite pairing. The parser REQUIRES exactly this version; v1
+// links carried a per-server singleton room that no longer exists.
+const PAIRING_PROTOCOL_VERSION = 2;
 
 /** Strip colons/whitespace and upper-case a DTLS fingerprint for comparison. */
 export function normalizeFingerprint(fp) {
@@ -45,6 +47,17 @@ export function parseConnectLink(rawUrl) {
   const params = parseQuery(rawUrl.slice(queryStart + 1));
   if (params.kind === "error") return params;
 
+  // Version gate FIRST so every stale link — whatever its exact shape — gets
+  // the actionable message instead of a confusing missing-param complaint.
+  if (params.values.get("v") !== String(PAIRING_PROTOCOL_VERSION)) {
+    return {
+      kind: "error",
+      reason:
+        "This pairing link uses an old protocol version — re-pair with a current link " +
+        `(expected v=${PAIRING_PROTOCOL_VERSION})`,
+    };
+  }
+
   const room = params.values.get("room");
   const fp = params.values.get("fp");
   const code = params.values.get("code");
@@ -69,11 +82,6 @@ export function parseConnectLink(rawUrl) {
   if (ice && ice !== "all" && ice !== "relay") {
     return { kind: "error", reason: "TURN policy `ice` must be `all` or `relay`" };
   }
-  const versionRaw = params.values.get("v");
-  const v = versionRaw ? Number(versionRaw) : PAIRING_PROTOCOL_VERSION;
-  if (!Number.isInteger(v) || v < 1) {
-    return { kind: "error", reason: "Protocol version `v` must be a positive integer" };
-  }
 
   return {
     kind: "ok",
@@ -81,7 +89,7 @@ export function parseConnectLink(rawUrl) {
     fp,
     code,
     sig: sigParsed.url,
-    v,
+    v: PAIRING_PROTOCOL_VERSION,
     ice: ice ?? "all",
     srv: params.values.get("srv") || undefined,
   };
@@ -182,12 +190,19 @@ export function printConnectBanner({
   title,
   pairing,
   qrPairingCode = null,
+  // Per-invite deep links minted by the server (v=2: each invite has its OWN
+  // signaling room, so codes must not be recombined with another invite's
+  // room). When provided these are printed verbatim; the local rebuild below
+  // is only a fallback for older stdout-marker flows.
+  deepLink: providedDeepLink = null,
+  qrDeepLink: providedQrDeepLink = null,
   deepLinkLabel = "Deep link",
   instructions = "Open the QR code with the Android camera. Vibez1 will confirm and save the connection.",
 }) {
-  const deepLink = createConnectDeepLink(pairing);
+  const deepLink = providedDeepLink || createConnectDeepLink(pairing);
   const effectiveQrCode = qrPairingCode || pairing.code;
-  const qrDeepLink = createConnectDeepLink({ ...pairing, code: effectiveQrCode });
+  const qrDeepLink =
+    providedQrDeepLink || createConnectDeepLink({ ...pairing, code: effectiveQrCode });
   const divider = "=".repeat(72);
   console.log(`\n${divider}`);
   console.log(`  ${title}`);

@@ -1,24 +1,48 @@
 /**
- * WebRTC RPC transport — the single peer-to-peer pipe that replaces remote-mode
- * WebSocket ingress (plan §1). It is the **host↔server** pipe; the host (shell)
- * multiplexes N logically-authenticated sessions over it: its own `shell`
- * session plus one `panel:<key>` session per panel (each redeeming its own
- * one-time connection grant — per-panel principal identity is preserved, the
- * pipe never collapses panels into the host principal).
+ * WebRTC RPC transport, OFFERER side — v2 wire protocol (plan §1) + recovery
+ * state machine (plan §3.2–3.5). It is the **host↔server** pipe; the host
+ * (shell) multiplexes N logically-authenticated sessions over it: its own
+ * `shell` session plus one `panel:<key>` session per panel (each redeeming its
+ * own one-time connection grant — per-panel principal identity is preserved,
+ * the pipe never collapses panels into the host principal).
  *
- * - **control channel** (reliable/ordered): JSON `SessionControlFrame`s —
- *   handshake, RPC envelopes, events, routing, stream init/cancel, keepalive.
- * - **bulk channel** (reliable/ordered): binary `streamCodec` v2 frames
- *   (`[streamId:4]…`) carrying proxyFetch/asset bodies, demuxed by stream id.
+ * - **control channel** (reliable/ordered): JSON `SessionControlFrame`s,
+ *   fragmented under the negotiated chunk (`controlFraming.ts`) and scheduled
+ *   per-session round-robin (`frameScheduler.ts`). `hello`/`ping`/`pong`
+ *   bypass the scheduler (direct sends) so a saturated link can never starve
+ *   its own keepalive.
+ * - **bulk channel** (reliable/ordered): self-describing mux messages
+ *   (`protocol/bulkMux.ts` — `[streamId:u32][flags:u8][payload]`) carrying
+ *   proxyFetch/asset bodies, demuxed by stream id. The v1 byte-stream decoder
+ *   path is deleted; DATA needs no reassembly at all.
+ *
+ * ### Hello preamble (§1.1)
+ * The FIRST control message in each direction is `{t:"hello", proto:2,
+ * maxMsg, platform, keepalive}` — sent directly on channel-open (after the
+ * pin verifies), bypassing every queue. Effective chunk =
+ * `min(both maxMsg, 256 KiB)`; effective keepalive = min of both ends'
+ * parameters. The transport reports "connected" only once the pin verified,
+ * both channels opened AND the remote hello arrived. A non-hello first frame,
+ * `proto !== 2`, or 10 s of hello silence drops the pipe — no tolerant
+ * fallback.
+ *
+ * ### Recovery (§3.2)
+ * Exactly ONE in-flight establish, always: a down-event during an establish
+ * sets a dirty flag that re-runs recovery after the attempt settles. The
+ * previous peer is closed before a new one is assigned; `generation` fences
+ * late callbacks from torn-down peers. Backoff mirrors `wsClient`
+ * (1s·2ⁿ + jitter, cap 30 s); timers are tracked, cancelled on close, and
+ * unref'd. Status: "disconnected" on pipe-down (before recovery),
+ * "connecting" during reestablish, "connected" only after hello completes.
  *
  * Security: DTLS authenticates the *pipe* (the observed remote fingerprint is
  * pinned against the QR `fp`, FAIL-CLOSED on mismatch); per-session grants
- * authorize each *principal*. Confidentiality holds end-to-end even when relayed
- * through TURN (DTLS is never terminated by the relay).
+ * authorize each *principal*. Confidentiality holds end-to-end even when
+ * relayed through TURN (DTLS is never terminated by the relay).
  *
  * The transport is written entirely against the `webrtcPeer`/`webrtcSignaling`
- * interfaces, so it carries NO native dependency and is exercised in tests with
- * in-memory fakes (`webrtcClient.test.ts`).
+ * interfaces, so it carries NO native dependency and is exercised in tests
+ * with in-memory fakes (`webrtcClient.test.ts`).
  */
 
 import type {
@@ -30,26 +54,39 @@ import type {
   RpcStreamRequest,
 } from "../types.js";
 import {
+  FRAME_DATA,
+  FRAME_END,
+  FRAME_ERROR,
   type InboundStreamMux,
   type DecodedFramedStream,
   createInboundStreamMux,
   decodeFramedResponseToStreaming,
   decodeFramedStream,
-  StreamFrameDecoderV2,
 } from "../protocol/streamCodec.js";
+import {
+  BULK_MUX_HEADER_BYTES,
+  createBulkDemux,
+  encodeBulkMessage,
+  type StreamFrameType,
+} from "../protocol/bulkMux.js";
 import { createControlCodec } from "./controlFraming.js";
-import { awaitDrain, writeChunked } from "./channelIo.js";
+import { createFrameScheduler, type EnqueueOutcome, type FrameScheduler } from "./frameScheduler.js";
 import {
   SESSION_CLOSE,
+  SESSION_HELLO,
   SESSION_OPEN,
   SESSION_PING,
+  SESSION_PONG,
+  SESSION_PROTOCOL_VERSION,
   SESSION_RPC,
   SESSION_ROUTE,
   SESSION_STREAM_CANCEL,
   SESSION_STREAM_OPEN,
   type SessionControlFrame,
   type SessionEventFrame,
+  type SessionHelloFrame,
   type SessionOpenResultFrame,
+  type SessionRouteFrame,
   type SessionRoutedFrame,
   type SessionRoutedResponseErrorFrame,
   type SessionRpcFrame,
@@ -62,6 +99,7 @@ import type {
   RtcCandidateType,
   RtcConnectionState,
   RtcDataChannelLike,
+  RtcIceCandidate,
   RtcPeerConnectionLike,
   WebRtcPairing,
 } from "./webrtcPeer.js";
@@ -73,16 +111,47 @@ import {
   DEFAULT_CHUNK_SIZE,
 } from "./webrtcPeer.js";
 import type { SignalingClient } from "./webrtcSignaling.js";
+
+export type { StreamFrameType } from "../protocol/bulkMux.js";
+
 // Upper bound on the INITIAL connect. Generous enough for a slow relayed (TURN)
 // DTLS handshake, but finite so an unreachable peer fails loud instead of hanging
 // the caller's "connecting" spinner forever. Reconnects (reestablish) are NOT
 // bounded by this — the caller is already up and the transport recovers in place.
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
-const KEEPALIVE_INTERVAL_MS = 15_000;
-const KEEPALIVE_TIMEOUT_MS = 45_000;
+/** Keepalive parameters this end advertises in its hello (§1.1); the effective
+ * values are the min of both ends'. */
+const LOCAL_KEEPALIVE = { intervalMs: 15_000, timeoutMs: 45_000 } as const;
+/** Hard ceiling on the negotiated chunk size (§1.1) — mirrors the answerer. */
+const MAX_CHUNK_SIZE = 256 * 1024;
+/** Drain high-water for BOTH channels (§1.3/§1.4 — 256 KiB, symmetric). */
+const BUFFER_HIGH_WATER = 256 * 1024;
+/** The remote hello must arrive within this of our hello going out (§1.1). */
+const HELLO_TIMEOUT_MS = 10_000;
+/** Reestablish backoff — the exact `wsClient` policy. */
+const RECONNECT_BASE_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+const RECONNECT_JITTER_MS = 500;
+/** Per-attempt deadline on a session open (§3.3) — a lost `open-result` can no
+ * longer hang `ready()`; the attempt retries under per-session backoff. */
+const SESSION_OPEN_DEADLINE_MS = 20_000;
+const SESSION_RETRY_BASE_DELAY_MS = 1_000;
+const SESSION_RETRY_MAX_DELAY_MS = 15_000;
+const SESSION_RETRY_JITTER_MS = 250;
+/** `nudge()` pong deadline (§3.1): after an out-of-band probe ping, a pong must
+ * land within this or the pipe is declared down — event-driven reconnect on a
+ * mobile foreground/network-change, instead of waiting out the 45 s keepalive. */
+const NUDGE_PONG_DEADLINE_MS = 5_000;
+/** Receive-side buffer bound per stream (§3.5): exceeding it fails the stream
+ * and sends cancel — fail loud, never silent unbounded buffering. */
+const STREAM_RECEIVE_CAP_BYTES = 8 * 1024 * 1024;
+/** Control-scheduler lane for pipe-level frames that belong to no session
+ * (mirrors the answerer's DEFAULT_CONTROL_LANE). */
+const PIPE_LANE = "__pipe";
 
 export const PIPE_CLOSED_CODE = "PIPE_CLOSED";
 export const FINGERPRINT_MISMATCH_CODE = "DTLS_FINGERPRINT_MISMATCH";
+export const STREAM_RECEIVE_OVERFLOW_CODE = "STREAM_RECEIVE_OVERFLOW";
 
 function errorWithCode(message: string, code: string): Error {
   const e = new Error(message) as Error & { code?: string };
@@ -93,6 +162,13 @@ function errorWithCode(message: string, code: string): Error {
 /** Normalize a DTLS SHA-256 fingerprint for comparison (strip colons, upcase). */
 function normalizeFingerprint(fp: string): string {
   return fp.replace(/[:\s]/g, "").toUpperCase();
+}
+
+type AnyTimer = ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>;
+
+/** Timers must never hold the Node event loop open for an idle transport. */
+function unrefTimer(timer: AnyTimer): void {
+  (timer as unknown as { unref?: () => void }).unref?.();
 }
 
 export interface WebRtcSessionOptions {
@@ -108,16 +184,19 @@ export interface WebRtcSessionOptions {
   /**
    * Token provider for this session's one-time connection grant. Re-invoked on
    * every (re)open because grants are one-shot (rpcServer redeem consumes them).
+   * A continuation whose reopen generation went stale is DISCARDED un-sent, so
+   * a slow grant fetch can never burn a fresh grant redemption (§3.3).
    */
   getToken(): Promise<string> | string;
-  /** Recovery hook — fired with 'cold-recover' | 'resubscribe' on re-open. */
+  /** Recovery hook — fired with 'cold-recover' | 'resubscribe' on EVERY open,
+   * including the first (WS parity; consumers bootstrap subscriptions off it). */
   onRecovery?: (kind: RecoveryKind) => void;
   /**
    * Fired once when this session authenticated by redeeming a pairing code: the
    * freshly issued device credential to persist for reconnects. Only the first
    * (pairing) open delivers it.
    */
-  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
+  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void | Promise<void>;
 }
 
 /** A logical session over the pipe — a full `EnvelopeRpcTransport`. */
@@ -144,25 +223,56 @@ export interface WebRtcTransportOptions {
   pairing: WebRtcPairing;
   /** 'offerer' (client/host) creates the offer; 'answerer' is the server side. */
   role?: "offerer" | "answerer";
+  /** Optional cap on the maxMsg this end advertises in its hello. The advertised
+   * value is `min(chunkSize, channel.maxMessageSize || 16 KiB)`; the effective
+   * chunk is then `min(both ends' hello maxMsg, 256 KiB)` (§1.1). */
   chunkSize?: number;
+  /** Advertised in the hello preamble (informational). */
+  platform?: "desktop" | "mobile" | "server" | "headless";
   logPrefix?: string;
   /** Upper bound (ms) on the initial connect before it rejects (default 30s).
    * Reconnects are not bounded by this. */
   connectTimeoutMs?: number;
-  /** Observability: selected ICE candidate type changed (host/srflx/**relay**). */
+  /** Observability: selected ICE candidate type changed (host/srflx/**relay**);
+   * fired with `null` on pipe-down. Same feed as `transport.onCandidateType`. */
   onCandidateType?: (type: RtcCandidateType | null) => void;
 }
 
 export interface WebRtcTransport {
-  /** Establish the pipe (idempotent); resolves once DTLS is pinned + channels open. */
+  /** Establish the pipe (idempotent); resolves once the DTLS pin verified, both
+   * channels opened AND the hello exchange completed. */
   connect(): Promise<void>;
   ready(): Promise<void>;
   status(): RpcConnectionStatus;
   onStatusChange(handler: (status: RpcConnectionStatus) => void): () => void;
-  /** Open a logical authenticated session — returns its `EnvelopeRpcTransport`. */
+  /** Open a logical authenticated session — returns its `EnvelopeRpcTransport`.
+   * A live session with the same sid is explicitly closed first. */
   openSession(options: WebRtcSessionOptions): WebRtcSession;
   /** Last selected ICE candidate-pair type — 'relay' means TURN engaged (alarm). */
   candidateType(): RtcCandidateType | null;
+  /** Candidate-type feed for the relay alarm (§9.8): fired with the selected
+   * type when the pipe comes up and `null` when it goes down. */
+  onCandidateType(handler: (type: RtcCandidateType | null) => void): () => void;
+  /**
+   * Send one logical bulk frame for `streamId`: mux-encoded (§1.2) and chunked
+   * under the negotiated size (DATA payloads split into independent DATA
+   * messages; oversized HEAD/ERROR JSON continues via MORE), scheduled
+   * round-robin per stream against the bulk channel's 256 KiB high-water.
+   * Resolves once accepted under the queue caps AND sent; settles (never
+   * rejects) on pipe-down — the transport's recovery path is the failure
+   * signal. This is the upload seam (§1.6): the `bodyStreamId` request-body
+   * path streams DATA frames through here. Throws synchronously when the bulk
+   * channel is not open.
+   */
+  sendBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void>;
+  /**
+   * Out-of-band liveness probe (§3.1): ping now + arm a 5 s pong deadline that
+   * declares the pipe down if unanswered, so recovery reestablishes immediately
+   * instead of after the keepalive timeout. No-op while not connected or while
+   * recovery is in flight. Event-driven reconnect trigger (mobile foreground /
+   * network change); cleared by any pong.
+   */
+  nudge(): void;
   close(): Promise<void>;
 }
 
@@ -172,15 +282,15 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   // options.createSignaling and closed on teardown. Held so close() can release it.
   let signaling: SignalingClient | null = null;
   const role = options.role ?? "offerer";
-  const chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
   const log = options.logPrefix ?? "[webrtc]";
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
 
   let peer: RtcPeerConnectionLike | null = null;
   let control: RtcDataChannelLike | null = null;
   let bulk: RtcDataChannelLike | null = null;
-  // Control writes serialize + drain through this chain (backpressure for large
-  // fragmented control frames); survives reconnect (awaitDrain escapes on close).
-  let controlWriteChain: Promise<void> = Promise.resolve();
+  let controlScheduler: FrameScheduler | null = null;
+  let bulkScheduler: FrameScheduler | null = null;
   let generation = 0;
   let status: RpcConnectionStatus = "disconnected";
   let connectPromise: Promise<void> | null = null;
@@ -192,21 +302,131 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   // the new pipe, but leave a still-pending initial connect alone (its caller awaits it).
   let connectResolved = false;
   let closed = false;
+
+  // --- serialized establish (§3.2) -----------------------------------------
+  /** True while an establish attempt is in flight — there is never a second. */
+  let establishing = false;
+  /** A down-event landed during the in-flight establish; recovery re-runs
+   * after the attempt settles (never a concurrent teardown). */
+  let dirty = false;
+  let reconnectAttempt = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // --- hello negotiation (§1.1) ---------------------------------------------
+  let pinVerified = false;
+  let helloSent = false;
+  let remoteHello: SessionHelloFrame | null = null;
+  let helloTimer: ReturnType<typeof setTimeout> | null = null;
+  /** What our hello advertised: min(chunkSize option, channel max, 16 KiB floor). */
+  let advertisedMaxMsg = DEFAULT_CHUNK_SIZE;
+  /** min(advertisedMaxMsg, remote hello maxMsg, 256 KiB) once negotiated. */
+  let effectiveChunk = DEFAULT_CHUNK_SIZE;
+  let keepaliveIntervalMs: number = LOCAL_KEEPALIVE.intervalMs;
+  let keepaliveTimeoutMs: number = LOCAL_KEEPALIVE.timeoutMs;
+
   let lastPongAt = 0;
   let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
-  let reconnectAttempt = 0;
-  let recovering = false;
-  let pinVerified = false;
+  /** One-shot deadline armed by nudge(); any pong clears it (§3.1). */
+  let nudgeTimer: ReturnType<typeof setTimeout> | null = null;
   const unsubs: Array<() => void> = [];
 
   const statusListeners = new Set<(status: RpcConnectionStatus) => void>();
+  const candidateTypeListeners = new Set<(type: RtcCandidateType | null) => void>();
   const sessions = new Map<string, SessionImpl>();
-  const inboundMux: InboundStreamMux = createInboundStreamMux();
-  // Bulk channel → demux v2 frames into per-stream bodies. The Response itself
-  // resolves inside decodeFramedResponseToStreaming when the HEAD frame lands.
-  const bulkDecoder = new StreamFrameDecoderV2((streamId, type, payload) => {
-    inboundMux.push(streamId, type, payload);
+
+  /**
+   * §3.4 delivery-gap closure: outbound ROUTED REQUEST and RESPONSE frames
+   * whose enqueue has not (yet) been confirmed flushed, keyed by requestId
+   * (UUIDs — a request we issue and a response we owe can never collide). The
+   * client layer's pending-call policy keeps routed pendings alive across a
+   * clean reconnect (the server inbox replays their RESPONSES) — but a frame
+   * that was queued and never hit the wire at pipe-down has nothing
+   * server-side to replay: a lost REQUEST strands OUR pending; a lost RESPONSE
+   * strands the REMOTE caller's (the server keeps its `routedRequestOrigins`
+   * entry and nothing ever settles the origin — the caller's pipe never went
+   * down, so no rejection fires on their side either). The transport therefore
+   * re-drives these frames after a `resubscribe` recovery (`finishOpen`).
+   * Bounded naturally: each entry corresponds to a live pending call (ours or
+   * the remote caller's); removed on confirmed flush, on the settling
+   * response / routed-response-error arriving, on cold-recover / terminal
+   * session close (the client layer rejects those pendings), and on hard
+   * close. Direct-server (`rpc`) frames are NOT tracked — their pendings are
+   * rejected the moment the transport reports `disconnected` (client.ts §3.4),
+   * so a re-drive would only risk duplicate execution. Re-driving is
+   * duplicate-safe twice over: a partially-sent fragment set is discarded by
+   * the peer's defragmenter reset on reconnect (a `'dropped'` frame was
+   * definitionally never delivered), and the server's origin bookkeeping is
+   * consumed on first response delivery (a duplicate response bounces back as
+   * `routed-response-error`, which no-ops at the responder).
+   */
+  const unflushedRouted = new Map<string, SessionRouteFrame>();
+
+  /** Drop tracked unflushed routed frames belonging to one session. */
+  function dropUnflushedRouted(sid: string): void {
+    for (const [requestId, tracked] of unflushedRouted) {
+      if (tracked.sid === sid) unflushedRouted.delete(requestId);
+    }
+  }
+
+  /** Track a routed request/response frame until its enqueue confirms
+   * `'flushed'` — a `'dropped'` settle KEEPS the entry (that is what
+   * re-drives). Routed events are best-effort by contract: not tracked. */
+  function trackRoutedFrame(frame: SessionControlFrame, enqueued: Promise<EnqueueOutcome>): void {
+    if (frame.t !== SESSION_ROUTE) return;
+    const message = frame.envelope.message as { type?: string; requestId?: string };
+    if (message.type !== "request" && message.type !== "response") return;
+    if (typeof message.requestId !== "string") return;
+    const requestId = message.requestId;
+    unflushedRouted.set(requestId, frame);
+    void enqueued.then((outcome) => {
+      // Identity-checked: a stale settle from a previous generation must not
+      // delete an entry that was re-driven meanwhile (same frame object, so a
+      // genuine flush on ANY generation clears it).
+      if (outcome === "flushed" && unflushedRouted.get(requestId) === frame) {
+        unflushedRouted.delete(requestId);
+      }
+    });
+  }
+
+  /** Streams awaiting frames: sid (for the cancel frame) + abort-listener
+   * removal, reaped on END/ERROR/abort/pipe-down (no accumulation on shared
+   * AbortSignals — §3.5). `abortUpload` (set only for streams with a request
+   * body, §1.6) stops the body pump whenever the stream settles — abort,
+   * response END/ERROR, pipe-down — so no upload outlives its request. */
+  const activeStreams = new Map<
+    number,
+    { sid: string; offAbort: () => void; abortUpload?: (error: Error) => void }
+  >();
+
+  const inboundMux: InboundStreamMux = createInboundStreamMux({
+    maxBufferedBytesPerStream: STREAM_RECEIVE_CAP_BYTES,
+    onStreamOverflow: (streamId, bufferedBytes) => {
+      const error = errorWithCode(
+        `stream ${streamId} exceeded the ${STREAM_RECEIVE_CAP_BYTES}-byte receive buffer (${bufferedBytes} buffered)`,
+        STREAM_RECEIVE_OVERFLOW_CODE,
+      );
+      console.warn(`${log} ${error.message}`);
+      const active = activeStreams.get(streamId);
+      inboundMux.fail(streamId, error);
+      if (active) {
+        try {
+          writeControlFrame({ t: SESSION_STREAM_CANCEL, sid: active.sid, streamId });
+        } catch {
+          /* pipe gone — inboundMux.closeAll on pipe-down reaps the rest */
+        }
+      }
+      settleStream(streamId);
+    },
   });
+
+  // Bulk channel → self-describing mux messages → per-stream bodies (§1.2).
+  // Reset on reconnect (a fresh pipe's continuations never concatenate onto a
+  // dead pipe's partial HEAD/ERROR accumulations).
+  const bulkDemux = createBulkDemux((streamId, type, payload) => {
+    inboundMux.push(streamId, type, payload);
+    if (type === FRAME_END || type === FRAME_ERROR) settleStream(streamId);
+  });
+
   // Control-channel framing: fragment large frames on send + reassemble on receive,
   // plus the frame-id counter — bundled in one codec, reset on reconnect. RN corrupts
   // >16 KiB messages, so the fragmentation is what keeps large RPC envelopes intact.
@@ -225,60 +445,157 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
   }
 
-  // -- channel writes (drain + chunking shared via channelIo) ---------------
-
-  function writeControlFrame(frame: SessionControlFrame): void {
-    if (!control || control.readyState !== "open") {
-      throw errorWithCode("WebRTC control channel not open", PIPE_CLOSED_CODE);
+  function emitCandidateType(type: RtcCandidateType | null): void {
+    try {
+      options.onCandidateType?.(type);
+    } catch (error) {
+      console.warn(`${log} onCandidateType option threw`, error);
     }
-    const bytes = new TextEncoder().encode(encodeControlFrame(frame));
-    const max = Math.min(chunkSize, control.maxMessageSize || chunkSize);
-    const parts = controlCodec.frame(bytes, max);
-    // Keep the synchronous open-check/throw (callers rely on it), but serialize +
-    // drain the actual fragment sends so a large control frame (now fragmented)
-    // doesn't push every fragment at once and balloon the shared control buffer.
-    controlWriteChain = controlWriteChain
-      .then(() => writeControlParts(parts))
-      .catch((error) => console.warn(`${log} writeControl error: ${(error as Error).message}`));
+    for (const listener of candidateTypeListeners) {
+      try {
+        listener(type);
+      } catch (error) {
+        console.warn(`${log} candidate-type listener threw`, error);
+      }
+    }
   }
 
-  async function writeControlParts(parts: Uint8Array[]): Promise<void> {
+  // -- channel writes ---------------------------------------------------------
+
+  /**
+   * Session-addressed control write: fragments under the negotiated chunk and
+   * enqueues on the per-session lane (pipe-level frames use `__pipe`). Throws
+   * synchronously when the channel is not open (callers rely on it); the
+   * enqueue itself settles-never-rejects (pipe-down is the failure signal).
+   */
+  function writeControlFrame(frame: SessionControlFrame): void {
+    const scheduler = controlScheduler;
+    if (!control || control.readyState !== "open" || !scheduler) {
+      throw errorWithCode("WebRTC control channel not open", PIPE_CLOSED_CODE);
+    }
+    const bytes = encoder.encode(encodeControlFrame(frame));
+    const parts = controlCodec.frame(bytes, effectiveChunk);
+    const lane = (frame as { sid?: string }).sid ?? PIPE_LANE;
+    // The enqueue settles-never-rejects; its outcome ('flushed' | 'dropped')
+    // feeds the §3.4 unflushed-routed-request tracking above.
+    trackRoutedFrame(frame, scheduler.enqueue(lane, parts));
+  }
+
+  /**
+   * Direct control write for `hello`/`ping`/`pong` — bypasses the scheduler
+   * entirely (§1.4: keepalive is out-of-band; the hello precedes the pipe being
+   * up). These frames are tiny, so this is one whole-tagged codec message,
+   * protocol-safe between fragment sets.
+   */
+  function writeControlDirect(frame: SessionControlFrame): void {
     const channel = control;
-    if (!channel || channel.readyState !== "open") return;
-    for (const part of parts) {
-      await awaitDrain(channel);
+    if (!channel || channel.readyState !== "open") {
+      throw errorWithCode("WebRTC control channel not open", PIPE_CLOSED_CODE);
+    }
+    const bytes = encoder.encode(encodeControlFrame(frame));
+    for (const part of controlCodec.frame(bytes, Math.max(advertisedMaxMsg, DEFAULT_CHUNK_SIZE))) {
       channel.send(part);
     }
   }
 
-  async function writeBulk(bytes: Uint8Array): Promise<void> {
-    const channel = bulk;
-    if (!channel || channel.readyState !== "open") {
-      throw errorWithCode("WebRTC bulk channel not open", PIPE_CLOSED_CODE);
+  /** Encode one logical bulk frame into ≤effectiveChunk mux messages (§1.2) —
+   * byte-identical policy to the answerer's `encodeBulkFrameParts`. */
+  function encodeBulkFrameParts(
+    streamId: number,
+    type: StreamFrameType,
+    payload: Uint8Array,
+  ): Uint8Array[] {
+    const budget = Math.max(1, effectiveChunk - BULK_MUX_HEADER_BYTES);
+    if (payload.byteLength <= budget) {
+      return [encodeBulkMessage(streamId, type, payload)];
     }
-    await writeChunked(channel, bytes, chunkSize);
+    if (type === FRAME_DATA) {
+      // DATA has no wire-level frame: each message's bytes simply append to
+      // the stream, so an oversized payload becomes independent DATA messages.
+      const parts: Uint8Array[] = [];
+      for (let offset = 0; offset < payload.byteLength; offset += budget) {
+        parts.push(
+          encodeBulkMessage(
+            streamId,
+            type,
+            payload.subarray(offset, Math.min(offset + budget, payload.byteLength)),
+          ),
+        );
+      }
+      return parts;
+    }
+    if (type === FRAME_END) {
+      // END carries a tiny JSON payload and cannot continue (MORE is invalid
+      // on END) — an oversized one is a programming error, not a wire state.
+      throw new Error(
+        `END payload (${payload.byteLength}B) exceeds the negotiated chunk (${budget}B)`,
+      );
+    }
+    // Oversized HEAD/ERROR JSON continues via MORE messages (§1.2).
+    const parts: Uint8Array[] = [];
+    for (let offset = 0; offset < payload.byteLength; offset += budget) {
+      const end = Math.min(offset + budget, payload.byteLength);
+      parts.push(encodeBulkMessage(streamId, type, payload.subarray(offset, end), end < payload.byteLength));
+    }
+    return parts;
   }
 
-  // -- inbound control demux ------------------------------------------------
+  function sendBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void> {
+    const scheduler = bulkScheduler;
+    if (!bulk || bulk.readyState !== "open" || !scheduler) {
+      throw errorWithCode("WebRTC bulk channel not open", PIPE_CLOSED_CODE);
+    }
+    // Outcome discarded: bulk-stream failure is signalled by pipe-down/stream
+    // teardown, not per-write results (settle-never-rejects).
+    return scheduler.enqueue(streamId, encodeBulkFrameParts(streamId, type, payload)).then(() => undefined);
+  }
+
+  // -- inbound control demux ----------------------------------------------------
 
   function handleControlMessage(data: Uint8Array, forGeneration: number): void {
     if (forGeneration !== generation || closed) return;
-    const full = controlCodec.accept(data);
-    if (!full) return; // incomplete fragment set (or malformed — dropped)
+    let full: Uint8Array | null;
+    try {
+      full = controlCodec.accept(data);
+    } catch (error) {
+      // ControlProtocolViolation (defrag budget breach) — fail loud (§2.5).
+      onPipeDown(
+        `control protocol violation: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    if (!full) return; // incomplete fragment set
     let frame: SessionControlFrame;
     try {
-      frame = decodeControlFrame(new TextDecoder().decode(full));
+      frame = decodeControlFrame(decoder.decode(full));
     } catch (error) {
-      console.warn(`${log} dropping malformed control frame`, error);
+      // Control frames are whole JSON documents from a conforming peer; a
+      // malformed one is a protocol violation, not something to tolerate.
+      onPipeDown(
+        `malformed control frame: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    if (!remoteHello) {
+      // §1.1: the FIRST control frame in each direction must be the hello.
+      if (frame.t !== SESSION_HELLO) {
+        onPipeDown(`protocol violation: '${frame.t}' frame before hello`);
+        return;
+      }
+      handleRemoteHello(frame, forGeneration);
       return;
     }
     switch (frame.t) {
+      case SESSION_HELLO:
+        onPipeDown("protocol violation: duplicate hello");
+        return;
       case "pong":
         lastPongAt = Date.now();
+        clearNudgeTimer(); // any pong clears an armed nudge deadline (§3.1)
         return;
       case "ping":
         try {
-          writeControlFrame({ t: "pong", ts: frame.ts });
+          writeControlDirect({ t: SESSION_PONG, ts: frame.ts });
         } catch {
           /* pipe gone */
         }
@@ -290,13 +607,29 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         sessions.get(frame.sid)?.onServerClosed(frame.code, frame.reason, frame.terminal ?? false);
         return;
       case "rpc":
-      case "routed":
-        sessions.get(frame.sid)?.deliverEnvelope((frame as SessionRpcFrame | SessionRoutedFrame).envelope);
+      case "routed": {
+        const envelope = (frame as SessionRpcFrame | SessionRoutedFrame).envelope;
+        const message = envelope.message as { type?: string; requestId?: string };
+        // A response proves its request WAS delivered — clear any (racing)
+        // unflushed-tracking entry so it can never be spuriously re-driven.
+        // (requestIds are UUIDs: an inbound response can only ever match OUR
+        // request entry, never a response entry we owe someone else.)
+        if (message.type === "response" && typeof message.requestId === "string") {
+          unflushedRouted.delete(message.requestId);
+        }
+        sessions.get(frame.sid)?.deliverEnvelope(envelope);
         return;
+      }
       case "event":
         sessions.get(frame.sid)?.deliverServerEvent(frame as SessionEventFrame);
         return;
       case "routed-response-error":
+        // The server saw the routed message and failed to deliver it — the
+        // pending settles here (request direction), or our RESPONSE reached
+        // the server but bounced (response direction, incl. the duplicate
+        // bounce after a re-drive race): either way the tracked entry is
+        // done and must never re-drive.
+        unflushedRouted.delete((frame as SessionRoutedResponseErrorFrame).requestId);
         sessions.get(frame.sid)?.deliverRoutedResponseError(frame as SessionRoutedResponseErrorFrame);
         return;
       case "routed-event-error":
@@ -309,6 +642,59 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
   }
 
+  function handleBulkMessage(data: Uint8Array, forGeneration: number): void {
+    if (forGeneration !== generation || closed) return;
+    if (!remoteHello) {
+      onPipeDown("protocol violation: bulk message before hello");
+      return;
+    }
+    try {
+      bulkDemux.push(data);
+    } catch (error) {
+      // BulkProtocolViolation — a peer speaking a different dialect fails loud
+      // instead of corrupting streams silently (§1.2).
+      onPipeDown(
+        `bulk protocol violation: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  // -- hello negotiation (§1.1) ------------------------------------------------
+
+  function handleRemoteHello(frame: SessionHelloFrame, forGeneration: number): void {
+    if (frame.proto !== SESSION_PROTOCOL_VERSION) {
+      onPipeDown(
+        `protocol violation: hello proto ${frame.proto} (want ${SESSION_PROTOCOL_VERSION})`,
+      );
+      return;
+    }
+    if (!Number.isFinite(frame.maxMsg) || frame.maxMsg <= 0) {
+      onPipeDown(`protocol violation: hello maxMsg ${frame.maxMsg}`);
+      return;
+    }
+    remoteHello = frame;
+    clearHelloTimer();
+    tryComplete(forGeneration);
+  }
+
+  function armHelloTimer(): void {
+    clearHelloTimer();
+    helloTimer = setTimeout(() => {
+      helloTimer = null;
+      if (!remoteHello) {
+        onPipeDown(`hello timeout (no remote hello within ${HELLO_TIMEOUT_MS}ms)`);
+      }
+    }, HELLO_TIMEOUT_MS);
+    unrefTimer(helloTimer);
+  }
+
+  function clearHelloTimer(): void {
+    if (helloTimer !== null) {
+      clearTimeout(helloTimer);
+      helloTimer = null;
+    }
+  }
+
   function reopenSession(session: SessionImpl): void {
     // Fire-and-forget reopen drives the session handshake. Callers that care await
     // ready(), which observes the same openPromise rejection; this catch only
@@ -317,114 +703,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     void session.reopen().catch(() => undefined);
   }
 
-  // -- signaling + peer lifecycle ------------------------------------------
-
-  async function establishPeer(): Promise<void> {
-    // Fresh signaling per (re)establish — see createSignaling. Close the previous
-    // one first; the local `sig` binds this establish's handlers to ITS signaling
-    // so a later re-establish (which reassigns the outer `signaling`) cannot make
-    // an in-flight handler send into the wrong socket.
-    try {
-      signaling?.close();
-    } catch {
-      /* already closed */
-    }
-    const sig = options.createSignaling();
-    signaling = sig;
-    const iceServers = sig.fetchIceServers
-      ? await sig.fetchIceServers()
-      : pairing.iceServers ?? [];
-    const thisGeneration = ++generation;
-    setStatus("connecting");
-
-    const pc = await provider.create({
-      iceServers,
-      iceTransportPolicy: pairing.iceTransportPolicy,
-    });
-    peer = pc;
-
-    // Pre-negotiated channels: both peers open matching ids, no ondatachannel race.
-    const controlChannel = pc.createDataChannel(CONTROL_LABEL, {
-      ordered: true,
-      negotiated: true,
-      id: CONTROL_CHANNEL_ID,
-    });
-    const bulkChannel = pc.createDataChannel(BULK_LABEL, {
-      ordered: true,
-      negotiated: true,
-      id: BULK_CHANNEL_ID,
-    });
-    control = controlChannel;
-    bulk = bulkChannel;
-    controlChannel.bufferedAmountLowThreshold = chunkSize;
-    bulkChannel.bufferedAmountLowThreshold = chunkSize;
-
-    unsubs.push(
-      controlChannel.onMessage((d) => handleControlMessage(d, thisGeneration)),
-      // Channels open just AFTER ICE 'connected'; completion waits for both
-      // (writing a frame to a still-'connecting' channel would throw).
-      controlChannel.onOpen(() => tryComplete(thisGeneration)),
-      bulkChannel.onOpen(() => tryComplete(thisGeneration)),
-      bulkChannel.onMessage((d) => {
-        if (thisGeneration !== generation || closed) return;
-        void bulkDecoder.push(d);
-      }),
-      controlChannel.onClose(() => {
-        if (thisGeneration !== generation) return;
-        onPipeDown("control channel closed");
-      }),
-    );
-
-    // Signaling glue.
-    unsubs.push(
-      pc.onLocalDescription((desc) => void sig.sendDescription(desc).catch((e) => console.warn(`${log} sendDescription`, e))),
-      pc.onLocalCandidate((cand) => void sig.sendCandidate(cand).catch((e) => console.warn(`${log} sendCandidate`, e))),
-      sig.onDescription((desc) => void onRemoteDescription(desc, thisGeneration)),
-      sig.onCandidate((cand) => void pc.addRemoteCandidate(cand).catch((e) => console.warn(`${log} addRemoteCandidate`, e))),
-      sig.onClosed((reason) => {
-        // Signaling is the rendezvous for the handshake (offer/answer/ICE) only.
-        // Once the pipe is connected it is independent of signaling, so a
-        // signaling-WS close — e.g. an idle dev-worker timeout (code 1006) — must
-        // NOT tear down a healthy pipe. Only a close DURING the handshake is fatal.
-        if (status !== "connected") onPipeDown(`signaling closed: ${reason ?? ""}`);
-      }),
-      pc.onConnectionStateChange((state) => onConnectionState(state, thisGeneration)),
-    );
-
-    if (role === "offerer") {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-    }
-  }
-
-  async function onRemoteDescription(desc: { type: "offer" | "answer"; sdp: string }, forGeneration: number): Promise<void> {
-    if (forGeneration !== generation || !peer) return;
-    await peer.setRemoteDescription(desc);
-    if (desc.type === "offer" && role === "answerer") {
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-    }
-  }
-
-  function onConnectionState(state: RtcConnectionState, forGeneration: number): void {
-    if (forGeneration !== generation || closed) return;
-    if (state === "connected") {
-      options.onCandidateType?.(peer?.selectedCandidateType() ?? null);
-      tryComplete(forGeneration);
-    } else if (state === "failed") {
-      onPipeDown(`ICE ${state}`);
-    }
-    // ICE "disconnected" is TRANSIENT — the agent keeps probing and usually
-    // recovers to "connected" (common on relay paths / flaky links). Tearing the
-    // pipe down here would abort a recoverable connection mid-transfer; the
-    // keepalive timeout is the backstop if it never comes back.
-  }
-
   /**
-   * Idempotently complete the connection once BOTH the DTLS pin is verified and
-   * the control+bulk channels are open. Triggered by ICE 'connected' AND by each
-   * channel's onOpen (whichever lands last), so we never declare the pipe ready
-   * before a frame can actually be written.
+   * Idempotently complete the connection. Triggered by ICE 'connected', each
+   * channel's onOpen and the remote hello (whichever lands last). Order:
+   *  1. pin verified (FAIL-CLOSED on mismatch),
+   *  2. both channels open → our hello goes out DIRECTLY (first control frame),
+   *  3. remote hello received → negotiate chunk/keepalive → "connected".
    */
   function tryComplete(forGeneration: number): void {
     if (forGeneration !== generation || closed || status === "connected") return;
@@ -447,20 +731,59 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       pinVerified = true;
     }
     if (control.readyState !== "open" || bulk.readyState !== "open") return; // wait for channel-open
+    if (!helloSent) {
+      // Advertise min(chunkSize option, the channel's REAL maxMessageSize with a
+      // 16 KiB floor-default — RN adapters may report 0/undefined, and 16 KiB is
+      // the RN corruption cap exactly as DEFAULT_CHUNK_SIZE encodes).
+      advertisedMaxMsg = control.maxMessageSize || DEFAULT_CHUNK_SIZE;
+      if (options.chunkSize) advertisedMaxMsg = Math.min(options.chunkSize, advertisedMaxMsg);
+      const hello: SessionHelloFrame = {
+        t: SESSION_HELLO,
+        proto: SESSION_PROTOCOL_VERSION,
+        maxMsg: advertisedMaxMsg,
+        ...(options.platform ? { platform: options.platform } : {}),
+        keepalive: { ...LOCAL_KEEPALIVE },
+      };
+      try {
+        writeControlDirect(hello);
+      } catch (error) {
+        onPipeDown(`hello send failed: ${error instanceof Error ? error.message : String(error)}`);
+        return;
+      }
+      helloSent = true;
+      armHelloTimer();
+    }
+    if (!remoteHello) return; // §1.1: connected only after the hello exchange
+    clearHelloTimer();
+    effectiveChunk = Math.min(advertisedMaxMsg, remoteHello.maxMsg, MAX_CHUNK_SIZE);
+    keepaliveIntervalMs = Math.min(
+      LOCAL_KEEPALIVE.intervalMs,
+      remoteHello.keepalive?.intervalMs || Number.POSITIVE_INFINITY,
+    );
+    keepaliveTimeoutMs = Math.min(
+      LOCAL_KEEPALIVE.timeoutMs,
+      remoteHello.keepalive?.timeoutMs || Number.POSITIVE_INFINITY,
+    );
     lastPongAt = Date.now();
     reconnectAttempt = 0;
     startKeepalive();
-    // (Re)open every live session over the (re)established pipe.
-    for (const session of sessions.values()) reopenSession(session);
+    emitCandidateType(peer.selectedCandidateType());
+    // (Re)open every live session over the (re)established pipe. Runs BEFORE the
+    // status flip so a status-driven send observes a pending openPromise.
+    for (const session of [...sessions.values()]) reopenSession(session);
     resolveConnect?.();
     connectResolved = true;
     setStatus("connected");
   }
 
-  function onPipeDown(reason: string): void {
-    if (closed || recovering) return;
+  // -- pipe-down + serialized recovery (§3.2) -----------------------------------
+
+  /** Fail everything riding the pipe; status flips to "disconnected" BEFORE any
+   * recovery starts (the status contract the shared bootstrap depends on). */
+  function failPipe(reason: string): void {
     setStatus("disconnected");
     stopKeepalive();
+    clearHelloTimer();
     // The connect promise resolved when this (now-dead) pipe first came up, so
     // re-arm it to a fresh pending one — otherwise ready()/connect() during recovery
     // would return the stale resolved promise and proceed over a down pipe. Only
@@ -474,28 +797,92 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           reject(error);
         };
       });
+      // Mark handled: nobody may ever await this re-armed promise (recovery is
+      // background); a close() that rejects it must not surface an unhandled
+      // rejection. A caller that DOES connect()/ready() still observes it.
+      void connectPromise.catch(() => undefined);
     }
+    emitCandidateType(null);
     // Fail loud: reject in-flight streams + server→client bridge calls now; the
     // sessions re-open after recovery (callers retry against a live pipe).
     inboundMux.closeAll(errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE));
+    for (const [, stream] of activeStreams) {
+      stream.offAbort();
+      stream.abortUpload?.(errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE));
+    }
+    activeStreams.clear();
     for (const session of sessions.values()) session.onPipeDown(reason);
-    void reestablish(reason);
+  }
+
+  function onPipeDown(reason: string): void {
+    if (closed) return;
+    if (establishing) {
+      // §3.2: never a concurrent teardown — flag it; recovery re-runs after the
+      // in-flight establish settles.
+      if (!dirty) {
+        dirty = true;
+        console.warn(`${log} pipe down during establish: ${reason}`);
+        failPipe(reason);
+      }
+      return;
+    }
+    if (reconnectTimer !== null) return; // already down; recovery scheduled
+    console.warn(`${log} pipe down: ${reason}`);
+    failPipe(reason);
+    scheduleReestablish(reason);
+  }
+
+  /** Backoff+jitter mirroring the WS transport (capped 30 s). The timer is
+   * tracked (cancelled by close()) and unref'd. */
+  function scheduleReestablish(reason: string): void {
+    if (closed || establishing || reconnectTimer !== null) return;
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt + Math.random() * RECONNECT_JITTER_MS,
+      RECONNECT_MAX_DELAY_MS,
+    );
+    reconnectAttempt++;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      console.warn(`${log} re-establishing pipe (attempt ${reconnectAttempt}, after: ${reason})`);
+      void runEstablish(reason);
+    }, delay);
+    unrefTimer(reconnectTimer);
   }
 
   /**
-   * Recover by re-establishing the peer over the PERSISTENT signaling room
-   * (plan §1/§2). We do a full re-establish (new PeerConnection + DTLS) rather
-   * than relying on `restartIce()`, which `node-datachannel` may not expose —
-   * full re-establish is the reliable path on every native stack, re-verifies
-   * the fingerprint pin, and auto-reopens every session. Backoff+jitter mirrors
-   * the WS transport (capped 30 s). `generation` (bumped inside establishPeer)
-   * fences any late callbacks from the torn-down peer.
+   * The ONE establish runner — every path (initial connect, reestablish) funnels
+   * here, so there is exactly one in-flight establishPeer, always. A down-event
+   * during the attempt sets `dirty`, consumed after the attempt settles.
    */
-  async function reestablish(reason: string): Promise<void> {
-    if (closed || recovering) return;
-    recovering = true;
+  async function runEstablish(reason: string): Promise<void> {
+    if (closed || establishing) return;
+    establishing = true;
+    dirty = false;
     setStatus("connecting");
-    // Drop the old peer + its subscriptions before standing up a new one.
+    try {
+      await establishPeer();
+    } catch (error) {
+      console.warn(
+        `${log} establish failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      dirty = true;
+    } finally {
+      establishing = false;
+    }
+    if (closed) return;
+    if (dirty) {
+      dirty = false;
+      setStatus("disconnected");
+      scheduleReestablish(`${reason} (attempt failed)`);
+    }
+  }
+
+  /** Tear down the current peer/channels/schedulers and reset per-pipe codec
+   * state. Runs at the START of every establish (the previous peer is closed
+   * BEFORE the new one is assigned) and on hardClose. */
+  function teardownPipe(): void {
+    clearHelloTimer();
+    stopKeepalive();
     for (const off of unsubs.splice(0)) {
       try {
         off();
@@ -503,6 +890,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         /* ignore */
       }
     }
+    controlScheduler?.close();
+    bulkScheduler?.close();
+    controlScheduler = null;
+    bulkScheduler = null;
     try {
       control?.close();
     } catch {
@@ -518,41 +909,204 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     } catch {
       /* ignore */
     }
-    control = bulk = null;
+    control = null;
+    bulk = null;
     peer = null;
     pinVerified = false;
+    helloSent = false;
+    remoteHello = null;
+    advertisedMaxMsg = DEFAULT_CHUNK_SIZE;
+    effectiveChunk = DEFAULT_CHUNK_SIZE;
     // A fresh pipe must not reassemble against the dead pipe's leftovers: drop any
-    // half-decoded bulk stream frames and half-reassembled control fragments.
-    bulkDecoder.reset();
+    // half-demuxed bulk continuations and half-reassembled control fragments.
+    bulkDemux.reset();
     controlCodec.reset();
-    const delay = Math.min(1000 * 2 ** reconnectAttempt + Math.random() * 500, 30_000);
-    reconnectAttempt++;
-    await new Promise((r) => setTimeout(r, delay));
-    recovering = false;
-    if (closed) return;
-    console.warn(`${log} re-establishing pipe (attempt ${reconnectAttempt}, after: ${reason})`);
+  }
+
+  // -- signaling + peer lifecycle ------------------------------------------
+
+  async function establishPeer(): Promise<void> {
+    // Close the previous pipe BEFORE standing up (or assigning) the new one.
+    teardownPipe();
+    // Fresh signaling per (re)establish — see createSignaling. The local `sig`
+    // binds this establish's handlers to ITS signaling so a later re-establish
+    // (which reassigns the outer `signaling`) cannot make an in-flight handler
+    // send into the wrong socket.
     try {
-      await establishPeer();
-    } catch (error) {
-      onPipeDown(`re-establish failed: ${error instanceof Error ? error.message : String(error)}`);
+      signaling?.close();
+    } catch {
+      /* already closed */
+    }
+    const thisGeneration = ++generation;
+    const sig = options.createSignaling();
+    signaling = sig;
+    // Registered BEFORE any await: a signaling drop during setup must count as
+    // a down-event (previously it fell through the cracks until the offer send
+    // failed). Once the pipe is connected it is independent of signaling, so an
+    // idle-close of the room WS must NOT tear down a healthy pipe.
+    unsubs.push(
+      sig.onClosed((reason) => {
+        if (thisGeneration !== generation || closed) return;
+        if (status !== "connected") onPipeDown(`signaling closed: ${reason ?? ""}`);
+      }),
+    );
+    const iceServers = sig.fetchIceServers
+      ? await sig.fetchIceServers()
+      : pairing.iceServers ?? [];
+    if (thisGeneration !== generation || closed || dirty) return; // aborted under us
+
+    const pc = await provider.create({
+      iceServers,
+      iceTransportPolicy: pairing.iceTransportPolicy,
+    });
+    if (thisGeneration !== generation || closed || dirty) {
+      try {
+        pc.close();
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    peer = pc;
+
+    // Pre-negotiated channels: both peers open matching ids.
+    const controlChannel = pc.createDataChannel(CONTROL_LABEL, {
+      ordered: true,
+      negotiated: true,
+      id: CONTROL_CHANNEL_ID,
+    });
+    const bulkChannel = pc.createDataChannel(BULK_LABEL, {
+      ordered: true,
+      negotiated: true,
+      id: BULK_CHANNEL_ID,
+    });
+    control = controlChannel;
+    bulk = bulkChannel;
+    controlChannel.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
+    bulkChannel.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
+    // One scheduler pair per pipe generation, bound to THESE channels: queued
+    // bytes can never leak into the next generation (teardown settles them).
+    controlScheduler = createFrameScheduler({ getChannel: () => controlChannel });
+    bulkScheduler = createFrameScheduler({ getChannel: () => bulkChannel });
+
+    unsubs.push(
+      controlChannel.onMessage((d) => handleControlMessage(d, thisGeneration)),
+      // Channels open just AFTER ICE 'connected'; completion waits for both
+      // (writing a frame to a still-'connecting' channel would throw).
+      controlChannel.onOpen(() => tryComplete(thisGeneration)),
+      bulkChannel.onOpen(() => tryComplete(thisGeneration)),
+      bulkChannel.onMessage((d) => handleBulkMessage(d, thisGeneration)),
+      controlChannel.onClose(() => {
+        if (thisGeneration !== generation) return;
+        onPipeDown("control channel closed");
+      }),
+      bulkChannel.onClose(() => {
+        if (thisGeneration !== generation) return;
+        onPipeDown("bulk channel closed");
+      }),
+      controlChannel.onError((error) => {
+        if (thisGeneration !== generation) return;
+        onPipeDown(`control channel error: ${error.message}`);
+      }),
+      bulkChannel.onError((error) => {
+        if (thisGeneration !== generation) return;
+        onPipeDown(`bulk channel error: ${error.message}`);
+      }),
+    );
+
+    // Candidate buffering (§3.2): queue inbound remote candidates until a remote
+    // description has been applied to the CURRENT peer, then flush. RN's
+    // setRemoteDescription is genuinely async — candidates racing it were dropped.
+    let remoteDescApplied = false;
+    const pendingCandidates: RtcIceCandidate[] = [];
+    const applyRemoteDescription = async (desc: { type: "offer" | "answer"; sdp: string }): Promise<void> => {
+      await pc.setRemoteDescription(desc);
+      if (thisGeneration !== generation || closed) return;
+      if (desc.type === "offer" && role === "answerer") {
+        const answer = await pc.createAnswer();
+        if (thisGeneration !== generation || closed) return;
+        await pc.setLocalDescription(answer);
+        if (thisGeneration !== generation || closed) return;
+      }
+      remoteDescApplied = true;
+      for (const cand of pendingCandidates.splice(0)) {
+        try {
+          await pc.addRemoteCandidate(cand);
+        } catch (error) {
+          console.warn(`${log} addRemoteCandidate (buffered)`, error);
+        }
+      }
+    };
+
+    // Signaling glue. Every void'd async handler carries a .catch — a failure
+    // that makes the pipe unusable (description exchange) is a down-event, never
+    // an unhandled rejection crash (§3.2).
+    unsubs.push(
+      pc.onLocalDescription((desc) =>
+        void sig.sendDescription(desc).catch((error) => {
+          console.warn(`${log} sendDescription`, error);
+          if (thisGeneration === generation) onPipeDown("signaling sendDescription failed");
+        }),
+      ),
+      pc.onLocalCandidate((cand) =>
+        void sig.sendCandidate(cand).catch((error) => console.warn(`${log} sendCandidate`, error)),
+      ),
+      sig.onDescription((desc) => {
+        if (thisGeneration !== generation || closed) return;
+        void applyRemoteDescription(desc).catch((error) => {
+          console.warn(`${log} setRemoteDescription`, error);
+          if (thisGeneration === generation) onPipeDown("setRemoteDescription failed");
+        });
+      }),
+      sig.onCandidate((cand) => {
+        if (thisGeneration !== generation || closed) return;
+        if (!remoteDescApplied) {
+          pendingCandidates.push(cand);
+          return;
+        }
+        void pc.addRemoteCandidate(cand).catch((error) => console.warn(`${log} addRemoteCandidate`, error));
+      }),
+      pc.onConnectionStateChange((state) => onConnectionState(state, thisGeneration)),
+    );
+
+    if (role === "offerer") {
+      const offer = await pc.createOffer();
+      if (thisGeneration !== generation || closed) return;
+      await pc.setLocalDescription(offer);
     }
   }
 
+  function onConnectionState(state: RtcConnectionState, forGeneration: number): void {
+    if (forGeneration !== generation || closed) return;
+    if (state === "connected") {
+      tryComplete(forGeneration);
+    } else if (state === "failed") {
+      onPipeDown(`ICE ${state}`);
+    }
+    // ICE "disconnected" is TRANSIENT — the agent keeps probing and usually
+    // recovers to "connected" (common on relay paths / flaky links). Tearing the
+    // pipe down here would abort a recoverable connection mid-transfer; the
+    // keepalive timeout is the backstop if it never comes back.
+  }
+
+  // -- keepalive (§1.4: out-of-band, parameters from the hello) -----------------
+
   function startKeepalive(): void {
     stopKeepalive();
+    const timeout = keepaliveTimeoutMs;
     keepaliveTimer = setInterval(() => {
       if (!control || control.readyState !== "open") return;
-      if (Date.now() - lastPongAt > KEEPALIVE_TIMEOUT_MS) {
+      if (Date.now() - lastPongAt > timeout) {
         onPipeDown("keepalive timeout");
         return;
       }
       try {
-        writeControlFrame({ t: SESSION_PING, ts: Date.now() });
+        writeControlDirect({ t: SESSION_PING, ts: Date.now() });
       } catch {
         /* pipe gone */
       }
-    }, KEEPALIVE_INTERVAL_MS);
-    (keepaliveTimer as { unref?: () => void }).unref?.();
+    }, keepaliveIntervalMs);
+    unrefTimer(keepaliveTimer);
   }
 
   function stopKeepalive(): void {
@@ -560,41 +1114,74 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       clearInterval(keepaliveTimer);
       keepaliveTimer = null;
     }
+    // A nudge deadline belongs to a live pipe; every stopKeepalive() path is a
+    // pipe-down/teardown/close, so drop it here too (no leaked timer fires
+    // onPipeDown against a already-dead or reconnecting pipe).
+    clearNudgeTimer();
+  }
+
+  function clearNudgeTimer(): void {
+    if (nudgeTimer !== null) {
+      clearTimeout(nudgeTimer);
+      nudgeTimer = null;
+    }
+  }
+
+  /**
+   * Liveness probe (§3.1): send an immediate out-of-band ping and arm a one-shot
+   * 5 s pong deadline; if no pong lands, declare the pipe down so the recovery
+   * loop reestablishes NOW rather than after the ~45 s keepalive timeout. Any
+   * pong clears the deadline. No-op unless the pipe is fully up and no recovery
+   * is in flight (there is nothing to probe, and the reconnect loop already
+   * owns the reestablish). Mobile calls this on foreground / network-type change.
+   */
+  function nudge(): void {
+    if (closed || status !== "connected" || establishing || reconnectTimer !== null) return;
+    if (!control || control.readyState !== "open") return;
+    try {
+      writeControlDirect({ t: SESSION_PING, ts: Date.now() });
+    } catch {
+      return; // pipe gone under us — the channel handlers drive recovery
+    }
+    clearNudgeTimer();
+    nudgeTimer = setTimeout(() => {
+      nudgeTimer = null;
+      if (closed || status !== "connected") return;
+      onPipeDown("nudge timeout");
+    }, NUDGE_PONG_DEADLINE_MS);
+    unrefTimer(nudgeTimer);
   }
 
   async function hardClose(): Promise<void> {
+    if (closed) return;
     closed = true;
     // Settle any pending connect promise (initial OR re-armed during recovery) so
     // an awaiting connect()/ready() rejects rather than hanging on a closed pipe.
     rejectConnect?.(errorWithCode("Transport closed", PIPE_CLOSED_CODE));
-    stopKeepalive();
-    for (const off of unsubs.splice(0)) {
-      try {
-        off();
-      } catch {
-        /* ignore */
-      }
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
-    try {
-      control?.close();
-    } catch {
-      /* ignore */
-    }
-    try {
-      bulk?.close();
-    } catch {
-      /* ignore */
-    }
-    try {
-      peer?.close();
-    } catch {
-      /* ignore */
-    }
+    teardownPipe();
     try {
       signaling?.close();
     } catch {
       /* ignore */
     }
+    // Fail every session and CLEAR the map — nothing awaiting ready()/openPromise
+    // may hang, and closed sessions must not leak (§3.2).
+    const all = [...sessions.values()];
+    sessions.clear();
+    // Hard close settles every pending at the client layer — a re-drive after
+    // this would be wrong, and there is no next pipe anyway (§3.4).
+    unflushedRouted.clear();
+    for (const session of all) session.onPipeDown("transport closed");
+    inboundMux.closeAll(errorWithCode("WebRTC transport closed", PIPE_CLOSED_CODE));
+    for (const [, stream] of activeStreams) {
+      stream.offAbort();
+      stream.abortUpload?.(errorWithCode("WebRTC transport closed", PIPE_CLOSED_CODE));
+    }
+    activeStreams.clear();
     setStatus("disconnected");
   }
 
@@ -606,43 +1193,190 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     return id;
   }
 
+  function settleStream(streamId: number): void {
+    const stream = activeStreams.get(streamId);
+    if (!stream) return;
+    activeStreams.delete(streamId);
+    stream.offAbort();
+    // The request settled (END/ERROR/abort/cancel): a still-running upload has
+    // nothing left to feed — stop it. Completed pumps ignore this (no-op).
+    stream.abortUpload?.(errorWithCode("stream settled before upload completed", PIPE_CLOSED_CODE));
+  }
+
+  /**
+   * Pump a streaming REQUEST body onto the bulk channel as DATA frames keyed by
+   * `bodyStreamId` (plan §1.6). Each `sendBulkFrame` is AWAITED — the pipe's
+   * bounded scheduler queue IS the upload backpressure. Clean EOF sends END;
+   * abort / reader failure / send failure sends `{message, code:"UPLOAD_ABORTED"}`
+   * as an ERROR frame AND fails the stream() result loudly (mux fail +
+   * stream-cancel), unless the failure came from the stream's own settlement.
+   */
+  function pumpRequestBody(
+    sid: string,
+    streamId: number,
+    bodyStreamId: number,
+    body: ReadableStream<Uint8Array>,
+  ): { abort: (error: Error) => void } {
+    const reader = body.getReader();
+    let abortError: Error | null = null;
+    const abort = (error: Error): void => {
+      if (abortError) return;
+      abortError = error;
+      // Wake a parked read() (cancel resolves it done) and discard the queued
+      // unsent backlog so the ERROR frame is not stuck behind megabytes of DATA.
+      void reader.cancel(error).catch(() => undefined);
+      bulkScheduler?.dropKey(bodyStreamId);
+    };
+    void (async () => {
+      let bytesOut = 0;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (abortError) throw abortError;
+          if (done) break;
+          if (value && value.byteLength > 0) {
+            bytesOut += value.byteLength;
+            // Await = upload backpressure (bounded scheduler). It settles (never
+            // rejects) on pipe-down; the abortError check after it catches that.
+            await sendBulkFrame(bodyStreamId, FRAME_DATA, value);
+            if (abortError) throw abortError;
+          }
+        }
+        await sendBulkFrame(bodyStreamId, FRAME_END, encoder.encode(JSON.stringify({ bytesIn: bytesOut })));
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        // Settle the server's inbound body loudly (it must never hang half-fed).
+        try {
+          await sendBulkFrame(
+            bodyStreamId,
+            FRAME_ERROR,
+            encoder.encode(JSON.stringify({ message: err.message, code: "UPLOAD_ABORTED" })),
+          );
+        } catch {
+          /* pipe gone — the server reaps the body via session/pipe teardown */
+        }
+        if (abortError !== err) {
+          // A pump-originated failure (reader threw / send failed), not a
+          // settlement-driven stop: fail the caller's stream() result loudly
+          // and tell the server to stop serving the request.
+          inboundMux.fail(streamId, err);
+          try {
+            writeControlFrame({ t: SESSION_STREAM_CANCEL, sid, streamId });
+          } catch {
+            /* pipe gone */
+          }
+          settleStream(streamId);
+        }
+      }
+    })();
+    return { abort };
+  }
+
   function beginStream(
     sid: string,
     envelope: RpcEnvelope,
-    signal?: AbortSignal | null
-  ): ReadableStream<Uint8Array> {
+    signal?: AbortSignal | null,
+    requestBody?: ReadableStream<Uint8Array> | null
+  ): {
+    body: ReadableStream<Uint8Array>;
+    onBodyCancel: (reason?: unknown) => void;
+  } {
     const streamId = allocateStream();
     const body = inboundMux.acquire(streamId);
-    // Send the stream-open control frame; the response body rides the bulk channel.
-    writeControlFrame({ t: SESSION_STREAM_OPEN, sid, streamId, envelope });
+    const noopCancel = (): void => undefined;
+    if (signal?.aborted) {
+      // Pre-aborted: never opens on the wire; the body settles immediately.
+      inboundMux.fail(streamId, errorWithCode("Streaming RPC aborted by caller", PIPE_CLOSED_CODE));
+      if (requestBody) void requestBody.cancel().catch(() => undefined);
+      return { body, onBodyCancel: noopCancel };
+    }
+    let offAbort = (): void => undefined;
     if (signal) {
       const onAbort = (): void => {
+        // Abort settles LOCALLY too (§3.5): fail the mux entry so a pre-HEAD
+        // await rejects now, and tell the server to stop producing. settleStream
+        // also aborts an in-flight upload pump (§1.6), whose ERROR frame settles
+        // the server's inbound body.
+        inboundMux.fail(streamId, errorWithCode("Streaming RPC aborted by caller", PIPE_CLOSED_CODE));
         try {
           writeControlFrame({ t: SESSION_STREAM_CANCEL, sid, streamId });
         } catch {
           /* pipe gone */
         }
+        settleStream(streamId);
       };
-      if (signal.aborted) onAbort();
-      else signal.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener("abort", onAbort, { once: true });
+      // Removed when the stream settles (END/ERROR/abort/pipe-down) — no
+      // listener accumulation on shared signals.
+      offAbort = () => signal.removeEventListener("abort", onAbort);
     }
-    return body;
+    const entry: { sid: string; offAbort: () => void; abortUpload?: (error: Error) => void } = {
+      sid,
+      offAbort,
+    };
+    activeStreams.set(streamId, entry);
+    // The request body rides the bulk channel too, keyed by its OWN stream id,
+    // declared on the stream-open (plan §1.6). The open frame is SENT before
+    // the first DATA frame, but control and bulk are independent SCTP streams,
+    // so cross-channel ARRIVAL order is not guaranteed — the server holds
+    // early DATA in a bounded pre-open buffer and flushes it when the open
+    // lands (rpcServer.attachWebRtcPipe), so the pump can start immediately
+    // with no open-ack round trip.
+    const bodyStreamId = requestBody ? allocateStream() : undefined;
+    try {
+      // The response body rides the bulk channel keyed by streamId.
+      writeControlFrame({
+        t: SESSION_STREAM_OPEN,
+        sid,
+        streamId,
+        ...(bodyStreamId !== undefined ? { bodyStreamId } : {}),
+        envelope,
+      });
+    } catch (error) {
+      inboundMux.fail(streamId, error instanceof Error ? error : new Error(String(error)));
+      settleStream(streamId);
+      if (requestBody) void requestBody.cancel().catch(() => undefined);
+      return { body, onBodyCancel: noopCancel };
+    }
+    if (requestBody && bodyStreamId !== undefined) {
+      entry.abortUpload = pumpRequestBody(sid, streamId, bodyStreamId, requestBody).abort;
+    }
+    return {
+      body,
+      onBodyCancel: () => {
+        if (!activeStreams.has(streamId)) return;
+        try {
+          writeControlFrame({ t: SESSION_STREAM_CANCEL, sid, streamId });
+        } catch {
+          /* pipe gone */
+        }
+        settleStream(streamId);
+      },
+    };
   }
 
   function openStream(
     sid: string,
     envelope: RpcEnvelope,
-    signal?: AbortSignal | null
+    signal?: AbortSignal | null,
+    requestBody?: ReadableStream<Uint8Array> | null
   ): Promise<Response> {
-    return decodeFramedResponseToStreaming(beginStream(sid, envelope, signal), "", signal);
+    const started = beginStream(sid, envelope, signal, requestBody);
+    return decodeFramedResponseToStreaming(started.body, "", signal, {
+      onBodyCancel: started.onBodyCancel,
+    });
   }
 
   function openStreamReadable(
     sid: string,
     envelope: RpcEnvelope,
-    signal?: AbortSignal | null
+    signal?: AbortSignal | null,
+    requestBody?: ReadableStream<Uint8Array> | null
   ): Promise<DecodedFramedStream> {
-    return decodeFramedStream(beginStream(sid, envelope, signal), "", signal);
+    const started = beginStream(sid, envelope, signal, requestBody);
+    return decodeFramedStream(started.body, "", signal, {
+      onBodyCancel: started.onBodyCancel,
+    });
   }
 
   // -- session implementation ----------------------------------------------
@@ -652,10 +1386,17 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     private readonly messageListeners = new Set<(envelope: RpcEnvelope) => void>();
     private resolvedCallerId: string | undefined;
     private lastServerBootId: string | undefined;
-    private hasOpenedBefore = false;
+    /** Reopen generation (§3.3): a getToken continuation whose generation went
+     * stale is discarded un-sent (never burns a fresh one-shot grant). */
+    private openGen = 0;
+    private retryAttempt = 0;
+    private retryTimer: ReturnType<typeof setTimeout> | null = null;
+    private deadlineTimer: ReturnType<typeof setTimeout> | null = null;
     private openResolve: (() => void) | null = null;
     private openReject: ((error: unknown) => void) | null = null;
     private openPromise: Promise<void> | null = null;
+    /** The current openPromise has settled (resolved or rejected). */
+    private openSettled = false;
     private sessionClosed = false;
 
     constructor(private readonly opts: WebRtcSessionOptions) {
@@ -666,78 +1407,226 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       return this.resolvedCallerId;
     }
 
+    /** True only while this instance owns its sid in the transport's map —
+     * a superseded instance must never announce/close for its replacement. */
+    private isCurrent(): boolean {
+      return sessions.get(this.sid) === this;
+    }
+
+    private ensureOpenPromise(): void {
+      if (this.openPromise && !this.openSettled) return; // pending — keep it
+      this.openSettled = false;
+      this.openPromise = new Promise<void>((resolve, reject) => {
+        this.openResolve = () => {
+          this.openSettled = true;
+          resolve();
+        };
+        this.openReject = (error) => {
+          this.openSettled = true;
+          reject(error);
+        };
+      });
+      // Mark handled: a background reopen with no ready() caller must not
+      // surface an unhandled rejection; real awaiters still observe it.
+      void this.openPromise.catch(() => undefined);
+    }
+
     async reopen(): Promise<void> {
       if (this.sessionClosed || closed) return;
+      this.cancelRetry(); // a direct reopen supersedes a scheduled one
+      const gen = ++this.openGen;
       // Assign openPromise SYNCHRONOUSLY — before the (possibly async) getToken —
       // so a caller's ready() actually waits for the session to authenticate.
-      // ready() resolves immediately when openPromise is unset; with an async
-      // token provider (mobile's one-shot panel grant) the old order let ready()
-      // resolve BEFORE SESSION_OPEN was even sent, so the caller sent RPC on an
-      // unopened session and the server (no shim yet) silently dropped it.
-      this.openPromise = new Promise<void>((resolve, reject) => {
-        this.openResolve = resolve;
-        this.openReject = reject;
-      });
-      try {
-        const token = await this.opts.getToken();
-        writeControlFrame({
-          t: SESSION_OPEN,
-          sid: this.sid,
-          token,
-          connectionId: this.opts.connectionId,
-          clientSessionId: this.opts.clientSessionId,
-          clientLabel: this.opts.clientLabel,
-          clientPlatform: this.opts.clientPlatform,
-        });
-      } catch (err) {
-        // getToken failed (e.g. grant fetch rejected) — fail ready() loudly
-        // instead of leaving it hung on a promise that never settles.
-        this.openReject?.(err instanceof Error ? err : new Error(String(err)));
+      this.ensureOpenPromise();
+      this.armDeadline(gen);
+      const result = this.openPromise!;
+      void (async () => {
+        let token: string;
+        try {
+          token = await this.opts.getToken();
+        } catch (error) {
+          if (gen !== this.openGen || this.sessionClosed || closed) return;
+          console.warn(`${log} session ${this.sid} getToken failed`, error);
+          // Non-terminal open failure → per-session backoff retry (§3.3).
+          this.clearDeadline();
+          this.scheduleRetry("getToken failed");
+          return;
+        }
+        if (gen !== this.openGen || this.sessionClosed || closed) return; // STALE — discard the grant un-sent
+        try {
+          writeControlFrame({
+            t: SESSION_OPEN,
+            sid: this.sid,
+            token,
+            connectionId: this.opts.connectionId,
+            clientSessionId: this.opts.clientSessionId,
+            clientLabel: this.opts.clientLabel,
+            clientPlatform: this.opts.clientPlatform,
+          });
+        } catch {
+          // Pipe dropped between checks — recovery reopens every session on the
+          // next pipe-up; the deadline is cleared by onPipeDown.
+        }
+      })();
+      return result;
+    }
+
+    private armDeadline(gen: number): void {
+      this.clearDeadline();
+      this.deadlineTimer = setTimeout(() => {
+        this.deadlineTimer = null;
+        if (gen !== this.openGen || this.sessionClosed || closed || this.openSettled) return;
+        console.warn(`${log} session ${this.sid} open attempt timed out after ${SESSION_OPEN_DEADLINE_MS}ms`);
+        this.scheduleRetry("open deadline");
+      }, SESSION_OPEN_DEADLINE_MS);
+      unrefTimer(this.deadlineTimer);
+    }
+
+    private clearDeadline(): void {
+      if (this.deadlineTimer !== null) {
+        clearTimeout(this.deadlineTimer);
+        this.deadlineTimer = null;
       }
-      return this.openPromise;
+    }
+
+    /** Per-session reopen backoff (cap ~15 s); stops on terminal close, session
+     * close, transport close, or when this instance was superseded. */
+    private scheduleRetry(reason: string): void {
+      if (this.sessionClosed || closed || this.retryTimer !== null || !this.isCurrent()) return;
+      const delay = Math.min(
+        SESSION_RETRY_BASE_DELAY_MS * 2 ** this.retryAttempt + Math.random() * SESSION_RETRY_JITTER_MS,
+        SESSION_RETRY_MAX_DELAY_MS,
+      );
+      this.retryAttempt++;
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        if (this.sessionClosed || closed || !this.isCurrent()) return;
+        if (status !== "connected") return; // pipe recovery reopens on completion
+        console.warn(`${log} session ${this.sid} reopening (attempt ${this.retryAttempt}, after: ${reason})`);
+        void this.reopen().catch(() => undefined);
+      }, delay);
+      unrefTimer(this.retryTimer);
+    }
+
+    private cancelRetry(): void {
+      if (this.retryTimer !== null) {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+      }
     }
 
     onOpenResult(frame: SessionOpenResultFrame): void {
+      if (this.sessionClosed) return;
       if (!frame.success) {
         const error = errorWithCode(frame.error ?? "Session auth failed", "SESSION_AUTH_FAILED");
-        this.openReject?.(error);
-        if (frame.terminal) this.sessionClosed = true;
+        if (frame.terminal) {
+          this.terminate(error);
+          return;
+        }
+        console.warn(`${log} session ${this.sid} open rejected (non-terminal): ${error.message}`);
+        this.clearDeadline();
+        this.scheduleRetry("open rejected");
         return;
       }
+      void this.finishOpen(frame).catch((error) => {
+        if (this.sessionClosed) return;
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.terminate(err);
+      });
+    }
+
+    private async finishOpen(frame: SessionOpenResultFrame): Promise<void> {
+      if (this.sessionClosed) return;
+      this.clearDeadline();
+      this.retryAttempt = 0;
       this.resolvedCallerId = frame.callerId;
       // A freshly paired device's credential rides back on the first open-result
       // (the server keeps only its hash). Hand it to the client to persist before
       // resolving ready(), so a reconnect can authenticate with the refresh secret.
-      if (frame.deviceCredential) this.opts.onPaired?.(frame.deviceCredential);
-      // cold-recover vs resubscribe (parity with wsClient.ts:146-153): server
-      // restart (bootId change) OR a dirty session ⇒ cold-recover.
-      if (this.hasOpenedBefore) {
-        const bootChanged =
-          this.lastServerBootId !== undefined &&
-          frame.serverBootId !== undefined &&
-          this.lastServerBootId !== frame.serverBootId;
-        const kind: RecoveryKind = frame.sessionDirty || bootChanged ? "cold-recover" : "resubscribe";
+      if (frame.deviceCredential) await this.opts.onPaired?.(frame.deviceCredential);
+      if (this.sessionClosed) return;
+      // cold-recover vs resubscribe (WS parity, wsClient.ts:136-155): server
+      // restart (bootId change) OR a dirty session ⇒ cold-recover. Fires on the
+      // FIRST open too — consumers bootstrap their subscriptions off it.
+      const bootChanged =
+        this.lastServerBootId !== undefined &&
+        frame.serverBootId !== undefined &&
+        this.lastServerBootId !== frame.serverBootId;
+      const kind: RecoveryKind = frame.sessionDirty || bootChanged ? "cold-recover" : "resubscribe";
+      try {
         this.opts.onRecovery?.(kind);
+      } catch (error) {
+        console.warn(`${log} session ${this.sid} onRecovery threw`, error);
       }
       this.lastServerBootId = frame.serverBootId;
-      this.hasOpenedBefore = true;
+      // §3.4 delivery gap: a routed REQUEST or RESPONSE that was queued but
+      // never flushed at pipe-down has no server-side trace, so the inbox
+      // replay that keeps routed pendings alive across `resubscribe` can never
+      // settle it (a lost request strands OUR pending; a lost response strands
+      // the REMOTE caller's) — re-drive those frames now that the session is
+      // open on the new pipe. Duplicate-safe (never delivered — see
+      // unflushedRouted) and reorder-safe (RPC responses are requestId-keyed).
+      // On `cold-recover` the client layer rejects the routed pendings
+      // instead; re-driving would resurrect calls whose callers already saw
+      // the failure.
+      if (kind === "resubscribe") {
+        for (const tracked of [...unflushedRouted.values()]) {
+          if (tracked.sid !== this.sid) continue;
+          try {
+            writeControlFrame(tracked); // re-tracks under the new generation's scheduler
+          } catch {
+            // Pipe dropped again under us — entries stay tracked; the next
+            // resubscribe re-drives them (cold-recover / close clears them).
+          }
+        }
+      } else {
+        dropUnflushedRouted(this.sid);
+      }
       this.openResolve?.();
     }
 
     onServerClosed(code: number | undefined, reason: string | undefined, terminal: boolean): void {
-      if (terminal) this.sessionClosed = true;
-      this.failPending(errorWithCode(`Session closed: ${reason ?? code ?? ""}`, PIPE_CLOSED_CODE));
+      if (this.sessionClosed) return;
+      if (terminal) {
+        // Terminal close (lease revoke, panel retired, …): the session leaves
+        // the map — it must never auto-reopen or leak (§1.5).
+        this.terminate(errorWithCode(`Session closed: ${reason ?? code ?? ""}`, PIPE_CLOSED_CODE));
+        return;
+      }
+      // Non-terminal (e.g. 4008 session-not-open after a server-side desync):
+      // sends must wait for the reopen, so re-arm the open promise and schedule
+      // a backoff reopen — the desync self-heals within one round-trip (§1.5).
+      console.warn(`${log} session ${this.sid} closed non-terminally (${code ?? "?"}: ${reason ?? ""}) — reopening`);
+      this.clearDeadline();
+      this.ensureOpenPromise();
+      this.scheduleRetry(`server closed (${code ?? "?"})`);
+    }
+
+    /** Terminal end of this logical session: settle everything, leave the map. */
+    private terminate(error: Error): void {
+      this.sessionClosed = true;
+      this.clearDeadline();
+      this.cancelRetry();
+      if (this.openPromise && !this.openSettled) this.openReject?.(error);
+      this.openResolve = null;
+      this.openReject = null;
+      if (this.isCurrent()) {
+        sessions.delete(this.sid);
+        // A dead session can never re-drive: drop its tracked requests (§3.4).
+        dropUnflushedRouted(this.sid);
+      }
     }
 
     onPipeDown(reason: string): void {
-      this.failPending(errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE));
-    }
-
-    private failPending(error: Error): void {
-      this.openReject?.(error);
-      this.openReject = null;
+      this.clearDeadline();
+      this.cancelRetry();
+      if (this.openPromise && !this.openSettled) {
+        this.openReject?.(errorWithCode(`WebRTC pipe down: ${reason}`, PIPE_CLOSED_CODE));
+      }
       this.openResolve = null;
-      this.openPromise = null;
+      this.openReject = null;
+      this.openPromise = null; // the next pipe-up reopens with a fresh promise
+      this.openSettled = false;
     }
 
     deliverEnvelope(envelope: RpcEnvelope): void {
@@ -824,30 +1713,47 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       return transport.onStatusChange(handler);
     }
 
-    async stream(envelope: RpcEnvelope, signal?: AbortSignal | null): Promise<Response> {
+    async stream(
+      envelope: RpcEnvelope,
+      signal?: AbortSignal | null,
+      body?: ReadableStream<Uint8Array> | null
+    ): Promise<Response> {
       await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`stream() requires a stream-request envelope, got ${message.type}`);
       }
-      return openStream(this.sid, envelope, signal);
+      return openStream(this.sid, envelope, signal, body);
     }
 
     async streamReadable(
       envelope: RpcEnvelope,
-      signal?: AbortSignal | null
+      signal?: AbortSignal | null,
+      body?: ReadableStream<Uint8Array> | null
     ): Promise<DecodedFramedStream> {
       await this.ensureReadyForOutbound();
       const message = envelope.message as RpcStreamRequest;
       if (message.type !== "stream-request") {
         throw new Error(`streamReadable() requires a stream-request envelope, got ${message.type}`);
       }
-      return openStreamReadable(this.sid, envelope, signal);
+      return openStreamReadable(this.sid, envelope, signal, body);
     }
 
     close(): void {
+      const current = this.isCurrent();
       this.sessionClosed = true;
+      this.clearDeadline();
+      this.cancelRetry();
+      if (this.openPromise && !this.openSettled) {
+        this.openReject?.(errorWithCode("Session closed", PIPE_CLOSED_CODE));
+      }
+      this.openResolve = null;
+      this.openReject = null;
+      // Identity-checked (§3.3): a superseded instance must neither evict its
+      // replacement from the map nor announce a close for the shared sid.
+      if (!current) return;
       sessions.delete(this.sid);
+      dropUnflushedRouted(this.sid); // no session ⇒ nothing to re-drive
       try {
         writeControlFrame({ t: SESSION_CLOSE, sid: this.sid });
       } catch {
@@ -887,16 +1793,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           )
         );
       }, connectTimeoutMs);
-      try {
-        await establishPeer();
-      } catch (error) {
-        // Setup (provider/signaling/ICE) threw before the peer wired its own
-        // failure callbacks. Reject + clear the connect promise (rejectConnect
-        // nulls connectPromise) so a later connect() retries cleanly instead of
-        // awaiting this poisoned, never-settling one.
-        rejectConnect?.(error instanceof Error ? error : new Error(String(error)));
-        throw error;
-      }
+      unrefTimer(connectTimer);
+      // Kick the serialized establish runner unless recovery is already driving
+      // it (an in-flight attempt or a scheduled backoff retry — both settle or
+      // re-arm this same connectPromise).
+      if (!establishing && reconnectTimer === null) void runEstablish("initial connect");
       return connectPromise;
     },
     ready(): Promise<void> {
@@ -911,6 +1812,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     },
     openSession(opts: WebRtcSessionOptions): WebRtcSession {
       const session = new SessionImpl(opts);
+      // A live duplicate sid is explicitly closed first (§3.3) — the old
+      // instance announces its own close while it still owns the map slot.
+      const existing = sessions.get(session.sid);
+      if (existing) existing.close();
       sessions.set(session.sid, session);
       // If the pipe is already up, open immediately; otherwise reopen() runs on connect.
       if (status === "connected") reopenSession(session);
@@ -919,6 +1824,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     candidateType(): RtcCandidateType | null {
       return peer?.selectedCandidateType() ?? null;
     },
+    onCandidateType(handler: (type: RtcCandidateType | null) => void): () => void {
+      candidateTypeListeners.add(handler);
+      return () => candidateTypeListeners.delete(handler);
+    },
+    sendBulkFrame,
+    nudge,
     close(): Promise<void> {
       return hardClose();
     },

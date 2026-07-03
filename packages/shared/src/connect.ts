@@ -6,7 +6,12 @@ export const WORKSPACE_ROUTE_PREFIX = "/_workspace/";
 export const PAIRING_ROOM_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 /** DTLS SHA-256 fingerprint after stripping colons: 32 bytes = 64 hex chars. */
 const FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
-export const PAIRING_PROTOCOL_VERSION = 1;
+/**
+ * v2 = room-per-invite pairing (multi-client redesign). The parser REQUIRES
+ * exactly this version: v1 links carried a per-server singleton room that no
+ * longer exists, so they are rejected outright — re-pair with a current link.
+ */
+export const PAIRING_PROTOCOL_VERSION = 2;
 
 export type TurnPolicy = "all" | "relay";
 
@@ -26,7 +31,7 @@ export interface ConnectPairing {
   code: string;
   /** Signaling endpoint (decouples us from a hard-coded host). */
   sig: string;
-  /** Protocol version (defaults to PAIRING_PROTOCOL_VERSION). */
+  /** Protocol version (defaults to PAIRING_PROTOCOL_VERSION; must be 2). */
   v?: number;
   /** TURN policy — force `relay` to validate TURN-over-TLS:443 (defaults `all`). */
   ice?: TurnPolicy;
@@ -151,6 +156,17 @@ export function parseConnectLink(raw: string): ConnectLink {
   const params = parseQuery(raw.slice(queryStart + 1));
   if (params.kind === "error") return params;
 
+  // Version gate FIRST so every stale link — whatever its exact shape — gets
+  // the actionable message instead of a confusing missing-param complaint.
+  if (params.values.get("v") !== String(PAIRING_PROTOCOL_VERSION)) {
+    return {
+      kind: "error",
+      reason:
+        "This pairing link uses an old protocol version — re-pair with a current link " +
+        `(expected v=${PAIRING_PROTOCOL_VERSION})`,
+    };
+  }
+
   const room = params.values.get("room");
   const fp = params.values.get("fp");
   const code = params.values.get("code");
@@ -175,11 +191,6 @@ export function parseConnectLink(raw: string): ConnectLink {
   if (ice && ice !== "all" && ice !== "relay") {
     return { kind: "error", reason: "TURN policy `ice` must be `all` or `relay`" };
   }
-  const versionRaw = params.values.get("v");
-  const v = versionRaw ? Number(versionRaw) : PAIRING_PROTOCOL_VERSION;
-  if (!Number.isInteger(v) || v < 1) {
-    return { kind: "error", reason: "Protocol version `v` must be a positive integer" };
-  }
 
   return {
     kind: "ok",
@@ -187,7 +198,7 @@ export function parseConnectLink(raw: string): ConnectLink {
     fp,
     code,
     sig: sigParsed.url,
-    v,
+    v: PAIRING_PROTOCOL_VERSION,
     ice: (ice as TurnPolicy | undefined) ?? "all",
     srv: params.values.get("srv") || undefined,
   };

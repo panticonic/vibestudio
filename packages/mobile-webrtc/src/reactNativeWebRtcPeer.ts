@@ -113,11 +113,9 @@ interface NativeRtcPeerConnection {
   setLocalDescription(desc?: NativeSessionDescription): Promise<void>;
   setRemoteDescription(desc: NativeSessionDescription): Promise<void>;
   addIceCandidate(candidate: unknown): Promise<void>;
-  restartIce(): void;
   close(): void;
   addEventListener(type: "connectionstatechange" | "iceconnectionstatechange", listener: () => void): void;
   addEventListener(type: "icecandidate", listener: (event: NativeIceCandidateEvent) => void): void;
-  addEventListener(type: "datachannel", listener: (event: { channel: NativeRtcDataChannel }) => void): void;
 }
 
 export interface ReactNativeWebRtcProviderOptions {
@@ -318,7 +316,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   private readonly stateFanout: Fanout<[RtcConnectionState]>;
   private readonly localDescFanout: Fanout<[RtcSessionDescription]>;
   private readonly localCandFanout: Fanout<[RtcIceCandidate]>;
-  private readonly dataChannelFanout: Fanout<[RtcDataChannelLike]>;
   // The SDP last passed to setRemoteDescription — cached so remoteFingerprint()
   // can read the a=fingerprint line back the instant sRD resolves, without
   // depending on the timing of the native remoteDescription accessor.
@@ -331,7 +328,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
     this.stateFanout = new Fanout(log);
     this.localDescFanout = new Fanout(log);
     this.localCandFanout = new Fanout(log);
-    this.dataChannelFanout = new Fanout(log);
 
     const emitState = (): void =>
       this.stateFanout.emit(normalizeConnectionState(this.pc.connectionState));
@@ -354,11 +350,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
         sdpMid: candidate.sdpMid ?? null,
         sdpMLineIndex: candidate.sdpMLineIndex ?? null,
       });
-    });
-    // Answerer-side / non-negotiated channels — unused on the offerer path (which
-    // pre-negotiates control+bulk by id), but wired for contract completeness.
-    this.pc.addEventListener("datachannel", (event) => {
-      this.dataChannelFanout.emit(new WrappedDataChannel(event.channel, this.log));
     });
   }
 
@@ -411,12 +402,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
     );
   }
 
-  restartIce(): void {
-    // react-native-webrtc supports a native ICE restart; the transport prefers a
-    // full peer re-establish for recovery, but the contract requires this entry.
-    this.pc.restartIce();
-  }
-
   remoteFingerprint(): string | null {
     // The DTLS SHA-256 the QR pins is the a=fingerprint:sha-256 line of the remote
     // SDP. Sound because by the time DTLS is 'connected' the native stack has
@@ -448,10 +433,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
 
   onLocalCandidate(handler: (candidate: RtcIceCandidate) => void): () => void {
     return this.localCandFanout.add(handler);
-  }
-
-  onDataChannel(handler: (channel: RtcDataChannelLike) => void): () => void {
-    return this.dataChannelFanout.add(handler);
   }
 
   close(): void {

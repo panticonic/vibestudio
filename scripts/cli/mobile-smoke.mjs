@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import {
@@ -1638,19 +1638,15 @@ async function main() {
     children.push(signalingChild);
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
-    // 2. The disposable server, as a WebRTC answerer. We pick the room + pairing
-    //    code; the server presents its persistent DTLS cert and logs the
-    //    vibez1://connect link whose `fp` pins that cert.
-    const room = randomUUID();
-    const pairingCode = randomBytes(18).toString("base64url");
+    // 2. The disposable server, as a WebRTC answerer. The server mints the
+    //    per-invite room + pairing code itself and logs the vibez1://connect
+    //    link whose `fp` pins its persistent DTLS cert.
     const serverArgs = createServerArgs(readyFilePath);
     const serverInvocation = createServerInvocation(serverArgs);
     const serverEnv = {
       ...process.env,
       NODE_ENV: process.env.NODE_ENV ?? "development",
       VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
-      VIBEZ1_WEBRTC_ROOM: room,
-      VIBEZ1_PAIRING_CODE: pairingCode,
       // Force the single-workspace server path: `--serve-panels` with no workspace
       // otherwise boots the hub (no WebRTC answerer), so pairing never connects.
       VIBEZ1_FORCE_WORKSPACE_SERVER: "1",

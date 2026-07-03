@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { WebSocketServer, type WebSocket } from "ws";
-import { CdpHostBridgeClient, type HostBridgeHandlers } from "./hostBridge.js";
+import {
+  CdpHostBridgeClient,
+  type CdpHostBridgeSocket,
+  type HostBridgeHandlers,
+} from "./hostBridge.js";
 
 /** Minimal fake of the server's cdpBridge /api/cdp-host endpoint. */
 class FakeBridgeServer {
@@ -55,6 +60,29 @@ function handlers(overrides: Partial<HostBridgeHandlers> = {}): HostBridgeHandle
     registerRejected: vi.fn(),
     ...overrides,
   };
+}
+
+class FakeBridgeSocket extends EventEmitter implements CdpHostBridgeSocket {
+  readyState = 0;
+  readonly sent: Array<Record<string, unknown>> = [];
+
+  send(data: string): void {
+    this.sent.push(JSON.parse(data) as Record<string, unknown>);
+  }
+
+  close(): void {
+    this.readyState = 3;
+    this.emit("close");
+  }
+
+  open(): void {
+    this.readyState = 1;
+    this.emit("open");
+  }
+
+  receive(message: Record<string, unknown>): void {
+    this.emit("message", JSON.stringify(message));
+  }
 }
 
 describe("CdpHostBridgeClient", () => {
@@ -114,6 +142,50 @@ describe("CdpHostBridgeClient", () => {
     expect(reRegistered).toEqual({ type: "cdp:register", targetId: "panel-1", tabId: 7 });
   }, 15_000);
 
+  it("re-registers targets when an injected bridge socket reconnects", async () => {
+    vi.useFakeTimers();
+    try {
+      const sockets: FakeBridgeSocket[] = [];
+      client = new CdpHostBridgeClient({
+        serverUrl: "https://server.example/_workspace/dev",
+        hostConnectionId: "headless-rpc",
+        getToken: () => "good-token",
+        handlers: handlers(),
+        socketFactory: () => {
+          const socket = new FakeBridgeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+      });
+
+      client.start();
+      sockets[0]?.open();
+      await Promise.resolve();
+      expect(sockets[0]?.sent[0]).toEqual({ type: "vibez1:cdp-auth", token: "good-token" });
+      sockets[0]?.receive({ type: "vibez1:cdp-auth-ok" });
+      client.registerTarget("panel-1", 7);
+      expect(sockets[0]?.sent.at(-1)).toEqual({
+        type: "cdp:register",
+        targetId: "panel-1",
+        tabId: 7,
+      });
+
+      sockets[0]?.close();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(sockets).toHaveLength(2);
+      sockets[1]?.open();
+      await Promise.resolve();
+      sockets[1]?.receive({ type: "vibez1:cdp-auth-ok" });
+
+      expect(sockets[1]?.sent).toEqual([
+        { type: "vibez1:cdp-auth", token: "good-token" },
+        { type: "cdp:register", targetId: "panel-1", tabId: 7 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("relays cdp:command to the handler and returns cdp:result", async () => {
     const h = handlers({
       cdpCommand: vi.fn(async (_t, method) => ({ echoed: method })),
@@ -153,9 +225,17 @@ describe("CdpHostBridgeClient", () => {
     });
     await startClient(h);
     server.send({ type: "cdp:command", requestId: "r1", targetId: "p", method: "X" });
-    expect(await server.next()).toMatchObject({ type: "cdp:error", requestId: "r1", error: "boom" });
+    expect(await server.next()).toMatchObject({
+      type: "cdp:error",
+      requestId: "r1",
+      error: "boom",
+    });
     server.send({ type: "nav:command", requestId: "r2", targetId: "p", action: "reload" });
-    expect(await server.next()).toMatchObject({ type: "nav:error", requestId: "r2", error: "nav-fail" });
+    expect(await server.next()).toMatchObject({
+      type: "nav:error",
+      requestId: "r2",
+      error: "nav-fail",
+    });
   });
 
   it("handles host:command, cdp:detach and register rejection", async () => {
@@ -164,7 +244,13 @@ describe("CdpHostBridgeClient", () => {
     client!.registerTarget("panel-1", 1);
     await server.next(); // consume register
 
-    server.send({ type: "host:command", requestId: "r3", targetId: "panel-1", action: "accessibilityTree", args: [] });
+    server.send({
+      type: "host:command",
+      requestId: "r3",
+      targetId: "panel-1",
+      action: "accessibilityTree",
+      args: [],
+    });
     expect(await server.next()).toMatchObject({ type: "host:result", requestId: "r3" });
     expect(h.hostCommand).toHaveBeenCalledWith("panel-1", "accessibilityTree", []);
 
