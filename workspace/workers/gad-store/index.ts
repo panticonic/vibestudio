@@ -81,7 +81,7 @@ interface PublishIntentEntry {
 
 interface PublishIntent {
   intentId: string;
-  operation: "push" | "merge" | "import";
+  operation: "push" | "import";
   entries: PublishIntentEntry[];
   message?: string | null;
   actor?: ParticipantRef | null;
@@ -693,7 +693,7 @@ interface HostRefsStore {
   updateMains(input: {
     entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
     reason?: string;
-    operation: "push" | "merge" | "import" | "delete" | "restore";
+    operation: "push" | "import" | "delete" | "restore";
     invocationToken?: string;
   }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }>;
   /** The host ref log for a repo (audit trail of main movement) — the
@@ -1531,7 +1531,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       -- (see runGadGcMark) so a crash cannot sweep an un-recorded candidate.
       CREATE TABLE IF NOT EXISTS gad_publish_intents (
         intent_id TEXT PRIMARY KEY,
-        operation TEXT NOT NULL,          -- "push" | "merge"
+        operation TEXT NOT NULL,          -- "push" | "import"
         -- entries: [{ repoPath, logId, expectedOld, next, parentEventId,
         --            parentStateHash, files:[{path,contentHash,mode}], editOps }]
         entries_json TEXT NOT NULL,
@@ -5981,7 +5981,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   private async runVcsPush(
-    input: { repoPaths: string[]; sourceHead: string; message?: string | null; actor: ParticipantRef },
+    input: {
+      repoPaths: string[];
+      sourceHead: string;
+      message?: string | null;
+      actor: ParticipantRef;
+    },
     invocationToken: string | undefined,
     isRetry: boolean
   ): Promise<VcsPushResultDo> {
@@ -6085,7 +6090,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
         contentHash: f.contentHash,
         mode: f.mode,
       }));
-      advancing.push({ repoPath, logId, oursState, candidateState: theirsState, sourceEventId, files });
+      advancing.push({
+        repoPath,
+        logId,
+        oursState,
+        candidateState: theirsState,
+        sourceEventId,
+        files,
+      });
     }
 
     if (divergences.length > 0) return { status: "diverged", divergences };
@@ -6114,7 +6126,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // provenance. On CAS conflict: discard intent, re-read, bounded retry.
     const entries: PublishIntentEntry[] = [];
     for (const c of advancing) {
-      const oursFiles = c.oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, c.oursState);
+      const oursFiles =
+        c.oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, c.oursState);
       entries.push({
         repoPath: c.repoPath,
         logId: c.logId,
@@ -6141,7 +6154,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
     try {
       try {
         await this.refsStore().updateMains({
-          entries: entries.map((e) => ({ repoPath: e.repoPath, expectedOld: e.expectedOld, next: e.next })),
+          entries: entries.map((e) => ({
+            repoPath: e.repoPath,
+            expectedOld: e.expectedOld,
+            next: e.next,
+          })),
           reason: input.message ?? `push ${repoPaths.join(", ")} from ${sourceHead}`,
           operation: "push",
           ...(invocationToken ? { invocationToken } : {}),
@@ -6364,7 +6381,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       });
     }
     if (divergences.length > 0) return { status: "diverged", divergences };
-    if (allApplied) return { status: "up-to-date", repoPaths: advancing.map((c) => c.repoPath), reports };
+    if (allApplied)
+      return { status: "up-to-date", repoPaths: advancing.map((c) => c.repoPath), reports };
     return null;
   }
 
@@ -6396,10 +6414,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   private listPublishIntents(): PublishIntent[] {
     return (
-      this.sql.exec(`SELECT * FROM gad_publish_intents ORDER BY created_at`).toArray() as JsonRecord[]
+      this.sql
+        .exec(`SELECT * FROM gad_publish_intents ORDER BY created_at`)
+        .toArray() as JsonRecord[]
     ).map((row) => ({
       intentId: String(row["intent_id"]),
-      operation: String(row["operation"]) as "push" | "merge" | "import",
+      operation: String(row["operation"]) as "push" | "import",
       entries: JSON.parse(String(row["entries_json"])) as PublishIntentEntry[],
       message: row["message"] ? String(row["message"]) : null,
       actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ParticipantRef) : null,
@@ -6604,23 +6624,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // READ-AT-ENTRY (invocation-token contract): capture the on-behalf-of token
     // synchronously before any await — the main-advancing tail presents it to
     // `refs.updateMains` for the gate's attribution.
-    const invocationToken = this.invocationToken;
     this.ensureReady();
     const { logId, targetHead, sourceHead } = input;
-    // Main target (host `mergeGroup` / `mergeIntoMainHead` for chrome callers):
-    // the 3-way is computed here and the advance PUBLISHES through the
-    // single-writer write-ahead-intent → refs.updateMains(operation:"merge")
-    // machinery — the SAME publish path as push, so main stays a gated CAS the
-    // host never side-advances. This is INTERNAL-only: the public surfaces
-    // (`vcs.merge`, host `mergeHeads`) reject a main target; only the internal
-    // host merge path reaches here. Conflicted-to-main parks a pending merge the
-    // host projects.
-    if (targetHead === "main") {
-      return this.runVcsMergeMain(logId, sourceHead, input.actor, invocationToken);
-    }
+    // `main` is NOT a mergeable target: main advances only through the gated
+    // fast-forward push path (`refs.updateMains`), never by merging a head into
+    // it. Only `ctx:*` heads carry checkouts and accept a merge.
     if (!targetHead.startsWith("ctx:")) {
       throw new Error(
-        `vcsMerge: '${targetHead}' — merge targets a ctx:* head or main; got an unrecognized head`
+        `vcsMerge: '${targetHead}' — merge targets a ctx:* head; main advances via push, not merge`
       );
     }
     const existingPending = this.getPendingMerge({ logId, head: targetHead }).info;
@@ -6739,209 +6750,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.setPendingMerge({
       logId,
       head: targetHead,
-      info: {
-        oursStateHash: oursState,
-        theirsStateHash: theirsState,
-        theirsEventId,
-        baseStateHash: result.baseStateHash,
-        theirsHead: sourceHead,
-        conflicts: result.conflicts,
-        provisionalStateHash,
-        materialized: false,
-      },
-    });
-    return {
-      status: "conflicted",
-      stateHash: provisionalStateHash,
-      conflicts: result.conflicts,
-      mergeable: "conflict",
-      conflictPaths: result.conflicts.map((c) => c.path),
-      theirsHead: sourceHead,
-      upstreamCommits,
-    };
-  }
-
-  /**
-   * Merge `sourceHead` (a ctx head) into a repo's protected `main` — the
-   * publish-class merge (P3). The 3-way is computed here; a clean result is
-   * adopted as `main` through the SAME write-ahead-intent → single-writer
-   * `refs.updateMains(operation:"merge")` → provenance machinery as push (so the
-   * main advance is a gated CAS the host never side-runs). A conflicted result
-   * stages + mirrors the provisional (conflict-marked) tree and parks a pending
-   * merge on the `main` head; the host projects the markers into the live
-   * workspace and drives the resolution → vcs.commit, which records the merge
-   * parents. The merge commit's first parent is `main` (baseStateHash), its
-   * second parent is `theirs`.
-   *
-   * PUBLISH-INTENT LIFECYCLE — mirrors {@link runVcsPush} EXACTLY (three fixes):
-   *  1. `inFlightPublishIntents.add` synchronously at record time, removed in a
-   *     `finally` around the whole attempt, so a concurrent `healPublishDrift`
-   *     never stale-reaps this op's parked intent across the (human-gated) CAS
-   *     window.
-   *  2. NON-eager-delete on a throw from `updateMains`: the write-ahead intent is
-   *     left parked so `healPublishDrift` completes it if the CAS landed, or
-   *     discards it against the ref log if it never did. Deleting here would fall
-   *     back to unrecoverable no-intent drift (lineage/attribution/hunk loss).
-   *  3. On the own-duplicate conflict path where the CAS ACTUALLY landed (our
-   *     candidate is the current main), call the idempotent
-   *     {@link completePublishIntent} and return `merged` instead of throwing a
-   *     spurious error with the provenance thrown away.
-   */
-  private async runVcsMergeMain(
-    logId: string,
-    sourceHead: string,
-    actor: ParticipantRef,
-    invocationToken: string | undefined
-  ): Promise<
-    | { status: "up-to-date"; stateHash: string; conflicts: []; mergeable: "clean"; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
-    | { status: "merged"; stateHash: string; eventId: string; headHash: string; previousStateHash: string; conflicts: []; mergeable: "clean"; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
-    | { status: "conflicted"; stateHash: string; conflicts: Array<{ path: string; kind: string }>; mergeable: "conflict"; conflictPaths: string[]; theirsHead: string; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
-  > {
-    const store = this.contentStore();
-    const repoPath = this.repoPathOfLog(logId);
-    if (!repoPath) throw new Error(`vcsMerge: a main-target merge requires a repo log, got ${logId}`);
-
-    // Heal any crash-window drift before reading main, so the base/tip and the
-    // 3-way see a consistent lineage (mirrors the push precondition).
-    await this.healPublishDrift();
-
-    const existingPending = this.getPendingMerge({ logId, head: "main" }).info;
-    if (existingPending) {
-      throw new Error(`merge in progress on main: resolve + vcs.commit, or vcs.discardEdits`);
-    }
-
-    const oursState = (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
-    // The DO's recorded main lineage must be in lockstep with the protected ref
-    // (the host drains the provenance follower before dispatching).
-    const doHead = this.resolveWorktreeHeadInternal(logId, "main");
-    if (oursState !== EMPTY_STATE_HASH && (!doHead || doHead.stateHash !== oursState)) {
-      throw new Error(
-        `main lineage for ${repoPath} is behind the protected ref: this store records ` +
-          `${doHead?.stateHash ?? "<absent>"} but the ref is ${oursState} — drain/reconcile ` +
-          `provenance before merging`
-      );
-    }
-
-    const theirsHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
-    const theirsState = theirsHeadRef?.stateHash;
-    if (!theirsState) throw new Error(`merge source head has no state: ${sourceHead}`);
-    const theirsEventId = this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
-    const upstreamCommits = this.upstreamCommitsBetween(oursState, theirsState, theirsEventId);
-
-    const result = await this.computeMerge({
-      oursStateHash: oursState,
-      theirsStateHash: theirsState,
-      labels: { ours: "main", theirs: sourceHead },
-    });
-
-    if (result.status === "up-to-date") {
-      return { status: "up-to-date", stateHash: oursState, conflicts: [], mergeable: "clean", upstreamCommits };
-    }
-
-    if (result.status === "clean" || result.status === "fast-forward") {
-      // Stage + mirror the merged tree FIRST (mirroring invariant: the ref must
-      // point at a content-store-expandable state before the gated CAS).
-      const mergedState = await this.stageAndMirror(
-        store,
-        result.files,
-        `Merge ${sourceHead} into main`
-      );
-      const oursFiles = oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, oursState);
-      const mergedFiles = result.files.map((f) => ({ path: f.path, contentHash: f.contentHash, mode: f.mode }));
-      const expectedOld = oursState === EMPTY_STATE_HASH ? null : oursState;
-      const intent: PublishIntent = {
-        intentId: crypto.randomUUID(),
-        operation: "merge",
-        entries: [
-          {
-            repoPath,
-            logId,
-            expectedOld,
-            next: mergedState,
-            parentEventId: theirsEventId,
-            // Second parent = theirs (main is the implicit first parent via
-            // `expectedOld`/baseStateHash), preserving merge parent order.
-            parentStateHash: theirsState,
-            files: mergedFiles,
-            editOps: this.mergeEditOps(oursFiles, result.files),
-          },
-        ],
-        message: `Merge ${sourceHead} into main`,
-        actor,
-        sourceHead,
-      };
-      // Mark in-flight BEFORE the durable record + the (human-gated) CAS window
-      // so a concurrent heal never stale-reaps this parked intent (fix 1).
-      this.inFlightPublishIntents.add(intent.intentId);
-      this.transaction(() => this.recordPublishIntent(intent));
-      const succeed = () => {
-        const headRef = this.resolveWorktreeHeadInternal(logId, "main");
-        return {
-          status: "merged" as const,
-          stateHash: mergedState,
-          eventId: headRef?.commitEventId ?? theirsEventId ?? "",
-          headHash: headRef?.commitEventId ?? mergedState,
-          previousStateHash: oursState,
-          conflicts: [] as [],
-          mergeable: "clean" as const,
-          upstreamCommits,
-        };
-      };
-      try {
-        try {
-          await this.refsStore().updateMains({
-            entries: [{ repoPath, expectedOld, next: mergedState }],
-            reason: `merge ${repoPath} from ${sourceHead}`,
-            operation: "merge",
-            ...(invocationToken ? { invocationToken } : {}),
-          });
-        } catch (error) {
-          if (this.isRefConflictError(error)) {
-            // A conflict may be our OWN duplicate POST: the CAS committed
-            // host-side and its response was lost. Do NOT delete before
-            // classifying — if our candidate IS the current main the CAS landed
-            // and we owe provenance, not a spurious error without it (fix 3).
-            const current =
-              (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
-            if (current === mergedState) {
-              this.completePublishIntent(intent);
-              return succeed();
-            }
-            // Genuine concurrent advance moved the merge base: leave the intent
-            // parked (healPublishDrift discards it against the ref log, since the
-            // CAS never landed) and surface the conflict — the caller recomputes
-            // and re-drives (fix 2: no eager delete).
-            throw error;
-          }
-          // Non-conflict failure (approval denial, or a lost-response transport
-          // error that may or may not have applied): do NOT delete. The
-          // write-ahead intent exists precisely to survive a crash between the
-          // CAS and its provenance — healPublishDrift completes it if the CAS
-          // landed, else discards it against the ref log (fix 2).
-          throw error;
-        }
-        // Success: record provenance with full fidelity, then complete (delete)
-        // the intent. A crash between the CAS and here is healed on next
-        // start / push.
-        this.completePublishIntent(intent);
-        return succeed();
-      } finally {
-        this.inFlightPublishIntents.delete(intent.intentId);
-      }
-    }
-
-    // Conflicted-to-main: stage + mirror the provisional (conflict-marked) tree
-    // and park a pending merge on `main`. NO ref advance — the host projects the
-    // markers into the live workspace, acknowledges materialization, and the
-    // resolution lands via vcs.edit → vcs.commit (records the merge parents).
-    const provisionalStateHash = await this.stageAndMirror(
-      store,
-      result.files,
-      `Provisional merge of ${sourceHead} into main`
-    );
-    this.setPendingMerge({
-      logId,
-      head: "main",
       info: {
         oursStateHash: oursState,
         theirsStateHash: theirsState,

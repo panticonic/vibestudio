@@ -197,7 +197,11 @@ describe("WorkspaceVcs merge", () => {
     await divergedSetup({ conflict: false });
 
     // Push diverges — `main` advanced past the ctx base on a clean-mergeable region.
-    const diverged = await pushToMain(gad, { repoPaths: [REPO], sourceHead: CTX_HEAD, actor: AGENT });
+    const diverged = await pushToMain(gad, {
+      repoPaths: [REPO],
+      sourceHead: CTX_HEAD,
+      actor: AGENT,
+    });
     expect(diverged.status).toBe("diverged");
     if (diverged.status === "diverged") {
       expect(diverged.divergences).toHaveLength(1);
@@ -396,75 +400,6 @@ describe("WorkspaceVcs merge", () => {
     expect(result.status).toBe("up-to-date");
   });
 
-  it("write-ahead heals a direct main merge whose provenance completion crashes after the CAS", async () => {
-    // Narrow-host P3: a merge into `main` is published by the DO through the
-    // SAME write-ahead-intent → refs.updateMains → provenance machinery as push.
-    // A crash between the ref CAS and provenance recording leaves `main`
-    // ADVANCED (not rolled back); the pending intent heals forward on restart.
-    await seedMain([{ kind: "create", path: "a.txt", content: text("A\n") }]);
-    const before = await vcs.resolveHead(VCS_MAIN_HEAD, REPO);
-    expect(before).toBeTruthy();
-    await vcs.recordEdit({
-      head: CTX_HEAD,
-      repoPath: REPO,
-      actor: AGENT,
-      edits: [{ kind: "create", path: "b.txt", content: text("B\n") }],
-    });
-    await vcs.commit({ head: CTX_HEAD, repoPath: REPO, message: "add b", actor: AGENT });
-
-    // Simulate a crash: fail provenance completion AFTER updateMains lands.
-    const inst = gad.instance as unknown as {
-      completePublishIntent: (i: unknown) => void;
-      vcsHealPublishDrift: (i: unknown) => Promise<{ pendingIntents: number }>;
-      resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
-    };
-    const original = inst.completePublishIntent;
-    inst.completePublishIntent = () => {
-      throw new Error("simulated crash after CAS");
-    };
-
-    // Main-target merge is INTERNAL-only: the public `mergeHeads`/`vcs.merge`
-    // surfaces reject a main target, so drive the host's internal merge path.
-    await expect(
-      vcs.mergeGroup([{ repoPath: REPO, sourceHead: CTX_HEAD, targetHead: VCS_MAIN_HEAD }], {
-        actor: USER,
-      })
-    ).rejects.toThrow(/simulated crash/);
-
-    // Write-ahead: the protected ref advanced past `before`, intent still pending.
-    const advanced = await vcs.resolveHead(VCS_MAIN_HEAD, REPO);
-    expect(advanced).not.toBe(before);
-
-    // Restart: restore provenance recording and heal — provenance rejoins the ref.
-    inst.completePublishIntent = original;
-    const healed = await inst.vcsHealPublishDrift({});
-    expect(healed.pendingIntents).toBe(0);
-    expect(inst.resolveWorktreeHeadInternal(REPO_LOG, "main")?.stateHash).toBe(advanced);
-  });
-
-  it("a clean main-target merge advance records a MERGE transition (not snapshot)", async () => {
-    // The internal main-merge publishes through refs.updateMains(operation:
-    // "merge"); the host's post-advance reaction must emit a `merge` transition
-    // kind so provenance/attribution consumers see a merge, not a plain snapshot.
-    await seedMain([{ kind: "create", path: "a.txt", content: text("A\n") }]);
-    await commitCtx([{ kind: "create", path: "b.txt", content: text("B\n") }], "add b");
-
-    const events: Array<{ head: string; transitionKind: string }> = [];
-    const off = vcs.onStateAdvanced((e) => events.push(e));
-    try {
-      const [merged] = await vcs.mergeGroup(
-        [{ repoPath: REPO, sourceHead: CTX_HEAD, targetHead: VCS_MAIN_HEAD }],
-        { actor: USER }
-      );
-      expect(merged!.status).toBe("merged");
-    } finally {
-      off();
-    }
-    const mainAdvance = events.find((e) => e.head === VCS_MAIN_HEAD);
-    expect(mainAdvance).toBeDefined();
-    expect(mainAdvance!.transitionKind).toBe("merge");
-  });
-
   it("conflicted merge: parks a pending merge and materializes markers onto the ctx worktree", async () => {
     await divergedSetup({ conflict: true });
 
@@ -563,7 +498,9 @@ describe("WorkspaceVcs merge", () => {
     await vcs.recordEdit({
       head: CTX_HEAD,
       repoPath: REPO,
-      edits: [{ kind: "write", path: "shared.txt", content: text("half-resolved\nline2\nline3\n") }],
+      edits: [
+        { kind: "write", path: "shared.txt", content: text("half-resolved\nline2\nline3\n") },
+      ],
       actor: AGENT,
     });
     // The uncommitted resolution row exists while the merge is pending.
@@ -584,29 +521,6 @@ describe("WorkspaceVcs merge", () => {
     expect(await readAt(CTX_HEAD, "shared.txt")).toBe("CTX\nline2\nline3\n");
     // And on disk (the projected working view) it matches the restore, too.
     expect(await readDisk(CTX_HEAD, "shared.txt")).toBe("CTX\nline2\nline3\n");
-  });
-
-  it("abortMerge on a main-head merge (no working rows) still clears the pending", async () => {
-    await divergedSetup({ conflict: true });
-    // Merge INTO main (INTERNAL host path — the public surfaces reject a main
-    // target) parks a pending merge on the `main` head (a main head never
-    // carries working edit rows — applyEditOps rejects main edits).
-    const [merge] = await vcs.mergeGroup(
-      [{ repoPath: REPO, sourceHead: CTX_HEAD, targetHead: VCS_MAIN_HEAD }],
-      { actor: USER }
-    );
-    expect(merge!.status).toBe("conflicted");
-    expect(await vcs.pendingMerge(VCS_MAIN_HEAD, REPO)).not.toBeNull();
-    expect(
-      gad.instance.listWorkingEdits({ logId: REPO_LOG, head: VCS_MAIN_HEAD })
-    ).toEqual([]);
-
-    const aborted = await vcs.abortMerge(VCS_MAIN_HEAD, { repoPath: REPO });
-    expect(aborted.aborted).toBe(true);
-    expect(await vcs.pendingMerge(VCS_MAIN_HEAD, REPO)).toBeNull();
-    expect(
-      gad.instance.listWorkingEdits({ logId: REPO_LOG, head: VCS_MAIN_HEAD })
-    ).toEqual([]);
   });
 
   it("merge base over multi-parent history stays correct after a merge", async () => {
@@ -864,7 +778,11 @@ describe("WorkspaceVcs memory (WS4)", () => {
       actor: { id: "scribe", kind: "agent" },
     });
     await vcs.commit({ head: seedHead, repoPath, message, actor: { id: "scribe", kind: "agent" } });
-    const pushed = await pushToMain(gad, { repoPaths: [repoPath], sourceHead: seedHead, actor: USER });
+    const pushed = await pushToMain(gad, {
+      repoPaths: [repoPath],
+      sourceHead: seedHead,
+      actor: USER,
+    });
     expect(pushed.status).toBe("pushed");
     await vcs.dropContext(ctxId);
   }
