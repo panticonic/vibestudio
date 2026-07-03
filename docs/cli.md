@@ -59,10 +59,10 @@ pnpm cli remote serve --port 3030
 Pair this terminal, choose a workspace, start the terminal app, and mint new invites:
 
 ```sh
-vibez1 remote pair "vibez1://connect?url=...&code=..."
+vibez1 remote pair "vibez1://connect?room=...&fp=...&code=...&sig=...&v=2"
 vibez1 remote workspaces
 vibez1 remote select dev
-vibez1 terminal start --pair "vibez1://connect?url=...&code=..."
+vibez1 terminal start --pair "vibez1://connect?room=...&fp=...&code=...&sig=...&v=2"
 vibez1 terminal start
 vibez1 remote invite
 vibez1 remote status

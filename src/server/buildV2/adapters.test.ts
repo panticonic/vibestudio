@@ -52,6 +52,15 @@ describe("reactAdapter", () => {
     expect(entry).toContain('"expose"');
     expect(entry).toContain('"entry"');
   });
+
+  it("honors a manifest frameworkModule override for the auto-mount import", () => {
+    const entry = adapter.generateEntry("expose", "entry", "@workspace/my-react");
+    expect(entry).toContain('from "@workspace/my-react"');
+    expect(entry).not.toContain('"@workspace/react"');
+    // Same contract surface, different provider module.
+    expect(entry).toContain("autoMountReactPanel");
+    expect(entry).toContain("shouldAutoMount");
+  });
 });
 
 describe("svelteAdapter", () => {
@@ -87,6 +96,13 @@ describe("svelteAdapter", () => {
     // No React/radix bleed-through.
     expect(entry).not.toContain("autoMountReactPanel");
     expect(entry).not.toContain("@radix-ui/themes/styles.css");
+  });
+
+  it("honors a manifest frameworkModule override for the auto-mount import", () => {
+    const entry = adapter.generateEntry("expose", "entry", "@workspace/my-svelte");
+    expect(entry).toContain('from "@workspace/my-svelte"');
+    expect(entry).not.toContain('"@workspace/svelte"');
+    expect(entry).toContain("autoMountSveltePanel");
   });
 });
 

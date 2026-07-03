@@ -1,5 +1,5 @@
 import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
-import type { DORefParam } from "@vibez1/shared/userlandServiceRpc";
+import { VCS_SERVICE_PROTOCOL, type DORefParam } from "@vibez1/shared/userlandServiceRpc";
 import type {
   WorkspaceDeclarations,
   SingletonRegistry,
@@ -45,6 +45,38 @@ export type ResolvedUserlandService = DurableObjectServiceResolution | WorkerSer
  * - Otherwise the service is a factory: callers MUST pass an explicit
  *   `objectKey`. Resolving without one throws.
  */
+/**
+ * The gad-store DO backing the workspace VCS — resolved from the `vcs`
+ * SERVICE declaration (protocol `vibez1.vcs.v1`), i.e. the SAME manifest row
+ * userland dispatch resolves through `workers.resolveService`. One source of
+ * truth by construction: the store the host attaches to (provenance follower,
+ * host `vcs.*` dispatch, bootstrap main-binding) is exactly the store the
+ * userland `vcs` service serves; the two can never point at different DOs.
+ *
+ * Returns null when the workspace declares no singleton-DO-backed `vcs`
+ * service — no declaration, a worker-backed one, or a factory DO (no
+ * `singletonObjects` row names a concrete object to attach to). The caller
+ * disables the durable VCS store with a loud diagnostic; the host never falls
+ * back to a hardcoded unit name.
+ */
+export function resolveVcsStoreBinding(
+  decls: WorkspaceDeclarations
+): { source: string; className: string; objectKey: string } | null {
+  let resolved: ResolvedUserlandService;
+  try {
+    resolved = resolveUserlandService(decls, VCS_SERVICE_PROTOCOL);
+  } catch {
+    // Absent declaration or a factory DO service (no singleton row).
+    return null;
+  }
+  if (resolved.kind !== "durable-object") return null;
+  return {
+    source: resolved.source,
+    className: resolved.className,
+    objectKey: resolved.objectKey,
+  };
+}
+
 export function resolveUserlandService(
   decls: WorkspaceDeclarations,
   query: string,

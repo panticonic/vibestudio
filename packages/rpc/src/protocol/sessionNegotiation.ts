@@ -30,10 +30,25 @@
 import type { AuthenticatedCaller, CallerKind, RpcEnvelope } from "../types.js";
 import type { ClientPlatform } from "./wsProtocol.js";
 
-export const SESSION_PROTOCOL_VERSION = 1 as const;
+/** v2 = `hello` preamble negotiation (§1.1) + self-describing bulk mux (§1.2).
+ * Pre-release: v1 peers are not served — a `hello` with `proto !== 2` is a
+ * protocol violation and drops the pipe. */
+export const SESSION_PROTOCOL_VERSION = 2 as const;
 
 /** Error code stamped when a logical session drops with calls in flight. */
 export const SESSION_CONNECTION_LOST_CODE = "CONNECTION_LOST" as const;
+
+/**
+ * Close code carried by a **non-terminal** `closed` frame the server sends when
+ * any frame arrives for an unknown sid (rpc, route, event, stream-open — plan
+ * §1.5). The client responds by re-opening the session with backoff, so any
+ * session-state desync between the two ends self-heals within one round-trip +
+ * reopen. The frame is sent with `terminal: false` explicitly — the numeric
+ * The value deliberately avoids every code in `closeCodes.ts` (a client that
+ * consulted `isTerminalCloseCode()` instead of the frame's `terminal` flag must
+ * still never read this as terminal).
+ */
+export const SESSION_NOT_OPEN_CLOSE_CODE = 4008 as const;
 
 // ---------------------------------------------------------------------------
 // Frame tags
@@ -53,6 +68,7 @@ export const SESSION_STREAM_OPEN = "stream-open" as const; // begin a bulk strea
 export const SESSION_STREAM_CANCEL = "stream-cancel" as const; // cancel a bulk stream
 export const SESSION_PING = "ping" as const; // pipe-level keepalive (no sid)
 export const SESSION_PONG = "pong" as const;
+export const SESSION_HELLO = "hello" as const; // pipe-level preamble (no sid), first frame each direction
 
 // ---------------------------------------------------------------------------
 // Frame shapes
@@ -158,6 +174,12 @@ export interface SessionStreamOpenFrame {
   sid: string;
   /** Bulk-channel stream id the response body will be tagged with. */
   streamId: number;
+  /**
+   * When present, the REQUEST body rides the bulk channel as DATA messages
+   * tagged with this stream id (plan §1.6 — uploads stop traveling as base64
+   * JSON inside control envelopes). Absent = no request body.
+   */
+  bodyStreamId?: number;
   /** envelope.message is an `RpcStreamRequest`. */
   envelope: RpcEnvelope;
 }
@@ -178,6 +200,22 @@ export interface SessionPongFrame {
   ts: number;
 }
 
+/**
+ * Connection preamble (plan §1.1) — the first frame on the control channel in
+ * EACH direction, after the channels open and the pin verifies, before any
+ * `open`. Negotiates the effective chunk size (`min(both maxMsg, 256 KiB)`)
+ * and keepalive parameters (min of both). A non-`hello` first frame or
+ * `proto !== SESSION_PROTOCOL_VERSION` is a protocol violation → pipe down.
+ */
+export interface SessionHelloFrame {
+  t: typeof SESSION_HELLO;
+  proto: number;
+  /** Sender's usable SCTP message size (RN advertises 16 KiB; node ends 256 KiB). */
+  maxMsg: number;
+  platform?: "desktop" | "mobile" | "server" | "headless";
+  keepalive?: { intervalMs: number; timeoutMs: number };
+}
+
 export type SessionControlFrame =
   | SessionOpenFrame
   | SessionOpenResultFrame
@@ -192,7 +230,8 @@ export type SessionControlFrame =
   | SessionStreamOpenFrame
   | SessionStreamCancelFrame
   | SessionPingFrame
-  | SessionPongFrame;
+  | SessionPongFrame
+  | SessionHelloFrame;
 
 // ---------------------------------------------------------------------------
 // Codec — JSON over the control channel. Decode THROWS on malformed input so a
@@ -219,7 +258,11 @@ const FRAME_TAGS = new Set<string>([
   SESSION_STREAM_CANCEL,
   SESSION_PING,
   SESSION_PONG,
+  SESSION_HELLO,
 ]);
+
+/** Pipe-level frames carry no sid (they concern the pipe, not one session). */
+const PIPE_LEVEL_TAGS = new Set<string>([SESSION_PING, SESSION_PONG, SESSION_HELLO]);
 
 export function decodeControlFrame(data: string): SessionControlFrame {
   const parsed = JSON.parse(data) as unknown;
@@ -230,9 +273,17 @@ export function decodeControlFrame(data: string): SessionControlFrame {
   if (!FRAME_TAGS.has(tag)) {
     throw new Error(`Unknown session control frame tag: ${tag}`);
   }
-  // Session-scoped frames must carry a sid; ping/pong are pipe-level.
-  if (tag !== SESSION_PING && tag !== SESSION_PONG && typeof (parsed as { sid?: unknown }).sid !== "string") {
+  // Session-scoped frames must carry a sid; ping/pong/hello are pipe-level.
+  if (!PIPE_LEVEL_TAGS.has(tag) && typeof (parsed as { sid?: unknown }).sid !== "string") {
     throw new Error(`Session control frame '${tag}' missing sid`);
+  }
+  // hello is the negotiation preamble — its two mandatory numbers must be
+  // present and numeric or the peer cannot be negotiated with (fail loud).
+  if (tag === SESSION_HELLO) {
+    const hello = parsed as { proto?: unknown; maxMsg?: unknown };
+    if (typeof hello.proto !== "number" || typeof hello.maxMsg !== "number") {
+      throw new Error("Session control frame 'hello' missing numeric proto/maxMsg");
+    }
   }
   return parsed as SessionControlFrame;
 }
@@ -253,6 +304,7 @@ export const isSessionStreamOpen = (f: SessionControlFrame): f is SessionStreamO
 export const isSessionStreamCancel = (f: SessionControlFrame): f is SessionStreamCancelFrame => f.t === SESSION_STREAM_CANCEL;
 export const isSessionPing = (f: SessionControlFrame): f is SessionPingFrame => f.t === SESSION_PING;
 export const isSessionPong = (f: SessionControlFrame): f is SessionPongFrame => f.t === SESSION_PONG;
+export const isSessionHello = (f: SessionControlFrame): f is SessionHelloFrame => f.t === SESSION_HELLO;
 
 // ---------------------------------------------------------------------------
 // Server-side negotiation contract — the responsibilities the per-logical-session

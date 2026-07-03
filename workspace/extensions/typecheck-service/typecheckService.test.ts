@@ -10,6 +10,12 @@ import { mkdtemp, writeFile, rm, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { typeCheckRpcMethods, clearTypeCheckCache } from "./typecheckService.js";
+import {
+  FS_TYPE_DEFINITIONS,
+  GLOBAL_TYPE_DEFINITIONS,
+  PATH_TYPE_DEFINITIONS,
+  TS_LIB_FILES,
+} from "@vibez1/typecheck";
 
 let panelDir: string;
 
@@ -346,5 +352,95 @@ describe("service caching", () => {
     // Both should succeed without errors
     expect(result1.diagnostics.filter(d => d.severity === "error")).toHaveLength(0);
     expect(result2.diagnostics.filter(d => d.severity === "error")).toHaveLength(0);
+  });
+});
+
+describe("typecheck.getBrowserTypeDefinitions", () => {
+  it("returns bundled Monaco-facing definitions and stable file paths", async () => {
+    const result = await typeCheckRpcMethods["typecheck.getBrowserTypeDefinitions"]();
+
+    expect(result.FS_TYPE_DEFINITIONS).toBe(FS_TYPE_DEFINITIONS);
+    expect(result.PATH_TYPE_DEFINITIONS).toBe(PATH_TYPE_DEFINITIONS);
+    expect(result.GLOBAL_TYPE_DEFINITIONS).toBe(GLOBAL_TYPE_DEFINITIONS);
+    expect(result.TS_LIB_FILES["lib.es5.d.ts"]).toBe(TS_LIB_FILES["lib.es5.d.ts"]);
+    expect(result.tsLibFilePaths["lib.es5.d.ts"]).toBe(
+      "file:///node_modules/typescript/lib/lib.es5.d.ts",
+    );
+    expect(result.typeDefinitionFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          filePath: "file:///node_modules/fs/index.d.ts",
+          content: FS_TYPE_DEFINITIONS,
+          moduleName: "fs",
+        }),
+        expect.objectContaining({
+          filePath: "file:///node_modules/path/index.d.ts",
+          content: PATH_TYPE_DEFINITIONS,
+          moduleName: "path",
+        }),
+        expect.objectContaining({
+          filePath: "file:///vibez1/globals.d.ts",
+          content: GLOBAL_TYPE_DEFINITIONS,
+        }),
+      ]),
+    );
+    expect(result.packageTypes).toEqual([]);
+    expect(result.packageTypeDefinitionFiles).toEqual([]);
+  });
+
+  it("serializes package declaration loader output for requested package names", async () => {
+    const packageDir = join(panelDir, "node_modules", "typed-pkg");
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(
+      join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "typed-pkg",
+        version: "1.0.0",
+        types: "index.d.ts",
+        exports: {
+          ".": { types: "./index.d.ts" },
+          "./sub": { types: "./sub.d.ts" },
+        },
+      }),
+    );
+    await writeFile(join(packageDir, "index.d.ts"), "export declare const answer: number;\n");
+    await writeFile(join(packageDir, "sub.d.ts"), "export declare const subAnswer: string;\n");
+
+    const result = await typeCheckRpcMethods["typecheck.getBrowserTypeDefinitions"](
+      panelDir,
+      ["typed-pkg", "typed-pkg"],
+    );
+
+    expect(result.packageTypes).toHaveLength(1);
+    expect(result.packageTypes[0]).toEqual(
+      expect.objectContaining({
+        packageName: "typed-pkg",
+        entryPoint: "index.d.ts",
+        errors: [],
+        files: expect.objectContaining({
+          "index.d.ts": "export declare const answer: number;\n",
+          "sub.d.ts": "export declare const subAnswer: string;\n",
+        }),
+        subpaths: expect.objectContaining({
+          "./sub": "sub.d.ts",
+        }),
+      }),
+    );
+    expect(result.packageTypeDefinitionFiles).toEqual(
+      expect.arrayContaining([
+        {
+          packageName: "typed-pkg",
+          relativePath: "index.d.ts",
+          filePath: "file:///node_modules/typed-pkg/index.d.ts",
+          content: "export declare const answer: number;\n",
+        },
+        {
+          packageName: "typed-pkg",
+          relativePath: "sub.d.ts",
+          filePath: "file:///node_modules/typed-pkg/sub.d.ts",
+          content: "export declare const subAnswer: string;\n",
+        },
+      ]),
+    );
   });
 });

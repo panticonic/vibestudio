@@ -237,16 +237,6 @@ export function canonicalizeFingerprint(raw: string): string | null {
   return match?.[1] ? match[1].toUpperCase() : null;
 }
 
-/** Error code the transport matches to escalate to a full peer re-establish. */
-export const ICE_RESTART_UNSUPPORTED_CODE = "ICE_RESTART_UNSUPPORTED";
-
-/** Attach a stable `.code` to an Error (mirrors the transport's helper). */
-function errorWithCode(message: string, code: string): Error {
-  const error = new Error(message) as Error & { code?: string };
-  error.code = code;
-  return error;
-}
-
 /** node-datachannel ICE-server entry (object form carries TURN creds safely). */
 export interface NodeIceServer {
   hostname: string;
@@ -340,7 +330,6 @@ interface NativePeerConnection {
   onLocalDescription(cb: (sdp: string, type: string) => void): void;
   onLocalCandidate(cb: (candidate: string, mid: string) => void): void;
   onStateChange(cb: (state: string) => void): void;
-  onDataChannel(cb: (dataChannel: NativeDataChannel) => void): void;
   state(): string;
   getSelectedCandidatePair?():
     | { local?: NativeCandidateInfo; remote?: NativeCandidateInfo }
@@ -348,7 +337,6 @@ interface NativePeerConnection {
     | null;
   // node-datachannel 0.32 returns { value, algorithm }; other bindings a string.
   remoteFingerprint?(): unknown;
-  restartIce?(): void;
 }
 
 interface NativePeerConnectionCtor {
@@ -479,7 +467,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   private readonly stateFanout = new Fanout<[RtcConnectionState]>();
   private readonly localDescFanout = new Fanout<[RtcSessionDescription]>();
   private readonly localCandFanout = new Fanout<[RtcIceCandidate]>();
-  private readonly dataChannelFanout = new Fanout<[RtcDataChannelLike]>();
   // Last SDP passed to setRemoteDescription — cached so remoteFingerprint() can
   // parse the a=fingerprint line even when this binding exposes neither a native
   // remoteFingerprint() nor a remoteDescription() accessor (node-datachannel 0.32).
@@ -493,7 +480,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
     pc.onLocalCandidate((candidate, mid) =>
       this.localCandFanout.emit({ candidate, sdpMid: mid, sdpMLineIndex: null })
     );
-    pc.onDataChannel((dc) => this.dataChannelFanout.emit(new WrappedDataChannel(dc)));
   }
 
   createDataChannel(label: string, init?: RtcDataChannelInit): RtcDataChannelLike {
@@ -535,25 +521,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
     // Single data-channel m-line ⇒ mid defaults to "0" when signaling omits it.
     this.pc.addRemoteCandidate(candidate.candidate, candidate.sdpMid ?? "0");
     return Promise.resolve();
-  }
-
-  restartIce(): void {
-    // Use the native ICE-restart entry point when this binding exposes one.
-    if (typeof this.pc.restartIce === "function") {
-      this.pc.restartIce();
-      return;
-    }
-    // node-datachannel 0.32 ships no ICE-restart API: its setLocalDescription
-    // takes only a description *type*, with no `{ iceRestart: true }` option
-    // (that WHATWG form lives in the react-native adapter, not here). There is no
-    // honest way to renegotiate ICE through this binding, so we FAIL LOUD with a
-    // matchable code rather than silently no-op — the transport catches this and
-    // escalates to a full peer re-establish over the persistent signaling room.
-    throw errorWithCode(
-      "node-datachannel: ICE restart is unsupported by this binding — " +
-        "the transport must rebuild the peer instead.",
-      ICE_RESTART_UNSUPPORTED_CODE
-    );
   }
 
   remoteFingerprint(): string | null {
@@ -613,10 +580,6 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
 
   onLocalCandidate(handler: (candidate: RtcIceCandidate) => void): () => void {
     return this.localCandFanout.add(handler);
-  }
-
-  onDataChannel(handler: (channel: RtcDataChannelLike) => void): () => void {
-    return this.dataChannelFanout.add(handler);
   }
 
   close(): void {

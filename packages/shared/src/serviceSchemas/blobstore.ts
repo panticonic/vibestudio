@@ -7,12 +7,16 @@
 import { z } from "zod";
 import type { ServicePolicy, MethodAccessDescriptor } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
+import { STATE_HASH_RE, TREE_HASH_RE } from "../contentTree/treeObjects.js";
 
 export const DIGEST_RE = /^[0-9a-f]{64}$/;
 export const PREFIX_RE = /^[0-9a-f]{0,64}$/;
+/** Either tree-object address form: `manifest:<hex>` (a directory node) or
+ *  `state:<hex>` (a root pointer, gad state-hash compatible). */
+export const TREE_REF_RE = /^(manifest|state):[0-9a-f]{64}$/;
 
 export const BLOBSTORE_READ_POLICY: ServicePolicy = {
-  allowed: ["panel", "app", "worker", "do", "shell", "server"],
+  allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"],
 };
 export const BLOBSTORE_ADMIN_POLICY: ServicePolicy = { allowed: ["shell", "server"] };
 
@@ -49,13 +53,81 @@ export const ListOptsSchema = z
     limit: z.number().int().positive().max(100_000).optional(),
   })
   .optional();
-export const PruneOptsSchema = z.object({
-  referenced: z.array(DigestSchema),
-  dryRun: z.boolean().optional(),
-  olderThanMs: z.number().int().nonnegative().optional(),
-  limit: z.number().int().positive().max(100_000).optional(),
-});
 export const ListArgsSchema = z.union([z.tuple([]), z.tuple([ListOptsSchema])]);
+
+// ---------------------------------------------------------------------------
+// Tree objects (immutable content-addressed file trees in the same CAS)
+// ---------------------------------------------------------------------------
+
+export const TreeHashSchema = z.string().regex(TREE_HASH_RE);
+export const StateHashSchema = z.string().regex(STATE_HASH_RE);
+/** A tree reference: `manifest:<hex>` node hash or `state:<hex>` root pointer. */
+export const TreeRefSchema = z.string().regex(TREE_REF_RE);
+
+/** One directory-node entry — the exact gad manifest-hash entry shape, so tree
+ *  hashes stay byte-compatible with existing gad manifest/state hashes. */
+export const TreeEntrySchema = z.discriminatedUnion("kind", [
+  z.object({
+    name: z.string().min(1),
+    kind: z.literal("file"),
+    contentHash: DigestSchema,
+    /** Git-style mode: 33188 regular, 33261 executable. */
+    mode: z.union([z.literal(33188), z.literal(33261)]),
+  }),
+  z.object({
+    name: z.string().min(1),
+    kind: z.literal("dir"),
+    childHash: TreeHashSchema,
+  }),
+]);
+
+/** Recursive listing entry: a tree-relative path plus its content address. */
+export const TreeListEntrySchema = z.discriminatedUnion("kind", [
+  z.object({
+    path: z.string(),
+    kind: z.literal("file"),
+    contentHash: DigestSchema,
+    mode: z.number().int(),
+  }),
+  z.object({ path: z.string(), kind: z.literal("dir"), treeHash: TreeHashSchema }),
+]);
+
+export const TreeFileStatSchema = z.object({
+  contentHash: DigestSchema,
+  mode: z.number().int(),
+});
+
+export const PutTreeOptsSchema = z
+  .object({
+    /** Also store a `state:` root-pointer object for this node and return its
+     *  stateHash — marks the node as a tree ROOT resolvable by state hash. */
+    root: z.boolean().optional(),
+  })
+  .optional();
+
+export const ListTreeOptsSchema = z
+  .object({
+    /** Tree-relative path to list under ("" or omitted = whole tree). */
+    prefix: z.string().optional(),
+    limit: z.number().int().positive().max(100_000).optional(),
+  })
+  .optional();
+
+export const DiffTreesResultSchema = z.object({
+  added: z.array(z.object({ path: z.string(), contentHash: DigestSchema, mode: z.number().int() })),
+  removed: z.array(
+    z.object({ path: z.string(), contentHash: DigestSchema, mode: z.number().int() })
+  ),
+  changed: z.array(
+    z.object({
+      path: z.string(),
+      fromContentHash: DigestSchema,
+      toContentHash: DigestSchema,
+      fromMode: z.number().int(),
+      toMode: z.number().int(),
+    })
+  ),
+});
 
 export const blobstoreMethods = defineServiceMethods({
   has: {
@@ -152,6 +224,59 @@ export const blobstoreMethods = defineServiceMethods({
     policy: BLOBSTORE_READ_POLICY,
     access: READ_ACCESS,
   },
+  putTree: {
+    description:
+      "Store one immutable directory node (tree object) in the CAS from its entries; returns its `manifest:` tree hash (gad-manifest compatible). Every referenced child must already exist in the store — file contentHash blobs and dir childHash tree nodes are verified, so a tree hash can never be claimed while its objects are missing. Pass {root:true} to also store a `state:` root pointer and get the gad-compatible stateHash back. Idempotent by content. Build deep trees bottom-up (children before parents).",
+    args: z.tuple([z.array(TreeEntrySchema).max(100_000), PutTreeOptsSchema]),
+    returns: z.object({ treeHash: TreeHashSchema, stateHash: StateHashSchema.optional() }),
+    policy: BLOBSTORE_READ_POLICY,
+    access: WRITE_ACCESS,
+    examples: [{ args: [[], { root: true }] }],
+  },
+  getTree: {
+    description:
+      "Entries of a tree object (one directory node), or null if absent. Accepts a `manifest:` node hash or a `state:` root pointer (resolved to its root node).",
+    args: z.tuple([TreeRefSchema]),
+    returns: z.array(TreeEntrySchema).nullable(),
+    policy: BLOBSTORE_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  listTree: {
+    description:
+      "Recursive listing of a tree: every file (contentHash+mode) and directory (treeHash) under an optional prefix path, sorted by path. Returns null if the root tree object is absent.",
+    args: z.union([z.tuple([TreeRefSchema]), z.tuple([TreeRefSchema, ListTreeOptsSchema])]),
+    returns: z.array(TreeListEntrySchema).nullable(),
+    policy: BLOBSTORE_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  readFileAtTree: {
+    description:
+      "Resolve a tree-relative file path to its content digest and mode, or null if the path is absent or not a file. Read the bytes via the ordinary blob APIs.",
+    args: z.tuple([TreeRefSchema, z.string().min(1)]),
+    returns: TreeFileStatSchema.nullable(),
+    policy: BLOBSTORE_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  diffTrees: {
+    description:
+      "Authoritative diff between two trees: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing from the store.",
+    args: z.tuple([TreeRefSchema, TreeRefSchema]),
+    returns: DiffTreesResultSchema,
+    policy: BLOBSTORE_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  materializeTree: {
+    description:
+      "Project a tree onto disk at outDir (absolute path): hardlinks non-executable files from the CAS (copies executables so chmod never touches the shared CAS inode). Existing files with matching size are trusted and skipped. Admin-only — writes outside the store.",
+    args: z.tuple([
+      TreeRefSchema,
+      z.string().min(1),
+      z.object({ link: z.boolean().optional() }).optional(),
+    ]),
+    returns: z.object({ written: z.number(), unchanged: z.number() }),
+    policy: BLOBSTORE_ADMIN_POLICY,
+    access: WRITE_ACCESS,
+  },
   delete: {
     description: "Delete a blob by digest; returns true if it existed. Destructive, admin-only.",
     args: z.tuple([DigestSchema]),
@@ -166,14 +291,5 @@ export const blobstoreMethods = defineServiceMethods({
     returns: z.array(z.string()),
     policy: BLOBSTORE_ADMIN_POLICY,
     access: ADMIN_READ_ACCESS,
-  },
-  pruneUnreferenced: {
-    description:
-      "Garbage-collect blobs not in the `referenced` set (optionally only those older than olderThanMs). Pass dryRun:true to preview without deleting. Destructive, admin-only.",
-    args: z.tuple([PruneOptsSchema]),
-    returns: z.object({ deleted: z.array(z.string()), kept: z.number(), dryRun: z.boolean() }),
-    policy: BLOBSTORE_ADMIN_POLICY,
-    access: ADMIN_DESTRUCTIVE_ACCESS,
-    examples: [{ args: [{ referenced: [], dryRun: true }] }],
   },
 });

@@ -16,20 +16,25 @@
     }
   },
   "blobstore": {
-    "service": ["app", "do", "panel", "server", "shell", "worker"],
+    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "delete": ["server", "shell"],
-      "getBase64": ["app", "do", "panel", "server", "shell", "worker"],
-      "getRange": ["app", "do", "panel", "server", "shell", "worker"],
-      "getRangeBytes": ["app", "do", "panel", "server", "shell", "worker"],
-      "getText": ["app", "do", "panel", "server", "shell", "worker"],
-      "grep": ["app", "do", "panel", "server", "shell", "worker"],
-      "has": ["app", "do", "panel", "server", "shell", "worker"],
+      "diffTrees": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "getBase64": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "getRange": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "getRangeBytes": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "getText": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "getTree": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "grep": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "has": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "list": ["server", "shell"],
-      "pruneUnreferenced": ["server", "shell"],
-      "putBase64": ["app", "do", "panel", "server", "shell", "worker"],
-      "putText": ["app", "do", "panel", "server", "shell", "worker"],
-      "stat": ["app", "do", "panel", "server", "shell", "worker"]
+      "listTree": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "materializeTree": ["server", "shell"],
+      "putBase64": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "putText": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "putTree": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "readFileAtTree": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "stat": ["app", "do", "extension", "panel", "server", "shell", "worker"]
     }
   },
   "build": {
@@ -48,7 +53,8 @@
       "inspectBuildProvenance": null,
       "listRecentBuildEvents": null,
       "listSkills": null,
-      "recompute": null
+      "recompute": null,
+      "validate": null
     }
   },
   "corsApproval": {
@@ -242,6 +248,15 @@
       "unregister": null
     }
   },
+  "refs": {
+    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "methods": {
+      "listMains": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "readMain": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "readMainLog": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+      "updateMains": ["app", "do", "extension", "panel", "server", "shell", "worker"]
+    }
+  },
   "runtime": {
     "service": ["app", "do", "panel", "server", "shell", "worker"],
     "methods": {
@@ -299,20 +314,13 @@
     "methods": {
       "abortMerge": null,
       "commit": null,
-      "commitAncestors": null,
-      "commitEdits": null,
       "contextStatus": null,
       "deleteRepo": null,
       "diff": null,
       "discardEdits": null,
       "edit": null,
-      "editsByActor": null,
-      "editsByInvocation": null,
-      "editsByTurn": null,
-      "fileHistory": null,
       "forkRepo": null,
       "listFiles": null,
-      "log": null,
       "merge": null,
       "mergeGroup": null,
       "pendingMerge": null,

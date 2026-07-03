@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -14,12 +14,45 @@ import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
 
+// Resolve @workspace/* and @vibez1/* imports to source via the
+// workspace/tsconfig.json path map (same source of truth vitest.config.ts
+// uses), so this test doesn't depend on built package dists.
+const tsconfigPaths: Record<string, string[]> = JSON.parse(
+  readFileSync(resolve("workspace/tsconfig.json"), "utf-8")
+).compilerOptions.paths;
+
+function probeSourceFile(base: string): string | undefined {
+  const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`];
+  for (const candidate of candidates) {
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
+  }
+  return undefined;
+}
+
+function resolveFromTsconfigPaths(specifier: string): string | undefined {
+  const exact = tsconfigPaths[specifier]?.[0];
+  if (exact) return probeSourceFile(resolve(exact));
+  for (const [pattern, [target]] of Object.entries(tsconfigPaths)) {
+    const star = pattern.indexOf("*");
+    if (star === -1 || !target) continue;
+    const prefix = pattern.slice(0, star);
+    const suffix = pattern.slice(star + 1);
+    if (specifier.startsWith(prefix) && specifier.endsWith(suffix)) {
+      const wildcard = specifier.slice(prefix.length, specifier.length - suffix.length);
+      const found = probeSourceFile(resolve(target.replace("*", wildcard)));
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 const workspaceAliasPlugin: esbuild.Plugin = {
   name: "workspace-alias",
   setup(build) {
-    build.onResolve({ filter: /^@workspace\/agentic-protocol$/ }, () => ({
-      path: resolve("workspace/packages/agentic-protocol/src/index.ts"),
-    }));
+    build.onResolve({ filter: /^(@workspace|@vibez1)[/-]/ }, (args) => {
+      const path = resolveFromTsconfigPaths(args.path);
+      return path ? { path } : undefined;
+    });
   },
 };
 

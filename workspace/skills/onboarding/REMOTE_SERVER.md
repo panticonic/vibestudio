@@ -13,14 +13,12 @@ Remote reach is **WebRTC**: the client and server establish one peer-to-peer, DT
 
 ## 1. Start the server as a WebRTC answerer
 
-The server needs a **signaling room** (a tiny Cloudflare Worker/DO that brokers the WebRTC offer/answer — it never sees your data) and a pairing code. Point it at signaling and it prints a pairing link:
+The server needs a **signaling endpoint** (a tiny Cloudflare Worker/DO that brokers the WebRTC offer/answer — it never sees your data). The server mints the per-invite signaling room and pairing code itself; point it at signaling and it prints a pairing link:
 
 ```
 VIBEZ1_WEBRTC_SIGNAL_URL=wss://signaling.example.workers.dev \
-VIBEZ1_WEBRTC_ROOM=$(uuidgen) \
-VIBEZ1_PAIRING_CODE=$(openssl rand -base64 18 | tr -d '=+/' | head -c 24) \
   vibez1-server --serve-panels --print-credentials
-# → [webrtc-answerer] pairing link: vibez1://connect?room=…&fp=…&code=…&sig=…
+# → Pairing link: vibez1://connect?room=…&fp=…&code=…&sig=…&v=2
 ```
 
 - The server presents a **persistent DTLS cert** (default `<appRoot>/.vibez1/webrtc/server.{pem,key}`, overridable with `VIBEZ1_WEBRTC_CERT`/`VIBEZ1_WEBRTC_KEY`). Its SHA-256 is the `fp` in the link — the client pins it (**fail-closed** on mismatch), so a malicious signaling server cannot MitM.
@@ -35,7 +33,7 @@ When the remote server is meant to edit Vibez1 itself, start it with `pnpm dev:s
 
 The pairing link / QR carries everything the client needs (`room`, `fp`, `code`, `sig`); scanning or opening it establishes the WebRTC pipe and mints a **durable device credential** — no admin token leaves the server.
 
-- **CLI** — `parseConnectLink(link)` → `WebRtcRpcClient` (`src/cli/webrtcClient.ts`), same `call`/`callTarget`/`stream` surface as the HTTP client. `node-datachannel` loads lazily, so plain HTTP CLI usage never touches the native module.
+- **CLI** — run `vibez1 remote pair "vibez1://connect?…"` to pair over WebRTC. The CLI stores the device credential plus `room`/`fp`/`sig` pairing material and uses the shared `createPairedConnection()` bootstrap for later RPC calls.
 - **Desktop (Electron)** — open the `vibez1://connect?…` link (or scan the QR); the shell pairs over WebRTC and stores the device credential in the OS keychain. Once one client is connected, mint a fresh link for another device with `vibez1 remote invite`.
 - **Mobile** — scan the QR or follow a `vibez1://connect?…` link from `vibez1 mobile pair` / **Pair another device**; the native host stores the credential via `react-native-keychain`.
 

@@ -1,9 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { setWorkspaceAppTrust } from "@vibez1/shared/chromeTrust";
 import { writeProductSeedSourceRecord } from "@vibez1/shared/productSeedTrust";
 import { EntityCache } from "@vibez1/shared/runtime/entityCache";
 import type { PendingApproval } from "@vibez1/shared/approvals";
@@ -19,7 +20,19 @@ const REACT_NATIVE_PROVIDER = {
   contractVersion: "vibez1-build-provider-v1",
 };
 
+// App trust is manifest-declared (meta/vibez1.yml trust.*) and seeded per
+// process by the workspace loader / server startup. Seed the shipped default
+// grants here so the AppHost's trust filtering is exercised the way a live
+// server sees it.
+beforeEach(() => {
+  setWorkspaceAppTrust({
+    chromeApps: ["apps/shell", "apps/mobile"],
+    connectionManagementApps: ["apps/shell", "apps/remote-cli"],
+  });
+});
+
 afterEach(() => {
+  setWorkspaceAppTrust(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
   if (originalAppDevStatus === undefined) delete process.env["VIBEZ1_APP_DEV_STATUS"];
   else process.env["VIBEZ1_APP_DEV_STATUS"] = originalAppDevStatus;
@@ -189,6 +202,15 @@ function makeHarness(
     getReactNativeAppArtifactBaseUrl: () =>
       opts.reactNativeAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
     getTerminalAppArtifactBaseUrl: () => opts.terminalAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
+    // Manifest-declared preferred app per host target (mirrors the shipped
+    // meta/vibez1.yml hostTargets seed). Preferences come from the manifest,
+    // never from hardcoded unit names in the host.
+    getHostTargetDecl: (target) =>
+      target === "electron"
+        ? { appSource: "apps/shell", requiresExtensions: [] }
+        : target === "react-native"
+          ? { appSource: "apps/mobile", requiresExtensions: ["extensions/react-native"] }
+          : { appSource: "apps/remote-cli", requiresExtensions: [] },
   });
   return {
     host,
@@ -946,6 +968,47 @@ describe("AppHost", () => {
         selectedForHost: false,
       })
     );
+  });
+
+  it("keeps panel-hosting in apps:available for a trusted chrome app", async () => {
+    const { host, eventService, graphNode } = makeHarness();
+    // apps/shell is seeded into trust.chromeApps by the shared beforeEach.
+    graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
+
+    await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
+    await host.whenSettled();
+
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "apps:available",
+      expect.objectContaining({
+        appId: "@workspace-apps/shell",
+        source: "apps/shell",
+        capabilities: expect.arrayContaining(["panel-hosting", "notifications"]),
+      })
+    );
+  });
+
+  it("strips panel-hosting from apps:available for an app absent from trust.chromeApps", async () => {
+    const { host, eventService, graphNode } = makeHarness();
+    // Remove apps/shell from the chrome trust list: the app now self-declares
+    // panel-hosting without authorization, so the server-vetted (effective)
+    // capability set projected into apps:available must drop it.
+    setWorkspaceAppTrust({ chromeApps: [], connectionManagementApps: [] });
+    graphNode.manifest.app.capabilities = ["panel-hosting", "notifications"] as never;
+
+    await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
+    await host.whenSettled();
+
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "apps:available",
+      expect.objectContaining({
+        appId: "@workspace-apps/shell",
+        source: "apps/shell",
+        capabilities: ["notifications"],
+      })
+    );
+    // And the server-side authorization check agrees: the capability is not granted.
+    expect(host.hasAppCapability("@workspace-apps/shell", "panel-hosting")).toBe(false);
   });
 
   it("uses the selected React Native source instead of the canonical mobile fallback", () => {

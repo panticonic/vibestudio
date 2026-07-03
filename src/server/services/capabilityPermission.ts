@@ -2,6 +2,7 @@ import type {
   ApprovalOperationDescriptor,
   ApprovalRequesterCategory,
   ApprovalResourceScope,
+  DiffReviewEntry,
   PendingCapabilityApproval,
 } from "@vibez1/shared/approvals";
 import type {
@@ -46,6 +47,9 @@ export interface CapabilityPermissionRequest {
   title: string;
   description?: string;
   details?: PendingCapabilityApproval["details"];
+  /** Host-computed diff-review payload (narrow-host-vcs-plan §5.1) surfaced on
+   *  the pending approval. */
+  diffReview?: DiffReviewEntry[];
   deniedReason: string;
 }
 
@@ -105,6 +109,7 @@ export async function requestCapabilityPermission(
     resourceScope,
     grantResourceKey: resourceKey,
     details: request.details,
+    ...(request.diffReview ? { diffReview: request.diffReview } : {}),
     signal: request.signal,
   });
   if (decision === "deny") {

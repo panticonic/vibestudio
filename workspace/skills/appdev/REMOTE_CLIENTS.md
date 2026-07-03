@@ -8,24 +8,23 @@ capability.
 
 | Concept           | Purpose                                                                   |
 | ----------------- | ------------------------------------------------------------------------- |
-| Pairing invite    | One-time bootstrap material: server URL plus pairing code                 |
+| Pairing invite    | One-time WebRTC bootstrap material: room, DTLS fingerprint, code, signaling endpoint |
 | Device credential | Long-lived device id plus refresh token, stored by the client/native host |
-| Shell token       | Desktop remote shell token refreshed from a device credential             |
+| Shell token       | Remote shell credential presented as `refresh:<deviceId>:<refreshToken>` over the pipe |
 | Principal grant   | Short-lived grant scoped to one app/runtime principal                     |
-| Connection info   | Server URL and public connection metadata                                 |
+| Connection info   | WebRTC pairing metadata plus server/workspace identity                    |
 
 ## Desktop Remote Shell
 
-Desktop remote startup is a two-step flow:
+Remote startup is a two-step WebRTC flow:
 
 1. Pair with the server hub and store a device credential.
-2. Select a workspace, which returns a workspace-scoped server URL under
-   `/_workspace/<name>`.
+2. Select a workspace, which returns a workspace-scoped WebRTC pairing invite.
 
-`vibez1 remote pair "vibez1://connect?url=...&code=..."` exchanges a
-pairing invite and stores the hub credential. `vibez1 remote select <name>`
-stores the selected workspace URL. Electron launches only against selected
-workspace URLs; root hub URLs are not app-launch endpoints.
+`vibez1 remote pair "vibez1://connect?room=...&fp=...&code=...&sig=...&v=2"`
+exchanges a pairing invite over the pipe and stores the hub credential.
+`vibez1 remote select <name>` pairs to the selected workspace's room and keeps
+the hub credential for later workspace listing/selection.
 
 ## Mobile Client
 

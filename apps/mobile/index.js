@@ -189,9 +189,27 @@ async function drainStream(body) {
  * Fetch a gateway asset over the pipe and return its bytes. Uses `streamReadable`
  * (not `stream`) because RN's whatwg-fetch `Response` cannot consume a
  * `ReadableStream` body — we read the decoded stream directly via `getReader()`.
+ *
+ * `bodyText` (optional) is the REQUEST body. It streams over the pipe's bulk
+ * channel via `options.body` (plan §1.6) — never as a `body` field inside the
+ * descriptor, which the server's strict schema rejects.
  */
-async function gatewayFetchBytes(connection, descriptor) {
-  const decoded = await connection.rpc.streamReadable("main", "gateway.fetch", [descriptor]);
+async function gatewayFetchBytes(connection, descriptor, bodyText) {
+  const body =
+    bodyText == null
+      ? undefined
+      : new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(bodyText));
+            controller.close();
+          },
+        });
+  const decoded = await connection.rpc.streamReadable(
+    "main",
+    "gateway.fetch",
+    [descriptor],
+    body ? { body } : undefined
+  );
   const bytes = await drainStream(decoded.body);
   if (decoded.status !== 200) {
     throw new Error(
@@ -256,12 +274,17 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
   if (typeof options.source === "string" && options.source.length > 0) {
     bootstrapBody.source = options.source;
   }
-  const manifestBytes = await gatewayFetchBytes(connection, {
-    path: "/_r/s/auth/mobile-app-bootstrap",
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(bootstrapBody),
-  });
+  // The device-credential body streams via options.body (§1.6) — the fetch
+  // descriptor's strict schema rejects any inline `body` field.
+  const manifestBytes = await gatewayFetchBytes(
+    connection,
+    {
+      path: "/_r/s/auth/mobile-app-bootstrap",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    },
+    JSON.stringify(bootstrapBody)
+  );
   const bootstrap = JSON.parse(new TextDecoder().decode(manifestBytes))?.bootstrap;
   if (!bootstrap) throw new Error("Mobile app bootstrap returned no manifest");
   if (bootstrap.rnHostAbi !== RN_HOST_ABI) {

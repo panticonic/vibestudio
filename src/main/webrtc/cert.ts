@@ -20,13 +20,7 @@
  * in CI rather than at DTLS time.
  */
 
-import {
-  X509Certificate,
-  generateKeyPairSync,
-  randomBytes,
-  randomUUID,
-  sign as cryptoSign,
-} from "node:crypto";
+import { X509Certificate, generateKeyPairSync, randomBytes, sign as cryptoSign } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -35,6 +29,49 @@ export interface PersistentCert {
   keyPemFile: string;
   /** DTLS SHA-256 fingerprint as uppercase colon-separated hex (the QR `fp`). */
   fingerprint: string;
+}
+
+/**
+ * The persistent identity (DTLS cert/key pair) is in a half-provisioned state:
+ * exactly one of the two PEM files is present, or a file exists but is
+ * empty/unparseable. Re-minting on top of that would silently break every
+ * paired device's DTLS pin, so we refuse to start instead. Deleting BOTH files
+ * is the deliberate re-mint gesture.
+ */
+export class CertIdentityError extends Error {
+  readonly code = "CERT_IDENTITY_HALF_STATE" as const;
+  constructor(message: string) {
+    super(message);
+    this.name = "CertIdentityError";
+  }
+}
+
+type IdentityFileState = "absent" | "empty" | "present";
+
+/**
+ * Classify a persistent-identity file: absent (no such path), empty
+ * (exists but whitespace-only), or present (exists with non-whitespace content).
+ */
+function classifyIdentityFile(file: string): IdentityFileState {
+  if (!fs.existsSync(file)) return "absent";
+  const content = fs.readFileSync(file, "utf8");
+  return content.trim().length === 0 ? "empty" : "present";
+}
+
+function describeIdentityFile(
+  label: string,
+  file: string,
+  state: IdentityFileState | "corrupt"
+): string {
+  const word =
+    state === "absent"
+      ? "MISSING"
+      : state === "empty"
+        ? "EMPTY"
+        : state === "corrupt"
+          ? "CORRUPT"
+          : "present";
+  return `${label} (${file}): ${word}`;
 }
 
 /**
@@ -53,9 +90,15 @@ export function certFileFingerprint(certificatePemFile: string): string {
 }
 
 /**
- * Load the persistent cert at the given paths, or mint-and-persist one if either
- * file is missing. Returns the paths plus the stable DTLS fingerprint to publish
- * in the QR. The private key is written `0600`.
+ * Load the persistent cert at the given paths, or mint-and-persist one on FIRST
+ * provision (neither file present). Returns the paths plus the stable DTLS
+ * fingerprint to publish in the QR. The private key is written `0600`.
+ *
+ * Fails loud rather than re-minting on a half-provisioned identity: if exactly
+ * one of the two files is present, or a file exists but is empty/unparseable,
+ * this throws {@link CertIdentityError}. Silently re-minting there would hand
+ * every already-paired device a new fingerprint and break its DTLS pin (§2.6);
+ * the only deliberate re-mint is deleting BOTH files.
  */
 export function ensurePersistentCert(opts: {
   certificatePemFile: string;
@@ -64,42 +107,52 @@ export function ensurePersistentCert(opts: {
   commonName?: string;
 }): PersistentCert {
   const { certificatePemFile, keyPemFile } = opts;
-  if (fs.existsSync(certificatePemFile) && fs.existsSync(keyPemFile)) {
+  const certState = classifyIdentityFile(certificatePemFile);
+  const keyState = classifyIdentityFile(keyPemFile);
+
+  const consequence =
+    "re-minting would break every paired device's DTLS pin; delete BOTH files to " +
+    "deliberately re-mint, or restore the missing one";
+
+  if (certState === "present" && keyState === "present") {
     // Already provisioned — reuse so the fingerprint stays stable across restarts.
-    return {
-      certificatePemFile,
-      keyPemFile,
-      fingerprint: certFileFingerprint(certificatePemFile),
-    };
+    let fingerprint: string;
+    try {
+      fingerprint = certFileFingerprint(certificatePemFile);
+    } catch (error) {
+      throw new CertIdentityError(
+        "[webrtc-cert] persistent identity is half-provisioned; refusing to start:\n" +
+          `  ${describeIdentityFile("cert", certificatePemFile, "corrupt")} (${
+            error instanceof Error ? error.message : String(error)
+          })\n` +
+          `  ${describeIdentityFile("key", keyPemFile, keyState)}\n` +
+          `${consequence}.`
+      );
+    }
+    console.log(`[webrtc-cert] reusing persistent identity ${fingerprint}`);
+    return { certificatePemFile, keyPemFile, fingerprint };
   }
 
-  const { certPem, keyPem } = generateSelfSignedEcCert(opts.commonName);
-  fs.mkdirSync(path.dirname(keyPemFile), { recursive: true });
-  fs.mkdirSync(path.dirname(certificatePemFile), { recursive: true });
-  // Key first (0600), then cert — so a crash never leaves a cert without its key.
-  writeFileAtomic(keyPemFile, keyPem, 0o600);
-  writeFileAtomic(certificatePemFile, certPem, 0o644);
-  return { certificatePemFile, keyPemFile, fingerprint: pemFingerprint(certPem) };
-}
-
-/**
- * Load the persistent signaling room id at `roomFile`, or mint-and-persist one if
- * absent. The QR/pairing link embeds this room and returning devices re-dial the
- * SAME room on reconnect, with the answerer waiting there for a new offer — so,
- * exactly like the DTLS cert, it MUST survive server restarts. A fresh
- * `randomUUID()` per start would strand every paired device in a stale, empty room
- * (the device dials the old room; the server answers in a new one), making
- * reconnection impossible after any restart. Returns the stable room id.
- */
-export function ensurePersistentRoom(roomFile: string): string {
-  if (fs.existsSync(roomFile)) {
-    const existing = fs.readFileSync(roomFile, "utf8").trim();
-    if (existing) return existing;
+  if (certState === "absent" && keyState === "absent") {
+    // First provision: mint a fresh identity and persist both PEMs.
+    const { certPem, keyPem } = generateSelfSignedEcCert(opts.commonName);
+    fs.mkdirSync(path.dirname(keyPemFile), { recursive: true });
+    fs.mkdirSync(path.dirname(certificatePemFile), { recursive: true });
+    // Key first (0600), then cert — so a crash never leaves a cert without its key.
+    writeFileAtomic(keyPemFile, keyPem, 0o600);
+    writeFileAtomic(certificatePemFile, certPem, 0o644);
+    const fingerprint = pemFingerprint(certPem);
+    console.log(`[webrtc-cert] minted new identity ${fingerprint}`);
+    return { certificatePemFile, keyPemFile, fingerprint };
   }
-  const room = randomUUID();
-  fs.mkdirSync(path.dirname(roomFile), { recursive: true });
-  writeFileAtomic(roomFile, `${room}\n`, 0o644);
-  return room;
+
+  // Half-state: exactly one file present, or a file exists but is empty. Refuse.
+  throw new CertIdentityError(
+    "[webrtc-cert] persistent identity is half-provisioned; refusing to start:\n" +
+      `  ${describeIdentityFile("cert", certificatePemFile, certState)}\n` +
+      `  ${describeIdentityFile("key", keyPemFile, keyState)}\n` +
+      `${consequence}.`
+  );
 }
 
 /**

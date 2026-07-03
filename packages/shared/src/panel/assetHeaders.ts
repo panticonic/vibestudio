@@ -12,12 +12,17 @@
  * Request headers forwarded to the gateway. `host`, `cookie`, and
  * `accept-encoding` are intentionally NOT forwarded — they describe the façade hop,
  * not the upstream asset request (and the gateway serves assets uncompressed).
+ * `content-length` is also NOT forwarded: request bodies are re-framed as a
+ * stream over the pipe (plan §1.6), so the loopback fetch re-derives framing.
  */
 export const FORWARD_REQUEST_HEADERS: readonly string[] = [
   "authorization",
   "accept",
   "accept-language",
   "cache-control",
+  // Describes the forwarded request BODY (plan §1.6 — the façades forward
+  // non-GET/HEAD bodies); a POST body without its content-type is broken.
+  "content-type",
   "range",
   "if-none-match",
   "if-modified-since",

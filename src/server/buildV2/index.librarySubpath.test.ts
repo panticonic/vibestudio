@@ -29,9 +29,6 @@ function fakeWorkspaceSource(
     async discoverGraph() {
       return discoverPackageGraph(getWorkspaceRoot());
     },
-    async diffPaths() {
-      return [];
-    },
     onStateAdvanced() {
       return () => {};
     },
@@ -73,9 +70,6 @@ function fakeMultiStateWorkspaceSource(
     },
     async discoverGraph(stateHash) {
       return discoverPackageGraph(rootForState(stateHash));
-    },
-    async diffPaths() {
-      return [];
     },
     onStateAdvanced() {
       return () => {};

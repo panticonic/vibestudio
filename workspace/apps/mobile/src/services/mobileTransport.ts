@@ -14,6 +14,7 @@ import type {
   RpcClient,
   RpcConnectionStatus,
   RpcEventContext,
+  RpcStreamOptions,
 } from "@vibez1/rpc";
 import type { RecoveryKind } from "@vibez1/rpc/protocol/recoveryCoordinator";
 import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
@@ -130,7 +131,7 @@ export class MobileRpcClient
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { signal?: AbortSignal }
+    options?: RpcStreamOptions
   ): Promise<Response> {
     return (await this.ensureRpc()).stream(targetId, method, args, options);
   }
@@ -138,13 +139,14 @@ export class MobileRpcClient
   /**
    * Like {@link stream} but yields the decoded head + a raw `ReadableStream`
    * body — RN's whatwg-fetch `Response` cannot consume a ReadableStream. The
-   * panel-asset façade (B2) reads panel bundles through this.
+   * panel-asset façade (B2) reads panel bundles through this. `options.body`
+   * streams a REQUEST body out over the pipe's bulk channel (plan §1.6).
    */
   async streamReadable(
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { signal?: AbortSignal }
+    options?: RpcStreamOptions
   ): ReturnType<RpcClient["streamReadable"]> {
     return (await this.ensureRpc()).streamReadable(targetId, method, args, options);
   }

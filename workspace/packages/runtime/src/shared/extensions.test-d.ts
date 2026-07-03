@@ -4,7 +4,7 @@ import type { Api as ShellApi } from "@workspace-extensions/shell";
 import { createExtensionsClient } from "./extensions.js";
 
 // Type-level guarantees for the no-fallback extensions client. This file has no
-// runtime tests; it exists purely so `tsc -p tsconfig.workspace.json` enforces
+// runtime tests; it exists purely so `tsc -p workspace/tsconfig.json` enforces
 // that `use(name)` is keyed on the WorkspaceExtensions registry.
 
 declare const rpc: ExtensionsClientRpc;

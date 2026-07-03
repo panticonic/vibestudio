@@ -14,9 +14,11 @@ ev(leaf)    = hash(treeHash(leaf))
 ev(package) = hash(treeHash(package), ev(dep_1), ev(dep_2), ...)
 ```
 
-Content is hashed from the GAD workspace state. Each unit contributes the
-content-addressed subtree hash for its workspace-relative path at the selected
-source state.
+Content is hashed from the workspace state's content-addressed tree in the
+generic content store. Each unit contributes the subtree hash (`manifest:` tree
+hash for a directory, content digest for a file) for its workspace-relative
+path at the selected source state — resolved from the content store's tree
+objects, byte-identical to the hashes the gad store mints.
 
 Computed bottom-up via topological sort. If `ev(X)` hasn't changed, X's build is still valid.
 
@@ -25,10 +27,12 @@ Computed bottom-up via topological sort. If `ev(X)` hasn't changed, X's build is
 The build key is the full cache identity:
 
 ```
-build_key = hash(BUILD_CACHE_VERSION, unitName, ev, sourcemap)
+build_key = hash(BUILD_CACHE_VERSION, rootDepsFingerprint, unitName, ev, sourcemap)
 ```
 
-`BUILD_CACHE_VERSION` (currently `"15"`) is incremented when build logic changes (plugins, esbuild options, shims) to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
+`BUILD_CACHE_VERSION` (currently `"17"`) is incremented when build logic changes (plugins, esbuild options, shims) or when the build-key derivation itself changes, to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
+
+`rootDepsFingerprint` folds in the **contents** of the host-root `package.json`, `pnpm-lock.yaml`, and `pnpm-workspace.yaml`, so a change to the host's dependency set (which can change what external npm deps resolve to) invalidates cached workspace builds. Missing files are handled deterministically (absent is distinct from present-but-empty). The host app root is injected explicitly at build-system construction (`setBuildRootConfig`), with the `VIBEZ1_APP_ROOT` env var as an override and `process.cwd()` as a last-resort fallback. The fingerprint, its resolved root, how the root was resolved, and its per-file inputs are exposed via `getRootDependencyFingerprintInfo()` for build metadata/diagnostics. (These host-root files are read off live disk, not content-addressed workspace state; folding them into GAD state is a future step.)
 
 ### Runtime Provenance
 
@@ -55,6 +59,7 @@ Builds are stored immutably at `{userData}/builds/{build_key}/`:
   ├── index.html      (panels/about only)
   ├── package.json    (workers/extensions only — {"type":"module"})
   ├── assets/         (chunks, images, fonts)
+  ├── artifacts.json  (artifact manifest — output file list)
   └── metadata.json   (sentinel — kind, name, ev, sourcemap, builtAt)
 ```
 
@@ -70,8 +75,8 @@ No LRU, no TTL. GC prunes entries not referenced by any active unit. Race-safe w
 src/server/buildV2/
 ├── packageGraph.ts       ← DAG discovery from workspace package.json files
 ├── effectiveVersion.ts   ← State subtree hashing and EV computation
-├── buildSource.ts        ← GAD-state materialization for reproducible builds
-├── refs.ts               ← Source-ref helpers for pinned workspace inputs
+├── buildSource.ts        ← Content-store tree materialization for reproducible builds
+├── refs.ts               ← Build-ref validation (main / state:<hash> / ctx:<id>)
 ├── stateTrigger.ts       ← VCS state advance → EV recompute → rebuild
 ├── buildStore.ts         ← Content-addressed artifact storage
 ├── externalDeps.ts       ← Transitive external dep collection + cached npm install
@@ -81,33 +86,26 @@ src/server/buildV2/
 
 ### Package Graph (`packageGraph.ts`)
 
-Scans seven workspace directories:
+Scans eight workspace directories (the `BUILDABLE_UNIT_DIRS` subset of the canonical `WORKSPACE_SOURCE_DIRS` in `@vibez1/shared/workspace/sourceDirs` — `meta/`, `agents/`, and `projects/` are source dirs but hold no build units, so they are not scanned):
 
 | Directory               | Kind        | Scope                     |
 | ----------------------- | ----------- | ------------------------- |
 | `workspace/packages/`   | `package`   | `@workspace/*`            |
 | `workspace/panels/`     | `panel`     | `@workspace-panels/*`     |
+| `workspace/apps/`       | `app`       | `@workspace-apps/*`       |
 | `workspace/about/`      | `panel`     | `@workspace-about/*`      |
 | `workspace/workers/`    | `worker`    | `@workspace-workers/*`    |
 | `workspace/extensions/` | `extension` | `@workspace-extensions/*` |
 | `workspace/skills/`     | `package`   | `@workspace-skills/*`     |
 | `workspace/templates/`  | `template`  | —                         |
 
-Each unit's `package.json` is read. Dependencies matching any workspace scope (`@workspace/`, `@workspace-panels/`, `@workspace-about/`, `@workspace-workers/`, `@workspace-extensions/`, `@workspace-skills/`) become internal edges in the DAG. Both `dependencies` and `peerDependencies` are included (peers first, so regular deps override on conflict).
+The scanned directory list, node kinds, and package scopes are all derived from `BUILDABLE_UNIT_DIRS` (which also exports `WORKSPACE_PACKAGE_SCOPES`), so the build system, its scope set, and the packaged-template staging script never drift.
 
-The graph supports **dependency ref specs** — internal deps can pin to specific branches, refs, or commits:
+Each unit's `package.json` is read. Dependencies matching any workspace scope (`@workspace/`, `@workspace-panels/`, `@workspace-apps/`, `@workspace-about/`, `@workspace-workers/`, `@workspace-extensions/`, `@workspace-skills/`) become internal edges in the DAG. Both `dependencies` and `peerDependencies` are included (peers first, so regular deps override on conflict).
 
-```json
-{
-  "dependencies": {
-    "@workspace/core": "workspace:*",
-    "@workspace/ai": "workspace:branch:experimental",
-    "@workspace/runtime": "workspace:commit:abc1234"
-  }
-}
-```
+**Internal deps must use `workspace:*`** (equivalently `*` or an empty spec). GAD workspace builds do **not** support per-dependency branch/commit refs: a spec like `workspace:branch:experimental` or `workspace:commit:abc1234` is rejected — the dep is still treated as an internal edge, but the unit records a `dependencyError` (`validateInternalDepSpec`) and is blocked from building. All units resolve at the same workspace state; there is no per-dep source pinning.
 
-Ref specs affect EV computation: the dependency source state is resolved at the specified ref, not necessarily the main branch.
+Whole-build ref targeting is a separate concept (see `refs.ts` / `RuntimeEntityBuildRef`): a build ref is `main`, `state:<stateHash>`, or `ctx:<contextId>` — not a git branch/commit/tag.
 
 ### Effective Version Computation (`effectiveVersion.ts`)
 
@@ -115,18 +113,17 @@ Ref specs affect EV computation: the dependency source state is resolved at the 
 
 **Incremental recomputation** (`recomputeFromNodes`): When a state advance changes one or more units, only recomputes EVs for those units and their reverse dependencies.
 
-**Cold-start optimization** (`computeEffectiveVersionsWithCache`): Compares current source-state hashes against persisted ref state. If a unit's content state hasn't changed and no dependency was recomputed, the previous EV is reused. Makes cold start O(changed units) not O(all units).
+**Cold-start optimization** (in `initBuildSystemV2`): Loads the persisted `ev-state.json` and compares its `stateHash` against the current workspace state hash. If they match, the whole persisted EV map is reused with zero subtree-hash resolutions; otherwise EVs are recomputed for the current state via `computeEffectiveVersions` and re-persisted.
 
 **Persisted state** (in `{userData}/`):
 
-- `ev-map.json` — derived state, safe to delete (triggers full recompute)
-- `ref-state.json` — per-unit source-state hashes for cold-start diff
+- `ev-state.json` — a single derived-state file, safe to delete (triggers full recompute). Holds `{ stateHash, evMap, contentHashes }`: the workspace state hash the map was computed at, the per-unit EV map, and the per-unit content (subtree) hashes used for the cold-start diff.
 
 ### Build Source Materialization (`buildSource.ts`)
 
-Before building, source is materialized from the immutable GAD state into a temp directory. This ensures builds match the EV regardless of later working tree edits.
+Before building, each unit's subtree is materialized from its immutable content-addressed tree in the content store (`materializeTree`, hardlinked from the CAS) into a per-state directory under `{userData}/build-sources/`. This ensures builds match the EV regardless of later working tree edits; the gad DO is never queried for manifests — every state hash the builder sees resolves to a full tree in the content store (the mirroring invariant).
 
-The materialized tree is cleaned up after the build completes.
+Per-state source dirs are an immutable P1 cache — reused across builds at the same state and deletable at any time.
 
 ### External Dependencies (`externalDeps.ts`)
 
@@ -229,27 +226,27 @@ The build system is registered as the `"build"` RPC service:
 Workspace units are directories in the shared GAD-backed source tree. Builds use
 state materialization rather than per-unit repositories.
 
+The build system scans the eight buildable-unit directories below (`BUILDABLE_UNIT_DIRS`). The full workspace source tree (`WORKSPACE_SOURCE_DIRS`) additionally contains `meta/`, `agents/`, and `projects/`, which are not scanned for build units.
+
 ```
 workspace/
 ├── packages/              ← internal libraries (not directly buildable)
 │   ├── core/
 │   ├── runtime/
-│   ├── ai/
-│   ├── react/
-│   ├── about-shared/
 │   └── ...
 ├── panels/                ← user-facing panels (browser target)
 │   ├── chat/
-│   ├── chat-launcher/
 │   └── ...
+├── apps/                  ← app units (electron/other targets)
 ├── about/                 ← shell panels (browser target, shell service access)
 │   ├── about/
-│   ├── model-provider-config/
 │   └── ...
-└── extensions/            ← trusted Node extensions
-    ├── @workspace-extensions/
-    ├── test-echo/
-    └── ...
+├── workers/               ← worker units (workerd/node target)
+├── extensions/            ← trusted Node extensions
+│   ├── test-echo/
+│   └── ...
+├── skills/                ← skill packages (content; ungated pushes)
+└── templates/             ← panel/build templates (template.json)
 ```
 
 ### Package Manifest
@@ -282,6 +279,7 @@ Unit metadata lives in `package.json` under the `vibez1` key:
 | `externals`        | `{}`          | Import map entries (externalized from bundle)                       |
 | `exposeModules`    | `[]`          | Modules registered on `__vibez1ModuleMap__`                       |
 | `dedupeModules`    | `[]`          | Additional packages to deduplicate (react/react-dom always deduped) |
+| `frameworkModule`  | per framework | Override the workspace module the generated panel entry imports the framework auto-mount contract from (defaults per `buildV2/platformModules.ts` `FRAMEWORK_MODULES`) |
 
 ---
 
@@ -299,12 +297,13 @@ Unit metadata lives in `package.json` under the `vibez1` key:
 
 ## Initialization Flow
 
-`initBuildSystemV2(workspaceRoot, workspaceVcs)`:
+`initBuildSystemV2(workspaceRoot, source, appNodeModules)`:
 
-1. Discover package graph from workspace
-2. Snapshot current source state
-3. Compute EVs with cold-start optimization (diff against persisted refs)
-4. Persist ref state + EV map
-5. Build any missing buildable units (panels, about pages, workers, extensions — not packages)
-6. Start state trigger (subscribes to VCS state advances)
-7. Return public API handle
+1. Inject the host app root for the build-key root-deps fingerprint (`setBuildRootConfig({ appRoot: path.dirname(workspaceRoot) })`)
+2. Discover package graph from workspace
+3. Snapshot current source state
+4. Compute EVs with cold-start optimization (reuse `ev-state.json` when its `stateHash` matches)
+5. Persist `ev-state.json`
+6. Build any missing buildable units (panels, about pages, workers, extensions — not packages)
+7. Start state trigger (subscribes to VCS state advances)
+8. Return public API handle

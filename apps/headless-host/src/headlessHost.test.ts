@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { HeadlessHost } from "./headlessHost.js";
-import type { HeadlessHostConfig } from "./config.js";
+import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
 import { LeaseTracker } from "@vibez1/shared/panel/leaseTracker";
 import type { PanelRuntimeLease } from "@vibez1/shared/panel/panelLease";
 
@@ -18,6 +18,63 @@ function config(): HeadlessHostConfig {
 }
 
 describe("HeadlessHost lifecycle guards", () => {
+  it("re-registers and re-subscribes lease events after injected connection recovery", async () => {
+    let recover: (() => void | Promise<void>) | null = null;
+    const rpc = {
+      call: vi.fn(async <T = unknown>(_targetId: string, method: string): Promise<T> => {
+        if (method === "panelRuntime.getSnapshot") {
+          return { version: { epoch: "e1", counter: 0 }, leases: [] } as T;
+        }
+        return undefined as T;
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const close = vi.fn(async () => undefined);
+    const host = new HeadlessHost({
+      ...config(),
+      auth: { kind: "injected" },
+      connectionFactory: async () => ({
+        rpc: rpc as unknown as HeadlessHostServerConnection["rpc"],
+        getToken: () => "token",
+        onServerEvent: vi.fn(),
+        onResubscribe: (handler) => {
+          recover = handler;
+        },
+        close,
+      }),
+    });
+    const startBrowser = vi.fn(async () => undefined);
+    const startBridge = vi.fn();
+    const reconcile = vi.fn(async () => undefined);
+    Object.assign(
+      host as unknown as {
+        startBrowser: typeof startBrowser;
+        startBridge: typeof startBridge;
+        reconcile: typeof reconcile;
+      },
+      { startBrowser, startBridge, reconcile }
+    );
+
+    await host.start();
+    expect(rpc.call).toHaveBeenCalledWith("main", "panelRuntime.registerClient", [
+      host.registration,
+    ]);
+    expect(rpc.call).toHaveBeenCalledWith("main", "events.subscribe", [
+      "panel:runtimeLeaseChanged",
+    ]);
+    expect(recover).toBeTypeOf("function");
+
+    await recover!();
+
+    expect(
+      rpc.call.mock.calls.filter((call) => call[1] === "panelRuntime.registerClient")
+    ).toHaveLength(2);
+    expect(rpc.call.mock.calls.filter((call) => call[1] === "events.subscribe")).toHaveLength(2);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    await host.stop("test");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("coalesces duplicate browser-gone signals for the active generation", async () => {
     const host = new HeadlessHost(config());
     let resolveRecovery!: () => void;
@@ -30,10 +87,12 @@ describe("HeadlessHost lifecycle guards", () => {
       recoverBrowser,
     });
 
-    const first = (host as unknown as { handleBrowserGone(generation: number): Promise<void> })
-      .handleBrowserGone(1);
-    const second = (host as unknown as { handleBrowserGone(generation: number): Promise<void> })
-      .handleBrowserGone(1);
+    const first = (
+      host as unknown as { handleBrowserGone(generation: number): Promise<void> }
+    ).handleBrowserGone(1);
+    const second = (
+      host as unknown as { handleBrowserGone(generation: number): Promise<void> }
+    ).handleBrowserGone(1);
 
     expect(recoverBrowser).toHaveBeenCalledTimes(1);
     resolveRecovery();
@@ -48,8 +107,9 @@ describe("HeadlessHost lifecycle guards", () => {
       recoverBrowser,
     });
 
-    await (host as unknown as { handleBrowserGone(generation: number): Promise<void> })
-      .handleBrowserGone(1);
+    await (
+      host as unknown as { handleBrowserGone(generation: number): Promise<void> }
+    ).handleBrowserGone(1);
 
     expect(recoverBrowser).not.toHaveBeenCalled();
   });

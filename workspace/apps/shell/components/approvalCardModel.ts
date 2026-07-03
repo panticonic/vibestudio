@@ -7,6 +7,7 @@
  */
 import type { ApprovalDecision, PendingApproval } from "@vibez1/shared/approvals";
 import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibez1/shared/approvalCopy";
+import type { DiffReviewEntry } from "@workspace/ui";
 
 export interface CallerInfo {
   /** Friendly user-visible label — panel title, worker source basename, etc. */
@@ -46,8 +47,79 @@ export type ApprovalCardIntentBody =
   | { type: "device-cancel" }
   | { type: "minimize" }
   | { type: "browse"; dir: "prev" | "next" }
-  | { type: "show-panel" };
+  | { type: "show-panel" }
+  // Diff-review (P3.5): the overlay surface has no RPC, so the presentational
+  // card asks the chrome coordinator to fetch a payload blob by content hash,
+  // and the result comes back down as an updated `blobResults` prop.
+  | { type: "fetch-blob"; hash: string }
+  // Diff-review escape hatch: the reviewer wants to inspect a file in the
+  // gad-browser panel (the only surface with a real file-inspection view).
+  // The chrome coordinator opens/focuses gad-browser with this target as
+  // launch state-args. Emitted both for degraded (binary/oversized) rows and
+  // as a quiet secondary action on normal file headers.
+  | { type: "open-in-gad-browser"; target: GadBrowserTarget };
 export type ApprovalCardIntent = { approvalId: string } & ApprovalCardIntentBody;
+
+/**
+ * Deep-link target for the "open in gad-browser" escape hatch. Carries the
+ * repo + path + the two content hashes and two tree states named in the
+ * diff-review payload, so the gad-browser panel can land on the file at (at
+ * least) the new state. Mirrors the per-file fields of a `DiffReviewEntry`.
+ */
+export interface GadBrowserTarget {
+  repoPath: string;
+  path: string;
+  oldHash?: string;
+  newHash?: string;
+  oldState: string;
+  newState: string | null;
+}
+
+/**
+ * Result of one chrome-side blob fetch, pushed back down to the overlay surface.
+ * `text` is the decoded blob; a `null`-shaped result is either a missing blob or
+ * a fetch error (both degrade non-blockingly in the viewer).
+ */
+export type BlobResult = { text: string } | { missing: true } | { error: string };
+
+/**
+ * Feature-detect the diff-review payload on an approval. Absent (every approval
+ * that isn't a host main-advance / repo deletion / restore) → `null`, and the
+ * card renders exactly as today. Present → the host-computed per-repo batch
+ * entries. The field is declared on the shared `PendingApproval` type; the
+ * runtime shape check guards against a malformed payload over the wire.
+ */
+export function getDiffReviewPayload(approval: PendingApproval): DiffReviewEntry[] | null {
+  const candidate = approval.diffReview;
+  if (!Array.isArray(candidate) || candidate.length === 0) return null;
+  const valid = candidate.every((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const record = entry as { repoPath?: unknown; changedFiles?: unknown; diffStat?: unknown };
+    if (typeof record.repoPath !== "string") return false;
+    if (!Array.isArray(record.changedFiles)) return false;
+    const diffStat = record.diffStat;
+    if (typeof diffStat !== "object" || diffStat === null) return false;
+    return typeof (diffStat as { filesChanged?: unknown }).filesChanged === "number";
+  });
+  return valid ? candidate : null;
+}
+
+/**
+ * Every content hash the diff-review payload legitimately references. The chrome
+ * fetches ONLY these hashes on the surface's behalf — a `fetch-blob` intent for
+ * any other hash is ignored. (Content addressing already guarantees a hash can
+ * only return its own bytes; this bounds WHICH blobs the card may read at all.)
+ */
+export function diffReviewPayloadHashes(entries: DiffReviewEntry[]): Set<string> {
+  const hashes = new Set<string>();
+  for (const entry of entries) {
+    for (const file of entry.changedFiles) {
+      if (file.oldHash) hashes.add(file.oldHash);
+      if (file.newHash) hashes.add(file.newHash);
+    }
+  }
+  return hashes;
+}
 
 export function basename(path: string): string {
   if (!path) return "";

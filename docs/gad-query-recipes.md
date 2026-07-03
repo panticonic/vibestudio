@@ -1,5 +1,15 @@
 # GAD Query Recipes
 
+> ⚠️ **Stale schema — verify table names before copying the SQL here.** Some
+> recipes below query `trajectory_branches` and `trajectory_events`, which are no
+> longer the live table names (the current branch/event log is `log_heads`,
+> `log_events`, `refs`, and `ref_log`). Other tables used here — `trajectory_turns`,
+> `trajectory_messages`, `trajectory_message_blocks`, `trajectory_invocations`,
+> `channel_roster` — are still current. For authoritative table/column names see
+> [gad-architecture.md](./gad-architecture.md) and the schema of record in
+> `workspace/workers/gad-store/index.ts`. Prefer the bounded `gad.inspect*` APIs
+> below over raw SQL.
+
 GAD uses the canonical agentic trajectory schema:
 
 - `trajectory_branches`

@@ -6,7 +6,6 @@ import * as path from "node:path";
 import { X509Certificate, randomBytes } from "node:crypto";
 import {
   Fanout,
-  ICE_RESTART_UNSUPPORTED_CODE,
   WrappedPeerConnection,
   canonicalizeFingerprint,
   candidateTypeFromPair,
@@ -19,7 +18,12 @@ import {
   toNodeBuffer,
   toNodeIceServers,
 } from "./nodeDatachannelPeer.js";
-import { certFileFingerprint, ensurePersistentCert, generateSelfSignedEcCert } from "./cert.js";
+import {
+  CertIdentityError,
+  certFileFingerprint,
+  ensurePersistentCert,
+  generateSelfSignedEcCert,
+} from "./cert.js";
 
 // A fixed ECDSA P-256 self-signed cert (generated once with openssl) and its
 // pinned SHA-256 fingerprint. This proves localFingerprint is a *stable* offline
@@ -376,9 +380,9 @@ describe("canonicalizeFingerprint — native fingerprint normalization", () => {
 });
 
 // Build a WrappedPeerConnection over a structurally-complete fake native peer so
-// the adapter methods (remoteFingerprint / selectedCandidateType / restartIce)
-// are exercised WITHOUT the native binary — only the optional accessors under
-// test are overridden per case.
+// the adapter methods (remoteFingerprint / selectedCandidateType) are exercised
+// WITHOUT the native binary — only the optional accessors under test are
+// overridden per case.
 type FakePc = Partial<ConstructorParameters<typeof WrappedPeerConnection>[0]>;
 function wrap(overrides: FakePc = {}): WrappedPeerConnection {
   const noop = (): void => {};
@@ -393,7 +397,6 @@ function wrap(overrides: FakePc = {}): WrappedPeerConnection {
     onLocalDescription: noop,
     onLocalCandidate: noop,
     onStateChange: noop,
-    onDataChannel: noop,
     state: () => "new",
     ...overrides,
   };
@@ -476,28 +479,6 @@ describe("WrappedPeerConnection.selectedCandidateType — getSelectedCandidatePa
   });
 });
 
-describe("WrappedPeerConnection.restartIce — coded-failure contract", () => {
-  it("throws ICE_RESTART_UNSUPPORTED when the binding lacks a native restartIce()", () => {
-    let caught: (Error & { code?: string }) | undefined;
-    try {
-      wrap().restartIce();
-    } catch (error) {
-      caught = error as Error & { code?: string };
-    }
-    expect(caught).toBeInstanceOf(Error);
-    expect(caught?.code).toBe(ICE_RESTART_UNSUPPORTED_CODE);
-    expect(ICE_RESTART_UNSUPPORTED_CODE).toBe("ICE_RESTART_UNSUPPORTED");
-    expect(caught?.message).toMatch(/ICE restart is unsupported/);
-  });
-
-  it("delegates to the native restartIce() when present (no throw)", () => {
-    const restart = vi.fn();
-    const pc = wrap({ restartIce: restart });
-    expect(() => pc.restartIce()).not.toThrow();
-    expect(restart).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("cert.ts — persistent ECDSA P-256 management", () => {
   it("generateSelfSignedEcCert mints a valid, self-verifying P-256 cert", () => {
     const { certPem, keyPem } = generateSelfSignedEcCert("unit-test");
@@ -536,5 +517,86 @@ describe("cert.ts — persistent ECDSA P-256 management", () => {
     const keyFile = tmp("k.pem");
     ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
     expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
+  });
+
+  it("logs on first mint and on reuse, keeping the fingerprint stable", () => {
+    const certFile = tmp("log-cert.pem");
+    const keyFile = tmp("log-key.pem");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const first = ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    const second = ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    const messages = log.mock.calls.map((c) => String(c[0]));
+    log.mockRestore();
+    expect(second.fingerprint).toBe(first.fingerprint);
+    expect(
+      messages.some(
+        (m) => m.includes("[webrtc-cert] minted new identity") && m.includes(first.fingerprint)
+      )
+    ).toBe(true);
+    expect(
+      messages.some(
+        (m) =>
+          m.includes("[webrtc-cert] reusing persistent identity") && m.includes(first.fingerprint)
+      )
+    ).toBe(true);
+  });
+
+  it("throws CertIdentityError when the cert exists but the key is missing", () => {
+    const certFile = tmp("half-a-cert.pem");
+    const keyFile = tmp("half-a-key.pem");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    fs.rmSync(keyFile);
+    let err: unknown;
+    try {
+      ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    } catch (e) {
+      err = e;
+    }
+    vi.restoreAllMocks();
+    expect(err).toBeInstanceOf(CertIdentityError);
+    expect((err as CertIdentityError).code).toBe("CERT_IDENTITY_HALF_STATE");
+    expect((err as Error).message).toContain(certFile);
+    expect((err as Error).message).toContain(keyFile);
+    expect((err as Error).message).toContain("MISSING");
+  });
+
+  it("throws CertIdentityError when the key exists but the cert is missing", () => {
+    const certFile = tmp("half-b-cert.pem");
+    const keyFile = tmp("half-b-key.pem");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    fs.rmSync(certFile);
+    let err: unknown;
+    try {
+      ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    } catch (e) {
+      err = e;
+    }
+    vi.restoreAllMocks();
+    expect(err).toBeInstanceOf(CertIdentityError);
+    expect((err as CertIdentityError).code).toBe("CERT_IDENTITY_HALF_STATE");
+    expect((err as Error).message).toContain(certFile);
+    expect((err as Error).message).toContain(keyFile);
+  });
+
+  it("throws CertIdentityError when a file exists but is empty/whitespace", () => {
+    const certFile = tmp("empty-cert.pem");
+    const keyFile = tmp("empty-key.pem");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    fs.writeFileSync(certFile, "   \n"); // whitespace-only → EMPTY, not present
+    let err: unknown;
+    try {
+      ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    } catch (e) {
+      err = e;
+    }
+    vi.restoreAllMocks();
+    expect(err).toBeInstanceOf(CertIdentityError);
+    expect((err as CertIdentityError).code).toBe("CERT_IDENTITY_HALF_STATE");
+    expect((err as Error).message).toContain(certFile);
+    expect((err as Error).message).toContain(keyFile);
+    expect((err as Error).message).toContain("EMPTY");
   });
 });

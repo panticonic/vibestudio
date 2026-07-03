@@ -25,19 +25,31 @@
  * session's offer. The frames stay opaque — the room buffers bytes, it does not
  * parse SDP.
  *
- * The two peers are told apart by a `peer:a` / `peer:b` tag. Relaying does not
- * need the tag (there are only two sockets, so "the peer" is simply the other
- * one) but the tag gives a deterministic slot and lets a dropped peer rejoin the
- * SAME slot to drive ICE-restart.
+ * The two peers fill ROLE-KEYED slots: a join MUST declare `?role=offerer` or
+ * `?role=answerer` (missing/invalid → HTTP 400, no upgrade). Relaying always
+ * targets the opposite role; the role also gives a deterministic slot and lets
+ * a dropped peer rejoin the SAME slot to drive ICE-restart.
+ *
+ * SAME-ROLE JOINS EVICT THE INCUMBENT (last-writer-wins, on purpose). With one
+ * room per paired device, a second socket claiming a role that is already held
+ * is BY CONSTRUCTION the same party reconnecting — its own ghost after an
+ * unclean drop, or a restarted server re-arming the answerer slot. The old
+ * socket is closed (code 4001, "superseded by new <role>") and the fresh one
+ * takes the slot, instead of the reconnect wedging behind a dead socket until
+ * Cloudflare reaps the TCP. A different-role join simply fills the other slot.
+ *
+ * A hibernated socket answers keepalive pings on its own via the runtime
+ * auto-response (`setWebSocketAutoResponse`, armed in the constructor), so a
+ * dead socket is detected in seconds (the client reaps a socket that goes 40s
+ * without a pong) without ever waking the DO. `ping`/`pong` are keepalive-only:
+ * they are NOT in RELAYED_TYPES and never reach `webSocketMessage`.
  */
 
-import { RELAYED_TYPES, type SignalingServerMessage } from "./protocol";
+import { RELAYED_TYPES, type SignalingRole, type SignalingServerMessage } from "./protocol";
 import { mintIceServers, type TurnEnv } from "./turn";
 
-const SLOT_A = "peer:a";
-const SLOT_B = "peer:b";
-/** RFC 6455 1013 "Try Again Later" — the room is at capacity. */
-const CLOSE_TRY_AGAIN_LATER = 1013;
+/** RFC 6455 private-use close code: the slot was reclaimed by a same-role join. */
+const CLOSE_SUPERSEDED = 4001;
 /**
  * DO-storage key holding the ordered frames a peer sent before its counterpart
  * joined. Flushed to the second joiner, then deleted; also wiped when the room
@@ -70,19 +82,40 @@ function jsonResponse(data: unknown, status = 200): Response {
   });
 }
 
-function send(ws: WebSocket, message: SignalingServerMessage): void {
+/**
+ * Throw-safe raw send. Returns whether the socket accepted the bytes: a gone or
+ * closing socket throws and yields `false` (the close handler reconciles the
+ * roster). Relay uses this directly so it forwards the ORIGINAL bytes verbatim
+ * without re-serializing.
+ */
+function sendRaw(ws: WebSocket, data: string): boolean {
   try {
-    ws.send(JSON.stringify(message));
+    ws.send(data);
+    return true;
   } catch {
-    // The socket is gone; the close handler will reconcile the roster.
+    return false;
   }
+}
+
+/** Throw-safe send of a typed server message (lifecycle notifications). */
+function send(ws: WebSocket, message: SignalingServerMessage): void {
+  sendRaw(ws, JSON.stringify(message));
 }
 
 export class SignalingRoom implements DurableObject {
   constructor(
     private readonly state: DurableObjectState,
-    private readonly env: SignalingRoomEnv,
-  ) {}
+    private readonly env: SignalingRoomEnv
+  ) {
+    // Arm the hibernation-compatible keepalive: the runtime answers `{"t":"ping"}`
+    // with `{"t":"pong"}` WITHOUT waking the DO, so a hibernated socket still
+    // proves liveness and a dead one is reaped in seconds (the client pings every
+    // 20s and treats 40s of silence as death). ping/pong stay off the relay path
+    // (not in RELAYED_TYPES) — they never reach the peer.
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}')
+    );
+  }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -120,41 +153,58 @@ export class SignalingRoom implements DurableObject {
     if (!upgrade || upgrade.toLowerCase() !== "websocket") {
       return jsonResponse({ error: "expected websocket upgrade" }, 426);
     }
-    return this.handleJoin();
+
+    // A join MUST declare which slot it fills — the room cannot pair or evict
+    // without knowing the role. Missing/invalid is a hard 400 (no upgrade), not
+    // a tolerated default.
+    const role = url.searchParams.get("role");
+    if (role !== "offerer" && role !== "answerer") {
+      return jsonResponse({ error: "join requires ?role=offerer|answerer" }, 400);
+    }
+    return this.handleJoin(role);
   }
 
-  private async handleJoin(): Promise<Response> {
-    const sockets = this.state.getWebSockets();
+  private async handleJoin(role: SignalingRole): Promise<Response> {
+    const roleTag = `role:${role}`;
+    const otherTag = role === "offerer" ? "role:answerer" : "role:offerer";
     const { 0: client, 1: server } = new WebSocketPair();
 
-    if (sockets.length >= 2) {
-      // Reject the third joiner. Accept the socket the plain way (NOT
-      // hibernatable) only to deliver the refusal and close it — it never
-      // enters the roster.
-      server.accept();
-      send(server, { t: "room-full" });
-      server.close(CLOSE_TRY_AGAIN_LATER, "room full");
-      return new Response(null, { status: 101, webSocket: client });
+    // Same-role join = the same party reconnecting (§4). Evict any incumbent
+    // holding this role so the fresh socket owns the slot, rather than the
+    // reconnect wedging behind a dead socket. Closed sockets leave the roster,
+    // so the slot is genuinely reclaimed.
+    for (const incumbent of this.state.getWebSockets(roleTag)) {
+      try {
+        incumbent.close(CLOSE_SUPERSEDED, `superseded by new ${role}`);
+      } catch {
+        // Already closing; the close handler reconciles the roster.
+      }
     }
 
-    const taken = new Set(sockets.flatMap((ws) => this.state.getTags(ws)));
-    const slot = taken.has(SLOT_A) ? SLOT_B : SLOT_A;
-    this.state.acceptWebSocket(server, [slot]);
+    this.state.acceptWebSocket(server, [roleTag]);
 
-    // Tell the peer(s) already present that the room is now occupied by another
-    // peer, so the answerer knows to expect an offer.
-    const peers = sockets.length + 1;
-    for (const other of sockets) {
+    // The genuine counterpart is the OTHER role's socket (evicted same-role
+    // ghosts are excluded by construction). Tell it a peer arrived so the
+    // answerer knows to expect an offer.
+    const others = this.state.getWebSockets(otherTag);
+    const peers = others.length + 1;
+    for (const other of others) {
       send(other, { t: "peer-joined", peers });
     }
 
-    // This join completes the pair: deliver anything the first peer sent while
+    // This join completes the pair: deliver anything the counterpart sent while
     // it was alone, in order, before any live frame can reach the new joiner.
-    if (sockets.length === 1) {
+    if (others.length > 0) {
       await this.flushPendingTo(server);
     }
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  private roleTagForSocket(ws: WebSocket): "role:offerer" | "role:answerer" | null {
+    if (this.state.getWebSockets("role:offerer").includes(ws)) return "role:offerer";
+    if (this.state.getWebSockets("role:answerer").includes(ws)) return "role:answerer";
+    return null;
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -170,9 +220,16 @@ export class SignalingRoom implements DurableObject {
       console.warn(`[signaling] dropping unrelayable frame t=${String(type)}`);
       return;
     }
-    // Blind relay: forward the original bytes verbatim to the other peer. We
-    // parsed only the top-level `t` to route; the SDP/ICE payload is never read.
-    const others = this.state.getWebSockets().filter((other) => other !== ws);
+    // Blind relay: forward the original bytes verbatim to the opposite-role
+    // peer. We parsed only the top-level `t` to route; the SDP/ICE payload is
+    // never read.
+    const roleTag = this.roleTagForSocket(ws);
+    if (!roleTag) {
+      console.warn("[signaling] dropping frame from untagged socket");
+      return;
+    }
+    const otherTag = roleTag === "role:offerer" ? "role:answerer" : "role:offerer";
+    const others = this.state.getWebSockets(otherTag).filter((other) => other !== ws);
     if (others.length === 0) {
       // No counterpart yet (the answerer is still arriving). Hold the frame so
       // it is delivered on join instead of dropped — the connection no longer
@@ -180,14 +237,22 @@ export class SignalingRoom implements DurableObject {
       await this.bufferFrame(text);
       return;
     }
-    for (const other of others) other.send(text);
+    // Throw-safe relay: a counterpart that is mid-close throws on send. If NO
+    // counterpart accepted the frame (the sole peer is already gone), fall back
+    // to the pre-join buffer so the frame is delivered to a genuine (re)joiner
+    // instead of silently lost.
+    let delivered = 0;
+    for (const other of others) if (sendRaw(other, text)) delivered++;
+    if (delivered === 0) {
+      await this.bufferFrame(text);
+    }
   }
 
   async webSocketClose(
     ws: WebSocket,
     code: number,
     reason: string,
-    _wasClean: boolean,
+    _wasClean: boolean
   ): Promise<void> {
     try {
       ws.close(code, reason);
@@ -226,7 +291,7 @@ export class SignalingRoom implements DurableObject {
     const seq = (await this.state.storage.get<number>(PENDING_SEQ_KEY)) ?? 0;
     if (seq >= MAX_BUFFERED_FRAMES) {
       console.warn(
-        `[signaling] pre-join buffer full (cap ${MAX_BUFFERED_FRAMES}); dropping frame until the second peer joins`,
+        `[signaling] pre-join buffer full (cap ${MAX_BUFFERED_FRAMES}); dropping frame until the second peer joins`
       );
       return;
     }

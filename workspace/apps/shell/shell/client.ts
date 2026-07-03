@@ -23,6 +23,7 @@ import { remoteCredMethods } from "@vibez1/shared/serviceSchemas/remoteCred";
 import { settingsMethods } from "@vibez1/shared/serviceSchemas/settings";
 import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
 import { autofillMethods } from "@vibez1/shared/serviceSchemas/autofill";
+import { blobstoreMethods } from "@vibez1/shared/serviceSchemas/blobstore";
 import { tokensMethods } from "@vibez1/shared/serviceSchemas/tokens";
 import { viewMethods } from "@vibez1/shared/serviceSchemas/view";
 import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
@@ -108,6 +109,11 @@ const viewClient = createTypedServiceClient("view", viewMethods, (service, metho
 const workspaceClient = createTypedServiceClient(
   "workspace",
   workspaceMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const blobstoreClient = createTypedServiceClient(
+  "blobstore",
+  blobstoreMethods,
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 import type {
@@ -197,6 +203,7 @@ export const panel = {
       name?: string;
       isRoot?: boolean;
       ref?: string;
+      stateArgs?: Record<string, unknown>;
     }
   ) =>
     panelTreeClient.create(source, {
@@ -204,6 +211,7 @@ export const panel = {
       ref: options?.ref,
       parentId: options?.isRoot === false ? undefined : null,
       focus: true,
+      stateArgs: options?.stateArgs,
     }),
   createChild: (
     parentId: string,
@@ -498,6 +506,14 @@ export const tokens = {
 export const autofill = {
   confirmSave: (panelId: string, action: "save" | "never" | "dismiss") =>
     autofillClient.confirmSave(panelId, action),
+};
+// =============================================================================
+// Blobstore Service (content-addressed read surface — diff-review lazy fetch)
+// =============================================================================
+export const blobstore = {
+  getText: (digest: string) => blobstoreClient.getText(digest),
+  getBase64: (digest: string) => blobstoreClient.getBase64(digest),
+  stat: (digest: string) => blobstoreClient.stat(digest),
 };
 // =============================================================================
 // Events Service

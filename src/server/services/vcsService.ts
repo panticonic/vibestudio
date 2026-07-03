@@ -17,15 +17,15 @@ import {
   vcsMethods,
   vcsApplyEditsInputSchema,
   type VcsRecallInput,
-  type VcsPushInput,
 } from "@vibez1/shared/serviceSchemas/vcs";
 import { normalizeWorkspaceRepoPath } from "@vibez1/shared/workspace/remotes";
-import type { WorkspaceVcs } from "../gadVcs/workspaceVcs.js";
+import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
-import { VCS_MAIN_HEAD, vcsContextHead } from "../gadVcs/store.js";
+import { VCS_MAIN_HEAD, vcsContextHead } from "../vcsHost/paths.js";
 import type {
-  MainAdvanceApprovalCandidate,
   MainAdvanceApprovalGate,
+  MainAdvanceOperation,
+  RefAdvanceGateContext,
 } from "./mainAdvanceApproval.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
@@ -99,36 +99,6 @@ function resolveWriteHead(
   return ownHead;
 }
 
-function resolvePushSourceHead(
-  ctx: ServiceContext,
-  deps: VcsServiceDeps,
-  requestedHead: string | undefined
-): string {
-  if (requestedHead) {
-    if (isPrivilegedCaller(ctx, deps)) return requestedHead;
-    const ownHead = headForCaller(ctx, deps);
-    if (ownHead === VCS_MAIN_HEAD) {
-      throw new Error(
-        `vcs.push from ${ctx.caller.runtime.kind} requires a context; no context head is registered`
-      );
-    }
-    if (requestedHead !== ownHead) {
-      throw new Error(
-        `Callers may only push their own context head (${ownHead}), not ${requestedHead}`
-      );
-    }
-    return requestedHead;
-  }
-
-  const ownHead = headForCaller(ctx, deps);
-  if (ownHead === VCS_MAIN_HEAD) {
-    throw new Error(
-      "vcs.push requires a source context head. Call from a registered context, or pass sourceHead explicitly from shell/server."
-    );
-  }
-  return ownHead;
-}
-
 function routeWorkspacePath(filePath: string): { repoPath: string; repoRelPath: string } | null {
   const split = splitRepoPath(filePath);
   if (!split) return null;
@@ -164,29 +134,22 @@ function stripRepoPath(filePath: string, repoPath: string): string {
       : normalized;
 }
 
-function mainAdvanceHook(
+/**
+ * The advance context a caller-driven main advance carries into the
+ * protected-ref gate (`RefService.updateMains` → the injected main-advance
+ * approval). The gate computes the authoritative changed-path diff itself;
+ * this only conveys WHO is advancing and WHY.
+ */
+function mainAdvanceContext(
   ctx: ServiceContext,
-  deps: VcsServiceDeps,
-  input: Omit<MainAdvanceApprovalCandidate, "event" | "caller">
-) {
-  if (!deps.mainAdvanceGate) return undefined;
-  return async (event: MainAdvanceApprovalCandidate["event"]) => {
-    if (event.head !== VCS_MAIN_HEAD) return;
-    await deps.mainAdvanceGate?.approve({
-      ...input,
-      event,
-      caller: ctx.caller,
-    });
+  input: { operation: MainAdvanceOperation; sourceHead?: string }
+): RefAdvanceGateContext {
+  return {
+    kind: "caller",
+    caller: ctx.caller,
+    operation: input.operation,
+    ...(input.sourceHead ? { sourceHead: input.sourceHead } : {}),
   };
-}
-
-function mainAdvanceOptions(
-  ctx: ServiceContext,
-  deps: VcsServiceDeps,
-  input: Omit<MainAdvanceApprovalCandidate, "event" | "caller">
-) {
-  const beforeAdvance = mainAdvanceHook(ctx, deps, input);
-  return beforeAdvance ? { beforeAdvance } : {};
 }
 
 function looksLikeWorkspacePath(value: string): boolean {
@@ -343,6 +306,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               message: input.message,
               actor,
               ...(excludeByRepo.has(repoPath) ? { exclude: excludeByRepo.get(repoPath)! } : {}),
+              // A2/T1: self-asserted sealing tool-call id, recorded on the commit event.
+              ...(input.invocationId ? { invocationId: input.invocationId } : {}),
             });
             out.push({ repoPath: normalizeWorkspaceRepoPath(repoPath), ...result });
           }
@@ -354,38 +319,10 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const repoPath = normalizeWorkspaceRepoPath(repoArg);
           return await vcs.discardEdits({ head, repoPath });
         }
-        case "commitEdits": {
-          const [repoArg, target] = args as [string, { eventId: string }];
-          const repoPath = normalizeWorkspaceRepoPath(repoArg);
-          return await vcs.listCommitEdits(repoPath, target.eventId);
-        }
-        case "fileHistory": {
-          const [repoArg, pathArg, headArg, limitArg] = args as [
-            string,
-            string,
-            string | undefined,
-            number | undefined,
-          ];
-          const repoPath = normalizeWorkspaceRepoPath(repoArg);
-          return await vcs.fileHistory(repoPath, pathArg, headArg, limitArg);
-        }
-        case "commitAncestors": {
-          const [repoArg, eventIdArg, limitArg] = args as [string, string, number | undefined];
-          const repoPath = normalizeWorkspaceRepoPath(repoArg);
-          return await vcs.commitAncestors(repoPath, eventIdArg, limitArg);
-        }
-        case "editsByActor": {
-          const [actorId, limitArg] = args as [string, number | undefined];
-          return await vcs.editsByActor(actorId, limitArg);
-        }
-        case "editsByTurn": {
-          const [turnId] = args as [string];
-          return await vcs.editsByTurn(turnId);
-        }
-        case "editsByInvocation": {
-          const [invocationId] = args as [string];
-          return await vcs.editsByInvocation(invocationId);
-        }
+        // History/read traversals (commitEdits, fileHistory, commitAncestors,
+        // editsByActor/Turn/Invocation, log) are USERLAND-dispatched since
+        // P5c: consumers resolve the `vcs` manifest service (workers.
+        // resolveService → gad-store DO) and call its `vcs*` read methods.
         case "previewBuild": {
           const [input] = args as [{ repoPaths?: string[]; units?: string[]; head?: string }];
           const head = input.head
@@ -475,22 +412,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const head = resolveReadHeadArg("status", headArg, ctx, deps);
           return await vcs.statusHead(head, repoPath);
         }
-        case "log": {
-          const [repoArg, limitArg, requestedHead] = args as [
-            string,
-            number | undefined,
-            string | undefined,
-          ];
-          const limit = limitArg ?? 50;
-          const repoPath = normalizeWorkspaceRepoPath(repoArg);
-          const head = requestedHead ?? headForCaller(ctx, deps);
-          return await vcs.readVcsLog(limit, head, repoPath);
-        }
         case "diff": {
           const [left, right] = args as [string, string];
           assertStateHashArg("diff", left, "left");
           assertStateHashArg("diff", right, "right");
-          return await vcs.vcs.diffStates(left, right);
+          // Content-store Merkle diff (diffTrees) — the gad DO is not consulted.
+          return await vcs.diffStates(left, right);
         }
         case "resolveHead": {
           const [requested, repoArg] = args as [string | undefined, string];
@@ -527,7 +454,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             sourceHead: e.sourceHead,
             targetHead: resolveWriteHead(ctx, deps, e.targetHead),
           }));
-          return await vcs.mergeGroup(normalizedEntries, { actor });
+          return await vcs.mergeGroup(normalizedEntries, {
+            actor,
+            // Entries targeting `main` (chrome callers only — resolveWriteHead
+            // confines everyone else to their own ctx head) advance the
+            // protected ref; the gate needs the caller context.
+            mainAdvance: mainAdvanceContext(ctx, { operation: "merge" }),
+          });
         }
         case "abortMerge": {
           const [repoArg, headArg] = args as [string | undefined, string | undefined];
@@ -536,13 +469,9 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           if (!repoPath) {
             throw new Error("vcs.abortMerge requires repoPath in the per-repo VCS model");
           }
-          return await vcs.abortMerge(targetHead, {
-            actor,
-            repoPath,
-            ...(targetHead === VCS_MAIN_HEAD
-              ? mainAdvanceOptions(ctx, deps, { operation: "abort-merge" })
-              : {}),
-          });
+          // Aborting a pending merge restores the pre-merge tree; it never
+          // advances a head ref, so no main-advance gate applies (even on main).
+          return await vcs.abortMerge(targetHead, { actor, repoPath });
         }
         case "pendingMerge": {
           const [repoArg, headArg] = args as [string | undefined, string | undefined];
@@ -553,23 +482,22 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           }
           return await vcs.pendingMerge(targetHead, repoPath);
         }
-        case "push": {
-          // Per-repo, build-gated push (W4). Group push (multiple repos) is
-          // atomic at the store layer (ingestRepoGroup). Routed through the
-          // main-advance approval gate.
-          const [input] = args as [VcsPushInput];
-          const repoPaths = input.repoPaths.map((r) => normalizeWorkspaceRepoPath(r));
-          const sourceHead = resolvePushSourceHead(ctx, deps, input.sourceHead);
-          return await vcs.push({
-            repoPaths,
-            sourceHead,
-            ...(input.message ? { message: input.message } : {}),
-            actor,
-            ...mainAdvanceOptions(ctx, deps, { operation: "push", sourceHead }),
-            // BuildSystemV2 satisfies RepoPushValidator structurally — no cast.
-            getBuildSystem: () => deps.getBuildSystem?.() ?? null,
-          });
-        }
+        // `push` is USERLAND-dispatched since the P3 flip: build-gated main
+        // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
+        // manifest service), not here. Client-side routing is load-bearing —
+        // the relay mints the on-behalf-of invocation token with the
+        // originating caller only when the DO is called directly. The method
+        // is kept in the advertised `vcsMethods` schema for typed clients, but
+        // reaching this host handler means the caller skipped that routing.
+        case "push":
+          throw new Error(
+            "vcs.push has no host handler: it is userland-dispatched (P3 flip) to the " +
+              "gad-store DO's `vcsPush`, reached via the `vcs` manifest service " +
+              "(workers.resolveService → DO). Route it through the runtime client's push " +
+              "override (packages/runtime/src/shared/vcsClient.ts createVcsClient), which " +
+              "mints the on-behalf-of invocation token with the originating caller — a host " +
+              "forward would erase it."
+          );
         case "pushStatus": {
           const [repoArgs] = args as [string[]];
           const repoPaths = repoArgs.map((r) => normalizeWorkspaceRepoPath(r));
@@ -590,50 +518,32 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         }
         case "deleteRepo": {
           // Severe, global-state action: archive a repo's history and remove it
-          // from workspace main. Gated by a dedicated per-repo deletion approval
-          // (NOT the generic write grant) via the beforeDelete hook.
+          // from workspace main. The SEVERE per-repo deletion approval is raised
+          // exactly ONCE by the ref gate when `updateMains` classifies the
+          // null-next entry (narrow-host-vcs-plan §5) — the caller is threaded
+          // through so that one prompt attributes to the originating principal.
           const [input] = args as [{ repoPath: string; force?: boolean }];
           const repoPath = normalizeWorkspaceRepoPath(input.repoPath);
           const result = await vcs.deleteRepo({
             repoPath,
             actor,
+            caller: ctx.caller,
             ...(input.force ? { force: true } : {}),
-            ...(deps.mainAdvanceGate
-              ? {
-                  beforeDelete: async ({ fileCount, stateHash, dependents }) =>
-                    deps.mainAdvanceGate!.approveRepoDeletion({
-                      caller: ctx.caller,
-                      repoPath,
-                      fileCount,
-                      stateHash,
-                      dependents,
-                    }),
-                }
-              : {}),
           });
           await deps.getBuildSystem?.()?.whenSettled();
           return result;
         }
         case "restoreRepo": {
           // Recover a deleted repo: re-point main at its archive head. Fails if a
-          // different repo now occupies the path. Gated by a (standard) restore
-          // approval via the beforeRestore hook.
+          // different repo now occupies the path. The restore approval is raised
+          // exactly ONCE by the ref gate when `updateMains` classifies the
+          // previously-deleted re-creation (narrow-host-vcs-plan §5).
           const [input] = args as [{ repoPath: string }];
           const repoPath = normalizeWorkspaceRepoPath(input.repoPath);
           const result = await vcs.restoreRepo({
             repoPath,
             actor,
-            ...(deps.mainAdvanceGate
-              ? {
-                  beforeRestore: async ({ fileCount, stateHash }) =>
-                    deps.mainAdvanceGate!.approveRepoRestore({
-                      caller: ctx.caller,
-                      repoPath,
-                      fileCount,
-                      stateHash,
-                    }),
-                }
-              : {}),
+            caller: ctx.caller,
           });
           await deps.getBuildSystem?.()?.whenSettled();
           return result;

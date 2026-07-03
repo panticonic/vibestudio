@@ -75,7 +75,6 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       resolveHead: async () => "state:0",
       resolveContextView: async () => "state:0",
       discoverGraph: async () => graph,
-      diffPaths: async () => [],
       onStateAdvanced: (cb) => {
         advanceCb = cb;
         return () => {};

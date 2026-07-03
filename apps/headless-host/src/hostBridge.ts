@@ -29,6 +29,16 @@ export interface HostBridgeHandlers {
   registerRejected(targetId: string, reason: string): void;
 }
 
+export interface CdpHostBridgeSocket {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  on(event: "open", listener: () => void): this;
+  on(event: "message", listener: (data: unknown) => void): this;
+  on(event: "close", listener: () => void): this;
+  on(event: "error", listener: (error: unknown) => void): this;
+}
+
 interface BridgeMessage {
   type?: string;
   requestId?: string;
@@ -43,7 +53,7 @@ interface BridgeMessage {
 }
 
 export class CdpHostBridgeClient {
-  private ws: WebSocket | null = null;
+  private socket: CdpHostBridgeSocket | null = null;
   private stopped = false;
   private authenticated = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,6 +66,7 @@ export class CdpHostBridgeClient {
       getToken: () => string | Promise<string>;
       handlers: HostBridgeHandlers;
       onAuthenticated?: () => void;
+      socketFactory?: (url: string) => CdpHostBridgeSocket;
     }
   ) {}
 
@@ -68,13 +79,13 @@ export class CdpHostBridgeClient {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
-    this.ws?.close(1000, "host shutting down");
-    this.ws = null;
+    this.socket?.close(1000, "host shutting down");
+    this.socket = null;
     this.authenticated = false;
   }
 
   isConnected(): boolean {
-    return this.authenticated && this.ws?.readyState === WebSocket.OPEN;
+    return this.authenticated && this.socket?.readyState === WebSocket.OPEN;
   }
 
   registerTarget(targetId: string, tabId: number): void {
@@ -97,30 +108,32 @@ export class CdpHostBridgeClient {
 
   private connect(): void {
     if (this.stopped) return;
-    const ws = new WebSocket(this.wsUrl(), { maxPayload: 256 * 1024 * 1024 });
-    this.ws = ws;
+    const url = this.wsUrl();
+    const socket =
+      this.opts.socketFactory?.(url) ?? new WebSocket(url, { maxPayload: 256 * 1024 * 1024 });
+    this.socket = socket;
     this.authenticated = false;
 
-    ws.on("open", () => {
+    socket.on("open", () => {
       void (async () => {
         try {
           const token = await this.opts.getToken();
-          ws.send(JSON.stringify({ type: "vibez1:cdp-auth", token }));
+          socket.send(JSON.stringify({ type: "vibez1:cdp-auth", token }));
         } catch (error) {
           log.warn(`failed to get bridge token: ${String(error)}`);
-          ws.close();
+          socket.close();
         }
       })();
     });
-    ws.on("message", (data) => {
+    socket.on("message", (data) => {
       void this.handleMessage(String(data));
     });
-    ws.on("close", () => {
+    socket.on("close", () => {
       this.authenticated = false;
-      if (this.ws === ws) this.ws = null;
+      if (this.socket === socket) this.socket = null;
       this.scheduleReconnect();
     });
-    ws.on("error", (error) => {
+    socket.on("error", (error) => {
       log.warn(`bridge socket error: ${String(error)}`);
     });
   }
@@ -135,7 +148,7 @@ export class CdpHostBridgeClient {
 
   private send(message: Record<string, unknown>): void {
     if (!this.isConnected()) return;
-    this.ws?.send(JSON.stringify(message));
+    this.socket?.send(JSON.stringify(message));
   }
 
   private async handleMessage(raw: string): Promise<void> {
@@ -172,7 +185,8 @@ export class CdpHostBridgeClient {
         return;
       }
       case "cdp:detach": {
-        if (message.targetId) await this.opts.handlers.detach(message.targetId).catch(() => undefined);
+        if (message.targetId)
+          await this.opts.handlers.detach(message.targetId).catch(() => undefined);
         return;
       }
       case "cdp:register-rejected": {

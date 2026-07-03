@@ -14,6 +14,7 @@ export type {
   RpcMessage,
   RpcTransport,
   RpcCallOptions,
+  RpcStreamOptions,
   AuthenticatedCaller,
   ExposedMethods,
   RpcEventListener,
@@ -74,3 +75,22 @@ export {
   retargetEnvelope,
 } from "./envelope.js";
 export { createHandlerRegistry } from "./transport-helpers.js";
+export type { DecodedFramedStream } from "./types.js";
+export {
+  BRIDGE_STREAM_CHUNK_BYTES,
+  BRIDGE_STREAM_BUFFER_CAP_BYTES,
+  bridgeStreamSurfaceOf,
+  createBridgeBodyReassembler,
+  createBridgeStreamRelay,
+  decodeBridgeChunk,
+  openBridgeUploadStream,
+  type BridgeBodyChunk,
+  type BridgeBodyReassembler,
+  type BridgeChunkEncoding,
+  type BridgeChunkPayload,
+  type BridgeStreamMessage,
+  type BridgeStreamOpen,
+  type BridgeStreamRelay,
+  type BridgeStreamRelayDeps,
+  type BridgeStreamShellSurface,
+} from "./bridgeStream.js";

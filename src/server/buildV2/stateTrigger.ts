@@ -29,7 +29,7 @@ import { recordDiagnostics } from "./diagnosticsStore.js";
 import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
-// Workspace state source (implemented by gadVcs/workspaceVcs.ts)
+// Workspace state source (implemented by vcsHost/workspaceVcs.ts)
 // ---------------------------------------------------------------------------
 
 export interface StateAdvancedEvent {
@@ -141,14 +141,12 @@ export interface WorkspaceStateSource {
   /**
    * Discover package manifests from a workspace-rooted state. Per the per-repo
    * VCS reshape this is the composed live workspace view (`workspaceView()` =
-   * `composeRepoStates` over each repo's `main`), which equals the legacy
+   * `composeRepoStatesLocal` over each repo's `main`), which equals the legacy
    * whole-workspace state for discovery purposes: discovery stays
    * workspace-rooted so unit `relativePath`s, EVs, and the build graph are all
    * in workspace coordinates regardless of which repo advanced.
    */
   discoverGraph(stateHash: string): Promise<PackageGraph>;
-  /** Changed file paths between two states. */
-  diffPaths(leftStateHash: string, rightStateHash: string): Promise<string[]>;
   /** Subscribe to state advances (any head). Returns unsubscribe. */
   onStateAdvanced(cb: (event: StateAdvancedEvent) => void): () => void;
   /** Append `build.completed` provenance to the builds log (best effort). */
@@ -311,9 +309,11 @@ export class StateTransitionTrigger extends EventEmitter {
    * Non-main (pinned / `ctx:*`) state advance. In the edit→commit→push model a
    * ctx-head commit emits `state-advanced` ONLY for memory/attribution
    * bookkeeping (consumed directly off `workspaceVcs.onStateAdvanced`) — it is
-   * NOT a publication and MUST NOT build: builds are authoritative only at the
-   * push gate (`validateRepoPush` builds + caches + recordBuilds the candidate),
-   * and on-demand previews of working content go through `previewBuild` (which
+   * NOT a publication and MUST NOT build: builds are validated at the push gate
+   * (`validate`/`validateRepoPush` build + cache the candidate, idempotently —
+   * they do NOT record the baseline), and the recorded baseline (`persistEvState`
+   * + `recordBuild`) is promoted ONLY here, reactively, when `main` advances.
+   * On-demand previews of working content go through `previewBuild` (which
    * never touches the EV baseline). So the build trigger deliberately does
    * nothing here: no `buildChanged`, no `change-detected`/unit-reconcile, and —
    * critically — no `persistEvState` (the EV baseline tracks ONLY pushed main

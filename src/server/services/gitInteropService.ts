@@ -8,7 +8,6 @@ import { GitClient } from "@vibez1/git";
 import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import type { ServiceContext, VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import type { AppCapability } from "@vibez1/shared/unitManifest";
-import type { WorkspaceTreeScanner } from "../gadVcs/workspaceTree.js";
 import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "@vibez1/shared/workspace/types";
 import {
   getDeclaredRemoteForRepo,
@@ -32,8 +31,19 @@ import { isAuthorizedChrome } from "./chromeTrust.js";
 
 const SHARED_GIT_REMOTE_CAPABILITY = "workspace-shared-git-remote";
 
+/**
+ * Structural slice of the host's workspace source-tree scanner. Declared
+ * locally so this service — a pure host policy/dispatch boundary (approvals,
+ * egress clone, config writes) — carries NO dependency on the gad layer's
+ * module layout.
+ */
+type WorkspaceTreeScannerLike = {
+  getSourceTree(): Promise<{ children: WorkspaceTreeNode[] }>;
+  invalidate(): void;
+};
+
 type GitInteropServiceDeps = {
-  treeScanner: WorkspaceTreeScanner;
+  treeScanner: WorkspaceTreeScannerLike;
   workspacePath?: string;
   workspaceConfig?: WorkspaceConfig;
   egressProxy?: Pick<EgressProxy, "forwardGitHttp">;
@@ -46,10 +56,11 @@ type GitInteropServiceDeps = {
    * cloned repo by snapshotting its on-disk tree into the repo log at `main`
    * (W7 distribution). No lockfile, no pinning — the clone lands at its
    * declared branch HEAD and its tree becomes the repo log's first `main`
-   * state. Wired to `GitBridge.importRepoTree`. Optional so unit tests that
-   * don't exercise distribution can omit it.
+   * state. Wired to the git-bridge extension's `importRepoTree`
+   * (`extensions.invoke`); the caller context is forwarded for attribution.
+   * Optional so unit tests that don't exercise distribution can omit it.
    */
-  initRepoLog?: (repoPath: string) => Promise<void>;
+  initRepoLog?: (ctx: ServiceContext, repoPath: string) => Promise<void>;
 };
 
 type WorkspaceTreeNode = {
@@ -185,7 +196,7 @@ async function completeWorkspaceDependencies(
       // disk and usable); surface it as a non-fatal warning.
       if (deps.initRepoLog) {
         try {
-          await deps.initRepoLog(imported.path);
+          await deps.initRepoLog(ctx, imported.path);
         } catch (logErr) {
           console.warn(
             `[GitRemotes] Cloned ${imported.path} but failed to initialize its vcs:repo log:`,

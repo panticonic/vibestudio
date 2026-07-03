@@ -25,6 +25,25 @@ export interface RpcRequest {
    */
   parentInvocationToken?: string;
   /**
+   * Set only by the HOST on a userland `vcs` DO dispatch: an opaque,
+   * host-minted correlation nonce for on-behalf-of attribution (the DO echoes
+   * it into `refs.updateMains`; the host resolves it against its own
+   * invocation table). NOT a credential — it carries no identity and grants
+   * none; see docs/narrow-host-vcs-plan.md §4.
+   */
+  invocationToken?: string;
+  /**
+   * Set only by the HOST on a userland `vcs` DO dispatch, at the SAME relay
+   * chokepoint that mints {@link invocationToken}: the originating caller's
+   * host-resolved context registration id (`entityCache.resolveContext`), or
+   * absent when the caller has none. HOST-VERIFIED, never client-asserted — a
+   * sandboxed caller cannot set or influence it. The vcs writer DO reads it
+   * read-at-entry to structurally confine a sandboxed push's `ctx:` source head
+   * to the caller's OWN context (docs/narrow-host-vcs-plan.md §3, register row
+   * 11). Carries no authority of its own; it only scopes source-head selection.
+   */
+  callerContextId?: string;
+  /**
    * Explicit opt-in (set ONLY by `callDeferred`) that this call may complete
    * out-of-band: a human-gated server method (approval, credential use) may
    * park the call, ack immediately with `{deferred, requestId}`, and deliver
@@ -244,6 +263,14 @@ export interface RpcStreamOptions {
   idempotencyKey?: string;
   /** Request read-only containment for streaming calls. */
   readOnly?: boolean;
+  /**
+   * Streaming REQUEST body (plan §1.6 — uploads ride the bulk channel). Only
+   * body-capable transports accept it: the WebRTC session pumps it as DATA
+   * frames on the bulk channel (declared via `bodyStreamId` on the
+   * `stream-open`). Every other transport (WS, HTTP, in-process) THROWS when a
+   * body is passed — bodies never silently fall back to base64-in-args.
+   */
+  body?: ReadableStream<Uint8Array> | null;
 }
 
 export interface RpcCaller {
@@ -298,17 +325,43 @@ export interface EnvelopeRpcTransport {
    * the duplex `stream-request`/`stream-frame` envelope path. The core builds a
    * `stream-request` envelope; the transport POSTs it and returns the streaming
    * `Response`. Socket transports omit this and keep the frame-envelope path.
+   *
+   * `body` is the streaming REQUEST body (plan §1.6). Only the WebRTC session
+   * transport supports it (bulk-channel DATA frames keyed by the stream-open's
+   * `bodyStreamId`); transports that cannot physically stream a request body
+   * MUST throw when one is passed — never a silent drop or base64 fallback.
    */
-  stream?(envelope: RpcEnvelope, signal?: AbortSignal | null): Promise<Response>;
+  stream?(
+    envelope: RpcEnvelope,
+    signal?: AbortSignal | null,
+    body?: ReadableStream<Uint8Array> | null
+  ): Promise<Response>;
   /**
    * Streaming variant returning the decoded head + raw `ReadableStream<Uint8Array>`
    * body (no `Response` wrapper) — for RN clients. Transports that support duplex
    * streaming implement this; `createRpcClient.streamReadable()` delegates here.
+   * `body` follows the same contract as `stream`.
    */
   streamReadable?(
     envelope: RpcEnvelope,
-    signal?: AbortSignal | null
+    signal?: AbortSignal | null,
+    body?: ReadableStream<Uint8Array> | null
   ): Promise<DecodedFramedStream>;
+  /**
+   * UPLOAD-ONLY first-class hop for panel shell bridges (plan §1.6). A bridge
+   * transport (Electron contextBridge / RN postMessage) cannot expose a full
+   * `stream` — its downstream host session may be a plain loopback WS with no
+   * response plane — but it CAN carry a streaming request body as explicit
+   * bridge chunk messages (see `bridgeStream.ts`). The core calls this ONLY
+   * when a request carries a `body` and the transport has no full `stream`
+   * hook; body-less streams keep the duplex envelope path byte-identical.
+   * Transports without it reject bodies loudly.
+   */
+  streamBody?(
+    envelope: RpcEnvelope,
+    signal?: AbortSignal | null,
+    body?: ReadableStream<Uint8Array> | null
+  ): Promise<Response>;
 }
 
 export type RpcConnectionStatus = "connected" | "connecting" | "disconnected";

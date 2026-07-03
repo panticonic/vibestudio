@@ -1,7 +1,22 @@
 import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import { describe, expect, it, vi } from "vitest";
+import { setWorkspaceAppTrust } from "@vibez1/shared/chromeTrust";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createViewService } from "./viewService.js";
+
+// App trust is manifest-declared (meta/vibez1.yml trust.chromeApps) and seeded
+// per process when the workspace manifest loads. Seed the shipped defaults so
+// the unauthorized-source rejection path is exercised as a live host sees it.
+beforeEach(() => {
+  setWorkspaceAppTrust({
+    chromeApps: ["apps/shell", "apps/mobile"],
+    connectionManagementApps: ["apps/shell", "apps/remote-cli"],
+  });
+});
+
+afterEach(() => {
+  setWorkspaceAppTrust(null);
+});
 
 function makeViewManager(capabilities: string[] = [], opts: { id?: string; source?: string } = {}) {
   const appId = opts.id ?? "@workspace-apps/shell";

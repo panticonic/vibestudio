@@ -9,11 +9,7 @@
 export type {
   PrimitiveFieldValue,
   FieldValue,
-  FieldType,
-  ConditionOperator,
   FieldCondition,
-  FieldOption,
-  SliderNotch,
   FieldWarning,
   FieldDefinition,
   FormSchema,
@@ -21,32 +17,7 @@ export type {
 export { FREE_TEXT_CHOICE_VALUE } from "./form-schema.js";
 
 // AI types
-export type {
-  AIModelInfo,
-  AIRoleRecord,
-  AIToolDefinition,
-  MessageRole,
-  TextPart,
-  FilePart,
-  ToolCallPart,
-  ToolResultPart,
-  SystemMessage,
-  UserMessage,
-  AssistantMessage,
-  ToolMessage,
-  Message,
-  ToolDefinition,
-  OnChunkCallback,
-  OnFinishCallback,
-  OnStepFinishCallback,
-  OnErrorCallback,
-  StepFinishResult,
-  StreamTextFinishResult,
-  StreamTextOptions,
-  StreamEvent,
-  ToolExecutionResult,
-  StreamTextResult,
-} from "./ai-types.js";
+export type { AIToolDefinition } from "./ai-types.js";
 
 // Runtime types
 export type {

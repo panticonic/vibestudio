@@ -1,24 +1,51 @@
 /**
- * Server-side WebRTC answerer pipe (plan §1/§3). The complement of
- * `webrtcClient` (the offerer/host): the home server accepts ONE pipe per paired
- * host and exposes its control/bulk channels as a `PipeChannels` surface that
- * `rpcServer.attachWebRtcPipe` demultiplexes into N logical sessions.
+ * Server-side WebRTC answerer pipe — v2 redesign (plan §1 wire protocol,
+ * §2.1–2.2 server). The complement of the offerer (`webrtcClient`): the home
+ * server answers a paired device's offer and exposes the control/bulk channels
+ * as the pipe surface `rpcServer.attachWebRtcPipe` demultiplexes into N
+ * logical sessions.
  *
- * The answerer does NOT fingerprint-pin: the pin is one-directional (the CLIENT
- * pins the SERVER's persistent DTLS cert via the QR `fp`). The server presents
- * that cert (via `certificatePemFile`/`keyPemFile` in the provider config) and
- * authenticates each principal per-session through the grant redemption that runs
- * inside `attachWebRtcPipe` (handleAuth) — DTLS authenticates the pipe, grants
- * authorize the principals.
+ * Shape of one pipe (§2.1):
+ * - **Lazy peer.** `connect()` arms signaling only. The `RTCPeerConnection` is
+ *   created on the first inbound offer, so N idle paired devices cost N
+ *   websockets and zero native peers.
+ * - **Supervised signaling rejoin.** One owned loop joins the room and rejoins
+ *   after every drop with 1s·2ⁿ + jitter backoff (cap 30 s) — the exact
+ *   `wsClient` policy. Same-role joins evict our own ghost server-side, so a
+ *   rejoin always wins. A close that lands during a join attempt is observed
+ *   by the post-attempt `onClosed` registration — never swallowed.
+ * - **Hello preamble (§1.1).** The FIRST control message each direction is a
+ *   `hello`; ours goes out directly on control-channel open (bypassing the
+ *   scheduler). Effective chunk = min(both maxMsg, 256 KiB); effective
+ *   keepalive = min of both ends' parameters. A session frame before the
+ *   remote hello, a `proto !== 2`, or 10 s of hello silence drops the pipe.
+ * - **Liveness (§2.2).** ICE `failed`/`closed` → down immediately; ICE
+ *   `disconnected` → 20 s grace, cancelled when ICE returns to `connected`
+ *   (instant-fatal `disconnected` was the split-brain bug —
+ *   `webrtc-rpc-remediation-plan.md` #2). Both channels' `onClose`/`onError`
+ *   → down. Inbound `ping` silence for 2× the negotiated timeout → down.
+ * - **Schedulers (§1.3/§1.4).** Control frames fan out over per-lane FIFO
+ *   queues, bulk frames over per-stream queues; both drain round-robin at
+ *   message granularity through `frameScheduler` against a 256 KiB high-water.
+ *   `ping` is answered with a direct `pong` that bypasses the queues.
+ * - **On down:** notify, tear the peer down, reset codec/demux, settle queued
+ *   scheduler work, and return to the lazy-armed state awaiting the next
+ *   offer. Signaling stays joined (the rejoin loop guards it).
+ *
+ * The answerer does NOT fingerprint-pin: the pin is one-directional (the
+ * CLIENT pins the SERVER's persistent DTLS cert via the QR `fp`). The server
+ * presents that cert (`certificatePemFile`/`keyPemFile`) and authenticates
+ * each principal per-session inside `attachWebRtcPipe`.
  *
  * Written against the platform-agnostic `webrtcPeer`/`webrtcSignaling`
- * interfaces, so it is unit-testable with the same in-memory fabric as the
- * client and carries no native dependency.
+ * interfaces, so it is unit-testable with an in-memory fabric and carries no
+ * native dependency.
  */
 
 import type { RpcConnectionStatus } from "../types.js";
 import type {
   PeerConnectionProvider,
+  RtcCandidateType,
   RtcConnectionState,
   RtcDataChannelLike,
   RtcIceCandidate,
@@ -35,27 +62,98 @@ import {
   DEFAULT_CHUNK_SIZE,
 } from "./webrtcPeer.js";
 import { createControlCodec } from "./controlFraming.js";
-import { awaitDrain, writeChunked } from "./channelIo.js";
+import { createFrameScheduler } from "./frameScheduler.js";
+import {
+  BULK_MUX_HEADER_BYTES,
+  createBulkDemux,
+  encodeBulkMessage,
+  type StreamFrameType,
+} from "../protocol/bulkMux.js";
+import { FRAME_DATA, FRAME_END } from "../protocol/streamCodec.js";
+import {
+  SESSION_HELLO,
+  SESSION_PING,
+  SESSION_PONG,
+  SESSION_PROTOCOL_VERSION,
+  decodeControlFrame,
+  encodeControlFrame,
+  isSessionHello,
+  type SessionHelloFrame,
+} from "../protocol/sessionNegotiation.js";
 
-// Backpressure high-water — kept SEPARATE from the chunk size. The 16 KiB chunk is
-// a per-message interop limit; throughput needs many chunks in flight. Draining to
-// one chunk before sending the next starves a relayed link to ~24 KB/s (one chunk
-// per buffered-amount-low round-trip); a 256 KiB window keeps the SCTP pipe full.
-const BULK_BUFFER_HIGH_WATER = 256 * 1024;
+export type { StreamFrameType } from "../protocol/bulkMux.js";
+
+// --- Wire/liveness constants (§1.1, §2.2) -----------------------------------
+
+/** Drain high-water for BOTH channels (§1.3/§1.4 — 256 KiB, symmetric). */
+const BUFFER_HIGH_WATER = 256 * 1024;
+/** Hard ceiling on the negotiated chunk size (§1.1). */
+const MAX_CHUNK_SIZE = 256 * 1024;
+/** Keepalive parameters this end advertises in its hello (§1.1). */
+const LOCAL_KEEPALIVE = { intervalMs: 15_000, timeoutMs: 45_000 } as const;
+/** The remote hello must arrive within this of control-channel open (§1.1). */
+const HELLO_TIMEOUT_MS = 10_000;
+/** ICE `disconnected` grace before teardown (§2.2 — split-brain fix). */
+const ICE_DISCONNECTED_GRACE_MS = 20_000;
+/** Signaling rejoin backoff — the exact `wsClient` policy. */
+const REJOIN_BASE_DELAY_MS = 1_000;
+const REJOIN_MAX_DELAY_MS = 30_000;
+const REJOIN_JITTER_MS = 500;
+/** Control frames at most this big are sniffed for pipe-level ping/pong. A
+ * ping is ~30 bytes; session frames that small are decoded twice, harmlessly. */
+const PING_SNIFF_MAX_BYTES = 512;
+/** Session control bytes accepted after hello but before bulk opens. This window
+ * should be tiny; the cap is a protocol tripwire against a peer flooding before
+ * the pipe is usable. */
+const PRE_PIPE_UP_CONTROL_CAP_BYTES = 4 * 1024 * 1024;
+/** Default control lane for pipe-level writes that belong to no session. */
+export const DEFAULT_CONTROL_LANE = "__pipe";
 
 export interface WebRtcAnswererPipe {
-  /** Write a serialized control frame to the client. Resolves once this frame's
-   * fragments have drained, so a caller can meter its own un-drained bytes. */
-  writeControl(data: Uint8Array): Promise<void> | void;
-  /** Write a binary bulk frame to the client (chunked under maxMessageSize). */
-  writeBulk(data: Uint8Array): void;
-  /** Control-channel backpressure for the server's slow-consumer logic. */
+  /**
+   * Write a serialized control frame to the client. `lane` is the session sid
+   * (default `"__pipe"`): per-lane FIFO order is preserved while the scheduler
+   * round-robins across lanes at fragment granularity, so one session's huge
+   * frame no longer stalls every other session. Resolves when this frame's
+   * fragments have been sent (backpressure metering); settles silently when
+   * the pipe is down (pipe-down is the failure signal, not per-write errors).
+   */
+  writeControl(data: Uint8Array, lane?: string): Promise<void>;
+  /**
+   * Write one bulk frame: mux-encoded (§1.2) and chunked under the negotiated
+   * size — DATA payloads split into independent DATA messages, oversized
+   * HEAD/ERROR JSON continues via MORE. Scheduled round-robin per stream.
+   * Resolves when accepted under the queue caps AND sent.
+   */
+  writeBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void>;
+  /** Discard everything still queued for a cancelled stream. */
+  dropBulkStream(streamId: number): void;
+  /** Queued-but-unsent bulk bytes — total, or for one stream (metering). */
+  bulkPendingBytes(streamId?: number): number;
+  /** Un-drained control bytes (channel buffer + scheduler queues). */
   controlBufferedAmount(): number;
-  /** Register the inbound control-frame handler (rpcServer.attachWebRtcPipe). */
+  /** Register the inbound control-frame handler. Frames arrive reassembled
+   * and post-hello only; hello/ping/pong are handled inside the pipe. */
   onControl(handler: (data: Uint8Array) => void): void;
-  /** Register a handler fired when the underlying pipe is lost or closed. */
+  /** Register the inbound bulk-frame handler (demuxed §1.2 frames). The
+   * payload may be a view into the receive buffer — copy to retain. */
+  onBulkFrame(
+    handler: (streamId: number, type: StreamFrameType, payload: Uint8Array) => void
+  ): void;
+  /** Register a handler fired when the pipe is lost or closed. */
   onDown(handler: (reason: string) => void): () => void;
-  /** Establish the pipe (idempotent); resolves once both channels are open. */
+  /** Selected ICE candidate-pair type of the live peer — `'relay'` means TURN
+   * engaged (the §9.8 relay alarm). Null when no peer is up. */
+  candidateType(): RtcCandidateType | null;
+  /** Candidate-type feed for the relay alarm (§9.8), mirroring the offerer's
+   * `WebRtcTransport.onCandidateType`: fired with the selected type when the
+   * pipe comes up (hello complete) and `null` when it goes down. */
+  onCandidateType(handler: (type: RtcCandidateType | null) => void): () => void;
+  /**
+   * Arm signaling (lazy — no peer until the first offer) and wait. Resolves
+   * when the hello exchange is complete AND both channels are open; rejects
+   * only on `close()` (signaling failures retry forever under backoff).
+   */
   connect(): Promise<void>;
   status(): RpcConnectionStatus;
   close(): Promise<void>;
@@ -66,204 +164,335 @@ type SignalingFactory = () => SignalingClient | Promise<SignalingClient>;
 export interface WebRtcAnswererOptions {
   provider: PeerConnectionProvider;
   /**
-   * A pre-created signaling client. Kept for tests/simple embedders; production
-   * callers should prefer createSignaling so a closed room can be rejoined.
+   * Create a signaling client joined to this pipe's room with
+   * `role: "answerer"`. Owned by the supervised rejoin loop: called once on
+   * `connect()` and again after every signaling drop or failed attempt, under
+   * 1s·2ⁿ + jitter backoff (cap 30 s).
    */
-  signaling?: SignalingClient;
-  /** Create a fresh signaling client for the same room after a room websocket drop. */
-  createSignaling?: SignalingFactory;
+  createSignaling: SignalingFactory;
   pairing: Pick<WebRtcPairing, "iceServers" | "iceTransportPolicy"> & {
     certificatePemFile?: string;
     keyPemFile?: string;
   };
-  chunkSize?: number;
   logPrefix?: string;
 }
 
-export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtcAnswererPipe {
-  if (!options.signaling && !options.createSignaling) {
-    throw new Error("createWebRtcAnswererPipe requires signaling or createSignaling");
-  }
-  const { provider, pairing } = options;
-  const createSignaling: SignalingFactory =
-    options.createSignaling ??
-    (() => {
-      if (!options.signaling) {
-        throw new Error("createWebRtcAnswererPipe requires signaling or createSignaling");
-      }
-      return options.signaling;
-    });
-  const chunkSize = options.chunkSize ?? DEFAULT_CHUNK_SIZE;
-  const log = options.logPrefix ?? "[webrtc-answerer]";
+interface ConnectWaiter {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
 
+type AnyTimer = ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>;
+
+/** Timers must never hold the Node event loop open for an idle pipe. */
+function unrefTimer(timer: AnyTimer): void {
+  (timer as unknown as { unref?: () => void }).unref?.();
+}
+
+export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtcAnswererPipe {
+  const { provider, pairing, createSignaling } = options;
+  const log = options.logPrefix ?? "[webrtc-answerer]";
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  let closed = false;
+  let status: RpcConnectionStatus = "disconnected";
+
+  // --- signaling (owned by the rejoin loop) ---------------------------------
   let signaling: SignalingClient | null = null;
+  let signalingLoopStarted = false;
+  let rejoinTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Settles a parked backoff sleep so close() exits the loop immediately. */
+  let wakeRejoin: (() => void) | null = null;
+
+  // --- peer generation ------------------------------------------------------
   let peer: RtcPeerConnectionLike | null = null;
   let control: RtcDataChannelLike | null = null;
   let bulk: RtcDataChannelLike | null = null;
-  let status: RpcConnectionStatus = "disconnected";
-  let connectPromise: Promise<void> | null = null;
-  let resolveConnect: (() => void) | null = null;
-  let rejectConnect: ((error: unknown) => void) | null = null;
-  let closed = false;
-  // See onDown: re-arm a resolved connect promise on pipe-down so connect()/ready()
-  // while awaiting a re-pairing offer waits for the new pipe, not the stale promise.
-  let connectResolved = false;
-  let controlHandler: ((data: Uint8Array) => void) | null = null;
-  // Control frames larger than the channel cap are fragmented on send and
-  // reassembled here on receive (see controlFraming). Reset when the peer is torn
-  // down so a re-pairing pipe never reassembles against a dead pipe's fragments.
-  const controlCodec = createControlCodec();
-  // `signalingUnsubs` holds the SIGNALING handlers — they outlive individual
-  // peers so a re-pairing offer can swap the peer underneath them. `peerUnsubs`
-  // holds the PEER-specific handlers, torn down + re-created on each (re-)establish.
-  const signalingUnsubs: Array<() => void> = [];
   const peerUnsubs: Array<() => void> = [];
   let peerHasRemote = false;
-  let signalingArmed = false;
-  let signalingRecovery: Promise<void> | null = null;
-  const downHandlers = new Set<(reason: string) => void>();
+  let controlOpen = false;
+  let bulkOpen = false;
+
+  // --- hello negotiation (§1.1) ---------------------------------------------
+  let localMaxMsg = DEFAULT_CHUNK_SIZE;
+  let localHelloSent = false;
+  let remoteHello: SessionHelloFrame | null = null;
+  let effectiveChunk = DEFAULT_CHUNK_SIZE;
+  let keepaliveTimeoutMs: number = LOCAL_KEEPALIVE.timeoutMs;
+  /** Hello exchange complete AND both channels open — the pipe is usable. */
+  let pipeUp = false;
+  let prePipeUpControlBytes = 0;
+  const prePipeUpControlFrames: Uint8Array[] = [];
+
+  // --- timers ---------------------------------------------------------------
+  let helloTimer: ReturnType<typeof setTimeout> | null = null;
+  let graceTimer: ReturnType<typeof setTimeout> | null = null;
+  let livenessTimer: ReturnType<typeof setInterval> | null = null;
+  let lastPingAt = 0;
+
+  // --- establish serialization + signaling buffers (§3.2 discipline) --------
+  let establishInFlight: Promise<void> | null = null;
   const pendingDescriptions: RtcSessionDescription[] = [];
   const pendingCandidates: RtcIceCandidate[] = [];
 
-  // Bulk-channel writes are SERIALIZED through this chain. N logical streams share
-  // ONE bulk channel, and chunked sends await drain (yielding the event loop), so
-  // without serialization the chunks of frames from parallel streams (e.g. a
-  // panel's HTML/JS/CSS/transport fetched concurrently) interleave on the wire and
-  // the byte-stream frame decoder mis-parses them. Each frame's chunks must be
-  // contiguous; ordering across frames does not matter (each carries its streamId).
-  let bulkWriteChain: Promise<void> = Promise.resolve();
+  // --- codecs / handlers ----------------------------------------------------
+  const controlCodec = createControlCodec();
+  let controlHandler: ((data: Uint8Array) => void) | null = null;
+  let bulkFrameHandler:
+    | ((streamId: number, type: StreamFrameType, payload: Uint8Array) => void)
+    | null = null;
+  const demux = createBulkDemux((streamId, type, payload) => {
+    bulkFrameHandler?.(streamId, type, payload);
+  });
+  const downHandlers = new Set<(reason: string) => void>();
+  const candidateTypeListeners = new Set<(type: RtcCandidateType | null) => void>();
+  let connectWaiter: ConnectWaiter | null = null;
 
-  async function writeBulkChunks(data: Uint8Array): Promise<void> {
-    const channel = bulk;
-    if (!channel || channel.readyState !== "open") return;
-    await writeChunked(channel, data, chunkSize);
-  }
+  // One scheduler per channel for the pipe's LIFETIME: `getChannel` gates on
+  // `pipeUp`, so on down the pump settles everything queued (and writes issued
+  // while down settle silently), while the next generation's enqueues send.
+  const controlScheduler = createFrameScheduler({
+    getChannel: () => (pipeUp ? control : null),
+  });
+  const bulkScheduler = createFrameScheduler({
+    getChannel: () => (pipeUp ? bulk : null),
+  });
 
-  // Control writes serialize through this chain and await drain between fragments,
-  // exactly like the bulk path. Without it, a large control frame (now possible —
-  // we fragment them) pushes every fragment synchronously and balloons the shared
-  // control buffer with zero backpressure; the per-call promise lets a caller (the
-  // server-side shim) meter its OWN un-drained bytes for per-session backpressure.
-  let controlWriteChain: Promise<void> = Promise.resolve();
+  // ---------------------------------------------------------------------------
+  // Signaling: supervised rejoin loop (§2.1)
+  // ---------------------------------------------------------------------------
 
-  async function writeControlParts(parts: Uint8Array[]): Promise<void> {
-    const channel = control;
-    if (!channel || channel.readyState !== "open") return;
-    for (const part of parts) {
-      await awaitDrain(channel);
-      channel.send(part);
-    }
-  }
-
-  // Signaling handlers reference the CURRENT `peer` (mutable), so a re-pairing
-  // that swaps the peer underneath them keeps routing correctly. The signaling
-  // client itself may be replaced after its websocket closes.
-  async function armSignaling(): Promise<SignalingClient> {
-    if (signaling && signalingArmed) return signaling;
-    const next = await createSignaling();
-    signaling = next;
-    signalingArmed = true;
-    signalingUnsubs.push(
-      next.onDescription((desc) => {
-        if (!peer) {
-          pendingDescriptions.push(desc);
-          return;
-        }
-        void onRemoteDescription(desc);
-      }),
-      next.onCandidate((cand) => {
-        const current = peer;
-        if (!current) {
-          pendingCandidates.push(cand);
-          return;
-        }
-        void current
-          .addRemoteCandidate(cand)
-          .catch((e) => console.warn(`${log} addRemoteCandidate`, e));
-      }),
-      next.onClosed((reason) => void onSignalingClosed(next, reason)),
-    );
-    return next;
-  }
-
-  function teardownSignaling(closeClient: boolean): void {
-    for (const off of signalingUnsubs.splice(0)) {
-      try {
-        off();
-      } catch {
-        /* ignore */
-      }
-    }
-    const current = signaling;
-    signaling = null;
-    signalingArmed = false;
-    if (closeClient && current) {
-      try {
-        current.close();
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  function onSignalingClosed(source: SignalingClient, reason?: string): void {
-    if (closed || source !== signaling) return;
-    const message = `signaling closed: ${reason ?? ""}`;
-    teardownSignaling(false);
-    if (!options.createSignaling) {
-      onDown(message);
-      return;
-    }
-    signalingRecovery ??= recoverSignaling(message).finally(() => {
-      signalingRecovery = null;
+  function startSignalingLoop(): void {
+    if (signalingLoopStarted || closed) return;
+    signalingLoopStarted = true;
+    void runSignalingLoop().catch((error) => {
+      // The loop catches everything it expects; this is a genuine bug path.
+      console.error(`${log} signaling supervisor crashed`, error);
     });
   }
 
-  async function recoverSignaling(reason: string): Promise<void> {
-    const hadPipe = status === "connected";
-    if (hadPipe) {
-      console.warn(`${log} ${reason}; rejoining signaling room`);
-    } else {
-      onDown(reason);
-      teardownPeer();
-    }
-    try {
-      await armSignaling();
-      if (!hadPipe && !closed) {
-        await establishPeer();
+  async function runSignalingLoop(): Promise<void> {
+    let attempt = 0;
+    while (!closed) {
+      let client: SignalingClient | null = null;
+      try {
+        client = await createSignaling();
+      } catch (error) {
+        console.warn(`${log} signaling join failed`, error);
       }
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      console.warn(`${log} signaling recovery failed`, err);
-      if (!hadPipe) rejectConnect?.(err);
+      if (closed) {
+        try {
+          client?.close();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      if (client) {
+        attempt = 0;
+        signaling = client;
+        // Resolves when THIS client closes. onClosed fires immediately for a
+        // close that already landed (during the join attempt) — re-checked
+        // here, never swallowed.
+        const reason = await watchSignaling(client);
+        if (signaling === client) signaling = null;
+        if (closed) return;
+        console.warn(`${log} signaling closed (${reason ?? "?"}); rejoining`);
+      }
+      const delay = Math.min(
+        REJOIN_BASE_DELAY_MS * 2 ** attempt + Math.random() * REJOIN_JITTER_MS,
+        REJOIN_MAX_DELAY_MS
+      );
+      attempt += 1;
+      await rejoinSleep(delay);
     }
   }
 
+  /** Register the transport handlers on a joined client; resolve on its close. */
+  function watchSignaling(client: SignalingClient): Promise<string | undefined> {
+    return new Promise((resolve) => {
+      let done = false;
+      const offs: Array<() => void> = [];
+      const finish = (reason?: string): void => {
+        if (done) return;
+        done = true;
+        for (const off of offs) {
+          try {
+            off();
+          } catch {
+            /* ignore */
+          }
+        }
+        resolve(reason);
+      };
+      offs.push(
+        client.onDescription((desc) => onSignalDescription(desc)),
+        client.onCandidate((cand) => onSignalCandidate(cand)),
+        client.onClosed((reason) => finish(reason ?? "signaling closed"))
+      );
+    });
+  }
+
+  function rejoinSleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const done = (): void => {
+        if (rejoinTimer !== null) {
+          clearTimeout(rejoinTimer);
+          rejoinTimer = null;
+        }
+        wakeRejoin = null;
+        resolve();
+      };
+      wakeRejoin = done;
+      rejoinTimer = setTimeout(done, ms);
+      unrefTimer(rejoinTimer);
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Descriptions & candidates: serialized, offer-driven establish (§2.1, §3.2)
+  // ---------------------------------------------------------------------------
+
+  function onSignalDescription(desc: RtcSessionDescription): void {
+    if (closed) return;
+    pendingDescriptions.push(desc);
+    pumpDescriptions();
+  }
+
+  function onSignalCandidate(cand: RtcIceCandidate): void {
+    if (closed) return;
+    const pc = peer;
+    // Buffer until a remote description has been applied to the CURRENT peer
+    // and no newer description is queued or being applied: a candidate that
+    // follows a queued offer belongs to that offer's generation and must land
+    // AFTER it (the old flow applied queued candidates before the triggering
+    // offer — the re-pair ordering inversion).
+    if (!pc || !peerHasRemote || establishInFlight !== null || pendingDescriptions.length > 0) {
+      pendingCandidates.push(cand);
+      return;
+    }
+    void pc.addRemoteCandidate(cand).catch((e) => console.warn(`${log} addRemoteCandidate`, e));
+  }
+
+  function flushCandidates(): void {
+    const pc = peer;
+    if (!pc || !peerHasRemote) return;
+    for (const cand of pendingCandidates.splice(0)) {
+      // A stale candidate from a torn-down generation fails here — warned,
+      // never masked, never applied out of order.
+      void pc.addRemoteCandidate(cand).catch((e) => console.warn(`${log} addRemoteCandidate`, e));
+    }
+  }
+
+  /** One in-flight establish, always; new descriptions queue behind it. */
+  function pumpDescriptions(): void {
+    if (closed || establishInFlight !== null || pendingDescriptions.length === 0) return;
+    establishInFlight = processDescriptions()
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        pipeDown(`establish failed: ${message}`);
+      })
+      .finally(() => {
+        establishInFlight = null;
+        if (closed) return;
+        if (pendingDescriptions.length > 0) {
+          pumpDescriptions();
+          return;
+        }
+        // Candidates that arrived while the establish was in flight.
+        flushCandidates();
+      });
+  }
+
+  async function processDescriptions(): Promise<void> {
+    while (!closed && pendingDescriptions.length > 0) {
+      const desc = pendingDescriptions.shift()!;
+      if (desc.type === "answer") {
+        // The offerer speaks first; the answerer never receives an answer.
+        console.warn(`${log} dropping unexpected remote answer`);
+        continue;
+      }
+      if (peer && peerHasRemote) {
+        // Re-pair: the same device re-established (new PeerConnection + DTLS).
+        // A second offer cannot apply to a used peer — tear down and re-answer.
+        // Candidates that arrived after this offer stay buffered and flush
+        // only after the new description is applied.
+        console.warn(`${log} re-pairing: new offer on a used peer — resetting`);
+        pipeDown("re-pairing offer");
+      }
+      if (!peer) {
+        // Recovery-path visibility (§9.8): together with the "re-pairing" warn
+        // above and the rejoin loop's "signaling closed … rejoining", every
+        // (re-)establish names the path that fired it.
+        console.log(`${log} inbound offer — establishing peer`);
+        await establishPeer();
+      }
+      const pc = peer;
+      if (!pc) return; // closed under us
+      await pc.setRemoteDescription(desc);
+      if (peer !== pc || closed) return;
+      peerHasRemote = true;
+      flushCandidates();
+      const answer = await pc.createAnswer();
+      if (peer !== pc || closed) return;
+      await pc.setLocalDescription(answer);
+    }
+  }
+
+  /** Create the lazy peer + pre-negotiated channels for an inbound offer. */
   async function establishPeer(): Promise<void> {
-    const activeSignaling = await armSignaling();
-    const iceServers = activeSignaling.fetchIceServers
-      ? await activeSignaling.fetchIceServers()
-      : pairing.iceServers ?? [];
     status = "connecting";
+    const client = signaling;
+    const iceServers = client?.fetchIceServers
+      ? await client.fetchIceServers()
+      : (pairing.iceServers ?? []);
     const pc = await provider.create({
       iceServers,
       iceTransportPolicy: pairing.iceTransportPolicy,
       certificatePemFile: pairing.certificatePemFile,
       keyPemFile: pairing.keyPemFile,
     });
+    if (closed) {
+      try {
+        pc.close();
+      } catch {
+        /* ignore */
+      }
+      throw new Error("Answerer pipe closed");
+    }
     peer = pc;
     peerHasRemote = false;
     // Pre-negotiated channels with the SAME ids the offerer opens.
-    control = pc.createDataChannel(CONTROL_LABEL, { ordered: true, negotiated: true, id: CONTROL_CHANNEL_ID });
-    bulk = pc.createDataChannel(BULK_LABEL, { ordered: true, negotiated: true, id: BULK_CHANNEL_ID });
-    control.bufferedAmountLowThreshold = chunkSize;
-    bulk.bufferedAmountLowThreshold = BULK_BUFFER_HIGH_WATER;
+    const ctl = pc.createDataChannel(CONTROL_LABEL, {
+      ordered: true,
+      negotiated: true,
+      id: CONTROL_CHANNEL_ID,
+    });
+    const blk = pc.createDataChannel(BULK_LABEL, {
+      ordered: true,
+      negotiated: true,
+      id: BULK_CHANNEL_ID,
+    });
+    control = ctl;
+    bulk = blk;
+    ctl.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
+    blk.bufferedAmountLowThreshold = BUFFER_HIGH_WATER;
 
     peerUnsubs.push(
-      control.onMessage((d) => {
-        const full = controlCodec.accept(d);
-        if (full) controlHandler?.(full);
+      ctl.onOpen(() => onControlChannelOpen()),
+      ctl.onClose(() => pipeDown("control channel closed")),
+      ctl.onError((error) => pipeDown(`control channel error: ${error.message}`)),
+      ctl.onMessage((data) => handleControlMessage(data)),
+      blk.onOpen(() => {
+        bulkOpen = true;
+        maybePipeUp();
       }),
+      blk.onClose(() => pipeDown("bulk channel closed")),
+      blk.onError((error) => pipeDown(`bulk channel error: ${error.message}`)),
+      blk.onMessage((data) => handleBulkMessage(data)),
+      pc.onConnectionStateChange((state) => onConnectionState(state)),
       pc.onLocalDescription((desc) => {
         const current = signaling;
         if (!current) return;
@@ -273,28 +502,382 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
         const current = signaling;
         if (!current) return;
         void current.sendCandidate(cand).catch((e) => console.warn(`${log} sendCandidate`, e));
-      }),
-      pc.onConnectionStateChange((s) => onConnectionState(s)),
+      })
     );
-
-    const queuedDescriptions = pendingDescriptions.splice(0);
-    for (const desc of queuedDescriptions) {
-      await onRemoteDescription(desc);
-    }
-    const queuedCandidates = pendingCandidates.splice(0);
-    for (const cand of queuedCandidates) {
-      await pc
-        .addRemoteCandidate(cand)
-        .catch((e) => console.warn(`${log} addRemoteCandidate`, e));
+    // Some adapters open negotiated channels synchronously.
+    if (ctl.readyState === "open") onControlChannelOpen();
+    if (blk.readyState === "open") {
+      bulkOpen = true;
+      maybePipeUp();
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Hello preamble (§1.1)
+  // ---------------------------------------------------------------------------
+
+  function onControlChannelOpen(): void {
+    if (controlOpen) return; // idempotent (adapter races)
+    const channel = control;
+    if (!channel) return;
+    controlOpen = true;
+    localMaxMsg = channel.maxMessageSize || DEFAULT_CHUNK_SIZE;
+    const hello: SessionHelloFrame = {
+      t: SESSION_HELLO,
+      proto: SESSION_PROTOCOL_VERSION,
+      maxMsg: localMaxMsg,
+      platform: "server",
+      keepalive: { ...LOCAL_KEEPALIVE },
+    };
+    // DIRECT send — the hello must be the FIRST control message and cannot sit
+    // behind the scheduler (which only opens once the pipe is up). A hello is
+    // tiny, so this is one whole-tagged codec message.
+    const parts = controlCodec.frame(encoder.encode(encodeControlFrame(hello)), localMaxMsg);
+    try {
+      for (const part of parts) channel.send(part);
+    } catch (error) {
+      pipeDown(`hello send failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    localHelloSent = true;
+    armHelloTimeout();
+    maybePipeUp();
+  }
+
+  function armHelloTimeout(): void {
+    clearHelloTimeout();
+    helloTimer = setTimeout(() => {
+      helloTimer = null;
+      if (!remoteHello) {
+        pipeDown(`hello timeout (no remote hello within ${HELLO_TIMEOUT_MS}ms)`);
+      }
+    }, HELLO_TIMEOUT_MS);
+    unrefTimer(helloTimer);
+  }
+
+  function clearHelloTimeout(): void {
+    if (helloTimer !== null) {
+      clearTimeout(helloTimer);
+      helloTimer = null;
+    }
+  }
+
+  function handleRemoteHello(frameBytes: Uint8Array): void {
+    let frame;
+    try {
+      frame = decodeControlFrame(decoder.decode(frameBytes));
+    } catch (error) {
+      pipeDown(
+        `malformed first control frame: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
+    if (!isSessionHello(frame)) {
+      // Any session frame before the hello is a protocol violation (§1.1).
+      pipeDown(`protocol violation: '${frame.t}' frame before hello`);
+      return;
+    }
+    if (frame.proto !== SESSION_PROTOCOL_VERSION) {
+      pipeDown(`protocol violation: hello proto ${frame.proto} (want ${SESSION_PROTOCOL_VERSION})`);
+      return;
+    }
+    if (!Number.isFinite(frame.maxMsg) || frame.maxMsg <= 0) {
+      pipeDown(`protocol violation: hello maxMsg ${frame.maxMsg}`);
+      return;
+    }
+    remoteHello = frame;
+    clearHelloTimeout();
+    maybePipeUp();
+  }
+
+  /** Relay-alarm feed (§9.8), mirroring the offerer's `emitCandidateType`. */
+  function emitCandidateType(type: RtcCandidateType | null): void {
+    for (const listener of [...candidateTypeListeners]) {
+      try {
+        listener(type);
+      } catch (error) {
+        console.warn(`${log} candidate-type listener threw`, error);
+      }
+    }
+  }
+
+  function maybePipeUp(): void {
+    if (pipeUp || closed) return;
+    if (!remoteHello || !localHelloSent || !controlOpen || !bulkOpen) return;
+    effectiveChunk = Math.min(localMaxMsg, remoteHello.maxMsg, MAX_CHUNK_SIZE);
+    keepaliveTimeoutMs = Math.min(
+      LOCAL_KEEPALIVE.timeoutMs,
+      remoteHello.keepalive?.timeoutMs ?? Number.POSITIVE_INFINITY
+    );
+    pipeUp = true;
+    status = "connected";
+    lastPingAt = Date.now();
+    startLivenessTimer();
+    connectWaiter?.resolve();
+    connectWaiter = null;
+    console.log(
+      `${log} pipe up (chunk=${effectiveChunk}B keepaliveTimeout=${keepaliveTimeoutMs}ms platform=${remoteHello.platform ?? "?"})`
+    );
+    emitCandidateType(peer?.selectedCandidateType() ?? null);
+    flushPrePipeUpControlFrames();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Liveness (§2.2)
+  // ---------------------------------------------------------------------------
+
+  function startLivenessTimer(): void {
+    stopLivenessTimer();
+    const deadlineMs = 2 * keepaliveTimeoutMs;
+    if (!Number.isFinite(deadlineMs)) return;
+    const cadence = Math.max(1, Math.floor(keepaliveTimeoutMs / 2));
+    livenessTimer = setInterval(() => {
+      if (!pipeUp) return;
+      if (Date.now() - lastPingAt > deadlineMs) pipeDown("client keepalive lost");
+    }, cadence);
+    unrefTimer(livenessTimer);
+  }
+
+  function stopLivenessTimer(): void {
+    if (livenessTimer !== null) {
+      clearInterval(livenessTimer);
+      livenessTimer = null;
+    }
+  }
+
+  function onConnectionState(state: RtcConnectionState): void {
+    if (closed) return;
+    switch (state) {
+      case "connected":
+        // ICE recovered within the grace window — cancel the pending teardown
+        // (sessions survive; the instant-fatal path was the split-brain bug).
+        clearGraceTimer();
+        return;
+      case "disconnected":
+        armGraceTimer();
+        return;
+      case "failed":
+        pipeDown("ICE failed");
+        return;
+      case "closed":
+        pipeDown("ICE closed");
+        return;
+      default:
+        return;
+    }
+  }
+
+  function armGraceTimer(): void {
+    if (graceTimer !== null) return;
+    console.warn(`${log} ICE disconnected — ${ICE_DISCONNECTED_GRACE_MS}ms grace before teardown`);
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      pipeDown("ICE disconnected (grace elapsed)");
+    }, ICE_DISCONNECTED_GRACE_MS);
+    unrefTimer(graceTimer);
+  }
+
+  function clearGraceTimer(): void {
+    if (graceTimer !== null) {
+      clearTimeout(graceTimer);
+      graceTimer = null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Inbound frames
+  // ---------------------------------------------------------------------------
+
+  function handleControlMessage(message: Uint8Array): void {
+    let full: Uint8Array | null;
+    try {
+      full = controlCodec.accept(message);
+    } catch (error) {
+      // ControlProtocolViolation (defrag budget breach) — fail loud (§2.5).
+      pipeDown(
+        `control protocol violation: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return;
+    }
+    if (!full) return;
+    if (!remoteHello) {
+      handleRemoteHello(full);
+      return;
+    }
+    if (full.byteLength <= PING_SNIFF_MAX_BYTES && consumePipeFrame(full)) return;
+    if (!pipeUp) {
+      prePipeUpControlBytes += full.byteLength;
+      if (prePipeUpControlBytes > PRE_PIPE_UP_CONTROL_CAP_BYTES) {
+        pipeDown(`pre-pipe-up control backlog exceeded ${PRE_PIPE_UP_CONTROL_CAP_BYTES} bytes`);
+        return;
+      }
+      prePipeUpControlFrames.push(full.slice());
+      return;
+    }
+    controlHandler?.(full);
+  }
+
+  function flushPrePipeUpControlFrames(): void {
+    if (prePipeUpControlFrames.length === 0) return;
+    const frames = prePipeUpControlFrames.splice(0);
+    prePipeUpControlBytes = 0;
+    for (const frame of frames) {
+      if (closed || !pipeUp) return;
+      controlHandler?.(frame);
+    }
+  }
+
+  /** Handle pipe-level ping/pong/hello inside the pipe; true = consumed. */
+  function consumePipeFrame(frameBytes: Uint8Array): boolean {
+    let parsed: { t?: unknown; ts?: unknown };
+    try {
+      parsed = JSON.parse(decoder.decode(frameBytes)) as { t?: unknown; ts?: unknown };
+    } catch {
+      // Control frames are whole JSON documents; a non-JSON frame is corrupt.
+      pipeDown("malformed control frame");
+      return true;
+    }
+    if (parsed?.t === SESSION_PING) {
+      lastPingAt = Date.now();
+      sendPongDirect(typeof parsed.ts === "number" ? parsed.ts : Date.now());
+      return true;
+    }
+    if (parsed?.t === SESSION_PONG) return true; // we never ping — ignore strays
+    if (parsed?.t === SESSION_HELLO) {
+      pipeDown("protocol violation: duplicate hello");
+      return true;
+    }
+    return false;
+  }
+
+  /** Answer a ping DIRECTLY — bypassing the scheduler, so a saturated link can
+   * never starve its own keepalive into a spurious teardown (§1.4). A direct
+   * whole-tagged message between fragment sets is protocol-safe. */
+  function sendPongDirect(ts: number): void {
+    const channel = control;
+    if (!channel || channel.readyState !== "open") return;
+    const parts = controlCodec.frame(
+      encoder.encode(encodeControlFrame({ t: SESSION_PONG, ts })),
+      effectiveChunk
+    );
+    try {
+      for (const part of parts) channel.send(part);
+    } catch (error) {
+      pipeDown(`pong send failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function handleBulkMessage(message: Uint8Array): void {
+    if (!remoteHello) {
+      pipeDown("protocol violation: bulk message before hello");
+      return;
+    }
+    try {
+      demux.push(message);
+    } catch (error) {
+      // BulkProtocolViolation — a peer speaking a different dialect fails
+      // loud instead of corrupting streams silently (§1.2).
+      pipeDown(
+        `bulk protocol violation: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Outbound encoding
+  // ---------------------------------------------------------------------------
+
+  /** Encode one logical bulk frame into ≤effectiveChunk mux messages (§1.2). */
+  function encodeBulkFrameParts(
+    streamId: number,
+    type: StreamFrameType,
+    payload: Uint8Array
+  ): Uint8Array[] {
+    const budget = Math.max(1, effectiveChunk - BULK_MUX_HEADER_BYTES);
+    if (payload.byteLength <= budget) {
+      return [encodeBulkMessage(streamId, type, payload)];
+    }
+    if (type === FRAME_DATA) {
+      // DATA has no wire-level frame: each message's bytes simply append to
+      // the stream, so an oversized payload becomes independent DATA messages.
+      const parts: Uint8Array[] = [];
+      for (let offset = 0; offset < payload.byteLength; offset += budget) {
+        parts.push(
+          encodeBulkMessage(
+            streamId,
+            type,
+            payload.subarray(offset, Math.min(offset + budget, payload.byteLength))
+          )
+        );
+      }
+      return parts;
+    }
+    if (type === FRAME_END) {
+      // END carries a tiny JSON payload and cannot continue (MORE is invalid
+      // on END) — an oversized one is a programming error, not a wire state.
+      throw new Error(
+        `END payload (${payload.byteLength}B) exceeds the negotiated chunk (${budget}B)`
+      );
+    }
+    // Oversized HEAD/ERROR JSON continues via MORE messages (§1.2).
+    const parts: Uint8Array[] = [];
+    for (let offset = 0; offset < payload.byteLength; offset += budget) {
+      const end = Math.min(offset + budget, payload.byteLength);
+      parts.push(
+        encodeBulkMessage(streamId, type, payload.subarray(offset, end), end < payload.byteLength)
+      );
+    }
+    return parts;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Down / teardown
+  // ---------------------------------------------------------------------------
+
+  function notifyDown(reason: string): void {
+    for (const handler of [...downHandlers]) {
+      try {
+        handler(reason);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * The single down path: tear the peer down, settle queued work, notify, and
+   * return to the lazy-armed state awaiting the next offer. Signaling stays
+   * joined (the rejoin loop guards it); connect() waiters keep waiting.
+   */
+  function pipeDown(reason: string): void {
+    if (closed) return;
+    if (!peer && status === "disconnected") return; // nothing up, nothing to drop
+    console.warn(`${log} pipe down: ${reason}`);
+    teardownPeer();
+    status = "disconnected";
+    notifyDown(reason);
+    emitCandidateType(null);
+  }
+
   function teardownPeer(): void {
-    // Stale control fragments from the dead pipe must not reassemble against the
-    // re-paired pipe's first frames.
+    clearHelloTimeout();
+    clearGraceTimer();
+    stopLivenessTimer();
+    pipeUp = false; // schedulers' getChannel now yields null → queued work settles
+    // A fresh pipe must never reassemble against a dead pipe's fragments or
+    // continue a dead pipe's partial HEAD/ERROR accumulations.
     controlCodec.reset();
-    pendingDescriptions.length = 0;
-    pendingCandidates.length = 0;
+    demux.reset();
+    prePipeUpControlFrames.length = 0;
+    prePipeUpControlBytes = 0;
+    remoteHello = null;
+    localHelloSent = false;
+    controlOpen = false;
+    bulkOpen = false;
+    peerHasRemote = false;
+    effectiveChunk = DEFAULT_CHUNK_SIZE;
+    localMaxMsg = DEFAULT_CHUNK_SIZE;
+    // Unsubscribe BEFORE closing so the close/error handlers don't re-enter.
     for (const off of peerUnsubs.splice(0)) {
       try {
         off();
@@ -317,147 +900,113 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     } catch {
       /* ignore */
     }
-    peer = null;
     control = null;
     bulk = null;
-    peerHasRemote = false;
+    peer = null;
   }
 
-  async function onRemoteDescription(desc: { type: "offer" | "answer"; sdp: string }): Promise<void> {
-    if (closed) return;
-    if (desc.type === "offer" && peerHasRemote) {
-      // Re-pairing: a fresh host offer arrived after the current peer was already
-      // negotiated — e.g. the mobile host reloaded from the bootstrap into the
-      // workspace app, or any offerer did a full re-establish (webrtcClient's
-      // reestablish() builds a NEW PeerConnection + DTLS, not restartIce). A new
-      // offer on the established peer is rejected by libdatachannel ("Invalid ICE
-      // settings from remote SDP"), so tear the used peer down + re-arm a fresh one.
-      console.warn(`${log} re-pairing: new offer on a used peer — resetting`);
-      onDown("re-pairing offer");
-      teardownPeer();
-      await establishPeer();
-    }
-    if (!peer || closed) return;
-    await peer.setRemoteDescription(desc);
-    peerHasRemote = true;
-    if (desc.type === "offer") {
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-    }
-  }
-
-  function onConnectionState(state: RtcConnectionState): void {
-    if (closed) return;
-    if (state === "connected") {
-      status = "connected";
-      resolveConnect?.();
-      connectResolved = true;
-    } else if (state === "failed" || state === "disconnected") {
-      onDown(`ICE ${state}`);
-    }
-  }
-
-  function notifyDown(reason: string): void {
-    for (const handler of [...downHandlers]) {
-      try {
-        handler(reason);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-
-  function onDown(reason: string): void {
-    if (closed) return;
-    const wasDisconnected = status === "disconnected";
-    if (!wasDisconnected) {
-      console.warn(`${log} pipe down: ${reason}`);
-      notifyDown(reason);
-    }
-    status = "disconnected";
-    // Re-arm a resolved connect promise so a connect()/ready() while waiting for the
-    // re-pairing offer awaits the new pipe rather than returning the stale resolved one.
-    if (connectResolved) {
-      connectResolved = false;
-      connectPromise = new Promise<void>((resolve, reject) => {
-        resolveConnect = resolve;
-        rejectConnect = (error) => {
-          connectPromise = null;
-          reject(error);
-        };
-      });
-      void connectPromise.catch(() => {});
-    }
-    // The offerer drives reconnection (ICE-restart / re-establish) over the
-    // persistent signaling room; the answerer just waits for the new offer.
-  }
+  // ---------------------------------------------------------------------------
+  // Public surface
+  // ---------------------------------------------------------------------------
 
   return {
-    writeControl(data: Uint8Array): Promise<void> {
-      const ch = control;
-      if (!ch || ch.readyState !== "open") return Promise.resolve();
-      // Fragment large frames: RN corrupts >16 KiB data-channel messages, and an
-      // RPC response/event can exceed the cap. The offerer reassembles by id. The
-      // fragments serialize + drain through controlWriteChain (backpressure); the
-      // returned promise resolves once THIS frame's fragments have drained.
-      const max = Math.min(chunkSize, ch.maxMessageSize || chunkSize);
-      const parts = controlCodec.frame(data, max);
-      const p = controlWriteChain
-        .then(() => writeControlParts(parts))
-        .catch((e) => console.warn(`${log} writeControl`, e));
-      controlWriteChain = p;
-      return p;
+    async writeControl(data: Uint8Array, lane: string = DEFAULT_CONTROL_LANE): Promise<void> {
+      const parts = controlCodec.frame(data, effectiveChunk);
+      // Outcome discarded: the answerer's failure signal is session/pipe
+      // teardown, not per-write results (settle-never-rejects).
+      await controlScheduler.enqueue(lane, parts);
     },
-    writeBulk(data: Uint8Array): void {
-      // Enqueue behind any in-flight bulk write so each frame's chunks stay
-      // contiguous (see writeBulkChunks) — parallel streams must not interleave.
-      bulkWriteChain = bulkWriteChain
-        .then(() => writeBulkChunks(data))
-        .catch((e) => console.warn(`${log} writeBulk`, e));
+
+    async writeBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void> {
+      await bulkScheduler.enqueue(streamId, encodeBulkFrameParts(streamId, type, payload));
     },
+
+    dropBulkStream(streamId: number): void {
+      bulkScheduler.dropKey(streamId);
+    },
+
+    bulkPendingBytes(streamId?: number): number {
+      return bulkScheduler.pendingBytes(streamId);
+    },
+
     controlBufferedAmount(): number {
-      return control?.bufferedAmount ?? 0;
+      return (control?.bufferedAmount ?? 0) + controlScheduler.pendingBytes();
     },
+
     onControl(handler: (data: Uint8Array) => void): void {
       controlHandler = handler;
     },
+
+    onBulkFrame(
+      handler: (streamId: number, type: StreamFrameType, payload: Uint8Array) => void
+    ): void {
+      bulkFrameHandler = handler;
+    },
+
     onDown(handler: (reason: string) => void): () => void {
       downHandlers.add(handler);
       return () => downHandlers.delete(handler);
     },
+
+    candidateType(): RtcCandidateType | null {
+      return peer?.selectedCandidateType() ?? null;
+    },
+
+    onCandidateType(handler: (type: RtcCandidateType | null) => void): () => void {
+      candidateTypeListeners.add(handler);
+      return () => candidateTypeListeners.delete(handler);
+    },
+
     async connect(): Promise<void> {
       if (closed) throw new Error("Answerer pipe closed");
-      if (status === "connected") return;
-      if (connectPromise) return connectPromise;
-      connectPromise = new Promise<void>((resolve, reject) => {
-        resolveConnect = resolve;
-        rejectConnect = (error) => {
-          connectPromise = null;
-          reject(error);
-        };
-      });
-      void connectPromise.catch(() => {});
-      try {
-        await establishPeer();
-      } catch (error) {
-        // Provider/signaling setup threw — reject + clear so a later connect()
-        // retries instead of awaiting a poisoned, never-settling promise.
-        rejectConnect?.(error instanceof Error ? error : new Error(String(error)));
-        throw error;
+      startSignalingLoop();
+      if (pipeUp) return;
+      if (!connectWaiter) {
+        let resolve!: () => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<void>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        // Mark handled so a close() with no awaiting caller never surfaces an
+        // unhandled rejection; real awaiters still observe the rejection.
+        void promise.catch(() => {});
+        connectWaiter = { promise, resolve, reject };
       }
-      return connectPromise;
+      return connectWaiter.promise;
     },
+
     status(): RpcConnectionStatus {
       return status;
     },
+
     async close(): Promise<void> {
-      if (!closed) notifyDown("answerer pipe closed");
+      if (closed) return;
       closed = true;
-      // Settle a pending connect promise so an awaiting connect() rejects, not hangs.
-      rejectConnect?.(new Error("Answerer pipe closed"));
       teardownPeer();
-      teardownSignaling(true);
       status = "disconnected";
+      notifyDown("answerer pipe closed");
+      emitCandidateType(null);
+      connectWaiter?.reject(new Error("Answerer pipe closed"));
+      connectWaiter = null;
+      // Stop the rejoin loop: settle a parked backoff sleep and close the
+      // joined client (its onClosed resolves the loop's watch).
+      if (rejoinTimer !== null) {
+        clearTimeout(rejoinTimer);
+        rejoinTimer = null;
+      }
+      wakeRejoin?.();
+      const client = signaling;
+      signaling = null;
+      try {
+        client?.close();
+      } catch {
+        /* ignore */
+      }
+      controlScheduler.close();
+      bulkScheduler.close();
+      pendingDescriptions.length = 0;
+      pendingCandidates.length = 0;
     },
   };
 }

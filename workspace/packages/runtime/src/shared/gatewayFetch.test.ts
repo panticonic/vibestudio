@@ -101,6 +101,51 @@ describe("createGatewayFetch", () => {
       await expect(gw("https://evil.test/steal")).rejects.toThrow(/only gateway-relative/);
     });
 
+    it("streams a POST body as the third stream() arg — never base64 in the descriptor (§1.6)", async () => {
+      captureFetch();
+      const stream = vi.fn(
+        (_envelope: unknown, _signal?: unknown, _body?: ReadableStream<Uint8Array> | null) =>
+          Promise.resolve(new Response("tunneled")),
+      );
+      stubPanel(stream as never);
+      const gw = createGatewayFetch({ serverUrl: "http://gw.test", token: "T" });
+
+      await gw("/api/upload", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"hello":"upload"}',
+      });
+
+      expect(stream).toHaveBeenCalledTimes(1);
+      const [envelope, , body] = stream.mock.calls[0]! as unknown as [
+        { message: { args: Array<Record<string, unknown>> } },
+        unknown,
+        ReadableStream<Uint8Array> | null,
+      ];
+      // The descriptor carries NO body field of any kind.
+      const descriptor = envelope.message.args[0]!;
+      expect(descriptor).not.toHaveProperty("body");
+      expect(descriptor).not.toHaveProperty("bodyBase64");
+      expect(descriptor["method"]).toBe("POST");
+      // The body rides as a ReadableStream for the transport's bulk-channel pump.
+      expect(body).toBeInstanceOf(ReadableStream);
+      const reader = body!.getReader();
+      const { value } = await reader.read();
+      expect(new TextDecoder().decode(value)).toBe('{"hello":"upload"}');
+    });
+
+    it("a GET tunnels with a null body (no upload stream opened)", async () => {
+      captureFetch();
+      const stream = vi.fn(
+        (_envelope: unknown, _signal?: unknown, _body?: ReadableStream<Uint8Array> | null) =>
+          Promise.resolve(new Response("tunneled")),
+      );
+      stubPanel(stream as never);
+      const gw = createGatewayFetch({ serverUrl: "http://gw.test", token: "T" });
+      await gw("/some/route");
+      expect(stream.mock.calls[0]![2]).toBeNull();
+    });
+
     it("fails loud when the host has not wired stream()", async () => {
       captureFetch();
       vi.stubGlobal("__vibez1Shell", {}); // bridge present, stream() not wired

@@ -63,10 +63,6 @@ function scopeTracksHead(scopeRef: string | undefined, head: string): boolean {
   return normalized === head;
 }
 
-function isBootstrapMainBoundDo(source: string, className: string): boolean {
-  return source === "workers/gad-store" && className === "GadWorkspaceDO";
-}
-
 // This file is bundled as both ESM (standalone server) and CJS (Electron
 // utility process). build.mjs injects __filename into the ESM bundle, while
 // CJS provides it natively. Avoid spelling import.meta here: esbuild warns
@@ -236,6 +232,20 @@ export interface WorkerdManagerDeps {
   registerEgressCaller: (callerId: string, caller: VerifiedCaller) => void;
   unregisterEgressCaller: (callerId: string) => void;
   getWorkerdGatewayToken: () => string;
+  /**
+   * Manifest-declared DOs that stay bound to the explicit main head during
+   * bootstrap instead of synthetic ctx-head scopes (e.g. the gad store
+   * backing the userland `vcs` service in meta/vibez1.yml). Absent ⇒ no DO is
+   * bootstrap-main-bound; the manager never assumes a hardcoded unit.
+   */
+  getBootstrapMainBoundDos?: () => ReadonlyArray<{ source: string; className: string }>;
+  /**
+   * Extra env text bindings for INTERNAL DO classes, keyed by className.
+   * The server derives these from the workspace manifest's `providers.*`
+   * slots (e.g. `EVAL_ENGINE_SOURCE` for EvalDO, `BROWSER_DATA_BROKER_ID`
+   * for BrowserDataDO) so internal DOs never hardcode workspace unit names.
+   */
+  getInternalDoEnv?: (className: string) => Record<string, string>;
   /** Override for tests; production uses the default router readiness window. */
   workerdStartupReadyTimeoutMs?: number;
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
@@ -609,7 +619,7 @@ export class WorkerdManager {
       key: args.key,
     });
     const explicitRef = explicitScopeRef(args.ref);
-    const bootstrapMainBound = isBootstrapMainBoundDo(args.source, args.className);
+    const bootstrapMainBound = this.isBootstrapMainBoundDo(args.source, args.className);
     const scopeRef = bootstrapMainBound ? args.ref : explicitRef;
     await this.ensureDOClass(args.source, args.className, {
       scopeRef,
@@ -1264,6 +1274,14 @@ export class WorkerdManager {
       const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
       if (gatewayAliases.length > 0) {
         bindings.push({ name: "GATEWAY_URL_ALIASES", json: JSON.stringify(gatewayAliases) });
+      }
+
+      // Manifest-declared provider bindings for this internal DO class
+      // (meta/vibez1.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO,
+      // BROWSER_DATA_BROKER_ID for BrowserDataDO). Injected here so internal
+      // DOs consume workspace unit identities only through the manifest.
+      for (const [name, text] of Object.entries(this.deps.getInternalDoEnv?.(className) ?? {})) {
+        bindings.push({ name, text });
       }
 
       // EvalDO runs sandboxed agent code and needs the workerd UnsafeEval API
@@ -2407,9 +2425,20 @@ export default { fetch() { return new Response("universal-do host"); } };
     opts: { contextId?: string; ref?: string } = {}
   ): Promise<void> {
     const explicitRef = explicitScopeRef(opts.ref);
-    const bootstrapMainBound = isBootstrapMainBoundDo(source, className);
+    const bootstrapMainBound = this.isBootstrapMainBoundDo(source, className);
     const scopeRef = bootstrapMainBound ? opts.ref : explicitRef;
     await this.ensureDOClass(source, className, { scopeRef, objectKey });
+  }
+
+  /**
+   * Whether `(source, className)` is a manifest-declared bootstrap main-bound
+   * DO (see WorkerdManagerDeps.getBootstrapMainBoundDos). No declaration ⇒
+   * false — there is no hardcoded fallback unit.
+   */
+  private isBootstrapMainBoundDo(source: string, className: string): boolean {
+    return (this.deps.getBootstrapMainBoundDos?.() ?? []).some(
+      (decl) => decl.source === source && decl.className === className
+    );
   }
 
   private async waitForHttpReady(timeoutMs = 5_000): Promise<void> {

@@ -5,8 +5,8 @@
  * loopback origin (`buildPanelUrl` → `http://127.0.0.1:{port}/{source}/`), but
  * the asset bytes live on the server. This service exposes a single `fetch`
  * method that the remote shell's panel-asset façade calls over the WebRTC pipe;
- * the server does a LOOPBACK fetch to its OWN gateway and returns the full
- * response (status + headers + base64 body).
+ * the server does a LOOPBACK fetch to its OWN gateway and streams the full
+ * response back.
  *
  * The gateway serves panel HTML/bundles/runtime helpers without auth (see
  * `Gateway` request routing — "Everything else → panel HTTP handler"), so no
@@ -15,16 +15,38 @@
  * asset path that wants it, but it is never injected here.
  *
  * The Response streams back over the pipe's bulk channel (panel bundles are MB).
+ * REQUEST bodies stream in the same way (plan §1.6): the caller declares a
+ * `bodyStreamId` on its stream-open and pumps the body as bulk DATA frames; the
+ * transport assembles it into `ctx.body`, which this handler forwards as the
+ * loopback request body. Bodies never travel as base64/plain-string fields
+ * inside the descriptor — the schema is strict, so a stale caller still sending
+ * `body`/`bodyBase64` fails loudly instead of having its body silently dropped.
+ *
  * Callers are the trusted desktop principals (`shell`, Electron-hosted `app`) and
  * panels (the panel runtime tunnels its gateway-relative asset fetches here);
  * workers/DOs are server-co-located and fetch the loopback gateway directly.
+ *
+ * Content digest for the façade's content-addressed cache (plan §6): the façades
+ * key their on-disk cache by a content digest. Build artifacts ARE digest-addressed
+ * (each carries a build-time `sha256-…` integrity, see buildStore.ts), but that
+ * hash is NOT surfaced as a response header by the loopback gateway
+ * (`panelHttpServer.writeArtifact` emits Content-Type / Cache-Control / build
+ * revision only). We deliberately do NOT reach into that build metadata here or
+ * buffer-and-hash the body on this side — this method must stream (bundles exceed
+ * the message-size limit), and hashing here would force a full buffer. Instead the
+ * façade hashes immutable-cacheable bodies itself on first receipt (digest-on-write;
+ * see AssetDiskCache). If a future gateway change emits `x-vibez1-content-digest`,
+ * it rides through untouched (it is not in STRIP_RESPONSE_HEADERS) and the façade
+ * prefers it over hashing — no change needed here.
  */
 
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import { ServiceError } from "@vibez1/shared/serviceDispatcher";
+import { checkPanelGatewayPath } from "@vibez1/shared/panel/assetPathPolicy";
 
-/** Loopback fetch request shape sent by the panel-asset façade. */
+/** Loopback fetch request shape sent by the panel-asset façade. The request
+ * body (if any) rides the bulk channel as a stream (`ctx.body`), never in here. */
 export interface GatewayFetchDescriptor {
   /** Absolute request path (must start with "/"), e.g. `/apps/shell/?contextId=…`. */
   path: string;
@@ -32,29 +54,25 @@ export interface GatewayFetchDescriptor {
   method?: string;
   /** Headers to forward to the loopback gateway (e.g. an `Authorization` bearer). */
   headers?: Record<string, string>;
-  /** Plain-string request body — e.g. the native bootstrap's JSON manifest POST
-   * (`apps/mobile/index.js`), which sends `body: JSON.stringify(...)`. */
-  body?: string;
-  /** Base64-encoded request body for binary payloads — the panel's runtime
-   * gatewayFetch base64-encodes its bytes. Mutually exclusive with `body`. */
-  bodyBase64?: string;
   /** Gzip the response on the wire; the caller decompresses (see schema comment). */
   gzip?: boolean;
 }
 
-const fetchDescriptorSchema = z.object({
-  path: z.string(),
-  method: z.string().optional(),
-  headers: z.record(z.string(), z.string()).optional(),
-  body: z.string().optional(),
-  bodyBase64: z.string().optional(),
-  // Gzip the response on the wire. react-native-webrtc serializes its bulk-channel
-  // receive (one message per round-trip), so a multi-MB asset streams too slowly
-  // over a relay; gzip (~4×) keeps it inside the pipe window. The caller is
-  // responsible for decompressing (the mobile native host does, before verifying
-  // the *uncompressed* integrity). Signaled back via `x-vibez1-content-gzip`.
-  gzip: z.boolean().optional(),
-});
+// STRICT: a caller still sending the deleted base64/plain-string body fields
+// (`body`/`bodyBase64`) must fail loudly, not have its body silently stripped.
+const fetchDescriptorSchema = z
+  .object({
+    path: z.string(),
+    method: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    // Gzip the response on the wire. react-native-webrtc serializes its bulk-channel
+    // receive (one message per round-trip), so a multi-MB asset streams too slowly
+    // over a relay; gzip (~4×) keeps it inside the pipe window. The caller is
+    // responsible for decompressing (the mobile native host does, before verifying
+    // the *uncompressed* integrity). Signaled back via `x-vibez1-content-gzip`.
+    gzip: z.boolean().optional(),
+  })
+  .strict();
 
 export function createGatewayFetchService(deps: {
   /** Resolved loopback gateway port (lazy — finalized only after gateway start). */
@@ -69,15 +87,19 @@ export function createGatewayFetchService(deps: {
     // via the WebRtcServerClient main session; Electron-hosted runtimes call as
     // `app`) AND by panels — the panel runtime's gatewayFetch tunnels here as the
     // panel principal to load gateway-relative workspace assets. The path is forced
-    // absolute and appended to the loopback gateway (no external origin), and a
-    // panel already has fs access to the same workspace, so this grants nothing new.
+    // absolute, checked against the panel-origin allowlist (assetPathPolicy — panel
+    // assets, /_r/w/ worker routes, /_a/ app artifacts; NEVER /_r/s/ management
+    // routes or /rpc), and appended to the loopback gateway (no external origin),
+    // and a panel already has fs access to the same workspace, so this grants
+    // nothing new.
     // (Workers/DOs are server-co-located and fetch the loopback gateway directly.)
     policy: { allowed: ["shell", "app", "panel"] },
     methods: {
       fetch: {
         description:
           "Loopback-fetch a panel asset from the server's own gateway and stream the " +
-          "Response back over the pipe's bulk channel (a streaming method).",
+          "Response back over the pipe's bulk channel (a streaming method). A request " +
+          "body streams IN over the same channel (stream-open bodyStreamId → ctx.body).",
         args: z.tuple([fetchDescriptorSchema]),
         // Streaming method: the handler returns a Response whose body is chunked
         // over the bulk channel by handleWsStreamRequest. Node callers use `.stream`
@@ -86,41 +108,49 @@ export function createGatewayFetchService(deps: {
         access: { sensitivity: "read" },
       },
     },
-    handler: async (_ctx, method, args) => {
+    handler: async (ctx, method, args) => {
       if (method !== "fetch") {
         throw new ServiceError(serviceName, method, `Unknown gateway method: ${method}`, "ENOSYS");
       }
 
       const descriptor = args[0] as GatewayFetchDescriptor;
-      // Defense-in-depth: the path is concatenated after the loopback authority,
-      // so a value not starting with "/" (e.g. "@evil.example") could re-point
-      // the request at another host. Require an absolute path.
-      if (!descriptor.path.startsWith("/")) {
+      // AUTHORITATIVE panel-origin path allowlist (defense in depth — see
+      // assetPathPolicy). This service is reachable from the panel/loopback
+      // origin, and the gateway namespace it proxies into includes management
+      // routes (`/_r/s/*` auth/workspace/webhook, `/rpc`). Panels hold no
+      // privileged bearer today, so downstream auth would reject them — but the
+      // panel origin must never be able to ADDRESS those routes at all, even if
+      // a downstream route's auth regresses. Only panel assets, `/_r/w/` worker
+      // routes, and `/_a/` app artifacts pass. The check also normalizes the
+      // path exactly like `fetch()` will (dot segments, backslash host escapes
+      // like "/\evil.example"), and the normalized `decision.target` — not the
+      // raw input — is what gets fetched, so check and fetch cannot diverge.
+      const decision = checkPanelGatewayPath(descriptor.path);
+      if (!decision.allowed) {
         throw new ServiceError(
           serviceName,
           method,
-          `gateway.fetch path must be absolute (start with "/"): ${descriptor.path}`,
-          "EINVAL"
+          `gateway.fetch rejected: ${decision.reason}`,
+          decision.denied === "policy" ? "EACCES" : "EINVAL"
         );
       }
 
       const port = deps.getGatewayPort();
-      const url = `http://127.0.0.1:${port}${descriptor.path}`;
+      const url = `http://127.0.0.1:${port}${decision.target}`;
 
-      // STREAMING (via the pipe's stream path, handleWsStreamRequest): the body
-      // rides the bulk channel chunked under the data-channel message-size limit.
-      // A buffered base64 return would exceed that limit for real bundles (MB).
+      // STREAMING both ways (via the pipe's stream path, handleWsStreamRequest):
+      // the response body rides the bulk channel chunked under the data-channel
+      // message-size limit, and the request body (ctx.body, plan §1.6) streams in
+      // from the same channel. A buffered base64 body in either direction would
+      // exceed that limit for real payloads (MB).
       const response = await fetch(url, {
         method: descriptor.method ?? "GET",
         headers: descriptor.headers,
-        // bodyBase64 (binary, the panel path) takes precedence; body (a plain
-        // string, the native bootstrap path) is the fallback. Either may be absent.
-        ...(descriptor.bodyBase64 !== undefined
-          ? { body: Buffer.from(descriptor.bodyBase64, "base64") }
-          : descriptor.body !== undefined
-            ? { body: descriptor.body }
-            : {}),
-      });
+        ...(ctx.body
+          ? // undici requires half-duplex to be declared for stream bodies.
+            { body: ctx.body, duplex: "half" }
+          : {}),
+      } as RequestInit);
 
       if (descriptor.gzip && response.ok && response.body) {
         // Compress on the wire (see schema). The body is re-streamed through a gzip

@@ -38,7 +38,11 @@ export type ConnectionlessTransport = EnvelopeRpcTransport & {
   request(envelope: RpcEnvelope): Promise<unknown>;
   deliver(envelope: RpcEnvelope): void;
   respond(envelope: RpcEnvelope): Promise<RpcEnvelope | null>;
-  stream(envelope: RpcEnvelope, signal?: AbortSignal | null): Promise<Response>;
+  stream(
+    envelope: RpcEnvelope,
+    signal?: AbortSignal | null,
+    body?: ReadableStream<Uint8Array> | null
+  ): Promise<Response>;
 };
 
 function describeFetchFailure(error: unknown): string {
@@ -206,7 +210,15 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         deliverToListeners(inbound);
       });
     },
-    async stream(envelope, signal): Promise<Response> {
+    async stream(envelope, signal, body): Promise<Response> {
+      if (body) {
+        // The HTTP transport POSTs the envelope JSON to /rpc/stream — there is
+        // no channel for a separate streaming request body (plan §1.6: fail
+        // loud, never a silent drop or base64 fallback).
+        throw new Error(
+          "Streaming request bodies (uploads) require the WebRTC transport; the HTTP transport cannot stream a request body"
+        );
+      }
       let response: Response;
       try {
         response = await fetchImpl(streamUrl, {

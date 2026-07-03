@@ -367,7 +367,11 @@ async function buildRemoteSessionConnection(
   // own gateway over the pipe (gateway.fetch RPC). The façade lives for the
   // whole session; there is no teardown hook on this path (the process exits
   // with the session), which is acceptable for a single loopback listener.
-  const facade = await startPanelAssetFacade(serverClient);
+  // Persist the façade's asset cache + stable loopback port under userData so the
+  // content-addressed cache and the webview HTTP cache both survive restarts.
+  const facade = await startPanelAssetFacade(serverClient, {
+    stateDir: path.join(app.getPath("userData"), "panel-asset-facade"),
+  });
   const remotePorts: ServerPorts = { gatewayPort: facade.port, workerdPort: 0, adminToken: "" };
   const gatewayConfig = { serverUrl: `http://127.0.0.1:${facade.port}` };
 

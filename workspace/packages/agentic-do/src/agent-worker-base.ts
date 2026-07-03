@@ -270,8 +270,16 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     // Reads come from the materialized working tree (fs RPC, scoped to the
     // caller's context); writes go through GAD's edit-first commit so the head
     // is authoritative and disk is its projection.
-    const vcs = createToolVcs(<T>(method: string, methodArgs: unknown[]) =>
-      this.rpc.call<T>("main", method, methodArgs)
+    // Push is userland-dispatched (P3): route it to the gad-store DO via the
+    // `vcs` manifest service on `this.rpc`, with THIS agent's context head as
+    // the source (the same head its edit/commit land on).
+    const vcs = createToolVcs(
+      <T>(method: string, methodArgs: unknown[]) => this.rpc.call<T>("main", method, methodArgs),
+      {
+        rpc: this.rpc as unknown as import("@vibez1/shared/userlandServiceRpc").RpcCallerLike,
+        // Lazy: the channel subscription is only guaranteed at push time.
+        sourceHead: () => `ctx:${this.subscriptions.getContextId(channelId)}`,
+      }
     );
     return [
       createReadTool(cwd, fs),

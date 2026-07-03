@@ -37,10 +37,45 @@ const HOST_BUILD_DEV_DEPS = ["buffer", "sql.js", "svelte", "esbuild-svelte"];
 // come in via the root.dependencies mirror.
 const SERVER_EXTRA_DEPS = ["@puppeteer/browsers", "react-devtools-core"];
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// Workspace source dirs staged into the packaged template (the initial
+// workspace a fresh install ships with). This is a subset of the canonical
+// WORKSPACE_SOURCE_DIRS from @vibez1/shared/workspace/sourceDirs — `projects/`
+// is runtime-only content created per user and starts empty, so it is not
+// shipped. A drift guard (tests/workspaceTemplateDirs.drift.test.ts) asserts
+// this list stays in sync with the shared taxonomy. This module can't import
+// the TS constant directly, so the list is mirrored here and cross-checked.
+export const WORKSPACE_TEMPLATE_DIRS = [
+  "meta",
+  "panels",
+  "packages",
+  "agents",
+  "workers",
+  "skills",
+  "about",
+  "templates",
+  "apps",
+  "extensions",
+];
+
+export const WORKSPACE_TEMPLATE_ROOT_FILES = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "tsconfig.json",
+  "tsconfig.integration.json",
+];
+
+export const WORKSPACE_TEMPLATE_SUPPORT_DIRS = ["packages", "patches"];
+
+// Only run the build when invoked directly (`node scripts/build-npm-packages.mjs`),
+// not when imported (e.g. by the drift-guard test) — importing must be free of
+// side effects beyond the cheap top-level reads above.
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
 
 async function main() {
   console.log(`Staging npm packages @ v${VERSION}`);
@@ -83,10 +118,15 @@ function stageServer() {
   copyFile("dist/server.mjs", path.join(root, "dist/server.mjs"));
   copyFile("dist/internal-do.bundle.mjs", path.join(root, "dist/internal-do.bundle.mjs"));
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
-  copyTree(path.join(repoRoot, "dist/headless-host"), path.join(root, "dist/headless-host"), defaultSkip);
+  copyTree(
+    path.join(repoRoot, "dist/headless-host"),
+    path.join(root, "dist/headless-host"),
+    defaultSkip
+  );
 
   // First-run workspace template (runtimePaths.ts: appRoot/workspace-template).
   stageWorkspaceTemplate(path.join(root, "workspace-template"));
+  stageWorkspaceTemplateSupport(root);
 
   // Bin shims.
   copyFile("scripts/vibez1-launcher.mjs", path.join(root, "scripts/vibez1-launcher.mjs"));
@@ -114,7 +154,7 @@ function stageServer() {
       vibez1: "scripts/vibez1-launcher.mjs",
     },
     engines: { node: ">=20" },
-    files: ["dist", "vendor", "workspace-template", "scripts"],
+    files: ["dist", "vendor", "workspace-template", "packages", "patches", "scripts"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
     dependencies: computeHostDependencies({ electron: false }),
@@ -135,12 +175,17 @@ function stageApp() {
 
   // The app runs unpackaged: it reads appRoot/workspace as the first-run template.
   stageWorkspaceTemplate(path.join(root, "workspace"));
+  stageWorkspaceTemplateSupport(root);
 
   copyFile("scripts/vibez1-launcher.mjs", path.join(root, "scripts/vibez1-launcher.mjs"));
   copyFile("scripts/vibez1-server-shim.mjs", path.join(root, "scripts/vibez1-server-shim.mjs"));
   copyFile("scripts/branded-electron.mjs", path.join(root, "scripts/branded-electron.mjs"));
   if (fs.existsSync(path.join(repoRoot, "build-resources"))) {
-    copyTree(path.join(repoRoot, "build-resources"), path.join(root, "build-resources"), defaultSkip);
+    copyTree(
+      path.join(repoRoot, "build-resources"),
+      path.join(root, "build-resources"),
+      defaultSkip
+    );
   }
 
   // Vendor the host's @vibez1/* packages under vendor/ (copied into node_modules
@@ -164,7 +209,7 @@ function stageApp() {
       "vibez1-server": "scripts/vibez1-server-shim.mjs",
     },
     engines: { node: ">=20" },
-    files: ["dist", "vendor", "workspace", "scripts", "build-resources"],
+    files: ["dist", "vendor", "workspace", "packages", "patches", "scripts", "build-resources"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     dependencies: computeHostDependencies({ electron: true }),
     publishConfig: { access: "public" },
@@ -236,13 +281,23 @@ function normalizeVendoredManifest(manifestPath) {
 // ---------------------------------------------------------------------------
 function stageWorkspaceTemplate(dest) {
   const src = path.join(repoRoot, "workspace");
-  const include = new Set([
-    "meta", "panels", "packages", "agents", "workers", "skills", "about", "templates", "apps", "extensions",
-  ]);
+  const include = new Set(WORKSPACE_TEMPLATE_DIRS);
   mkdirp(dest);
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !include.has(entry.name)) continue;
-    copyTree(path.join(src, entry.name), path.join(dest, entry.name), templateSkip);
+    if (entry.isDirectory()) {
+      if (!include.has(entry.name)) continue;
+      copyTree(path.join(src, entry.name), path.join(dest, entry.name), templateSkip);
+    } else if (entry.isFile() && WORKSPACE_TEMPLATE_ROOT_FILES.includes(entry.name)) {
+      copyTree(path.join(src, entry.name), path.join(dest, entry.name), templateSkip);
+    }
+  }
+}
+
+function stageWorkspaceTemplateSupport(pkgRoot) {
+  for (const dir of WORKSPACE_TEMPLATE_SUPPORT_DIRS) {
+    const src = path.join(repoRoot, dir);
+    if (!fs.existsSync(src)) continue;
+    copyTree(src, path.join(pkgRoot, dir), defaultSkip);
   }
 }
 
@@ -251,10 +306,19 @@ function stageWorkspaceTemplate(dest) {
 // ---------------------------------------------------------------------------
 function defaultSkip(name, dirent) {
   if (dirent.isDirectory()) {
-    return name === "node_modules" || name === ".git" || name === "tests" ||
-      name === "__tests__" || name === "dist-publish";
+    return (
+      name === "node_modules" ||
+      name === ".git" ||
+      name === "tests" ||
+      name === "__tests__" ||
+      name === "dist-publish"
+    );
   }
-  return /\.(test|spec)\.[cm]?[jt]sx?$/.test(name) || name.endsWith(".tsbuildinfo") || name.endsWith(".map");
+  return (
+    /\.(test|spec)\.[cm]?[jt]sx?$/.test(name) ||
+    name.endsWith(".tsbuildinfo") ||
+    name.endsWith(".map")
+  );
 }
 
 function templateSkip(name, dirent) {
@@ -263,8 +327,13 @@ function templateSkip(name, dirent) {
     // skip a plain "state" dir: panels legitimately have state/ source (e.g.
     // workspace/panels/spectrolite/state). The workspace's runtime state lives at
     // the top level and is already excluded by stageWorkspaceTemplate's include-list.
-    return name === "node_modules" || name === ".git" ||
-      name === ".databases" || name === ".contexts" || name === ".cache";
+    return (
+      name === "node_modules" ||
+      name === ".git" ||
+      name === ".databases" ||
+      name === ".contexts" ||
+      name === ".cache"
+    );
   }
   return name === ".env" || name === ".secrets.yml";
 }

@@ -9,12 +9,14 @@ import { EntityCache } from "@vibez1/shared/runtime/entityCache";
 import type { EntityKind, EntityRecord } from "@vibez1/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
 import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@vibez1/rpc";
-import { StreamFrameDecoderV2 } from "@vibez1/rpc/protocol/streamCodec";
+import { FRAME_DATA, FRAME_END, FRAME_ERROR, FRAME_HEAD } from "@vibez1/rpc/protocol/streamCodec";
 import {
   decodeControlFrame,
   encodeControlFrame,
+  SESSION_NOT_OPEN_CLOSE_CODE,
   type SessionControlFrame,
 } from "@vibez1/rpc/protocol/sessionNegotiation";
+import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 
 function makeRecord(
   id: string,
@@ -86,6 +88,7 @@ type TestRpcServer = {
     callerKind: string,
     targetId: string
   ): { ok: boolean; reason?: string };
+  sendToWs(ws: unknown, msg: unknown): void;
 };
 
 function testServer(server: RpcServer): TestRpcServer {
@@ -238,7 +241,71 @@ function registerClient(server: RpcServer, client: WsClientState): void {
   testServer(server).connections.addClient(client);
 }
 
-describe("RpcServer relay behavior", () => {
+/** Let queued promise callbacks (frame pumps, metering settles) run. */
+const flushAsync = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Fake answerer pipe implementing the v2 AttachablePipe contract. */
+function createFakePipe() {
+  const control: Array<{ frame: SessionControlFrame; lane: string | undefined }> = [];
+  const bulk: Array<{ streamId: number; type: number; payload: Uint8Array }> = [];
+  let controlHandler: ((data: Uint8Array) => void) | null = null;
+  let bulkFrameHandler: ((streamId: number, type: number, payload: Uint8Array) => void) | null =
+    null;
+  let downHandler: ((reason: string) => void) | null = null;
+  const pipe = {
+    writeControl: (data: Uint8Array, lane?: string): Promise<void> => {
+      control.push({ frame: decodeControlFrame(new TextDecoder().decode(data)), lane });
+      return Promise.resolve();
+    },
+    writeBulkFrame: (streamId: number, type: number, payload: Uint8Array): Promise<void> => {
+      bulk.push({ streamId, type, payload });
+      return Promise.resolve();
+    },
+    dropBulkStream: vi.fn(),
+    bulkPendingBytes: () => 0,
+    controlBufferedAmount: () => 0,
+    onControl: (handler: (data: Uint8Array) => void): void => {
+      controlHandler = handler;
+    },
+    onBulkFrame: (handler: (streamId: number, type: number, payload: Uint8Array) => void): void => {
+      bulkFrameHandler = handler;
+    },
+    onDown: (handler: (reason: string) => void): (() => void) => {
+      downHandler = handler;
+      return () => {
+        if (downHandler === handler) downHandler = null;
+      };
+    },
+  };
+  return {
+    pipe: pipe as unknown as Parameters<RpcServer["attachWebRtcPipe"]>[0],
+    control,
+    bulk,
+    controlOfType: (t: string) => control.filter((w) => w.frame.t === t),
+    sendControl: (frame: SessionControlFrame) =>
+      controlHandler!(new TextEncoder().encode(encodeControlFrame(frame))),
+    emitDown: (reason: string) => downHandler!(reason),
+    hasBulkHandler: () => bulkFrameHandler !== null,
+    emitBulk: (streamId: number, type: number, payload: Uint8Array) =>
+      bulkFrameHandler!(streamId, type, payload),
+  };
+}
+
+function unknownSidRpcRequest(sid: string, requestId: string): SessionControlFrame {
+  return {
+    t: "rpc",
+    sid,
+    envelope: makeEnvelope("panel:c1", "main", "panel", {
+      type: "request",
+      requestId,
+      fromId: "panel:c1",
+      method: "fs.read",
+      args: [],
+    }),
+  };
+}
+
+describe("RpcServer attachWebRtcPipe (v2 pipe contract)", () => {
   it("closes all WebRTC logical sessions when the underlying pipe goes down", () => {
     const { server } = createServer();
     const closeArgs: unknown[][] = [];
@@ -249,105 +316,322 @@ describe("RpcServer relay behavior", () => {
       );
     });
 
-    let controlHandler: ((data: Uint8Array) => void) | null = null;
-    let downHandler: ((reason: string) => void) | null = null;
-    server.attachWebRtcPipe({
-      writeControl: vi.fn(),
-      writeBulk: vi.fn(),
-      controlBufferedAmount: () => 0,
-      onControl: (handler) => {
-        controlHandler = handler;
-      },
-      onDown: (handler) => {
-        downHandler = handler;
-        return () => {
-          if (downHandler === handler) downHandler = null;
-        };
-      },
-    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    // The upload passthrough seam is armed even before uploads land (§1.6).
+    expect(p.hasBulkHandler()).toBe(true);
 
-    controlHandler!(
-      new TextEncoder().encode(
-        encodeControlFrame({ t: "open", sid: "s1", token: "grant", connectionId: "c1" })
-      )
-    );
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
     expect(testServer(server).handleConnection).toHaveBeenCalledTimes(1);
 
-    downHandler!("ICE failed");
+    p.emitDown("ICE failed");
     expect(closeArgs).toHaveLength(1);
     expect(closeArgs[0]![0]).toBe(1006);
     expect((closeArgs[0]![1] as Buffer).toString()).toBe("ICE failed");
 
-    downHandler!("late duplicate");
+    p.emitDown("late duplicate");
     expect(closeArgs).toHaveLength(1);
   });
 
-  it("fails unknown WebRTC session frames instead of silently dropping them", async () => {
+  it("answers an unknown-sid rpc request with SESSION_NOT_OPEN plus a non-terminal closed(4008)", () => {
     const { server } = createServer();
-    const controlFrames: SessionControlFrame[] = [];
-    const bulkFrames: Array<{ streamId: number; type: number; payload: Uint8Array }> = [];
-    const bulkDecoder = new StreamFrameDecoderV2((streamId, type, payload) => {
-      bulkFrames.push({ streamId, type, payload });
-    });
-    let controlHandler: ((data: Uint8Array) => void) | null = null;
-    server.attachWebRtcPipe({
-      writeControl: (data) => {
-        controlFrames.push(decodeControlFrame(new TextDecoder().decode(data)));
-      },
-      writeBulk: (data) => void bulkDecoder.push(data),
-      controlBufferedAmount: () => 0,
-      onControl: (handler) => {
-        controlHandler = handler;
-      },
-    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
 
-    controlHandler!(
-      new TextEncoder().encode(
-        encodeControlFrame({
-          t: "rpc",
-          sid: "missing",
-          envelope: makeEnvelope("panel:c1", "main", "panel", {
-            type: "request",
-            requestId: "req-1",
-            fromId: "panel:c1",
-            method: "fs.read",
-            args: [],
-          }),
-        })
-      )
-    );
-    expect(controlFrames[0]).toMatchObject({
+    p.sendControl(unknownSidRpcRequest("missing", "req-1"));
+
+    // The pending call settles now …
+    expect(p.controlOfType("rpc")[0]!.frame).toMatchObject({
       t: "rpc",
       sid: "missing",
       envelope: {
         message: { type: "response", requestId: "req-1", errorCode: "SESSION_NOT_OPEN" },
       },
     });
+    // … and the self-healing closed tells the client to reopen the session.
+    const closed = p.controlOfType("closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]!.frame).toMatchObject({
+      t: "closed",
+      sid: "missing",
+      code: SESSION_NOT_OPEN_CLOSE_CODE,
+      reason: "session not open",
+      terminal: false,
+    });
+    // Control frames ride the frame's session lane.
+    expect(closed[0]!.lane).toBe("missing");
+  });
 
-    controlHandler!(
-      new TextEncoder().encode(
-        encodeControlFrame({
-          t: "stream-open",
-          sid: "missing",
-          streamId: 42,
-          envelope: makeEnvelope("panel:c1", "main", "panel", {
-            type: "stream-request",
-            requestId: "stream-1",
-            fromId: "panel:c1",
-            method: "credentials.proxyFetch",
-            args: [],
-          }),
-        })
-      )
-    );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(bulkFrames).toHaveLength(1);
-    expect(bulkFrames[0]).toMatchObject({ streamId: 42, type: 0x04 });
-    expect(JSON.parse(new TextDecoder().decode(bulkFrames[0]!.payload))).toMatchObject({
-      code: "SESSION_NOT_OPEN",
+  it("sends closed(4008) — and nothing else — for an unknown-sid event-carrying frame", () => {
+    const { server } = createServer();
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl({
+      t: "rpc",
+      sid: "ghost",
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "event",
+        fromId: "panel:c1",
+        event: "state-changed",
+        payload: 1,
+      }),
+    });
+
+    expect(p.controlOfType("rpc")).toHaveLength(0); // nothing to respond to
+    expect(p.controlOfType("closed")).toHaveLength(1);
+    expect(p.controlOfType("closed")[0]!.frame).toMatchObject({
+      sid: "ghost",
+      code: SESSION_NOT_OPEN_CLOSE_CODE,
+      terminal: false,
     });
   });
 
+  it("rate-limits closed(4008) per sid — two rapid unknown frames produce one closed each sid", () => {
+    const { server } = createServer();
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl(unknownSidRpcRequest("missing", "req-1"));
+    p.sendControl(unknownSidRpcRequest("missing", "req-2"));
+    p.sendControl(unknownSidRpcRequest("other", "req-3"));
+
+    // Per-request responses are NOT rate-limited (every pending call settles) …
+    expect(p.controlOfType("rpc")).toHaveLength(3);
+    // … but the closed self-heal frame is one per sid per window.
+    const closedSids = p.controlOfType("closed").map((w) => (w.frame as { sid: string }).sid);
+    expect(closedSids).toEqual(["missing", "other"]);
+  });
+
+  it("fails an unknown-sid stream-open with a bulk FRAME_ERROR the stream decoder can parse, plus closed(4008)", () => {
+    const { server } = createServer();
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "missing",
+      streamId: 42,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "stream-1",
+        fromId: "panel:c1",
+        method: "credentials.proxyFetch",
+        args: [],
+      }),
+    });
+
+    expect(p.bulk).toHaveLength(1);
+    expect(p.bulk[0]).toMatchObject({ streamId: 42, type: FRAME_ERROR });
+    // Exactly the ErrorFramePayload shape parseErrorFrame/decodeFramedStream expects.
+    expect(JSON.parse(new TextDecoder().decode(p.bulk[0]!.payload))).toEqual({
+      status: 409,
+      message: "WebRTC session is not open",
+      code: "SESSION_NOT_OPEN",
+    });
+    expect(p.controlOfType("closed")).toHaveLength(1);
+    expect(p.controlOfType("closed")[0]!.frame).toMatchObject({
+      sid: "missing",
+      code: SESSION_NOT_OPEN_CLOSE_CODE,
+      terminal: false,
+    });
+  });
+
+  it("sends closed(4008) for an unknown-sid stream-cancel", () => {
+    const { server } = createServer();
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl({ t: "stream-cancel", sid: "missing", streamId: 9 });
+    expect(p.controlOfType("closed")).toHaveLength(1);
+  });
+
+  it("does NOT answer pings — keepalive lives inside the answerer transport now", () => {
+    const { server } = createServer();
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl({ t: "ping", ts: 123 });
+    expect(p.control).toHaveLength(0); // no pong, no closed (pipe-level, no sid)
+  });
+
+  it("does not echo closed(4008) for an unknown-sid close (the client is discarding the session)", () => {
+    const { server } = createServer();
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl({ t: "close", sid: "already-gone", code: 1000, reason: "bye" });
+    expect(p.control).toHaveLength(0); // a closed reply would trigger a spurious reopen
+  });
+});
+
+describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancellation)", () => {
+  function streamRequest(requestId: string, method = "files.stream"): RpcMessage {
+    return { type: "stream-request", requestId, fromId: "panel:nav-a", method, args: [] };
+  }
+
+  function setupStreamingServer() {
+    const created = createServer();
+    const dispatcher = testServer(created.server).dispatcher;
+    dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
+    dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    return { ...created, dispatcher };
+  }
+
+  function sentStreamFrames(client: WsClientState) {
+    return (client.ws.send as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => JSON.parse(String(call[0])))
+      .filter((msg) => msg.envelope?.message?.type === "stream-frame")
+      .map((msg) => msg.envelope.message as { frameType: number; payload: string });
+  }
+
+  it("uses the binary sendStreamFrame surface (raw bytes, no base64) when the transport exposes it", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
+
+    const client = createClient();
+    const sends: Array<{ requestId: string; type: number; payload: Uint8Array }> = [];
+    const sendStreamFrame = vi.fn(
+      (requestId: string, type: number, payload: Uint8Array): Promise<void> | false => {
+        sends.push({ requestId, type, payload });
+        return Promise.resolve();
+      }
+    );
+    (client.ws as unknown as { sendStreamFrame: unknown }).sendStreamFrame = sendStreamFrame;
+
+    await handleRpc(server, client, streamRequest("sr-1"));
+
+    expect(sends.map((s) => s.type)).toEqual([FRAME_HEAD, FRAME_DATA, FRAME_END]);
+    expect(sends.every((s) => s.requestId === "sr-1")).toBe(true);
+    expect(JSON.parse(new TextDecoder().decode(sends[0]!.payload))).toMatchObject({
+      status: 200,
+    });
+    // DATA is the RAW body bytes — no base64, no JSON envelope.
+    expect(new TextDecoder().decode(sends[1]!.payload)).toBe("hello!");
+    expect(JSON.parse(new TextDecoder().decode(sends[2]!.payload))).toEqual({ bytesIn: 6 });
+    // Nothing went over the JSON ws.send path.
+    expect(sentStreamFrames(client)).toHaveLength(0);
+  });
+
+  it("keeps the base64-JSON path when the transport has no sendStreamFrame (plain WS unchanged)", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    dispatcher.dispatch.mockResolvedValue(new Response("hello!", { status: 200 }));
+
+    const client = createClient();
+    await handleRpc(server, client, streamRequest("sr-1"));
+
+    const frames = sentStreamFrames(client);
+    expect(frames.map((f) => f.frameType)).toEqual([FRAME_HEAD, FRAME_DATA, FRAME_END]);
+    expect(Buffer.from(frames[1]!.payload, "base64").toString()).toBe("hello!");
+  });
+
+  it("AWAITS each binary frame send — the producer loop suspends until the pipe accepts the frame", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    const encoderUtf8 = new TextEncoder();
+    dispatcher.dispatch.mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoderUtf8.encode("a"));
+            controller.enqueue(encoderUtf8.encode("b"));
+            controller.close();
+          },
+        }),
+        { status: 200 }
+      )
+    );
+
+    const client = createClient();
+    const gates: Array<() => void> = [];
+    const sendStreamFrame = vi.fn((): Promise<void> => {
+      return new Promise<void>((resolve) => gates.push(resolve));
+    });
+    (client.ws as unknown as { sendStreamFrame: unknown }).sendStreamFrame = sendStreamFrame;
+
+    const done = handleRpc(server, client, streamRequest("sr-1"));
+    await flushAsync();
+    expect(sendStreamFrame).toHaveBeenCalledTimes(1); // HEAD in flight, loop parked
+
+    gates[0]!();
+    await flushAsync();
+    expect(sendStreamFrame).toHaveBeenCalledTimes(2); // DATA "a"
+
+    gates[1]!();
+    await flushAsync();
+    expect(sendStreamFrame).toHaveBeenCalledTimes(3); // DATA "b"
+
+    gates[2]!();
+    await flushAsync();
+    expect(sendStreamFrame).toHaveBeenCalledTimes(4); // END
+
+    gates[3]!();
+    await done;
+  });
+
+  it("registers parsed-service streams in wsStreamAborts — a client stream-cancel stops the service read", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("first"));
+        // Never closes — only a cancel can end this stream.
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    dispatcher.dispatch.mockResolvedValue(new Response(body, { status: 200 }));
+
+    const client = createClient();
+    const done = handleRpc(server, client, streamRequest("sr-2"));
+    await flushAsync();
+    // HEAD + first chunk are out; the read loop is now parked on a stalled producer.
+    expect(sentStreamFrames(client).map((f) => f.frameType)).toEqual([FRAME_HEAD, FRAME_DATA]);
+
+    await handleRpc(server, client, {
+      type: "stream-cancel",
+      requestId: "sr-2",
+      fromId: "panel:nav-a",
+    });
+    await done;
+
+    expect(cancelled).toBe(true); // ReadableStream cancel propagated to the producer
+    const frames = sentStreamFrames(client);
+    expect(frames[frames.length - 1]!.frameType).toBe(FRAME_ERROR); // no END masquerade
+    expect(frames.some((f) => f.frameType === FRAME_END)).toBe(false);
+  });
+
+  it("terminates a session whose bufferedAmount (incl. bulk backlog) exceeds the hard limit", () => {
+    const { server } = createServer();
+    const control: SessionControlFrame[] = [];
+    const pipe: PipeChannels = {
+      writeControl: (data) => {
+        control.push(decodeControlFrame(new TextDecoder().decode(data)));
+        return Promise.resolve();
+      },
+      // Never settles — the bulk backlog stays metered.
+      writeBulkFrame: () => new Promise<void>(() => {}),
+      dropBulkStream: () => {},
+      bulkPendingBytes: () => 0,
+    };
+    const shim = new SessionWebSocketShim("s1", pipe, () => {});
+    shim.registerStream("req-1", 7);
+    // Meter 129 MiB of un-drained bulk without allocating it: the shim only
+    // reads byteLength and hands the payload to the (fake) pipe.
+    const written = shim.sendStreamFrame("req-1", FRAME_DATA, {
+      byteLength: 129 * 1024 * 1024,
+    } as unknown as Uint8Array);
+    expect(written).not.toBe(false);
+    expect(shim.bufferedAmount).toBeGreaterThan(128 * 1024 * 1024);
+
+    testServer(server).sendToWs(shim, { type: "ws:event", event: "x", payload: 1 });
+
+    expect(shim.readyState).toBe(3); // terminated — the slow session, not the pipe
+    expect(control.some((frame) => frame.t === "closed")).toBe(true);
+  });
+});
+
+describe("RpcServer relay behavior", () => {
   it("allows authenticated panels to relay to panel, DO, and worker targets", () => {
     const { server } = createServer();
 
@@ -426,6 +710,175 @@ describe("RpcServer relay behavior", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:1111\//);
     expect(fetchMock.mock.calls[1]?.[0]).toMatch(/^http:\/\/127\.0\.0\.1:2222\//);
+  });
+
+  it("mints a vcsPush invocation token resolving to the ORIGINATING caller (§4)", async () => {
+    // Narrow-host P3 attribution: a userland `vcsPush` dispatch to the
+    // single-writer DO (targetId === vcsWriterIdentity) mints an on-behalf-of
+    // token recording the ORIGINATING caller. The DO threads it back into
+    // refs.updateMains, which resolves it against THIS table to attribute the
+    // advance — the whole reason the push flip must be client-side (a
+    // host-service forward would erase the originating principal here).
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => targetId,
+    });
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let tokenSeen: string | undefined;
+    let resolvedCallerId: string | undefined;
+    let sizeDuringDispatch = -1;
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as { message?: { invocationToken?: string } };
+      tokenSeen = envelope.message?.invocationToken;
+      if (tokenSeen) {
+        // Resolve WHILE the dispatch is in flight (the token window is open).
+        resolvedCallerId = vcsInvocations.resolve(tokenSeen)?.caller.runtime.id;
+        sizeDuringDispatch = vcsInvocations.size();
+      }
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: { status: "pushed" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testServer(server).relayToDO("panel:nav-a", "panel", targetId, "vcsPush", [
+      { repoPaths: ["packages/a"], sourceHead: "ctx:c1" },
+    ]);
+
+    // Minted, threaded, and resolved to the originating caller (NOT the DO).
+    expect(tokenSeen).toBeTruthy();
+    expect(resolvedCallerId).toBe("panel:nav-a");
+    expect(sizeDuringDispatch).toBe(1);
+    // The window closes when the dispatch settles — replay fails closed.
+    expect(vcsInvocations.size()).toBe(0);
+    expect(vcsInvocations.resolve(tokenSeen!)).toBeNull();
+  });
+
+  it("threads the caller's HOST-RESOLVED context id to the writer DO (row 11)", async () => {
+    // Source-head confinement: the relay resolves the ORIGINATING caller's
+    // context registration (`entityCache.resolveContext`) at the same chokepoint
+    // that mints the token, and threads it as `message.callerContextId`. The
+    // writer DO uses it to confine a sandboxed push to its own `ctx:` head. Never
+    // client-asserted — resolved host-side here.
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => targetId,
+    });
+    // Register the caller with a context registration.
+    entityCache._onActivate(makeRecord("panel:ctx-a", "panel", { contextId: "ctx-42" }));
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let contextSeen: string | undefined;
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as { message?: { callerContextId?: string } };
+      contextSeen = envelope.message?.callerContextId;
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: { status: "pushed" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testServer(server).relayToDO("panel:ctx-a", "panel", targetId, "vcsPush", [
+      { repoPaths: ["packages/a"], sourceHead: "ctx:ctx-42" },
+    ]);
+    expect(contextSeen).toBe("ctx-42");
+  });
+
+  it("does NOT thread a context id to a NON-writer DO dispatch (row 11)", async () => {
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const writerId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const otherId = "do:workers/example:Store:key";
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => writerId,
+    });
+    entityCache._onActivate(makeRecord("panel:ctx-a", "panel", { contextId: "ctx-42" }));
+    entityCache._onActivate(makeRecord(otherId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let contextSeen: string | undefined = "unset";
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as { message?: { callerContextId?: string } };
+      contextSeen = envelope.message?.callerContextId;
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: { ok: true } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testServer(server).relayToDO("panel:ctx-a", "panel", otherId, "ping", []);
+    expect(contextSeen).toBeUndefined();
+  });
+
+  it("does NOT mint an invocation token for a NON-writer DO dispatch", async () => {
+    // Only the single-writer DO identity mints a token; any other DO target
+    // (targetId !== vcsWriterIdentity) relays without one.
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const writerId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const otherId = "do:workers/example:Store:key";
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => writerId,
+    });
+    entityCache._onActivate(makeRecord(otherId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let tokenSeen: string | undefined = "unset";
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as { message?: { invocationToken?: string } };
+      tokenSeen = envelope.message?.invocationToken;
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: { ok: true } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testServer(server).relayToDO("panel:nav-a", "panel", otherId, "ping", []);
+    expect(tokenSeen).toBeUndefined();
+    expect(vcsInvocations.size()).toBe(0);
   });
 
   it("rejects distinct live panel runtime connections for the same caller", () => {
@@ -754,6 +1207,154 @@ describe("RpcServer relay behavior", () => {
           message: { type: "response", requestId: "req-reconnect", result: { ok: true } },
         },
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles the caller when a delivered routed request's callee terminally dies", async () => {
+    vi.useFakeTimers();
+    try {
+      const { server } = createServer();
+      const origin = createClientWithConnection("panel:nav-a", "conn-1");
+      const target = createClientWithConnection("panel:nav-b", "target-conn");
+      registerClient(server, origin);
+      registerClient(server, target);
+
+      handleRoute(server, origin, "panel:nav-b", {
+        type: "request",
+        requestId: "req-stranded",
+        fromId: "panel:nav-a",
+        method: "test.method",
+        args: [],
+      });
+      // Delivered to the callee — inbox replay / re-drive can no longer help.
+      expect(target.ws.send).toHaveBeenCalledTimes(1);
+
+      testServer(server).handleClose(target, 1006, "network");
+      await vi.advanceTimersByTimeAsync(3001);
+
+      const originMessages = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([raw]) => JSON.parse(raw as string) as { type: string }
+      );
+      expect(originMessages.filter((m) => m.type === "ws:routed-response-error")).toHaveLength(1);
+      expect(originMessages.find((m) => m.type === "ws:routed-response-error")).toMatchObject({
+        type: "ws:routed-response-error",
+        targetId: "panel:nav-b",
+        requestId: "req-stranded",
+        error: "Target panel:nav-b did not reconnect within grace window",
+        errorCode: "RECONNECT_GRACE_EXPIRED",
+      });
+
+      // A late response after teardown must NOT settle the caller a second
+      // time — the origin entry was consumed; the responder gets the bounce.
+      handleRoute(server, target, "panel:nav-a", {
+        type: "response",
+        requestId: "req-stranded",
+        result: { ok: true },
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      const originAfter = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([raw]) => JSON.parse(raw as string) as { type: string }
+      );
+      expect(originAfter.filter((m) => m.type === "ws:routed")).toHaveLength(0);
+      const responderBounce = (target.ws.send as ReturnType<typeof vi.fn>).mock.calls
+        .map(([raw]) => JSON.parse(raw as string) as { type: string })
+        .find((m) => m.type === "ws:routed-response-error");
+      expect(responderBounce).toMatchObject({ errorCode: "TARGET_NOT_REACHABLE" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not error delivered routed requests when the callee reconnects within grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const { server, grantPanel, runtimeCoordinator } = createServer();
+      const origin = createClientWithConnection("panel:nav-a", "conn-1");
+      const target = createClientWithConnection("panel:nav-b", "target-conn");
+      registerClient(server, origin);
+      registerClient(server, target);
+
+      handleRoute(server, origin, "panel:nav-b", {
+        type: "request",
+        requestId: "req-survives",
+        fromId: "panel:nav-a",
+        method: "test.method",
+        args: [],
+      });
+      expect(target.ws.send).toHaveBeenCalledTimes(1);
+
+      // Transient pipe-down: the callee resumes the SAME connectionId within
+      // the grace window (resubscribe) — the pending must be left alone.
+      testServer(server).handleClose(target, 1006, "network");
+      const reconnectedWs = createTestWs();
+      runtimeCoordinator.acquire("panel:nav-b", {
+        slotId: "panel:tree/slot-b",
+        clientSessionId: "test-desktop",
+        connectionId: "target-conn",
+      });
+      testServer(server).handleAuth(reconnectedWs, grantPanel("panel:nav-b"), "target-conn");
+      await vi.advanceTimersByTimeAsync(3001);
+
+      const originMessages = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([raw]) => JSON.parse(raw as string) as { type: string }
+      );
+      expect(originMessages.filter((m) => m.type === "ws:routed-response-error")).toHaveLength(0);
+
+      // The callee's (replayed/re-driven) response still reaches the caller.
+      handleRoute(server, createClientWithConnection("panel:nav-b", "target-conn"), "panel:nav-a", {
+        type: "response",
+        requestId: "req-survives",
+        result: { ok: true },
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      const routed = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls
+        .map(([raw]) => JSON.parse(raw as string) as { type: string })
+        .find((m) => m.type === "ws:routed");
+      expect(routed).toMatchObject({
+        type: "ws:routed",
+        envelope: {
+          message: { type: "response", requestId: "req-survives", result: { ok: true } },
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles the caller exactly once when a response races callee teardown", async () => {
+    vi.useFakeTimers();
+    try {
+      const { server } = createServer();
+      const origin = createClientWithConnection("panel:nav-a", "conn-1");
+      const target = createClientWithConnection("panel:nav-b", "target-conn");
+      registerClient(server, origin);
+      registerClient(server, target);
+
+      handleRoute(server, origin, "panel:nav-b", {
+        type: "request",
+        requestId: "req-race",
+        fromId: "panel:nav-a",
+        method: "test.method",
+        args: [],
+      });
+
+      // Response lands during the grace window, BEFORE terminal expiry: it
+      // consumes the origin entry, so expiry must not produce a second settle.
+      testServer(server).handleClose(target, 1006, "network");
+      handleRoute(server, target, "panel:nav-a", {
+        type: "response",
+        requestId: "req-race",
+        result: { ok: true },
+      });
+      await vi.advanceTimersByTimeAsync(3001);
+
+      const originMessages = (origin.ws.send as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([raw]) => JSON.parse(raw as string) as { type: string }
+      );
+      expect(originMessages.filter((m) => m.type === "ws:routed")).toHaveLength(1);
+      expect(originMessages.filter((m) => m.type === "ws:routed-response-error")).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -1133,5 +1734,447 @@ describe("RpcServer caller identity", () => {
         effectiveVersion: "",
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §1.6 uploads — inbound request bodies on the bulk channel
+// ---------------------------------------------------------------------------
+
+describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => {
+  const utf8 = (text: string) => new TextEncoder().encode(text);
+
+  async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString("utf-8");
+  }
+
+  /** Attach a pipe with a captured shim and an open session + body stream-open. */
+  function setupUpload(opts: { bodyStreamId?: number; requestId?: string } = {}) {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: opts.bodyStreamId ?? 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: opts.requestId ?? "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    return { server, shim: shim!, p };
+  }
+
+  it("assembles DATA…END bulk frames into the request body stream (single take)", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1");
+    expect(body).toBeDefined();
+    expect(shim.takeInboundBody("up-1")).toBeUndefined(); // single consumption
+
+    p.emitBulk(8, FRAME_DATA, utf8("hello "));
+    p.emitBulk(8, FRAME_DATA, utf8("world"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 11 })));
+    await expect(readAll(body!)).resolves.toBe("hello world");
+  });
+
+  it("an ERROR bulk frame errors the body with the client's message + code", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("partial"));
+    p.emitBulk(
+      8,
+      FRAME_ERROR,
+      utf8(JSON.stringify({ message: "upload died", code: "UPLOAD_ABORTED" }))
+    );
+    await expect(readAll(body)).rejects.toMatchObject({
+      message: "upload died",
+      code: "UPLOAD_ABORTED",
+    });
+  });
+
+  it("errors the body loudly past 8 MiB unconsumed (SCTP can't be paused)", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    const chunk = new Uint8Array(1024 * 1024);
+    for (let i = 0; i < 9; i++) p.emitBulk(8, FRAME_DATA, chunk); // 9 MiB, nothing consumed
+    await expect(readAll(body)).rejects.toThrow(/receive buffer/);
+    // Late frames for the errored stream drop silently (no throw, no revival).
+    p.emitBulk(8, FRAME_DATA, chunk);
+  });
+
+  it("bytes the consumer has read do NOT count against the cap", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    const reader = body.getReader();
+    const chunk = new Uint8Array(1024 * 1024);
+    // 24 MiB total, but consumed as it arrives — never near the cap.
+    for (let i = 0; i < 24; i++) {
+      p.emitBulk(8, FRAME_DATA, chunk);
+      const { value } = await reader.read();
+      expect(value!.byteLength).toBe(chunk.byteLength);
+    }
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 24 * 1024 * 1024 })));
+    const { done } = await reader.read();
+    expect(done).toBe(true);
+  });
+
+  it("pipe-down errors every unfinished body (teardown, no leaks)", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("half-"));
+    p.emitDown("ICE failed");
+    await expect(readAll(body)).rejects.toThrow(/upload/);
+    // A frame arriving after teardown routes nowhere (registry cleaned).
+    p.emitBulk(8, FRAME_DATA, utf8("late"));
+  });
+
+  it("reaps the body when the response settles (END/ERROR emitted) before the upload finished", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("still-uploading"));
+    // The producer path emits the response END — the request is over.
+    const written = shim.sendStreamFrame("up-1", FRAME_END, utf8(JSON.stringify({ bytesIn: 0 })));
+    expect(written).not.toBe(false);
+    await expect(readAll(body)).rejects.toThrow(/request settled/);
+  });
+
+  it("a session close errors its inbound bodies", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    p.sendControl({ t: "close", sid: "s1", code: 1000, reason: "bye" });
+    await expect(readAll(body)).rejects.toThrow(/upload/);
+  });
+
+  it("a stream-open WITHOUT bodyStreamId registers no body", () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "no-body",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x" }],
+      }),
+    });
+    expect(shim!.takeInboundBody("no-body")).toBeUndefined();
+    // Bulk frames for an id with no body sit in the pre-open buffer (no throw)
+    // and are TTL-reaped if the open never comes.
+    p.emitBulk(99, FRAME_DATA, new TextEncoder().encode("void"));
+  });
+
+  // -- OPEN/DATA cross-channel race (control and bulk are independent SCTP
+  //    streams: the client sends stream-open first, but DATA can ARRIVE first).
+
+  it("buffers DATA/END arriving BEFORE the stream-open and completes the body intact", async () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    // The whole upload beats its stream-open across the channel boundary.
+    p.emitBulk(8, FRAME_DATA, utf8("early "));
+    p.emitBulk(8, FRAME_DATA, utf8("bird"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 10 })));
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const body = shim!.takeInboundBody("up-1")!;
+    await expect(readAll(body)).resolves.toBe("early bird");
+  });
+
+  it("flushes pre-open frames ahead of post-open frames, preserving order", async () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    // Only the LEADING frame raced ahead of the open.
+    p.emitBulk(8, FRAME_DATA, utf8("lead-"));
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    p.emitBulk(8, FRAME_DATA, utf8("tail"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 9 })));
+    const body = shim!.takeInboundBody("up-1")!;
+    await expect(readAll(body)).resolves.toBe("lead-tail");
+  });
+
+  it("errors the body when END's bytesIn disagrees with the received count (lost DATA)", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("only-half"));
+    // Sender counted 18 bytes out; only 9 arrived — must fail, never truncate.
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 18 })));
+    await expect(readAll(body)).rejects.toThrow(/truncated.*declared 18 bytes, received 9/);
+  });
+
+  it("errors the body on an END frame with no bytesIn (protocol violation)", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("data"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({})));
+    await expect(readAll(body)).rejects.toThrow(/no bytesIn/);
+  });
+
+  it("TTL-reaps pre-open frames for a never-opened stream, then fails a pathologically late open loud", async () => {
+    vi.useFakeTimers();
+    try {
+      const { server } = createServer();
+      let shim: SessionWebSocketShim | undefined;
+      testServer(server).handleConnection = vi.fn((ws: unknown) => {
+        shim = ws as SessionWebSocketShim;
+      });
+      const p = createFakePipe();
+      server.attachWebRtcPipe(p.pipe);
+      p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+      p.emitBulk(8, FRAME_DATA, utf8("orphaned"));
+      vi.advanceTimersByTime(5001); // UPLOAD_PREOPEN_TTL_MS — frames discarded
+      // Frames after expiry drop against the condemnation marker (no regrowth).
+      p.emitBulk(8, FRAME_DATA, utf8("more"));
+
+      // If the open DOES arrive after expiry, the body must fail loudly —
+      // its leading bytes are gone, completing would silently truncate.
+      p.sendControl({
+        t: "stream-open",
+        sid: "s1",
+        streamId: 7,
+        bodyStreamId: 8,
+        envelope: makeEnvelope("panel:c1", "main", "panel", {
+          type: "stream-request",
+          requestId: "up-1",
+          fromId: "panel:c1",
+          method: "gateway.fetch",
+          args: [{ path: "/x", method: "POST" }],
+        }),
+      });
+      const body = shim!.takeInboundBody("up-1")!;
+      await expect(readAll(body)).rejects.toThrow(/expired.*before its stream-open/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("condemns a pre-open buffer past 8 MiB and fails the eventual open loud", async () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    const chunk = new Uint8Array(1024 * 1024);
+    for (let i = 0; i < 9; i++) p.emitBulk(8, FRAME_DATA, chunk); // 9 MiB pre-open
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const body = shim!.takeInboundBody("up-1")!;
+    await expect(readAll(body)).rejects.toThrow(/pre-open buffer/);
+  });
+
+  it("frames pumped after the body settles drop (retired id) instead of buffering as pre-open", async () => {
+    const { shim, p } = setupUpload();
+    const body = shim.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("all"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 3 })));
+    await expect(readAll(body)).resolves.toBe("all");
+    // Late frames for the settled id drop silently — no pre-open buffer growth,
+    // no throw.
+    p.emitBulk(8, FRAME_DATA, utf8("late"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 4 })));
+  });
+});
+
+describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {
+  function bodyStream(text: string): ReadableStream<Uint8Array> {
+    return new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(text));
+        c.close();
+      },
+    });
+  }
+
+  function streamRequest(requestId: string, method: string, args: unknown[] = []): RpcMessage {
+    return { type: "stream-request", requestId, fromId: "panel:nav-a", method, args };
+  }
+
+  function setupStreamingServer(opts: Parameters<typeof createServer>[0] = {}) {
+    const created = createServer(opts);
+    const dispatcher = testServer(created.server).dispatcher;
+    dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
+    dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    return { ...created, dispatcher };
+  }
+
+  it("threads the shim-assembled body into the parsed-service ServiceContext", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    let seenBody: unknown;
+    dispatcher.dispatch.mockImplementation(async (ctx: { body?: unknown }) => {
+      seenBody = ctx.body;
+      return new Response("ok", { status: 200 });
+    });
+
+    const client = createClient();
+    const body = bodyStream("upload");
+    (client.ws as unknown as Record<string, unknown>)["sendStreamFrame"] = vi.fn(() =>
+      Promise.resolve()
+    );
+    const takeInboundBody = vi.fn((requestId: string) =>
+      requestId === "sr-up" ? body : undefined
+    );
+    (client.ws as unknown as Record<string, unknown>)["takeInboundBody"] = takeInboundBody;
+
+    await handleRpc(server, client, streamRequest("sr-up", "gateway.fetch", [{ path: "/x" }]));
+
+    expect(takeInboundBody).toHaveBeenCalledWith("sr-up");
+    expect(seenBody).toBe(body);
+  });
+
+  it("passes the inbound body to forwardProxyFetchStream for credentials.proxyFetch", async () => {
+    const forward = vi.fn(
+      async (
+        _params: unknown,
+        sink: (frame: { kind: string; [k: string]: unknown }) => Promise<void> | void
+      ) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "end", bytesIn: 0 });
+        return { status: 200, bytesIn: 0 };
+      }
+    );
+    const { server, dispatcher } = setupStreamingServer({
+      egressProxy: { forwardProxyFetchStream: forward } as never,
+    });
+    dispatcher.getMethodSchema = vi.fn().mockReturnValue(undefined);
+
+    const client = createClient();
+    const body = bodyStream("proxied-upload");
+    (client.ws as unknown as Record<string, unknown>)["sendStreamFrame"] = vi.fn(() =>
+      Promise.resolve()
+    );
+    (client.ws as unknown as Record<string, unknown>)["takeInboundBody"] = vi.fn(() => body);
+
+    await handleRpc(
+      server,
+      client,
+      streamRequest("sr-px", "credentials.proxyFetch", [
+        { url: "https://api.example/upload", method: "POST" },
+      ])
+    );
+
+    expect(forward).toHaveBeenCalledTimes(1);
+    expect((forward.mock.calls[0]![0] as { body?: unknown }).body).toBe(body);
+  });
+
+  it("rejects a proxyFetch that declares BOTH a streamed body and an args body (fail loud)", async () => {
+    const forward = vi.fn();
+    const { server } = setupStreamingServer({
+      egressProxy: { forwardProxyFetchStream: forward } as never,
+    });
+
+    const client = createClient();
+    const sends: Array<{ type: number; payload: Uint8Array }> = [];
+    (client.ws as unknown as Record<string, unknown>)["sendStreamFrame"] = vi.fn(
+      (_requestId: string, frameType: number, payload: Uint8Array) => {
+        sends.push({ type: frameType, payload });
+        return Promise.resolve();
+      }
+    );
+    (client.ws as unknown as Record<string, unknown>)["takeInboundBody"] = vi.fn(() =>
+      bodyStream("streamed")
+    );
+
+    await handleRpc(
+      server,
+      client,
+      streamRequest("sr-both", "credentials.proxyFetch", [
+        { url: "https://api.example/upload", method: "POST", body: "args-body" },
+      ])
+    );
+
+    expect(forward).not.toHaveBeenCalled();
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.type).toBe(FRAME_ERROR);
+    expect(new TextDecoder().decode(sends[0]!.payload)).toContain("exactly one");
+  });
+
+  it("plain WS (no takeInboundBody) dispatches with no ctx.body — wire unchanged", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    let seenBody: unknown = "unset";
+    dispatcher.dispatch.mockImplementation(async (ctx: { body?: unknown }) => {
+      seenBody = ctx.body;
+      return new Response("ok", { status: 200 });
+    });
+    const client = createClient();
+    await handleRpc(server, client, streamRequest("sr-ws", "gateway.fetch", [{ path: "/x" }]));
+    expect(seenBody).toBeUndefined();
   });
 });

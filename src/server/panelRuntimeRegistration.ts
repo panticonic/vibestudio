@@ -14,6 +14,7 @@ import {
   type ServiceDispatcher,
 } from "@vibez1/shared/serviceDispatcher";
 import type { Workspace, WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import { isAboutSource } from "@vibez1/shared/workspace/aboutNamespace";
 import type { CentralDataManager } from "@vibez1/shared/centralData";
 import type { HostConfig } from "@vibez1/shared/hostConfig";
 import type {
@@ -95,7 +96,7 @@ function normalizePanelNavigationState(input: Record<string, unknown>): PanelNav
 function shouldValidateOpenPanelWorkspaceUnit(source: string): boolean {
   if (!source) return false;
   if (isBrowserPanelSource(source)) return false;
-  if (source.startsWith("about/")) return false;
+  if (isAboutSource(source)) return false;
   return source === "panels" || source.startsWith("panels/");
 }
 
@@ -880,7 +881,7 @@ export interface CommonDeps {
   workspace: Workspace;
   workspacePath: string;
   workspaceConfig: WorkspaceConfig;
-  treeScanner?: import("./gadVcs/workspaceTree.js").WorkspaceTreeScanner;
+  treeScanner?: import("./vcsHost/workspaceTreeScanner.js").WorkspaceTreeScanner;
   adminToken: string;
   centralData: CentralDataManager | null;
   hostConfig: HostConfig;

@@ -20,34 +20,17 @@ import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibez1/shared/typedServiceClient";
-import {
-  createPanelRuntime,
-  createRuntimeSelfHandle,
-  type PanelRuntimeApi,
-} from "@workspace/runtime/panel-runtime";
-import {
-  createGatewayFetch,
-  createHostedRuntime,
-  createRpcFs,
-  createRuntimeParentHandle,
-  createServicesProxy,
-  createWorkerdClient,
-  type RuntimeHost,
-  type WorkspaceRuntime,
-} from "@workspace/runtime/hosted";
-// Pure authoring helpers (z, defineContract, Rpc, path/context utils, journal …)
-// — seeded into eval's `@workspace/runtime` module so eval matches panel/worker,
-// where they arrive via the barrel `export * from "../shared/portable.js"`.
-import * as portableHelpers from "@workspace/runtime/portable";
 
 /**
  * EvalDO — the blessed, per-owner unsafe-eval kernel.
  *
  * An internal Durable Object (alongside WorkspaceDO/BrowserDataDO) that runs the agent
  * `eval` capability server-side. It:
- *  - dynamically loads the `@workspace/eval` engine at runtime (it is NOT statically
- *    bundled here — keeps the internal bundle lean and lets the volatile engine update
- *    without a kernel rebuild),
+ *  - dynamically loads the manifest-declared eval engine + runtime units at runtime
+ *    (meta/vibez1.yml `providers.evalEngine` / `providers.evalRuntime`, injected as
+ *    env bindings — NOTHING workspace-owned is statically bundled here: keeps the
+ *    internal bundle lean, lets the volatile engine update without a kernel rebuild,
+ *    and keeps host code free of hardcoded workspace unit names),
  *  - compiles via the workerd `UNSAFE_EVAL` binding (`new Function` is blocked in workerd;
  *    we install `__vibez1CompileFunction__` so the engine's two codegen sites route
  *    through `env.UNSAFE_EVAL.newFunction`),
@@ -115,6 +98,52 @@ interface EvalEngine {
   }) => ScopeManagerLike;
   SqlScopePersistence: new (sql: unknown, blobs: ScopeBlobBackendLike) => unknown;
 }
+
+/**
+ * Minimal structural mirrors of the runtime provider's surface. The REAL
+ * implementations live in the manifest-declared runtime unit
+ * (`providers.evalRuntime` in meta/vibez1.yml) and are loaded dynamically via
+ * the build service — the host bundle carries NO static import of workspace
+ * code. These types describe only what the EvalDO itself touches.
+ */
+interface PanelRuntimeApiLike {
+  getPanelHandle(panelId: string): unknown;
+}
+
+/** Opaque hosted-runtime surface — the EvalDO only spreads/enumerates it. */
+type WorkspaceRuntimeLike = Record<string, unknown>;
+
+/**
+ * Factories the declared runtime unit must expose. Contract: the unit's
+ * `./hosted` subpath exports the hosted-runtime factories and `./panel-runtime`
+ * exports the panel-runtime factories (see `WorkspaceProvidersDecl.evalRuntime`).
+ */
+interface RuntimeSupportModule {
+  createHostedRuntime(host: Record<string, unknown>): WorkspaceRuntimeLike;
+  createGatewayFetch(config: Record<string, unknown>): unknown;
+  createRpcFs(rpc: unknown): unknown;
+  createRuntimeParentHandle(
+    getPanelHandle: (panelId: string) => unknown,
+    parentId: string,
+    parentEntityId: string,
+    parentKind?: "panel" | "worker" | "do"
+  ): unknown;
+  createServicesProxy(rt: WorkspaceRuntimeLike): Record<string, unknown>;
+  createWorkerdClient(rpc: unknown): unknown;
+  createPanelRuntime(options: Record<string, unknown>): PanelRuntimeApiLike;
+  createRuntimeSelfHandle(options: { id: string }): unknown;
+}
+
+/** The `./hosted` + `./panel-runtime` factory names the EvalDO requires. */
+const RUNTIME_HOSTED_FACTORIES = [
+  "createHostedRuntime",
+  "createGatewayFetch",
+  "createRpcFs",
+  "createRuntimeParentHandle",
+  "createServicesProxy",
+  "createWorkerdClient",
+] as const;
+const RUNTIME_PANEL_FACTORIES = ["createPanelRuntime", "createRuntimeSelfHandle"] as const;
 
 type GlobalBag = Record<string, unknown>;
 type FsClient = TypedServiceClient<typeof fsMethods>;
@@ -218,7 +247,15 @@ export class EvalDO extends DurableObjectBase {
    * and worker run, so `import { … } from "@workspace/runtime"` resolves to the
    * identical surface in eval. Cached per-object (its rpc/fs are owner-scoped).
    */
-  private hostedRuntime: WorkspaceRuntime | null = null;
+  private hostedRuntime: WorkspaceRuntimeLike | null = null;
+  /**
+   * Factories from the manifest-declared runtime unit (providers.evalRuntime),
+   * loaded dynamically via the build service (see ensureRuntimeSupport). The
+   * host bundle never statically imports workspace code.
+   */
+  private runtimeSupport: RuntimeSupportModule | null = null;
+  /** The declared runtime unit's `./portable` helpers (z, defineContract, …). */
+  private portableHelpers: Record<string, unknown> | null = null;
   /** Owner identity baked into the cached hosted runtime at first init. A warm
    *  EvalDO serves exactly one owner (objectKey = sha256(ownerId\0subKey)), so a
    *  later run arriving with a different contextId/gatewayToken is a routing or
@@ -226,6 +263,7 @@ export class EvalDO extends DurableObjectBase {
    *  (Finding 3). */
   private hostedRuntimeIdentity: { contextId: string; gatewayToken: string } | null = null;
   private cdpLoaded = false;
+  private warnedNoCdpProvider = false;
   /**
    * The owner's nearest panel ancestor (server-supplied via `RunArgs.parent`),
    * read by the hosted runtime's `resolveParent`. Mutable so a re-resolved parent
@@ -754,13 +792,14 @@ export class EvalDO extends DurableObjectBase {
 
   private async runLocked(args: RunArgs, signal?: AbortSignal, runId?: string): Promise<RunResult> {
     const engine = await this.ensureEngine();
+    const support = await this.ensureRuntimeSupport();
     const scopeManager = await this.ensureScopeManager(engine);
     // The hosted runtime's `resolveParent` reads `this.parentMeta` live, so set it
     // before (re)building the host. Server-supplied; defaults to no parent.
     this.parentMeta = args.parent ?? null;
     this.currentRunReadOnly = args.readOnly ?? false;
     this.currentRunAbortSignal = signal ?? null;
-    const rt = this.ensureHostedRuntime(args.contextId ?? "", args.gatewayToken);
+    const rt = this.ensureHostedRuntime(support, args.contextId ?? "", args.gatewayToken);
 
     // Thread THIS run's abort signal + read-only flag into EVERY outbound rpc.call the eval makes: the
     // abort signal so a `cancel(runId)`/`forceReset()` that aborts `controller` unwinds a run wedged on
@@ -777,11 +816,17 @@ export class EvalDO extends DurableObjectBase {
     //  2. dynamic fallback — any other service becomes `callMain("<name>.<method>", …)`.
     // It adds no access: the fallback routes through `callMain`, so the server dispatcher's
     // per-method `policy.allowed` is still the sole gate (a `do`-denied method still rejects).
-    const services = createServicesProxy(rt);
+    const services = support.createServicesProxy(rt);
 
     // Layer 2 — the importable surface (gad/workspace/credentials/openPanel/…)
-    // injected ambiently too (same refs as `import {…} from "@workspace/runtime"`),
-    // plus Layer 3 — eval-only ambient state helpers (scope/db/help/etc.).
+    // injected ambiently too (same refs as importing the declared runtime
+    // module), plus Layer 3 — eval-only ambient state helpers (scope/db/help/…).
+    // Help text names the DECLARED runtime module (providers.evalRuntime) —
+    // resolvable here because ensureRuntimeSupport already required it.
+    const runtimeModuleName = this.requireDeclaredProviderSource(
+      "EVAL_RUNTIME_SOURCE",
+      "evalRuntime"
+    );
     const bindings: Record<string, unknown> = {
       ...rt,
       services,
@@ -801,7 +846,7 @@ export class EvalDO extends DurableObjectBase {
           // Prefer the INJECTED binding's surface (what eval actually calls) over the raw RPC
           // service — they can diverge (fs's low-level handle* wire methods are hidden behind
           // open()→FileHandle).
-          const injected = (rt as unknown as Record<string, unknown>)[serviceName];
+          const injected = rt[serviceName];
           if (injected !== undefined) {
             if (injected && typeof injected === "object") {
               const described = await this.describeInjectedSurface(
@@ -817,7 +862,7 @@ export class EvalDO extends DurableObjectBase {
               surface: "injected-runtime",
               kind: typeof injected,
               note:
-                `\`${serviceName}\` is a top-level runtime export from \`@workspace/runtime\` (a ` +
+                `\`${serviceName}\` is a top-level runtime export from \`${runtimeModuleName}\` (a ` +
                 `${typeof injected}) — call it directly, it is not an RPC service. See its signature ` +
                 `in skills/sandbox/RUNTIME_API.md (panel APIs: skills/workspace-dev/PANEL_API.md). ` +
                 `Use \`help('<name>')\` with a name from the \`services\` list for RPC services.`,
@@ -837,7 +882,7 @@ export class EvalDO extends DurableObjectBase {
           ambient: [...EVAL_AMBIENT_ONLY],
           guidance:
             "Use rich runtime bindings directly (`workers`, `vcs`, `fs`, ...), or import them from " +
-            "`@workspace/runtime`. For raw service catalog methods, use " +
+            `\`${runtimeModuleName}\`. For raw service catalog methods, use ` +
             '`rpc.call("main", "<svc>.<method>", [...])`; `services.<svc>.<method>(...)` is also available ' +
             "for service names that do not collide with runtime bindings. For rich runtime bindings " +
             "(fs, vcs, credentials, blobstore, gad, workers, …), `services.<name>` is the SAME " +
@@ -845,7 +890,7 @@ export class EvalDO extends DurableObjectBase {
             "help('<name>') for a binding's methods — for the rich bindings this describes what you " +
             "actually call (e.g. fs.open()→FileHandle), not the raw RPC service; or use the " +
             "docs_search/docs_open tools for full typed schemas in the service/runtime catalog. `importable` " +
-            'names come from `import {…} from "@workspace/runtime"`; `ambient` names are pre-injected ' +
+            `names come from \`import {…} from "${runtimeModuleName}"\`; \`ambient\` names are pre-injected ` +
             "globals (do NOT import them). Use the `imports` parameter for npm/workspace packages. " +
             "Full reference: skills/sandbox/EVAL.md.",
         };
@@ -1067,36 +1112,68 @@ export class EvalDO extends DurableObjectBase {
     stash("$lastReturn", returnText);
   }
 
-  /** Bootstrap module-map/require/compile globals + dynamically load `@workspace/eval`. */
-  private async ensureEngine(): Promise<EvalEngine> {
-    if (this.engine) return this.engine;
-    const g = globalThis as GlobalBag;
+  /**
+   * A manifest-declared provider source from an env binding. The server derives
+   * these bindings from `workspace/meta/vibez1.yml`'s `providers.*` slots when
+   * it generates the internal-DO workerd config — the EvalDO itself carries no
+   * workspace unit names.
+   */
+  private declaredProviderSource(binding: string): string | null {
+    const value = this.env[binding];
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  }
 
-    // Compile function backed by the workerd UnsafeEval binding (new Function is blocked).
+  private requireDeclaredProviderSource(binding: string, slot: string): string {
+    const source = this.declaredProviderSource(binding);
+    if (!source) {
+      throw new Error(
+        `eval: no \`providers.${slot}\` is declared in meta/vibez1.yml for this workspace — eval is disabled`
+      );
+    }
+    return source;
+  }
+
+  /**
+   * Bootstrap the shared isolate globals: the UnsafeEval-backed compile
+   * function (`new Function` is blocked in workerd), the global module map, and
+   * the global require. Mirrors the worker bundle bootstrap. Returns the map.
+   */
+  private ensureIsolateModuleGlobals(): Record<string, unknown> {
+    const g = globalThis as GlobalBag;
     const unsafeEval = this.env["UNSAFE_EVAL"] as UnsafeEvalBinding | undefined;
     if (!unsafeEval) throw new Error("EvalDO: UNSAFE_EVAL binding not configured");
     g["__vibez1CompileFunction__"] = (argNames: string[], body: string) =>
       unsafeEval.newFunction(body, "eval", ...argNames);
-
-    // Module map + require (mirrors the worker bundle bootstrap).
     const moduleMap = (g["__vibez1ModuleMap__"] ??= {}) as Record<string, unknown>;
     g["__vibez1Require__"] = (id: string): unknown => {
       const mod = moduleMap[id];
       if (mod) return mod;
       throw new Error(`Module "${id}" not available in EvalDO. Use the imports parameter for npm.`);
     };
+    return moduleMap;
+  }
 
-    // Load the engine bundle once and execute it into the module map via the same
-    // UnsafeEval compiler (new Function is blocked even for this bootstrap step).
-    if (!moduleMap["@workspace/eval"]) {
-      const built = await this.mainBuild().getBuild("@workspace/eval", undefined, {
+  /**
+   * Build `specifier` as a worker library bundle via the build service and
+   * execute it into the shared isolate module map (via the UnsafeEval compiler
+   * — `new Function` is blocked even for this bootstrap step). Idempotent per
+   * specifier. Only stateless library modules belong in the SHARED map.
+   */
+  private async loadLibraryModule(
+    specifier: string,
+    opts: { externals?: string[] } = {}
+  ): Promise<unknown> {
+    const g = globalThis as GlobalBag;
+    const moduleMap = this.ensureIsolateModuleGlobals();
+    if (!moduleMap[specifier]) {
+      const built = await this.mainBuild().getBuild(specifier, undefined, {
         library: true,
-        externals: Object.keys(moduleMap),
+        externals: opts.externals ?? [],
         libraryTarget: "worker",
       });
       const bundle = requireBuildBundleResult(
         built,
-        "EvalDO: build.getBuild did not return a library bundle for @workspace/eval"
+        `EvalDO: build.getBuild did not return a library bundle for ${specifier}`
       );
       const compile = g["__vibez1CompileFunction__"] as (
         a: string[],
@@ -1106,11 +1183,63 @@ export class EvalDO extends DurableObjectBase {
       const module = { exports };
       const fn = compile(["require", "exports", "module"], bundle);
       fn(g["__vibez1Require__"], exports, module);
-      moduleMap["@workspace/eval"] = module.exports;
+      moduleMap[specifier] = module.exports;
     }
+    return moduleMap[specifier];
+  }
 
-    this.engine = moduleMap["@workspace/eval"] as EvalEngine;
+  /**
+   * Dynamically load the manifest-declared eval engine
+   * (`providers.evalEngine` in meta/vibez1.yml — injected as the
+   * `EVAL_ENGINE_SOURCE` binding). It is NOT statically bundled here — keeps
+   * the internal bundle lean, lets the volatile engine update without a kernel
+   * rebuild, and keeps host code free of hardcoded workspace unit names.
+   */
+  private async ensureEngine(): Promise<EvalEngine> {
+    if (this.engine) return this.engine;
+    const engineSource = this.requireDeclaredProviderSource("EVAL_ENGINE_SOURCE", "evalEngine");
+    const moduleMap = this.ensureIsolateModuleGlobals();
+    const loaded = await this.loadLibraryModule(engineSource, {
+      externals: Object.keys(moduleMap),
+    });
+    this.engine = loaded as EvalEngine;
     return this.engine;
+  }
+
+  /**
+   * Load the hosted-runtime/panel-runtime factories + portable helpers from
+   * the manifest-declared runtime unit (`providers.evalRuntime` — injected as
+   * `EVAL_RUNTIME_SOURCE`). Contract: the unit exposes `./hosted`,
+   * `./panel-runtime`, and `./portable` export subpaths (the same modules
+   * panels/workers build against). Loaded via the build service like the
+   * engine — the host prod bundle carries ZERO static `@workspace` imports —
+   * and cached in the shared isolate map (pure stateless factories, safe to
+   * share across owners). `externals: []` matches the server's boot pre-warm
+   * so the cold build is usually already cached.
+   */
+  private async ensureRuntimeSupport(): Promise<RuntimeSupportModule> {
+    if (this.runtimeSupport && this.portableHelpers) return this.runtimeSupport;
+    const runtimeSource = this.requireDeclaredProviderSource("EVAL_RUNTIME_SOURCE", "evalRuntime");
+    const [hosted, panelRuntime, portable] = await Promise.all([
+      this.loadLibraryModule(`${runtimeSource}/hosted`),
+      this.loadLibraryModule(`${runtimeSource}/panel-runtime`),
+      this.loadLibraryModule(`${runtimeSource}/portable`),
+    ]);
+    const support = {
+      ...(panelRuntime as Record<string, unknown>),
+      ...(hosted as Record<string, unknown>),
+    };
+    for (const name of [...RUNTIME_HOSTED_FACTORIES, ...RUNTIME_PANEL_FACTORIES]) {
+      if (typeof support[name] !== "function") {
+        throw new Error(
+          `eval: the declared runtime unit ${runtimeSource} (providers.evalRuntime) does not export ` +
+            `${name} from its ./hosted or ./panel-runtime subpath`
+        );
+      }
+    }
+    this.portableHelpers = { ...(portable as Record<string, unknown>) };
+    this.runtimeSupport = support as unknown as RuntimeSupportModule;
+    return this.runtimeSupport;
   }
 
   private async ensureScopeManager(engine: EvalEngine): Promise<ScopeManagerLike> {
@@ -1157,7 +1286,11 @@ export class EvalDO extends DurableObjectBase {
    * `workspace.units.watch` receive server→DO pushes), and `panelRuntime` is
    * fed the real `rpc.on` (no `()=>()=>{}` no-op).
    */
-  private ensureHostedRuntime(contextId: string, gatewayToken?: string): WorkspaceRuntime {
+  private ensureHostedRuntime(
+    support: RuntimeSupportModule,
+    contextId: string,
+    gatewayToken?: string
+  ): WorkspaceRuntimeLike {
     // Owner-scoped gateway token from the eval service (Finding 4 hardening); the
     // env `RPC_AUTH_TOKEN` (shared internal-DO service bearer) is only a fallback
     // for direct/internal calls. gatewayFetch is `relativeOnly` so the bearer
@@ -1198,31 +1331,35 @@ export class EvalDO extends DurableObjectBase {
       serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
       token,
     };
-    const panelRuntime = createPanelRuntime({
+    const panelRuntime = support.createPanelRuntime({
       rpc,
-      selfHandle: () => createRuntimeSelfHandle({ id: this.rpcSelfId }),
+      selfHandle: () => support.createRuntimeSelfHandle({ id: this.rpcSelfId }),
       // A panel openPanel()'d without an explicit parentId defaults to the eval owner's nearest panel
       // ancestor (server-resolved into this.parentMeta), so an agent/eval launch nests UNDER its owning
       // panel — parity with a panel, which defaults to its own id. A function (not a value) because the
       // runtime is cached while parentMeta is set/re-resolved per run — read live, like resolveParent.
       defaultOpenParentId: () => this.parentMeta?.parentId ?? null,
-    }) as PanelRuntimeApi;
-    const host: RuntimeHost = {
+    });
+    const host: Record<string, unknown> = {
       id: this.rpcSelfId,
       contextId,
       rpc,
-      fs: createRpcFs(rpc),
+      fs: support.createRpcFs(rpc),
       gatewayConfig,
-      gatewayFetch: createGatewayFetch({ ...gatewayConfig, relativeOnly: true }),
+      gatewayFetch: support.createGatewayFetch({ ...gatewayConfig, relativeOnly: true }),
       panelRuntime,
-      workers: createWorkerdClient(rpc),
-      openExternal: (url, options) => this.mainExternalOpen().openExternal(url, options),
+      workers: support.createWorkerdClient(rpc),
+      openExternal: (url: string, options?: unknown) =>
+        this.mainExternalOpen().openExternal(
+          url,
+          options as Parameters<ExternalOpenClient["openExternal"]>[1]
+        ),
       // The owner's nearest panel ancestor (server-supplied via RunArgs.parent →
       // this.parentMeta). Read live so the cached host reflects a re-resolved
       // parent. null when the owner has no panel ancestor.
       resolveParent: () =>
         this.parentMeta
-          ? createRuntimeParentHandle(
+          ? support.createRuntimeParentHandle(
               (pid) => panelRuntime.getPanelHandle(pid),
               this.parentMeta.parentId,
               this.parentMeta.parentEntityId,
@@ -1230,29 +1367,29 @@ export class EvalDO extends DurableObjectBase {
             )
           : null,
     };
-    const rt = createHostedRuntime(host);
-    // `@workspace/runtime` in eval = the hosted runtime instance + the pure
-    // authoring helpers (z/defineContract/journal/…), matching panel/worker barrels.
-    this.moduleMap["@workspace/runtime"] = { ...rt, ...portableHelpers };
+    const rt = support.createHostedRuntime(host);
+    // The declared runtime module in eval (e.g. `@workspace/runtime`) = the
+    // hosted runtime instance + the pure authoring helpers
+    // (z/defineContract/journal/…), matching panel/worker barrels. Keyed by the
+    // manifest-declared unit name so `import { … } from "<declared runtime>"`
+    // resolves to it.
+    const runtimeModuleKey = this.requireDeclaredProviderSource(
+      "EVAL_RUNTIME_SOURCE",
+      "evalRuntime"
+    );
+    this.moduleMap[runtimeModuleKey] = { ...rt, ...(this.portableHelpers ?? {}) };
     this.hostedRuntime = rt;
     this.hostedRuntimeIdentity = { contextId, gatewayToken: token };
     return rt;
   }
 
   /**
-   * Make `@workspace/cdp-client` importable in eval (full CDP commands+events
-   * from a connectionless DO). Loaded via the build service like the engine —
-   * robust to the internal-DO bundle's module resolution — and cached in the
-   * shared isolate map (the client is stateless, so cross-owner sharing is safe,
-   * unlike per-owner user imports).
-   */
-  /**
    * Conservative check: does this run reference CDP at all? Used to gate the
    * (cold-path) cdp-client build. Any route to the client contains the substring
-   * "cdp" — the `@workspace/cdp-client` import, `handle.cdp`, `CdpConnection`,
+   * "cdp" — the declared cdp-client import, `handle.cdp`, `CdpConnection`,
    * `getCdpEndpoint` — so a no-match means no CDP and a false positive only
    * restores the prior unconditional cost. Imports map values are checked too
-   * (an explicit `{ "x": "@workspace/cdp-client" }` alias).
+   * (an explicit `{ "x": "<declared cdp client>" }` alias).
    */
   private referencesCdp(code: string, imports?: Record<string, string>): boolean {
     if (/cdp/i.test(code)) return true;
@@ -1260,44 +1397,46 @@ export class EvalDO extends DurableObjectBase {
     return false;
   }
 
+  /**
+   * Make the manifest-declared CDP client (`providers.cdpClient` — injected as
+   * `EVAL_CDP_CLIENT_SOURCE`) importable in eval (full CDP commands+events from
+   * a connectionless DO). Loaded via the build service like the engine — robust
+   * to the internal-DO bundle's module resolution — and cached in the shared
+   * isolate map (the client is stateless, so cross-owner sharing is safe,
+   * unlike per-owner user imports). No declared provider ⇒ CDP support is
+   * disabled (logged once); eval imports of an undeclared module fail with the
+   * regular module-resolution diagnostic.
+   */
   private async ensureCdpModule(): Promise<void> {
     if (this.cdpLoaded) return;
-    const g = globalThis as GlobalBag;
-    const globalMap = (g["__vibez1ModuleMap__"] ??= {}) as Record<string, unknown>;
-    if (!globalMap["@workspace/cdp-client"]) {
-      const built = await this.mainBuild().getBuild("@workspace/cdp-client", undefined, {
-        library: true,
-        externals: Object.keys(globalMap),
-        libraryTarget: "worker",
-      });
-      const bundle = requireBuildBundleResult(
-        built,
-        "EvalDO: build.getBuild did not return a library bundle for @workspace/cdp-client"
-      );
-      const compile = g["__vibez1CompileFunction__"] as (
-        a: string[],
-        b: string
-      ) => (...args: unknown[]) => unknown;
-      const exports: Record<string, unknown> = {};
-      const module = { exports };
-      const fn = compile(["require", "exports", "module"], bundle);
-      fn(g["__vibez1Require__"], exports, module);
-      globalMap["@workspace/cdp-client"] = module.exports;
+    const cdpSource = this.declaredProviderSource("EVAL_CDP_CLIENT_SOURCE");
+    if (!cdpSource) {
+      if (!this.warnedNoCdpProvider) {
+        this.warnedNoCdpProvider = true;
+        console.warn(
+          "[eval] run references CDP but no `providers.cdpClient` is declared in meta/vibez1.yml — CDP module not preloaded"
+        );
+      }
+      return;
     }
-    const loaded = globalMap["@workspace/cdp-client"] as { CdpConnection?: unknown } | undefined;
+    const globalMap = this.ensureIsolateModuleGlobals();
+    const loaded = (await this.loadLibraryModule(cdpSource, {
+      externals: Object.keys(globalMap),
+    })) as { CdpConnection?: unknown } | undefined;
     if (typeof loaded?.CdpConnection !== "function") {
-      // The default (".") library entry is index.ts, which re-exports BOTH
-      // `CdpConnection` (worker.ts, for `import {CdpConnection}`) and `BrowserImpl`
-      // (browser.ts, for `handle.cdp.lightweightPage()` via loadLightweightClient).
-      // A missing CdpConnection means the build resolved the wrong entry.
+      // The default (".") library entry must re-export BOTH `CdpConnection`
+      // (for `import {CdpConnection}`) and the browser impl (for
+      // `handle.cdp.lightweightPage()` via loadLightweightClient). A missing
+      // CdpConnection means the build resolved the wrong entry.
       throw new Error(
-        "EvalDO: @workspace/cdp-client did not expose CdpConnection (wrong build entry?)"
+        `EvalDO: ${cdpSource} (providers.cdpClient) did not expose CdpConnection (wrong build entry?)`
       );
     }
-    // Seed BOTH maps: the per-object map backs `import {…} from "@workspace/cdp-client"`
-    // (engine resolution); the global map backs `handle.cdp`'s `loadLightweightClient`,
-    // which resolves via the global `__vibez1Require__`.
-    this.moduleMap["@workspace/cdp-client"] = globalMap["@workspace/cdp-client"];
+    // Seed BOTH maps: the per-object map backs `import {…} from "<declared cdp client>"`
+    // (engine resolution); the global map (seeded by loadLibraryModule) backs
+    // `handle.cdp`'s `loadLightweightClient`, which resolves via the global
+    // `__vibez1Require__`.
+    this.moduleMap[cdpSource] = loaded;
     this.cdpLoaded = true;
   }
 

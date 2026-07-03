@@ -35,6 +35,9 @@ function makeCoordinator(opts: {
   pending?: PendingUnitBatchApproval[];
   launch?: HostTargetLaunchResult;
   trustedUnits?: Array<{ kind: string; name: string; source: string; status: string }>;
+  /** The app source the AppHost resolves for react-native (manifest-driven
+   *  selection); null mimics a workspace with no declared/selectable app. */
+  rnAppSource?: string | null;
 }) {
   const emit = vi.fn();
   const publishPending = vi.fn();
@@ -60,7 +63,16 @@ function makeCoordinator(opts: {
     },
     eventService: { emit },
     startupApprovals: { publishPending },
-    getAppHost: () => ({ launchHostTarget }) as unknown as AppHost,
+    getAppHost: () =>
+      ({
+        launchHostTarget,
+        selectedHostTargetAppSource: (target: string) =>
+          target === "react-native"
+            ? opts.rnAppSource !== undefined
+              ? opts.rnAppSource
+              : "apps/mobile"
+            : null,
+      }) as unknown as AppHost,
     getTrustedUnitHosts: () => [
       {
         listWorkspaceUnits: () => opts.trustedUnits ?? [],
@@ -116,6 +128,47 @@ describe("HostTargetLaunchCoordinator", () => {
     });
     expect(publishPending).toHaveBeenCalledTimes(2);
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("recognizes the building react-native app via the AppHost-resolved source, not a hardcoded name", async () => {
+    const launch: HostTargetLaunchResult = {
+      status: "unavailable",
+      launched: false,
+      target: "react-native",
+      reason: "React Native build provider is not active",
+      details: [],
+    };
+    // A workspace whose manifest declares a DIFFERENT react-native app: its
+    // building app unit counts as preparing…
+    const custom = makeCoordinator({
+      launch,
+      rnAppSource: "apps/field-mobile",
+      trustedUnits: [
+        {
+          kind: "app",
+          name: "@workspace-apps/field-mobile",
+          source: "apps/field-mobile",
+          status: "building",
+        },
+      ],
+    });
+    expect((await custom.coordinator.launch("react-native")).status).toBe("preparing");
+
+    // …while the historically hardcoded apps/mobile gets NO special treatment
+    // when the resolved app is a different unit.
+    const stale = makeCoordinator({
+      launch,
+      rnAppSource: "apps/field-mobile",
+      trustedUnits: [
+        {
+          kind: "app",
+          name: "@workspace-apps/mobile",
+          source: "apps/mobile",
+          status: "building",
+        },
+      ],
+    });
+    expect((await stale.coordinator.launch("react-native")).status).toBe("unavailable");
   });
 
   it("returns ready launch state without self-notifying", async () => {

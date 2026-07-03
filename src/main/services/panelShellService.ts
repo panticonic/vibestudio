@@ -20,6 +20,7 @@ import {
 } from "@vibez1/shared/panelChrome";
 import { createBrowserDataRpcClient } from "@vibez1/browser-data";
 import { getPanelSource } from "@vibez1/shared/panel/accessors";
+import { isAboutSource } from "@vibez1/shared/workspace/aboutNamespace";
 import type { BrowserNavigationIntent } from "@vibez1/shared/panelCommands";
 import { requireAppCapability } from "./appCapabilities.js";
 
@@ -89,7 +90,7 @@ async function getRepoState(
   source: string,
   serverClient?: ServerClient | null
 ): Promise<PanelRepoState | undefined> {
-  if (!serverClient || isBrowserPanelSource(source) || source.startsWith("about/")) {
+  if (!serverClient || isBrowserPanelSource(source) || isAboutSource(source)) {
     return undefined;
   }
 

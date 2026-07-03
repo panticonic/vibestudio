@@ -25,9 +25,6 @@ function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & Buil
     async discoverGraph() {
       return discoverPackageGraph(workspaceRoot);
     },
-    async diffPaths() {
-      return [];
-    },
     onStateAdvanced() {
       return () => {};
     },

@@ -44,6 +44,12 @@ type CheckPanelOptions = {
   contextId?: string;
 };
 
+type BrowserTypeDefinitionsOptions = {
+  panelPath?: string;
+  packageNames?: string[];
+  contextId?: string;
+};
+
 function extractPanelSourceFromCallerId(callerId: string): string | undefined {
   const treePrefix = `${PANEL_PRINCIPAL_PREFIX}tree/`;
   if (!callerId.startsWith(treePrefix)) return undefined;
@@ -306,6 +312,25 @@ export async function activate(ctx: ExtensionContextLike) {
         line,
         column,
         fileContent,
+        { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) },
+      );
+    },
+
+    async getBrowserTypeDefinitions(options?: BrowserTypeDefinitionsOptions) {
+      const opts = options ?? {};
+      const packageNames = opts.packageNames ?? [];
+      const effectiveContextId = opts.contextId ?? currentInvocationContextId(ctx);
+      const source =
+        opts.panelPath ?? (packageNames.length > 0 ? currentCallerPanelPath(ctx) : undefined);
+
+      if (!source) {
+        return typeCheckRpcMethods["typecheck.getBrowserTypeDefinitions"](undefined, packageNames);
+      }
+
+      const resolvedPanelPath = await resolvePanelPath(ctx, source, effectiveContextId);
+      return typeCheckRpcMethods["typecheck.getBrowserTypeDefinitions"](
+        resolvedPanelPath,
+        packageNames,
         { workspaceContext: await buildContextWorkspaceContext(ctx, effectiveContextId) },
       );
     },

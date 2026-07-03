@@ -132,8 +132,6 @@ export class PanelInitClient {
           contextId,
           ref: undefined,
           gatewayPort: Number.parseInt(url.port, 10) || (url.protocol === "https:" ? 443 : 80),
-          externalHost: url.hostname,
-          protocol: url.protocol === "https:" ? "https" : "http",
           basePath: basePath === "/" ? "" : basePath,
         });
 

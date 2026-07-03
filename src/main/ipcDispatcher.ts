@@ -8,7 +8,11 @@
 import { ipcMain, type WebContents } from "electron";
 import {
   ELECTRON_LOCAL_SERVICE_NAMES,
+  createBridgeStreamRelay,
   responseEnvelopeFor,
+  type BridgeBodyChunk,
+  type BridgeStreamOpen,
+  type BridgeStreamRelay,
   type RpcCallOptions,
   type RpcEnvelope,
   type RpcMessage,
@@ -171,6 +175,8 @@ export class IpcDispatcher {
   private readonly panelSessions = new Map<string, Promise<PanelSession>>();
   /** webContents ids with a destroy teardown attached (so we attach it once). */
   private readonly panelDestroyHooked = new Set<number>();
+  /** §1.6 upload relays, one per panel principal (see @vibez1/rpc bridgeStream.ts). */
+  private readonly panelStreamRelays = new Map<string, BridgeStreamRelay>();
 
   constructor(deps: IpcDispatcherDeps) {
     this.deps = deps;
@@ -209,6 +215,86 @@ export class IpcDispatcher {
       }
       this.handleEnvelope(event.sender, caller.callerId, caller.callerKind, envelope);
     });
+
+    // §1.6 upload hop: a panel's streaming REQUEST body crosses the bridge as
+    // sequenced chunk messages (postMessage/contextBridge have no stream type);
+    // the relay reassembles it and feeds the panel session's first-class
+    // streamReadable(). invoke()-backed channels reject loudly on bad callers /
+    // malformed messages — a body is never silently dropped.
+    ipcMain.handle("vibez1:rpc:stream-open", (event, msg: BridgeStreamOpen) => {
+      const caller = this.requirePanelCaller(event.sender.id, "stream-open");
+      this.ensurePanelStreamRelay(event.sender, caller.callerId).open(msg);
+    });
+    ipcMain.handle("vibez1:rpc:stream-body-chunk", (event, msg: BridgeBodyChunk) => {
+      const caller = this.requirePanelCaller(event.sender.id, "stream-body-chunk");
+      const relay = this.panelStreamRelays.get(caller.callerId);
+      if (!relay) {
+        throw new Error(`No open bridge upload stream for panel ${caller.callerId}`);
+      }
+      // The returned promise IS the backpressure: it resolves once the host's
+      // reassembly buffer is back under the watermark.
+      return relay.pushBodyChunk(msg);
+    });
+    ipcMain.on("vibez1:rpc:stream-abort", (event, opId: unknown) => {
+      const caller = this.deps.resolveCallerForWebContents(event.sender.id);
+      if (!caller || caller.callerKind !== "panel") return;
+      this.panelStreamRelays.get(caller.callerId)?.abort(String(opId));
+    });
+    ipcMain.on("vibez1:rpc:stream-ack", (event, payload: { opId?: unknown; seq?: unknown }) => {
+      const caller = this.deps.resolveCallerForWebContents(event.sender.id);
+      if (!caller || caller.callerKind !== "panel") return;
+      this.panelStreamRelays.get(caller.callerId)?.ack(String(payload?.opId), Number(payload?.seq));
+    });
+  }
+
+  private requirePanelCaller(
+    webContentsId: number,
+    what: string
+  ): { callerId: string; callerKind: "panel" } {
+    const caller = this.deps.resolveCallerForWebContents(webContentsId);
+    if (!caller || caller.callerKind !== "panel") {
+      throw new Error(
+        `Rejecting ${what} from non-panel sender ` +
+          `(webContentsId=${webContentsId}, kind=${caller?.callerKind ?? "unresolved"})`
+      );
+    }
+    return { callerId: caller.callerId, callerKind: "panel" };
+  }
+
+  /**
+   * One §1.6 upload relay per panel principal. The relay opens the panel's
+   * session stream (`streamReadable` — WebRTC only; the loopback WS session has
+   * none and uploads fail LOUDLY) and ships the response back over
+   * `vibez1:rpc:stream-message` with ack-gated chunks.
+   */
+  private ensurePanelStreamRelay(sender: WebContents, callerId: string): BridgeStreamRelay {
+    const existing = this.panelStreamRelays.get(callerId);
+    if (existing) return existing;
+    const relay = createBridgeStreamRelay({
+      chunkFormat: "binary",
+      openStream: async (envelope, signal, body) => {
+        const session = await this.ensurePanelSession(sender, callerId);
+        if (typeof session.streamReadable !== "function") {
+          throw new Error(
+            "Streaming request bodies (uploads) require the WebRTC transport; " +
+              "this panel's host session cannot stream a request body"
+          );
+        }
+        return session.streamReadable(envelope, signal, body);
+      },
+      sendToPanel: (msg) => {
+        const wc = this.deps.getWebContentsForCaller(callerId);
+        if (wc && !wc.isDestroyed()) wc.send("vibez1:rpc:stream-message", msg);
+      },
+    });
+    this.panelStreamRelays.set(callerId, relay);
+    sender.once("destroyed", () => {
+      if (this.panelStreamRelays.get(callerId) === relay) {
+        this.panelStreamRelays.delete(callerId);
+      }
+      relay.destroy("panel webview destroyed");
+    });
+    return relay;
   }
 
   /**
@@ -368,16 +454,22 @@ export class IpcDispatcher {
 
   /**
    * Open (or reuse) the relay session for a panel principal, redeeming its runtime
-   * lease. A terminally-closed/disconnected session is dropped and re-opened on the
-   * current lease (lease revoke / pipe drop). The session is closed when the panel
-   * webview is destroyed.
+   * lease. Only a TERMINALLY closed session (lease revoke / session teardown) is
+   * dropped and re-opened on the current lease; a transport blip is transient and
+   * the transport auto-reopens sessions (§3.3). The session is closed when the
+   * panel webview is destroyed.
    */
   private ensurePanelSession(sender: WebContents, callerId: string): Promise<PanelSession> {
     const existing = this.panelSessions.get(callerId);
     if (existing) {
       return existing.then((session) => {
-        const live = !session.isClosed?.() && (session.status?.() ?? "connected") === "connected";
-        if (live) return session;
+        // Liveness = NOT terminally closed — deliberately NOT the transport
+        // status (§3.3): a routine pipe reconnect reads "connecting" while the
+        // transport auto-reopens its logical sessions, and recycling on that
+        // transient state would terminally close a healthy session and re-mint
+        // a grant on every blip. Only a terminal close (lease revoke, session
+        // teardown) recycles.
+        if (!(session.isClosed?.() ?? false)) return session;
         this.panelSessions.delete(callerId);
         session.close();
         return this.ensurePanelSession(sender, callerId);

@@ -49,7 +49,7 @@ Allowed callers: `server`, `shell`
 
 Per-workspace content-addressable blob storage
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`
+Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 
 | Method | Description |
 |--------|-------------|
@@ -62,9 +62,14 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`
 | `blobstore.grep` | Search a blob's text for a regex pattern; returns matching lines with optional surrounding context, or null if the blob is absent. |
 | `blobstore.putBase64` | Store raw bytes from a base64 payload; returns content digest + byte size (idempotent by content). |
 | `blobstore.getBase64` | Full blob contents as a base64 string, or null if absent. |
+| `blobstore.putTree` | Store one immutable directory node (tree object) in the CAS from its entries; returns its `manifest:` tree hash (gad-manifest compatible). Every referenced child must already exist in the store — file contentHash blobs and dir childHash tree nodes are verified, so a tree hash can never be claimed while its objects are missing. Pass {root:true} to also store a `state:` root pointer and get the gad-compatible stateHash back. Idempotent by content. Build deep trees bottom-up (children before parents). |
+| `blobstore.getTree` | Entries of a tree object (one directory node), or null if absent. Accepts a `manifest:` node hash or a `state:` root pointer (resolved to its root node). |
+| `blobstore.listTree` | Recursive listing of a tree: every file (contentHash+mode) and directory (treeHash) under an optional prefix path, sorted by path. Returns null if the root tree object is absent. |
+| `blobstore.readFileAtTree` | Resolve a tree-relative file path to its content digest and mode, or null if the path is absent or not a file. Read the bytes via the ordinary blob APIs. |
+| `blobstore.diffTrees` | Authoritative diff between two trees: added/removed/changed file paths, computed by Merkle walk (identical subtree hashes are skipped wholesale). Throws if either tree's objects are missing from the store. |
+| `blobstore.materializeTree` | Project a tree onto disk at outDir (absolute path): hardlinks non-executable files from the CAS (copies executables so chmod never touches the shared CAS inode). Existing files with matching size are trusted and skipped. Admin-only — writes outside the store. |
 | `blobstore.delete` | Delete a blob by digest; returns true if it existed. Destructive, admin-only. |
 | `blobstore.list` | List blob digests, optionally filtered by hex prefix and capped by limit. Admin-only. |
-| `blobstore.pruneUnreferenced` | Garbage-collect blobs not in the `referenced` set (optionally only those older than olderThanMs). Pass dryRun:true to preview without deleting. Destructive, admin-only. |
 
 ## `build`
 
@@ -77,6 +82,7 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. |
+| `build.validate` | Gad-facing push validation (narrow-host VCS): build + cache + classify a composed candidate workspace view. Keyed by (viewHash, repoPaths, baseViewHash) — repoPaths are the pushed repos (buildable pushed units gate absolutely; content-only skip) and baseViewHash drives the dependent regression gate (a dependent also red on the base is informational; omitted ⇒ failed dependents gate absolutely). IDEMPOTENT: never promotes the EV baseline or records provenance, so it is safe to call on candidates that are never published. |
 | `build.getBuildReport` | Queryable companion to the synchronous push gate: build a unit (runtime, or library targets for packages) at the given workspace state (omitted = main HEAD) and return its agent-actionable RepoBuildReport with structured esbuild + tsc diagnostics. Does NOT advance any head. |
 | `build.getEffectiveVersion` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
 | `build.inspectBuildProvenance` | Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units. |
@@ -197,7 +203,7 @@ Allowed callers: `shell`, `app`, `panel`
 
 | Method | Description |
 |--------|-------------|
-| `gateway.fetch` | Loopback-fetch a panel asset from the server's own gateway and stream the Response back over the pipe's bulk channel (a streaming method). |
+| `gateway.fetch` | Loopback-fetch a panel asset from the server's own gateway and stream the Response back over the pipe's bulk channel (a streaming method). A request body streams IN over the same channel (stream-open bodyStreamId → ctx.body). |
 
 ## `gitInterop`
 
@@ -328,6 +334,19 @@ Allowed callers: `shell`, `app`, `server`
 | `push.register` | Register a device's push token for a client id, persisting it so it survives server restarts. |
 | `push.unregister` | Remove the persisted push registration for a client id; returns whether one existed. |
 
+## `refs`
+
+Protected host main refs (repoPath → main): read, log, and the single-writer group compare-and-swap
+
+Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
+
+| Method | Description |
+|--------|-------------|
+| `refs.readMain` | Current record of one repo's protected `main` (repoPath → state), or null when absent. |
+| `refs.listMains` | Every repo's protected `main`, sorted by repoPath. |
+| `refs.readMainLog` | Chronological (oldest→newest) movement log for one repo's `main`; `limit` keeps the newest N entries. `new` is null for a delete entry (`old` is null for a re-creation). |
+| `refs.updateMains` | Atomic group compare-and-swap over protected `main` refs. Every entry validates (`expectedOld` matches current, null = must-not-exist) under one critical section; the batch persists in ONE atomic file replace. `next: null` deletes a main. Any per-entry conflict fails the whole batch with structured per-entry data. Approval-gated and restricted to the single VCS-DO writer (§3): every other caller gets a structured policy rejection. |
+
 ## `runtime`
 
 Runtime entity creation and retirement
@@ -395,18 +414,11 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `vcs.edit` | Record a batch of file edits as UNCOMMITTED WORKING changes on the caller's context head — tracked durably with full provenance, but NOT a commit: no commit-log entry, no head advance, no build, and they never appear in vcs.log. Edits route to their owning repo by path. Make deliberate milestones with vcs.commit. Edits target a `ctx:*` head; `main` advances only via push. |
 | `vcs.commit` | Fold the caller context's uncommitted working edits into ONE deliberate, messaged snapshot per repo, advancing each repo's context head and owning exactly those edits (queryable via commitEdits). `message` is mandatory. `exclude` leaves listed paths uncommitted (the inverse of `git add`). A repo with a pending merge commits the resolution. `main` is rejected (push only). |
 | `vcs.discardEdits` | Drop a repo's uncommitted working edits on the caller's context head AND clear any in-progress merge, restoring the committed head on disk (abort / stash-drop). |
-| `vcs.commitEdits` | List the edit-ops a commit owns (commit → its edits), by commit event id. Index-backed; ordered by the edit replay order. |
-| `vcs.fileHistory` | File history / blame: every edit to a path in COMMIT-lineage order (committed commits first, then the uncommitted working tail on the given head). Index-backed. |
-| `vcs.commitAncestors` | Walk a commit's ancestry in the event-keyed commit DAG (by commit event id, not state hash — distinct commits can share content). Returns each commit's parents. |
-| `vcs.editsByActor` | Every edit authored by an actor (author provenance), across commits — index-backed. |
-| `vcs.editsByTurn` | Every edit authored in an agent turn (causal provenance — ties VCS edits to the agentic trajectory). Index-backed. |
-| `vcs.editsByInvocation` | Every edit authored in a single tool-call invocation (causal provenance). Index-backed. |
 | `vcs.previewBuild` | On-demand build of the caller context's WORKING content (committed head + uncommitted edits), scoped to specific repos or units. Does NOT touch the published EV baseline — builds happen authoritatively only at push. Use for a dev preview without committing. |
 | `vcs.readFile` | Read one file's content (text or base64 bytes) at a VCS ref, with its state/content hashes and mode; returns null if the path is absent. Empty ref ⇒ the caller's current head. Pass repoPath to read from a specific repo's head (path repo-relative). |
 | `vcs.listFiles` | List every file (path, content hash, mode) at a VCS ref; omit the ref for the caller's current head. Pass repoPath to list a single repo's head. |
 | `vcs.revert` | Undo a prior change by forward-applying its inverse patch onto the caller's head, advancing it; target the change by state hash or event id. Pass repoPath to revert on a specific repo's log. |
 | `vcs.status` | Unpushed changes on a repo's head relative to that repo's main: the added/removed/changed paths plus the head state and whether it is ahead of main. Not a filesystem scan. repoPath is required (per-repo VCS). |
-| `vcs.log` | Commit log for a repo's head, most recent first, capped by limit (default 50). repoPath is required (per-repo VCS). |
 | `vcs.diff` | Diff two GAD states by their `state:…` hashes, returning the added/removed/changed files between them. |
 | `vcs.resolveHead` | Resolve a ref to its head name and current `state:…` hash on a repo's log. Omit the ref for the caller's current context head; pass "main"/"ctx:…" for an explicit ref, and repoPath to scope to a repo. |
 | `vcs.workspaceViewWithRepoAt` | Compose a workspace-rooted state view with one repo replaced by a repo-rooted state hash (or removed when null). Use this to convert a repo state from vcs.log/vcs.commit/vcs.resolveHead into the immutable state ref that build.getBuild expects. |
@@ -414,7 +426,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `vcs.mergeGroup` | Coordinated multi-repo pull: merge each repo's source head into its target (default main). Best-effort per-repo (not the atomic group-push path). |
 | `vcs.abortMerge` | Abort a pending (conflicted) merge on a repo's head, restoring its pre-merge tree; this is itself a head write. repoPath is required; omit head for the caller's own context head. |
 | `vcs.pendingMerge` | Inspect a repo head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. repoPath is required; omit head for the caller's own context head. |
-| `vcs.push` | Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances. FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). Shell/server may pass sourceHead explicitly; context callers may only push their own ctx head. |
+| `vcs.push` | Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances (a gated compare-and-swap on the server's protected `main` ref per repo). FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). A concurrent advance that cannot be classified as a divergence throws a RETRYABLE error with code `REF_CONFLICT` — re-read main and re-push. The main advance is approval-gated. sourceHead is the caller-supplied head to publish (the DO trusts it): the runtime vcs client pins each context caller to its OWN ctx head, while shell/server callers may pass any sourceHead explicitly. |
 | `vcs.pushStatus` | How far each repo's head is ahead of that repo's main: the unpushed change count and per-file changes a push would carry. |
 | `vcs.forkRepo` | Fork a repo to a new path, preserving history: the new repo's log descends from the source's lineage (its `log` shows the inherited commits), so you can edit on top of the forked history. The package.json `name` leaf is rewritten to the new path so the fork is build-valid; deeper renames (component/class names) are yours to make, then push. |
 | `vcs.deleteRepo` | SEVERE, global-state action: permanently remove a whole repo from the workspace. Distinct from edits — it archives the repo's history (moved to a recoverable archive head) and drops the repo from workspace main, deleting its working tree. Requires explicit user approval every time (a dedicated per-repo deletion grant that the ordinary write grant never covers). REFUSES if other repos depend on this one unless `force` is set (their builds will break). Rejects the `meta` repo and any path with no committed main. |
