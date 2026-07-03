@@ -2,12 +2,22 @@
  * Diff-review deep-link target consumed by the gad-browser panel.
  *
  * The approval card's "open in gad-browser" escape hatch launches (or navigates)
- * this panel with a `diffTarget` state-arg naming a single file at two tree
- * states. gad-browser has no two-state compare view (see the module note in
- * `index.tsx`); the deepest it supports today is landing on the Files tab
- * filtered to the target path at the NEW state. These pure helpers parse the
- * untrusted state-arg and drive that focus, and are unit-tested in isolation.
+ * this panel with a `diffTarget` state-arg naming a file at two tree states. The
+ * panel renders a real two-state compare view (the shared `@workspace/ui`
+ * `DiffViewer`) for the target, with the whole changed-file set of the entry
+ * available for stepping, and still offers the Files-tab focus filter as the
+ * fallback when content can't be fetched. These pure helpers parse the untrusted
+ * state-arg, build the compare entry, resolve states → branches, and drive the
+ * focus filter; they are unit-tested in isolation.
  */
+import type { DiffChangedFile, DiffFileKind, DiffReviewEntry } from "@workspace/ui";
+
+/**
+ * One changed file of the diff-review entry, carried alongside the focused file
+ * so the compare view can step across every file the reviewer was sent for.
+ * Mirror of `@workspace/ui`'s `DiffChangedFile`.
+ */
+export type DiffTargetFile = DiffChangedFile;
 
 /** Parsed, validated deep-link target (mirror of the shell's `GadBrowserTarget`). */
 export interface DiffTarget {
@@ -17,6 +27,33 @@ export interface DiffTarget {
   newHash?: string;
   oldState?: string;
   newState?: string | null;
+  /** Host-flagged binary/oversized focused file — rendered diffstat-only. */
+  binary?: boolean;
+  tooLarge?: boolean;
+  /**
+   * Every changed file of the source entry (includes the focused `path`). When
+   * present the compare view renders the whole set so the reviewer can step
+   * between files; absent → the compare view shows just the focused file.
+   */
+  files?: DiffTargetFile[];
+}
+
+const FILE_KINDS: ReadonlySet<string> = new Set<DiffFileKind>(["added", "removed", "changed"]);
+
+/** Validate one raw `files[]` entry into a `DiffTargetFile`, or `null`. */
+function parseTargetFile(value: unknown): DiffTargetFile | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const path = record["path"];
+  const kind = record["kind"];
+  if (typeof path !== "string") return null;
+  if (typeof kind !== "string" || !FILE_KINDS.has(kind)) return null;
+  const file: DiffTargetFile = { path, kind: kind as DiffFileKind };
+  if (typeof record["oldHash"] === "string") file.oldHash = record["oldHash"];
+  if (typeof record["newHash"] === "string") file.newHash = record["newHash"];
+  if (record["binary"] === true) file.binary = true;
+  if (record["tooLarge"] === true) file.tooLarge = true;
+  return file;
 }
 
 /**
@@ -40,7 +77,85 @@ export function parseDiffTarget(value: unknown): DiffTarget | null {
   if (typeof oldState === "string") target.oldState = oldState;
   if (newState === null) target.newState = null;
   else if (typeof newState === "string") target.newState = newState;
+  if (record["binary"] === true) target.binary = true;
+  if (record["tooLarge"] === true) target.tooLarge = true;
+  const files = record["files"];
+  if (Array.isArray(files)) {
+    const parsed = files
+      .map(parseTargetFile)
+      .filter((file): file is DiffTargetFile => file !== null);
+    if (parsed.length > 0) target.files = parsed;
+  }
   return target;
+}
+
+/** Derive the change kind of the focused file from its two content hashes. */
+export function focusedFileKind(target: DiffTarget): DiffFileKind {
+  if (target.oldHash && target.newHash) return "changed";
+  if (target.newHash && !target.oldHash) return "added";
+  return "removed";
+}
+
+/** The focused file (the `path` the reviewer was sent to) as a changed-file. */
+function focusedFile(target: DiffTarget): DiffTargetFile {
+  const file: DiffTargetFile = { path: target.path, kind: focusedFileKind(target) };
+  if (target.oldHash) file.oldHash = target.oldHash;
+  if (target.newHash) file.newHash = target.newHash;
+  if (target.binary) file.binary = true;
+  if (target.tooLarge) file.tooLarge = true;
+  return file;
+}
+
+/**
+ * Build the `DiffReviewEntry` the shared `DiffViewer` consumes for a target.
+ * Uses the full `files[]` set when present (so every changed file is available
+ * for stepping), otherwise a single-file entry for the focused `path`. Line
+ * totals are omitted — the viewer computes exact per-file counts from the two
+ * blobs it fetches lazily by content hash.
+ */
+export function buildCompareEntry(target: DiffTarget): DiffReviewEntry {
+  const changedFiles: DiffTargetFile[] =
+    target.files && target.files.length > 0 ? target.files : [focusedFile(target)];
+  return {
+    repoPath: target.repoPath,
+    oldState: target.oldState ?? "",
+    newState: target.newState ?? null,
+    diffStat: { filesChanged: changedFiles.length },
+    changedFiles,
+  };
+}
+
+/** Where a tree state currently lives: the worktree heads pointing at it. */
+export interface StateLocation {
+  stateHash: string;
+  /** Head names (gad-browser branch ids) whose current state is `stateHash`. */
+  branchIds: string[];
+  /** The commit event id recorded for the first matching head, if any. */
+  commitEventId: string | null;
+}
+
+/**
+ * Resolve a tree state to the worktree heads currently pointing at it, from the
+ * rows of `gad_worktree_heads` (a read-only projection the panel queries). A
+ * state that is no longer any head's current state resolves to an empty
+ * `branchIds` (e.g. the OLD side of a change, superseded by the new head).
+ */
+export function resolveStateLocation(
+  headRows: ReadonlyArray<Record<string, unknown>>,
+  stateHash: string | null | undefined
+): StateLocation | null {
+  if (!stateHash) return null;
+  const branchIds: string[] = [];
+  let commitEventId: string | null = null;
+  for (const row of headRows) {
+    if (row["state_hash"] !== stateHash) continue;
+    const head = typeof row["head"] === "string" ? row["head"] : null;
+    if (head && !branchIds.includes(head)) branchIds.push(head);
+    if (!commitEventId && typeof row["commit_event_id"] === "string") {
+      commitEventId = row["commit_event_id"] as string;
+    }
+  }
+  return { stateHash, branchIds, commitEventId };
 }
 
 /**

@@ -7,7 +7,7 @@
  */
 import type { ApprovalDecision, PendingApproval } from "@vibez1/shared/approvals";
 import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibez1/shared/approvalCopy";
-import type { DiffReviewEntry } from "@workspace/ui";
+import type { DiffChangedFile, DiffReviewEntry } from "@workspace/ui";
 
 export interface CallerInfo {
   /** Friendly user-visible label — panel title, worker source basename, etc. */
@@ -62,9 +62,12 @@ export type ApprovalCardIntent = { approvalId: string } & ApprovalCardIntentBody
 
 /**
  * Deep-link target for the "open in gad-browser" escape hatch. Carries the
- * repo + path + the two content hashes and two tree states named in the
- * diff-review payload, so the gad-browser panel can land on the file at (at
- * least) the new state. Mirrors the per-file fields of a `DiffReviewEntry`.
+ * repo + focused path + the two content hashes and two tree states named in the
+ * diff-review payload, so the gad-browser panel can render a real two-state
+ * compare view for the file. `files` carries the entry's whole changed-file set
+ * so the panel can step across every file the reviewer was sent for; `binary` /
+ * `tooLarge` mirror the host degrade flags of the focused file. Mirrors the
+ * per-file fields of a `DiffReviewEntry` (and the panel's `DiffTarget`).
  */
 export interface GadBrowserTarget {
   repoPath: string;
@@ -73,6 +76,11 @@ export interface GadBrowserTarget {
   newHash?: string;
   oldState: string;
   newState: string | null;
+  /** Host-flagged binary/oversized focused file → diffstat-only in the panel. */
+  binary?: boolean;
+  tooLarge?: boolean;
+  /** Every changed file of the source entry (includes the focused `path`). */
+  files?: DiffChangedFile[];
 }
 
 /**

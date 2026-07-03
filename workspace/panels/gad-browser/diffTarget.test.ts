@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCompareEntry,
   describeDiffTarget,
+  focusedFileKind,
   parseDiffTarget,
+  resolveStateLocation,
   rowMatchesDiffTarget,
   shortHash,
   type DiffTarget,
@@ -43,6 +46,126 @@ describe("parseDiffTarget", () => {
     expect(parseDiffTarget({ repoPath: "r" })).toBeNull();
     expect(parseDiffTarget({ repoPath: 1, path: "p" })).toBeNull();
   });
+
+  it("parses the degrade flags and the changed-file set", () => {
+    const target = parseDiffTarget({
+      repoPath: "r",
+      path: "b.ts",
+      binary: true,
+      tooLarge: true,
+      files: [
+        { path: "a.ts", kind: "added", newHash: "na" },
+        { path: "b.ts", kind: "changed", oldHash: "ob", newHash: "nb", binary: true },
+        // malformed entries are dropped, not fatal:
+        { path: "c.ts" },
+        { kind: "removed" },
+        "nope",
+      ],
+    });
+    expect(target?.binary).toBe(true);
+    expect(target?.tooLarge).toBe(true);
+    expect(target?.files).toEqual([
+      { path: "a.ts", kind: "added", newHash: "na" },
+      { path: "b.ts", kind: "changed", oldHash: "ob", newHash: "nb", binary: true },
+    ]);
+  });
+
+  it("omits files when none of the entries validate", () => {
+    const target = parseDiffTarget({ repoPath: "r", path: "p", files: [{ path: "x" }] });
+    expect(target && "files" in target).toBe(false);
+  });
+});
+
+describe("focusedFileKind", () => {
+  it("derives changed / added / removed from the two hashes", () => {
+    expect(focusedFileKind({ repoPath: "r", path: "p", oldHash: "o", newHash: "n" })).toBe(
+      "changed"
+    );
+    expect(focusedFileKind({ repoPath: "r", path: "p", newHash: "n" })).toBe("added");
+    expect(focusedFileKind({ repoPath: "r", path: "p", oldHash: "o" })).toBe("removed");
+    expect(focusedFileKind({ repoPath: "r", path: "p", newState: null })).toBe("removed");
+  });
+});
+
+describe("buildCompareEntry", () => {
+  it("uses the whole changed-file set when present", () => {
+    const target: DiffTarget = {
+      repoPath: "packages/demo",
+      path: "b.ts",
+      oldState: "state:a",
+      newState: "state:b",
+      files: [
+        { path: "a.ts", kind: "added", newHash: "na" },
+        { path: "b.ts", kind: "changed", oldHash: "ob", newHash: "nb" },
+      ],
+    };
+    expect(buildCompareEntry(target)).toEqual({
+      repoPath: "packages/demo",
+      oldState: "state:a",
+      newState: "state:b",
+      diffStat: { filesChanged: 2 },
+      changedFiles: [
+        { path: "a.ts", kind: "added", newHash: "na" },
+        { path: "b.ts", kind: "changed", oldHash: "ob", newHash: "nb" },
+      ],
+    });
+  });
+
+  it("falls back to a single focused-file entry, carrying degrade flags", () => {
+    const target: DiffTarget = {
+      repoPath: "r",
+      path: "logo.png",
+      oldHash: "o",
+      newHash: "n",
+      oldState: "state:a",
+      newState: "state:b",
+      binary: true,
+    };
+    expect(buildCompareEntry(target)).toEqual({
+      repoPath: "r",
+      oldState: "state:a",
+      newState: "state:b",
+      diffStat: { filesChanged: 1 },
+      changedFiles: [
+        { path: "logo.png", kind: "changed", oldHash: "o", newHash: "n", binary: true },
+      ],
+    });
+  });
+
+  it("represents a removed target as a single removed file, newState null", () => {
+    const entry = buildCompareEntry({ repoPath: "r", path: "p", oldHash: "o", newState: null });
+    expect(entry.newState).toBeNull();
+    expect(entry.changedFiles).toEqual([{ path: "p", kind: "removed", oldHash: "o" }]);
+  });
+});
+
+describe("resolveStateLocation", () => {
+  const heads = [
+    { log_id: "l1", head: "main", state_hash: "state:new", commit_event_id: "ev-1" },
+    { log_id: "l1", head: "feature", state_hash: "state:new", commit_event_id: "ev-2" },
+    { log_id: "l2", head: "main", state_hash: "state:other", commit_event_id: "ev-3" },
+  ];
+
+  it("returns the distinct heads pointing at the state, with a commit event id", () => {
+    expect(resolveStateLocation(heads, "state:new")).toEqual({
+      stateHash: "state:new",
+      branchIds: ["main", "feature"],
+      commitEventId: "ev-1",
+    });
+  });
+
+  it("returns an empty head set for a superseded (non-head) state", () => {
+    expect(resolveStateLocation(heads, "state:gone")).toEqual({
+      stateHash: "state:gone",
+      branchIds: [],
+      commitEventId: null,
+    });
+  });
+
+  it("resolves to null for a missing state (removed side)", () => {
+    expect(resolveStateLocation(heads, null)).toBeNull();
+    expect(resolveStateLocation(heads, undefined)).toBeNull();
+  });
 });
 
 describe("rowMatchesDiffTarget", () => {
@@ -83,6 +206,8 @@ describe("shortHash / describeDiffTarget", () => {
   });
 
   it("describes a removed target", () => {
-    expect(describeDiffTarget({ repoPath: "r", path: "p", newState: null })).toBe("r · p @ removed");
+    expect(describeDiffTarget({ repoPath: "r", path: "p", newState: null })).toBe(
+      "r · p @ removed"
+    );
   });
 });
