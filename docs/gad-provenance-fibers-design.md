@@ -180,9 +180,12 @@ Consequences for this spec, folded in throughout:
   `indexMemoryFiles`; `memidx:` markers live DO-side (bears on U5).
 - **File reads are recorded nowhere.** The dead `gad_file_observations` /
   `gad_file_mutations` / `gad_file_change_hunks` projections, their
-  `state.file_*` event kinds, and `blameGadFileSnippet` are slated for
-  deletion with the bang (the narrow-host tree still carries and GC-references
-  them). Reads get a soft signal (§4), not a log event.
+  `state.file_*` event kinds, and `blameGadFileSnippet` are already deleted
+  on this branch (`dc8efbe4`); the narrow-host tree still carries them, so
+  the cut is **re-applied during the merge resolution** — including rewriting
+  the incoming `runGadGcMark` unions that reference the dead tables, which is
+  the same edit as U4's working-edit fix (one pass over the GC mark set).
+  Reads get a soft signal (§4), not a log event.
 - **Main movement has a host-verified record (new in v3).** The host main-ref
   log (`writer`, token-resolved `onBehalfOf`, `reason`, `operation`, nullable
   `old`/`new`) is authoritative attribution for every push/merge/delete/
@@ -224,6 +227,14 @@ replayable where their source is replayable, never pruned, and covered by
 whatever integrity covers their source table. There is **no** separate fiber
 row to keep consistent — the constraint that prevents drift is that no second
 copy exists.
+
+The host **main-ref log** (§2) is deliberately *not* a new edge kind: its
+on-behalf-of principal is a host `VerifiedCaller` (panel/chrome/extension),
+not a graph anchor, so inventing a `principal` anchor for one signal would
+inflate §3 for no traversal value. It surfaces instead as **commit-anchor
+metadata** — a main-advance's host-verified attribution rides the commit item
+in the attachment and drill-down, read through the refs bridge at render
+time.
 
 **Soft (behavioral) edges** — signals with no native home, recorded in one
 physical table:
@@ -738,7 +749,10 @@ Ship views + one helper, not a thick API:
   pipeline returning the item-budgeted page plus `{ shown, total, nextCursor }`;
   the one unit the warm cache, read attachment, and drill-down all call.
 - `blameLines(repoPath, path, lineRange, head)` — §5; the offset composition
-  must not be reimplemented in ad-hoc SQL.
+  must not be reimplemented in ad-hoc SQL. v3 placement: the composition core
+  (offset mapping through hunk deltas, merge routing) belongs in
+  **vcs-engine** as a pure function over op rows — unit-testable without a
+  DO — with the gad-store DO supplying the rows and owning the RPC.
 
 Raw `gad.query` (read-only CTEs) returns **unranked** edges: SQL is for chasing
 a specific handle, not re-deriving the ranked block. Follow-on ergonomics
@@ -797,7 +811,10 @@ U4–U5 below):
      uncommitted edit older than the min-age can have its content swept and
      the eventual commit dangles. Add uncommitted edit-op hashes (new and
      old) to the mark union. Flagged as A1 in the handoff; fix belongs
-     upstream regardless of this plan's timeline.
+     upstream regardless of this plan's timeline — and if it hasn't landed
+     by the time the narrow-host merge reaches this branch, it is made here
+     in the same edit that strips the dead `gad_file_mutations`/
+     `gad_file_observations` references from those unions (§2).
   2. **Demote the caller-supplied list.** `blobstore.pruneUnreferenced` (and
      the tree-object variant) still accept a caller-supplied `referenced`
      list over the shared CAS — delete the RPC or re-route it through the
