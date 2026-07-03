@@ -102,7 +102,11 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       edits: [{ kind: "write", path: file, content: text(body) }],
     });
     await vcs.commit({ head: seedHead, repoPath, message: `advance ${file}`, actor: USER });
-    const pushed = await pushToMain(gad, { repoPaths: [repoPath], sourceHead: seedHead, actor: USER });
+    const pushed = await pushToMain(gad, {
+      repoPaths: [repoPath],
+      sourceHead: seedHead,
+      actor: USER,
+    });
     expect(pushed.status).toBe("pushed");
     await vcs.dropContext(seedId);
   }
@@ -156,14 +160,16 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       "panels/chat",
       "skills/onboarding",
     ]);
-    // First attach adopted every repo main exactly once.
-    expect(before.every((record) => record.seq === 1)).toBe(true);
+    // First attach adopted every repo main to a real content-store value.
+    expect(before.every((record) => /^(state|manifest):/.test(record.stateHash))).toBe(true);
 
-    // Advance one repo through the real push flow (seq 1 → 2), then "restart":
-    // a fresh WorkspaceVcs + fresh RefService over the same durable stores.
+    // Advance one repo through the real push flow, then "restart": a fresh
+    // WorkspaceVcs + fresh RefService over the same durable stores.
     await advanceMain("packages/foo", "index.ts", "export const x = 2;\n");
     const advancedValue = await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo");
-    expect(readRefs().find((record) => record.repoPath === "packages/foo")?.seq).toBe(2);
+    expect(readRefs().find((record) => record.repoPath === "packages/foo")?.stateHash).toBe(
+      advancedValue
+    );
 
     const restarted = new WorkspaceVcs({
       blobsDir: path.join(root, "blobs"),
@@ -174,9 +180,9 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     });
     await restarted.attachGad(callerFor(gad));
 
-    // Seeding on re-attach is a no-op everywhere: same repos, same values,
-    // same seqs — the advanced ref keeps its advanced value (set-if-absent
-    // never rewinds an existing ref).
+    // Seeding on re-attach is a no-op everywhere: same repos, same values —
+    // the advanced ref keeps its advanced value (set-if-absent never rewinds an
+    // existing ref).
     const after = readRefs();
     expect(after).toEqual(
       readRefs().map((record) => record) // stable across consecutive reads
@@ -185,12 +191,12 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       before.map((record) => record.repoPath).sort()
     );
     const foo = after.find((record) => record.repoPath === "packages/foo");
-    expect(foo?.seq).toBe(2);
     expect(foo?.stateHash).toBe(advancedValue);
     for (const record of after) {
       if (record.repoPath !== "packages/foo") {
-        expect(record.seq).toBe(1);
-        expect(record.stateHash).toBe(before.find((b) => b.repoPath === record.repoPath)?.stateHash);
+        expect(record.stateHash).toBe(
+          before.find((b) => b.repoPath === record.repoPath)?.stateHash
+        );
       }
     }
     expect(await restarted.resolveHead(VCS_MAIN_HEAD, "packages/foo")).toBe(advancedValue);

@@ -18,24 +18,6 @@
 
 import { randomUUID } from "node:crypto";
 import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { MainUpdateOperation } from "@vibez1/shared/serviceSchemas/refs";
-
-const MAIN_ADVANCING_VCS_METHODS = {
-  vcsPush: "push",
-  vcsMerge: "merge",
-  vcsImportPublish: "import",
-} as const satisfies Record<string, MainUpdateOperation>;
-
-export function vcsInvocationOperationForMethod(method: string): MainUpdateOperation | null {
-  return MAIN_ADVANCING_VCS_METHODS[method as keyof typeof MAIN_ADVANCING_VCS_METHODS] ?? null;
-}
-
-export function vcsInvocationMethodAllowsOperation(
-  method: string,
-  operation: MainUpdateOperation
-): boolean {
-  return vcsInvocationOperationForMethod(method) === operation;
-}
 
 export interface VcsInvocationRecord {
   token: string;
@@ -47,10 +29,10 @@ export interface VcsInvocationRecord {
   caller: VerifiedCaller;
   /** DO identity the dispatch was routed through (for "via" prompt copy). */
   via: string;
-  /** VCS writer DO method this token was minted for. */
+  /** VCS writer DO method this token was minted for (attribution/prompt copy
+   *  only — it grants no operation-specific authority; the real gate on a main
+   *  advance is the host's own content diff + user consent). */
   method: string;
-  /** The only refs.updateMains operation this token may authorize. */
-  operation: MainUpdateOperation;
   requestId?: string;
   createdAt: number;
 }
@@ -66,21 +48,10 @@ export class VcsInvocationTable {
    * window (CAS-retry); every attempt independently passes the full gate, so
    * multi-presentation adds no authority.
    */
-  mint(input: {
-    caller: VerifiedCaller;
-    via: string;
-    method: string;
-    operation: MainUpdateOperation;
-    requestId?: string;
-  }): {
+  mint(input: { caller: VerifiedCaller; via: string; method: string; requestId?: string }): {
     token: string;
     release: () => void;
   } {
-    if (!vcsInvocationMethodAllowsOperation(input.method, input.operation)) {
-      throw new Error(
-        `Invalid VCS invocation scope: ${input.method} cannot update mains with operation ${input.operation}`
-      );
-    }
     const token = randomUUID();
     this.active.set(token, {
       token,
@@ -88,7 +59,6 @@ export class VcsInvocationTable {
       caller: input.caller,
       via: input.via,
       method: input.method,
-      operation: input.operation,
       ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
       createdAt: Date.now(),
     });

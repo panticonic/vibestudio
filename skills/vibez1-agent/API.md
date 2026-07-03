@@ -344,7 +344,6 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 |--------|-------------|
 | `refs.readMain` | Current record of one repo's protected `main` (repoPath → state), or null when absent. |
 | `refs.listMains` | Every repo's protected `main`, sorted by repoPath. |
-| `refs.readMainLog` | Chronological (oldest→newest) movement log for one repo's `main`; `limit` keeps the newest N entries. `new` is null for a delete entry (`old` is null for a re-creation). |
 
 ## `runtime`
 

@@ -63,7 +63,7 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
   let gad: TestGad;
   let doi: GadWorkspaceDO;
   let refs: ReturnType<typeof createRefService>;
-  let gateCalls: Array<{ operation: string; entries: unknown[]; onBehalfOf: string | null }>;
+  let gateCalls: Array<{ entries: unknown[]; gateContext: unknown }>;
   let buildValidateCalls: number;
   let bridge: GitBridge;
 
@@ -84,9 +84,8 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
       // it flows through here exactly like a push — recorded for assertions.
       gate: async (batch) => {
         gateCalls.push({
-          operation: batch.operation,
           entries: batch.entries,
-          onBehalfOf: batch.onBehalfOf,
+          gateContext: batch.gateContext,
         });
       },
     });
@@ -112,13 +111,15 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
             mode: number;
           }>,
         importPublish: (input) =>
-          (doi as unknown as {
-            vcsImportPublish: (i: unknown) => Promise<{
-              status: "published" | "up-to-date";
-              repoPath: string;
-              stateHash: string;
-            }>;
-          }).vcsImportPublish(input),
+          (
+            doi as unknown as {
+              vcsImportPublish: (i: unknown) => Promise<{
+                status: "published" | "up-to-date";
+                repoPath: string;
+                stateHash: string;
+              }>;
+            }
+          ).vcsImportPublish(input),
       },
       // The bridge's content store IS the host content store the DO reads via
       // attachLocalHostBridges — the same blob dir, so the mirror + publish see
@@ -189,10 +190,14 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
 
     // Main advanced to the imported tree via the gated single-writer path.
     expect(readMain()).toBe(imported.stateHash);
-    // The advance went through the approval gate as an IMPORT operation.
+    // The advance went through the single host approval gate. The host gate is
+    // semantics-free (Phase 5): it no longer classifies "import" — that label is
+    // DO-owned (asserted below via the main log's "Import … from git" summary).
+    // The gate sees the plain CAS shape (a new ref: old null → imported state).
     expect(gateCalls).toHaveLength(1);
-    expect(gateCalls[0]?.operation).toBe("import");
-    expect((gateCalls[0]?.entries as Array<{ repoPath: string; next: string | null }>)[0]).toMatchObject({
+    expect(
+      (gateCalls[0]?.entries as Array<{ repoPath: string; next: string | null }>)[0]
+    ).toMatchObject({
       repoPath: REPO,
       old: null,
       next: imported.stateHash,
@@ -202,18 +207,22 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
     // publish, the main provenance lineage (the DO's recorded main head).
     const staging = doi.resolveWorktreeHead({ logId: LOG, head: STAGING });
     expect(staging?.stateHash).toBe(imported.stateHash);
-    const mainHead = (doi as unknown as {
-      resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
-    }).resolveWorktreeHeadInternal(LOG, "main");
+    const mainHead = (
+      doi as unknown as {
+        resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
+      }
+    ).resolveWorktreeHeadInternal(LOG, "main");
     expect(mainHead?.stateHash).toBe(imported.stateHash);
     const mainLog = doi.vcsLog(REPO, 5, "main");
     expect(mainLog[0]?.outputStateHash).toBe(imported.stateHash);
     expect(mainLog[0]?.summary).toContain(`Import ${REPO} from git`);
 
     // The pending intent completed and was cleared.
-    const pending = (gad.instance as unknown as {
-      sql: { exec: (s: string) => { toArray: () => unknown[] } };
-    }).sql
+    const pending = (
+      gad.instance as unknown as {
+        sql: { exec: (s: string) => { toArray: () => unknown[] } };
+      }
+    ).sql
       .exec("SELECT * FROM gad_publish_intents")
       .toArray();
     expect(pending).toHaveLength(0);
@@ -248,9 +257,10 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
     expect(second.changed).toBe(true);
     expect(second.stateHash).not.toBe(first.stateHash);
     expect(readMain()).toBe(second.stateHash);
-    // Second advance: expectedOld is the previously-published main (FF-CAS).
+    // Second advance: expectedOld is the previously-published main (FF-CAS). The
+    // host gate is semantics-free (no "import" label); the CAS old value is the
+    // observable proof this advanced over the prior published main.
     expect(gateCalls).toHaveLength(2);
-    expect(gateCalls[1]?.operation).toBe("import");
     expect((gateCalls[1]?.entries as Array<{ old: string | null }>)[0]?.old).toBe(first.stateHash);
   });
 
@@ -270,8 +280,6 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
   });
 
   it("the deleted adoptImportedRepo surface no longer resolves", async () => {
-    await expect(
-      gad.callAs("extension", "adoptImportedRepo", REPO)
-    ).rejects.toThrow();
+    await expect(gad.callAs("extension", "adoptImportedRepo", REPO)).rejects.toThrow();
   });
 });

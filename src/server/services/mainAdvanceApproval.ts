@@ -24,10 +24,6 @@ const WORKSPACE_REPO_DELETE_CAPABILITY = "workspace-repo-delete";
 // so it is gated too, but as a standard (recovery) action rather than severe.
 const WORKSPACE_REPO_RESTORE_CAPABILITY = "workspace-repo-restore";
 
-/** The user-visible operations that advance a repo's protected `main` ref.
- *  Import/delete/restore frame as push-class approval at the gate. */
-export type MainAdvanceOperation = "push" | "merge";
-
 /**
  * A candidate protected-ref (`repo` → main) advance awaiting approval. The
  * `changedPaths` are SERVER-COMPUTED (content-store `diffTrees` between the
@@ -36,7 +32,6 @@ export type MainAdvanceOperation = "push" | "merge";
  */
 export interface MainAdvanceApprovalCandidate {
   caller: VerifiedCaller;
-  operation: MainAdvanceOperation;
   /** The repo whose `main` ref is advancing. */
   repoPath: string;
   /** Server-computed changed paths, workspace-rooted. */
@@ -72,7 +67,6 @@ export type RefAdvanceGateContext =
   | {
       kind: "caller";
       caller: VerifiedCaller;
-      operation: MainAdvanceOperation;
       sourceHead?: string;
       /** DO identity the write was dispatched through, for "requested by X via
        *  Y" prompt copy (§4). Never authoritative. */
@@ -145,11 +139,12 @@ export function createMainRefAdvanceGate(deps: {
     const diffReview = perEntry.map((e) => e.review);
 
     for (const { entry, review, changedPaths } of perEntry) {
-      // Classification is DERIVED from the host's own state + ref log — the
-      // caller's claimed `operation` never loosens it (fail closed to the
-      // stricter prompt).
+      // The ONLY host-side classification is a REMOVAL, derived from the host's
+      // own CAS request shape (`next === null`) — never from a caller-supplied
+      // VCS-operation label. Everything else is an ordinary content advance;
+      // the VCS workflow (push/merge/import/restore) lives in the DO.
       if (entry.next === null) {
-        // Delete → severe per-repo deletion capability, inside the batch. The
+        // Removal → severe per-repo deletion capability, inside the batch. The
         // dependents warning (repos whose build breaks) is host-computed from
         // the build dependency graph, exactly like the file count is from the
         // CAS diff (§5) — never caller-supplied.
@@ -166,24 +161,11 @@ export function createMainRefAdvanceGate(deps: {
         });
         continue;
       }
-      if (entry.old === null && entry.priorDeleted) {
-        // Re-creation of a previously deleted repo (host ref log shows the
-        // prior delete) → restore capability.
-        await deps.approvalGate.approveRepoRestore({
-          caller: context.caller,
-          repoPath: entry.repoPath,
-          fileCount: review.diffStat.filesChanged,
-          stateHash: entry.next,
-          diffReview,
-        });
-        continue;
-      }
 
       // Ordinary advance: changed paths are the server-computed tree delta,
       // re-rooted to the repo (never anything the caller proposed).
       await deps.approvalGate.approve({
         caller: context.caller,
-        operation: context.operation,
         repoPath: entry.repoPath,
         changedPaths,
         stateHash: candidateView,
@@ -727,7 +709,7 @@ async function approveWorkspaceMainAdvance(
       },
       operation: {
         kind: "workspace",
-        verb: operationLabel(candidate.operation),
+        verb: "update workspace main",
         object: {
           type: "vcs-head",
           label: "Head",
@@ -816,19 +798,18 @@ function metaChangeDescription(units: UnitBatchEntry[]): string {
     : "This push edits sensitive workspace configuration.";
 }
 
-function mainAdvanceTitle(candidate: MainAdvanceApprovalCandidate): string {
-  return candidate.operation === "merge" ? "Merge into workspace main" : "Push workspace changes";
+function mainAdvanceTitle(_candidate: MainAdvanceApprovalCandidate): string {
+  return "Update workspace main";
 }
 
 function mainAdvanceDescription(candidate: MainAdvanceApprovalCandidate): string {
-  return `This ${operationLabel(candidate.operation)} moves workspace main and changes ${pathCountSummary(candidate.changedPaths)}.`;
+  return `This advance moves workspace main and changes ${pathCountSummary(candidate.changedPaths)}.`;
 }
 
 function mainAdvanceDetails(
   candidate: MainAdvanceApprovalCandidate
 ): Array<{ label: string; value: string }> {
   return [
-    { label: "Operation", value: operationLabel(candidate.operation) },
     { label: "Repo", value: candidate.repoPath },
     ...(candidate.via ? [{ label: "Via", value: candidate.via }] : []),
     ...(candidate.sourceHead ? [{ label: "Source", value: candidate.sourceHead }] : []),
@@ -859,15 +840,6 @@ async function resolveBuildStatusLine(
   }
   if (!status || !status.validated) return "not validated";
   return status.failed ? "failed" : "ok";
-}
-
-function operationLabel(operation: MainAdvanceOperation): string {
-  switch (operation) {
-    case "push":
-      return "vcs push";
-    case "merge":
-      return "vcs merge";
-  }
 }
 
 function pathCountSummary(paths: string[]): string {

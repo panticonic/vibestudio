@@ -11,7 +11,7 @@ import * as path from "node:path";
 
 import { WorktreeStore } from "../vcsHost/worktreeStore.js";
 import { DiskProjector } from "../vcsHost/diskProjector.js";
-import { VCS_MAIN_HEAD } from "../vcsHost/paths.js";
+import { VCS_ACTIVE_CONTEXT_HEAD } from "../vcsHost/paths.js";
 import { createWorktreeService } from "./worktreeService.js";
 
 const REPO = "packages/demo";
@@ -60,7 +60,12 @@ describe("worktree.scan primitive", () => {
       },
     });
 
-    const result = (await service.handler({} as never, "scan", [REPO, VCS_MAIN_HEAD])) as {
+    // D1/D2: the scan targets the ACTIVE context head (`ctx:workspace`), whose
+    // checkout is the workspace root; `main` is a pure ref with no working tree.
+    const result = (await service.handler({} as never, "scan", [
+      REPO,
+      VCS_ACTIVE_CONTEXT_HEAD,
+    ])) as {
       stateHash: string;
       files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
     };

@@ -25,7 +25,11 @@ import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
-import { createRefService, type RefGateBatch, type RefGate } from "../../../src/server/services/refService.js";
+import {
+  createRefService,
+  type RefGateBatch,
+  type RefGate,
+} from "../../../src/server/services/refService.js";
 import {
   createMainAdvanceApprovalGate,
   createMainRefAdvanceGate,
@@ -72,7 +76,7 @@ function panelCaller() {
 }
 
 function callerAdvance(sourceHead: string): RefAdvanceGateContext {
-  return { kind: "caller", caller: panelCaller(), operation: "push", sourceHead };
+  return { kind: "caller", caller: panelCaller(), sourceHead };
 }
 
 class MemoryGrantStore implements MetaApprovalGrantStore {
@@ -143,7 +147,11 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
     const seedHead = vcsContextHead("__seed__");
     await vcs.recordEdit({ head: seedHead, repoPath, edits, actor: USER });
     await vcs.commit({ head: seedHead, repoPath, message: "seed", actor: USER });
-    const pushed = await pushToMain(gad, { repoPaths: [repoPath], sourceHead: seedHead, actor: USER });
+    const pushed = await pushToMain(gad, {
+      repoPaths: [repoPath],
+      sourceHead: seedHead,
+      actor: USER,
+    });
     expect(pushed.status).toBe("pushed");
     await vcs.dropContext("__seed__");
     const main = await vcs.resolveHead(VCS_MAIN_HEAD, repoPath);
@@ -297,7 +305,6 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
 
     expect(approvals).toHaveLength(1);
     const candidate = approvals[0]!;
-    expect(candidate.operation).toBe("push");
     expect(candidate.repoPath).toBe(REPO);
     // Exactly the two files the trees differ by — workspace-rooted, computed
     // by the server's diffTrees (stay.txt untouched, so absent).

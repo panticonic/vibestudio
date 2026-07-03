@@ -64,7 +64,6 @@ import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
 import type { ClientPlatform } from "@vibez1/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import { vcsInvocationOperationForMethod } from "./services/vcsInvocationTable.js";
 
 const log = createDevLogger("RpcServer");
 const RPC_RUNTIME_ID_HEADER = "x-vibez1-runtime-id";
@@ -2820,20 +2819,20 @@ export class RpcServer {
     // relayed call settles, so later replay fails closed.
     const vcsWriterIdentity = this.deps.getVcsWriterIdentity?.() ?? null;
     const targetsVcsWriter = vcsWriterIdentity !== null && targetId === vcsWriterIdentity;
-    const vcsOperation = targetsVcsWriter ? vcsInvocationOperationForMethod(method) : null;
-    const vcsInvocations =
-      vcsOperation !== null && targetsVcsWriter ? this.deps.vcsInvocations : undefined;
-    const invocation =
-      vcsInvocations && vcsOperation !== null
-        ? vcsInvocations.mint({
-            caller:
-              relayCallerScope?.invocationCaller ?? this.verifiedCallerFor(callerId, callerKind),
-            via: targetId,
-            method,
-            operation: vcsOperation,
-            ...(meta?.requestId ? { requestId: meta.requestId } : {}),
-          })
-        : null;
+    // The token is a method-agnostic host-resolved principal handle (the host no
+    // longer classifies a VCS operation from the method — that semantics moved to
+    // the DO). Mint it for every dispatch routed to the writer DO; the `method`
+    // rides along for attribution/prompt copy only and grants no authority.
+    const vcsInvocations = targetsVcsWriter ? this.deps.vcsInvocations : undefined;
+    const invocation = vcsInvocations
+      ? vcsInvocations.mint({
+          caller:
+            relayCallerScope?.invocationCaller ?? this.verifiedCallerFor(callerId, callerKind),
+          via: targetId,
+          method,
+          ...(meta?.requestId ? { requestId: meta.requestId } : {}),
+        })
+      : null;
     // Source-head confinement (register row 11): thread the caller's
     // HOST-RESOLVED context registration id alongside the token so the writer DO
     // can reject a sandboxed push proposing a FOREIGN `ctx:` source head. Never

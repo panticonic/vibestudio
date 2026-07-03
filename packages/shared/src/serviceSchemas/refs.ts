@@ -5,10 +5,12 @@
  * The host tracks exactly one canonical `main` state per repo path. There is no
  * generic `(repo, ref)` namespace and no public arbitrary-tree `advanceRef`
  * (deleted in the narrow-host-vcs P1 — see docs/narrow-host-vcs-plan.md §2.1):
- * the only write is `updateMains`, an atomic group compare-and-swap restricted
- * to the single VCS writer (the gad-store DO backing the workspace `vcs`
- * service declaration). Reads (`readMain`/`listMains`/`readMainLog`) are plain
- * lookups available to any caller who can hold source.
+ * the only write is `updateMains`, a semantics-free atomic group
+ * compare-and-swap restricted to the single VCS writer (the gad-store DO
+ * backing the workspace `vcs` service declaration). It carries NO VCS-operation
+ * label, reason, or movement log — provenance lives in the DO
+ * (narrow-host-boundary-refactor Phase 5). Reads (`readMain`/`listMains`) are
+ * plain lookups available to any caller who can hold source.
  */
 
 import { z } from "zod";
@@ -36,39 +38,8 @@ export const MainRefRecordSchema = z.object({
   repoPath: z.string(),
   stateHash: RefValueSchema,
   updatedAt: z.number(),
-  seq: z.number().int(),
 });
 export type MainRefRecord = z.infer<typeof MainRefRecordSchema>;
-
-/** How a batch of main movements is framed (approval copy + log). `merge`
- *  records a main-target merge published by the VCS writer DO. A `delete` batch
- *  removes mains (`next: null`); `restore` re-creates a previously deleted
- *  repo's main (`expectedOld: null` on a repo whose host ref log shows a prior
- *  delete). */
-export const MAIN_UPDATE_OPERATIONS = ["push", "merge", "import", "delete", "restore"] as const;
-export const MainUpdateOperationSchema = z.enum(MAIN_UPDATE_OPERATIONS);
-export type MainUpdateOperation = z.infer<typeof MainUpdateOperationSchema>;
-
-/**
- * One entry in the per-repoPath main-movement log. `new` is NULLABLE: a delete
- * records `new: null` and a subsequent re-creation records `old: null` — which
- * is exactly what the gate's log-derived restore classification reads (§5).
- * `writer` is the DO/principal that performed the CAS; `onBehalfOf` is the
- * host-resolved originating principal (from the invocation-token table, §4)
- * when the write was dispatched on behalf of an upstream caller.
- */
-export const MainRefLogEntrySchema = z.object({
-  repoPath: z.string(),
-  seq: z.number().int(),
-  old: RefValueSchema.nullable(),
-  new: RefValueSchema.nullable(),
-  writer: z.string(),
-  onBehalfOf: z.string().nullable().optional(),
-  reason: z.string(),
-  operation: MainUpdateOperationSchema,
-  timestamp: z.number(),
-});
-export type MainRefLogEntry = z.infer<typeof MainRefLogEntrySchema>;
 
 /** One repo's requested main movement. `next: null` deletes the main. */
 export const MainUpdateEntrySchema = z.object({
@@ -82,9 +53,6 @@ export type MainUpdateEntry = z.infer<typeof MainUpdateEntrySchema>;
 
 export const updateMainsInputSchema = z.object({
   entries: z.array(MainUpdateEntrySchema).min(1),
-  /** Human-readable reason recorded in every touched repo's main log. */
-  reason: z.string().max(2000).optional(),
-  operation: MainUpdateOperationSchema,
   /**
    * On-behalf-of correlation nonce (§4). NOT a credential: an opaque handle the
    * host resolves against its own invocation table to attribute this write to
@@ -98,9 +66,8 @@ export const UpdateMainsResultSchema = z.object({
   updated: z.array(
     z.object({
       repoPath: z.string(),
-      /** null = the main was deleted. */
+      /** null = the main was removed. */
       stateHash: RefValueSchema.nullable(),
-      seq: z.number().int(),
     })
   ),
 });
@@ -123,27 +90,14 @@ export const refsMethods = defineServiceMethods({
     policy: REFS_POLICY,
     access: READ_ACCESS,
   },
-  readMainLog: {
-    description:
-      "Chronological (oldest→newest) movement log for one repo's `main`; `limit` keeps the newest N " +
-      "entries. `new` is null for a delete entry (`old` is null for a re-creation).",
-    args: z.tuple([
-      z.object({
-        repoPath: z.string().min(1),
-        limit: z.number().int().positive().optional(),
-      }),
-    ]),
-    returns: z.array(MainRefLogEntrySchema),
-    policy: REFS_POLICY,
-    access: READ_ACCESS,
-  },
   updateMains: {
     description:
-      "Atomic group compare-and-swap over protected `main` refs. Every entry validates " +
+      "Semantics-free atomic group compare-and-swap over protected `main` refs. Every entry validates " +
       "(`expectedOld` matches current, null = must-not-exist) under one critical section; the batch " +
-      "persists in ONE atomic file replace. `next: null` deletes a main. Any per-entry conflict fails " +
-      "the whole batch with structured per-entry data. Approval-gated and restricted to the single " +
-      "VCS-DO writer (§3): every other caller gets a structured policy rejection.",
+      "persists in ONE atomic file replace. `next: null` removes a main. Any per-entry conflict fails " +
+      "the whole batch with structured per-entry data. Host-approval-gated (the host computes the " +
+      "content diff itself, D3) and restricted to the single VCS-DO writer (§3): every other caller " +
+      "gets a structured policy rejection.",
     args: z.tuple([updateMainsInputSchema]),
     returns: UpdateMainsResultSchema,
     policy: UPDATE_MAINS_POLICY,
