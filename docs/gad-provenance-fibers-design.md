@@ -1,6 +1,8 @@
 # GAD Provenance Graph — Design Spec
 
-Status: proposal, v2 (reformulated 2026-07 after the per-repo VCS rework landed).
+Status: proposal, v3 (2026-07-03: v2 rebased onto the narrow-host VCS split in
+progress in the main worktree — see §0.1; handoff to that workstream in
+`docs/gad-provenance-handoff-2026-07.md`).
 Pre-release; **no backward compatibility** — schema is reset on bump
 (`GadWorkspaceDO.dropPersistenceTables`), so we add/rename freely.
 
@@ -36,9 +38,9 @@ gap"). The per-repo VCS rework (`25ef96f5`, `f8cc1281`) replaced that world:
 1. **The keystone edge is now native.** `gad_worktree_edit_ops` carries
    `actor_id`/`actor_json` (verified caller, always populated), `invocation_id`
    (live end-to-end: the agent `edit`/`write` tools pass `toolCallId` —
-   `harness/src/tools/edit.ts:131`, `write.ts:47`), and turn **by join**
-   (`edit_ops.invocation_id → trajectory_invocations.turn_id`, the single
-   source of truth — `editsByTurn`). "Which invocation/turn produced this edit"
+   `workspace/packages/harness/src/tools/edit.ts`, `write.ts`), and turn **by
+   join** (`edit_ops.invocation_id → trajectory_invocations.turn_id`, the
+   source of truth; the rows also carry a denormalized `turn_id` — §2). "Which invocation/turn produced this edit"
    no longer needs new infrastructure.
 2. **Edits are working rows until committed.** `vcs.edit` records uncommitted
    ops (`committed_event_id IS NULL`, no log event, no state mint); `vcs.commit`
@@ -48,7 +50,8 @@ gap"). The per-repo VCS rework (`25ef96f5`, `f8cc1281`) replaced that world:
    **mandatory** — a new, free semantic signal v1 never had.
 3. **Per-repo logs.** Every repo has its own log `vcs:repo:<path>` with heads
    `main` / `ctx:<contextId>`; the workspace view is a composition
-   (`composeRepoStates`) over a durable context base pin (`vcs_context_bases`).
+   (`composeRepoStates`, now `composeRepoStatesMirrored` in the DO) over a
+   durable context base pin (`vcs_context_bases`).
    `VCS_LOG_ID` is gone. Commit ancestry is **event-keyed**
    (`gad_worktree_heads.commit_event_id`, `gad_transition_parents.parent_event_id`,
    `commitAncestors`) so identical content states from distinct commits don't
@@ -80,6 +83,49 @@ Everything else in this spec is the v1 architecture rebased onto that
 foundation, with the new signals (commit messages, working-vs-committed
 distinction) folded in.
 
+### 0.1 The narrow-host split (v3 rebase, 2026-07)
+
+Between v2 and v3, the main worktree began landing the **narrow-host VCS
+split** (`docs/narrow-host-vcs-plan.md`): the host VCS (`src/server/gadVcs/`)
+is deleted; semantics move to a pure `workspace/packages/vcs-engine/`
+(EditEngine, MergeEngine, diff3) plus the gad-store DO, which now owns
+edit/commit composition, ctx-head merges, and all history reads; the host
+shrinks to `src/server/vcsHost/` — a mains-only ref table
+(`refs.updateMains`, batch CAS, single-writer = the gad-store DO), a
+host-minted invocation-token table for on-behalf-of attribution, build as a
+service, a batch approval gate with a diff-review UI, and disk projection.
+Audit of the working tree (2026-07-03): P1/P2/P3.5 and the P5b/c/d semantics
+migration are substantially landed; **P3 has not flipped** (host push
+pipeline, `ProvenanceFollower`, after-the-fact provenance recording still
+live); P4/P5 not started.
+
+Consequences for this spec, folded in throughout:
+
+- **The substrate survives.** Every §2 ground-truth structure made the move
+  intact: `gad_worktree_edit_ops` (all columns), commit-by-re-key,
+  `IngestWorktreeStateInput.editOps`, event-keyed ancestry, the history
+  surfaces (now userland-dispatched DO RPCs `vcsFileHistory`,
+  `vcsEditsBy*`, …), mandatory messages, per-repo logs, `gad_claims`,
+  `gad_memory_fts`.
+- **Renamed seams**: `buildEditOpRows` → `EditEngine.applyEditOps`
+  (`vcs-engine/src/editEngine.ts`); `insertWorkingEditOps` →
+  `insertWorkingEditRows` (gad-store DO); `commitRepo` → `commitWorking`;
+  `diff3Merge` → `vcs-engine/src/diff3.ts` (a pure package — which makes U3
+  easier, not harder); agent tools →
+  `workspace/packages/harness/src/tools/edit.ts` / `write.ts`.
+- **The whole graph is now one-DO-local.** History reads, claims, FTS, and
+  the touches table all live in the gad-store DO — §6's density query and
+  §9's views need no host round-trips. §7.2's parallel-read gotcha stands
+  unchanged (content bytes stay on the fs/host side).
+- **A new native signal exists**: the host **main-ref log** (`writer`,
+  token-resolved `onBehalfOf`, `reason`, `operation`, nullable `new`) is
+  host-verified provenance for every main movement — stronger than anything
+  the DO records; the graph adopts it for main-advance attribution (§2).
+- **Sequencing is now coupled to P3** (§11): main-advance/merge provenance
+  moves from the host follower into the DO in P3, and U1–U3 are specified
+  against that post-P3 world. They should be contributed *into* P3, not
+  retrofitted after it.
+
 ## 1. Goals
 
 1. **Blame that works in production** — for any file/line/head, recover which
@@ -106,13 +152,16 @@ distinction) folded in.
   rows: `kind` (`replace|write|create|delete|chmod`), `path` (repo-relative),
   `old_content_hash`/`new_content_hash`, `hunks_json` (offset ranges; auto-diffed
   for text writes), `actor_id`/`actor_json`, `invocation_id` (self-asserted
-  `toolCallId` from the agent tools), `edit_seq`/`ordinal` (replay order),
+  `toolCallId` from the agent tools), `turn_id` (denormalized at write),
+  `edit_seq`/`ordinal` (replay order),
   `committed_event_id`/`committed_seq`/`output_state_hash` (NULL while working;
-  stamped by `commitRepo`'s re-key on commit). Indexes exist for path-in-lineage
-  order, actor, turn, and invocation lookups.
-- **Turn is derived, never stored on the edit**: `invocation_id →
-  trajectory_invocations(turn_id, log_id, head)`. This also yields the edit's
-  **session** (trajectory branch) — no session column needed on edit ops.
+  stamped by `commitWorking`'s re-key on commit). Indexes exist for
+  path-in-lineage order, actor, turn, and invocation lookups.
+- **Turn's source of truth is the join**: `invocation_id →
+  trajectory_invocations(turn_id, log_id, head)`. The stored `turn_id` column
+  is a write-time denormalization (v3 amendment: the narrow-host substrate
+  stamps it; the join stays authoritative and yields the edit's **session**
+  (trajectory branch) — no session column needed on edit ops).
 - **Commit ancestry is event-keyed**: `commitAncestors` walks
   `gad_transition_parents.parent_event_id` from `gad_worktree_heads
   .commit_event_id`. `fileHistory` orders committed ops by that traversal and
@@ -127,10 +176,19 @@ distinction) folded in.
   `gad_memory_fts` — but **no tool emits the events**. We add producers (§8).
 - **FTS recall exists**: `gad_memory_fts` (claims, messages, committed files)
   behind `vcs.recall`. Commit messages are **not yet indexed** (§10 tweak T3).
+  File indexing is now split: the host decodes bytes and calls the DO's
+  `indexMemoryFiles`; `memidx:` markers live DO-side (bears on U5).
 - **File reads are recorded nowhere.** The dead `gad_file_observations` /
   `gad_file_mutations` / `gad_file_change_hunks` projections, their
-  `state.file_*` event kinds, and `blameGadFileSnippet` are deleted (schema
-  v22). Reads get a soft signal (§4), not a log event.
+  `state.file_*` event kinds, and `blameGadFileSnippet` are slated for
+  deletion with the bang (the narrow-host tree still carries and GC-references
+  them). Reads get a soft signal (§4), not a log event.
+- **Main movement has a host-verified record (new in v3).** The host main-ref
+  log (`writer`, token-resolved `onBehalfOf`, `reason`, `operation`, nullable
+  `old`/`new`) is authoritative attribution for every push/merge/delete/
+  restore of a main — the DO reads it through the refs bridge. The graph uses
+  it for main-advance attribution; it complements, never replaces, the
+  self-asserted edit-time `invocation_id`.
 
 ## 3. Anchors
 
@@ -247,9 +305,10 @@ commit and its mandatory message.
 **Line-level blame is an interval problem in offset space**, and offset
 composition is only correct if each op's base **is** the previous op's output.
 Today that chain holds within a head (working edits are CAS-serialized and
-`buildEditOpRows` derives `old_content_hash` from the composed map) but has two
-genuine holes: **merge commits record no per-file ops at all** (the merge path
-goes through `snapshotDir` → ingest with no `editOps`), and nothing *enforces*
+`EditEngine.applyEditOps` derives `old_content_hash` from the composed map)
+but has two genuine holes: **merge commits record no per-file ops at all**
+(host-side merge/heal ingests carry no `editOps`, and the DO's `vcsMerge`
+clean-commit path needs the same verification), and nothing *enforces*
 continuity where ops are supplied to an ingest. We do not work around those
 holes with query-time content-diff fallbacks — **we close them in the VCS**, so
 the chain is total by construction and blame is exact:
@@ -258,11 +317,17 @@ the chain is total by construction and blame is exact:
 
 - **U1 — hunk completeness invariant.** Every edit op that mutates an existing
   **text** file carries `hunks_json` — enforced at insert time in the store
-  (`insertWorkingEditOps` and the ingest `editOps` path), not left to caller
+  (`insertWorkingEditRows` and the ingest `editOps` path), not left to caller
   goodwill. `hunks_json IS NULL` is legal only for `create`, `delete`, `chmod`,
-  and binary content, and binary is **marked explicitly** on the row so blame
-  can distinguish "no line structure" from "missing data". A violating insert
-  is rejected loudly.
+  binary content, and **explicitly-marked synthetic ops** (below), and binary
+  is **marked explicitly** on the row so blame can distinguish "no line
+  structure" from "missing data". A violating insert is rejected loudly.
+  **Synthetic carve-out (v3):** the narrow-host P3 crash-heal keeps a degraded
+  fallback — a main matching no recorded publish intent is caught up by a
+  synthetic ingest of the ref's tree, which cannot carry true hunks. Those ops
+  are **stamped synthetic on the row**; blame (§5.2) and the U2 integrity
+  chain check treat them as chain restarts (like `create`), never as silent
+  gaps and never as integrity failures.
 - **U2 — chain continuity invariant.** An op's `old_content_hash` must equal
   the path's content at its base: for working rows this is already structural
   (the composed working map produces it — assert it anyway); for ingest-supplied
@@ -271,10 +336,12 @@ the chain is total by construction and blame is exact:
   per-path chain check — walking each path's first-parent lineage,
   `op[k+1].old_content_hash == op[k].new_content_hash` — so a broken chain is a
   loud integrity failure, never a silent mis-blame.
-- **U3 — provenance-preserving merges.** `diff3Merge` already computes the full
-  base/ours/theirs chunk alignment internally and throws it away, returning
-  only merged text. Extend it to also return **merge hunks against the OURS
-  side**, each annotated with origin: `{start, end, newText, origin:
+- **U3 — provenance-preserving merges.** `diff3Merge` (now
+  `vcs-engine/src/diff3.ts` — a pure package, so this change is clean and
+  host-free) already computes the full base/ours/theirs chunk alignment
+  internally and throws it away, returning only merged text. Extend it (and
+  `MergeEngine`'s per-file results) to also return **merge hunks against the
+  OURS side**, each annotated with origin: `{start, end, newText, origin:
   "theirs" | "resolved", theirsStart?, theirsEnd?}` — a region theirs changed
   and ours didn't is a `theirs` hunk carrying its source range in the other
   parent's content; a conflict the agent resolved is `resolved` (authored by
@@ -282,8 +349,11 @@ the chain is total by construction and blame is exact:
   base/ours/theirs per file, so this is recording what it already knows. The
   merge ingest then passes these as `editOps` (`old_content_hash` = ours,
   `new_content_hash` = merged — satisfying U2 against the first parent), using
-  the `IngestWorktreeStateInput.editOps` path that already exists. Merges stop
-  being blame holes; they become exactly-routable nodes.
+  the `IngestWorktreeStateInput.editOps` path that already exists. This
+  applies to **both** merge sites in the narrow-host world: the DO's
+  `vcsMerge` (ctx-head merges, P5d — verify its clean-merge commits record
+  ops at all) and the P3 gad push/merge orchestration. Merges stop being
+  blame holes; they become exactly-routable nodes.
 
 ### 5.2 The blame algorithm (exact, no fallback)
 
@@ -307,10 +377,13 @@ the chain is total by construction and blame is exact:
    contexts commit to the same per-repo log, so the other branch's ops are
    present with their true authors — routing terminates at a `create` or at
    lines older than the log.
-4. **Semantic stops only.** `create` and binary ops end the walk because
-   identity genuinely begins there — the only remaining "barriers" are true
-   ones. There is **no content-diff fallback**: U1–U3 make the chain total,
-   and a gap is an integrity bug to fix, not a case to paper over.
+4. **Semantic stops only.** `create`, binary ops, and **synthetic ops** (the
+   marked crash-heal catch-up ingests, U1) end the walk because identity
+   genuinely begins (or provably restarts) there — the only remaining
+   "barriers" are true ones, and a synthetic stop reports itself as degraded
+   rather than blaming the healing actor. There is **no content-diff
+   fallback**: U1–U3 make the chain total, and an unmarked gap is an
+   integrity bug to fix, not a case to paper over.
 
 Bounded per-file computation at query time — O(ops reachable for this path),
 not stored state. Non-agent ops blame to actor + commit with no producing
@@ -679,15 +752,19 @@ substrate where it falls short rather than working around it — four tool/servi
 seams (T1–T4) and five store/merge/recall upgrades (U1–U3 specified in §5.1;
 U4–U5 below):
 
-- **T1 — commit causality.** The `vcs.commit` service handler passes neither
+- **T1 — commit causality.** The `vcs.commit` schema carries neither
   `invocationId` nor `turnId`, so the commit _event_ is attributable only
   through its ops. Thread the committing tool-call id through `commit` →
-  `commitRepo` → the ingest's `causality_json`, same self-asserted pattern as
-  `vcs.edit`. (Ops keep their own invocations through the re-key; this is about
-  blaming the commit itself, e.g. for merge/empty commits.)
-- **T2 — keep invocation stamping mechanical.** `edit.ts`/`write.ts` pass
-  `toolCallId` by hand today. Move the stamp into the shared tool-executor
-  wrapper so a future tool cannot forget it — mechanism over discipline.
+  `commitWorking` → the ingest's causality, same self-asserted pattern as
+  `vcs.edit`. (Ops keep their own invocations through the re-key; this is
+  about blaming the commit itself, e.g. for merge/empty commits.) **v3
+  timing:** cheapest folded into the narrow-host P3, which reopens the commit
+  schema anyway — flagged in the handoff (A2).
+- **T2 — keep invocation stamping mechanical.**
+  `workspace/packages/harness/src/tools/edit.ts`/`write.ts` pass `toolCallId`
+  by hand today (the executor supplies it positionally; each tool opts in).
+  Move the stamp into the shared tool-executor wrapper so a future tool
+  cannot forget it — mechanism over discipline.
 - **T3 — index commit messages into `gad_memory_fts`** (`kind='commit'`,
   anchored to the commit event id) at commit-projection time, so the mandatory
   messages join the recall leg. They are the cheapest high-quality semantic
@@ -704,37 +781,48 @@ U4–U5 below):
   `diff3Merge` returns origin-annotated merge hunks vs ours and the merge
   ingest records them as `editOps`. These modify the VCS substrate itself —
   the plan upgrades the system rather than working around it.
-- **U4 — owner-derived blob pruning.** The VCS file CAS and the general
-  blobstore are **the same directory** (`getUserDataPath()/blobs` — wired to
-  both `WorkspaceVcs` and `blobstoreService`), holding GAD file versions,
-  spilled log-event payloads (whose references live in the gad-store DO's
-  `log_blob_refs`), and ad-hoc userland blobs. `blobstore.pruneUnreferenced`
-  deletes anything not in a **caller-supplied** `referenced` list — a loaded
-  gun next to the memory system: a pruner that doesn't collect the gad-store's
-  live digests deletes spilled `request`/`result`/`output` payloads that
-  durable log events still reference (hydration then fails) and can orphan
-  every FTS anchor (recall keeps its text copy and confidently hands out
-  handles that dangle — the trust-eroding failure the attachment cannot
-  afford). Nothing calls it automatically today, so the trap is latent — and
-  it gets defused now, in the bang: pruning becomes a **server-driven
-  mark-and-sweep whose referenced set is assembled from the owners** — the
-  gad-store's `log_blob_refs` + manifest/file-version digests +
-  working-edit `new_content_hash`es (exported by the DO, which already has the
-  GC machinery for this) unioned with VCS state reachability — with a creation
-  grace window, same shape as `runGadGc`. A caller-supplied `referenced` list
-  is never authority over the shared CAS.
-- **U5 — fail-loud file indexing.** `indexRepoFiles` currently skips a missing
-  CAS blob (`!bytes → continue`) and then advances the `memidx:` marker
-  unconditionally — a transient miss permanently un-indexes that file version
-  (the marker-equality fast path never revisits it) with no trace. Missing
-  blobs **abort the pass** so it retries on the next advance, and every skip
-  (256KB cap, binary sniff) is logged — no silent caps. Two adjacent seams
-  land with it: `rebuildTrajectoryProjections` triggers a file reindex kick
-  (replay wipes the `memidx:` markers but nothing re-runs the pass until the
-  next per-repo `main` advance or server restart — an empty-file-recall window
-  the recall leg must not have), and `recallMemory` dedups published copies
-  (a `message.completed` projected on both the trajectory and channel logs
-  indexes once per log and returns duplicate hits for the same text).
+- **U4 — owner-derived blob pruning (v3: half-landed upstream, one live
+  hole).** The VCS file CAS and the general blobstore are **the same
+  directory**, holding GAD file versions, spilled log-event payloads
+  (referenced by the gad-store DO's `log_blob_refs`), and ad-hoc userland
+  blobs. The narrow-host tree already ships the server-driven shape v2 asked
+  for: `VcsGcScheduler` runs hourly with a 24h min-age, rooting on mains
+  reachability unioned with the DO's `runGadGcMark().liveBlobDigests`. What
+  remains of U4:
+  1. **Close the working-edit hole — urgent, pre-bang.** `runGadGcMark`'s
+     live set is the union of `gad_file_versions` + `log_blob_refs` +
+     mutations + observations; it does **not** include
+     `gad_worktree_edit_ops.new_content_hash`, and working-edit bytes reach
+     the host CAS with no `gad_file_versions` row until commit — so an
+     uncommitted edit older than the min-age can have its content swept and
+     the eventual commit dangles. Add uncommitted edit-op hashes (new and
+     old) to the mark union. Flagged as A1 in the handoff; fix belongs
+     upstream regardless of this plan's timeline.
+  2. **Demote the caller-supplied list.** `blobstore.pruneUnreferenced` (and
+     the tree-object variant) still accept a caller-supplied `referenced`
+     list over the shared CAS — delete the RPC or re-route it through the
+     owner-derived root set. A caller-supplied list is never authority.
+  3. **Align with P4.** The narrow-host plan's gad-declared pin/unpin root
+     surface (for staging lineages, archives, pending intents) subsumes the
+     rest of v2's U4 when it lands; until then the DO-mark union is the
+     mechanism.
+- **U5 — fail-loud file indexing (v3: seam moved, bug confirmed live).**
+  Indexing is now split — the host decodes bytes and calls the DO's
+  `indexMemoryFiles`; markers live DO-side — but the host half
+  (`src/server/vcsHost/workspaceVcs.ts`, `indexRepoFiles`) still skips a
+  missing CAS blob (`!bytes → continue`) and then advances the `memidx:`
+  marker unconditionally — a transient miss permanently un-indexes that file
+  version (the marker-equality fast path never revisits it) with no trace.
+  Missing blobs **abort the pass** so it retries on the next advance, and
+  every skip (size cap, binary sniff) is logged — no silent caps. Flagged as
+  A4 in the handoff (cheapest fixed upstream while that code is fresh). Two
+  adjacent seams land with it: `rebuildTrajectoryProjections` triggers a file
+  reindex kick (replay wipes the `memidx:` markers but nothing re-runs the
+  pass until the next per-repo `main` advance or server restart — an
+  empty-file-recall window the recall leg must not have), and `recallMemory`
+  dedups published copies (a `message.completed` projected on both the
+  trajectory and channel logs indexes once per log and returns duplicate hits
+  for the same text).
 
 Explicitly **not** tweaked: `invocation_id` stays self-asserted (the DO cannot
 verify a tool-call id; pre-release this is fine and T2 makes it mechanical);
@@ -751,7 +839,19 @@ has no silent spill hole by construction.
 Everything ships together, in one schema bump, as a single coherent system. No
 value gates, no bake-offs, no interim milestones: the differentiator is the
 whole loop (blame → claims → density-ranked recall → read attachment), and it
-is built and landed as one. The workstreams below are a decomposition for
+is built and landed as one.
+
+**v3 sequencing constraint: the bang lands after (or inside) the narrow-host
+P3.** P3 moves main-advance/merge provenance from the host
+`ProvenanceFollower` into the DO (write-ahead publish intents) and deletes the
+host push pipeline — the exact substrate U1–U3 bind to. Building the blame
+invariants against the follower now means building against code scheduled for
+deletion; instead, U1–U3 (and T1) are contributed *into* P3 via the handoff
+(`docs/gad-provenance-handoff-2026-07.md`, items A2/A3). Two handoff items are
+pre-bang and independent of our timeline: the GC working-edit hole (A1 — the
+urgent half of U4) and the index-marker fix (A4 — the upstream half of U5).
+
+The workstreams below are a decomposition for
 implementation order within the bang, not release phases — nothing is "done"
 until all of them are:
 
@@ -801,11 +901,13 @@ Resolved (locked for the build):
 - **Anchors:** commits are identified by **event id**, never state hash.
 - **Blame is exact, by invariant — not best-effort.** The hunk chain is total
   by construction (U1 completeness + U2 continuity, enforced at insert/ingest
-  and checked by `checkGadIntegrity`); merges are provenance-preserving nodes
-  (U3 origin-annotated hunks), not barriers; line blame = offset-space
-  composition along the first-parent chain with merge routing (§5.2). There is
-  no query-time content-diff fallback — a chain gap is an integrity bug, not a
-  case.
+  and checked by `checkGadIntegrity` — which today has no edit-op referential
+  checks at all; the chain check is net-new); merges are provenance-preserving
+  nodes (U3 origin-annotated hunks), not barriers; line blame = offset-space
+  composition along the first-parent chain with merge routing (§5.2).
+  Semantic stops are `create`, binary, and marked-synthetic crash-heal ops —
+  there is no query-time content-diff fallback; an unmarked chain gap is an
+  integrity bug, not a case.
 - **Soft touches are session-anchored** (session → file/claim) — an
   invocation-keyed edge could never coalesce since every read is a fresh
   invocation; `last_invocation_id` is a column, not the key.
@@ -846,7 +948,10 @@ Resolved (locked for the build):
 - **Determinism:** native graph is mechanism-derived and integrity-covered;
   the soft layer is explicitly non-deterministic and outside integrity/replay.
 - **No `included`, no `probed`, no self-reinforcement from showing.**
-- **Turn is derived** (invocation → trajectory join), never stored on edges.
+- **Turn's source of truth is the join** (invocation → trajectory); the
+  substrate's stored `turn_id` on edit-op rows is a write-time
+  denormalization, never authoritative. No turn/session columns on any edge
+  this plan adds.
 
 Remaining knobs (set defaults now, tune on real logs): λ and `K`/`M`/`N`; kind
 weights and `w_sim`/`w_prov`; the `hits` curve (default `sqrt`); whether the
