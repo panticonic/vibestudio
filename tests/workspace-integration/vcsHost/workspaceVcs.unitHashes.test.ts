@@ -47,7 +47,7 @@ function callerFor(gad: TestGad): GadCaller {
 
 /**
  * Reference unit hashes: the DO's durable per-repo `main` listings (recorded
- * through the direct provenance ingest — drained first), re-rooted under
+ * synchronously by the DO's publish path), re-rooted under
  * their repo paths and re-hashed with the shared reference implementation
  * (`buildWorktreeManifest().subtreeHash`). Since P5a the composed workspace
  * view is SERVER-minted (the DO never holds a state row for it), so the
@@ -55,12 +55,10 @@ function callerFor(gad: TestGad): GadCaller {
  * reproduce the exact composed state hash the server handed out.
  */
 async function referenceUnitHashes(
-  vcs: WorkspaceVcs,
   gad: TestGad,
   stateHash: string,
   paths: string[]
 ): Promise<Record<string, string | null>> {
-  await vcs.flushMainProvenance();
   const heads = gad.instance.listWorktreeHeads({
     logIdPrefix: "vcs:repo:",
     head: "main",
@@ -152,7 +150,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     const { stateHash } = await vcs.ensureFresh();
 
     const fromStore = await vcs.unitHashes(stateHash, UNIT_PATHS);
-    const fromReference = await referenceUnitHashes(vcs, gad, stateHash, UNIT_PATHS);
+    const fromReference = await referenceUnitHashes(gad, stateHash, UNIT_PATHS);
     expect(fromStore).toEqual(fromReference);
 
     // Shape sanity: dirs are manifest hashes, files plain content digests,
@@ -179,14 +177,18 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
       ],
     });
     await vcs.commit({ head, repoPath: "panels/chat", message: "edit chat", actor: USER });
-    const pushed = await pushToMain(gad, { repoPaths: ["panels/chat"], sourceHead: head, actor: USER });
+    const pushed = await pushToMain(gad, {
+      repoPaths: ["panels/chat"],
+      sourceHead: head,
+      actor: USER,
+    });
     expect(pushed.status).toBe("pushed");
 
     const after = await vcs.ensureFresh();
     expect(after.stateHash).not.toBe(before.stateHash);
 
     const fromStore = await vcs.unitHashes(after.stateHash, UNIT_PATHS);
-    expect(fromStore).toEqual(await referenceUnitHashes(vcs, gad, after.stateHash, UNIT_PATHS));
+    expect(fromStore).toEqual(await referenceUnitHashes(gad, after.stateHash, UNIT_PATHS));
 
     // Only the touched unit (and its nested dir) shifted — untouched units'
     // hashes (⇒ EVs ⇒ build keys) are unchanged, keeping their cache valid.
@@ -209,9 +211,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     const attached = await vcs.ensureFresh();
     expect(attached.stateHash).toBe(local.stateHash);
 
-    expect(bootstrapHashes).toEqual(
-      await referenceUnitHashes(vcs, gad, attached.stateHash, UNIT_PATHS)
-    );
+    expect(bootstrapHashes).toEqual(await referenceUnitHashes(gad, attached.stateHash, UNIT_PATHS));
     // And the attached (content-store) path agrees with both.
     expect(await vcs.unitHashes(attached.stateHash, UNIT_PATHS)).toEqual(bootstrapHashes);
   });
