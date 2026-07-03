@@ -6,7 +6,7 @@
  * through the real WorkspaceVcs edit→commit flow, then exercises: happy-path
  * single/multi-repo group atomicity, up-to-date, divergence classification,
  * build-failed no-publish, write-ahead-intent crash→heal with full provenance,
- * synthetic catch-up for intent-less drift, and the GC-root protection of a
+ * fail-closed handling for intent-less drift, and the GC-root protection of a
  * pending intent's candidate.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
@@ -15,7 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
 import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../src/server/vcsHost/paths.js";
@@ -45,7 +45,7 @@ function callerFor(gad: TestGad): GadCaller {
 
 type PushInput = {
   repoPaths: string[];
-  sourceHead: string;
+  sourceHead?: string | null;
   message?: string | null;
   actor: { id: string; kind: string };
 };
@@ -625,7 +625,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     // advanced → a compare-and-swap conflict. The intent must NOT be discarded
     // before that conflict is classified; the CAS landed, so provenance must be
     // recorded with full fidelity (NOT a spurious success with the intent thrown
-    // away, and NOT a degraded synthetic catch-up).
+    // away, and NOT an unrecoverable no-intent drift).
     const refsBridge = (gad.instance as unknown as {
       refsStore: () => { updateMains: (i: unknown) => Promise<unknown> };
     }).refsStore();
@@ -658,8 +658,8 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       ) => { stateHash: string; commitEventId: string | null } | null;
     }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
     expect(head?.stateHash).toBe(stateHash);
-    // The main commit's ops are REAL (from the parked intent), not the crash-heal
-    // synthetic catch-up the old delete-then-synthesize path would have produced.
+    // The main commit's ops are REAL (from the parked intent), not an invented
+    // no-intent recovery.
     const ops = sql
       .exec(
         "SELECT synthetic FROM gad_worktree_edit_ops WHERE committed_event_id = ?",
@@ -674,7 +674,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     expect(pending).toHaveLength(0);
   });
 
-  it("parks then heal-reaps the write-ahead intent on a pre-CAS approval denial (no ref move, no synthetic)", async () => {
+  it("parks then heal-reaps the write-ahead intent on a pre-CAS approval denial (no ref move)", async () => {
     await seedCommit("c1", "packages/a", "a.txt", "A\n");
     const sql = (gad.instance as unknown as {
       sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
@@ -705,7 +705,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     const healed = (await doInstance().vcsHealPublishDrift({})) as { pendingIntents: number };
     expect(healed.pendingIntents).toBe(0);
     expect(sql.exec("SELECT * FROM gad_publish_intents").toArray()).toHaveLength(0);
-    // No synthetic catch-up was fabricated for a main that never moved.
+    // No recovery commit was fabricated for a main that never moved.
     expect(readMain("packages/a")).toBe(null);
     const head = (gad.instance as unknown as {
       resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
@@ -724,7 +724,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     async function pushViaEnvelope(
       caller: { callerId: string; callerKind: string },
       callerContextId: string | undefined,
-      input: { repoPaths: string[]; sourceHead: string; actor?: { id: string; kind: string } }
+      input: { repoPaths: string[]; sourceHead?: string | null; actor?: { id: string; kind: string } }
     ): Promise<{ status: string; repoPaths?: string[] }> {
       const objectKey = "workspace-gad";
       const fetchable = gad.instance as unknown as { fetch(r: Request): Promise<Response> };
@@ -769,6 +769,39 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
           actor: USER,
         })
       ).rejects.toThrow(/may only push their own context head \(ctx:c2\)/);
+      expect(readMain("packages/a")).toBe(null);
+    });
+
+    it("defaults an omitted sourceHead to the sandboxed caller's own context head", async () => {
+      const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      const result = await pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
+        repoPaths: ["packages/a"],
+        actor: USER,
+      });
+      expect(result.status).toBe("pushed");
+      expect(readMain("packages/a")).toBe(stateHash);
+    });
+
+    it("rejects an omitted sourceHead when no registered context is available", async () => {
+      await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      await expect(
+        pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, undefined, {
+          repoPaths: ["packages/a"],
+          actor: USER,
+        })
+      ).rejects.toThrow(/sourceHead is required.*no registered context/);
+      expect(readMain("packages/a")).toBe(null);
+    });
+
+    it("rejects an empty explicit sourceHead before source resolution", async () => {
+      await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      await expect(
+        pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
+          repoPaths: ["packages/a"],
+          sourceHead: "",
+          actor: USER,
+        })
+      ).rejects.toThrow(/sourceHead must be a non-empty string/);
       expect(readMain("packages/a")).toBe(null);
     });
 

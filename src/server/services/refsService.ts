@@ -20,7 +20,11 @@ import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { refsMethods, updateMainsInputSchema } from "@vibez1/shared/serviceSchemas/refs";
 import type { RefService } from "./refService.js";
 import type { MainAdvanceOperation, RefAdvanceGateContext } from "./mainAdvanceApproval.js";
-import type { VcsInvocationTable } from "./vcsInvocationTable.js";
+import {
+  vcsInvocationMethodAllowsOperation,
+  type VcsInvocationRecord,
+  type VcsInvocationTable,
+} from "./vcsInvocationTable.js";
 
 export interface RefsServiceDeps {
   refs: RefService;
@@ -37,16 +41,40 @@ export interface RefsServiceDeps {
 }
 
 /** The RPC `operation` frames the approval prompt; the gate's advance path only
- *  distinguishes push vs merge (delete/restore are derived from entry shape). */
+ *  distinguishes push vs merge (delete/restore/import frame as push-class). */
 function advanceOperationLabel(operation: string): MainAdvanceOperation {
   return operation === "merge" ? "merge" : "push";
+}
+
+function assertInvocationRecordScoped(input: {
+  record: VcsInvocationRecord;
+  operation: string;
+  writerIdentity: string;
+  actualWriterId: string;
+}): void {
+  if (input.record.type !== "refs.updateMains") {
+    throw new Error("refs.updateMains: invocation token has the wrong purpose");
+  }
+  if (input.record.via !== input.writerIdentity || input.record.via !== input.actualWriterId) {
+    throw new Error("refs.updateMains: invocation token was minted for a different VCS writer");
+  }
+  if (input.record.operation !== input.operation) {
+    throw new Error(
+      `refs.updateMains: invocation token scoped to ${input.record.operation}, not ${input.operation}`
+    );
+  }
+  if (!vcsInvocationMethodAllowsOperation(input.record.method, input.record.operation)) {
+    throw new Error(
+      `refs.updateMains: invocation token method ${input.record.method} is not scoped to ${input.record.operation}`
+    );
+  }
 }
 
 export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
   return {
     name: "refs",
     description:
-      "Protected host main refs (repoPath → main): read, log, and the single-writer group compare-and-swap",
+      "Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.",
     policy: { allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"] },
     methods: refsMethods,
     handler: async (ctx, method, args) => {
@@ -73,11 +101,11 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
           // A panel/app/worker/extension, a non-writer DO, or a re-declared fake
           // `vcs` service (whose identity differs) all fail here.
           const writerIdentity = deps.getVcsWriterIdentity();
-          const callerIsWriter =
-            ctx.caller.runtime.kind === "do" &&
-            writerIdentity !== null &&
-            ctx.caller.runtime.id === writerIdentity;
-          if (!callerIsWriter) {
+          if (
+            ctx.caller.runtime.kind !== "do" ||
+            writerIdentity === null ||
+            ctx.caller.runtime.id !== writerIdentity
+          ) {
             throw new ServiceAccessError(
               "refs",
               "updateMains",
@@ -98,6 +126,12 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
               // attribute to the DO).
               throw new Error("refs.updateMains: invalid or expired invocation token");
             }
+            assertInvocationRecordScoped({
+              record,
+              operation: input.operation,
+              writerIdentity,
+              actualWriterId: ctx.caller.runtime.id,
+            });
             gateCaller = record.caller;
             onBehalfOf = `${record.caller.runtime.kind}:${record.caller.runtime.id}`;
             via = ctx.caller.runtime.id;

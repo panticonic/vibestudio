@@ -31,7 +31,7 @@ All verified present in this tree; keep them through P3–P5:
    load-bearing: provenance columns must survive commit).
 2. **`IngestWorktreeStateInput.editOps`** — the committed-rows-at-ingest path
    (bootstrap/merge/fork). This is the vehicle blame needs for merge and push
-   provenance; do not delete it when the ProvenanceFollower goes.
+   provenance; it survives the deletion of the old host provenance follower.
 3. **Event-keyed ancestry**: `gad_worktree_heads.commit_event_id`,
    `gad_transition_parents(parent_event_id, ordinal)` with first parent =
    ordinal 0, `commitAncestors`.
@@ -67,8 +67,8 @@ until P4's root-set surface exists. (Also note this contradicts the plan's
 
 ### A2: P3 is where blame is won or lost — build the invariants in, don't retrofit
 
-When push/merge provenance moves into the DO and the ProvenanceFollower is
-deleted:
+When push/merge provenance moves into the DO and the old host provenance follower
+is deleted:
 
 - **Main-advance and merge ingests should carry `editOps`** with per-file
   hunks whose `old_content_hash` composes against the **first parent** —
@@ -76,11 +76,11 @@ deleted:
   chain. The provenance spec calls this U2 (chain continuity); validating it
   at the ingest `editOps` path (reject on mismatch) is cheap while you are
   writing that path anyway.
-- **Mark degraded ingests as synthetic.** The crash-heal fallback (a main
-  matching no recorded intent → synthetic catch-up ingest of the ref's tree)
-  cannot carry true hunks. Stamp those rows (e.g. a `synthetic` marker on the
-  op or a distinguished `kind`) so blame treats them as chain restarts — like
-  `create` — instead of either mis-blaming or tripping integrity.
+- **Do not synthesize no-intent crash-heal provenance.** A main matching no
+  recorded intent cannot carry true hunks, parentage, or attribution, so the
+  reconciler must fail closed instead of fabricating a catch-up commit. Keep the
+  `synthetic` marker only for intentional snapshot-style provenance such as
+  import publishes, where blame should treat the rows as chain restarts.
 - **`vcsMerge` (P5d) clean-merge commits**: check whether they record per-file
   hunks today. If they commit the 3-way result without ops, every ctx merge is
   a blame hole. Ideal shape (spec U3): merge ops against the OURS side,
@@ -151,5 +151,5 @@ the owner-derived root set.
 The provenance "big bang" (one schema bump: blame invariants, claims
 producers, touches, recall upgrades, read-time attachment) lands **after your
 P3** — its blame invariants are specified against the post-P3 world (gad-owned
-push/merge provenance, no follower). A1 and A4 are worth doing immediately
+push/merge provenance, no old host provenance follower). A1 and A4 are worth doing immediately
 regardless; A2/A3 are cheapest folded into P3 itself.

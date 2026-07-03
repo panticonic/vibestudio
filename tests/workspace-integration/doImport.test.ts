@@ -26,8 +26,8 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../workers/gad-store/index.js";
-import { GitBridge, type BridgeHost } from "../extensions/git-bridge/bridge.js";
+import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
+import { GitBridge, type BridgeHost } from "../../workspace/extensions/git-bridge/bridge.js";
 import { attachLocalHostBridges } from "../../src/server/vcsHost/testSupport.js";
 import { createRefService } from "../../src/server/services/refService.js";
 import {

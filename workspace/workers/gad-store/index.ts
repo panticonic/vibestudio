@@ -75,7 +75,7 @@ interface PublishIntentEntry {
   parentStateHash: string | null;
   files: Array<{ path: string; contentHash: string; mode: number }>;
   editOps: ProvenanceEditOp[];
-  /** Provenance ops are synthetic (crash-heal catch-up) — skip chain checks. */
+  /** Provenance ops are synthetic (for example import snapshots) — skip chain checks. */
   synthetic?: boolean;
 }
 
@@ -309,7 +309,7 @@ export interface IngestWorktreeStateInput {
     newContentHash?: string | null;
     hunks?: unknown;
     mode?: number | null;
-    /** P3/A2: a synthetic op (crash-heal catch-up ingest) carries no true
+    /** P3/A2: a synthetic op (for example an import snapshot) carries no true
      *  first-parent hunks — blame treats it as a chain RESTART and the
      *  chain-continuity check skips it. */
     synthetic?: boolean | null;
@@ -714,6 +714,21 @@ interface HostBuildStore {
   }): Promise<Array<{ required?: boolean; status: string; [k: string]: unknown }>>;
 }
 
+/** The slice of the host `worktree.*` RPC surface: the pure disk-scan
+ *  primitive. `scan` reads a (repoPath, head) working tree into the CAS and
+ *  returns its content-addressed `{ stateHash, files }` — no commit, no ref
+ *  advance, no history. The DO composes it with the content/refs primitives to
+ *  own the scan-adopt semantics itself. */
+interface HostWorktreeStore {
+  scan(
+    repoPath: string,
+    head: string
+  ): Promise<{
+    stateHash: string;
+    files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
+  }>;
+}
+
 /** listTree caps results; a silently truncated listing would compose/merge as
  *  mass deletions, so overflow is a loud error. */
 const MERGE_LIST_TREE_LIMIT = 100_000;
@@ -1033,7 +1048,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
   // v22 (fabling): P3 narrow-host push/merge orchestration moves into the DO —
   // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
-  // `synthetic` column on gad_worktree_edit_ops (crash-heal chain restarts).
+  // `synthetic` column on gad_worktree_edit_ops (import snapshot chain restarts).
   // v22 (gad-system-review): removes the dead file-mutation/observation
   // projections and their state.file_* event kinds.
   // v23: the merge of the two v22 lines above — both cuts, one schema.
@@ -1453,8 +1468,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         invocation_id TEXT,
         turn_id TEXT,
         created_at TEXT,
-        -- P3/A2: a synthetic op carries no true first-parent hunks (the
-        -- crash-heal catch-up ingest of a ref's tree). Blame treats synthetic
+        -- P3/A2: a synthetic op carries no true first-parent hunks (for
+        -- example an import snapshot). Blame treats synthetic
         -- rows as chain RESTARTS (like create), never mis-blaming or tripping
         -- the first-parent chain-continuity check.
         synthetic INTEGER
@@ -5852,7 +5867,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
   async vcsPush(input: {
     repoPaths: string[];
-    sourceHead: string;
+    sourceHead?: string | null;
     message?: string | null;
     actor?: ParticipantRef | null;
   }): Promise<VcsPushResultDo> {
@@ -5867,11 +5882,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // still wins for parity with the pre-flip contract.
     const actor = input.actor ?? this.callerParticipant();
     this.ensureReady();
+    const sourceHead = this.resolvePushSourceHead(input.sourceHead, confinement);
     // Structural source-head confinement (register row 11): a sandboxed caller
     // may only push its OWN `ctx:` head. The context is HOST-VERIFIED (threaded
     // via the relay, never client-asserted); enforced BEFORE any read/publish.
-    this.assertSourceHeadConfined(input.sourceHead, confinement);
-    return this.runVcsPush({ ...input, actor }, invocationToken, false);
+    this.assertSourceHeadConfined(sourceHead, confinement);
+    return this.runVcsPush({ ...input, sourceHead, actor }, invocationToken, false);
   }
 
   /**
@@ -5884,6 +5900,31 @@ export class GadWorkspaceDO extends DurableObjectBase {
       callerKind: this.caller?.callerKind ?? null,
       callerContextId: this.callerContextId ?? null,
     };
+  }
+
+  /**
+   * Resolve the public `vcs.push({ sourceHead? })` shape at the DO boundary.
+   * Context callers may omit it and get their HOST-VERIFIED own `ctx:*` head;
+   * callers with no registered context (shell/server/mobile shell/direct DO)
+   * must name the source explicitly. This keeps the shared typed API intact
+   * without letting an omitted source fall through to a later undefined
+   * dereference.
+   */
+  private resolvePushSourceHead(
+    sourceHead: string | null | undefined,
+    confinement: { callerKind: string | null; callerContextId: string | null }
+  ): string {
+    if (sourceHead !== undefined && sourceHead !== null) {
+      if (typeof sourceHead !== "string" || sourceHead.length === 0) {
+        throw new Error("push: sourceHead must be a non-empty string when provided");
+      }
+      return sourceHead;
+    }
+    if (confinement.callerContextId) return `ctx:${confinement.callerContextId}`;
+    throw new Error(
+      "push: sourceHead is required when the caller has no registered context; " +
+        "pass sourceHead explicitly or call from a context runtime."
+    );
   }
 
   /**
@@ -5955,7 +5996,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     // Heal any crash-window drift (pending intents / lineage) before reading
     // mains, so the FF/divergence checks see a consistent lineage.
-    await this.healPublishDrift(store);
+    await this.healPublishDrift();
 
     // Precondition 1 — clean source: no uncommitted edits on any ctx source repo.
     if (sourceHead.startsWith("ctx:")) {
@@ -6137,7 +6178,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         // intent exists precisely to survive a crash between the CAS and its
         // provenance — healPublishDrift completes it if the CAS landed, else
         // discards it against the ref log. Deleting here would fall back to the
-        // degraded synthetic catch-up ingest (lineage/attribution/hunk loss).
+        // unrecoverable no-intent drift (lineage/attribution/hunk loss).
         throw error;
       }
 
@@ -6205,7 +6246,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     // Heal any crash-window drift before reading main so the CAS sees a
     // consistent lineage.
-    await this.healPublishDrift(store);
+    await this.healPublishDrift();
 
     // The staging lineage the bridge ingested the imported history onto.
     const stagingRef = this.resolveWorktreeHeadInternal(logId, input.sourceHead);
@@ -6407,10 +6448,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *    provenance with full fidelity (its recorded editOps/parents);
    *  - a pending intent whose CAS never landed (ref no longer at `expectedOld`,
    *    and no ref-log transition to `next`) → discard it;
-   *  - a main the DO's recorded lineage lags with NO covering intent → a
-   *    SYNTHETIC catch-up ingest of the ref's tree (stamped synthetic).
+   *  - a main the DO's recorded lineage lags with NO covering intent → fail
+   *    loudly. Refs alone cannot reconstruct the authored transition, so degraded
+   *    synthetic provenance is not allowed.
    */
-  private async healPublishDrift(store: HostContentStore): Promise<void> {
+  private async healPublishDrift(): Promise<void> {
     const intents = this.listPublishIntents();
     const coveredMains = new Set<string>();
     for (const intent of intents) {
@@ -6431,8 +6473,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         // across its (possibly human-gated) `refs.updateMains` window and its CAS
         // may still land — the appearance of staleness is exactly that window,
         // not a genuine orphan. Its repoPaths are already in `coveredMains`
-        // (added above for every entry), so skipping the reap does NOT let the
-        // synthetic pass below synthesize over it. A genuinely orphaned intent
+        // (added above for every entry), so no-intent drift checks below do not
+        // fire over it. A genuinely orphaned intent
         // (owner crashed/evicted) is absent from the set on the fresh instance's
         // startup heal and is reaped there, completing recovery (§6).
         if (!this.inFlightPublishIntents.has(intent.intentId)) {
@@ -6445,7 +6487,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       if (anyLanded) this.completePublishIntent(intent);
     }
 
-    // Mains whose recorded lineage lags with NO covering intent → synthetic.
+    // Mains whose recorded lineage lags with NO covering intent cannot be healed
+    // without inventing provenance. Fail closed and leave refs/DO disagreement
+    // visible to the operator.
     for (const ref of await this.refsStore().listMains()) {
       const repoPath = normalizeRepoPathArg(ref.repoPath);
       if (coveredMains.has(repoPath)) continue;
@@ -6453,7 +6497,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const logId = logIdForRepoPath(repoPath);
       const recorded = this.resolveWorktreeHeadInternal(logId, "main")?.stateHash ?? null;
       if (recorded === ref.stateHash) continue;
-      await this.syntheticCatchUpIngest(store, repoPath, logId, recorded, ref.stateHash);
+      throw new Error(
+        `vcsHealPublishDrift: protected ref for ${repoPath} is ${ref.stateHash}, ` +
+          `but the DO recorded main is ${recorded ?? "<absent>"} and no publish intent covers it`
+      );
     }
   }
 
@@ -6473,52 +6520,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return true;
   }
 
-  /** Degraded catch-up: record the ref's tree as a synthetic main commit so the
-   *  DO's lineage rejoins the ref. Stamped synthetic (chain restart) since true
-   *  first-parent hunks are unavailable. */
-  private async syntheticCatchUpIngest(
-    store: HostContentStore,
-    repoPath: string,
-    logId: string,
-    recorded: string | null,
-    refState: string
-  ): Promise<void> {
-    const files = (await this.stateFilesFor(store, refState)).map((f) => ({
-      path: f.path,
-      contentHash: f.contentHash,
-      mode: f.mode,
-    }));
-    const editOps: ProvenanceEditOp[] = files.map((f) => ({
-      kind: "create" as const,
-      path: f.path,
-      oldContentHash: null,
-      newContentHash: f.contentHash,
-      mode: f.mode,
-      synthetic: true,
-    }));
-    this.transaction(() =>
-      this.ingestWorktreeStateInTxn({
-        logId,
-        head: "main",
-        logKind: "vcs",
-        actor: SYSTEM_PARTICIPANT,
-        files,
-        baseStateHash: recorded ?? EMPTY_STATE_HASH,
-        expectedRefStateHash: recorded ?? EMPTY_STATE_HASH,
-        eventKind: "state.snapshot_ingested",
-        summary: `synthetic catch-up of ${repoPath} main to ref state`,
-        ...(editOps.length > 0 ? { editOps } : {}),
-      })
-    );
-    await this.mirrorStateToContentStore(store, files, refState);
-  }
-
   /** Host-triggerable startup self-heal (§6) — the same reconcile the push path
    *  runs on demand, exposed so the host can drive it at DO attach. */
   @rpc({ callers: ["do", "server"] })
   async vcsHealPublishDrift(): Promise<{ pendingIntents: number }> {
     this.ensureReady();
-    await this.healPublishDrift(this.contentStore());
+    await this.healPublishDrift();
     return {
       pendingIntents: (
         this.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one() as JsonRecord
@@ -6600,11 +6607,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const invocationToken = this.invocationToken;
     this.ensureReady();
     const { logId, targetHead, sourceHead } = input;
-    // Main target (mergeGroup / host vcs.merge→main for chrome callers): the
-    // 3-way is computed here and the advance PUBLISHES through the single-writer
-    // write-ahead-intent → refs.updateMains(operation:"merge") machinery — the
-    // same publish path as push, so main stays a gated CAS the host never
-    // side-advances. Conflicted-to-main parks a pending merge the host projects.
+    // Main target (host `mergeGroup` / `mergeIntoMainHead` for chrome callers):
+    // the 3-way is computed here and the advance PUBLISHES through the
+    // single-writer write-ahead-intent → refs.updateMains(operation:"merge")
+    // machinery — the SAME publish path as push, so main stays a gated CAS the
+    // host never side-advances. This is INTERNAL-only: the public surfaces
+    // (`vcs.merge`, host `mergeHeads`) reject a main target; only the internal
+    // host merge path reaches here. Conflicted-to-main parks a pending merge the
+    // host projects.
     if (targetHead === "main") {
       return this.runVcsMergeMain(logId, sourceHead, input.actor, invocationToken);
     }
@@ -6758,9 +6768,24 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * `refs.updateMains(operation:"merge")` → provenance machinery as push (so the
    * main advance is a gated CAS the host never side-runs). A conflicted result
    * stages + mirrors the provisional (conflict-marked) tree and parks a pending
-   * merge; the host projects the markers into the live workspace and drives the
-   * resolution → vcs.commit, which records the merge parents. The merge commit's
-   * first parent is `main` (baseStateHash), its second parent is `theirs`.
+   * merge on the `main` head; the host projects the markers into the live
+   * workspace and drives the resolution → vcs.commit, which records the merge
+   * parents. The merge commit's first parent is `main` (baseStateHash), its
+   * second parent is `theirs`.
+   *
+   * PUBLISH-INTENT LIFECYCLE — mirrors {@link runVcsPush} EXACTLY (three fixes):
+   *  1. `inFlightPublishIntents.add` synchronously at record time, removed in a
+   *     `finally` around the whole attempt, so a concurrent `healPublishDrift`
+   *     never stale-reaps this op's parked intent across the (human-gated) CAS
+   *     window.
+   *  2. NON-eager-delete on a throw from `updateMains`: the write-ahead intent is
+   *     left parked so `healPublishDrift` completes it if the CAS landed, or
+   *     discards it against the ref log if it never did. Deleting here would fall
+   *     back to unrecoverable no-intent drift (lineage/attribution/hunk loss).
+   *  3. On the own-duplicate conflict path where the CAS ACTUALLY landed (our
+   *     candidate is the current main), call the idempotent
+   *     {@link completePublishIntent} and return `merged` instead of throwing a
+   *     spurious error with the provenance thrown away.
    */
   private async runVcsMergeMain(
     logId: string,
@@ -6778,7 +6803,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     // Heal any crash-window drift before reading main, so the base/tip and the
     // 3-way see a consistent lineage (mirrors the push precondition).
-    await this.healPublishDrift(store);
+    await this.healPublishDrift();
 
     const existingPending = this.getPendingMerge({ logId, head: "main" }).info;
     if (existingPending) {
@@ -6823,6 +6848,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
       const oursFiles = oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, oursState);
       const mergedFiles = result.files.map((f) => ({ path: f.path, contentHash: f.contentHash, mode: f.mode }));
+      const expectedOld = oursState === EMPTY_STATE_HASH ? null : oursState;
       const intent: PublishIntent = {
         intentId: crypto.randomUUID(),
         operation: "merge",
@@ -6830,7 +6856,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           {
             repoPath,
             logId,
-            expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState,
+            expectedOld,
             next: mergedState,
             parentEventId: theirsEventId,
             // Second parent = theirs (main is the implicit first parent via
@@ -6845,38 +6871,60 @@ export class GadWorkspaceDO extends DurableObjectBase {
         sourceHead,
       };
       // Mark in-flight BEFORE the durable record + the (human-gated) CAS window
-      // so a concurrent heal never stale-reaps this parked intent (see field doc).
+      // so a concurrent heal never stale-reaps this parked intent (fix 1).
       this.inFlightPublishIntents.add(intent.intentId);
       this.transaction(() => this.recordPublishIntent(intent));
+      const succeed = () => {
+        const headRef = this.resolveWorktreeHeadInternal(logId, "main");
+        return {
+          status: "merged" as const,
+          stateHash: mergedState,
+          eventId: headRef?.commitEventId ?? theirsEventId ?? "",
+          headHash: headRef?.commitEventId ?? mergedState,
+          previousStateHash: oursState,
+          conflicts: [] as [],
+          mergeable: "clean" as const,
+          upstreamCommits,
+        };
+      };
       try {
         try {
           await this.refsStore().updateMains({
-            entries: [{ repoPath, expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState, next: mergedState }],
+            entries: [{ repoPath, expectedOld, next: mergedState }],
             reason: `merge ${repoPath} from ${sourceHead}`,
             operation: "merge",
             ...(invocationToken ? { invocationToken } : {}),
           });
         } catch (error) {
-          // A concurrent main advance changed the merge base — the caller
-          // recomputes and re-drives (best-effort per-repo, like the host path).
-          // Do NOT delete: updateMains may have landed host-side before throwing
-          // (a lost-response duplicate POST). Leave the write-ahead intent parked
-          // so healPublishDrift completes it with full provenance if the CAS
-          // landed, or discards it against the ref log if it never did.
+          if (this.isRefConflictError(error)) {
+            // A conflict may be our OWN duplicate POST: the CAS committed
+            // host-side and its response was lost. Do NOT delete before
+            // classifying — if our candidate IS the current main the CAS landed
+            // and we owe provenance, not a spurious error without it (fix 3).
+            const current =
+              (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
+            if (current === mergedState) {
+              this.completePublishIntent(intent);
+              return succeed();
+            }
+            // Genuine concurrent advance moved the merge base: leave the intent
+            // parked (healPublishDrift discards it against the ref log, since the
+            // CAS never landed) and surface the conflict — the caller recomputes
+            // and re-drives (fix 2: no eager delete).
+            throw error;
+          }
+          // Non-conflict failure (approval denial, or a lost-response transport
+          // error that may or may not have applied): do NOT delete. The
+          // write-ahead intent exists precisely to survive a crash between the
+          // CAS and its provenance — healPublishDrift completes it if the CAS
+          // landed, else discards it against the ref log (fix 2).
           throw error;
         }
+        // Success: record provenance with full fidelity, then complete (delete)
+        // the intent. A crash between the CAS and here is healed on next
+        // start / push.
         this.completePublishIntent(intent);
-        const headRef = this.resolveWorktreeHeadInternal(logId, "main");
-        return {
-          status: "merged",
-          stateHash: mergedState,
-          eventId: headRef?.commitEventId ?? theirsEventId ?? "",
-          headHash: headRef?.commitEventId ?? mergedState,
-          previousStateHash: oursState,
-          conflicts: [],
-          mergeable: "clean",
-          upstreamCommits,
-        };
+        return succeed();
       } finally {
         this.inFlightPublishIntents.delete(intent.intentId);
       }
@@ -7533,6 +7581,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
   protected buildStore(): HostBuildStore {
     return {
       validate: (input) => this.rpc.call("main", "build.validate", [input]),
+    };
+  }
+
+  /**
+   * Disk-scan primitive access — the host `worktree.scan` RPC (narrow-host
+   * boundary refactor P1). Reads a (repoPath, head) working tree into the CAS
+   * and returns its content-addressed `{ stateHash, files }`, DO-free and
+   * semantics-free. Protected SEAM like {@link contentStore}: host unit tests
+   * override it with a local scanner. No consumer yet — the scan-adopt path
+   * that drives it lands in a later phase.
+   */
+  protected worktreeStore(): HostWorktreeStore {
+    return {
+      scan: (repoPath, head) => this.rpc.call("main", "worktree.scan", [repoPath, head]),
     };
   }
 

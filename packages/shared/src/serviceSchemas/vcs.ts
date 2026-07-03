@@ -420,7 +420,7 @@ export const vcsRecallInputSchema = z.object({
 export type VcsRecallInput = z.infer<typeof vcsRecallInputSchema>;
 
 // ---------------------------------------------------------------------------
-// Push surface (per-repo + group) — W4
+// Userland push contract (per-repo + group) — DO `vcsPush`
 // ---------------------------------------------------------------------------
 
 export const vcsPushInputSchema = z.object({
@@ -456,7 +456,7 @@ export const vcsRepoDivergenceSchema = z.object({
 export type VcsRepoDivergence = z.infer<typeof vcsRepoDivergenceSchema>;
 
 // The build-report contract (`buildDiagnosticSchema` + `repoBuildReportSchema`)
-// is the CANONICAL one from build.ts — `vcs.push`/`vcs.previewBuild` return
+// is the CANONICAL one from build.ts — `vcsPush`/`vcs.previewBuild` return
 // exactly what the build service produces and validates (the SAME producer:
 // buildV2's validateRepoPush). Re-exported here so `vcs.*` callers import it from
 // one place; defining a parallel copy is what drifted (artifact-integrity
@@ -727,21 +727,6 @@ export const vcsMethods = defineServiceMethods({
     access: { ...WRITE_ACCESS },
     examples: [{ args: ["panels/chat"] }],
   },
-  mergeGroup: {
-    description:
-      "Coordinated multi-repo pull: merge each repo's source head into its target (default main). Best-effort per-repo (not the atomic group-push path).",
-    args: z.tuple([
-      z.array(
-        z.object({
-          repoPath: z.string(),
-          sourceHead: z.string(),
-          targetHead: z.string().optional(),
-        })
-      ),
-    ]),
-    returns: z.array(vcsMergeResultSchema.extend({ repoPath: z.string() })),
-    access: { ...WRITE_ACCESS },
-  },
   abortMerge: {
     description:
       "Abort a pending (conflicted) merge on a repo's head, restoring its pre-merge tree; this is itself a head write. repoPath is required; omit head for the caller's own context head.",
@@ -757,14 +742,6 @@ export const vcsMethods = defineServiceMethods({
     returns: vcsPendingMergeSchema,
     access: READ_ACCESS,
     examples: [{ args: ["panels/chat"] }],
-  },
-  push: {
-    description:
-      "Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances (a gated compare-and-swap on the server's protected `main` ref per repo). FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). A concurrent advance that cannot be classified as a divergence throws a RETRYABLE error with code `REF_CONFLICT` — re-read main and re-push. The main advance is approval-gated. sourceHead is the caller-supplied head to publish (the DO trusts it): the runtime vcs client pins each context caller to its OWN ctx head, while shell/server callers may pass any sourceHead explicitly.",
-    args: z.tuple([vcsPushInputSchema]),
-    returns: vcsPushResultSchema,
-    access: { ...WRITE_ACCESS, sensitivity: "admin" },
-    examples: [{ args: [{ repoPaths: ["panels/chat"] }] }],
   },
   pushStatus: {
     description:

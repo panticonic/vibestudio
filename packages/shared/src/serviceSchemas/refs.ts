@@ -16,13 +16,14 @@ import type { ServicePolicy, MethodAccessDescriptor } from "../servicePolicy.js"
 import { defineServiceMethods } from "../typedServiceClient.js";
 import { TREE_REF_RE } from "./blobstore.js";
 
-/** Everyone who can hold source can READ mains; the WRITE (`updateMains`) is
- *  additionally restricted to the single VCS-DO writer by target identity in
- *  the service handler (§3), not by caller kind. Reads mirror
+/** Everyone who can hold source can READ mains. The WRITE (`updateMains`) has a
+ *  static DO-only caller-kind policy, then the service handler narrows that to
+ *  the single VCS-DO writer by target identity (§3). Reads mirror
  *  BLOBSTORE_READ_POLICY. */
 export const REFS_POLICY: ServicePolicy = {
   allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"],
 };
+const UPDATE_MAINS_POLICY: ServicePolicy = { allowed: ["do"] };
 
 const READ_ACCESS: MethodAccessDescriptor = { sensitivity: "read" };
 const WRITE_ACCESS: MethodAccessDescriptor = { sensitivity: "write" };
@@ -39,17 +40,12 @@ export const MainRefRecordSchema = z.object({
 });
 export type MainRefRecord = z.infer<typeof MainRefRecordSchema>;
 
-/** How a batch of main movements is framed (approval copy + log). A `delete`
- *  batch removes mains (`next: null`); `restore` re-creates a previously
- *  deleted repo's main (`expectedOld: null` on a repo whose host ref log shows
- *  a prior delete). */
-export const MAIN_UPDATE_OPERATIONS = [
-  "push",
-  "merge",
-  "import",
-  "delete",
-  "restore",
-] as const;
+/** How a batch of main movements is framed (approval copy + log). `merge`
+ *  records a main-target merge published by the VCS writer DO. A `delete` batch
+ *  removes mains (`next: null`); `restore` re-creates a previously deleted
+ *  repo's main (`expectedOld: null` on a repo whose host ref log shows a prior
+ *  delete). */
+export const MAIN_UPDATE_OPERATIONS = ["push", "merge", "import", "delete", "restore"] as const;
 export const MainUpdateOperationSchema = z.enum(MAIN_UPDATE_OPERATIONS);
 export type MainUpdateOperation = z.infer<typeof MainUpdateOperationSchema>;
 
@@ -150,7 +146,7 @@ export const refsMethods = defineServiceMethods({
       "VCS-DO writer (§3): every other caller gets a structured policy rejection.",
     args: z.tuple([updateMainsInputSchema]),
     returns: UpdateMainsResultSchema,
-    policy: REFS_POLICY,
+    policy: UPDATE_MAINS_POLICY,
     access: WRITE_ACCESS,
   },
 });

@@ -6,12 +6,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   collectFindings,
+  collectWorkspaceFindings,
   defaultReason,
   isAllowlisted,
   isTestContext,
   isWorkspaceImportScope,
   looksPathLike,
   matchesAllowlistEntry,
+  resolvesIntoAnyRoot,
   resolvesIntoWorkspace,
   startsWithWorkspaceScope,
 } from "../scripts/check-host-workspace-imports.mjs";
@@ -20,8 +22,10 @@ const SCRIPT = path.resolve(__dirname, "../scripts/check-host-workspace-imports.
 
 // A fake host file deep enough that "../../workspace/x" lands in "/repo/workspace".
 const HOST_FILE = "/repo/src/server/foo.ts";
+const WORKSPACE_FILE = "/repo/workspace/workers/foo.ts";
 const ROOT = "/repo";
 const WS_ROOT = "/repo/workspace/";
+const HOST_PRIVATE_ROOTS = ["/repo/src/", "/repo/apps/", "/repo/scripts/", "/repo/tests/"];
 
 function findings(text: string, absFile = HOST_FILE) {
   return collectFindings({ text, absFile, root: ROOT });
@@ -86,6 +90,17 @@ describe("resolvesIntoWorkspace", () => {
     expect(resolvesIntoWorkspace("/repo/build.mjs", "workspace/apps/mobile", WS_ROOT)).toBe(true);
     expect(resolvesIntoWorkspace(HOST_FILE, "./sibling", WS_ROOT)).toBe(false);
     expect(resolvesIntoWorkspace(HOST_FILE, "../../src/other", WS_ROOT)).toBe(false);
+  });
+});
+
+describe("resolvesIntoAnyRoot", () => {
+  it("resolves relative imports into any protected root", () => {
+    expect(resolvesIntoAnyRoot(WORKSPACE_FILE, "../../src/server/x", HOST_PRIVATE_ROOTS)).toBe(
+      true
+    );
+    expect(resolvesIntoAnyRoot(WORKSPACE_FILE, "../packages/shared/x", HOST_PRIVATE_ROOTS)).toBe(
+      false
+    );
   });
 });
 
@@ -175,6 +190,33 @@ describe("collectFindings — workspace-reference category", () => {
   });
 });
 
+describe("collectWorkspaceFindings — workspace-host-import category", () => {
+  it("flags workspace files importing host-private implementation roots", () => {
+    const text = [
+      `import { RpcServer } from "../../src/server/rpcServer.js";`,
+      `const svc = await import("../../src/server/services/refService.js");`,
+      `const gate = require("../../scripts/check-host-workspace-imports.mjs");`,
+    ].join("\n");
+    const result = collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT });
+    expect(result.map((f) => f.category)).toEqual([
+      "workspace-host-import",
+      "workspace-host-import",
+      "workspace-host-import",
+    ]);
+  });
+
+  it("allows shared package imports and workspace-local imports", () => {
+    const text = [
+      `import { x } from "@vibez1/shared/foo";`,
+      `import { y } from "@workspace/runtime";`,
+      `import { z } from "../packages/runtime/src/shared/vcsClient.js";`,
+    ].join("\n");
+    expect(collectWorkspaceFindings({ text, absFile: WORKSPACE_FILE, root: ROOT })).toHaveLength(
+      0
+    );
+  });
+});
+
 describe("allowlist matching", () => {
   const finding = {
     file: "src/server/foo.ts",
@@ -219,6 +261,9 @@ describe("defaultReason", () => {
     expect(defaultReason({ file: "src/server/foo.test.ts", category: "import-violation" })).toBe(
       "DO/workspace integration test"
     );
+    expect(
+      defaultReason({ file: "workspace/workers/foo.ts", category: "workspace-host-import" })
+    ).toContain("must not import host-private");
     expect(
       defaultReason({ file: "src/server/buildV2/builder.ts", category: "workspace-reference" })
     ).toContain("workspace-reference baseline");
@@ -293,6 +338,21 @@ describe("CLI (child process against a temp fixture dir)", () => {
         `const scope = "@workspace-apps/shell";\n`
       );
       fs.writeFileSync(path.join(dir, "src", "bad.ts"), `export const ok = true;\n`);
+      expect(run(dir).code).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores the neutral cross-boundary integration-test harness", () => {
+    const dir = makeFixtureDir();
+    try {
+      fs.mkdirSync(path.join(dir, "tests", "workspace-integration"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "src", "bad.ts"), `export const ok = true;\n`);
+      fs.writeFileSync(
+        path.join(dir, "tests", "workspace-integration", "mixed.test.ts"),
+        `import x from "@workspace/runtime/worker/test-utils";\n`
+      );
       expect(run(dir).code).toBe(0);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

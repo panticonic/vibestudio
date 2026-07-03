@@ -21,7 +21,7 @@ import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/
 import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import type { UnitBatchEntry } from "@vibez1/shared/approvals";
 import type { UnitMetaChangeApprovalProvider } from "@vibez1/unit-host";
-import { GadWorkspaceDO } from "../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";

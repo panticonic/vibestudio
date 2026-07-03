@@ -37,7 +37,7 @@ the repo: `pnpm cli ...`).
   2. **`vcs.commit(message)`** folds your uncommitted edits into one deliberate,
      **messaged** snapshot **per repo** (`message` is mandatory; `exclude` holds
      paths back). This is what shows up in `vcs.log`.
-  3. **`vcs.push`** is the **only** way to advance `main`, and it is
+  3. **`vibez1 vcs push`** is the **only** way to advance `main`, and it is
      **fast-forward-only** and **build-gated**. It rejects if you still have
      uncommitted edits (commit first). On divergence — `main` moved past your
      base — it does **not** force; it returns a structured `diverged` error

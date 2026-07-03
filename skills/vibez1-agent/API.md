@@ -336,7 +336,7 @@ Allowed callers: `shell`, `app`, `server`
 
 ## `refs`
 
-Protected host main refs (repoPath → main): read, log, and the single-writer group compare-and-swap
+Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.
 
 Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 
@@ -345,7 +345,6 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 | `refs.readMain` | Current record of one repo's protected `main` (repoPath → state), or null when absent. |
 | `refs.listMains` | Every repo's protected `main`, sorted by repoPath. |
 | `refs.readMainLog` | Chronological (oldest→newest) movement log for one repo's `main`; `limit` keeps the newest N entries. `new` is null for a delete entry (`old` is null for a re-creation). |
-| `refs.updateMains` | Atomic group compare-and-swap over protected `main` refs. Every entry validates (`expectedOld` matches current, null = must-not-exist) under one critical section; the batch persists in ONE atomic file replace. `next: null` deletes a main. Any per-entry conflict fails the whole batch with structured per-entry data. Approval-gated and restricted to the single VCS-DO writer (§3): every other caller gets a structured policy rejection. |
 
 ## `runtime`
 
@@ -405,7 +404,7 @@ Allowed callers: `server`, `shell`
 
 ## `vcs`
 
-Workspace version control (GAD-native): commit, status, log, diff
+Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibez1 vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.
 
 Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
@@ -423,10 +422,8 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `vcs.resolveHead` | Resolve a ref to its head name and current `state:…` hash on a repo's log. Omit the ref for the caller's current context head; pass "main"/"ctx:…" for an explicit ref, and repoPath to scope to a repo. |
 | `vcs.workspaceViewWithRepoAt` | Compose a workspace-rooted state view with one repo replaced by a repo-rooted state hash (or removed when null). Use this to convert a repo state from vcs.log/vcs.commit/vcs.resolveHead into the immutable state ref that build.getBuild expects. |
 | `vcs.merge` | Reconcile divergence: pull `main` into the caller's context head on a repo, producing a MERGE COMMIT. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Returns the upstream commits + clean/conflict + conflictPaths. After merging, the context head descends from main so push fast-forwards. |
-| `vcs.mergeGroup` | Coordinated multi-repo pull: merge each repo's source head into its target (default main). Best-effort per-repo (not the atomic group-push path). |
 | `vcs.abortMerge` | Abort a pending (conflicted) merge on a repo's head, restoring its pre-merge tree; this is itself a head write. repoPath is required; omit head for the caller's own context head. |
 | `vcs.pendingMerge` | Inspect a repo head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. repoPath is required; omit head for the caller's own context head. |
-| `vcs.push` | Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances (a gated compare-and-swap on the server's protected `main` ref per repo). FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). A concurrent advance that cannot be classified as a divergence throws a RETRYABLE error with code `REF_CONFLICT` — re-read main and re-push. The main advance is approval-gated. sourceHead is the caller-supplied head to publish (the DO trusts it): the runtime vcs client pins each context caller to its OWN ctx head, while shell/server callers may pass any sourceHead explicitly. |
 | `vcs.pushStatus` | How far each repo's head is ahead of that repo's main: the unpushed change count and per-file changes a push would carry. |
 | `vcs.forkRepo` | Fork a repo to a new path, preserving history: the new repo's log descends from the source's lineage (its `log` shows the inherited commits), so you can edit on top of the forked history. The package.json `name` leaf is rewritten to the new path so the fork is build-valid; deeper renames (component/class names) are yours to make, then push. |
 | `vcs.deleteRepo` | SEVERE, global-state action: permanently remove a whole repo from the workspace. Distinct from edits — it archives the repo's history (moved to a recoverable archive head) and drops the repo from workspace main, deleting its working tree. Requires explicit user approval every time (a dedicated per-repo deletion grant that the ordinary write grant never covers). REFUSES if other repos depend on this one unless `force` is set (their builds will break). Rejects the `meta` repo and any path with no committed main. |
@@ -557,3 +554,13 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 | `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |
 | `workspace-state.panel.incrementAccess` | Bump the access counter for a panel entity. |
 | `workspace-state.panel.rebuildIndex` | Rebuild the panel-search index from active panel entities. |
+
+## `worktree`
+
+Host disk-scan primitive: read a working tree into the CAS (worktree.scan).
+
+Allowed callers: `do`, `shell`, `server`
+
+| Method | Description |
+|--------|-------------|
+| `worktree.scan` | Scan a working tree into the content store and return its content-addressed state. Resolves the (repoPath, head) directory, hashes+mirrors every file into the CAS (refreshing the .gad sidecar), and returns { stateHash, files }. A pure disk→CAS primitive: no commit, no ref advance, no history — the caller (the gad-store DO) owns all VCS semantics. |

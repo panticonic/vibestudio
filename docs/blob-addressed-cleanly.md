@@ -5,29 +5,31 @@
   - Shared canonical tree hashing: `packages/shared/src/contentTree/` (`buildWorktreeManifest`, tree objects, golden-vector cross-implementation tests against the DO's SQL hashing).
   - Content store tree APIs: `src/server/services/blobstoreService.ts` — tree objects, `resolveTreePath`, `listTree`, `diffTrees`, `materializeTree`. The content store is the tree authority.
   - State mirroring invariant: every state hash the system hands out resolves to a full mirrored tree in the content store (eager on scan/snapshot via `mirrorWorktreeTree`, lazy via `GadVcs.ensureStateMirrored`).
-  - Protected refs + gating: `src/server/services/refService.ts` is the sole `main`-ref authority (durable CAS `advanceRef`, approval-gated, wired in `index.ts`); `WorkspaceVcs` advances main only through it.
+  - Protected refs + gating: `src/server/services/refService.ts` is the sole `main`-ref authority (durable group CAS/delete via `refs.updateMains`, approval-gated, wired in `index.ts`); the gad-store DO is the only public writer and publishes through it.
   - Host/workspace boundary enforcement: `scripts/check-host-workspace-imports.mjs` (`pnpm check:host-boundary`) statically forbids host code (`src/`, `packages/`, `apps/`, `scripts/`, `tests/`, `build.mjs`) from importing `@workspace*` scopes or paths that resolve into `workspace/` — static/dynamic/`require`/type-only imports plus string-literal references, with generated bundle dirs (`dist`/`dist-publish`) excluded. As of 2026-07-03 it is GATING: wired into CI (`.github/workflows/ci.yml`) and the `.husky/pre-commit` hook. Allowlist: `scripts/host-boundary-allowlist.json` (currently zero import-violations; only host-owned scope-name contracts and smoke tooling references).
   - Build-from-content-store: buildV2 reads trees, unit hashes, and build sources exclusively from the content store (tree-hash keyed; no GAD manifest reads).
   - Server-computed diffs: `vcs.diff` / change detection use content-store `diffTrees` (`WorkspaceVcs.diffStates`); callers never supply changed paths.
   - Step 7 cleanup (this change): deleted the dead DO subtree RPCs (`getSubtreeHash`/`getSubtreeHashes`), the dead `GadVcs.diffStates` DO passthrough, and the dead `WorkspaceVcs.materializeWorkspace`; test oracles now pin the content store against the shared reference implementation. The gad DO keeps provenance/edit-ops/merge-bookkeeping only; its manifest tables are a private index.
 
   - P5a (freshness inversion, landed): the build/freshness path is fully gad-free. `ensureFresh` scans locally
-    (shared worktree hashing + eager content-store mirror), advances the protected ref, and returns — the gad DO
-    records the transition AFTERWARD via the async per-repo `GadProvenanceFollower`
-    (now `src/server/vcsHost/provenanceFollower.ts`; retry + reconcile; a DO failure delays history, never builds).
+    (shared worktree hashing + eager content-store mirror), writes a durable host scan record, advances the
+    protected ref, and returns — the gad DO records the transition AFTERWARD via `WorkspaceVcs` direct
+    per-repo ingest. A DO failure delays history, never builds; attach/on-demand sync replays the durable scan
+    record before invoking DO publish-intent heal.
     Composed workspace/candidate views are minted server-side (`composeRepoStatesLocal`), and state
     listings/reads (`listStateFiles`/`readFile`/`listFiles`/diffs) resolve content-store-first. Drift healing is
-    two-sided: `adoptMainFromStore` (DO→ref, git import) and the ref→DO reconciler (attach + on-demand from
-    `mainWorktreeHead`), which closes the "ref advanced but provenance unrecorded" crash window. The DO's
+    driven by refs and gad publish intents, which closes the "ref advanced but provenance unrecorded"
+    crash window. The DO's
     `expectedRefStateHash` on `vcs:repo:* @ main` ingests is now a KNOWN-PREDECESSOR guard, not a head CAS
     (main is ref-owned; the store is a follower). User-initiated VCS ops (commit/push/merge) keep synchronous
     DO semantics until the userland move.
 
   - P5b (partial — refs surface + merge semantics userland, landed): the protected-ref store is now
     RPC-exposed to userland as the `refs` service (`packages/shared/src/serviceSchemas/refs.ts`:
-    readRef/listRefs/readRefLog/advanceRef; advanceRef flows through the SAME main-advance approval
-    gate with the verified caller as gate context) — the host primitive a userland VCS uses to
-    request `main` advancement. The MERGE ENGINE moved userland: `@workspace/vcs-engine`
+    `readMain`/`listMains`/`readMainLog` plus DO-only `updateMains`; `updateMains`
+    flows through the SAME main-advance approval gate with host-resolved
+    on-behalf-of attribution) — the host primitive a userland VCS uses to request
+    `main` advancement. The MERGE ENGINE moved userland: `@workspace/vcs-engine`
     (workspace/packages/vcs-engine — vendored diff3 + dep-injected 3-way MergeEngine, workerd-safe)
     is consumed by the gad-store DO's new `computeMerge` RPC (DO-local manifest listings with a
     content-store `blobstore.listTree` fallback for server-minted states; blob bytes over
@@ -42,8 +44,8 @@
       derivation via computeReplaceHunks, applyReplaceHunks, conflict-marker probe) and the
       edit-boundary path policy (paths.ts). The DO's `applyEditOps` / `commitWorking` /
       `revertWorking` / `resolveWorkingState` compose ENTIRELY store-side: compose-base resolution
-      (ctx head → pinned-base slice via `blobstore.listTree` → protected `main` via the NEW
-      `refs.readRef` bridge), working-row replay, engine op application (blob bytes over
+      (ctx head → pinned-base slice via `blobstore.listTree` → protected `main` via the
+      `refs.readMain` bridge), working-row replay, engine op application (blob bytes over
       `blobstore.getBase64`/`putBase64`), two-part CAS insert, conflict-marker refusal, commit
       ingest + row re-key, and content-store MIRRORING of every composed state (bottom-up
       `blobstore.putTree` — the DO upholds the mirroring invariant for states it mints). Host
@@ -72,13 +74,11 @@
       for VCS reads + import provenance, `blobstore.*` for gad-side content (import mirrors the
       scanned tree bottom-up via `putTree`; export materializes checkouts from `listTree` +
       `getBase64` with the extension's own disk writes — no `GadVcs.materializeState`), and
-      `refs.readRef` for the import no-op check against the protected main. Export markers +
+      `refs.readMain` for the import no-op check against the protected main. Export markers +
       checkout tracking maps live in extension storage (the DO's generic `getMarker`/`setMarker`
       KV methods are DELETED). Consumers reach it via `extensions.invoke`.
-    * The ONE new host method: `vcs.adoptImportedRepo(repoPath)` — the narrow repo-lifecycle
-      remnant (chrome/extension callers only) that reconciles a repo's protected `main` onto the
-      store lineage a git-import ingest advanced (delegates to `adoptMainFromStore`; never a
-      general seed).
+    * No host adopt surface remains: git import ingests onto staging lineage and publishes
+      through the ordinary gad push path (`vcsPush` → `refs.updateMains({operation:"import"})`).
     * Host `gitInterop` stays as a thin POLICY/DISPATCH shim (stable service name for the
       runtime `git.*` namespace + startup dependency completion): approvals, egress-proxied
       clone, and meta/vibez1.yml writes are host substrate; its repo-log init hook now invokes
@@ -105,16 +105,16 @@
       `ContextManager` is DELETED and the host keeps only sparse materialization tracking
       + the projector. RECALL scoping is solely the DO's `pathPrefixes` query pushdown
       (the host's redundant client-side re-filter is deleted). Supporting: the DO's refs
-      bridge gained `listRefs` (workspace-view composition from protected repo mains) and
+      bridge gained refs-listing over protected repo mains (workspace-view composition) and
       `@workspace/vcs-engine` gained the repo-taxonomy twin (`repos.ts`:
       `discoverRepoPaths`, the userland mirror of the host section taxonomy).
-    * HOST REMNANTS (permanent, by design): push (build gate + protected-ref group CAS +
-      projection), `mergeGroup` entries targeting `main` (`mergeIntoMainHead` — the same
+    * OBSOLETE HOST REMNANTS SNAPSHOT: push (build gate + protected-ref group CAS +
+      projection), the former main-target `mergeGroup` path (`mergeIntoMainHead` — the same
       ref-gated push-class advance), fork/delete/restore disk+refs+build-settle steps
       (their provenance semantics — forkLog/archiveRepoMain/restoreRepoMain — are DO
-      methods), scan/freshness, `vcs.adoptImportedRepo`, disk projection, and the
-      build/reactive event stream. Host wrappers for merge/rebase drain the provenance
-      follower BEFORE dispatching (a `main` source must be in lockstep with the ref) and
+      methods), scan/freshness, the former import-adoption hook, disk projection, and the
+      build/reactive event stream. Host wrappers for merge/rebase synchronize main
+      provenance BEFORE dispatching (a `main` source must be in lockstep with the ref) and
       FOLLOW the DO's outcome with projection + events.
     * SUPERSEDED (2026-07-03, narrow-host VCS P1–P5 — see `docs/narrow-host-vcs-plan.md`):
       the "HOST REMNANTS (permanent, by design)" bullet ABOVE is no longer accurate.
@@ -135,9 +135,9 @@
         batch-shaped, delete/restore severe prompts);
       - fork lifecycle + bootstrap `seedMain` seeding (movement-limited: set-if-absent /
         new repo paths only, never moves an existing main);
-      - `ensureFresh` on-disk scan adoption, still backed by `ProvenanceFollower` for the
-        SCAN path only (self-heal-from-refs for user-on-disk edits — NOT push provenance,
-        which the DO now owns via write-ahead publish intents);
+      - `ensureFresh` on-disk scan adoption, backed by durable host scan records plus
+        direct per-repo DO ingest for the SCAN path only (NOT push provenance,
+        which the DO owns via write-ahead publish intents);
       - `mergeIntoMainHead` reduced to a THIN DO dispatcher (the merge-to-main advance
         flows through the DO's push path → `refs.updateMains`).
     * READ SURFACE DECISION: `vcs.readFile`/`listFiles`/`diff`/`resolveHead` stay a SLIM
@@ -149,8 +149,7 @@
       `src/server/vcsHost/` — `paths.ts` (repo log ids, head names, ignore sets,
       path-safety guards), `worktreeStore.ts` (`WorktreeStore`, ex-`GadVcs`: worktree scan
       → CAS, editable checkout, `ensureStateMirrored`, narrow DO passthroughs),
-      `diskProjector.ts` (`DiskProjector`), `provenanceFollower.ts` (`ProvenanceFollower`,
-      ex-`GadProvenanceFollower`), `repoDiscovery.ts`, `workspaceTreeScanner.ts`, and
+      `diskProjector.ts` (`DiskProjector`), `repoDiscovery.ts`, `workspaceTreeScanner.ts`, and
       `workspaceVcs.ts` (the orchestrator; still buildV2's `WorkspaceStateSource` +
       `BuildSourceProvider`). buildV2's `WorkspaceStateSource` dropped the never-called
       `diffPaths` member (and `WorkspaceVcs.diffPaths` with it); buildV2 imports the
@@ -251,14 +250,15 @@ GAD currently uses blob-addressed content, but the generic blob store is not yet
   repo/main -> treeHash
   repo/context/<id> -> treeHash // maybe, depending on whether contexts remain server-visible
 
-  Main advancement becomes a compare-and-swap operation:
+  Main advancement becomes an atomic main-only batch operation:
 
-  advanceRef({
-    repo,
-    ref: "main",
-    expectedOldTree,
-    nextTree,
-    caller,
+  refs.updateMains({
+    operation: "push" | "merge" | "import" | "delete" | "restore",
+    entries: [{
+      repo,
+      expectedOld,
+      next,
+    }],
     reason,
   })
 
@@ -311,5 +311,3 @@ GAD currently uses blob-addressed content, but the generic blob store is not yet
   Caveats
 
   We need atomic ref updates, durable refs, object validation, GC roots, and strict path normalization. Userland should not be able to claim a tree hash unless the content store has all referenced objects and the tree is valid.
-
-

@@ -40,11 +40,12 @@ function userlandRpcFor(client: RpcClient): RpcCallerLike {
  * `projects/vault`, the flat `meta` repo) is a first-class versioned unit with
  * its own log (`vcs:repo:<repoPath>`), `main` head, and `ctx:*` context heads.
  * These commands operate on the attached agent session's per-repo context heads
- * and advance `main` only through the **build-gated** `vcs.push`.
+ * and advance `main` only through the **build-gated** CLI/userland push path.
  *
  * The model is **edit → commit → push**. `vcs edit` records uncommitted working
  * changes (no build); `vcs commit -m` folds them into a messaged snapshot per
- * repo; `vcs push --repo <p>` build-gates that snapshot into `main`. A push that
+ * repo; `vibez1 vcs push --repo <p>` resolves the userland `vcs` service and
+ * build-gates that snapshot into `main` through the DO's `vcsPush`. A push that
  * comes back `build-failed` did NOT advance `main` (read the structured
  * diagnostics, fix the cited `file:line:col`, re-push); a push that comes back
  * `diverged` means `main` moved past your base — `vcs merge` to reconcile, then

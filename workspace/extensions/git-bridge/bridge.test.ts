@@ -14,7 +14,7 @@
  *    ingested staging head and adopts it into the ref map. The REAL gated
  *    single-writer publish (write-ahead intent → refs.updateMains(import) →
  *    provenance) is exercised end-to-end in
- *    `workspace/integration-tests/doImport.test.ts`;
+ *    `tests/workspace-integration/doImport.test.ts`;
  *  - `state` — in-memory marker/checkout-map store (extension storage in
  *    production).
  */

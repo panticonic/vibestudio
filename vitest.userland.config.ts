@@ -10,6 +10,11 @@ export default defineConfig({
   ...base,
   test: {
     ...base.test,
-    include: ["workspace/**/*.test.ts", "workspace/**/*.test.tsx"],
+    include: [
+      "workspace/**/*.test.ts",
+      "workspace/**/*.test.tsx",
+      "tests/workspace-integration/**/*.test.ts",
+      "tests/workspace-integration/**/*.test.tsx",
+    ],
   },
 });

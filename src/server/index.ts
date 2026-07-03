@@ -1271,6 +1271,16 @@ async function main() {
         },
       })
     );
+    // Disk-scan primitive (narrow-host boundary refactor P1): the pure
+    // `worktree.scan` RPC the gad-store DO drives to read a working tree into
+    // the CAS. Semantics-free (no commit/ref-advance/log) — a sibling of the
+    // blobstore/refs primitives, additive infra with no consumer yet.
+    const { createWorktreeService } = await import("./services/worktreeService.js");
+    container.registerRpc(
+      createWorktreeService({
+        scan: (repoPath, head) => workspaceVcs.scanWorktree(repoPath, head),
+      })
+    );
     let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;
     container.registerManaged({
       name: "vcsService",

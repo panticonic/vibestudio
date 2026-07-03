@@ -329,29 +329,6 @@ describe("vcsService", () => {
       expect(approve).not.toHaveBeenCalled();
     });
 
-    it("passes the caller advance context into mergeGroup (main targets hit the ref gate)", async () => {
-      const mergeGroup = vi.fn(async () => []);
-      const service = createVcsService({
-        workspaceVcs: { mergeGroup } as never,
-      });
-      const shell = createVerifiedCaller("shell:dev_cli", "shell");
-
-      await service.handler({ caller: shell }, "mergeGroup", [
-        [{ repoPath: "panels/source", sourceHead: "ctx:ctx-1", targetHead: "main" }],
-      ]);
-
-      expect(mergeGroup).toHaveBeenCalledWith(
-        [{ repoPath: "panels/source", sourceHead: "ctx:ctx-1", targetHead: "main" }],
-        expect.objectContaining({
-          mainAdvance: expect.objectContaining({
-            kind: "caller",
-            operation: "merge",
-            caller: shell,
-          }),
-        })
-      );
-    });
-
     it("lets a privileged shell caller reconcile an explicit ctx head", async () => {
       const { service, mergeHeads } = mergeService();
       const caller = createVerifiedCaller("shell:dev_cli", "shell");
@@ -746,33 +723,7 @@ describe("vcsService", () => {
     });
   });
 
-  describe("push authorization (per-repo, build-gated)", () => {
-    // `push` is USERLAND-dispatched since the P3 flip: the build-gated main
-    // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
-    // manifest service), NOT this host service. `push` stays in the advertised
-    // `vcsMethods` schema for typed clients, but its host case throws a DIRECTED
-    // error (not the generic "Unknown vcs method" fallthrough) that points the
-    // caller at the DO / runtime-client route — the client routes to the DO
-    // directly (the relay mints the on-behalf-of token with the originating
-    // caller).
-    it("throws a directed userland-dispatch error on the host service (moved to the DO)", async () => {
-      const push = vi.fn();
-      const service = createVcsService({
-        workspaceVcs: { push } as never,
-        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
-      });
-
-      await expect(
-        service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }])
-      ).rejects.toThrow(/userland-dispatched.*vcsPush|no host handler/);
-      // Directed at the runtime client's push override / manifest service — not
-      // the generic "Unknown vcs method" fallthrough.
-      await expect(
-        service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }])
-      ).rejects.toThrow(/vcsClient\.ts|manifest service/);
-      expect(push).not.toHaveBeenCalled();
-    });
-
+  describe("push status", () => {
     it("reports push status for the requested repos", async () => {
       const pushStatus = vi.fn(async () => ({
         repoPath: "panels/source",

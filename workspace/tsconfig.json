@@ -150,7 +150,6 @@
     "**/dist",
     "**/node_modules",
     "apps/mobile/**/*",
-    "integration-tests/**/*",
     "apps/mobile/jest.setup.ts",
     "apps/mobile/**/*.test.ts",
     "apps/mobile/**/*.test.tsx",

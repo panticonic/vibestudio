@@ -21,7 +21,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { GadWorkspaceDO } from "../../workers/gad-store/index.js";
+import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import {
   getTree,
   hasTreeObject,

@@ -1,7 +1,7 @@
 /**
- * GAD-native workspace version control client. The RPC methods are derived
- * from the shared `vcsMethods` schema; this module only adds the event helper
- * for head subscriptions.
+ * GAD-native workspace version control client. Host RPC methods are derived
+ * from the shared `vcsMethods` schema; history reads and push are routed to the
+ * userland `vcs` service.
  */
 
 import {
@@ -10,6 +10,8 @@ import {
   type VcsEditOpRow,
   type VcsHeadAdvance,
   type VcsLogEntry,
+  type VcsPushInput,
+  type VcsPushResult,
   type VcsWorkingAdvance,
 } from "@vibez1/shared/serviceSchemas/vcs";
 import {
@@ -89,6 +91,11 @@ export interface VcsHistoryClient {
 
 export type VcsClient = VcsRpcClient &
   VcsHistoryClient & {
+  /**
+   * Publish one or more repos from this runtime's context head to main. This is
+   * userland-dispatched to the gad-store DO's `vcsPush`, not host `vcs.push`.
+   */
+  push(input: VcsPushInput): Promise<VcsPushResult>;
   /**
    * Subscribe to head advances (commits by any actor on `head`). Fires on each
    * advance with the previous/new state, producing event, actor, file-level

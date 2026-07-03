@@ -22,11 +22,7 @@ import { normalizeWorkspaceRepoPath } from "@vibez1/shared/workspace/remotes";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../vcsHost/paths.js";
-import type {
-  MainAdvanceApprovalGate,
-  MainAdvanceOperation,
-  RefAdvanceGateContext,
-} from "./mainAdvanceApproval.js";
+import type { MainAdvanceApprovalGate } from "./mainAdvanceApproval.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
 export interface VcsServiceDeps {
@@ -134,24 +130,6 @@ function stripRepoPath(filePath: string, repoPath: string): string {
       : normalized;
 }
 
-/**
- * The advance context a caller-driven main advance carries into the
- * protected-ref gate (`RefService.updateMains` → the injected main-advance
- * approval). The gate computes the authoritative changed-path diff itself;
- * this only conveys WHO is advancing and WHY.
- */
-function mainAdvanceContext(
-  ctx: ServiceContext,
-  input: { operation: MainAdvanceOperation; sourceHead?: string }
-): RefAdvanceGateContext {
-  return {
-    kind: "caller",
-    caller: ctx.caller,
-    operation: input.operation,
-    ...(input.sourceHead ? { sourceHead: input.sourceHead } : {}),
-  };
-}
-
 function looksLikeWorkspacePath(value: string): boolean {
   return (
     value === "." ||
@@ -198,7 +176,8 @@ function assertStateHashArg(method: string, value: string, position: string): vo
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   return {
     name: "vcs",
-    description: "Workspace version control (GAD-native): commit, status, log, diff",
+    description:
+      "Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibez1 vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.",
     policy: {
       allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"],
     },
@@ -445,23 +424,6 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           }
           return await vcs.mergeHeads(targetHead, VCS_MAIN_HEAD, { actor, repoPath });
         }
-        case "mergeGroup": {
-          const [entries] = args as [
-            Array<{ repoPath: string; sourceHead: string; targetHead?: string }>,
-          ];
-          const normalizedEntries = entries.map((e) => ({
-            repoPath: normalizeWorkspaceRepoPath(e.repoPath),
-            sourceHead: e.sourceHead,
-            targetHead: resolveWriteHead(ctx, deps, e.targetHead),
-          }));
-          return await vcs.mergeGroup(normalizedEntries, {
-            actor,
-            // Entries targeting `main` (chrome callers only — resolveWriteHead
-            // confines everyone else to their own ctx head) advance the
-            // protected ref; the gate needs the caller context.
-            mainAdvance: mainAdvanceContext(ctx, { operation: "merge" }),
-          });
-        }
         case "abortMerge": {
           const [repoArg, headArg] = args as [string | undefined, string | undefined];
           const targetHead = resolveWriteHead(ctx, deps, headArg);
@@ -482,22 +444,6 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           }
           return await vcs.pendingMerge(targetHead, repoPath);
         }
-        // `push` is USERLAND-dispatched since the P3 flip: build-gated main
-        // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
-        // manifest service), not here. Client-side routing is load-bearing —
-        // the relay mints the on-behalf-of invocation token with the
-        // originating caller only when the DO is called directly. The method
-        // is kept in the advertised `vcsMethods` schema for typed clients, but
-        // reaching this host handler means the caller skipped that routing.
-        case "push":
-          throw new Error(
-            "vcs.push has no host handler: it is userland-dispatched (P3 flip) to the " +
-              "gad-store DO's `vcsPush`, reached via the `vcs` manifest service " +
-              "(workers.resolveService → DO). Route it through the runtime client's push " +
-              "override (packages/runtime/src/shared/vcsClient.ts createVcsClient), which " +
-              "mints the on-behalf-of invocation token with the originating caller — a host " +
-              "forward would erase it."
-          );
         case "pushStatus": {
           const [repoArgs] = args as [string[]];
           const repoPaths = repoArgs.map((r) => normalizeWorkspaceRepoPath(r));

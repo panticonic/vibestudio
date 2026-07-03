@@ -42,9 +42,9 @@ Decisions locked with the user:
 
 The 2026-07 security review found three issues that share one root cause: the system
 never committed to who publishes protected main. Four mutation paths existed
-(public `refs.advanceRef`, host `vcs.push`/`vcs.merge`, extension-reachable
-`vcs.adoptImportedRepo`, internal system advances), each enforcing a different subset
-of invariants:
+(public `refs.advanceRef`, the former host `vcs.push`/`vcs.merge` paths,
+extension-reachable `vcs.adoptImportedRepo`, internal system advances), each
+enforcing a different subset of invariants:
 
 - **Finding 1**: sandboxed callers could mint content trees and advance protected main
   through public `refs.advanceRef`, bypassing every push invariant.
@@ -111,8 +111,17 @@ Semantics of `updateMains`:
   store persists all entries in ONE atomic file replace (the existing
   persist-then-adopt commit in `refService.ts` already works this way — the group
   form just widens the write set). Any entry conflict fails the whole batch with a
-  structured per-entry report. No partial advance, no rollback machinery: there is
-  nothing to roll back because nothing else is written.
+  structured per-entry report. No partial advance, and the batch primitive itself
+  carries no internal rollback: there is nothing to roll back because nothing else
+  is written. NOTE (verified 2026-07-03, known deviation from a strict reading): the
+  DELETE/RESTORE lifecycle is a host-level TWO-step (retire the ref via `updateMains`,
+  then archive the store lineage in the DO), and a failed archive after a landed ref
+  delete is undone by a host-level COMPENSATING ref write — `WorkspaceVcs.compensateMainRef`
+  (`workspaceVcs.ts:736`, called at `:2849`/`:2970`) re-creates/re-advances the ref so
+  a repo never vanishes from refs while its store main is still live. That is a
+  compensating write across the ref↔archive boundary, not intra-batch rollback, but
+  it IS rollback machinery that exists in the tree — §7's "no rollback machinery"
+  applies only to the deleted PUSH pipeline, not to this delete-lifecycle path.
 - **`next: null` deletes the main ref** (repo leaves the workspace). Deletion joins
   the same atomicity and the same batch — a mixed batch (advance A, delete B) is one
   approval and one commit.
@@ -213,8 +222,8 @@ lineage-shaped behind those states is gad's.
 declaration — resolved through `resolveVcsStoreBinding` (`userlandServices.ts:62`),
 i.e. matched by target identity `do:{source}:{className}:{objectKey}`, NOT by
 `runtime.kind === "do"` (any other DO is rejected). Chrome/shell do not get the write
-surface either: user-level publishes also flow through `vcs.push` → gad → host, so
-there is exactly one code path that composes candidates.
+surface either: user-level publishes also flow through userland `vcsPush` → gad →
+host, so there is exactly one code path that composes candidates.
 
 Trust bootstrap (why a userland DO may hold the pen): gad-store's code is workspace
 code; changes to workspace code ship through main advances; every main advance passes
@@ -223,22 +232,31 @@ because the approval gate is host-owned and unskippable. Gad's invariants (FF, b
 are quality gates the user can rely on because replacing gad itself requires their
 approval on a truthful diff.
 
-"Exactly one write path" means exactly one USERLAND write path. Two enumerated
+"Exactly one write path" means exactly one USERLAND write path. THREE enumerated
 host-internal flows also write mains, in-process (never via RPC) with a `system` gate
-context, and both are movement-limited by construction:
+context (`SYSTEM_ADVANCE`, `workspaceVcs.ts:290`):
 
 - **Bootstrap seeding at attach**: `seedRef`-style set-if-absent only — it can never
   MOVE an existing main.
 - **Fork lifecycle**: creates refs at new repo paths only.
-
-Anything host-internal that would move or delete an EXISTING main is out of contract
-and belongs in the acceptance tests (below) as a negative case.
+- **Scan/freshness commits** (verified 2026-07-03 — this DOES move an existing main):
+  the build system's `WorkspaceStateSource.ensureFresh()` (`workspaceVcs.ts:1100` →
+  `snapshotRepoLogsFromDisk` `:3097` → `commitHead(main)` `:3105` → `commitMainHead`
+  `:931` → `advanceMainRef(SYSTEM_ADVANCE)` `:957`) adopts the user's own on-disk
+  edits into `main` via a one-entry `updateMains(operation:"push")` batch, CAS-guarded
+  and (system-)gated like any other advance. This is a legitimate host-internal
+  MOVER of an existing main, so the blanket "anything host-internal that would move an
+  EXISTING main is out of contract" is TOO STRONG as written: the contract is that no
+  host-internal path moves a main OUTSIDE the gated `updateMains` primitive — the scan
+  path goes THROUGH it (in-process caller-context write), so it is in-contract, not a
+  negative case. What remains out of contract (and a negative acceptance case) is any
+  host-internal ref move/delete that bypasses `updateMains`.
 
 ## 4. On-behalf-of attribution
 
 Requirement: approval prompts and ref-log entries must name the ORIGINATING principal
-(the panel/app/worker/extension whose `vcs.push` started the flow), not "gad-store DO"
-for every advance — without trusting the DO's claim.
+(the panel/app/worker/extension whose userland push started the flow), not
+"gad-store DO" for every advance — without trusting the DO's claim.
 
 **The token is NOT a caller credential.** It is a host-minted correlation nonce
 (fresh `randomUUID()` per dispatch, exactly as the extension host does in
@@ -387,19 +405,25 @@ the workspace app only presents it.
   there is no cross-store transaction to fake. Gad's contract: record provenance
   after a successful CAS; heal on crash (below).
 - **Crash self-heal** (replaces host `ProvenanceFollower` +
-  `reconcileMainProvenanceFromRefs`). Refs alone cannot reconstruct gad's commit
+  `reconcileMainProvenanceFromRefs`). VERIFIED 2026-07-03: the `ProvenanceFollower`
+  CLASS and `reconcileMainProvenanceFromRefs` are DELETED. For PUSH/MERGE the heal is
+  the DO's write-ahead publish intents (below). Separately, SCAN/FRESHNESS
+  after-the-fact recording survives inside `WorkspaceVcs`: the host writes a durable
+  scan record before the protected-ref CAS, records it afterward by direct
+  per-repo-ordered DO ingest, and attach/on-demand sync replays those host records
+  before calling `vcsHealPublishDrift`.
+  Refs alone cannot reconstruct gad's commit
   graph (parentage, merge sources, messages, attribution — today's
   `sourceEventId`/`parentEventId` chain), so healing is write-ahead, not
   reconstruction: BEFORE calling `refs.updateMains`, gad durably records a
   pending-publish intent in its own store (candidate states, parent event ids,
   message, on-behalf-of). On DO start (and on demand when a lineage read detects
   drift), gad compares `refs.listMains()` against its recorded lineage; a main
-  matching a pending intent completes that intent's provenance with full fidelity,
-  and only a main matching NO intent (lost store, external interference) falls back
-  to a synthetic catch-up ingest of the ref's tree — the same degraded semantics
-  today's host reconciler produces. Stale intents whose CAS never landed are
-  discarded against the ref log. Refs are the authority; gad is a follower of its
-  own successful writes.
+  matching a pending intent completes that intent's provenance with full fidelity.
+  A main matching NO intent (lost store, external interference) fails closed:
+  refs alone cannot reconstruct parentage, hunks, message, or attribution. Stale
+  intents whose CAS never landed are discarded against the ref log. Refs are the
+  authority; gad is a follower of its own successful writes.
 - **Deletion/restore semantics**: archives, tombstones, resurrection policy. Host
   delete = ref removal (+ projection/build cleanup reaction). "A stale context cannot
   resurrect a deleted repo" becomes a gad check, backed by the restore-shaped severe
@@ -418,11 +442,21 @@ Per the no-backward-compatibility rule, deleted outright (with a dead-code audit
 each phase):
 
 - `WorkspaceVcs.push` pipeline: FF/merge-base checks, divergence + dry-run merge
-  reporting, clean-source precondition, group lock-and-rollback machinery
-  (`advanceMainRef` group loop, `deleteRefs` rollback), `pushRaceResult`, CAS retry.
+  reporting, clean-source precondition, the group lock-and-rollback machinery
+  (`advanceMainRef` GROUP LOOP, `deleteRefs` rollback), `pushRaceResult`, CAS retry.
+  VERIFIED 2026-07-03: `deleteRefs`/`pushRaceResult` and the group-loop shape are gone.
+  NOTE: `advanceMainRef` itself SURVIVES as a single-entry in-process helper
+  (`workspaceVcs.ts:709`) used by the scan/freshness and delete/restore paths; and a
+  NEW `compensateMainRef` (`:736`) provides delete-lifecycle rollback (see §2.1) — so
+  "rollback machinery deleted" is true of the PUSH pipeline only.
 - Provenance coupling: `advanceRepoGroupUnlocked`'s ingest call from push,
-  `ProvenanceFollower`, `reconcileMainProvenanceFromRefs`, pending-merge seeding and
-  conflict-summary syncing in the host.
+  the `ProvenanceFollower` class, `reconcileMainProvenanceFromRefs`, and pending-merge
+  SEEDING (`seedMainPendingMerges`). VERIFIED 2026-07-03: all four are DELETED.
+  CORRECTION —
+  conflict-summary syncing is NOT deleted from the host: `WorkspaceVcs.syncConflictSummary`
+  (`workspaceVcs.ts:2116`, called from commit/merge at `:894`/`:1665`/`:1924`/`:2019`/`:2168`)
+  SURVIVES and is still host-owned. An earlier draft listing it among the deletions was
+  wrong; only pending-merge SEEDING (not conflict-summary syncing) was removed.
 - `vcs.adoptImportedRepo` (service) and `WorkspaceVcs.adoptMainFromStore`.
 - Public `refs.advanceRef` + the generic `(repo, ref)` namespace, schema, and the
   arbitrary-tree caller path in the gate (`refsService.ts` write surface;
@@ -447,7 +481,7 @@ is pre-release, so intermediate compatibility shims are not built.
   Generalize the gate to batches incl. delete/restore capabilities. Wire the DO
   invocation-token table + `on-behalf-of` resolution (generalizing the extension
   mechanism). Disambiguation: single-writer governs the RPC surface; during P1–P2
-  the host-side `vcs.push` pipeline calls the batch primitive IN-PROCESS (a
+  the former host-side `vcs.push` pipeline calls the batch primitive IN-PROCESS (a
   host-internal caller-context write, like today's push→RefService path), which
   proves prompt parity and disappears in P3 when dispatch flips to the DO. At no
   phase does any RPC caller other than the vcs DO reach `updateMains`.
@@ -462,9 +496,9 @@ is pre-release, so intermediate compatibility shims are not built.
   moving (the host already rebuilds/reacts on ref change), never as a side effect of
   a userland validate call.
 - **P3 — gad push/merge.** Implement push/merge orchestration + provenance recording +
-  CAS-retry in the gad-store DO; dispatch `vcs.push`/`vcs.merge` userland; DELETE the
-  host push pipeline, follower, reconcile, and adoption surfaces (public `advanceRef`
-  is already gone since P1).
+  CAS-retry in the gad-store DO; dispatch push/merge userland (`vcsPush`/`vcsMerge`); DELETE the
+  host push pipeline, old provenance follower, reconcile, and adoption surfaces
+  (public `advanceRef` is already gone since P1).
   Gad startup self-heal via write-ahead publish intents (§6).
 - **P3.5 — diff review UI** (parallel with P2/P3; ships before P3 flips dispatch, so
   the richer prompt covers gad-driven pushes from day one): gate payload extension
@@ -481,25 +515,25 @@ is pre-release, so intermediate compatibility shims are not built.
 
 | #   | Surface                                              | Change                                                                                                    | Who breaks                                                                                                                                                                                                                          |
 | --- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `refs.advanceRef` (public RPC)                       | Deleted in P1                                                                                             | No in-tree callers (grep-verified: the workspace uses readRef/listRefs only); the surface was deliberately public (P5b design) and reachable by any sandboxed caller — that reachability IS finding 1, and its removal is the point |
+| 1   | `refs.advanceRef` (public RPC)                       | Deleted in P1                                                                                             | No in-tree callers remain; the surface was deliberately public (P5b design) and reachable by any sandboxed caller — that reachability IS finding 1, and its removal is the point |
 | 2   | `refs.readRef/listRefs/readRefLog`                   | Replaced by main-only `readMain`/`listMains`/log                                                          | gad-store refs bridge (`gad-store/index.ts:6686`), workspace-view composition                                                                                                                                                       |
 | 3   | Generic `(repo, ref)` host namespace                 | Deleted; host tracks mains only                                                                           | Any non-main host ref usage (none known)                                                                                                                                                                                            |
 | 4   | `vcs.adoptImportedRepo`                              | Deleted (P4, shipped 2026-07-03) along with `WorkspaceVcs.adoptMainFromStore`                             | git-bridge REBUILT: import ingests onto a non-main `import:*` staging head, then publishes via the DO's `vcsImportPublish` → write-ahead intent → `refs.updateMains({operation:"import"})` (approval-gated, single-writer, extension-attributed). Extension ingest onto a `vcs:repo:*` main head is now rejected by the DO. Finding 2 closed structurally |
-| 5   | `vcs.push` / `vcs.merge`                             | Re-homed to userland dispatch; host pipeline deleted                                                      | Callers keep the method names; semantics of errors change (structured divergence/build results now produced by gad)                                                                                                                 |
+| 5   | Host `vcs.push` / main-advancing merge paths         | Host `vcs.push` is deleted; push is userland `vcsPush` via CLI/runtime, and main-advancing merge paths dispatch to gad | Host RPC callers cannot call `vcs.push`; CLI/runtime push behavior is preserved through the userland service, with structured divergence/build results produced by gad                                                               |
 | 6   | Fast-forward-only, clean-source, resurrection guards | No longer host-enforced; gad convention + approval prompt                                                 | Anything relying on the HOST rejecting non-FF advances                                                                                                                                                                              |
 | 7   | Push atomicity contract                              | Atomic over refs only (one batch CAS); provenance eventual, gad-healed                                    | Consumers of the old all-or-nothing refs+provenance claim (was never delivered)                                                                                                                                                     |
 | 8   | Approval prompt attribution                          | "requested by X (via vcs)" replaces direct-caller prompts; DO-attributed advances possible when untokened | Approval UX copy, grant-key semantics review                                                                                                                                                                                        |
 | 9   | Host build gating of pushes                          | Removed; gad orchestrates `build.validate`                                                                | Anything assuming main can never point at a non-building tree HOST-SIDE                                                                                                                                                             |
 | 10  | `ingestWorktreeState` on main lineages               | Restricted to gad's own push path; extensions confined to non-main heads                                  | Any extension ingesting directly onto main (the finding-2 vector — intentionally broken)                                                                                                                                            |
 | 11  | Push source-head confinement — CLOSED (2026-07-03) | STRUCTURAL confinement restored: the relay resolves the originating caller's context (`entityCache.resolveContext`) at the SAME chokepoint that mints the invocation token and threads it as a HOST-VERIFIED `callerContextId` on the DO dispatch envelope (`RpcRequest.callerContextId` → workerdRpcRelay → DO base read-at-entry getter). The writer DO's `vcsPush` recovers the deleted `resolvePushSourceHead` policy: a sandboxed caller (`panel`/`app`/`worker`/`extension`) pushing a `ctx:` source head must own it (`ctx:{callerContextId}`); a FOREIGN ctx head is rejected and an ABSENT context fails CLOSED. Chrome/`server`/`do`/system callers stay unrestricted. Never client-asserted. | A caller bypassing the runtime client can no longer propose another context's head — the DO rejects it structurally BEFORE any read/publish, in addition to the approval gate |
-| 12  | Merge-to-main attribution — CLOSED (2026-07-03) | Host-dispatched chrome merge-to-main now carries an on-behalf-of token: `WorkspaceVcs.mergeIntoMainHead` mints a `VcsInvocationTable` record for the VERIFIED gate-context caller and threads the token to the DO's `vcsMerge` via the method-path envelope (`DODispatch.dispatchOnBehalf` → `__invocationToken` → DO base), released after the dispatch settles. The DO echoes it into `refs.updateMains`, so the gate resolves the ORIGINATING chrome principal (promptless on chrome trust) instead of attributing to the writer DO. | Chrome merge-to-main attributes correctly; a panel-driven merge (if such a path is added) resolves to the panel. Absent table (in-process fixtures) → DO-attributed, as before |
+| 12  | Merge-to-main — INTERNAL-ONLY, CLOSED (2026-07-03) | Merge-to-main is INTERNAL-ONLY and published through the SAME gated single-writer path as push. There is NO public `vcs.mergeGroup` (removed from the schema + `runtimeSurface.portable.ts`; `WorkspaceVcs.mergeGroup` `:3262` survives only as an internal host/test helper), and public `vcs.merge` / `WorkspaceVcs.mergeHeads` REJECT a `main` target (`workspaceVcs.ts:1847` "main advances via push, not merge"). Internal path: `WorkspaceVcs.mergeGroup` → `mergeIntoMainHead` (`:1971`) → `callMainTargetMerge` (`:1936`, mints a `VcsInvocationTable` record with method `vcsMerge`/operation `merge` for the VERIFIED gate-context caller and threads the token to the DO's `vcsMerge`) → DO `vcsMerge({targetHead:"main"})` (`gad-store/index.ts:6869`, `@rpc callers do/server` — unreachable by sandboxed userland) → `runVcsMergeMain` (`:7104`) → the same gated publish as push: heal drift → `PublishIntent(operation:"merge")` → `refs.updateMains({operation:"merge"})` (`:7206`) → complete provenance. The DO echoes the token into `updateMains`, so the gate resolves the ORIGINATING principal, and a clean main-merge records a MERGE transition (`workspaceVcs.ts:429`, `transitionKind` derives from operation; `vcsInvocationTable.ts:25` maps `vcsMerge`→`merge`). CONFLICT-path LIMITATION: a conflicted main-merge parks a pending merge on the main head in the DO, materializes markers to the worktree, and is fully ABORTABLE via `vcsAbortMerge` (`:7287`) — but it is NOT resolve-forward-by-commit: `commitMainHead` (`workspaceVcs.ts:931`) is not pending-merge-aware (unlike ctx `commitHead` `:853`), so forward-resolution of a conflicted main merge is UNSUPPORTED and would need `commitMainHead` made pending-merge-aware. | No caller-facing `mergeGroup`. Chrome merge-to-main attributes correctly; a panel-driven internal merge (if such a path is added) resolves to the panel. Absent table (in-process fixtures) → DO-attributed, as before |
 
 ## 10. Acceptance tests
 
 Each bullet's covering test is noted parenthetically (verified green, P5 acceptance
 run 2026-07-03). Files: `refService.test.ts` / `refsService.test.ts` /
 `mainAdvanceApproval.test.ts` / `servicePolicyMatrix.test.ts` under
-`src/server/services/`; the rest under `workspace/integration-tests/` (`doVcsPush`,
+`src/server/services/`; the rest under `tests/workspace-integration/` (`doVcsPush`,
 `doImport`, `vcsHost/*`, `merge`) and `workspace/packages/ui/src/kit/diff/DiffViewer.test.tsx`.
 
 Security / single-writer:
@@ -583,11 +617,11 @@ Gad semantics parity:
   does NOT block the push".)
 - Kill the DO between `updateMains` success and provenance recording → restart
   completes the pending-publish intent with full provenance fidelity; a main with NO
-  matching intent heals via synthetic catch-up ingest (degraded, loud); reads during
-  the crash window fail loudly or heal on demand (no silent stale lineage).
+  matching intent fails closed (no invented catch-up provenance); reads during
+  the crash window fail loudly or heal on demand when a covering intent exists.
   (`doVcsPush.test.ts` "heals a crash between the CAS and provenance (write-ahead
-  intent)"; `workspaceVcs.attachHeal.test.ts` "catches the DO's main lineage up to a ref
-  that ran ahead (synthetic, no intent)"; `provenanceFollower.test.ts` heal cases.)
+  intent)"; `workspaceVcs.attachHeal.test.ts` "rejects a ref that ran ahead of the
+  DO with no covering publish intent"; `mainProvenance.test.ts` fail-closed drift cases.)
 - Git import end-to-end: staged lineage → gad push → prompt → main moves; for
   non-building or never-validated import content, the prompt's HOST-SOURCED build
   status line (build-service cache lookup, §5) reads "failed"/"not validated", so

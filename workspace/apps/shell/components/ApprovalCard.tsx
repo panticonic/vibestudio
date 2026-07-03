@@ -252,6 +252,11 @@ export function ApprovalCard({
                       newHash: file.newHash,
                       oldState: entry.oldState,
                       newState: entry.newState,
+                      binary: file.binary,
+                      tooLarge: file.tooLarge,
+                      // Ship the whole changed-file set so gad-browser can step
+                      // across every file of the entry, not just the focused one.
+                      files: entry.changedFiles,
                     },
                   })
                 }
