@@ -76,14 +76,20 @@ holds — the `main → workspace/` export is **write-only extraction**, not a c
   once bootstrap-from-disk + the persisted store cover it; if a residual gap-fill is still
   needed, report why.
 
-### 5. Git import → the caller entity's context
-- Today git import rides the host-level `onWorkspaceSourceChanged` → freshness path. Re-scope
-  it so an import writes into the **caller entity's `ctx:{id}`** via the normal edit/commit
-  path (the entity that initiated the import owns the change; it then pushes to main).
-- Investigate the current import trigger/mechanism first. If import is genuinely
-  caller-initiated (an RPC), route its writes to `callerContextId`'s head. If it's currently
-  a host filesystem/config watcher with no caller, that trigger model itself must change —
-  STOP and surface it as a design fork with your findings rather than guessing the trigger.
+### 5. Git import — DECIDED (2026-07-04): leave writing to `main`
+Investigation found "import" is two distinct triggers: (1) **boot-time dependency
+completion** — host-level, synthetic `server` caller, no entity — which legitimately
+lands in `main` via the gated DO-owned `importPublish` path; and (2) the **`importProject`
+RPC**, which clones and publishes to `main` (also via `importPublish`). The removed
+`ctx:workspace` freshness scan was separate from both.
+
+**Decision:** leave both as-is — `importProject` writes to `main` directly (gated
+`importPublish`), and boot-completion stays host-level → `main`. Routing user imports into
+the caller's `ctx:{id}` would require a net-new clone-into-context mechanism and would change
+import UX (import staged in a context, pushed deliberately); not worth it now given the
+existing path is gated and works (`doImport.test.ts` green). No code change beyond the
+interim already committed (`onWorkspaceSourceChanged` → `ensureRepoLogsFromDisk` set-if-absent
+seed for boot-completion). Revisit only if per-entity import staging is wanted later.
 
 ### 6. Repo discovery → the ref table
 - Change ongoing "which repos exist" consumers from disk-scan (`discoverReposFromDisk` /
