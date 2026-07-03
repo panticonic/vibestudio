@@ -60,7 +60,6 @@ export const updateMainsInputSchema = z.object({
    */
   invocationToken: z.string().optional(),
 });
-export type UpdateMainsRpcInput = z.infer<typeof updateMainsInputSchema>;
 
 export const UpdateMainsResultSchema = z.object({
   updated: z.array(
