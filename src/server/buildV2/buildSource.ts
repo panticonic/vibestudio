@@ -1,18 +1,26 @@
 /**
- * Build source provider — the seam between the builder and the GAD store.
+ * Build source provider — the seam between the builder and the CONTENT STORE.
  *
- * The builder never reads the live working tree *directly*: it materializes a
- * checkout of an immutable GAD worktree state (`state:…` hash), so build inputs
- * are content-addressed and frozen for the duration of a build (no commit/push
- * race). Crucially, that state is NOT necessarily committed. For `main` — the
- * real on-disk workspace — the buildV2 trigger calls
+ * The builder never reads the live working tree *directly*: build inputs are
+ * content-addressed trees in the generic content store (blobstoreService tree
+ * objects), addressed by an immutable worktree state (`state:…` hash) and
+ * frozen for the duration of a build (no commit/push race). The production
+ * provider (WorkspaceVcs.materializeForBuild) resolves each unit's subtree
+ * hash within the state's tree and projects it to disk with the content
+ * store's `materializeTree` (hardlinked from the CAS) — the gad DO is never
+ * queried for manifests; every state hash handed to the builder resolves in
+ * the content store (the mirroring invariant, see
+ * WorktreeStore.ensureStateMirrored).
+ *
+ * Crucially, that state is NOT necessarily committed. For `main` — the real
+ * on-disk workspace — the buildV2 trigger calls
  * `WorkspaceStateSource.ensureFresh()` (see workspaceVcs.ts), which scans the
- * live working tree (`localState(workspaceRoot)`) and ingests any out-of-band
- * edits into a fresh state *before* the build runs. Net effect: uncommitted
- * working-tree edits ARE built — that's why `pnpm dev` picks up your changes
- * without a commit — they are just snapshotted into an immutable state first.
- * The provider owns checkout caching (per-state dirs hardlinked from the
- * blobstore CAS — a P1 cache, deletable at any time).
+ * live working tree and ingests any out-of-band edits into a fresh state
+ * *before* the build runs. Net effect: uncommitted working-tree edits ARE
+ * built — that's why `pnpm dev` picks up your changes without a commit — they
+ * are just snapshotted into an immutable state first. The provider owns
+ * checkout caching (per-state dirs hardlinked from the blobstore CAS — a P1
+ * cache, deletable at any time).
  *
  * Tests install a passthrough provider that serves a plain directory.
  */

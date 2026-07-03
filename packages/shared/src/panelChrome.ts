@@ -1,5 +1,6 @@
 import type { Panel, PanelNavigationState, PanelSnapshot, WorkspaceNode } from "./types.js";
 import { getCurrentSnapshot, getPanelHistoryState, getPanelRef } from "./panel/accessors.js";
+import { isAboutSource } from "./workspace/aboutNamespace.js";
 
 export type PanelSourceKind = "panel" | "browser";
 
@@ -549,7 +550,7 @@ export interface AddressProviderBrowserDataAdapter {
 
 /** Panel-path suggestions are scoped to navigable panel sources: `panels/*` and `about/*`. */
 function isPanelOrAboutSource(suggestion: PanelSourceSuggestion): boolean {
-  return suggestion.source.startsWith("panels/") || suggestion.source.startsWith("about/");
+  return suggestion.source.startsWith("panels/") || isAboutSource(suggestion.source);
 }
 
 export async function getSharedPanelAddressOptions(args: {

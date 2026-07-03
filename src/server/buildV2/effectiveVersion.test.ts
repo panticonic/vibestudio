@@ -12,6 +12,8 @@ import {
   recomputeFromNodes,
   diffEvMaps,
   computeBuildKey,
+  setBuildRootConfig,
+  getRootDependencyFingerprintInfo,
   type ContentHashMap,
 } from "./effectiveVersion.js";
 
@@ -196,6 +198,148 @@ describe("effectiveVersion", () => {
         else process.env["VIBEZ1_APP_ROOT"] = previousAppRoot;
         fs.rmSync(root, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe("root-dependency fingerprint (build-key hermeticity)", () => {
+    const previousAppRoot = process.env["VIBEZ1_APP_ROOT"];
+    let root: string;
+
+    function writeRootFiles(dir: string, pkg: string, lock: string, ws: string): void {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "package.json"), pkg);
+      fs.writeFileSync(path.join(dir, "pnpm-lock.yaml"), lock);
+      fs.writeFileSync(path.join(dir, "pnpm-workspace.yaml"), ws);
+    }
+
+    function writeWorkspaceFiles(dir: string, pkg = '{"name":"workspace"}'): void {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "package.json"), pkg);
+      fs.writeFileSync(path.join(dir, "pnpm-lock.yaml"), "workspace-lock\n");
+      fs.writeFileSync(path.join(dir, "pnpm-workspace.yaml"), "workspace-packages\n");
+      fs.writeFileSync(path.join(dir, "tsconfig.json"), "{}\n");
+      fs.writeFileSync(path.join(dir, "tsconfig.integration.json"), "{}\n");
+    }
+
+    beforeEach(() => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-hermetic-"));
+      delete process.env["VIBEZ1_APP_ROOT"];
+      setBuildRootConfig(null);
+    });
+
+    afterEach(() => {
+      if (previousAppRoot === undefined) delete process.env["VIBEZ1_APP_ROOT"];
+      else process.env["VIBEZ1_APP_ROOT"] = previousAppRoot;
+      setBuildRootConfig(null);
+      fs.rmSync(root, { recursive: true, force: true });
+    });
+
+    it("folds host-root file CONTENTS into the build key (content-based identity)", () => {
+      const dir = path.join(root, "app");
+      writeRootFiles(
+        dir,
+        '{"name":"host","version":"1.0.0"}',
+        "lockfileVersion: '9.0'\n",
+        "packages: []\n"
+      );
+      setBuildRootConfig({ appRoot: dir });
+      const before = computeBuildKey("unit-a", "ev1", true);
+
+      // Change package.json CONTENTS (add a dependency) — build key must change.
+      fs.writeFileSync(
+        path.join(dir, "package.json"),
+        '{"name":"host","version":"1.0.0","dependencies":{"left-pad":"1.0.0"}}'
+      );
+      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+    });
+
+    it("uses the injected app root when VIBEZ1_APP_ROOT is unset", () => {
+      const dirA = path.join(root, "a");
+      const dirB = path.join(root, "b");
+      writeRootFiles(dirA, '{"name":"a"}', "lockfileVersion: '9.0'\n", "packages: []\n");
+      writeRootFiles(dirB, '{"name":"b"}', "lockfileVersion: '9.0'\n", "packages: []\n");
+
+      setBuildRootConfig({ appRoot: dirA });
+      const keyA = computeBuildKey("unit-a", "ev1", true);
+      expect(getRootDependencyFingerprintInfo().rootSource).toBe("injected");
+      expect(getRootDependencyFingerprintInfo().root).toBe(dirA);
+
+      setBuildRootConfig({ appRoot: dirB });
+      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(keyA);
+    });
+
+    it("folds nested workspace dependency/config files into the build key", () => {
+      const appRoot = path.join(root, "app");
+      const workspaceRoot = path.join(appRoot, "workspace");
+      writeRootFiles(appRoot, '{"name":"host"}', "lock\n", "ws\n");
+      writeWorkspaceFiles(workspaceRoot);
+
+      setBuildRootConfig({ appRoot, workspaceRoot });
+      const before = computeBuildKey("unit-a", "ev1", true);
+      const beforeInfo = getRootDependencyFingerprintInfo();
+      expect(beforeInfo.files.map((f) => f.file)).toContain("workspace/package.json");
+
+      fs.writeFileSync(
+        path.join(workspaceRoot, "package.json"),
+        '{"name":"workspace","overrides":{"x":"1.0.0"}}'
+      );
+      expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
+    });
+
+    it("lets VIBEZ1_APP_ROOT override the injected app root", () => {
+      const injected = path.join(root, "injected");
+      const overridden = path.join(root, "override");
+      writeRootFiles(injected, '{"name":"injected"}', "lock\n", "ws\n");
+      writeRootFiles(overridden, '{"name":"override"}', "lock\n", "ws\n");
+
+      setBuildRootConfig({ appRoot: injected });
+      process.env["VIBEZ1_APP_ROOT"] = overridden;
+      const info = getRootDependencyFingerprintInfo();
+      expect(info.rootSource).toBe("env");
+      expect(info.root).toBe(overridden);
+    });
+
+    it("handles missing files deterministically and distinctly from present-empty", () => {
+      const absentDir = path.join(root, "absent");
+      const emptyDir = path.join(root, "empty");
+      // absentDir: only package.json exists (lock + workspace missing).
+      fs.mkdirSync(absentDir, { recursive: true });
+      fs.writeFileSync(path.join(absentDir, "package.json"), '{"name":"x"}');
+      // emptyDir: all three exist but lock + workspace are empty.
+      writeRootFiles(emptyDir, '{"name":"x"}', "", "");
+
+      setBuildRootConfig({ appRoot: absentDir });
+      const absentInfo = getRootDependencyFingerprintInfo();
+      const absentKey = computeBuildKey("u", "ev", true);
+      expect(absentInfo.files.map((f) => f.present)).toEqual([true, false, false]);
+      expect(absentInfo.files[1]?.contentHash).toBeNull();
+
+      setBuildRootConfig({ appRoot: emptyDir });
+      const emptyInfo = getRootDependencyFingerprintInfo();
+      const emptyKey = computeBuildKey("u", "ev", true);
+      expect(emptyInfo.files.map((f) => f.present)).toEqual([true, true, true]);
+
+      // Present-empty must not collide with absent.
+      expect(emptyKey).not.toBe(absentKey);
+
+      // Deterministic: recomputing over the same absent root is stable.
+      setBuildRootConfig({ appRoot: absentDir });
+      expect(computeBuildKey("u", "ev", true)).toBe(absentKey);
+    });
+
+    it("surfaces input paths + presence for observability", () => {
+      const dir = path.join(root, "obs");
+      writeRootFiles(dir, '{"name":"o"}', "lock\n", "ws\n");
+      setBuildRootConfig({ appRoot: dir });
+      const info = getRootDependencyFingerprintInfo();
+      expect(info.files.map((f) => f.file)).toEqual([
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+      ]);
+      expect(info.files.every((f) => f.path.startsWith(dir))).toBe(true);
+      expect(info.files.every((f) => f.present && f.contentHash)).toBe(true);
+      expect(info.value).toMatch(/^[0-9a-f]{16}$/);
     });
   });
 });

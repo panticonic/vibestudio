@@ -30,17 +30,106 @@ import {
   sha256HexSyncText,
   sortForCanonicalJson,
   canonicalJson,
-  stableSha256Hex,
   stateHashForRoot,
   EMPTY_MANIFEST_HASH,
   EMPTY_STATE_HASH,
   type LogEnvelopeSemanticInput,
 } from "@workspace/agentic-protocol";
+import {
+  EditEngine,
+  MergeEngine,
+  decodeUtf8Text,
+  discoverRepoPaths,
+  hasConflictMarkers,
+  type EditOp as VcsEditOp,
+  type MergeComputation,
+  type MergeHunk,
+  type StateFileEntry,
+  type WorkingFileEntry,
+} from "@workspace/vcs-engine";
+
+/** A provenance edit-op minted for a main-advance / merge commit (the shape
+ *  {@link IngestWorktreeStateInput.editOps} expects). */
+type ProvenanceEditOp = {
+  kind: "replace" | "create" | "delete" | "chmod";
+  path: string;
+  oldContentHash: string | null;
+  newContentHash: string | null;
+  hunks?: unknown;
+  mode?: number | null;
+  synthetic?: boolean;
+};
+
+/** One repo's slice of a write-ahead publish intent (§6): everything needed to
+ *  reconstruct the provenance commit for a main advance whose ref CAS already
+ *  landed but whose provenance was not yet recorded (crash window). */
+interface PublishIntentEntry {
+  repoPath: string;
+  logId: string;
+  /** The main state the CAS swapped FROM (null = repo creation). */
+  expectedOld: string | null;
+  /** The main state the CAS swapped TO (the candidate). */
+  next: string;
+  /** Second-parent event/state (the pushed ctx commit / merge source). */
+  parentEventId: string | null;
+  parentStateHash: string | null;
+  files: Array<{ path: string; contentHash: string; mode: number }>;
+  editOps: ProvenanceEditOp[];
+  /** Provenance ops are synthetic (crash-heal catch-up) — skip chain checks. */
+  synthetic?: boolean;
+}
+
+interface PublishIntent {
+  intentId: string;
+  operation: "push" | "merge" | "import";
+  entries: PublishIntentEntry[];
+  message?: string | null;
+  actor?: ParticipantRef | null;
+  sourceHead?: string | null;
+}
+
+/** The DO-side push result — mirrors the host push contract (and the shared
+ *  `vcsPushResultSchema`) so in-tree callers keep working across the flip. */
+type VcsPushResultDo =
+  | { status: "pushed" | "up-to-date"; repoPaths: string[]; reports: unknown[] }
+  | {
+      status: "diverged";
+      divergences: Array<{
+        repoPath: string;
+        base: string | null;
+        mainTip: string | null;
+        upstreamCommits: Array<{
+          eventId: string;
+          message: string;
+          stateHash: string;
+          createdAt: string | null;
+        }>;
+        mergeable: "clean" | "conflict";
+        conflictPaths?: string[];
+      }>;
+    }
+  | { status: "build-failed"; reports: unknown[] };
+
+/** DO-side git-import publish result: the staged import tree either advanced
+ *  the protected `main` or already matched it. */
+type VcsImportPublishResultDo = {
+  status: "published" | "up-to-date";
+  repoPath: string;
+  stateHash: string;
+};
+
+const SYSTEM_PARTICIPANT = { kind: "system", id: "system" } as unknown as ParticipantRef;
 
 type JsonPrimitive = null | string | number | boolean;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 type JsonRecord = Record<string, JsonValue>;
 type SqlBinding = null | string | number | boolean | Uint8Array;
+
+interface GadGcRootsInput {
+  rootStateHashes?: string[] | null;
+  protectedBlobDigests?: string[] | null;
+  protectedTreeDigests?: string[] | null;
+}
 
 const CHANNEL_LOG_HEAD = "main";
 
@@ -78,6 +167,7 @@ const GAD_REQUIRED_TABLES = [
   "gad_worktree_edit_ops",
   "gad_claims",
   "gad_gc_candidates",
+  "gad_publish_intents",
 ] as const;
 
 /** Log kinds whose events are full agentic trajectory events (validated and
@@ -223,7 +313,17 @@ export interface IngestWorktreeStateInput {
     newContentHash?: string | null;
     hunks?: unknown;
     mode?: number | null;
+    /** P3/A2: a synthetic op (crash-heal catch-up ingest) carries no true
+     *  first-parent hunks — blame treats it as a chain RESTART and the
+     *  chain-continuity check skips it. */
+    synthetic?: boolean | null;
   }> | null;
+  /** P3/A2 (blame invariant U2): when true, validate that each non-synthetic
+   *  editOp's `oldContentHash` matches the file's content in the FIRST-PARENT
+   *  tree (`baseStateHash`) — the ops compose against the first parent. Rejects
+   *  on mismatch. Set by the DO push/merge provenance paths; left off for
+   *  bootstrap/fork ingests whose base may not be locally resolvable. */
+  validateFirstParentChain?: boolean | null;
   /** Causality (agent turn / tool-call that authored this commit) — recorded on
    *  the edit-op rows so VCS provenance ties to the agentic trajectory. */
   invocationId?: string | null;
@@ -522,8 +622,115 @@ function normalizePath(path: string): string {
   return normalized;
 }
 
+/** Normalize a workspace-relative repo path (the `vcs:repo:<path>` key) —
+ *  kept semantically identical to the host's normalizeRepoPathForLog. */
+function normalizeRepoPathArg(repoPath: string): string {
+  const normalized = repoPath.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
+  if (!normalized || normalized.includes("..")) {
+    throw new Error(`Invalid workspace repo path: ${repoPath}`);
+  }
+  return normalized;
+}
+
+/** Per-repo VCS log id for a workspace repo path. */
+function logIdForRepoPath(repoPath: string): string {
+  return `vcs:repo:${normalizeRepoPathArg(repoPath)}`;
+}
+
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
+}
+
+// ── Host content-store / refs access (P5b merge engine, P5c edit engine) ────
+
+/** One recursive tree-listing entry from the host content store. */
+interface HostTreeListEntry {
+  path: string;
+  kind: string;
+  contentHash?: string;
+  mode?: number;
+}
+
+/** One directory-node entry for `putTree` (the content store's wire shape). */
+type HostTreeEntry =
+  | { name: string; kind: "file"; contentHash: string; mode: number }
+  | { name: string; kind: "dir"; childHash: string };
+
+/**
+ * The slice of the host `blobstore.*` RPC surface the VCS engines need:
+ * mirrored tree listings for states this store has not recorded, blob bytes
+ * (base64 on the wire — workerd has no Buffer), and tree writes so states
+ * COMPOSED HERE satisfy the mirroring invariant (every handed-out state hash
+ * resolves to a full tree in the content store).
+ */
+interface HostContentStore {
+  listTree(
+    ref: string,
+    opts?: { prefix?: string; limit?: number }
+  ): Promise<HostTreeListEntry[] | null>;
+  /** Entries of one tree node, or null when absent — the cheap "is this state
+   *  already mirrored?" probe (the `state:` node is always written last). */
+  getTree(ref: string): Promise<unknown | null>;
+  getBase64(digest: string): Promise<string | null>;
+  putBase64(bytesBase64: string): Promise<{ digest: string; size: number }>;
+  putTree(
+    entries: HostTreeEntry[],
+    opts?: { root?: boolean }
+  ): Promise<{ treeHash: string; stateHash?: string }>;
+}
+
+/** The slice of the host `refs.*` RPC surface the VCS semantics need:
+ *  reading a repo's protected `main` (the compose-base / status baseline) and
+ *  enumerating every repo's protected refs (workspace-view composition). */
+interface HostRefsStore {
+  readMain(repoPath: string): Promise<{ stateHash: string } | null>;
+  listMains(): Promise<Array<{ repoPath: string; stateHash: string }>>;
+  /** P3: atomic group compare-and-swap over protected mains — the ONE
+   *  ref-write path (§2.1). Approval-gated host-side; the DO is the single
+   *  admitted writer. `invocationToken` names the on-behalf-of principal (§4).
+   *  Throws a structured conflict when any `expectedOld` no longer matches. */
+  updateMains(input: {
+    entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
+    reason?: string;
+    operation: "push" | "merge" | "import" | "delete" | "restore";
+    invocationToken?: string;
+  }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }>;
+  /** The host ref log for a repo (audit trail of main movement) — the
+   *  stale-intent discard consults this, not just current values (§6). */
+  readMainLog(
+    repoPath: string,
+    limit?: number
+  ): Promise<Array<{ seq: number; old: string | null; new: string | null; operation: string }>>;
+}
+
+/** The slice of the host `build.*` RPC surface the push gate needs (§2.2):
+ *  a pure, cached validate over a candidate workspace VIEW hash. */
+interface HostBuildStore {
+  validate(input: {
+    viewHash: string;
+    repoPaths: string[];
+    baseViewHash?: string;
+  }): Promise<Array<{ required?: boolean; status: string; [k: string]: unknown }>>;
+}
+
+/** listTree caps results; a silently truncated listing would compose/merge as
+ *  mass deletions, so overflow is a loud error. */
+const MERGE_LIST_TREE_LIMIT = 100_000;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
 }
 
 /** Quote each term so user input can't inject FTS5 query syntax. */
@@ -766,6 +973,26 @@ interface PreparedLogEvent {
   publish: Array<{ channelId: string; audience?: unknown }>;
 }
 
+/** camelCase edit-op provenance row (the userland vcs.* read surface). */
+interface VcsEditOpRowWire {
+  id: number;
+  eventId: string;
+  committedEventId: string | null;
+  committedSeq: number | null;
+  editSeq: number | null;
+  outputStateHash: string | null;
+  ordinal: number;
+  kind: string;
+  path: string;
+  oldContentHash: string | null;
+  newContentHash: string | null;
+  mode: number | null;
+  actorId: string | null;
+  invocationId: string | null;
+  turnId: string | null;
+  createdAt: string | null;
+}
+
 interface LineageSegment {
   logId: string;
   head: string;
@@ -800,7 +1027,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // identical content states don't conflate).
   // v18: schema cut removes unimplemented knowledge sidecar projection tables.
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
-  static override schemaVersion = 21;
+  // v22: P3 narrow-host push/merge orchestration moves into the DO —
+  // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
+  // `synthetic` column on gad_worktree_edit_ops (crash-heal chain restarts).
+  static override schemaVersion = 22;
 
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
@@ -1261,7 +1491,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
         actor_json TEXT,
         invocation_id TEXT,
         turn_id TEXT,
-        created_at TEXT
+        created_at TEXT,
+        -- P3/A2: a synthetic op carries no true first-parent hunks (the
+        -- crash-heal catch-up ingest of a ref's tree). Blame treats synthetic
+        -- rows as chain RESTARTS (like create), never mis-blaming or tripping
+        -- the first-parent chain-continuity check.
+        synthetic INTEGER
       )
     `);
     // Two sequencing orders: edit_seq is per edit CALL on a (log_id, head) and
@@ -1309,6 +1544,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
       CREATE TABLE IF NOT EXISTS gad_gc_candidates (
         digest TEXT PRIMARY KEY,
         marked_at TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      -- P3: write-ahead publish intents. Recorded durably BEFORE calling the
+      -- host refs.updateMains so a crash between the CAS landing and provenance
+      -- recording can be healed with full fidelity (parents, message, actor
+      -- labels). Deleted once provenance is recorded (a completed intent). The
+      -- candidate 'next' state hashes are GC roots while the intent is pending
+      -- (see runGadGcMark) so a crash cannot sweep an un-recorded candidate.
+      CREATE TABLE IF NOT EXISTS gad_publish_intents (
+        intent_id TEXT PRIMARY KEY,
+        operation TEXT NOT NULL,          -- "push" | "merge"
+        -- entries: [{ repoPath, logId, expectedOld, next, parentEventId,
+        --            parentStateHash, files:[{path,contentHash,mode}], editOps }]
+        entries_json TEXT NOT NULL,
+        message TEXT,
+        actor_json TEXT,
+        source_head TEXT,
+        created_at TEXT NOT NULL
       )
     `);
     this.ensureEmptyState();
@@ -1418,7 +1672,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     return (
       this.sql
-        .exec(`SELECT * FROM gad_worktree_heads ${where} ORDER BY log_id ASC, head ASC`, ...bindings)
+        .exec(
+          `SELECT * FROM gad_worktree_heads ${where} ORDER BY log_id ASC, head ASC`,
+          ...bindings
+        )
         .toArray() as JsonRecord[]
     ).map((row) => this.mapWorktreeHead(row));
   }
@@ -1454,7 +1711,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
   getContextBase(input: { contextId: string }): { contextId: string; stateHash: string } | null {
     this.ensureReady();
     const row = this.sql
-      .exec(`SELECT context_id, state_hash FROM vcs_context_bases WHERE context_id = ?`, input.contextId)
+      .exec(
+        `SELECT context_id, state_hash FROM vcs_context_bases WHERE context_id = ?`,
+        input.contextId
+      )
       .toArray()[0] as JsonRecord | undefined;
     return row
       ? { contextId: String(row["context_id"]), stateHash: String(row["state_hash"]) }
@@ -1649,7 +1909,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     if (!mainWorktree) {
       return { archived: false, archiveHead: null, stateHash: null, headHash: null };
     }
-    if (this.logHeadRow(logId, archiveHead) || this.resolveWorktreeHeadInternal(logId, archiveHead)) {
+    if (
+      this.logHeadRow(logId, archiveHead) ||
+      this.resolveWorktreeHeadInternal(logId, archiveHead)
+    ) {
       throw new Error(`archiveRepoMain: archive head already exists: ${logId}:${archiveHead}`);
     }
     const stateHash = mainWorktree.stateHash;
@@ -1658,10 +1921,30 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     // Re-key the head's lineage main → archiveHead (events/blobs keep their
     // content hashes — the parent chain is hash-linked, not head-linked).
-    this.sql.exec(`UPDATE log_heads SET head = ? WHERE log_id = ? AND head = ?`, archiveHead, logId, MAIN);
-    this.sql.exec(`UPDATE log_events SET head = ? WHERE log_id = ? AND head = ?`, archiveHead, logId, MAIN);
-    this.sql.exec(`UPDATE log_blob_refs SET head = ? WHERE log_id = ? AND head = ?`, archiveHead, logId, MAIN);
-    this.sql.exec(`UPDATE gad_worktree_heads SET head = ? WHERE log_id = ? AND head = ?`, archiveHead, logId, MAIN);
+    this.sql.exec(
+      `UPDATE log_heads SET head = ? WHERE log_id = ? AND head = ?`,
+      archiveHead,
+      logId,
+      MAIN
+    );
+    this.sql.exec(
+      `UPDATE log_events SET head = ? WHERE log_id = ? AND head = ?`,
+      archiveHead,
+      logId,
+      MAIN
+    );
+    this.sql.exec(
+      `UPDATE log_blob_refs SET head = ? WHERE log_id = ? AND head = ?`,
+      archiveHead,
+      logId,
+      MAIN
+    );
+    this.sql.exec(
+      `UPDATE gad_worktree_heads SET head = ? WHERE log_id = ? AND head = ?`,
+      archiveHead,
+      logId,
+      MAIN
+    );
 
     // The recall index is a derived projection — drop the repo's `main` rows so an
     // archived repo never surfaces in recall (re-foldable if it is ever restored).
@@ -1708,10 +1991,30 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const headHash = archLog.hash;
 
     // Re-key the archive head's lineage back to `main`.
-    this.sql.exec(`UPDATE log_heads SET head = ? WHERE log_id = ? AND head = ?`, MAIN, logId, archiveHead);
-    this.sql.exec(`UPDATE log_events SET head = ? WHERE log_id = ? AND head = ?`, MAIN, logId, archiveHead);
-    this.sql.exec(`UPDATE log_blob_refs SET head = ? WHERE log_id = ? AND head = ?`, MAIN, logId, archiveHead);
-    this.sql.exec(`UPDATE gad_worktree_heads SET head = ? WHERE log_id = ? AND head = ?`, MAIN, logId, archiveHead);
+    this.sql.exec(
+      `UPDATE log_heads SET head = ? WHERE log_id = ? AND head = ?`,
+      MAIN,
+      logId,
+      archiveHead
+    );
+    this.sql.exec(
+      `UPDATE log_events SET head = ? WHERE log_id = ? AND head = ?`,
+      MAIN,
+      logId,
+      archiveHead
+    );
+    this.sql.exec(
+      `UPDATE log_blob_refs SET head = ? WHERE log_id = ? AND head = ?`,
+      MAIN,
+      logId,
+      archiveHead
+    );
+    this.sql.exec(
+      `UPDATE gad_worktree_heads SET head = ? WHERE log_id = ? AND head = ?`,
+      MAIN,
+      logId,
+      archiveHead
+    );
 
     return { restored: true, archiveHead, stateHash, headHash };
   }
@@ -1936,7 +2239,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     for (const segment of this.logLineage(input.logId, input.head)) {
       const { where, bindings } = this.logEventWhereForSegment(segment, input);
       const row = this.sql
-        .exec(`SELECT COUNT(*) AS cnt, MIN(seq) AS first_seq FROM log_events WHERE ${where}`, ...bindings)
+        .exec(
+          `SELECT COUNT(*) AS cnt, MIN(seq) AS first_seq FROM log_events WHERE ${where}`,
+          ...bindings
+        )
         .one();
       const segmentCount = asNumber(row["cnt"]);
       count += segmentCount;
@@ -3231,7 +3537,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         payload["metadata"] ?? envelope.annotations?.["metadata"] ?? actor["metadata"] ?? null
       )
     );
-    const rolesJson = Object.keys(metadata).length > 0 ? JSON.stringify(sortForCanonicalJson(metadata)) : null;
+    const rolesJson =
+      Object.keys(metadata).length > 0 ? JSON.stringify(sortForCanonicalJson(metadata)) : null;
     const openRow = this.sql
       .exec(
         `SELECT joined_at FROM channel_roster
@@ -3334,6 +3641,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
       .toArray()[0] as JsonRecord | undefined;
     if (!state) throw new Error(`Unknown worktree state: ${stateHash}`);
     return asString(state["manifest_root_hash"]) ?? EMPTY_MANIFEST_HASH;
+  }
+
+  /** Whether this store has recorded a worktree state (known lineage). */
+  private hasWorktreeState(stateHash: string): boolean {
+    return (
+      this.sql
+        .exec(`SELECT 1 FROM gad_worktree_states WHERE state_hash = ? LIMIT 1`, stateHash)
+        .toArray().length > 0
+    );
   }
 
   private manifestEntries(manifestHash: string): JsonRecord[] {
@@ -3574,67 +3890,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @rpc({ callers: ["panel", "do", "worker", "server"] })
-  getSubtreeHash(input: { stateHash: string; path: string }): { subtreeHash: string | null } {
-    this.ensureReady();
-    const segments = normalizePath(input.path).split("/");
-    let manifestHash: string | null = this.manifestRootForState(input.stateHash);
-    for (let index = 0; index < segments.length; index += 1) {
-      if (!manifestHash) return { subtreeHash: null };
-      const entry = this.sql
-        .exec(
-          `SELECT * FROM gad_manifest_entries WHERE manifest_hash = ? AND name = ? LIMIT 1`,
-          manifestHash,
-          segments[index]!
-        )
-        .toArray()[0] as JsonRecord | undefined;
-      if (!entry) return { subtreeHash: null };
-      if (index === segments.length - 1) {
-        return {
-          subtreeHash:
-            entry["entry_kind"] === "dir"
-              ? asString(entry["child_manifest_hash"])
-              : (
-                    this.sql
-                      .exec(
-                        `SELECT content_hash FROM gad_file_versions WHERE id = ?`,
-                        asNumber(entry["file_version_id"])
-                      )
-                      .toArray()[0] as JsonRecord | undefined
-                  )?.["content_hash"] != null
-                ? String(
-                    (
-                      this.sql
-                        .exec(
-                          `SELECT content_hash FROM gad_file_versions WHERE id = ?`,
-                          asNumber(entry["file_version_id"])
-                        )
-                        .one() as Record<string, unknown>
-                    )["content_hash"]
-                  )
-                : null,
-        };
-      }
-      if (entry["entry_kind"] !== "dir") return { subtreeHash: null };
-      manifestHash = asString(entry["child_manifest_hash"]);
-    }
-    return { subtreeHash: null };
-  }
-
-  /** Batch form of getSubtreeHash — one DO round trip for a whole unit list
-   *  (buildV2 EV computation hashes every workspace unit at once). */
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  getSubtreeHashes(input: { stateHash: string; paths: string[] }): {
-    subtreeHashes: Record<string, string | null>;
-  } {
-    this.ensureReady();
-    const subtreeHashes: Record<string, string | null> = {};
-    for (const path of input.paths) {
-      subtreeHashes[path] = this.getSubtreeHash({ stateHash: input.stateHash, path }).subtreeHash;
-    }
-    return { subtreeHashes };
-  }
-
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
   readGadFileAtState(input: { stateHash: string; path: string }): JsonRecord | null {
     this.ensureReady();
     const path = normalizePath(input.path);
@@ -3802,8 +4057,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { added, removed, changed };
   }
 
-  /** Full recursive file listing of a worktree state (vcs materialize). */
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  /** Full recursive file listing of a worktree state (vcs materialize; the
+   *  git-bridge extension's listing fallback for pre-mirroring states). */
+  @rpc({ callers: ["panel", "do", "worker", "server", "extension"] })
   listStateFiles(input: { stateHash: string }): JsonRecord[] {
     this.ensureReady();
     return this.filesForState(input.stateHash);
@@ -3938,12 +4194,38 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // Worktree ingest (out-of-band edits become first-class observed transitions)
   // -------------------------------------------------------------------------
 
-  @rpc({ callers: ["do", "server"] })
+  // "extension": the trusted git-bridge extension ingests git-import
+  // history onto a NON-MAIN staging head (`import:*`); it is confined below
+  // and can never touch a repo's protected `main` lineage. Main lineage
+  // records are written ONLY by the DO's own publish path (the private
+  // `ingestWorktreeStateInTxn`, reached via vcsPush/vcsMerge/vcsImportPublish),
+  // never through this RPC surface. This structurally closes finding 2 (any
+  // extension ingesting to main + an ungated adoption).
+  @rpc({ callers: ["do", "server", "extension"] })
   async ingestWorktreeState(input: IngestWorktreeStateInput): Promise<{
     stateHash: string;
     eventId: string;
     headHash: string;
   }> {
+    // READ-AT-ENTRY: capture the verified caller kind before any await.
+    const callerKind = this.caller?.callerKind ?? null;
+    const targetsRepoMain = input.logId.startsWith("vcs:repo:") && input.head === "main";
+    // Confine sandboxed/extension callers to non-main staging heads: only the
+    // trusted in-process host (`do`/`server`, e.g. fork-rename provenance,
+    // group ingest, crash reconcile) may ingest onto a repo `main` lineage. An
+    // over-RPC call always carries an attributed caller kind (the framework
+    // refuses unattributed inbound RPC), so a present kind outside {do,server}
+    // — in practice the git-bridge `extension` — is rejected here; a null kind
+    // is an in-process/self call and is trusted. The DO's OWN publish path
+    // writes main lineage through the private `ingestWorktreeStateInTxn`, never
+    // this surface. This structurally closes finding 2.
+    if (targetsRepoMain && callerKind !== null && callerKind !== "do" && callerKind !== "server") {
+      throw new Error(
+        `ingestWorktreeState: caller "${callerKind}" may not ingest onto a protected ` +
+          `main lineage (${input.logId}). Ingest onto a non-main staging head and ` +
+          `publish through vcs.push / the import-publish path.`
+      );
+    }
     this.ensureReady();
     return this.transaction(() => this.ingestWorktreeStateInTxn(input));
   }
@@ -3956,98 +4238,151 @@ export class GadWorkspaceDO extends DurableObjectBase {
     headHash: string;
     headSeq: number;
   } {
-      const currentHead = this.resolveWorktreeHeadInternal(input.logId, input.head);
-      const currentStateHash = currentHead?.stateHash ?? EMPTY_STATE_HASH;
-      if (
-        input.expectedRefStateHash !== undefined &&
-        input.expectedRefStateHash !== null &&
-        input.expectedRefStateHash !== currentStateHash
-      ) {
+    const currentHead = this.resolveWorktreeHeadInternal(input.logId, input.head);
+    const currentStateHash = currentHead?.stateHash ?? EMPTY_STATE_HASH;
+    if (
+      input.expectedRefStateHash !== undefined &&
+      input.expectedRefStateHash !== null &&
+      input.expectedRefStateHash !== currentStateHash
+    ) {
+      // Repo `main` heads are NOT owned by this store: the server's
+      // protected-ref service (RefService) is the single main authority,
+      // and this store records main transitions as downstream PROVENANCE —
+      // synchronously for user-initiated VCS ops, asynchronously through
+      // the provenance follower for scan/freshness advances, and via the
+      // ref→store reconciler after a crash gap. A strict head CAS here
+      // would spuriously reject legitimate recording whenever this store
+      // is (transiently, by design) behind the ref. So for main we treat
+      // `expectedRefStateHash` as the CLAIMED PREDECESSOR instead of a
+      // swap guard: the transition is accepted as long as it attaches to
+      // lineage this store actually knows — the claimed predecessor must
+      // be a recorded worktree state (or the empty state). An UNKNOWN
+      // predecessor is genuinely inconsistent (the caller skipped
+      // reconciliation, or the hash spaces diverged) and is still rejected
+      // loudly. Non-main heads (ctx:*, archives) remain store-authoritative
+      // and keep the strict CAS.
+      const refOwnedMain = input.logId.startsWith("vcs:repo:") && input.head === "main";
+      if (!refOwnedMain) {
         throw new Error(`worktree head CAS conflict: ${input.logId}:${input.head}`);
       }
-      const baseStateHash = input.baseStateHash ?? currentStateHash;
-      const files = input.files.map((file) => {
-        const path = normalizePath(file.path);
-        const mode = file.mode ?? 33188;
-        this.ensureBlob(file.contentHash, file.size ?? 0);
-        return {
-          path,
-          contentHash: file.contentHash,
-          mode,
-          fileVersionId: this.ensureFileVersion(path, file.contentHash, mode),
-        };
-      });
-      const stateHash = this.createWorktreeState(files, {
-        ingest: true,
-        ...(input.summary ? { summary: input.summary } : {}),
-      });
-      const existingLog = this.logHeadRow(input.logId, input.head);
-      const logKind = existingLog
-        ? String(existingLog["log_kind"])
-        : String(input.logKind ?? "trajectory");
-      const eventId = input.eventId ?? crypto.randomUUID();
-      const result = this.appendLogEventInTxn({
-        logId: input.logId,
-        head: input.head,
-        logKind,
-        events: [
-          {
-            envelopeId: eventId,
-            actor: input.actor,
-            payloadKind: input.eventKind ?? "state.snapshot_ingested",
-            payload: {
-              protocol: "agentic.trajectory.v1",
-              inputStateHash: baseStateHash,
-              outputStateHash: stateHash,
-              ...(input.parentStateHashes && input.parentStateHashes.length > 0
-                ? { parentStateHashes: input.parentStateHashes }
-                : {}),
-              ...(input.parentEventIds && input.parentEventIds.length > 0
-                ? { parentEventIds: input.parentEventIds }
-                : {}),
-              ...(input.summary ? { summary: input.summary } : {}),
-              ...(input.metadata ? { metadata: input.metadata } : {}),
-            },
+      if (
+        input.expectedRefStateHash !== EMPTY_STATE_HASH &&
+        !this.hasWorktreeState(input.expectedRefStateHash)
+      ) {
+        throw new Error(
+          `main provenance ingest for ${input.logId} claims unknown predecessor ` +
+            `${input.expectedRefStateHash} — reconcile the store to the protected ref first`
+        );
+      }
+    }
+    const baseStateHash = input.baseStateHash ?? currentStateHash;
+    const files = input.files.map((file) => {
+      const path = normalizePath(file.path);
+      const mode = file.mode ?? 33188;
+      this.ensureBlob(file.contentHash, file.size ?? 0);
+      return {
+        path,
+        contentHash: file.contentHash,
+        mode,
+        fileVersionId: this.ensureFileVersion(path, file.contentHash, mode),
+      };
+    });
+    const stateHash = this.createWorktreeState(files, {
+      ingest: true,
+      ...(input.summary ? { summary: input.summary } : {}),
+    });
+    const existingLog = this.logHeadRow(input.logId, input.head);
+    const logKind = existingLog
+      ? String(existingLog["log_kind"])
+      : String(input.logKind ?? "trajectory");
+    const eventId = input.eventId ?? crypto.randomUUID();
+    const result = this.appendLogEventInTxn({
+      logId: input.logId,
+      head: input.head,
+      logKind,
+      events: [
+        {
+          envelopeId: eventId,
+          actor: input.actor,
+          payloadKind: input.eventKind ?? "state.snapshot_ingested",
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            inputStateHash: baseStateHash,
+            outputStateHash: stateHash,
+            ...(input.parentStateHashes && input.parentStateHashes.length > 0
+              ? { parentStateHashes: input.parentStateHashes }
+              : {}),
+            ...(input.parentEventIds && input.parentEventIds.length > 0
+              ? { parentEventIds: input.parentEventIds }
+              : {}),
+            ...(input.summary ? { summary: input.summary } : {}),
+            ...(input.metadata ? { metadata: input.metadata } : {}),
           },
-        ],
-      });
-      if (input.editOps && input.editOps.length > 0) {
-        // editOps passed to an ingest are COMMITTED rows (bootstrap/merge/fork
-        // commits). The working edit→commit path does NOT pass editOps — it
-        // re-keys pre-existing working rows in commitRepo.
-        const now = nowIso();
-        const actorId = asString((input.actor as unknown as Record<string, unknown>)?.["id"]) ?? null;
-        const actorJson = input.actor ? JSON.stringify(input.actor) : null;
-        input.editOps.forEach((op, ordinal) => {
-          this.sql.exec(
-            `INSERT INTO gad_worktree_edit_ops (
+        },
+      ],
+    });
+    if (input.editOps && input.editOps.length > 0) {
+      // editOps passed to an ingest are COMMITTED rows (bootstrap/merge/fork
+      // commits, and P3 push/merge provenance). The working edit→commit path
+      // does NOT pass editOps — it re-keys pre-existing working rows in
+      // commitRepo.
+      const now = nowIso();
+      const actorId = asString((input.actor as unknown as Record<string, unknown>)?.["id"]) ?? null;
+      const actorJson = input.actor ? JSON.stringify(input.actor) : null;
+      // A2 (U2): chain continuity vs the FIRST PARENT. Each non-synthetic op's
+      // old_content_hash must equal the file's content in baseStateHash (the
+      // first-parent tree). Only enforced when requested AND the base is locally
+      // resolvable (main advances always attach to a recorded predecessor).
+      if (input.validateFirstParentChain && this.hasWorktreeState(baseStateHash)) {
+        const baseByPath = new Map<string, string>();
+        for (const f of this.filesForState(baseStateHash)) {
+          baseByPath.set(String(f["path"]), String(f["content_hash"]));
+        }
+        for (const op of input.editOps) {
+          if (op.synthetic) continue;
+          const path = normalizePath(op.path);
+          const expected = baseByPath.get(path) ?? null;
+          const claimed = op.oldContentHash ?? null;
+          if (claimed !== expected) {
+            throw new Error(
+              `editOps chain continuity violation for ${input.logId}:${input.head} at ${path}: ` +
+                `oldContentHash ${claimed ?? "∅"} does not match first-parent content ` +
+                `${expected ?? "∅"} in ${baseStateHash}`
+            );
+          }
+        }
+      }
+      input.editOps.forEach((op, ordinal) => {
+        this.sql.exec(
+          `INSERT INTO gad_worktree_edit_ops (
                event_id, log_id, head, committed_event_id, committed_seq,
                edit_seq, output_state_hash, ordinal, kind, path,
                old_content_hash, new_content_hash, hunks_json, mode,
-               actor_id, actor_json, invocation_id, turn_id, created_at
-             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            eventId,
-            input.logId,
-            input.head,
-            eventId,
-            result.headSeq,
-            stateHash,
-            ordinal,
-            op.kind,
-            normalizePath(op.path),
-            op.oldContentHash ?? null,
-            op.newContentHash ?? null,
-            op.hunks !== undefined ? JSON.stringify(op.hunks) : null,
-            typeof op.mode === "number" ? op.mode : null,
-            actorId,
-            actorJson,
-            input.invocationId ?? null,
-            input.turnId ?? null,
-            now
-          );
-        });
-      }
-      return { stateHash, eventId, headHash: result.headHash, headSeq: result.headSeq };
+               actor_id, actor_json, invocation_id, turn_id, created_at, synthetic
+             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          eventId,
+          input.logId,
+          input.head,
+          eventId,
+          result.headSeq,
+          stateHash,
+          ordinal,
+          op.kind,
+          normalizePath(op.path),
+          op.oldContentHash ?? null,
+          op.newContentHash ?? null,
+          op.hunks !== undefined ? JSON.stringify(op.hunks) : null,
+          typeof op.mode === "number" ? op.mode : null,
+          actorId,
+          actorJson,
+          input.invocationId ?? null,
+          input.turnId ?? null,
+          now,
+          op.synthetic ? 1 : null
+        );
+      });
+    }
+    return { stateHash, eventId, headHash: result.headHash, headSeq: result.headSeq };
   }
 
   /**
@@ -4104,18 +4439,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /**
-   * EDIT persist (single DO txn). Insert precomputed edit-op rows as WORKING
+   * EDIT persist (single DO txn). Insert composed edit-op rows as WORKING
    * (committed_event_id = NULL, output_state_hash = NULL) with a shared per-call
    * `edit_seq = MAX+1` per (log_id, head) and a synthetic per-call `event_id`.
    * CAS on BOTH `expectedEditSeq` (the uncommitted sequence) AND
    * `expectedCommitHead` (the committed ctx-head state, null if none) — a
    * concurrent commit/merge can move the committed head without changing
    * MAX(edit_seq), so checking only the seq would let a stale-base edit slip
-   * through. On conflict the caller recomputes the ops + retries. Blobs are put
-   * to CAS by the caller (idempotent) before this call.
+   * through. On conflict {@link applyEditOps} recomputes the ops + retries.
    */
-  @rpc({ callers: ["do", "server"] })
-  insertWorkingEditOps(input: {
+  private insertWorkingEditRows(input: {
     logId: string;
     head: string;
     actorId: string;
@@ -4134,7 +4467,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
     expectedEditSeq: number;
     expectedCommitHead: string | null;
   }): { editSeq: number } {
-    this.ensureReady();
     return this.transaction(() => {
       const curEditSeq = Number(
         (
@@ -4192,59 +4524,660 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
+  // ── Working-content composition (P5c — the edit/commit semantics live HERE) ─
+
+  /** Workspace repo path of a `vcs:repo:<path>` log id, or null. */
+  private repoPathOfLog(logId: string): string | null {
+    return logId.startsWith("vcs:repo:") ? logId.slice("vcs:repo:".length) : null;
+  }
+
+  /** A head's uncommitted edit rows, in replay order. */
+  private workingEditRows(logId: string, head: string): JsonRecord[] {
+    return this.sql
+      .exec(
+        `SELECT * FROM gad_worktree_edit_ops
+         WHERE log_id = ? AND head = ? AND committed_event_id IS NULL
+         ORDER BY edit_seq, ordinal`,
+        logId,
+        head
+      )
+      .toArray() as JsonRecord[];
+  }
+
+  /** Apply one persisted edit-op row to a working file map (replay uses the
+   *  row's post-content hash; hunks are pure provenance, never applied). */
+  private applyWorkingRowToFiles(files: Map<string, WorkingFileEntry>, row: JsonRecord): void {
+    const kind = String(row["kind"]);
+    const p = String(row["path"]);
+    if (kind === "delete") {
+      files.delete(p);
+      return;
+    }
+    if (kind === "chmod") {
+      const cur = files.get(p);
+      if (cur) files.set(p, { ...cur, mode: Number(row["mode"] ?? cur.mode) });
+      return;
+    }
+    const newHash = row["new_content_hash"] ? String(row["new_content_hash"]) : null;
+    if (!newHash) return;
+    files.set(p, {
+      path: p,
+      contentHash: newHash,
+      mode: row["mode"] != null ? Number(row["mode"]) : (files.get(p)?.mode ?? 33188),
+    });
+  }
+
   /**
-   * COMMIT one repo (single DO txn): ingest the composed committed-state files
-   * onto the ctx head (state + commit log event @ new seq + head advance, CAS on
-   * `expectedCommitState`); if `parentStateHashes` is present this is a
-   * merge-resolution commit (records parent_event_id via the transition
-   * recorder) and any pending merge on the head is consumed. RE-KEY the included
-   * working rows → committed (set committed_event_id, committed_seq = the
-   * commit's log seq, output_state_hash = commit state). Re-keys; NEVER
-   * re-inserts (no duplicate edit-op rows).
+   * The COMMITTED base a repo's working content composes on: the ctx head if
+   * it exists, else the context's pinned-base slice for the repo, else the
+   * repo's protected `main` (read from the HOST ref store — the single main
+   * authority), else the empty state. `main` heads resolve straight to the
+   * protected ref (this store's recorded main is downstream provenance and may
+   * lag it). Ignores any pending merge — see {@link resolveComposeBase}.
+   */
+  private async resolveCommittedBaseState(
+    store: HostContentStore,
+    logId: string,
+    head: string
+  ): Promise<string> {
+    const repoPath = this.repoPathOfLog(logId);
+    if (head === "main") {
+      if (!repoPath) return this.resolveCommittedHeadState(logId, head) ?? EMPTY_STATE_HASH;
+      return (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
+    }
+    const ctxHead = this.resolveCommittedHeadState(logId, head);
+    if (ctxHead) return ctxHead;
+    if (head.startsWith("ctx:") && repoPath) {
+      const base = this.getContextBase({ contextId: head.slice("ctx:".length) });
+      if (base?.stateHash) {
+        const slice = await this.pinnedSliceState(store, base.stateHash, repoPath);
+        if (slice) return slice;
+      }
+    }
+    if (repoPath) {
+      const ref = await this.refsStore().readMain(repoPath);
+      if (ref?.stateHash) return ref.stateHash;
+    }
+    return EMPTY_STATE_HASH;
+  }
+
+  /**
+   * A repo's slice of a pinned (server-minted, content-store mirrored) base
+   * view, minted as a LOCAL subtree-rooted state — or null when the base view
+   * carries nothing under the repo path (the repo did not exist at the pin).
+   */
+  private async pinnedSliceState(
+    store: HostContentStore,
+    baseView: string,
+    repoPath: string
+  ): Promise<string | null> {
+    const entries = await store.listTree(baseView, { prefix: repoPath });
+    if (entries === null) {
+      throw new Error(`pinned base view ${baseView} is not resolvable in the content store`);
+    }
+    if (entries.length >= MERGE_LIST_TREE_LIMIT) {
+      throw new Error(`tree listing overflow for pinned base ${baseView}`);
+    }
+    const files = entries
+      .filter((entry) => entry.kind === "file" && entry.path !== repoPath)
+      .map((entry) => ({
+        path: entry.path.slice(repoPath.length + 1),
+        contentHash: String(entry.contentHash),
+        mode: entry.mode ?? 33188,
+      }));
+    if (files.length === 0) return null;
+    return this.transaction(() =>
+      this.createWorktreeState(
+        files.map((file) => {
+          const path = normalizePath(file.path);
+          this.ensureBlob(file.contentHash, 0);
+          return {
+            path,
+            contentHash: file.contentHash,
+            mode: file.mode,
+            fileVersionId: this.ensureFileVersion(path, file.contentHash, file.mode),
+          };
+        }),
+        { subtreeOf: baseView, prefix: repoPath }
+      )
+    );
+  }
+
+  /**
+   * The base the working CONTENT replays over: a pending merge's provisional
+   * (conflict-marked) tree while a reconcile is unresolved, else the committed
+   * base. Returns the pending info (the merge's `theirs` tip is the extra
+   * commit parent) and the committed lineage base alongside.
+   */
+  private async resolveComposeBase(
+    store: HostContentStore,
+    logId: string,
+    head: string
+  ): Promise<{
+    baseStateHash: string;
+    committedBaseStateHash: string;
+    pending: {
+      oursStateHash: string;
+      theirsStateHash: string;
+      theirsEventId?: string | null;
+      baseStateHash: string | null;
+      theirsHead: string;
+      conflicts: Array<{ path: string; kind: string }>;
+      provisionalStateHash: string;
+      materialized?: boolean;
+    } | null;
+  }> {
+    const pending = this.getPendingMerge({ logId, head }).info as {
+      oursStateHash: string;
+      theirsStateHash: string;
+      theirsEventId?: string | null;
+      baseStateHash: string | null;
+      theirsHead: string;
+      conflicts: Array<{ path: string; kind: string }>;
+      provisionalStateHash: string;
+      materialized?: boolean;
+    } | null;
+    const committedBaseStateHash = await this.resolveCommittedBaseState(store, logId, head);
+    return {
+      baseStateHash: pending ? pending.provisionalStateHash : committedBaseStateHash,
+      committedBaseStateHash,
+      pending,
+    };
+  }
+
+  /** Reconstruct a repo's working content: the compose base's file set with
+   *  the uncommitted edit-op rows replayed in (edit_seq, ordinal) order. */
+  private async composeWorkingFiles(
+    store: HostContentStore,
+    logId: string,
+    head: string,
+    baseStateHash: string
+  ): Promise<{ files: Map<string, WorkingFileEntry>; maxEditSeq: number; rows: JsonRecord[] }> {
+    const baseFiles = await this.stateFilesFor(store, baseStateHash);
+    const files = new Map<string, WorkingFileEntry>(
+      baseFiles.map((f) => [f.path, { path: f.path, contentHash: f.contentHash, mode: f.mode }])
+    );
+    const rows = this.workingEditRows(logId, head);
+    let maxEditSeq = 0;
+    for (const row of rows) {
+      const editSeq = Number(row["edit_seq"] ?? 0);
+      if (editSeq > maxEditSeq) maxEditSeq = editSeq;
+      this.applyWorkingRowToFiles(files, row);
+    }
+    return { files, maxEditSeq, rows };
+  }
+
+  /**
+   * Mirror a composed file set into the HOST content store (bottom-up
+   * `putTree`, children before parents) and assert the store agreed on the
+   * state identity — the mirroring-invariant chokepoint for every state this
+   * store COMPOSES itself (working states, committed sets). One `getTree`
+   * probe when already mirrored (the `state:` node is written last).
+   */
+  private async mirrorStateToContentStore(
+    store: HostContentStore,
+    files: Array<{ path: string; contentHash: string; mode: number }>,
+    expectStateHash: string
+  ): Promise<void> {
+    if ((await store.getTree(expectStateHash)) !== null) return;
+    interface DirNode {
+      dirs: Map<string, DirNode>;
+      files: Map<string, { contentHash: string; mode: number }>;
+    }
+    const root: DirNode = { dirs: new Map(), files: new Map() };
+    for (const file of files) {
+      const segments = file.path.split("/");
+      let node = root;
+      for (const segment of segments.slice(0, -1)) {
+        let child = node.dirs.get(segment);
+        if (!child) {
+          child = { dirs: new Map(), files: new Map() };
+          node.dirs.set(segment, child);
+        }
+        node = child;
+      }
+      node.files.set(segments[segments.length - 1]!, {
+        contentHash: file.contentHash,
+        mode: file.mode,
+      });
+    }
+    const entriesOf = async (node: DirNode): Promise<HostTreeEntry[]> => {
+      const entries: HostTreeEntry[] = [];
+      for (const [name, child] of node.dirs) {
+        const childEntries = await entriesOf(child);
+        const { treeHash } = await store.putTree(childEntries);
+        entries.push({ name, kind: "dir", childHash: treeHash });
+      }
+      for (const [name, file] of node.files) {
+        entries.push({ name, kind: "file", contentHash: file.contentHash, mode: file.mode });
+      }
+      return entries;
+    };
+    const result = await store.putTree(await entriesOf(root), { root: true });
+    if (result.stateHash !== expectStateHash) {
+      throw new Error(
+        `content-store mirror disagreed on state identity (${result.stateHash} != ${expectStateHash}) — shared hashing bug`
+      );
+    }
+  }
+
+  /** Stage a composed file set as a local content-addressed state AND mirror
+   *  it into the host content store (every handed-out hash must resolve there). */
+  private async stageAndMirror(
+    store: HostContentStore,
+    files: Array<{ path: string; contentHash: string; mode: number; size?: number }>,
+    summary: string
+  ): Promise<string> {
+    const list = files.map((file) => ({
+      path: file.path,
+      contentHash: file.contentHash,
+      mode: file.mode,
+      ...(file.size != null ? { size: file.size } : {}),
+    }));
+    const { stateHash } = this.stageWorktreeState({ files: list, summary });
+    await this.mirrorStateToContentStore(
+      store,
+      list.map(({ path, contentHash, mode }) => ({ path, contentHash, mode })),
+      stateHash
+    );
+    return stateHash;
+  }
+
+  /** The edit engine over the host content store's blob bytes. */
+  private editEngine(store: HostContentStore): EditEngine {
+    return new EditEngine({
+      readBlob: async (digest) => {
+        const bytesBase64 = await store.getBase64(digest);
+        return bytesBase64 === null ? null : base64ToBytes(bytesBase64);
+      },
+      writeBlob: async (bytes) => store.putBase64(bytesToBase64(bytes)),
+    });
+  }
+
+  /**
+   * EDIT — record a batch of high-level edit ops as UNCOMMITTED working edits
+   * on a `ctx:*` head. THE working-edit semantics live here (P5c): this store
+   * composes the current working content (committed base — ctx head, pinned
+   * slice, or protected `main` via the host refs bridge — plus prior
+   * uncommitted ops, or a pending merge's provisional tree), applies the ops
+   * through the userland edit engine (blob bytes over the content-store
+   * bridge; whole-file writes get hunk-level provenance), persists the rows in
+   * one txn under a two-part CAS, and stages + mirrors the new working state.
+   * No head advance, no log event, no build. The HOST projects the returned
+   * working state to disk and emits `working-advanced` — projection is a
+   * follower, never the semantics.
    */
   @rpc({ callers: ["do", "server"] })
-  async commitRepo(input: {
+  async applyEditOps(input: {
     logId: string;
     head: string;
-    files: Array<{ path: string; contentHash: string; size?: number | null; mode?: number | null }>;
+    actorId: string;
+    actorJson: string;
+    invocationId?: string | null;
+    turnId?: string | null;
+    eventId?: string | null;
+    edits: VcsEditOp[];
+    /** Optional optimistic guard: the composed working state the author saw. */
+    baseStateHash?: string | null;
+  }): Promise<{
+    editSeq: number;
+    stateHash: string;
     baseStateHash: string;
-    expectedCommitState: string | null;
-    summary: string;
+    changedPaths: string[];
+  }> {
+    this.ensureReady();
+    if (input.head === "main" || !input.head.startsWith("ctx:")) {
+      throw new Error(
+        `edit: '${input.head}' — edits target a ctx:* head; main advances only via push`
+      );
+    }
+    const store = this.contentStore();
+    const engine = this.editEngine(store);
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      // 1. Current working content + the two-part fingerprint it depends on.
+      const { baseStateHash } = await this.resolveComposeBase(store, input.logId, input.head);
+      const anchorHead = this.resolveCommittedHeadState(input.logId, input.head);
+      const working = await this.composeWorkingFiles(store, input.logId, input.head, baseStateHash);
+      if (input.baseStateHash != null) {
+        const currentWorkingState = await this.stageAndMirror(
+          store,
+          [...working.files.values()],
+          `working CAS base for ${input.head}`
+        );
+        if (currentWorkingState !== input.baseStateHash) {
+          throw new Error(
+            `edit CAS conflict on ${input.head}: working state ${currentWorkingState} != expected ${input.baseStateHash}`
+          );
+        }
+      }
+      // 2. Apply ops → new file map + edit-op rows (blob bytes through the bridge).
+      const { files, rows } = await engine.applyEditOps(working.files, input.edits);
+      if (rows.length === 0) {
+        return {
+          editSeq: working.maxEditSeq,
+          stateHash: await this.stageAndMirror(store, [...files.values()], `working ${input.head}`),
+          baseStateHash,
+          changedPaths: [],
+        };
+      }
+      const eventId = input.eventId ?? crypto.randomUUID();
+      try {
+        // 3. Atomic persist (single txn) — CAS on BOTH the uncommitted sequence
+        //    AND the committed ctx-head state (async compose above can interleave
+        //    with a concurrent edit/commit/merge).
+        const { editSeq } = this.insertWorkingEditRows({
+          logId: input.logId,
+          head: input.head,
+          actorId: input.actorId,
+          actorJson: input.actorJson,
+          invocationId: input.invocationId ?? null,
+          turnId: input.turnId ?? null,
+          eventId,
+          ops: rows,
+          expectedEditSeq: working.maxEditSeq,
+          expectedCommitHead: anchorHead ?? null,
+        });
+        // 4. Stage + mirror the new working content (outside the txn).
+        const stateHash = await this.stageAndMirror(
+          store,
+          [...files.values()],
+          `working edit on ${input.head}`
+        );
+        return { editSeq, stateHash, baseStateHash, changedPaths: rows.map((row) => row.path) };
+      } catch (error) {
+        // A concurrent edit (stale edit_seq) or commit/merge (advanced the
+        // committed head) → recompute against the new working content + retry.
+        if (error instanceof Error && error.message.includes("CAS conflict")) {
+          lastErr = error;
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error(
+      `edit: gave up after concurrent-edit retries on ${input.head}: ${
+        lastErr instanceof Error ? lastErr.message : String(lastErr)
+      }`
+    );
+  }
+
+  /**
+   * REVERT — compute a transition's inverse patch (the pre-transition content
+   * of every path it touched) and record it as a WORKING edit on `head` via
+   * {@link applyEditOps} — a `git revert`, never a reset. The inverse ops
+   * reference pre-transition content by blob digest (no bytes move); the edit
+   * engine derives the same hunk-level provenance as any other write.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async revertWorking(input: {
+    logId: string;
+    head: string;
+    target: { stateHash?: string | null; eventId?: string | null };
+    actorId: string;
+    actorJson: string;
+    invocationId?: string | null;
+    turnId?: string | null;
+  }): Promise<{
+    editSeq: number;
+    stateHash: string;
+    baseStateHash: string;
+    changedPaths: string[];
+  }> {
+    this.ensureReady();
+    let afterStateHash = input.target.stateHash ?? null;
+    if (!afterStateHash) {
+      if (!input.target.eventId) throw new Error("revert: target requires a stateHash or eventId");
+      const transition = this.getGadStateTransition({ eventId: input.target.eventId });
+      const output = transition?.["output_state_hash"];
+      if (typeof output !== "string" || !output) {
+        throw new Error(
+          `revert: event ${input.target.eventId} produced no output state on ${input.head}`
+        );
+      }
+      afterStateHash = output;
+    }
+    const producer = this.getGadStateProducer({ stateHash: afterStateHash });
+    const beforeStateHash = producer?.["input_state_hash"];
+    if (typeof beforeStateHash !== "string" || !beforeStateHash) {
+      throw new Error(`revert: no transition produced ${afterStateHash} (cannot invert)`);
+    }
+    const diff = this.diffGadStates({
+      leftStateHash: beforeStateHash,
+      rightStateHash: afterStateHash,
+    });
+    const edits: VcsEditOp[] = [];
+    // It ADDED these paths → the inverse deletes them.
+    for (const file of diff.added) edits.push({ kind: "delete", path: String(file["path"]) });
+    // It DELETED these → the inverse recreates them with pre-transition content.
+    for (const file of diff.removed) {
+      edits.push({
+        kind: "create",
+        path: String(file["path"]),
+        content: { kind: "blob", contentHash: String(file["content_hash"]) },
+        mode: asNumber(file["mode"]),
+      });
+    }
+    // It CHANGED these → the inverse restores the pre-transition content.
+    for (const file of diff.changed) {
+      const before = file["before"] as JsonRecord;
+      edits.push({
+        kind: "write",
+        path: String(file["path"]),
+        content: { kind: "blob", contentHash: String(before["content_hash"]) },
+        mode: asNumber(before["mode"]),
+      });
+    }
+    if (edits.length === 0) {
+      const store = this.contentStore();
+      const { baseStateHash } = await this.resolveComposeBase(store, input.logId, input.head);
+      return {
+        editSeq: 0,
+        stateHash: this.resolveCommittedHeadState(input.logId, input.head) ?? afterStateHash,
+        baseStateHash,
+        changedPaths: [],
+      };
+    }
+    return this.applyEditOps({
+      logId: input.logId,
+      head: input.head,
+      actorId: input.actorId,
+      actorJson: input.actorJson,
+      invocationId: input.invocationId ?? null,
+      turnId: input.turnId ?? null,
+      edits,
+    });
+  }
+
+  /**
+   * The WORKING content state for a `(logId, head)` — compose base +
+   * uncommitted ops — staged locally and mirrored into the content store.
+   * Null when the repo does not exist for the head at all (empty base, no
+   * edits): context views use that to distinguish "absent" from "empty".
+   */
+  @rpc({ callers: ["do", "server"] })
+  async resolveWorkingState(input: {
+    logId: string;
+    head: string;
+  }): Promise<{ stateHash: string | null }> {
+    this.ensureReady();
+    const store = this.contentStore();
+    const { baseStateHash } = await this.resolveComposeBase(store, input.logId, input.head);
+    const working = await this.composeWorkingFiles(store, input.logId, input.head, baseStateHash);
+    if (baseStateHash === EMPTY_STATE_HASH && working.rows.length === 0) {
+      return { stateHash: null };
+    }
+    return {
+      stateHash: await this.stageAndMirror(
+        store,
+        [...working.files.values()],
+        `working content for ${input.head}`
+      ),
+    };
+  }
+
+  /** Reject a commit whose included content still carries conflict markers in
+   *  any of the merge's conflicted paths. */
+  private async assertNoConflictMarkers(
+    store: HostContentStore,
+    files: Map<string, WorkingFileEntry>,
+    conflicts: Array<{ path: string; kind: string }>
+  ): Promise<void> {
+    for (const conflict of conflicts) {
+      const file = files.get(conflict.path);
+      if (!file) continue;
+      const bytesBase64 = await store.getBase64(file.contentHash);
+      if (bytesBase64 === null) continue;
+      const text = decodeUtf8Text(base64ToBytes(bytesBase64));
+      if (text !== null && hasConflictMarkers(text)) {
+        throw new Error(`commit: resolve conflict markers in ${conflict.path} first`);
+      }
+    }
+  }
+
+  /** Map a persisted edit-op row to the camelCase edit-op shape carried on
+   *  state-advanced events and the vcs read surface. */
+  private editOpFromRow(row: JsonRecord): {
+    kind: string;
+    path: string;
+    oldContentHash: string | null;
+    newContentHash: string | null;
+    hunks?: unknown;
+    mode?: number;
+  } {
+    return {
+      kind: String(row["kind"]),
+      path: String(row["path"]),
+      oldContentHash: row["old_content_hash"] ? String(row["old_content_hash"]) : null,
+      newContentHash: row["new_content_hash"] ? String(row["new_content_hash"]) : null,
+      ...(row["hunks_json"] ? { hunks: JSON.parse(String(row["hunks_json"])) } : {}),
+      ...(row["mode"] != null ? { mode: Number(row["mode"]) } : {}),
+    };
+  }
+
+  /**
+   * COMMIT — fold the uncommitted edits on a `ctx:*` head into ONE deliberate,
+   * messaged snapshot. THE commit semantics live here (P5c): this store
+   * composes the committed file set (committed base + included ops −
+   * `exclude`; a pending merge's provisional base makes this the
+   * merge-RESOLUTION commit), refuses unresolved conflict markers, ingests the
+   * state + commit event + head advance in one txn (CAS on the committed
+   * ctx-head state), RE-KEYS the included working rows to the commit (never
+   * re-inserts), consumes any pending merge, and mirrors the committed set
+   * into the content store. `unchanged` only when nothing is included AND no
+   * pending merge needs sealing. The HOST re-projects the working tree and
+   * emits the state-advanced event off the returned identities.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async commitWorking(input: {
+    logId: string;
+    head: string;
+    message: string;
     actor: ParticipantRef;
     invocationId?: string | null;
     turnId?: string | null;
-    parentStateHashes?: string[] | null;
-    parentEventIds?: string[] | null;
-    includeEditRowIds: number[];
+    /** Repo-relative paths whose working rows stay UNCOMMITTED. */
+    exclude?: string[] | null;
   }): Promise<{
+    status: "committed" | "unchanged";
     stateHash: string;
-    eventId: string;
-    headHash: string;
-    committedSeq: number;
+    eventId: string | null;
+    headHash: string | null;
+    committedSeq: number | null;
     editCount: number;
+    /** The event basis for the host's state-advanced diff (prev committed head,
+     *  or the lineage base for a first commit). */
+    previousStateHash: string;
+    editOps: Array<{
+      kind: string;
+      path: string;
+      oldContentHash: string | null;
+      newContentHash: string | null;
+      hunks?: unknown;
+      mode?: number;
+    }>;
+    transitionKind: "snapshot" | "merge-resolution";
   }> {
     this.ensureReady();
-    return this.transaction(() => {
-      const hasParents = !!(input.parentStateHashes && input.parentStateHashes.length > 0);
+    if (input.head === "main" || !input.head.startsWith("ctx:")) {
+      throw new Error(
+        `commit: '${input.head}' — commit targets a ctx:* head; main advances only via push`
+      );
+    }
+    if (!input.message || !input.message.trim()) {
+      throw new Error("commit: a message is required");
+    }
+    const store = this.contentStore();
+    const exclude = new Set(input.exclude ?? []);
+    const { baseStateHash, committedBaseStateHash, pending } = await this.resolveComposeBase(
+      store,
+      input.logId,
+      input.head
+    );
+    const workingRows = this.workingEditRows(input.logId, input.head);
+    const includedRows = workingRows.filter((row) => !exclude.has(String(row["path"])));
+    const ctxHead = this.resolveCommittedHeadState(input.logId, input.head);
+    // unchanged ONLY when nothing is included AND no pending merge needs sealing.
+    if (includedRows.length === 0 && !pending) {
+      return {
+        status: "unchanged",
+        stateHash: ctxHead ?? EMPTY_STATE_HASH,
+        eventId: null,
+        headHash: null,
+        committedSeq: null,
+        editCount: 0,
+        previousStateHash: ctxHead ?? EMPTY_STATE_HASH,
+        editOps: [],
+        transitionKind: "snapshot",
+      };
+    }
+    // Compose the committed file set = compose base + INCLUDED ops only
+    // (excluded paths stay at base content, their working rows uncommitted).
+    const lineageBase = ctxHead ?? committedBaseStateHash;
+    const baseFiles = await this.stateFilesFor(store, baseStateHash);
+    const files = new Map<string, WorkingFileEntry>(
+      baseFiles.map((f) => [f.path, { path: f.path, contentHash: f.contentHash, mode: f.mode }])
+    );
+    for (const row of includedRows) this.applyWorkingRowToFiles(files, row);
+    // Reject unresolved conflict markers (only possible while a pending merge
+    // is being resolved — applyEditOps never introduces markers).
+    if (pending) await this.assertNoConflictMarkers(store, files, pending.conflicts);
+    const fileList = [...files.values()].map((file) => ({
+      path: file.path,
+      contentHash: file.contentHash,
+      mode: file.mode,
+    }));
+    const result = this.transaction(() => {
+      // CAS re-check under the txn: the async compose above may have
+      // interleaved with a concurrent commit/merge on this head.
+      const currentHead = this.resolveCommittedHeadState(input.logId, input.head);
+      if ((currentHead ?? null) !== (ctxHead ?? null)) {
+        throw new Error(
+          `commit CAS conflict on ${input.head}: committed head moved during compose`
+        );
+      }
       const ingest = this.ingestWorktreeStateInTxn({
         logId: input.logId,
         head: input.head,
         logKind: "vcs",
         actor: input.actor,
-        files: input.files,
-        baseStateHash: input.baseStateHash,
-        expectedRefStateHash: input.expectedCommitState ?? EMPTY_STATE_HASH,
-        eventKind: hasParents ? "state.merge_applied" : "state.snapshot_ingested",
-        summary: input.summary,
+        files: fileList,
+        baseStateHash: lineageBase,
+        expectedRefStateHash: ctxHead ?? EMPTY_STATE_HASH,
+        eventKind: pending ? "state.merge_applied" : "state.snapshot_ingested",
+        summary: input.message,
         ...(input.invocationId ? { invocationId: input.invocationId } : {}),
         ...(input.turnId ? { turnId: input.turnId } : {}),
-        ...(hasParents ? { parentStateHashes: input.parentStateHashes! } : {}),
-        ...(input.parentEventIds && input.parentEventIds.length > 0
-          ? { parentEventIds: input.parentEventIds }
-          : {}),
+        // A2/T1: the commit's sealing tool-call attributes the commit EVENT
+        // itself (not only its re-keyed ops, which carry their own edit-time
+        // invocation ids). Recorded in the event metadata so the commit is
+        // traceable into the agentic trajectory without a log_events schema bump.
+        ...(input.invocationId ? { metadata: { commitInvocationId: input.invocationId } } : {}),
+        ...(pending ? { parentStateHashes: [pending.theirsStateHash] } : {}),
+        ...(pending?.theirsEventId ? { parentEventIds: [pending.theirsEventId] } : {}),
         // No editOps — re-key the pre-existing working rows below (NEVER re-insert).
       });
-      for (const id of input.includeEditRowIds) {
+      for (const row of includedRows) {
         this.sql.exec(
           `UPDATE gad_worktree_edit_ops
              SET committed_event_id = ?, committed_seq = ?, output_state_hash = ?
@@ -4252,7 +5185,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           ingest.eventId,
           ingest.headSeq,
           ingest.stateHash,
-          id
+          Number(row["id"])
         );
       }
       const editCount = Number(
@@ -4267,14 +5200,21 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
       // A commit on a head with a pending merge IS the resolution — consume it.
       this.deleteStateValue(`merge:${input.logId}:${input.head}`);
-      return {
-        stateHash: ingest.stateHash,
-        eventId: ingest.eventId,
-        headHash: ingest.headHash,
-        committedSeq: ingest.headSeq,
-        editCount,
-      };
+      return { ingest, editCount };
     });
+    // Mirroring invariant: the committed file set is in memory here.
+    await this.mirrorStateToContentStore(store, fileList, result.ingest.stateHash);
+    return {
+      status: "committed",
+      stateHash: result.ingest.stateHash,
+      eventId: result.ingest.eventId,
+      headHash: result.ingest.headHash,
+      committedSeq: result.ingest.headSeq,
+      editCount: result.editCount,
+      previousStateHash: lineageBase,
+      editOps: includedRows.map((row) => this.editOpFromRow(row)),
+      transitionKind: pending ? "merge-resolution" : "snapshot",
+    };
   }
 
   /** Drop a repo's uncommitted edit-op rows AND clear any pending merge on the
@@ -4392,7 +5332,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const tip = this.resolveWorktreeHeadInternal(input.logId, head)?.commitEventId ?? null;
     const ancestorIds = tip ? this.commitAncestorEventIds(tip, Math.max(limit * 20, limit)) : [];
     const commitOrder = new Map(
-      ancestorIds.slice().reverse().map((eventId, index) => [eventId, index])
+      ancestorIds
+        .slice()
+        .reverse()
+        .map((eventId, index) => [eventId, index])
     );
     const committedRows =
       ancestorIds.length === 0
@@ -4510,79 +5453,335 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return out;
   }
 
-  /**
-   * Mint a repo-rooted state from a subtree of a workspace-rooted state: keep
-   * only files under `prefix`, re-root their paths relative to `prefix`, and
-   * stage the result as a fresh content-addressed state. GAD is file-only
-   * (empty dirs are not represented), so this round-trips losslessly w.r.t.
-   * what GAD tracks.
-   */
-  @rpc({ callers: ["do", "server"] })
-  getSubtreeAsState(input: { stateHash: string; prefix: string }): { stateHash: string } {
+  // ── vcs.* read surface (P5c — userland-dispatched via the `vcs` manifest ──
+  // service; positional args, camelCase rows). These are the caller-facing
+  // history/read methods that used to live on the HOST vcs service; the raw
+  // input-object methods above remain the store-internal primitives.
+
+  /** Map a raw edit-op row to the camelCase VCS provenance shape. */
+  private mapVcsEditOpRow(row: JsonRecord): VcsEditOpRowWire {
+    const s = (v: unknown): string | null => (v == null ? null : String(v));
+    const n = (v: unknown): number | null => (v == null ? null : Number(v));
+    return {
+      id: Number(row["id"]),
+      eventId: String(row["event_id"]),
+      committedEventId: s(row["committed_event_id"]),
+      committedSeq: n(row["committed_seq"]),
+      editSeq: n(row["edit_seq"]),
+      outputStateHash: s(row["output_state_hash"]),
+      ordinal: Number(row["ordinal"] ?? 0),
+      kind: String(row["kind"]),
+      path: String(row["path"]),
+      oldContentHash: s(row["old_content_hash"]),
+      newContentHash: s(row["new_content_hash"]),
+      mode: n(row["mode"]),
+      actorId: s(row["actor_id"]),
+      invocationId: s(row["invocation_id"]),
+      turnId: s(row["turn_id"]),
+      createdAt: s(row["created_at"]),
+    };
+  }
+
+  /** commit → the edits it owns (by commit event id), in replay order.
+   *  `repoPath` scopes the caller's intent (event ids are globally unique). */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  vcsCommitEdits(repoPath: string, commitEventId: string): VcsEditOpRowWire[] {
     this.ensureReady();
-    const prefix = normalizePath(input.prefix);
-    const within = (p: string): boolean => p === prefix || p.startsWith(`${prefix}/`);
-    const rerooted = this.filesForState(input.stateHash)
-      .filter((f) => within(String(f["path"])))
-      .map((f) => {
-        const full = String(f["path"]);
-        const rel = full === prefix ? full.slice(full.lastIndexOf("/") + 1) : full.slice(prefix.length + 1);
-        return { path: rel, contentHash: String(f["content_hash"]), mode: asNumber(f["mode"]) };
+    void normalizeRepoPathArg(repoPath);
+    return this.listCommitEdits({ commitEventId }).map((row) => this.mapVcsEditOpRow(row));
+  }
+
+  /** A path's edit history / blame in COMMIT-lineage order (+ uncommitted tail). */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  vcsFileHistory(
+    repoPath: string,
+    filePath: string,
+    head?: string | null,
+    limit?: number | null
+  ): VcsEditOpRowWire[] {
+    this.ensureReady();
+    const norm = normalizeRepoPathArg(repoPath);
+    const relPath = filePath.startsWith(`${norm}/`) ? filePath.slice(norm.length + 1) : filePath;
+    return this.fileHistory({
+      logId: logIdForRepoPath(norm),
+      path: relPath,
+      ...(head ? { head } : {}),
+      ...(limit ? { limit } : {}),
+    }).map((row) => this.mapVcsEditOpRow(row));
+  }
+
+  /** Walk a commit's ancestry in the event-keyed commit DAG. */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  vcsCommitAncestors(
+    repoPath: string,
+    eventId: string,
+    limit?: number | null
+  ): Array<{ eventId: string; stateHash: string | null; parentEventIds: string[] }> {
+    this.ensureReady();
+    void normalizeRepoPathArg(repoPath);
+    return this.commitAncestors({ eventId, ...(limit ? { limit } : {}) });
+  }
+
+  /** Edits authored by an actor (author provenance), newest-lineage last. */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  vcsEditsByActor(actorId: string, limit?: number | null): VcsEditOpRowWire[] {
+    this.ensureReady();
+    return this.editsByActor({ actorId, ...(limit ? { limit } : {}) }).map((row) =>
+      this.mapVcsEditOpRow(row)
+    );
+  }
+
+  /** Edits authored in an agent turn (causal provenance). */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  vcsEditsByTurn(turnId: string): VcsEditOpRowWire[] {
+    this.ensureReady();
+    return this.editsByTurn({ turnId }).map((row) => this.mapVcsEditOpRow(row));
+  }
+
+  /** Edits authored in a single tool-call invocation (causal provenance). */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  vcsEditsByInvocation(invocationId: string): VcsEditOpRowWire[] {
+    this.ensureReady();
+    return this.editsByInvocation({ invocationId }).map((row) => this.mapVcsEditOpRow(row));
+  }
+
+  /** Recent vcs commits for a repo head, newest first. `head` defaults to
+   *  `main` — userland dispatch carries no caller-context head resolution. */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server", "extension"] })
+  vcsLog(
+    repoPath: string,
+    limit?: number | null,
+    head?: string | null
+  ): Array<{
+    seq: number;
+    envelopeId: string;
+    actor: unknown;
+    summary: string | null;
+    outputStateHash: string | null;
+    appendedAt: string;
+  }> {
+    this.ensureReady();
+    const max = limit && limit > 0 ? limit : 50;
+    const events = this.readLog({
+      logId: logIdForRepoPath(repoPath),
+      head: head ?? "main",
+      limit: 0,
+    });
+    return events
+      .filter(
+        (event) =>
+          event.payloadKind === "state.snapshot_ingested" ||
+          event.payloadKind === "state.merge_applied"
+      )
+      .slice(-max)
+      .reverse()
+      .map((event) => {
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+        return {
+          seq: event.seq,
+          envelopeId: event.envelopeId,
+          actor: event.actor,
+          summary: typeof payload["summary"] === "string" ? payload["summary"] : null,
+          outputStateHash:
+            typeof payload["outputStateHash"] === "string" ? payload["outputStateHash"] : null,
+          appendedAt: event.appendedAt,
+        };
       });
-    return this.transaction(() => ({
-      stateHash: this.createWorktreeState(
-        rerooted.map((file) => {
-          const path = normalizePath(file.path);
-          this.ensureBlob(file.contentHash, 0);
-          return {
-            path,
-            contentHash: file.contentHash,
-            mode: file.mode,
-            fileVersionId: this.ensureFileVersion(path, file.contentHash, file.mode),
-          };
-        }),
-        { subtreeOf: input.stateHash, prefix }
-      ),
-    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // vcs status semantics (P5d) — what "ahead / diverged / deleted / dirty"
+  // MEAN lives here, behind the userland `vcs` service. The host resolves
+  // caller-context heads and dispatches; it no longer owns the definitions.
+  // -------------------------------------------------------------------------
+
+  /** True iff the repo log was retired via deleteRepo (carries an `archived:*`
+   *  head) — used to distinguish a deleted repo from a brand-new unpushed one. */
+  private repoLogWasArchived(logId: string): boolean {
+    return this.listWorktreeHeads({ logId }).some((head) => head.head.startsWith("archived:"));
+  }
+
+  /** A head's committed state: `main` resolves through the PROTECTED REF (the
+   *  authority — this store's recorded main is downstream provenance), other
+   *  heads through this store's worktree-head rows. */
+  private async committedHeadState(
+    logId: string,
+    repoPath: string,
+    head: string
+  ): Promise<string | null> {
+    if (head === "main") {
+      return (await this.refsStore().readMain(repoPath))?.stateHash ?? null;
+    }
+    return this.resolveCommittedHeadState(logId, head);
+  }
+
+  /** Path-level diff of two states (either side may be a server-minted state —
+   *  listings resolve content-store-first). Mode-only changes count as
+   *  changed, matching the content store's Merkle tree diff. */
+  private async diffStatePaths(
+    store: HostContentStore,
+    leftStateHash: string,
+    rightStateHash: string
+  ): Promise<{ added: string[]; removed: string[]; changed: string[] }> {
+    const left = new Map(
+      (await this.stateFilesFor(store, leftStateHash)).map((f) => [f.path, f] as const)
+    );
+    const right = new Map(
+      (await this.stateFilesFor(store, rightStateHash)).map((f) => [f.path, f] as const)
+    );
+    const added: string[] = [];
+    const removed: string[] = [];
+    const changed: string[] = [];
+    for (const [path, file] of right) {
+      const prev = left.get(path);
+      if (!prev) added.push(path);
+      else if (prev.contentHash !== file.contentHash || prev.mode !== file.mode) {
+        changed.push(path);
+      }
+    }
+    for (const path of left.keys()) {
+      if (!right.has(path)) removed.push(path);
+    }
+    added.sort();
+    removed.sort();
+    changed.sort();
+    return { added, removed, changed };
   }
 
   /**
-   * Compose N repo-rooted states into one workspace-rooted state by re-rooting
-   * each repo's files back under its `repoPath` and staging the union. This is
-   * the derived "live workspace view" used by whole-tree consumers (build
-   * discovery, materialize, diff, git export). Inverse of getSubtreeAsState.
+   * State-diff of `head` against its publish lineage: the committed changes
+   * unique to `head`, never upstream-only drift from `main`. Pure store
+   * computation — the on-disk tree is a disposable projection and is never
+   * scanned. If `head` is an ancestor of `main`, there is nothing unpublished
+   * even though the states differ.
    */
-  @rpc({ callers: ["do", "server"] })
-  composeRepoStates(input: {
-    repos: Array<{ repoPath: string; stateHash: string }>;
-  }): { stateHash: string } {
-    this.ensureReady();
-    const composed: Array<{ path: string; contentHash: string; mode: number }> = [];
-    for (const repo of input.repos) {
-      const repoPath = normalizePath(repo.repoPath);
-      for (const f of this.filesForState(repo.stateHash)) {
-        composed.push({
-          path: `${repoPath}/${String(f["path"])}`,
-          contentHash: String(f["content_hash"]),
-          mode: asNumber(f["mode"]),
-        });
-      }
+  private async unpublishedDelta(
+    store: HostContentStore,
+    logId: string,
+    repoPath: string,
+    head: string
+  ): Promise<{
+    headStateHash: string | null;
+    baseStateHash: string | null;
+    diverged: boolean;
+    added: string[];
+    removed: string[];
+    changed: string[];
+  }> {
+    const headStateHash = await this.committedHeadState(logId, repoPath, head);
+    const baseStateHash = (await this.refsStore().readMain(repoPath))?.stateHash ?? null;
+    if (!headStateHash || headStateHash === baseStateHash) {
+      return { headStateHash, baseStateHash, diverged: false, added: [], removed: [], changed: [] };
     }
-    return this.transaction(() => ({
-      stateHash: this.createWorktreeState(
-        composed.map((file) => {
-          const path = normalizePath(file.path);
-          this.ensureBlob(file.contentHash, 0);
-          return {
-            path,
-            contentHash: file.contentHash,
-            mode: file.mode,
-            fileVersionId: this.ensureFileVersion(path, file.contentHash, file.mode),
-          };
-        }),
-        { composed: true }
-      ),
-    }));
+
+    let diffBaseStateHash: string;
+    let diverged = false;
+    if (!baseStateHash) {
+      diffBaseStateHash = EMPTY_STATE_HASH;
+    } else {
+      const mergeBase =
+        this.getMergeBase({ leftStateHash: baseStateHash, rightStateHash: headStateHash })
+          .baseStateHash ?? EMPTY_STATE_HASH;
+      diverged = mergeBase !== baseStateHash;
+      // Upstream-only drift: the head is already contained in main.
+      if (mergeBase === headStateHash) {
+        return { headStateHash, baseStateHash, diverged, added: [], removed: [], changed: [] };
+      }
+      diffBaseStateHash = mergeBase;
+    }
+
+    const diff = await this.diffStatePaths(store, diffBaseStateHash, headStateHash);
+    return { headStateHash, baseStateHash, diverged, ...diff };
+  }
+
+  /**
+   * Status of a repo head: its unpublished changes against the repo's
+   * protected `main` (a pure state-diff, never a worktree scan), its
+   * uncommitted working-edit count, and whether the repo was deleted
+   * (archived). `dirty` iff ahead of main or carrying uncommitted edits;
+   * `main` is always clean (it is the baseline). `head` defaults to `main` —
+   * userland dispatch carries no caller-context head resolution.
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  async vcsStatus(input: { repoPath: string; head?: string | null }): Promise<{
+    stateHash: string | null;
+    dirty: boolean;
+    uncommitted: number;
+    added: string[];
+    removed: string[];
+    changed: string[];
+    deleted: boolean;
+  }> {
+    this.ensureReady();
+    const norm = normalizeRepoPathArg(input.repoPath);
+    const logId = logIdForRepoPath(norm);
+    const resolvedHead = input.head ?? "main";
+    const store = this.contentStore();
+    const delta = await this.unpublishedDelta(store, logId, norm, resolvedHead);
+    const deleted = delta.baseStateHash === null && this.repoLogWasArchived(logId);
+    const uncommitted =
+      resolvedHead === "main" ? 0 : this.workingEditRows(logId, resolvedHead).length;
+    return {
+      stateHash: delta.headStateHash,
+      dirty:
+        delta.added.length > 0 ||
+        delta.removed.length > 0 ||
+        delta.changed.length > 0 ||
+        uncommitted > 0,
+      uncommitted,
+      added: delta.added,
+      removed: delta.removed,
+      changed: delta.changed,
+      deleted,
+    };
+  }
+
+  /**
+   * Push status for a repo: how far a head is ahead of that repo's protected
+   * `main` (the committed, unpushed changes), how many UNCOMMITTED working
+   * edits it carries (push rejects while > 0), and whether `main` has
+   * DIVERGED (a fast-forward push is impossible without an explicit
+   * vcs.merge). Per-repo; paths are repo-relative. `head` defaults to `main`.
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  async vcsPushStatus(input: { repoPath: string; head?: string | null }): Promise<{
+    repoPath: string;
+    head: string;
+    headStateHash: string | null;
+    mainStateHash: string | null;
+    ahead: number;
+    uncommitted: number;
+    diverged: boolean;
+    /** The repo was deleted from the workspace (its `main` is archived/gone).
+     *  A push will be refused — restore or drop the context, don't re-push. */
+    deleted: boolean;
+    files: Array<{ path: string; kind: "added" | "removed" | "changed" }>;
+  }> {
+    this.ensureReady();
+    const norm = normalizeRepoPathArg(input.repoPath);
+    const logId = logIdForRepoPath(norm);
+    const resolvedHead = input.head ?? "main";
+    const store = this.contentStore();
+    const delta = await this.unpublishedDelta(store, logId, norm, resolvedHead);
+    const files = [
+      ...delta.added.map((path) => ({ path, kind: "added" as const })),
+      ...delta.removed.map((path) => ({ path, kind: "removed" as const })),
+      ...delta.changed.map((path) => ({ path, kind: "changed" as const })),
+    ];
+    const deleted = delta.baseStateHash === null && this.repoLogWasArchived(logId);
+    const uncommitted =
+      resolvedHead === "main" ? 0 : this.workingEditRows(logId, resolvedHead).length;
+    return {
+      repoPath: norm,
+      head: resolvedHead,
+      headStateHash: delta.headStateHash,
+      mainStateHash: delta.baseStateHash,
+      ahead: files.length,
+      uncommitted,
+      diverged: delta.diverged,
+      deleted,
+      files,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -4729,6 +5928,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     info: {
       oursStateHash: string;
       theirsStateHash: string;
+      theirsEventId?: string | null;
       baseStateHash: string | null;
       theirsHead: string;
       conflicts: Array<{ path: string; kind: string }>;
@@ -4751,6 +5951,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     info: {
       oursStateHash: string;
       theirsStateHash: string;
+      theirsEventId?: string | null;
       baseStateHash: string | null;
       theirsHead: string;
       conflicts: Array<{ path: string; kind: string }>;
@@ -4772,6 +5973,1809 @@ export class GadWorkspaceDO extends DurableObjectBase {
   clearPendingMerge(input: { logId: string; head: string }): void {
     this.ensureReady();
     this.deleteStateValue(`merge:${input.logId}:${input.head}`);
+  }
+
+  /**
+   * Flip a parked pending merge to `materialized: true` — the host's
+   * projection acknowledgement (the provisional conflict-marked tree reached
+   * the head's working tree on disk). The crash-recovery invariant reads this
+   * flag: a pending merge that was never materialized must be re-projected
+   * before a commit can treat the worktree as the resolution.
+   */
+  @rpc({ callers: ["do", "server"] })
+  markPendingMergeMaterialized(input: { logId: string; head: string }): { marked: boolean } {
+    this.ensureReady();
+    const pending = this.getPendingMerge(input).info;
+    if (!pending) return { marked: false };
+    this.setPendingMerge({
+      logId: input.logId,
+      head: input.head,
+      info: { ...pending, materialized: true },
+    });
+    return { marked: true };
+  }
+
+  // -------------------------------------------------------------------------
+  // Merge orchestration (P5d) — what a MERGE IS lives here: precondition
+  // checks, base/tip resolution, the 3-way computation, the merge COMMIT on
+  // clean, and the parked pending merge on conflict. The host is a follower:
+  // it drains the provenance follower first (a `main` source must be in
+  // lockstep with the protected ref), projects the returned state to disk,
+  // acknowledges materialization, and emits build/reactive events. `main`
+  // TARGETS are excluded — advancing main is the host's gated push-class
+  // remnant (protected-ref CAS + approval + build gate).
+  // -------------------------------------------------------------------------
+
+  /** Port of the host commit-identity guard: a non-empty head must carry its
+   *  producing commit event. */
+  private commitEventIdOf(
+    ref: { stateHash: string; commitEventId: string | null } | null,
+    label: string
+  ): string | null {
+    if (!ref || ref.stateHash === EMPTY_STATE_HASH) return null;
+    if (!ref.commitEventId) {
+      throw new Error(`${label} has state ${ref.stateHash} but no commit event identity`);
+    }
+    return ref.commitEventId;
+  }
+
+  /** The source head's commits not yet on the target (first-parent walk from
+   *  `theirs` back to `oursState`) — the structured upstream-commits list
+   *  shared by merge results and the push-divergence error. */
+  private upstreamCommitsBetween(
+    oursState: string,
+    theirsState: string,
+    theirsEventId?: string | null
+  ): Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> {
+    if (theirsEventId) return this.upstreamCommitsBetweenEvents(oursState, theirsEventId);
+    const out: Array<{
+      eventId: string;
+      message: string;
+      stateHash: string;
+      createdAt: string | null;
+    }> = [];
+    let cur: string | null = theirsState;
+    for (let i = 0; i < 100; i++) {
+      if (!cur || cur === oursState || cur === EMPTY_STATE_HASH) break;
+      const prod = this.getGadStateProducer({ stateHash: cur });
+      const eventId = prod ? asString(prod["event_id"]) : null;
+      if (!prod || !eventId) break;
+      out.push({
+        eventId,
+        message: asString(prod["summary"]) ?? "",
+        stateHash: cur,
+        createdAt: asString(prod["created_at"]) ?? null,
+      });
+      cur = prod["input_state_hash"] ? String(prod["input_state_hash"]) : null;
+    }
+    return out;
+  }
+
+  private upstreamCommitsBetweenEvents(
+    stopState: string,
+    tipEventId: string
+  ): Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> {
+    const out: Array<{
+      eventId: string;
+      message: string;
+      stateHash: string;
+      createdAt: string | null;
+    }> = [];
+    let cur: string | null = tipEventId;
+    for (let i = 0; i < 100; i++) {
+      if (!cur) break;
+      const transition = this.getGadStateTransition({ eventId: cur });
+      const stateHash = transition?.["output_state_hash"]
+        ? String(transition["output_state_hash"])
+        : null;
+      if (!stateHash || stateHash === stopState || stateHash === EMPTY_STATE_HASH) break;
+      out.push({
+        eventId: cur,
+        message: transition?.["summary"] ? String(transition["summary"]) : "",
+        stateHash,
+        createdAt: transition?.["created_at"] ? String(transition["created_at"]) : null,
+      });
+      const ancestors = this.commitAncestors({ eventId: cur, limit: 1 });
+      cur = ancestors[0]?.parentEventIds[0] ?? null;
+    }
+    return out;
+  }
+
+  /**
+   * Provenance ops for a merge / main-advance commit: a first-parent tree diff
+   * OURS → merged. Each op's `oldContentHash` is the OURS-side (first-parent)
+   * content, so the ops compose against the first parent (blame invariant U2).
+   * Text files the 3-way merge rewrote carry origin-annotated hunks (U3);
+   * whole-file adds/removes/mode-changes record a whole-file op.
+   */
+  private mergeEditOps(
+    oursFiles: StateFileEntry[],
+    mergedFiles: Array<{ path: string; contentHash: string; mode: number; hunks?: MergeHunk[] }>
+  ): ProvenanceEditOp[] {
+    const ours = new Map(oursFiles.map((f) => [f.path, f]));
+    const merged = new Map(mergedFiles.map((f) => [f.path, f]));
+    const ops: ProvenanceEditOp[] = [];
+    const paths = [...new Set([...ours.keys(), ...merged.keys()])].sort();
+    for (const path of paths) {
+      const o = ours.get(path);
+      const m = merged.get(path);
+      if (m && !o) {
+        ops.push({
+          kind: "create",
+          path,
+          oldContentHash: null,
+          newContentHash: m.contentHash,
+          mode: m.mode,
+          ...(m.hunks ? { hunks: m.hunks } : {}),
+        });
+      } else if (!m && o) {
+        ops.push({ kind: "delete", path, oldContentHash: o.contentHash, newContentHash: null });
+      } else if (m && o) {
+        if (o.contentHash !== m.contentHash) {
+          ops.push({
+            kind: "replace",
+            path,
+            oldContentHash: o.contentHash,
+            newContentHash: m.contentHash,
+            mode: m.mode,
+            ...(m.hunks ? { hunks: m.hunks } : {}),
+          });
+        } else if (o.mode !== m.mode) {
+          ops.push({
+            kind: "chmod",
+            path,
+            oldContentHash: o.contentHash,
+            newContentHash: m.contentHash,
+            mode: m.mode,
+          });
+        }
+      }
+    }
+    return ops;
+  }
+
+  // -------------------------------------------------------------------------
+  // Push — DO-owned orchestration (P3). Ports the host push pipeline: clean
+  // source, fast-forward-only divergence classification, candidate
+  // composition, build gate, and the write-ahead-intent → refs.updateMains →
+  // provenance publish (single-writer, crash-healable).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Group push: fast-forward N repos' protected `main` atomically. Ports
+   * {@link WorkspaceVcs.push} into the DO — divergence is classified here (never
+   * auto-merged), the build gate runs over the composed candidate view via the
+   * host `build.validate`, and the advance PUBLISHES through the single-writer
+   * `refs.updateMains` (write-ahead intent first, provenance after). The
+   * host-minted on-behalf-of token names the originating principal for the
+   * approval prompt.
+   */
+  @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
+  async vcsPush(input: {
+    repoPaths: string[];
+    sourceHead: string;
+    message?: string | null;
+    actor?: ParticipantRef | null;
+  }): Promise<VcsPushResultDo> {
+    // READ-AT-ENTRY (durable invocation-token contract): capture the
+    // on-behalf-of token AND the verified caller synchronously, before ANY
+    // await — a concurrent dispatch can rebind either across an await boundary.
+    const invocationToken = this.invocationToken;
+    // `actor` is derived from the verified caller (client-side flip: userland
+    // callers no longer thread it). An explicit actor (in-process host callers)
+    // still wins for parity with the pre-flip contract.
+    const actor = input.actor ?? this.callerParticipant();
+    this.ensureReady();
+    return this.runVcsPush({ ...input, actor }, invocationToken, false);
+  }
+
+  /** The verified caller as a provenance participant, read synchronously at
+   *  handler entry (the invocation-token contract). Falls back to the system
+   *  participant when there is no active RPC caller (alarm/lifecycle). */
+  private callerParticipant(): ParticipantRef {
+    const caller = this.caller;
+    return caller
+      ? ({ id: caller.callerId, kind: caller.callerKind } as unknown as ParticipantRef)
+      : SYSTEM_PARTICIPANT;
+  }
+
+  private async runVcsPush(
+    input: { repoPaths: string[]; sourceHead: string; message?: string | null; actor: ParticipantRef },
+    invocationToken: string | undefined,
+    isRetry: boolean
+  ): Promise<VcsPushResultDo> {
+    const store = this.contentStore();
+    const sourceHead = input.sourceHead;
+    const repoPaths = input.repoPaths.map(normalizeRepoPathArg);
+    const seen = new Set<string>();
+    for (const r of repoPaths) {
+      if (seen.has(r)) throw new Error(`push: duplicate repoPath "${r}"`);
+      seen.add(r);
+    }
+
+    // Heal any crash-window drift (pending intents / lineage) before reading
+    // mains, so the FF/divergence checks see a consistent lineage.
+    await this.healPublishDrift(store);
+
+    // Precondition 1 — clean source: no uncommitted edits on any ctx source repo.
+    if (sourceHead.startsWith("ctx:")) {
+      for (const repoPath of repoPaths) {
+        if (this.workingEditRows(logIdForRepoPath(repoPath), sourceHead).length > 0) {
+          throw new Error(
+            `push: uncommitted edits in ${repoPath} — vcs.commit or vcs.discardEdits first`
+          );
+        }
+      }
+    }
+
+    // Precondition 2 — fast-forward-only per repo, against the CURRENT host main.
+    const advancing: Array<{
+      repoPath: string;
+      logId: string;
+      oursState: string;
+      candidateState: string;
+      sourceEventId: string | null;
+      files: Array<{ path: string; contentHash: string; mode: number }>;
+    }> = [];
+    const divergences: Extract<VcsPushResultDo, { status: "diverged" }>["divergences"] = [];
+
+    for (const repoPath of repoPaths) {
+      const logId = logIdForRepoPath(repoPath);
+      const oursState = (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
+      // Deletion-resurrection guard: a stale context cannot revive a deleted repo.
+      if (oursState === EMPTY_STATE_HASH && this.repoLogWasArchived(logId)) {
+        throw new Error(
+          `push: repo "${repoPath}" was deleted (its history is archived). A stale context ` +
+            `cannot resurrect it by pushing. Restore it explicitly (vcs.restoreRepo) or drop/rebase your context.`
+        );
+      }
+      let theirsState: string | undefined;
+      let sourceEventId: string | null;
+      if (sourceHead === "main") {
+        theirsState = oursState === EMPTY_STATE_HASH ? undefined : oursState;
+        sourceEventId = this.commitEventIdOf(
+          this.resolveWorktreeHeadInternal(logId, "main"),
+          `${repoPath}:main`
+        );
+      } else {
+        const ref = this.resolveWorktreeHeadInternal(logId, sourceHead);
+        theirsState = ref?.stateHash;
+        sourceEventId = this.commitEventIdOf(ref, `${repoPath}:${sourceHead}`);
+      }
+      // Phantom-repo guard.
+      if (oursState === EMPTY_STATE_HASH && (!theirsState || theirsState === EMPTY_STATE_HASH)) {
+        throw new Error(
+          `push: unknown repo "${repoPath}" — it has no main and no content on ${sourceHead}. ` +
+            `Create files under ${repoPath}/ first, then push.`
+        );
+      }
+      if (!theirsState || theirsState === oursState) continue;
+
+      if (oursState !== EMPTY_STATE_HASH) {
+        const base =
+          this.getMergeBase({ leftStateHash: oursState, rightStateHash: theirsState })
+            .baseStateHash ?? EMPTY_STATE_HASH;
+        if (base !== oursState) {
+          // Diverged: dry-run 3-way to classify clean-mergeable vs conflict.
+          const dry = await this.computeMerge({
+            oursStateHash: oursState,
+            theirsStateHash: theirsState,
+            labels: { ours: `${repoPath}:main`, theirs: `${repoPath}:${sourceHead}` },
+          });
+          const oursEventId = this.commitEventIdOf(
+            this.resolveWorktreeHeadInternal(logId, "main"),
+            `${repoPath}:main`
+          );
+          divergences.push({
+            repoPath,
+            base,
+            mainTip: oursState,
+            upstreamCommits: this.upstreamCommitsBetween(base, oursState, oursEventId),
+            mergeable: dry.status === "conflicted" ? "conflict" : "clean",
+            ...(dry.status === "conflicted"
+              ? { conflictPaths: dry.conflicts.map((c) => c.path) }
+              : {}),
+          });
+          continue;
+        }
+      }
+      const files = (await this.stateFilesFor(store, theirsState)).map((f) => ({
+        path: f.path,
+        contentHash: f.contentHash,
+        mode: f.mode,
+      }));
+      advancing.push({ repoPath, logId, oursState, candidateState: theirsState, sourceEventId, files });
+    }
+
+    if (divergences.length > 0) return { status: "diverged", divergences };
+    if (advancing.length === 0) return { status: "up-to-date", repoPaths, reports: [] };
+
+    // Build gate over the composed candidate view (every repo at main, pushed
+    // repos overlaid at their candidate states).
+    const baseStates = await this.collectRepoMainStatesFromRefs();
+    const overlay = new Map(baseStates.map((s) => [normalizeRepoPathArg(s.repoPath), s.stateHash]));
+    for (const c of advancing) overlay.set(c.repoPath, c.candidateState);
+    const baseView = await this.composeRepoStatesMirrored(store, baseStates);
+    const candidateView = await this.composeRepoStatesMirrored(
+      store,
+      [...overlay].map(([repoPath, stateHash]) => ({ repoPath, stateHash }))
+    );
+    const reports = await this.buildStore().validate({
+      viewHash: candidateView,
+      repoPaths: advancing.map((c) => c.repoPath),
+      baseViewHash: baseView,
+    });
+    if (reports.some((r) => r.required && r.status === "failed")) {
+      return { status: "build-failed", reports };
+    }
+
+    // PUBLISH — write-ahead intent, then the single-writer group CAS, then
+    // provenance. On CAS conflict: discard intent, re-read, bounded retry.
+    const entries: PublishIntentEntry[] = [];
+    for (const c of advancing) {
+      const oursFiles = c.oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, c.oursState);
+      entries.push({
+        repoPath: c.repoPath,
+        logId: c.logId,
+        expectedOld: c.oursState === EMPTY_STATE_HASH ? null : c.oursState,
+        next: c.candidateState,
+        parentEventId: c.sourceEventId,
+        parentStateHash: c.candidateState,
+        files: c.files,
+        editOps: this.mergeEditOps(oursFiles, c.files),
+      });
+    }
+    const intent: PublishIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "push",
+      entries,
+      message: input.message ?? null,
+      actor: input.actor,
+      sourceHead,
+    };
+    this.transaction(() => this.recordPublishIntent(intent));
+
+    try {
+      await this.refsStore().updateMains({
+        entries: entries.map((e) => ({ repoPath: e.repoPath, expectedOld: e.expectedOld, next: e.next })),
+        reason: input.message ?? `push ${repoPaths.join(", ")} from ${sourceHead}`,
+        operation: "push",
+        ...(invocationToken ? { invocationToken } : {}),
+      });
+    } catch (error) {
+      this.transaction(() => this.deletePublishIntent(intent.intentId));
+      if (this.isRefConflictError(error)) {
+        if (!isRetry) return this.runVcsPush(input, invocationToken, true);
+        const race = await this.pushRaceResult(advancing, reports);
+        if (race) return race;
+        throw error;
+      }
+      // Approval denial or any other failure: no ref moved, intent discarded.
+      throw error;
+    }
+
+    // Success: record provenance with full fidelity, then complete (delete) the
+    // intent. A crash between the CAS and here is healed on next start / push.
+    this.completePublishIntent(intent);
+    for (const c of advancing) {
+      await this.mirrorStateToContentStore(store, c.files, c.candidateState);
+    }
+    // Re-pin the ctx source's base view to the freshly-published workspace view
+    // (host did this at workspaceVcs.ts push tail): the context now reads from
+    // the advanced main, so subsequent reads/edits diff against it, not the
+    // stale pre-push base.
+    if (sourceHead.startsWith("ctx:")) {
+      await this.vcsPinContext({
+        contextId: sourceHead.slice("ctx:".length),
+        baseView: candidateView,
+      }).catch(() => {});
+    }
+    return { status: "pushed", repoPaths: advancing.map((c) => c.repoPath), reports };
+  }
+
+  /**
+   * Publish an imported repo tree onto its protected `main`. The git-bridge
+   * ingests the outside-world git history onto a NON-MAIN `import:*` staging
+   * head (preserving commit messages/authors), then calls this method; the
+   * advance goes through the SAME write-ahead-intent → single-writer
+   * `refs.updateMains({ operation: "import" })` → provenance machinery as push,
+   * so it is approval-gated and attributed to the originating extension via the
+   * host-minted invocation token. `expectedOld` is the current main (null for a
+   * brand-new repo). No-ops when main already equals the staged state. This
+   * replaces the deleted ungated `vcs.adoptImportedRepo` /
+   * `WorkspaceVcs.adoptMainFromStore` adoption (closes finding 2).
+   */
+  @rpc({ callers: ["extension", "server", "do"] })
+  async vcsImportPublish(input: {
+    repoPath: string;
+    sourceHead: string;
+    message?: string | null;
+    actor?: ParticipantRef | null;
+  }): Promise<VcsImportPublishResultDo> {
+    // READ-AT-ENTRY (invocation-token contract): capture the on-behalf-of token
+    // and verified caller synchronously, before any await.
+    const invocationToken = this.invocationToken;
+    const actor = input.actor ?? this.callerParticipant();
+    this.ensureReady();
+    return this.runVcsImportPublish({ ...input, actor }, invocationToken);
+  }
+
+  private async runVcsImportPublish(
+    input: { repoPath: string; sourceHead: string; message?: string | null; actor: ParticipantRef },
+    invocationToken: string | undefined
+  ): Promise<VcsImportPublishResultDo> {
+    const store = this.contentStore();
+    const repoPath = normalizeRepoPathArg(input.repoPath);
+    const logId = logIdForRepoPath(repoPath);
+    if (input.sourceHead === "main" || !input.sourceHead.startsWith("import:")) {
+      throw new Error(
+        `import publish: sourceHead must be a non-main import staging head, got "${input.sourceHead}"`
+      );
+    }
+
+    // Heal any crash-window drift before reading main so the CAS sees a
+    // consistent lineage.
+    await this.healPublishDrift(store);
+
+    // The staging lineage the bridge ingested the imported history onto.
+    const stagingRef = this.resolveWorktreeHeadInternal(logId, input.sourceHead);
+    const candidateState = stagingRef?.stateHash;
+    if (!candidateState || candidateState === EMPTY_STATE_HASH) {
+      throw new Error(
+        `import publish: staging head ${input.sourceHead} for ${repoPath} has no ingested state`
+      );
+    }
+
+    const oursState = (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
+    if (candidateState === oursState) {
+      return { status: "up-to-date", repoPath, stateHash: oursState };
+    }
+
+    const files = (await this.stateFilesFor(store, candidateState)).map((f) => ({
+      path: f.path,
+      contentHash: f.contentHash,
+      mode: f.mode,
+    }));
+    const oursFiles =
+      oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, oursState);
+    // Import provenance ops (main → imported tree). True per-line hunks are
+    // unavailable for an external git snapshot, so the ops are stamped SYNTHETIC
+    // (blame treats them as a chain restart, A2) and skip first-parent
+    // chain-continuity validation at completion.
+    const editOps = this.mergeEditOps(oursFiles, files).map((op) => ({
+      ...op,
+      synthetic: true as const,
+    }));
+    const sourceEventId = this.commitEventIdOf(stagingRef, `${repoPath}:${input.sourceHead}`);
+    const entry: PublishIntentEntry = {
+      repoPath,
+      logId,
+      expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState,
+      next: candidateState,
+      parentEventId: sourceEventId,
+      parentStateHash: candidateState,
+      files,
+      editOps,
+      synthetic: true,
+    };
+    const intent: PublishIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "import",
+      entries: [entry],
+      message: input.message ?? null,
+      actor: input.actor,
+      sourceHead: input.sourceHead,
+    };
+    this.transaction(() => this.recordPublishIntent(intent));
+
+    try {
+      await this.refsStore().updateMains({
+        entries: [{ repoPath: entry.repoPath, expectedOld: entry.expectedOld, next: entry.next }],
+        reason: input.message ?? `import ${repoPath} from git`,
+        operation: "import",
+        ...(invocationToken ? { invocationToken } : {}),
+      });
+    } catch (error) {
+      // Approval denial or a CAS conflict: no ref moved, discard the intent.
+      // Import is idempotent (re-scan + re-publish), so no in-place retry loop.
+      this.transaction(() => this.deletePublishIntent(intent.intentId));
+      throw error;
+    }
+
+    // Success: record provenance with full fidelity, then complete the intent.
+    // A crash between the CAS and here is healed on next start / push.
+    this.completePublishIntent(intent);
+    await this.mirrorStateToContentStore(store, files, candidateState);
+    return { status: "published", repoPath, stateHash: candidateState };
+  }
+
+  /** After a CAS conflict exhausted retries: reclassify each advancing repo
+   *  against the now-current main (already-applied vs freshly diverged). */
+  private async pushRaceResult(
+    advancing: Array<{ repoPath: string; logId: string; candidateState: string }>,
+    reports: unknown[]
+  ): Promise<VcsPushResultDo | null> {
+    const divergences: Extract<VcsPushResultDo, { status: "diverged" }>["divergences"] = [];
+    let allApplied = true;
+    for (const c of advancing) {
+      const current = (await this.refsStore().readMain(c.repoPath))?.stateHash ?? EMPTY_STATE_HASH;
+      if (current === c.candidateState) continue;
+      allApplied = false;
+      const base =
+        this.getMergeBase({ leftStateHash: current, rightStateHash: c.candidateState })
+          .baseStateHash ?? EMPTY_STATE_HASH;
+      if (base === current) continue;
+      const dry = await this.computeMerge({
+        oursStateHash: current,
+        theirsStateHash: c.candidateState,
+        labels: { ours: `${c.repoPath}:main`, theirs: `${c.repoPath}:candidate` },
+      });
+      const currentEventId = this.commitEventIdOf(
+        this.resolveWorktreeHeadInternal(c.logId, "main"),
+        `${c.repoPath}:main`
+      );
+      divergences.push({
+        repoPath: c.repoPath,
+        base,
+        mainTip: current,
+        upstreamCommits: this.upstreamCommitsBetween(base, current, currentEventId),
+        mergeable: dry.status === "conflicted" ? "conflict" : "clean",
+        ...(dry.status === "conflicted" ? { conflictPaths: dry.conflicts.map((x) => x.path) } : {}),
+      });
+    }
+    if (divergences.length > 0) return { status: "diverged", divergences };
+    if (allApplied) return { status: "up-to-date", repoPaths: advancing.map((c) => c.repoPath), reports };
+    return null;
+  }
+
+  private isRefConflictError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /compare-and-swap conflict/i.test(message) || /REF_CONFLICT/.test(message);
+  }
+
+  // ── Write-ahead publish intents (crash self-heal, §6) ──────────────────────
+
+  private recordPublishIntent(intent: PublishIntent): void {
+    this.sql.exec(
+      `INSERT INTO gad_publish_intents
+         (intent_id, operation, entries_json, message, actor_json, source_head, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      intent.intentId,
+      intent.operation,
+      JSON.stringify(intent.entries),
+      intent.message ?? null,
+      intent.actor ? JSON.stringify(intent.actor) : null,
+      intent.sourceHead ?? null,
+      nowIso()
+    );
+  }
+
+  private deletePublishIntent(intentId: string): void {
+    this.sql.exec(`DELETE FROM gad_publish_intents WHERE intent_id = ?`, intentId);
+  }
+
+  private listPublishIntents(): PublishIntent[] {
+    return (
+      this.sql.exec(`SELECT * FROM gad_publish_intents ORDER BY created_at`).toArray() as JsonRecord[]
+    ).map((row) => ({
+      intentId: String(row["intent_id"]),
+      operation: String(row["operation"]) as "push" | "merge" | "import",
+      entries: JSON.parse(String(row["entries_json"])) as PublishIntentEntry[],
+      message: row["message"] ? String(row["message"]) : null,
+      actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ParticipantRef) : null,
+      sourceHead: row["source_head"] ? String(row["source_head"]) : null,
+    }));
+  }
+
+  /** Record the provenance commits for an intent whose ref CAS landed, then
+   *  delete the intent — the completion half of the write-ahead protocol. Idempotent-safe:
+   *  ingest CAS treats the main predecessor as a claimed lineage anchor. */
+  private completePublishIntent(intent: PublishIntent): void {
+    this.transaction(() => {
+      for (const e of intent.entries) {
+        // Already recorded? (heal after a partial completion) — skip if the DO's
+        // recorded main head is already at the candidate.
+        const recorded = this.resolveWorktreeHeadInternal(e.logId, "main")?.stateHash ?? null;
+        if (recorded === e.next) continue;
+        this.ingestWorktreeStateInTxn({
+          logId: e.logId,
+          head: "main",
+          logKind: "vcs",
+          actor: intent.actor ?? SYSTEM_PARTICIPANT,
+          files: e.files,
+          baseStateHash: e.expectedOld ?? EMPTY_STATE_HASH,
+          expectedRefStateHash: e.expectedOld ?? EMPTY_STATE_HASH,
+          parentStateHashes: [e.parentStateHash ?? e.next],
+          ...(e.parentEventId ? { parentEventIds: [e.parentEventId] } : {}),
+          eventKind: "state.merge_applied",
+          summary:
+            intent.message ??
+            `${intent.operation} ${e.repoPath}${intent.sourceHead ? ` from ${intent.sourceHead}` : ""}`,
+          ...(e.editOps.length > 0
+            ? { editOps: e.editOps, validateFirstParentChain: !e.synthetic }
+            : {}),
+        });
+      }
+      this.deletePublishIntent(intent.intentId);
+    });
+  }
+
+  /**
+   * Crash self-heal (§6). Refs are the authority; the DO is a follower of its
+   * OWN successful writes. Reconcile pending intents and lineage against the
+   * host mains:
+   *  - a main matching a pending intent's `next` → complete that intent's
+   *    provenance with full fidelity (its recorded editOps/parents);
+   *  - a pending intent whose CAS never landed (ref no longer at `expectedOld`,
+   *    and no ref-log transition to `next`) → discard it;
+   *  - a main the DO's recorded lineage lags with NO covering intent → a
+   *    SYNTHETIC catch-up ingest of the ref's tree (stamped synthetic).
+   */
+  private async healPublishDrift(store: HostContentStore): Promise<void> {
+    const intents = this.listPublishIntents();
+    const coveredMains = new Set<string>();
+    for (const intent of intents) {
+      let allLanded = true;
+      let anyLanded = false;
+      for (const e of intent.entries) {
+        const current = (await this.refsStore().readMain(e.repoPath))?.stateHash ?? null;
+        coveredMains.add(normalizeRepoPathArg(e.repoPath));
+        if (current === e.next) anyLanded = true;
+        else allLanded = false;
+      }
+      if (allLanded) {
+        this.completePublishIntent(intent);
+        continue;
+      }
+      if (!anyLanded && (await this.intentIsStale(intent))) {
+        this.transaction(() => this.deletePublishIntent(intent.intentId));
+        continue;
+      }
+      // Mixed / indeterminate: complete the landed entries, keep the rest for a
+      // later pass (ref layer is all-or-none, so this is defensive only).
+      if (anyLanded) this.completePublishIntent(intent);
+    }
+
+    // Mains whose recorded lineage lags with NO covering intent → synthetic.
+    for (const ref of await this.refsStore().listMains()) {
+      const repoPath = normalizeRepoPathArg(ref.repoPath);
+      if (coveredMains.has(repoPath)) continue;
+      if (ref.stateHash === EMPTY_STATE_HASH) continue;
+      const logId = logIdForRepoPath(repoPath);
+      const recorded = this.resolveWorktreeHeadInternal(logId, "main")?.stateHash ?? null;
+      if (recorded === ref.stateHash) continue;
+      await this.syntheticCatchUpIngest(store, repoPath, logId, recorded, ref.stateHash);
+    }
+  }
+
+  /** An intent's CAS never landed iff no entry is currently at `next` AND the
+   *  ref log records no transition INTO `next` (consult the log, not just the
+   *  current value — a later push may have moved past it). */
+  private async intentIsStale(intent: PublishIntent): Promise<boolean> {
+    const readLog = this.refsStore().readMainLog?.bind(this.refsStore());
+    for (const e of intent.entries) {
+      const current = (await this.refsStore().readMain(e.repoPath))?.stateHash ?? null;
+      if (current === e.next) return false;
+      if (readLog) {
+        const log = await readLog(e.repoPath, 200);
+        if (log.some((entry) => entry.new === e.next)) return false;
+      }
+    }
+    return true;
+  }
+
+  /** Degraded catch-up: record the ref's tree as a synthetic main commit so the
+   *  DO's lineage rejoins the ref. Stamped synthetic (chain restart) since true
+   *  first-parent hunks are unavailable. */
+  private async syntheticCatchUpIngest(
+    store: HostContentStore,
+    repoPath: string,
+    logId: string,
+    recorded: string | null,
+    refState: string
+  ): Promise<void> {
+    const files = (await this.stateFilesFor(store, refState)).map((f) => ({
+      path: f.path,
+      contentHash: f.contentHash,
+      mode: f.mode,
+    }));
+    const editOps: ProvenanceEditOp[] = files.map((f) => ({
+      kind: "create" as const,
+      path: f.path,
+      oldContentHash: null,
+      newContentHash: f.contentHash,
+      mode: f.mode,
+      synthetic: true,
+    }));
+    this.transaction(() =>
+      this.ingestWorktreeStateInTxn({
+        logId,
+        head: "main",
+        logKind: "vcs",
+        actor: SYSTEM_PARTICIPANT,
+        files,
+        baseStateHash: recorded ?? EMPTY_STATE_HASH,
+        expectedRefStateHash: recorded ?? EMPTY_STATE_HASH,
+        eventKind: "state.snapshot_ingested",
+        summary: `synthetic catch-up of ${repoPath} main to ref state`,
+        ...(editOps.length > 0 ? { editOps } : {}),
+      })
+    );
+    await this.mirrorStateToContentStore(store, files, refState);
+  }
+
+  /** Host-triggerable startup self-heal (§6) — the same reconcile the push path
+   *  runs on demand, exposed so the host can drive it at DO attach. */
+  @rpc({ callers: ["do", "server"] })
+  async vcsHealPublishDrift(): Promise<{ pendingIntents: number }> {
+    this.ensureReady();
+    await this.healPublishDrift(this.contentStore());
+    return {
+      pendingIntents: (
+        this.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one() as JsonRecord
+      )["c"] as number,
+    };
+  }
+
+  /**
+   * Explicit reconcile: merge `sourceHead` (typically `main`) into a `ctx:*`
+   * `targetHead`, producing a MERGE COMMIT — never auto-done by push. Rejects
+   * on uncommitted edits (a clean working state is required) and on a
+   * reconcile already in progress.
+   *
+   *  - **clean / fast-forward**: commit the 3-way result on the ctx head
+   *    (`baseStateHash: ours` + `parentStateHashes: [theirs]`) and mirror it —
+   *    the host projects and emits.
+   *  - **conflicted**: stage + mirror the conflict-marked provisional tree and
+   *    park a pending merge (`materialized: false`); the host projects the
+   *    markers, acknowledges via {@link markPendingMergeMaterialized}, and the
+   *    resolution lands through vcs.edit → vcs.commit (which consumes the
+   *    pending and records the merge parents).
+   *
+   * A `main` SOURCE resolves through the protected ref (refs bridge) and
+   * requires this store's recorded main to be in lockstep — the host drains
+   * the provenance follower before dispatching, so drift here is real.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsMerge(input: {
+    logId: string;
+    targetHead: string;
+    sourceHead: string;
+    actor: ParticipantRef;
+  }): Promise<
+    | {
+        status: "up-to-date";
+        stateHash: string;
+        conflicts: [];
+        mergeable: "clean";
+        upstreamCommits: Array<{
+          eventId: string;
+          message: string;
+          stateHash: string;
+          createdAt: string | null;
+        }>;
+      }
+    | {
+        status: "merged";
+        stateHash: string;
+        eventId: string;
+        headHash: string;
+        previousStateHash: string;
+        conflicts: [];
+        mergeable: "clean";
+        upstreamCommits: Array<{
+          eventId: string;
+          message: string;
+          stateHash: string;
+          createdAt: string | null;
+        }>;
+      }
+    | {
+        status: "conflicted";
+        stateHash: string;
+        conflicts: Array<{ path: string; kind: string }>;
+        mergeable: "conflict";
+        conflictPaths: string[];
+        theirsHead: string;
+        upstreamCommits: Array<{
+          eventId: string;
+          message: string;
+          stateHash: string;
+          createdAt: string | null;
+        }>;
+      }
+  > {
+    // READ-AT-ENTRY (invocation-token contract): capture the on-behalf-of token
+    // synchronously before any await — the main-advancing tail presents it to
+    // `refs.updateMains` for the gate's attribution.
+    const invocationToken = this.invocationToken;
+    this.ensureReady();
+    const { logId, targetHead, sourceHead } = input;
+    // Main target (mergeGroup / host vcs.merge→main for chrome callers): the
+    // 3-way is computed here and the advance PUBLISHES through the single-writer
+    // write-ahead-intent → refs.updateMains(operation:"merge") machinery — the
+    // same publish path as push, so main stays a gated CAS the host never
+    // side-advances. Conflicted-to-main parks a pending merge the host projects.
+    if (targetHead === "main") {
+      return this.runVcsMergeMain(logId, sourceHead, input.actor, invocationToken);
+    }
+    if (!targetHead.startsWith("ctx:")) {
+      throw new Error(
+        `vcsMerge: '${targetHead}' — merge targets a ctx:* head or main; got an unrecognized head`
+      );
+    }
+    const existingPending = this.getPendingMerge({ logId, head: targetHead }).info;
+    if (existingPending) {
+      throw new Error(
+        `merge in progress on ${targetHead}: resolve + vcs.commit, or vcs.discardEdits`
+      );
+    }
+    // Clean working state required — a merge over uncommitted edits would fold
+    // unrelated changes into the merge commit.
+    if (this.workingEditRows(logId, targetHead).length > 0) {
+      throw new Error(
+        `uncommitted edits on ${targetHead} — vcs.commit or vcs.discardEdits before merge`
+      );
+    }
+    const store = this.contentStore();
+    const repoPath = this.repoPathOfLog(logId);
+
+    const oursHeadRef = this.resolveWorktreeHeadInternal(logId, targetHead);
+    const oursState =
+      oursHeadRef?.stateHash ?? (await this.resolveCommittedBaseState(store, logId, targetHead));
+
+    let theirsHeadRef: { stateHash: string; commitEventId: string | null } | null;
+    if (sourceHead === "main" && repoPath) {
+      const refValue = (await this.refsStore().readMain(repoPath))?.stateHash ?? null;
+      if (!refValue) throw new Error(`merge source head has no state: ${sourceHead}`);
+      const doHead = this.resolveWorktreeHeadInternal(logId, "main");
+      if (!doHead || doHead.stateHash !== refValue) {
+        throw new Error(
+          `main lineage for ${repoPath} is behind the protected ref: this store records ` +
+            `${doHead?.stateHash ?? "<absent>"} but the ref is ${refValue} — drain/reconcile ` +
+            `provenance before merging`
+        );
+      }
+      theirsHeadRef = doHead;
+    } else {
+      theirsHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
+    }
+    const theirsState = theirsHeadRef?.stateHash;
+    if (!theirsState) throw new Error(`merge source head has no state: ${sourceHead}`);
+    const theirsEventId = this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
+    const upstreamCommits = this.upstreamCommitsBetween(oursState, theirsState, theirsEventId);
+
+    const result = await this.computeMerge({
+      oursStateHash: oursState,
+      theirsStateHash: theirsState,
+      labels: { ours: targetHead, theirs: sourceHead },
+    });
+
+    if (result.status === "up-to-date") {
+      return {
+        status: "up-to-date",
+        stateHash: oursState,
+        conflicts: [],
+        mergeable: "clean",
+        upstreamCommits,
+      };
+    }
+
+    if (result.status === "clean" || result.status === "fast-forward") {
+      // Clean merge → a merge COMMIT on the target head (no file resolution).
+      // ours is the implicit first parent (the head advance); theirs the added
+      // one. Mirrored so the handed-out state resolves in the content store.
+      // A3/U3: record per-file ops (origin-annotated hunks vs OURS from the
+      // 3-way alignment) so a clean merge is NOT an op-less commit — blame
+      // attributes the incoming lines to the merge.
+      const oursFiles = await this.stateFilesFor(store, oursState);
+      const editOps = this.mergeEditOps(oursFiles, result.files);
+      const ingest = this.transaction(() =>
+        this.ingestWorktreeStateInTxn({
+          logId,
+          head: targetHead,
+          logKind: "vcs",
+          actor: input.actor,
+          files: result.files,
+          baseStateHash: oursState,
+          expectedRefStateHash: oursState,
+          parentStateHashes: [theirsState],
+          ...(theirsEventId ? { parentEventIds: [theirsEventId] } : {}),
+          eventKind: "state.merge_applied",
+          summary: `Merge ${sourceHead} into ${targetHead}`,
+          ...(editOps.length > 0 ? { editOps, validateFirstParentChain: true } : {}),
+        })
+      );
+      await this.mirrorStateToContentStore(
+        store,
+        result.files.map((file) => ({
+          path: file.path,
+          contentHash: file.contentHash,
+          mode: file.mode,
+        })),
+        ingest.stateHash
+      );
+      return {
+        status: "merged",
+        stateHash: ingest.stateHash,
+        eventId: ingest.eventId,
+        headHash: ingest.headHash,
+        previousStateHash: oursState,
+        conflicts: [],
+        mergeable: "clean",
+        upstreamCommits,
+      };
+    }
+
+    // Conflicted: stage + mirror the provisional (conflict-marked) tree and
+    // park the pending merge. The host projects the markers into the context
+    // FS and acknowledges with markPendingMergeMaterialized; the agent
+    // resolves via vcs.edit (working ops over the provisional) and seals it
+    // with vcs.commit, which consumes the pending and records the parents.
+    const provisionalStateHash = await this.stageAndMirror(
+      store,
+      result.files,
+      `Provisional merge of ${sourceHead} into ${targetHead}`
+    );
+    this.setPendingMerge({
+      logId,
+      head: targetHead,
+      info: {
+        oursStateHash: oursState,
+        theirsStateHash: theirsState,
+        theirsEventId,
+        baseStateHash: result.baseStateHash,
+        theirsHead: sourceHead,
+        conflicts: result.conflicts,
+        provisionalStateHash,
+        materialized: false,
+      },
+    });
+    return {
+      status: "conflicted",
+      stateHash: provisionalStateHash,
+      conflicts: result.conflicts,
+      mergeable: "conflict",
+      conflictPaths: result.conflicts.map((c) => c.path),
+      theirsHead: sourceHead,
+      upstreamCommits,
+    };
+  }
+
+  /**
+   * Merge `sourceHead` (a ctx head) into a repo's protected `main` — the
+   * publish-class merge (P3). The 3-way is computed here; a clean result is
+   * adopted as `main` through the SAME write-ahead-intent → single-writer
+   * `refs.updateMains(operation:"merge")` → provenance machinery as push (so the
+   * main advance is a gated CAS the host never side-runs). A conflicted result
+   * stages + mirrors the provisional (conflict-marked) tree and parks a pending
+   * merge; the host projects the markers into the live workspace and drives the
+   * resolution → vcs.commit, which records the merge parents. The merge commit's
+   * first parent is `main` (baseStateHash), its second parent is `theirs`.
+   */
+  private async runVcsMergeMain(
+    logId: string,
+    sourceHead: string,
+    actor: ParticipantRef,
+    invocationToken: string | undefined
+  ): Promise<
+    | { status: "up-to-date"; stateHash: string; conflicts: []; mergeable: "clean"; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
+    | { status: "merged"; stateHash: string; eventId: string; headHash: string; previousStateHash: string; conflicts: []; mergeable: "clean"; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
+    | { status: "conflicted"; stateHash: string; conflicts: Array<{ path: string; kind: string }>; mergeable: "conflict"; conflictPaths: string[]; theirsHead: string; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
+  > {
+    const store = this.contentStore();
+    const repoPath = this.repoPathOfLog(logId);
+    if (!repoPath) throw new Error(`vcsMerge: a main-target merge requires a repo log, got ${logId}`);
+
+    // Heal any crash-window drift before reading main, so the base/tip and the
+    // 3-way see a consistent lineage (mirrors the push precondition).
+    await this.healPublishDrift(store);
+
+    const existingPending = this.getPendingMerge({ logId, head: "main" }).info;
+    if (existingPending) {
+      throw new Error(`merge in progress on main: resolve + vcs.commit, or vcs.discardEdits`);
+    }
+
+    const oursState = (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
+    // The DO's recorded main lineage must be in lockstep with the protected ref
+    // (the host drains the provenance follower before dispatching).
+    const doHead = this.resolveWorktreeHeadInternal(logId, "main");
+    if (oursState !== EMPTY_STATE_HASH && (!doHead || doHead.stateHash !== oursState)) {
+      throw new Error(
+        `main lineage for ${repoPath} is behind the protected ref: this store records ` +
+          `${doHead?.stateHash ?? "<absent>"} but the ref is ${oursState} — drain/reconcile ` +
+          `provenance before merging`
+      );
+    }
+
+    const theirsHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
+    const theirsState = theirsHeadRef?.stateHash;
+    if (!theirsState) throw new Error(`merge source head has no state: ${sourceHead}`);
+    const theirsEventId = this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
+    const upstreamCommits = this.upstreamCommitsBetween(oursState, theirsState, theirsEventId);
+
+    const result = await this.computeMerge({
+      oursStateHash: oursState,
+      theirsStateHash: theirsState,
+      labels: { ours: "main", theirs: sourceHead },
+    });
+
+    if (result.status === "up-to-date") {
+      return { status: "up-to-date", stateHash: oursState, conflicts: [], mergeable: "clean", upstreamCommits };
+    }
+
+    if (result.status === "clean" || result.status === "fast-forward") {
+      // Stage + mirror the merged tree FIRST (mirroring invariant: the ref must
+      // point at a content-store-expandable state before the gated CAS).
+      const mergedState = await this.stageAndMirror(
+        store,
+        result.files,
+        `Merge ${sourceHead} into main`
+      );
+      const oursFiles = oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, oursState);
+      const mergedFiles = result.files.map((f) => ({ path: f.path, contentHash: f.contentHash, mode: f.mode }));
+      const intent: PublishIntent = {
+        intentId: crypto.randomUUID(),
+        operation: "merge",
+        entries: [
+          {
+            repoPath,
+            logId,
+            expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState,
+            next: mergedState,
+            parentEventId: theirsEventId,
+            // Second parent = theirs (main is the implicit first parent via
+            // `expectedOld`/baseStateHash), preserving merge parent order.
+            parentStateHash: theirsState,
+            files: mergedFiles,
+            editOps: this.mergeEditOps(oursFiles, result.files),
+          },
+        ],
+        message: `Merge ${sourceHead} into main`,
+        actor,
+        sourceHead,
+      };
+      this.transaction(() => this.recordPublishIntent(intent));
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath, expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState, next: mergedState }],
+          reason: `merge ${repoPath} from ${sourceHead}`,
+          operation: "merge",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        this.transaction(() => this.deletePublishIntent(intent.intentId));
+        // A concurrent main advance changed the merge base — the caller
+        // recomputes and re-drives (best-effort per-repo, like the host path).
+        throw error;
+      }
+      this.completePublishIntent(intent);
+      const headRef = this.resolveWorktreeHeadInternal(logId, "main");
+      return {
+        status: "merged",
+        stateHash: mergedState,
+        eventId: headRef?.commitEventId ?? theirsEventId ?? "",
+        headHash: headRef?.commitEventId ?? mergedState,
+        previousStateHash: oursState,
+        conflicts: [],
+        mergeable: "clean",
+        upstreamCommits,
+      };
+    }
+
+    // Conflicted-to-main: stage + mirror the provisional (conflict-marked) tree
+    // and park a pending merge on `main`. NO ref advance — the host projects the
+    // markers into the live workspace, acknowledges materialization, and the
+    // resolution lands via vcs.edit → vcs.commit (records the merge parents).
+    const provisionalStateHash = await this.stageAndMirror(
+      store,
+      result.files,
+      `Provisional merge of ${sourceHead} into main`
+    );
+    this.setPendingMerge({
+      logId,
+      head: "main",
+      info: {
+        oursStateHash: oursState,
+        theirsStateHash: theirsState,
+        theirsEventId,
+        baseStateHash: result.baseStateHash,
+        theirsHead: sourceHead,
+        conflicts: result.conflicts,
+        provisionalStateHash,
+        materialized: false,
+      },
+    });
+    return {
+      status: "conflicted",
+      stateHash: provisionalStateHash,
+      conflicts: result.conflicts,
+      mergeable: "conflict",
+      conflictPaths: result.conflicts.map((c) => c.path),
+      theirsHead: sourceHead,
+      upstreamCommits,
+    };
+  }
+
+  /**
+   * Abort a pending (conflicted) merge: clear the parked pending and hand the
+   * host the pre-merge state to restore on disk. NOT a head advance — a
+   * pending merge never moved the head (the provisional tree is a disk-only
+   * projection).
+   */
+  @rpc({ callers: ["do", "server"] })
+  vcsAbortMerge(input: { logId: string; head: string }): {
+    aborted: boolean;
+    restoreStateHash: string | null;
+  } {
+    this.ensureReady();
+    const pending = this.getPendingMerge(input).info;
+    if (!pending) return { aborted: false, restoreStateHash: null };
+    this.clearPendingMerge(input);
+    return { aborted: true, restoreStateHash: pending.oursStateHash };
+  }
+
+  // -------------------------------------------------------------------------
+  // Context semantics (P5d) — a CONTEXT's VCS state lives HERE: the durable
+  // pinned base view (vcs_context_bases), the composed working view (edited
+  // repos at their working content, the rest at the pinned base), per-repo
+  // status, rebase, and teardown. The host keeps only the DISK side: sparse
+  // materialization tracking and the projector that writes context folders.
+  // -------------------------------------------------------------------------
+
+  /** Composed-view cache — SELF-INVALIDATING: keyed by a signature of the
+   *  inputs that determine the view (pinned base + each touched repo's
+   *  committed ctx-head state + its uncommitted-edit fingerprint), so a stale
+   *  entry can never be returned. */
+  private readonly contextComposedViewCache = new Map<string, { key: string; view: string }>();
+  /** Content-addressed composition cache ((repoPath=state)* → view). */
+  private readonly composedRepoStatesCache = new Map<string, string>();
+  /** Decomposed pinned-view cache (a base view is immutable). */
+  private readonly pinnedViewDecomposeCache = new Map<
+    string,
+    Array<{ repoPath: string; stateHash: string }>
+  >();
+
+  /** Every repo's protected `main`, via the refs bridge — the authority. */
+  private async collectRepoMainStatesFromRefs(): Promise<
+    Array<{ repoPath: string; stateHash: string }>
+  > {
+    const refs = await this.refsStore().listMains();
+    return refs
+      .filter((record) => record.stateHash !== EMPTY_STATE_HASH)
+      .map((record) => ({ repoPath: record.repoPath, stateHash: record.stateHash }))
+      .sort((a, b) => a.repoPath.localeCompare(b.repoPath));
+  }
+
+  /** Every repo log carrying `head`, as `{ repoPath, stateHash }`. */
+  private collectRepoCtxHeadStates(head: string): Array<{ repoPath: string; stateHash: string }> {
+    const out: Array<{ repoPath: string; stateHash: string }> = [];
+    for (const row of this.listWorktreeHeads({ logIdPrefix: "vcs:repo:", head })) {
+      const repoPath = this.repoPathOfLog(row.logId);
+      if (!repoPath) continue;
+      out.push({ repoPath, stateHash: row.stateHash });
+    }
+    return out.sort((a, b) => a.repoPath.localeCompare(b.repoPath));
+  }
+
+  /**
+   * Compose repo subtree states into one workspace-rooted view, staged
+   * locally AND mirrored into the content store (the mirroring invariant for
+   * views composed here). Listings resolve content-store-first, so fresh ref
+   * mains the provenance follower has not recorded yet compose correctly.
+   * Cached by the content-addressed composition key (never stale).
+   */
+  private async composeRepoStatesMirrored(
+    store: HostContentStore,
+    repos: Array<{ repoPath: string; stateHash: string }>
+  ): Promise<string> {
+    if (repos.length === 0) {
+      await this.mirrorStateToContentStore(store, [], EMPTY_STATE_HASH);
+      return EMPTY_STATE_HASH;
+    }
+    const key = repos
+      .map((repo) => `${normalizeRepoPathArg(repo.repoPath)}=${repo.stateHash}`)
+      .sort()
+      .join("\n");
+    const cached = this.composedRepoStatesCache.get(key);
+    if (cached) return cached;
+    const files: Array<{ path: string; contentHash: string; mode: number }> = [];
+    for (const repo of repos) {
+      const prefix = normalizeRepoPathArg(repo.repoPath);
+      for (const file of await this.stateFilesFor(store, repo.stateHash)) {
+        files.push({
+          path: `${prefix}/${file.path}`,
+          contentHash: file.contentHash,
+          mode: file.mode,
+        });
+      }
+    }
+    const stateHash = await this.stageAndMirror(store, files, "composed workspace view");
+    if (this.composedRepoStatesCache.size >= 128) {
+      const oldest = this.composedRepoStatesCache.keys().next().value;
+      if (oldest !== undefined) this.composedRepoStatesCache.delete(oldest);
+    }
+    this.composedRepoStatesCache.set(key, stateHash);
+    return stateHash;
+  }
+
+  /** The live workspace view: the composed union of every repo's protected
+   *  `main` (via the refs bridge). */
+  private async workspaceViewFromRefs(store: HostContentStore): Promise<string> {
+    return this.composeRepoStatesMirrored(store, await this.collectRepoMainStatesFromRefs());
+  }
+
+  /**
+   * Decompose a pinned composed workspace view into its per-repo subtree
+   * states (repo membership from the view's own file paths — the userland
+   * repo taxonomy), cached by view hash (a base view is immutable).
+   */
+  private async decomposePinnedViewLocal(
+    store: HostContentStore,
+    baseView: string
+  ): Promise<Array<{ repoPath: string; stateHash: string }>> {
+    const cached = this.pinnedViewDecomposeCache.get(baseView);
+    if (cached) return cached;
+    const files = await this.stateFilesFor(store, baseView);
+    const out: Array<{ repoPath: string; stateHash: string }> = [];
+    for (const repoPath of discoverRepoPaths(files.map((file) => file.path))) {
+      const slice = await this.pinnedSliceState(store, baseView, repoPath);
+      if (slice) out.push({ repoPath, stateHash: slice });
+    }
+    if (this.pinnedViewDecomposeCache.size >= 64) {
+      const oldest = this.pinnedViewDecomposeCache.keys().next().value;
+      if (oldest !== undefined) this.pinnedViewDecomposeCache.delete(oldest);
+    }
+    this.pinnedViewDecomposeCache.set(baseView, out);
+    return out;
+  }
+
+  /**
+   * Cheap per-repo fingerprint of a context's working content — the inputs
+   * the composed view depends on: each touched repo's committed ctx-head
+   * state (null if none) and its highest uncommitted `edit_seq`. Covers repos
+   * with a ctx head AND repos with uncommitted-only edits (no ctx head yet).
+   */
+  private contextWorkingFingerprint(
+    contextId: string
+  ): Array<{ repoPath: string; committedState: string | null; editSeq: number }> {
+    const head = `ctx:${contextId}`;
+    const repoPaths = new Set<string>();
+    for (const c of this.collectRepoCtxHeadStates(head)) {
+      repoPaths.add(normalizeRepoPathArg(c.repoPath));
+    }
+    for (const row of this.listContextWorkingRepos({ head })) {
+      const repoPath = this.repoPathOfLog(row.logId);
+      if (repoPath) repoPaths.add(normalizeRepoPathArg(repoPath));
+    }
+    const out: Array<{ repoPath: string; committedState: string | null; editSeq: number }> = [];
+    for (const repoPath of repoPaths) {
+      const logId = logIdForRepoPath(repoPath);
+      const committedState = this.resolveCommittedHeadState(logId, head);
+      const editSeq = this.workingEditRows(logId, head).reduce(
+        (max, row) => Math.max(max, Number(row["edit_seq"] ?? 0)),
+        0
+      );
+      out.push({ repoPath, committedState, editSeq });
+    }
+    return out;
+  }
+
+  /** Stable signature of the inputs that determine a context's composed view. */
+  private contextViewSignature(
+    baseView: string | null,
+    fingerprint: Array<{ repoPath: string; committedState: string | null; editSeq: number }>
+  ): string {
+    const fp = fingerprint
+      .map((f) => `${normalizeRepoPathArg(f.repoPath)}=${f.committedState ?? "-"}@${f.editSeq}`)
+      .sort()
+      .join(",");
+    return `${baseView ?? "-"}|${fp}`;
+  }
+
+  /** Compose a context view: overlaid repos at their given states, every
+   *  other repo at its slice of the pinned base (live mains when unpinned). */
+  private async computeContextView(
+    store: HostContentStore,
+    baseView: string | null,
+    overlay: Map<string, string>
+  ): Promise<string> {
+    const baseRepos = baseView
+      ? await this.decomposePinnedViewLocal(store, baseView)
+      : await this.collectRepoMainStatesFromRefs();
+
+    if (overlay.size === 0) {
+      return (
+        baseView ??
+        (baseRepos.length === 0
+          ? EMPTY_STATE_HASH
+          : await this.composeRepoStatesMirrored(store, baseRepos))
+      );
+    }
+
+    const composedRepos = baseRepos.map(({ repoPath, stateHash }) => ({
+      repoPath,
+      stateHash: overlay.get(normalizeRepoPathArg(repoPath)) ?? stateHash,
+    }));
+    // Brand-new repos created in this context (overlaid, absent from the base).
+    const baseSet = new Set(baseRepos.map((r) => normalizeRepoPathArg(r.repoPath)));
+    for (const [repoPath, stateHash] of overlay) {
+      if (!baseSet.has(repoPath)) composedRepos.push({ repoPath, stateHash });
+    }
+    return composedRepos.length === 0
+      ? EMPTY_STATE_HASH
+      : await this.composeRepoStatesMirrored(store, composedRepos);
+  }
+
+  /**
+   * Pin (or re-pin) a context's base view. With `baseView` omitted this is an
+   * idempotent CREATE — pins the current workspace view (composed union of
+   * protected repo mains) only if not already pinned. With `baseView` given
+   * it FORCE-moves the pin (rebase / post-push re-pin).
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsPinContext(input: { contextId: string; baseView?: string | null }): Promise<{
+    baseView: string;
+  }> {
+    this.ensureReady();
+    let baseView = input.baseView ?? null;
+    if (!baseView) {
+      const existing = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
+      if (existing) return { baseView: existing };
+      baseView = await this.workspaceViewFromRefs(this.contentStore());
+    }
+    this.setContextBase({ contextId: input.contextId, stateHash: baseView });
+    this.contextComposedViewCache.delete(input.contextId);
+    return { baseView };
+  }
+
+  /**
+   * The context's composed view: each touched repo at its WORKING content
+   * (committed ctx head + uncommitted edits; a pending merge's provisional
+   * while reconciling), every other repo at its slice of the pinned base.
+   * Self-invalidating cache (see {@link contextViewSignature}).
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  async vcsResolveContextView(input: { contextId: string }): Promise<{ stateHash: string }> {
+    this.ensureReady();
+    const store = this.contentStore();
+    const baseView = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
+    const fingerprint = this.contextWorkingFingerprint(input.contextId);
+    const key = this.contextViewSignature(baseView, fingerprint);
+    const cached = this.contextComposedViewCache.get(input.contextId);
+    if (cached && cached.key === key) return { stateHash: cached.view };
+    // Fast path: a pure-read context (nothing touched) IS its pinned base.
+    if (baseView && fingerprint.length === 0) {
+      this.contextComposedViewCache.set(input.contextId, { key, view: baseView });
+      return { stateHash: baseView };
+    }
+    const head = `ctx:${input.contextId}`;
+    const overlay = new Map<string, string>();
+    for (const fp of fingerprint) {
+      const working = (
+        await this.resolveWorkingState({ logId: logIdForRepoPath(fp.repoPath), head })
+      ).stateHash;
+      if (working) overlay.set(normalizeRepoPathArg(fp.repoPath), working);
+    }
+    const view = await this.computeContextView(store, baseView, overlay);
+    this.contextComposedViewCache.set(input.contextId, { key, view });
+    return { stateHash: view };
+  }
+
+  /**
+   * The composed context view with ONE repo forced to a specific COMMITTED
+   * state (or dropped back to its base slice when null), every other edited
+   * repo at its committed ctx head. Computes the workspace-rooted
+   * "before"/"after" of a per-repo COMMIT so the build trigger can EV-diff a
+   * context commit against a real composed workspace state.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsComposedViewWithRepoAt(input: {
+    contextId: string;
+    repoPath: string;
+    repoStateHash: string | null;
+  }): Promise<{ stateHash: string }> {
+    this.ensureReady();
+    const store = this.contentStore();
+    const baseView = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
+    const norm = normalizeRepoPathArg(input.repoPath);
+    const overlay = new Map<string, string>();
+    for (const c of this.collectRepoCtxHeadStates(`ctx:${input.contextId}`)) {
+      if (normalizeRepoPathArg(c.repoPath) !== norm) {
+        overlay.set(normalizeRepoPathArg(c.repoPath), c.stateHash);
+      }
+    }
+    if (input.repoStateHash) overlay.set(norm, input.repoStateHash);
+    return { stateHash: await this.computeContextView(store, baseView, overlay) };
+  }
+
+  /** Every repo visible in a context's view (pinned-base repos ∪ ctx-head
+   *  repos ∪ working-only repos), base order first. */
+  private async contextRepoList(store: HostContentStore, contextId: string): Promise<string[]> {
+    const baseView = this.getContextBase({ contextId })?.stateHash ?? null;
+    const base = baseView
+      ? await this.decomposePinnedViewLocal(store, baseView)
+      : await this.collectRepoMainStatesFromRefs();
+    const ctx = this.collectRepoCtxHeadStates(`ctx:${contextId}`);
+    const working = this.listContextWorkingRepos({ head: `ctx:${contextId}` })
+      .map((row) => this.repoPathOfLog(row.logId))
+      .filter((repoPath): repoPath is string => repoPath !== null);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of [...base, ...ctx]) {
+      const n = normalizeRepoPathArg(r.repoPath);
+      if (!seen.has(n)) {
+        seen.add(n);
+        out.push(r.repoPath);
+      }
+    }
+    for (const repoPath of working) {
+      const n = normalizeRepoPathArg(repoPath);
+      if (!seen.has(n)) {
+        seen.add(n);
+        out.push(repoPath);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The states a context's repos should be on disk at — the host
+   * materializer's demand feed. `repos` is a list of repo paths or SECTION
+   * prefixes (each expands to every context repo under it); `"all"` is the
+   * whole view. Repos that do not exist in the context are omitted.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsContextRepoStates(input: {
+    contextId: string;
+    repos: string[] | "all";
+  }): Promise<Array<{ repoPath: string; stateHash: string }>> {
+    this.ensureReady();
+    const store = this.contentStore();
+    const all = await this.contextRepoList(store, input.contextId);
+    let list: string[];
+    if (input.repos === "all") {
+      list = all;
+    } else {
+      const set = new Set<string>();
+      for (const req of input.repos) {
+        const reqNorm = normalizeRepoPathArg(req).replace(/\/+$/u, "");
+        for (const repoPath of all) {
+          const rn = normalizeRepoPathArg(repoPath);
+          if (rn === reqNorm || rn.startsWith(`${reqNorm}/`)) set.add(repoPath);
+        }
+      }
+      list = [...set];
+    }
+    const head = `ctx:${input.contextId}`;
+    const out: Array<{ repoPath: string; stateHash: string }> = [];
+    for (const repoPath of list) {
+      const state = (await this.resolveWorkingState({ logId: logIdForRepoPath(repoPath), head }))
+        .stateHash;
+      if (state) out.push({ repoPath, stateHash: state });
+    }
+    return out;
+  }
+
+  /**
+   * Per-repo summary of where a context differs from main or needs attention:
+   * `forked` (committed ctx head), `uncommitted` (working edits), `ahead`
+   * (ctx commits not contained in main), `behind` (main advanced past the
+   * pinned base), `deleted` (repo retired via deleteRepo). Only interesting
+   * repos are returned.
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  async vcsContextStatus(input: { contextId: string }): Promise<
+    Array<{
+      repoPath: string;
+      forked: boolean;
+      uncommitted: boolean;
+      ahead: boolean;
+      behind: boolean;
+      deleted: boolean;
+    }>
+  > {
+    this.ensureReady();
+    const store = this.contentStore();
+    const baseView = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
+    const baseRepos = baseView
+      ? await this.decomposePinnedViewLocal(store, baseView)
+      : await this.collectRepoMainStatesFromRefs();
+    const baseByRepo = new Map(
+      baseRepos.map((r) => [normalizeRepoPathArg(r.repoPath), r.stateHash])
+    );
+    const ctxByRepo = new Map(
+      this.collectRepoCtxHeadStates(`ctx:${input.contextId}`).map((c) => [
+        normalizeRepoPathArg(c.repoPath),
+        { repoPath: c.repoPath, stateHash: c.stateHash },
+      ])
+    );
+    const editSeqByRepo = new Map(
+      this.contextWorkingFingerprint(input.contextId).map((f) => [
+        normalizeRepoPathArg(f.repoPath),
+        f.editSeq,
+      ])
+    );
+    const repoKeys = new Set([...baseByRepo.keys(), ...ctxByRepo.keys(), ...editSeqByRepo.keys()]);
+    const out: Array<{
+      repoPath: string;
+      forked: boolean;
+      uncommitted: boolean;
+      ahead: boolean;
+      behind: boolean;
+      deleted: boolean;
+    }> = [];
+    for (const key of repoKeys) {
+      const ctx = ctxByRepo.get(key) ?? null;
+      const baseState = baseByRepo.get(key) ?? null;
+      const repoPath = ctx?.repoPath ?? key;
+      const mainState =
+        (await this.refsStore().readMain(normalizeRepoPathArg(repoPath)))?.stateHash ?? null;
+      const forked = ctx !== null;
+      const uncommitted = (editSeqByRepo.get(key) ?? 0) > 0;
+      const behind = baseState !== null && mainState !== null && mainState !== baseState;
+      // The context still references this repo, but its `main` is gone AND it
+      // was archived — retired via deleteRepo (not a brand-new unpushed repo,
+      // which also lacks a main but has no archive head).
+      const deleted = mainState === null && this.repoLogWasArchived(logIdForRepoPath(repoPath));
+      let ahead = false;
+      if (forked) {
+        if (mainState === null) {
+          ahead = !deleted && ctx!.stateHash !== EMPTY_STATE_HASH;
+        } else if (ctx!.stateHash !== mainState) {
+          const mergeBase =
+            this.getMergeBase({ leftStateHash: mainState, rightStateHash: ctx!.stateHash })
+              .baseStateHash ?? EMPTY_STATE_HASH;
+          // `ahead` means the context has commits not contained in main. When
+          // the ctx head is an ancestor of main, it is only behind.
+          ahead = mergeBase !== ctx!.stateHash;
+        }
+      }
+      if (forked || uncommitted || behind || deleted) {
+        out.push({ repoPath, forked, uncommitted, ahead, behind, deleted });
+      }
+    }
+    return out.sort((a, b) => a.repoPath.localeCompare(b.repoPath));
+  }
+
+  /**
+   * Rebase: pull the latest protected `main` into each of the context's
+   * edited repos (a {@link vcsMerge} onto the ctx head), then RE-PIN the base
+   * to the current workspace view so unedited repos also advance. Rejects on
+   * uncommitted edits. If any repo conflicted, the pin stays where it was
+   * (the context keeps reporting `behind` until the conflicts resolve). The
+   * per-repo merge outcomes are returned so the HOST can project each repo's
+   * new state to disk and emit events — the follower half.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsRebaseContext(input: { contextId: string; actor: ParticipantRef }): Promise<{
+    repos: Array<{ repoPath: string; status: "up-to-date" | "merged" | "conflicted" }>;
+    baseView: string;
+    outcomes: Array<
+      { repoPath: string } & (
+        | { status: "up-to-date"; stateHash: string }
+        | {
+            status: "merged";
+            stateHash: string;
+            eventId: string;
+            headHash: string;
+            previousStateHash: string;
+          }
+        | {
+            status: "conflicted";
+            stateHash: string;
+            conflicts: Array<{ path: string; kind: string }>;
+            conflictPaths: string[];
+            theirsHead: string;
+          }
+      )
+    >;
+  }> {
+    this.ensureReady();
+    const store = this.contentStore();
+    const head = `ctx:${input.contextId}`;
+    // Reject up-front on uncommitted edits — a rebase merges over committed
+    // states only (each per-repo merge would reject anyway; fail clearly first).
+    const dirty = this.contextWorkingFingerprint(input.contextId).filter((f) => f.editSeq > 0);
+    if (dirty.length > 0) {
+      throw new Error(
+        `rebaseContext: uncommitted edits in ${dirty
+          .map((f) => f.repoPath)
+          .join(", ")} — vcs.commit or vcs.discardEdits first`
+      );
+    }
+    const repos: Array<{ repoPath: string; status: "up-to-date" | "merged" | "conflicted" }> = [];
+    const outcomes: Array<{ repoPath: string } & Record<string, unknown>> = [];
+    for (const { repoPath } of this.collectRepoCtxHeadStates(head)) {
+      const norm = normalizeRepoPathArg(repoPath);
+      const main = (await this.refsStore().readMain(norm))?.stateHash ?? null;
+      if (!main) {
+        repos.push({ repoPath, status: "up-to-date" });
+        continue;
+      }
+      const outcome = await this.vcsMerge({
+        logId: logIdForRepoPath(norm),
+        targetHead: head,
+        sourceHead: "main",
+        actor: input.actor,
+      });
+      repos.push({ repoPath, status: outcome.status });
+      outcomes.push({ repoPath, ...outcome });
+    }
+    // Only re-pin the base when EVERY edited repo merged cleanly — re-pinning
+    // over unresolved conflicts would falsely mark the context caught-up.
+    const conflicted = repos.some((r) => r.status === "conflicted");
+    const baseView = conflicted
+      ? (this.getContextBase({ contextId: input.contextId })?.stateHash ??
+        (await this.workspaceViewFromRefs(store)))
+      : (
+          await this.vcsPinContext({
+            contextId: input.contextId,
+            baseView: await this.workspaceViewFromRefs(store),
+          })
+        ).baseView;
+    return {
+      repos,
+      baseView,
+      outcomes: outcomes as never,
+    };
+  }
+
+  /**
+   * Teardown — the ONE place a context's durable VCS state dies. Per repo in
+   * (committed ctx heads ∪ uncommitted-edit repos): drop its uncommitted
+   * edits + pending merge AND fully retire its `ctx:{contextId}` head; then
+   * drop the pin row and the composed-view cache. Returns the touched repo
+   * paths so the host can clear its disk-side tracking. Idempotent.
+   */
+  @rpc({ callers: ["do", "server"] })
+  vcsDropContext(input: { contextId: string }): { repoPaths: string[] } {
+    this.ensureReady();
+    const head = `ctx:${input.contextId}`;
+    const repoPaths = new Set<string>();
+    for (const { repoPath } of this.collectRepoCtxHeadStates(head)) repoPaths.add(repoPath);
+    for (const row of this.listContextWorkingRepos({ head })) {
+      const repoPath = this.repoPathOfLog(row.logId);
+      if (repoPath) repoPaths.add(repoPath);
+    }
+    for (const repoPath of repoPaths) {
+      const logId = logIdForRepoPath(repoPath);
+      try {
+        this.discardWorkingEdits({ logId, head }); // uncommitted edits + pending
+      } catch {
+        // best-effort per repo — teardown must not wedge on one bad log
+      }
+      try {
+        this.deleteLogHead({ logId, head }); // ctx ref + log head + own events
+      } catch {
+        // best-effort per repo
+      }
+    }
+    try {
+      this.deleteContextBase({ contextId: input.contextId });
+    } catch {
+      // pin row may not exist
+    }
+    this.contextComposedViewCache.delete(input.contextId);
+    return { repoPaths: [...repoPaths] };
+  }
+
+  /**
+   * Content-store access for the merge/edit engines — the host `blobstore.*`
+   * RPC. Protected SEAM: host-side unit tests run this DO in-process with no
+   * gateway and override it with a local blob store; production always goes
+   * through the RPC bridge (`do` callers are policy-admitted on blobstore).
+   */
+  protected contentStore(): HostContentStore {
+    return {
+      listTree: (ref, opts) =>
+        this.rpc.call("main", "blobstore.listTree", [
+          ref,
+          { limit: MERGE_LIST_TREE_LIMIT, ...(opts?.prefix ? { prefix: opts.prefix } : {}) },
+        ]),
+      getTree: (ref) => this.rpc.call("main", "blobstore.getTree", [ref]),
+      getBase64: (digest) => this.rpc.call("main", "blobstore.getBase64", [digest]),
+      putBase64: (bytesBase64) => this.rpc.call("main", "blobstore.putBase64", [bytesBase64]),
+      putTree: (entries, opts) => this.rpc.call("main", "blobstore.putTree", [entries, opts]),
+    };
+  }
+
+  /**
+   * Protected-ref access for edit/commit composition — the host `refs.*` RPC
+   * (the single `main`-head authority). Protected SEAM like
+   * {@link contentStore}: host unit tests override it with the test's
+   * RefService.
+   */
+  protected refsStore(): HostRefsStore {
+    return {
+      readMain: (repoPath) => this.rpc.call("main", "refs.readMain", [repoPath]),
+      listMains: () => this.rpc.call("main", "refs.listMains", []),
+      updateMains: (input) => this.rpc.call("main", "refs.updateMains", [input]),
+      readMainLog: (repoPath, limit) =>
+        this.rpc.call("main", "refs.readMainLog", [
+          { repoPath, ...(limit !== undefined ? { limit } : {}) },
+        ]),
+    };
+  }
+
+  /**
+   * Build-service access for the push gate — the host `build.validate` RPC
+   * (pure, cached over a candidate view hash; §2.2). Protected SEAM like
+   * {@link contentStore}: host unit tests override it with a stub validator.
+   */
+  protected buildStore(): HostBuildStore {
+    return {
+      validate: (input) => this.rpc.call("main", "build.validate", [input]),
+    };
+  }
+
+  /**
+   * State file listing for the merge/edit engines: the local manifest index
+   * when this store recorded the state, else the content store's mirrored
+   * tree — inputs can be server-minted states (pinned-base slices, fresh ref
+   * mains the async provenance follower has not recorded yet), which by the
+   * mirroring invariant always resolve in the content store.
+   */
+  private async stateFilesFor(
+    store: HostContentStore,
+    stateHash: string
+  ): Promise<StateFileEntry[]> {
+    if (stateHash === EMPTY_STATE_HASH) return [];
+    if (this.hasWorktreeState(stateHash)) {
+      return this.filesForState(stateHash).map((file) => ({
+        path: String(file["path"]),
+        contentHash: String(file["content_hash"]),
+        mode: asNumber(file["mode"]),
+      }));
+    }
+    const entries = await store.listTree(stateHash);
+    if (entries === null) {
+      throw new Error(
+        `unknown worktree state ${stateHash} (not recorded here, not mirrored in the content store)`
+      );
+    }
+    if (entries.length >= MERGE_LIST_TREE_LIMIT) {
+      throw new Error(`tree listing overflow for ${stateHash}`);
+    }
+    return entries
+      .filter((entry) => entry.kind === "file")
+      .map((entry) => ({
+        path: entry.path,
+        contentHash: String(entry.contentHash),
+        mode: entry.mode ?? 33188,
+      }));
+  }
+
+  /**
+   * Three-way merge of `theirs` into `ours` — the userland VCS merge
+   * semantics (@workspace/vcs-engine), computed HERE so the host never owns
+   * what a merge IS. Pure over store values: discovers the base from this
+   * store's transition DAG, reads/writes blob bytes through the content
+   * store, and returns the merged (or conflict-marked provisional) file set —
+   * no refs move and nothing is appended; callers commit the result.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async computeMerge(input: {
+    oursStateHash: string;
+    theirsStateHash: string;
+    labels: { ours: string; theirs: string };
+  }): Promise<MergeComputation> {
+    this.ensureReady();
+    const store = this.contentStore();
+    const engine = new MergeEngine({
+      listStateFiles: (stateHash) => this.stateFilesFor(store, stateHash),
+      getMergeBase: async (leftStateHash, rightStateHash) =>
+        this.getMergeBase({ leftStateHash, rightStateHash }).baseStateHash,
+      readBlob: async (digest) => {
+        const bytesBase64 = await store.getBase64(digest);
+        return bytesBase64 === null ? null : base64ToBytes(bytesBase64);
+      },
+      writeBlob: async (bytes) => {
+        const result = await store.putBase64(bytesToBase64(bytes));
+        return { digest: result.digest, size: result.size };
+      },
+    });
+    return engine.compute(input.oursStateHash, input.theirsStateHash, input.labels);
   }
 
   // -------------------------------------------------------------------------
@@ -4881,19 +7885,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
   setMemoryIndexMarker(input: { key: string; value: string }): void {
     this.ensureReady();
     this.setStateValue(`memidx:${input.key}`, input.value);
-  }
-
-  /** Generic named marker (vcs bridge export positions etc.). */
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  getMarker(input: { key: string }): { value: string | null } {
-    this.ensureReady();
-    return { value: this.getStateValue(`marker:${input.key}`) };
-  }
-
-  @rpc({ callers: ["do", "server"] })
-  setMarker(input: { key: string; value: string }): void {
-    this.ensureReady();
-    this.setStateValue(`marker:${input.key}`, input.value);
   }
 
   /**
@@ -5026,18 +8017,30 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * The log itself is never collected (it IS the authority).
    */
   @rpc({ callers: ["server"] })
-  runGadGcMark(): {
+  runGadGcMark(input: GadGcRootsInput = {}): {
     keptStates: number;
     sweptStates: number;
     sweptManifests: number;
     sweptFileVersions: number;
     blobCandidates: number;
+    liveBlobDigests: string[];
   } {
     this.ensureReady();
     return this.transaction(() => {
-      // 1. Root states: every structured worktree head, every generic ref target
-      // with a stateHash, and pending merges.
+      // 1. Root states: every structured worktree head, host-provided
+      // protected refs, every generic ref target with a stateHash, and pending
+      // merges.
       const roots = new Set<string>([EMPTY_STATE_HASH]);
+      for (const stateHash of input.rootStateHashes ?? []) {
+        if (typeof stateHash === "string" && stateHash.length > 0) roots.add(stateHash);
+      }
+      const protectedDigests = new Set<string>();
+      for (const digest of input.protectedBlobDigests ?? []) {
+        if (typeof digest === "string" && digest.length > 0) protectedDigests.add(digest);
+      }
+      for (const digest of input.protectedTreeDigests ?? []) {
+        if (typeof digest === "string" && digest.length > 0) protectedDigests.add(digest);
+      }
       for (const head of this.listWorktreeHeads({})) {
         roots.add(head.stateHash);
       }
@@ -5062,6 +8065,27 @@ export class GadWorkspaceDO extends DurableObjectBase {
           }
         } catch {
           // unparseable pending merge — ignore
+        }
+      }
+      // P3 (§6): pending publish intents reference candidate `next` states not
+      // yet reachable from mains (the CAS may not have landed / provenance not
+      // yet recorded). Root them so a crash between intent and heal cannot have
+      // its candidate swept.
+      const intentRows = this.sql
+        .exec(`SELECT entries_json FROM gad_publish_intents`)
+        .toArray() as JsonRecord[];
+      for (const row of intentRows) {
+        try {
+          const parsed = JSON.parse(String(row["entries_json"])) as Array<{
+            next?: string;
+            parentStateHash?: string | null;
+          }>;
+          for (const entry of parsed) {
+            if (entry.next) roots.add(entry.next);
+            if (entry.parentStateHash) roots.add(entry.parentStateHash);
+          }
+        } catch {
+          // unparseable intent — ignore
         }
       }
       // Freshly created worktree states are temporary roots so a GC run cannot
@@ -5181,9 +8205,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
 
       // 6. Blob candidates: not referenced by surviving file versions, log
-      // payload spills, mutations, nor file observations (the same blob
-      // reachability collectGarbageBlobRefs uses); drop candidates that
-      // regained a reference.
+      // payload spills, mutations, file observations, nor uncommitted
+      // working-edit ops (the same blob reachability collectGarbageBlobRefs
+      // uses); drop candidates that regained a reference.
+      //
+      // Uncommitted working-edit ops (committed_event_id IS NULL) reference
+      // content that has already reached the host CAS via the content bridge
+      // but has no gad_file_versions row until commit. Both new_content_hash
+      // (the edit's result) and old_content_hash (needed by revert/
+      // inverse-patch paths) must be treated as live, or an uncommitted edit
+      // older than the sweep min-age is swept and the eventual commit dangles.
       this.sql.exec(
         `INSERT OR IGNORE INTO gad_gc_candidates (digest, marked_at)
          SELECT b.hash, ? FROM gad_blobs b
@@ -5193,7 +8224,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
               SELECT 1 FROM gad_file_mutations fm
                WHERE fm.before_hash = b.hash OR fm.after_hash = b.hash)
             AND NOT EXISTS (
-              SELECT 1 FROM gad_file_observations fo WHERE fo.content_hash = b.hash)`,
+              SELECT 1 FROM gad_file_observations fo WHERE fo.content_hash = b.hash)
+            AND NOT EXISTS (
+              SELECT 1 FROM gad_worktree_edit_ops eo
+               WHERE eo.committed_event_id IS NULL
+                 AND (eo.new_content_hash = b.hash OR eo.old_content_hash = b.hash))`,
         nowIso()
       );
       this.sql.exec(
@@ -5206,8 +8241,39 @@ export class GadWorkspaceDO extends DurableObjectBase {
                    OR fm.after_hash = gad_gc_candidates.digest)
              OR EXISTS (
                SELECT 1 FROM gad_file_observations fo
-                WHERE fo.content_hash = gad_gc_candidates.digest)`
+                WHERE fo.content_hash = gad_gc_candidates.digest)
+             OR EXISTS (
+               SELECT 1 FROM gad_worktree_edit_ops eo
+                WHERE eo.committed_event_id IS NULL
+                  AND (eo.new_content_hash = gad_gc_candidates.digest
+                    OR eo.old_content_hash = gad_gc_candidates.digest))`
       );
+      for (const digest of protectedDigests) {
+        this.sql.exec(`DELETE FROM gad_gc_candidates WHERE digest = ?`, digest);
+      }
+      const liveBlobDigests = new Set<string>(protectedDigests);
+      for (const row of this.sql
+        .exec(
+          `SELECT content_hash AS digest FROM gad_file_versions
+           UNION
+           SELECT digest AS digest FROM log_blob_refs
+           UNION
+           SELECT before_hash AS digest FROM gad_file_mutations WHERE before_hash IS NOT NULL
+           UNION
+           SELECT after_hash AS digest FROM gad_file_mutations WHERE after_hash IS NOT NULL
+           UNION
+           SELECT content_hash AS digest FROM gad_file_observations WHERE content_hash IS NOT NULL
+           UNION
+           SELECT new_content_hash AS digest FROM gad_worktree_edit_ops
+            WHERE committed_event_id IS NULL AND new_content_hash IS NOT NULL
+           UNION
+           SELECT old_content_hash AS digest FROM gad_worktree_edit_ops
+            WHERE committed_event_id IS NULL AND old_content_hash IS NOT NULL`
+        )
+        .toArray() as JsonRecord[]) {
+        const digest = asString(row["digest"]);
+        if (digest) liveBlobDigests.add(digest);
+      }
       const candidates = asNumber(
         (this.sql.exec(`SELECT COUNT(*) AS c FROM gad_gc_candidates`).one() as JsonRecord)["c"]
       );
@@ -5217,6 +8283,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         sweptManifests,
         sweptFileVersions,
         blobCandidates: candidates,
+        liveBlobDigests: [...liveBlobDigests].sort(),
       };
     });
   }
@@ -5228,13 +8295,22 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * deletion).
    */
   @rpc({ callers: ["server"] })
-  runGadGcSweep(input: { minAgeMs?: number | null } = {}): { digests: string[] } {
+  runGadGcSweep(input: { minAgeMs?: number | null } & GadGcRootsInput = {}): {
+    digests: string[];
+  } {
     this.ensureReady();
     const minAge = input.minAgeMs ?? 60_000;
     const cutoff = new Date(Date.now() - minAge).toISOString();
     // Creation-time grace: a blob created within the grace window may belong
     // to an in-flight multi-step flow that has not referenced it yet.
     const graceCutoff = new Date(Date.now() - GC_CREATION_GRACE_MS).toISOString();
+    const protectedDigests = new Set<string>();
+    for (const digest of input.protectedBlobDigests ?? []) {
+      if (typeof digest === "string" && digest.length > 0) protectedDigests.add(digest);
+    }
+    for (const digest of input.protectedTreeDigests ?? []) {
+      if (typeof digest === "string" && digest.length > 0) protectedDigests.add(digest);
+    }
     return this.transaction(() => {
       const rows = this.sql
         .exec(
@@ -5250,13 +8326,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
                 SELECT 1 FROM gad_file_observations fo
                  WHERE fo.content_hash = gad_gc_candidates.digest)
               AND NOT EXISTS (
+                SELECT 1 FROM gad_worktree_edit_ops eo
+                 WHERE eo.committed_event_id IS NULL
+                   AND (eo.new_content_hash = gad_gc_candidates.digest
+                     OR eo.old_content_hash = gad_gc_candidates.digest))
+              AND NOT EXISTS (
                 SELECT 1 FROM gad_blobs b
                  WHERE b.hash = gad_gc_candidates.digest AND b.created_at > ?)`,
           cutoff,
           graceCutoff
         )
         .toArray() as JsonRecord[];
-      const digests = rows.map((row) => String(row["digest"]));
+      const digests = rows
+        .map((row) => String(row["digest"]))
+        .filter((digest) => !protectedDigests.has(digest));
       for (const digest of digests) {
         this.sql.exec(`DELETE FROM gad_blobs WHERE hash = ?`, digest);
         this.sql.exec(`DELETE FROM gad_gc_candidates WHERE digest = ?`, digest);
@@ -5864,9 +8947,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }): ChannelReplayWindow {
     this.ensureReady();
     const rawLimit = input.limit ?? 50;
-    const limit = Number.isFinite(rawLimit)
-      ? Math.min(Math.max(Math.trunc(rawLimit), 0), 500)
-      : 50;
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 0), 500) : 50;
     const stats = this.lineageEventStats({ logId: input.channelId, head: CHANNEL_LOG_HEAD });
     let rows: LogEnvelope[];
     if (input.mode === "after") {
@@ -5896,7 +8977,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const replayToId = rows.length > 0 ? rows[rows.length - 1]!.seq : undefined;
     let hasMoreBefore: boolean | undefined;
     if (input.mode === "initial") {
-      hasMoreBefore = replayFromId !== undefined && stats.firstSeq !== undefined && stats.firstSeq < replayFromId;
+      hasMoreBefore =
+        replayFromId !== undefined && stats.firstSeq !== undefined && stats.firstSeq < replayFromId;
     } else if (input.mode === "before") {
       const anchor = replayFromId ?? input.beforeSeq ?? 0;
       hasMoreBefore = anchor > 0 && stats.firstSeq !== undefined && stats.firstSeq < anchor;

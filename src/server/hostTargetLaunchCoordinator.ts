@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { workspaceAppPackageName } from "@vibez1/shared/workspace/configParser";
 import { filterBootstrapApprovalsForTarget } from "@vibez1/shared/bootstrapApprovals";
 import type { PendingApproval, PendingUnitBatchApproval } from "@vibez1/shared/approvals";
 import { approvalViewModels, targetLabel } from "@vibez1/shared/bootstrapLaunchGate";
@@ -346,6 +347,12 @@ export class HostTargetLaunchCoordinator {
   }
 
   private reactNativePreparingDetails(details: string[] = []): string[] | null {
+    // The react-native app unit is recognized via the AppHost's manifest-driven
+    // selection (meta/vibez1.yml hostTargets.react-native.app / explicit
+    // selection) — never by a hardcoded unit name. No resolvable app ⇒ only
+    // building extensions count as "preparing".
+    const rnAppSource = this.deps.getAppHost()?.selectedHostTargetAppSource("react-native") ?? null;
+    const rnAppPackageName = rnAppSource ? tryWorkspaceAppPackageName(rnAppSource) : null;
     const building = this.deps
       .getTrustedUnitHosts()
       .flatMap((host) => host.listWorkspaceUnits())
@@ -353,8 +360,8 @@ export class HostTargetLaunchCoordinator {
         (unit) =>
           unit.status === "building" &&
           (unit.kind === "extension" ||
-            unit.source === "apps/mobile" ||
-            unit.name === "@workspace-apps/mobile")
+            (rnAppSource !== null && unit.source === rnAppSource) ||
+            (rnAppPackageName !== null && unit.name === rnAppPackageName))
       );
     if (building.length === 0) return null;
     return [
@@ -370,6 +377,16 @@ export class HostTargetLaunchCoordinator {
   private nextRevision(): number {
     this.revision += 1;
     return this.revision;
+  }
+}
+
+/** `workspaceAppPackageName` throws on non-app-shaped sources; the coordinator
+ *  only needs a best-effort package-name match, so soften to null. */
+function tryWorkspaceAppPackageName(source: string): string | null {
+  try {
+    return workspaceAppPackageName(source);
+  } catch {
+    return null;
   }
 }
 

@@ -513,6 +513,52 @@ async function main() {
   // runs eagerly here — bad workspaces fail fast at startup with a clear msg.
   const { buildWorkspaceDeclarations } = await import("@vibez1/shared/workspace/singletonRegistry");
   const workspaceDecls = buildWorkspaceDeclarations(workspaceConfig);
+  // The gad-store DO backing the userland `vcs` service — the ONE manifest
+  // declaration (services[] row + its singletonObjects row) that names the
+  // durable VCS store. The host's attach/follower and workerd's bootstrap
+  // main-binding resolve through it; there is no separate provider slot.
+  const { resolveVcsStoreBinding } = await import("./userlandServices.js");
+
+  // Manifest-declared host contracts (meta/vibez1.yml `trust`/`providers`/
+  // `hostTargets`). Loading the config (loadWorkspaceConfig) already seeded the
+  // process trust registry; re-seed explicitly so a differently-sourced config
+  // still establishes trust, and surface missing declarations once at boot.
+  const { resolveWorkspaceTrustGrants, resolveHostTargetDecl, browserDataBrokerPackageName } =
+    await import("@vibez1/shared/workspace/configParser");
+  const { setWorkspaceAppTrust } = await import("@vibez1/shared/chromeTrust");
+  setWorkspaceAppTrust(resolveWorkspaceTrustGrants(workspaceConfig));
+  {
+    const trustGrants = resolveWorkspaceTrustGrants(workspaceConfig);
+    if (trustGrants.chromeApps.length === 0) {
+      console.warn(
+        "[Trust] meta/vibez1.yml declares no `trust.chromeApps` — no workspace app may render host chrome"
+      );
+    }
+    if (trustGrants.connectionManagementApps.length === 0) {
+      console.warn(
+        "[Trust] meta/vibez1.yml declares no `trust.connectionManagementApps` — no workspace app may manage connections"
+      );
+    }
+  }
+  /** Manifest `providers.*` env bindings for internal DO classes (workerdManager). */
+  const internalDoProviderEnv = (className: string): Record<string, string> => {
+    if (className === "EvalDO") {
+      const env: Record<string, string> = {};
+      const providers = workspaceConfig.providers;
+      if (providers?.evalEngine?.source)
+        env["EVAL_ENGINE_SOURCE"] = providers.evalEngine.source.trim();
+      if (providers?.evalRuntime?.source)
+        env["EVAL_RUNTIME_SOURCE"] = providers.evalRuntime.source.trim();
+      if (providers?.cdpClient?.source)
+        env["EVAL_CDP_CLIENT_SOURCE"] = providers.cdpClient.source.trim();
+      return env;
+    }
+    if (className === "BrowserDataDO") {
+      const broker = browserDataBrokerPackageName(workspaceConfig);
+      return broker ? { BROWSER_DATA_BROKER_ID: broker } : {};
+    }
+    return {};
+  };
   // ===========================================================================
   // App node_modules resolution (for @vibez1/* platform packages)
   // ===========================================================================
@@ -562,15 +608,8 @@ async function main() {
   const authStorePath =
     process.env["VIBEZ1_AUTH_STORE_PATH"] ?? path.join(statePath, "auth", "devices.json");
   const deviceAuthStore = new DeviceAuthStore(authStorePath);
-  const startupPairingCodes =
-    !ipcChannel && process.env["VIBEZ1_DISABLE_STARTUP_PAIRING"] !== "1"
-      ? [
-          deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
-          deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
-        ]
-      : [];
-  const startupPairingCode = startupPairingCodes[0] ?? null;
-  const startupQrPairingCode = startupPairingCodes[1] ?? null;
+  // Startup pairing invites are minted AFTER the WebRTC ingress pool starts
+  // (post-startAll) so each invite gets a real per-invite room + deep link.
 
   const workerdGatewayToken = randomBytes(32).toString("hex");
   const { CredentialStore } = await import("../../packages/shared/src/credentials/store.js");
@@ -726,14 +765,48 @@ async function main() {
     getAppHost: () => appHostForGateway,
     getTrustedUnitHosts: trustedUnitHosts,
   });
+  // Protected server refs (repo → main): the single main-head authority.
+  // Constructed BEFORE WorkspaceVcs (which routes every main read/advance
+  // through it); the approval gate is late-bound below once the main-advance
+  // approval machinery exists — advances before that point fail closed.
+  const { createRefService } = await import("./services/refService.js");
+  const { collectTreeReachableDigests } = await import("./services/blobstoreService.js");
+  const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+  const vcsInvocationTable = new VcsInvocationTable();
+  let mainRefGate: import("./services/refService.js").RefGate | null = null;
+  const refService = createRefService({
+    statePath: path.join(getUserDataPath(), "refs"),
+    gate: async (batch) => {
+      if (!mainRefGate) {
+        throw new Error("Protected-ref gate not initialized yet (server still starting)");
+      }
+      await mainRefGate(batch);
+    },
+    // Validity check BEFORE approval (§2.1): every candidate `main` state must
+    // be a well-formed tree fully present in the content store — userland can
+    // never pin a hash the store cannot expand. Fails closed before any prompt.
+    assertTreeComplete: async (stateHash) => {
+      const reachable = await collectTreeReachableDigests(
+        path.join(getUserDataPath(), "blobs"),
+        stateHash
+      );
+      if (!reachable) {
+        throw new Error(
+          `updateMains: candidate main ${stateHash} is not fully present in the content store`
+        );
+      }
+    },
+  });
   // Workspace VCS (GAD-native): starts local-first (no DO needed), attaches
-  // to the gad-store DO once workerd is up (see "vcsAttach" below).
-  const { WorkspaceVcs } = await import("./gadVcs/workspaceVcs.js");
+  // to the DO backing the manifest-declared userland `vcs` service (protocol
+  // vibez1.vcs.v1) once workerd is up (see "vcsAttach" below).
+  const { WorkspaceVcs } = await import("./vcsHost/workspaceVcs.js");
   const workspaceVcs = new WorkspaceVcs({
     blobsDir: path.join(getUserDataPath(), "blobs"),
     workspaceRoot: workspacePath,
     contextsRoot: path.join(statePath, ".contexts"),
     buildSourcesRoot: path.join(getUserDataPath(), "build-sources"),
+    refs: refService,
   });
   const readWorkspaceFileAtCommit = async (
     commit: string,
@@ -833,7 +906,7 @@ async function main() {
     await reconcile();
   };
 
-  const { WorkspaceTreeScanner } = await import("./gadVcs/workspaceTree.js");
+  const { WorkspaceTreeScanner } = await import("./vcsHost/workspaceTreeScanner.js");
   const treeScanner = new WorkspaceTreeScanner(workspacePath);
   const skippedDeclaredRemoteRepoWarnings = new Set<string>();
   const syncDeclaredRemotesForSource = async (repoPath?: string): Promise<void> => {
@@ -980,13 +1053,15 @@ async function main() {
     },
   });
 
-  // Pre-warm the eval engine bundle at boot so the first interactive `eval.run`
-  // doesn't pay the cold esbuild compile of `@workspace/eval` (the bulk of the
-  // EvalDO cold start). Fire-and-forget: `buildUnit` caches + coalesces, so the
-  // EvalDO's identical getBuild later hits the warm cache (or awaits this
-  // in-flight build). Externals `[]` matches a fresh isolate's first engine
-  // build. cdp-client is intentionally NOT pre-warmed — it's lazily built only
-  // when an eval actually references CDP.
+  // Pre-warm the manifest-declared eval engine + runtime bundles at boot so the
+  // first interactive `eval.run` doesn't pay the cold esbuild compiles (the bulk
+  // of the EvalDO cold start). The units come from meta/vibez1.yml
+  // (`providers.evalEngine` / `providers.evalRuntime`) — no declaration means
+  // eval is disabled, so there is nothing to warm (logged once). Fire-and-forget:
+  // `buildUnit` caches + coalesces, so the EvalDO's identical getBuild later hits
+  // the warm cache (or awaits this in-flight build). Externals `[]` matches a
+  // fresh isolate's first builds. cdp-client is intentionally NOT pre-warmed —
+  // it's lazily built only when an eval actually references CDP.
   container.registerManaged({
     name: "evalEnginePrewarm",
     dependencies: ["buildSystem"],
@@ -994,20 +1069,35 @@ async function main() {
       const buildSystem = assertPresent(
         resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
       );
-      void buildSystem
-        .getBuild("@workspace/eval", undefined, {
-          library: true,
-          externals: [],
-          libraryTarget: "worker",
-        })
-        .then(() => console.log("[eval] pre-warmed @workspace/eval engine bundle"))
-        .catch((err) =>
-          console.warn(
-            `[eval] engine pre-warm failed (first eval will cold-build): ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          )
+      const engineSource = workspaceConfig.providers?.evalEngine?.source?.trim();
+      const runtimeSource = workspaceConfig.providers?.evalRuntime?.source?.trim();
+      if (!engineSource || !runtimeSource) {
+        console.warn(
+          "[eval] meta/vibez1.yml declares no `providers.evalEngine`/`providers.evalRuntime` — eval is disabled (pre-warm skipped)"
         );
+        return;
+      }
+      const prewarm = (specifier: string): void => {
+        void buildSystem
+          .getBuild(specifier, undefined, {
+            library: true,
+            externals: [],
+            libraryTarget: "worker",
+          })
+          .then(() => console.log(`[eval] pre-warmed ${specifier} bundle`))
+          .catch((err) =>
+            console.warn(
+              `[eval] ${specifier} pre-warm failed (first eval will cold-build): ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            )
+          );
+      };
+      prewarm(engineSource);
+      // The EvalDO loads these three runtime subpaths (see ensureRuntimeSupport).
+      prewarm(`${runtimeSource}/hosted`);
+      prewarm(`${runtimeSource}/panel-runtime`);
+      prewarm(`${runtimeSource}/portable`);
     },
   });
 
@@ -1020,8 +1110,8 @@ async function main() {
   const { createGitInteropService } = await import("./services/gitInteropService.js");
   const { createWorkerService } = await import("./services/workerService.js");
 
+  let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
   {
-    let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
     container.registerManaged({
       name: "build",
       dependencies: ["buildSystem"],
@@ -1063,8 +1153,10 @@ async function main() {
       },
     });
   }
-  const { GitBridge } = await import("./gadVcs/gitBridge.js");
-  const gitBridge = new GitBridge({ workspaceVcs, workspaceRoot: workspacePath });
+  // Git interchange semantics (P5c part 2) live in the trusted git-bridge
+  // EXTENSION (workspace/extensions/git-bridge); the host keeps only this
+  // policy/dispatch service (approvals, egress clone, config writes).
+  const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
   const gitInteropDefinition = createGitInteropService({
     treeScanner,
     workspacePath,
@@ -1072,8 +1164,13 @@ async function main() {
     egressProxy,
     // W7: initialize a `vcs:repo:<path>` log per freshly cloned dependency by
     // snapshotting its tree into the repo log at `main` (no lockfile/pinning).
-    initRepoLog: async (repoPath) => {
-      await gitBridge.importRepoTree(repoPath);
+    // Dispatched to the git-bridge extension with the original caller context.
+    initRepoLog: async (ctx, repoPath) => {
+      const host = extensionHostForGateway;
+      if (!host) {
+        throw new Error("git-bridge extension unavailable: extension host not started");
+      }
+      await host.invoke(ctx, GIT_BRIDGE_EXTENSION, "importRepoTree", [repoPath]);
     },
     approvalQueue,
     grantStore: capabilityGrantStore,
@@ -1121,7 +1218,7 @@ async function main() {
   };
   {
     const { createVcsService } = await import("./services/vcsService.js");
-    const { createMainAdvanceApprovalGate, FileMetaApprovalGrantStore } =
+    const { createMainAdvanceApprovalGate, createMainRefAdvanceGate, FileMetaApprovalGrantStore } =
       await import("./services/mainAdvanceApproval.js");
     const mainAdvanceGate = createMainAdvanceApprovalGate({
       approvalQueue,
@@ -1131,7 +1228,42 @@ async function main() {
       hasAppCapability: (callerId, capability) =>
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
       getProviders: () => [...trustedUnitHosts(), recurringMetaChangeProvider],
+      // Host-sourced build-status line for the approval prompt (§5):
+      // `build.statusAt` is a PURE per-view cache read and MUST NEVER trigger
+      // a build. `buildSystemForVcs` (declared below in this block) is assigned
+      // lazily when the vcs service starts, so read it at call time; before it
+      // exists the prompt truthfully renders "not validated".
+      getBuildStatusAt: (viewHash: string) => buildSystemForVcs?.statusAt(viewHash) ?? null,
     });
+    // The ONE approval path for protected main-ref advances: the server
+    // computes the authoritative diff (content-store diffTrees over the CAS'd
+    // trees) inside the gate; the meta repo additionally derives its semantic
+    // unit-change prompt from the candidate workspace view.
+    mainRefGate = createMainRefAdvanceGate({
+      blobsDir: path.join(getUserDataPath(), "blobs"),
+      approvalGate: mainAdvanceGate,
+      ensureStateMirrored: (stateHash) => workspaceVcs.worktrees.ensureStateMirrored(stateHash),
+      workspaceViewWithReposAt: (overrides) => workspaceVcs.workspaceViewWithReposAt(overrides),
+      computeDeleteDependents: (repoPath) => workspaceVcs.deleteDependents(repoPath),
+    });
+    // Protected refs exposed to userland (P5b): reads plus a gated
+    // compare-and-swap advance. This is how a userland VCS implementation
+    // requests `main` advancement — the advance flows through the SAME
+    // mainRefGate wired above, with the verified caller as the gate context.
+    const { createRefsService } = await import("./services/refsService.js");
+    container.registerRpc(
+      createRefsService({
+        refs: refService,
+        invocations: vcsInvocationTable,
+        // Single-writer identity (§3): the DO backing the workspace `vcs`
+        // service declaration, matched by target identity — recomputed per call
+        // so a re-declared/fake `vcs` service never matches.
+        getVcsWriterIdentity: () => {
+          const binding = resolveVcsStoreBinding(workspaceDecls);
+          return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
+        },
+      })
+    );
     let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;
     container.registerManaged({
       name: "vcsService",
@@ -1832,6 +1964,14 @@ async function main() {
         redeemPairingCredential: createPairingRedeemer({ deviceAuthStore, tokenManager }),
         resolveExtensionInvocation: (extensionName, invocationToken) =>
           extensionHostForGateway?.resolveActiveInvocation(extensionName, invocationToken) ?? null,
+        // On-behalf-of tokens for userland vcs-DO dispatches (§4): the relay
+        // mints one per dispatch to the single-writer DO; refs.updateMains
+        // resolves it against the SAME table.
+        vcsInvocations: vcsInvocationTable,
+        getVcsWriterIdentity: () => {
+          const binding = resolveVcsStoreBinding(workspaceDecls);
+          return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
+        },
       });
       server.initHandlers();
       // Wire server→DO event push so connectionless DOs receive real
@@ -1960,6 +2100,10 @@ async function main() {
         getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
         onHostTargetChanged: (target, reason) =>
           hostTargetLaunchCoordinator.notifyTargetChanged(target, reason),
+        // Manifest-declared preferred app per host target (meta/vibez1.yml
+        // hostTargets.*). Read live from workspaceConfig so meta-change
+        // reloads are reflected without an AppHost restart.
+        getHostTargetDecl: (target) => resolveHostTargetDecl(workspaceConfig, target),
       });
       appHostForGateway = host;
       return host;
@@ -2065,7 +2209,7 @@ async function main() {
   // the main process has its OWN FsService for panel-facing FS RPC)
   {
     const { FsService } = await import("@vibez1/shared/fsService");
-    const { isWritableVcsPath, vcsContextHead } = await import("./gadVcs/store.js");
+    const { isWritableVcsPath, vcsContextHead } = await import("./vcsHost/paths.js");
     // Reroute: sandboxed context mutations to GAD-tracked paths commit through
     // GAD (edit-first) instead of writing the worktree projection directly.
     //
@@ -2179,6 +2323,16 @@ async function main() {
           registerEgressCaller: (callerId, caller) => egressCallers.set(callerId, caller),
           unregisterEgressCaller: (callerId) => egressCallers.delete(callerId),
           getWorkerdGatewayToken: () => workerdGatewayToken,
+          // Manifest-declared wiring: the DO backing the userland `vcs`
+          // service (vibez1.vcs.v1) stays main-bound during bootstrap — the
+          // host's provenance follower records into it, so it must never be
+          // rebound to a synthetic ctx-head scope. Internal DO classes receive
+          // their provider identities as env bindings.
+          getBootstrapMainBoundDos: () => {
+            const binding = resolveVcsStoreBinding(workspaceDecls);
+            return binding ? [{ source: binding.source, className: binding.className }] : [];
+          },
+          getInternalDoEnv: internalDoProviderEnv,
           recordLifecycleEvent: (event) => {
             runtimeDiagnostics.record({
               workspaceId: workspace.config.id,
@@ -2331,13 +2485,28 @@ async function main() {
   }
 
   {
-    // Attach the workspace vcs to the gad-store DO: ingest the bootstrap
-    // local state (same state hash — no EV churn) and enable durable
-    // commits, context forks, and the builds provenance log.
+    // Attach the workspace vcs to the DO backing the manifest-declared
+    // userland `vcs` service (meta/vibez1.yml services[] row for protocol
+    // vibez1.vcs.v1, resolved with its singletonObjects row — the SAME
+    // declaration userland dispatch resolves): ingest the bootstrap local
+    // state (same state hash — no EV churn) and enable durable commits,
+    // context forks, and the builds provenance log. No such service ⇒ the
+    // durable store stays disabled with a loud diagnostic — the host never
+    // falls back to a hardcoded worker name.
     container.registerManaged({
       name: "vcsAttach",
       dependencies: ["doDispatch", "workerdManager"],
       async start(resolve) {
+        const binding = resolveVcsStoreBinding(workspaceDecls);
+        if (!binding) {
+          console.error(
+            "[Vcs] meta/vibez1.yml declares no singleton-DO-backed `vcs` service " +
+              "(protocol vibez1.vcs.v1 with a matching singletonObjects row) — durable VCS " +
+              "store disabled (no durable commits, context forks, or builds provenance)"
+          );
+          return workspaceVcs;
+        }
+        const { source, className } = binding;
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
@@ -2345,27 +2514,24 @@ async function main() {
           resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
         );
         const gadRef = {
-          source: "workers/gad-store",
-          className: "GadWorkspaceDO",
-          objectKey:
-            workspaceDecls.singletons.find("workers/gad-store", "GadWorkspaceDO")?.key ??
-            "workspace-gad",
+          source,
+          className,
+          objectKey: binding.objectKey,
           buildRef: "main",
         };
         // Entity record first: the DO's callbacks into the server (setTitle,
         // console bridge) resolve their principal through the entity cache.
         await activateDurableObjectEntity(doDispatch, workerdManagerInst, gadRef);
+        // attachGad bootstraps per-repo logs from disk (snapshot each on-disk
+        // repo subtree into `vcs:repo:<path>` at `main` if missing) AND seeds
+        // every repo main into the protected-ref store (idempotent set-if-
+        // absent on every startup).
         await workspaceVcs.attachGad({
           call: <T>(method: string, input: unknown): Promise<T> =>
             doDispatch.dispatch(gadRef, method, input) as Promise<T>,
         });
-        // Per-repo bootstrap: snapshot each on-disk repo subtree into its
-        // `vcs:repo:<path>` log at `main` if missing (replaces the legacy
-        // whole-tree `vcs:workspace` migration). Runs once the gad store is
-        // attached, before any context fork / build needs a repo log.
-        await workspaceVcs.ensureRepoLogsFromDisk();
         workspaceVcs.enableMemoryIndexing();
-        console.log("[Vcs] Attached to gad-store DO");
+        console.log(`[Vcs] Attached to VCS store DO (${source}:${className})`);
         return workspaceVcs;
       },
     });
@@ -2388,6 +2554,25 @@ async function main() {
         return driver;
       },
       async stop(instance: import("./services/lifecycleDriver.js").LifecycleDriver | null) {
+        instance?.stop();
+      },
+    });
+  }
+
+  {
+    container.registerManaged({
+      name: "vcsGcScheduler",
+      dependencies: ["vcsAttach"],
+      async start(resolve) {
+        const { VcsGcScheduler } = await import("./services/vcsGcScheduler.js");
+        const attachedVcs = assertPresent(
+          resolve<import("./vcsHost/workspaceVcs.js").WorkspaceVcs>("vcsAttach")
+        );
+        const scheduler = new VcsGcScheduler({ workspaceVcs: attachedVcs });
+        scheduler.start();
+        return scheduler;
+      },
+      async stop(instance: import("./services/vcsGcScheduler.js").VcsGcScheduler | null) {
         instance?.stop();
       },
     });
@@ -3024,11 +3209,13 @@ async function main() {
     );
   }
 
-  // WebRTC pairing material (room/fp/sig) — populated when the answerer starts
-  // (the "Remote ingress" block below); captured by auth.getConnectionInfo (so
-  // pairing invites mint a real deep link) and written to the ready file. Stays
-  // null when the answerer is off (loopback co-located mode) ⇒ no deep link.
-  let webrtcPairing: { room: string; fp: string; sig: string } | null = null;
+  // WebRTC pairing seam (fp/sig/ice/srv — NO room: rooms are minted per invite,
+  // plan §2.1) — populated when the ingress pool starts (post-startAll below);
+  // captured by auth.getConnectionInfo/createPairingInvite (which mint per-invite
+  // rooms + deep links against the pool) and written to the ready file. Stays
+  // null when WebRTC is off (loopback co-located mode) ⇒ no deep link.
+  let webrtcPairing: import("./services/auth/model.js").ConnectPairingSeam | null = null;
+  let webrtcIngress: import("./webrtcIngress.js").WebRtcIngress | null = null;
 
   // ── Per-workspace content-addressable blobstore ──
   {
@@ -3052,10 +3239,13 @@ async function main() {
               externalHost: hostConfig.externalHost,
               gatewayPort,
               // Lets createPairingInvite mint a real vibez1://connect deep link
-              // (room/fp/sig); null when the answerer is off ⇒ deepLink stays null.
+              // (per-invite room + fp/sig); null when WebRTC is off ⇒ null deepLink.
               pairing: webrtcPairing ?? undefined,
             };
           },
+          // The ingress pool arms one signaling room per invite (plan §2.1);
+          // resolved lazily because the pool starts after container.startAll().
+          getWebRtcIngress: () => webrtcIngress,
           connectionGrants,
           auditLog,
           hasAppCapability: (callerId, capability) =>
@@ -3132,6 +3322,12 @@ async function main() {
         uptimeMs: Date.now() - startedAt,
         workerd: workerdManagerForGateway?.getPort() ? "running" : "stopped",
         tokenSource,
+        // Relay-alarm landing spot (plan §2.1/§9.8): per-room pipe state incl.
+        // the selected ICE path, plus the pool's connect/relay counters. Null
+        // when WebRTC ingress is off (loopback co-located mode).
+        webrtc: webrtcIngress
+          ? { rooms: webrtcIngress.status(), stats: webrtcIngress.stats() }
+          : null,
       };
     },
   });
@@ -3243,17 +3439,18 @@ async function main() {
   // ── Start all services in dependency order ──
   await container.startAll();
 
-  // ── WebRTC answerer (now that rpcServerForGateway is live) ──
+  // ── WebRTC ingress pool (now that rpcServerForGateway is live) ──
   // Activated when VIBEZ1_WEBRTC_SIGNAL_URL is set (off by default ⇒ loopback
-  // co-located mode is unaffected). The server picks a room, presents a
-  // persistent DTLS cert (stable QR `fp`), joins the signaling room, and attaches
-  // the pipe to the live RpcServer; a paired client reaches us over WebRTC with
-  // no public endpoint. See docs/webrtc-local-e2e.md.
+  // co-located mode is unaffected). The server presents a persistent DTLS cert
+  // (stable QR `fp`) and arms ONE answerer pipe per signaling room: one room per
+  // already-paired device (persisted on the device record) plus one per
+  // outstanding pairing invite (plan §2.1 — the per-server singleton room and
+  // its room file are gone). See docs/webrtc-local-e2e.md.
   const webrtcSignalUrl = process.env["VIBEZ1_WEBRTC_SIGNAL_URL"];
   if (webrtcSignalUrl && rpcServerForGateway) {
     try {
-      const { startWebRtcAnswerer } = await import("./webrtcAnswererBootstrap.js");
-      const { ensurePersistentCert, ensurePersistentRoom } = await import("../main/webrtc/cert.js");
+      const { startWebRtcIngress } = await import("./webrtcIngress.js");
+      const { ensurePersistentCert } = await import("../main/webrtc/cert.js");
       const pathMod = await import("node:path");
       const certDir = pathMod.join(appRoot, ".vibez1", "webrtc");
       const cert = ensurePersistentCert({
@@ -3261,39 +3458,67 @@ async function main() {
           process.env["VIBEZ1_WEBRTC_CERT"] ?? pathMod.join(certDir, "server.pem"),
         keyPemFile: process.env["VIBEZ1_WEBRTC_KEY"] ?? pathMod.join(certDir, "server.key"),
       });
-      // The advertised pairing code MUST be one the deviceAuthStore can redeem
-      // (`completePairing`). Use the registered startup code; mint a fresh
-      // registered one only if startup pairing was disabled. VIBEZ1_PAIRING_CODE
-      // is NOT used — an unregistered code fails `hasPendingPairingCode`.
-      const pairingCode =
-        startupPairingCode ?? deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS);
-      // Persist the room (next to the DTLS cert) so paired devices can re-dial the
-      // SAME room after a server restart; a fresh per-start UUID would strand them.
-      // An explicit env override still wins for ops/multi-instance setups.
-      const room =
-        process.env["VIBEZ1_WEBRTC_ROOM"] ?? ensurePersistentRoom(pathMod.join(certDir, "room"));
-      const handle = await startWebRtcAnswerer({
+      const iceTransportPolicy: import("@vibez1/shared/connect").TurnPolicy =
+        process.env["VIBEZ1_WEBRTC_ICE"] === "relay" ? "relay" : "all";
+      const ingress = startWebRtcIngress({
         rpcServer: rpcServerForGateway,
         signalUrl: webrtcSignalUrl,
-        room,
         certificatePemFile: cert.certificatePemFile,
         keyPemFile: cert.keyPemFile,
-        pairingCode,
-        iceTransportPolicy: process.env["VIBEZ1_WEBRTC_ICE"] === "relay" ? "relay" : "all",
-        srv: process.env["VIBEZ1_WORKSPACE"] ?? undefined,
+        fingerprint: cert.fingerprint,
+        iceTransportPolicy,
       });
-      // Expose the pairing material (room + DTLS fingerprint + signaling) to
-      // auth.getConnectionInfo (pairing deep links) and the ready-file writer.
-      webrtcPairing = { room, fp: handle.fingerprint, sig: webrtcSignalUrl };
-      void handle; // pipe lifetime follows the process; closed on exit
+      webrtcIngress = ingress;
+      // Expose the pairing seam (fp/sig/ice/srv — rooms are per-invite) to
+      // auth.getConnectionInfo/createPairingInvite and the ready-file writer.
+      webrtcPairing = {
+        fp: cert.fingerprint,
+        sig: webrtcSignalUrl,
+        ice: iceTransportPolicy,
+        srv: process.env["VIBEZ1_WORKSPACE"] ?? undefined,
+      };
+      // Invite lifecycle → pool: redemption re-tags the invite's room with the
+      // device id (and the room persists on the device record); invite expiry
+      // and device revocation tear the room's pipe down.
+      deviceAuthStore.onPairingRoomRedeemed((room, deviceId) =>
+        ingress.armRoom(room, { deviceId })
+      );
+      deviceAuthStore.onPairingRoomReleased((room) => void ingress.disarmRoom(room));
+      // Re-arm one answerer room per already-paired device so returning
+      // devices reconnect into their own room after a server restart.
+      for (const device of deviceAuthStore.listDevices()) {
+        if (!device.revokedAt && device.room) {
+          ingress.armRoom(device.room, { deviceId: device.deviceId });
+        }
+      }
     } catch (error) {
       // Fail loud (the operator asked for WebRTC ingress) but do not abort the
-      // loopback gateway — local co-located clients still work.
+      // loopback gateway — local co-located clients still work. Notably a
+      // CertIdentityError (half-provisioned identity) lands here: log + skip.
       console.error(
-        `[webrtc-answerer] failed to start: ${error instanceof Error ? error.message : String(error)}`
+        `[webrtc-ingress] failed to start: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
+
+  // ── Startup pairing invites (banner + ready file) ──
+  // Minted through the SAME per-invite path as auth.createPairingInvite: when
+  // the ingress pool is live each invite gets a fresh room armed on the pool
+  // and a real vibez1://connect (v=2) deep link; without WebRTC they are bare
+  // codes redeemable over the loopback gateway.
+  const { mintPairingInvite } = await import("./services/auth/model.js");
+  const startupInvites =
+    !ipcChannel && process.env["VIBEZ1_DISABLE_STARTUP_PAIRING"] !== "1"
+      ? [
+          mintPairingInvite({ deviceAuthStore, pairing: webrtcPairing, ingress: webrtcIngress }),
+          mintPairingInvite({ deviceAuthStore, pairing: webrtcPairing, ingress: webrtcIngress }),
+        ]
+      : [];
+  const startupInvite = startupInvites[0] ?? null;
+  const startupQrInvite = startupInvites[1] ?? null;
+  const startupPairingCodes = startupInvites.map((invite) => invite.code);
+  const startupPairingCode = startupInvite?.code ?? null;
+  const startupQrPairingCode = startupQrInvite?.code ?? null;
 
   const workerdManager =
     container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
@@ -3551,14 +3776,20 @@ async function main() {
     if (tokenSource !== "env") {
       console.log(`  Persisted:   ${getAdminTokenPath()}`);
     }
-    // Remote pairing is the WebRTC QR link (signaling room + DTLS fingerprint)
-    // minted by the answerer (see the TODO(webrtc-answerer) seam above); there
-    // is no public OAuth/QR URL to print. The device pairing code below still
-    // authorizes the principal after the DTLS pin verifies.
+    // Remote pairing is the WebRTC QR link (per-invite signaling room + DTLS
+    // fingerprint) minted through the ingress pool above; there is no public
+    // OAuth/QR URL to print. The device pairing code below still authorizes
+    // the principal after the DTLS pin verifies.
     if (startupPairingCode) {
       console.log(`  Pairing code: ${startupPairingCode}`);
       if (startupQrPairingCode) {
         console.log(`  QR pairing code: ${startupQrPairingCode}`);
+      }
+      if (startupInvite?.deepLink) {
+        console.log(`  Pairing link: ${startupInvite.deepLink}`);
+      }
+      if (startupQrInvite?.deepLink) {
+        console.log(`  QR pairing link: ${startupQrInvite.deepLink}`);
       }
       console.log(
         `  Pairing TTL:  ${Math.round(DEFAULT_PAIRING_CODE_TTL_MS / 60_000)} minutes (server exits if unused)`
@@ -3575,9 +3806,18 @@ async function main() {
         rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
         adminToken,
-        // The WebRTC pairing material (present only when the answerer is active);
-        // remote clients pair from this, not from a connect/public URL.
-        pairing: webrtcPairing,
+        // The WebRTC pairing material (present only when the ingress pool is
+        // active); remote clients pair from this, not from a connect/public
+        // URL. `room`/`deepLink` come from the startup invite (per-invite
+        // rooms) — the hub reads `deepLink` when surfacing child pairing.
+        pairing: webrtcPairing
+          ? {
+              ...webrtcPairing,
+              room: startupInvite?.room ?? null,
+              deepLink: startupInvite?.deepLink ?? null,
+              qrDeepLink: startupQrInvite?.deepLink ?? null,
+            }
+          : null,
         pairingCode: startupPairingCode,
         qrPairingCode: startupQrPairingCode,
         pairingCodes: {

@@ -34,3 +34,17 @@ export { CommandPalette } from "./kit/CommandPalette";
 export type { CommandPaletteProps, CommandItem, SelectModifiers } from "./kit/CommandPalette";
 export { ShortcutsHelp } from "./kit/ShortcutsHelp";
 export type { ShortcutsHelpProps, ShortcutGroup, ShortcutEntry } from "./kit/ShortcutsHelp";
+
+// --- Shared UI kit: diff-review viewer (approval prompt + gad-browser) ---
+export { DiffViewer } from "./kit/diff/DiffViewer";
+export type { DiffViewerProps } from "./kit/diff/DiffViewer";
+export type {
+  DiffReviewEntry,
+  DiffChangedFile,
+  DiffFileKind,
+  DiffStat,
+  DiffContentFetcher,
+} from "./kit/diff/types";
+export { diffLines, splitLines, allAdded, allRemoved } from "./kit/diff/lineDiff";
+export type { DiffRow, DiffRowType, LineDiffResult } from "./kit/diff/lineDiff";
+export { languageForPath } from "./kit/diff/highlight";

@@ -24,6 +24,7 @@ import {
   persistEvState,
   diffEvMaps,
   computeBuildKey,
+  setBuildRootConfig,
   type ContentHashMap,
   type ChangeSet,
   type EffectiveVersionMap,
@@ -49,7 +50,7 @@ import {
 } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
 import { typecheckUnit } from "./typecheckFold.js";
-import { CONTAINER_SECTIONS, CONTENT_SECTIONS } from "../gadVcs/repoDiscovery.js";
+import { CONTAINER_SECTIONS, CONTENT_SECTIONS } from "@vibez1/shared/runtime/entitySpec";
 
 /** Expected unit kind for a build-unit section, used to report a malformed
  *  (unresolvable) unit at the right kind even when no GraphNode exists. */
@@ -62,7 +63,11 @@ const SECTION_UNIT_KIND: Record<string, GraphNode["kind"]> = {
   apps: "app",
 };
 import { diagnosticsFromError, hasErrors, type BuildDiagnostic } from "./diagnostics.js";
-import { recordDiagnostics, diagnosticsForUnit } from "./diagnosticsStore.js";
+import {
+  recordDiagnostics,
+  diagnosticsForUnit,
+  diagnosticsForBuildKey,
+} from "./diagnosticsStore.js";
 import type { LibraryBuildTarget } from "@vibez1/shared/serviceSchemas/build";
 import {
   StateTransitionTrigger,
@@ -80,6 +85,7 @@ import {
   ensureExternalDeps,
 } from "./externalDeps.js";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibez1/shared/extensionRuntimeAbi";
+import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibez1/shared/workspace/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
 
@@ -156,6 +162,50 @@ export interface ValidateRepoPushOptions {
   /** Workspace-rooted state to gate dependents against for the regression rule
    *  (the state BEFORE the push). When omitted, dependents gate absolutely. */
   baseView?: string;
+}
+
+/**
+ * Object-shaped input for the gad-facing `validate` build surface (narrow-host
+ * VCS plan §2.2). Keyed by the FULL triple — `repoPaths` decides pushed-vs-
+ * dependent roles and `baseViewHash` drives the dependent regression gate — so
+ * overlapping validations recompute classification, not compilation (the
+ * underlying per-unit builds are cached by build key).
+ */
+export interface ValidateInput {
+  /** Composed candidate workspace view (state:… hash) to build + classify at. */
+  viewHash: string;
+  /** Workspace-relative repo roots being pushed (pushed-role units). */
+  repoPaths: string[];
+  /** Composed view BEFORE the push, for the dependent regression gate. Omitted
+   *  ⇒ failed dependents gate absolutely. */
+  baseViewHash?: string;
+}
+
+/** Coarse per-unit build status at a composed view (host-internal `statusAt`). */
+export interface UnitBuildStatus {
+  unit: string;
+  /** `ok` = a build artifact for this unit's effective version is cached;
+   *  `failed` = the most recent recorded build at this EV had error diagnostics;
+   *  `unknown` = no cached artifact and no recorded failure at this EV. */
+  status: "ok" | "failed" | "unknown";
+}
+
+/**
+ * Result of `statusAt(viewHash)` — a PURE cache read over recorded/cached
+ * per-unit build results at an exact composed view. Never triggers a build.
+ * Deliberately coarser than a `validate` report: it answers "were the eagerly-
+ * maintained units at this view built, and did any fail," NOT required-vs-
+ * informational push classification (that is `validate`'s job). This is the
+ * approval gate's host-sourced prompt build-status line (plan §5 / §2.2).
+ */
+export interface BuildStatusAt {
+  /** True iff every eagerly-built unit at this view has a cached-or-recorded
+   *  result (no `unknown`). False for unknown/never-validated views. */
+  validated: boolean;
+  /** True iff any unit at this view has a recorded build failure. */
+  failed?: boolean;
+  /** Per-unit statuses for the eagerly-built units at this view. */
+  unitStatuses?: UnitBuildStatus[];
 }
 
 export type { BuildUnitOptions } from "./builder.js";
@@ -298,6 +348,26 @@ export interface BuildSystemV2 extends RepoPushValidator {
   ): Promise<RepoBuildReport[]>;
 
   /**
+   * Gad-facing build surface (narrow-host VCS plan §2.2). Build + cache the
+   * per-unit results for a composed candidate view and return the classified
+   * `RepoBuildReport[]` — IDEMPOTENT and side-effect-free w.r.t. the published
+   * EV baseline: unlike a main-advance reaction it never `persistEvState`s and
+   * never `recordBuild`s, so it is safe for gad to call on any candidate,
+   * including ones that are never published. Same report semantics as
+   * `validateRepoPush` (the in-process push-pipeline caller during P1–P2); the
+   * object-param shape matches the RPC surface the vcs DO calls.
+   */
+  validate(input: ValidateInput): Promise<RepoBuildReport[]>;
+
+  /**
+   * PURE cache read of per-unit build status at an exact composed view. Never
+   * triggers a build, never blocks. Host-internal — the approval gate's
+   * prompt build-status source (plan §5). Trivially adaptable to the P1 gate's
+   * injected `getBuildStatusAt?: (viewHash) => Promise<{ validated; failed? }>`.
+   */
+  statusAt(viewHash: string): Promise<BuildStatusAt>;
+
+  /**
    * Queryable companion to `validateRepoPush`: build a single unit at a state
    * (or main HEAD) and return its `RepoBuildReport` with structured
    * diagnostics. Does NOT advance any head.
@@ -367,6 +437,10 @@ export async function initBuildSystemV2(
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
+
+  // Root-dependency fingerprint inputs (package.json/pnpm-lock.yaml/…) resolve
+  // against the app root, not whatever cwd the server happened to start in.
+  setBuildRootConfig({ appRoot: path.dirname(workspaceRoot), workspaceRoot });
 
   // Declare where @vibez1/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots);
@@ -921,6 +995,74 @@ export async function initBuildSystemV2(
   };
 
   /**
+   * Gad-facing `build.validate` (plan §2.2). Object-param adapter over the push
+   * gate: build + cache + classify the candidate view. Idempotent — it never
+   * promotes the EV baseline (`persistEvState`) nor records provenance builds
+   * (`recordBuild`); those happen ONLY host-side in reaction to a main actually
+   * moving (`stateTrigger.process` on a `head === "main"` advance). Overlapping
+   * validations sharing units reuse the per-unit build cache (`buildUnit`
+   * coalesces + stores by build key) and recompute only the classification.
+   */
+  const validateImpl = (input: ValidateInput): Promise<RepoBuildReport[]> =>
+    validateRepoPushImpl(
+      input.repoPaths,
+      input.viewHash,
+      input.baseViewHash ? { baseView: input.baseViewHash } : undefined
+    );
+
+  /**
+   * `build.statusAt` (plan §2.2 / §5). PURE lookup over recorded/cached per-unit
+   * results at an exact composed view — never calls `buildUnit`. Scoped to the
+   * eagerly-maintained buildable units (panels/about/workers), matching the set
+   * the state trigger keeps warm at main and the GC active set; extensions/apps
+   * are activation-gated (not baseline-built) so they are intentionally out of
+   * this coarse read. A unit is `ok` when its runtime build key is in the store,
+   * `failed` when the most recent recorded diagnostics for that key carry
+   * errors, else `unknown` (never validated at this EV).
+   */
+  const statusAtImpl = async (viewHash: string): Promise<BuildStatusAt> => {
+    let view: GraphView;
+    try {
+      view = await viewAt(viewHash);
+    } catch {
+      // Unknown / unresolvable view — not a build, just not validated.
+      return { validated: false };
+    }
+    const unitStatuses: UnitBuildStatus[] = [];
+    let anyFailed = false;
+    let anyUnknown = false;
+    let anyChecked = false;
+    for (const node of view.graph.allNodes()) {
+      // Same set the state trigger builds eagerly at main (see prewarm + GC
+      // active set): buildable, excluding activation-gated extensions/apps.
+      if (!isNodeBuildable(node) || node.kind === "extension" || node.kind === "app") continue;
+      const ev = view.evMap[node.name];
+      if (!ev) continue;
+      anyChecked = true;
+      const buildKey = computeBuildUnitKey(node, ev);
+      let status: UnitBuildStatus["status"];
+      if (buildStore.has(buildKey)) {
+        status = "ok";
+      } else {
+        const diagnostics = diagnosticsForBuildKey(buildKey);
+        if (diagnostics && hasErrors(diagnostics)) {
+          status = "failed";
+          anyFailed = true;
+        } else {
+          status = "unknown";
+          anyUnknown = true;
+        }
+      }
+      unitStatuses.push({ unit: node.name, status });
+    }
+    return {
+      validated: anyChecked && !anyUnknown,
+      ...(anyFailed ? { failed: true } : {}),
+      unitStatuses,
+    };
+  };
+
+  /**
    * On-demand WORKING build (dev preview). Builds the requested repos/units from
    * a working composed view via the same ctx-ref build path as `validateRepoPush`
    * — BUT never persists the EV baseline and never records builds, so a preview
@@ -1337,6 +1479,14 @@ export async function initBuildSystemV2(
       return validateRepoPushImpl(repoPaths, candidateView, options);
     },
 
+    validate(input: ValidateInput): Promise<RepoBuildReport[]> {
+      return validateImpl(input);
+    },
+
+    statusAt(viewHash: string): Promise<BuildStatusAt> {
+      return statusAtImpl(viewHash);
+    },
+
     previewBuild(
       workingView: string,
       options?: { repoPaths?: string[]; units?: string[] }
@@ -1411,9 +1561,9 @@ export async function initBuildSystemV2(
         // About pages are gated purely by location: any unit under workspace/about/.
         // (No `shell` manifest flag — an about page is just a normal panel that
         // lives in about/.)
-        if (!n.relativePath.startsWith("about/")) continue;
+        if (!isAboutSource(n.relativePath)) continue;
         pages.push({
-          name: n.relativePath.slice("about/".length),
+          name: n.relativePath.slice(ABOUT_SOURCE_PREFIX.length),
           title: n.manifest.title ?? n.name,
           description: n.manifest.description,
           hiddenInLauncher: n.manifest.hiddenInLauncher ?? false,

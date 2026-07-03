@@ -61,16 +61,16 @@ foreground login flow can miss approval pushes/actions.
 Clean install:
 
 1. Desktop/server creates a pairing invite.
-2. User opens a `vibez1://connect?url=...&code=...` link on the phone.
+2. User opens a `vibez1://connect?room=...&fp=...&code=...&sig=...&v=2` link on the phone.
 3. Native bootstrap consumes the initial URL or URL event.
 4. Native bootstrap shows a trusted recovery-surface confirmation with the
-   target server URL.
-5. After user confirmation, native bootstrap calls native
-   `pairServer(serverUrl, code)`.
-6. Native code stores the hub device credential.
+   target server/workspace label from the link.
+5. After user confirmation, native bootstrap dials the WebRTC room, pins `fp`,
+   and presents the one-time `code` as the first shell-session token.
+6. Native code stores the returned device credential plus `room`/`fp`/`sig`.
 7. Native bootstrap calls `listWorkspaces()` and asks the user to choose one.
-8. Native bootstrap calls `selectWorkspace(name)`, which stores the
-   workspace-scoped URL and returns a mobile shell grant.
+8. Native bootstrap calls `selectWorkspace(name)`, which pairs to the
+   workspace-scoped WebRTC room and returns a mobile shell grant.
 9. Native bootstrap calls `prepareAppBundle(rnHostAbi, platform, source)`.
 10. Native code verifies the selected platform artifact, writes
    it to disk, and reloads into the workspace app.

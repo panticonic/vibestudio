@@ -672,7 +672,7 @@ The blobstore is a curated runtime binding — reach it as `services.blobstore`
 (equivalently `import { blobstore } from "@workspace/runtime"`, or the raw
 `rpc.call("blobstore.<method>", [...])`). Read/write methods
 (`putText`/`putBase64`/`getText`/`getRange`/`grep`/…) work from agent eval; the
-admin methods (`delete`/`list`/`pruneUnreferenced`) are server-only. Raw calls
+admin methods (`delete`/`list`) are server-only. Raw calls
 use `rpc.call("main", "blobstore.<method>", [...])`. A binary
 artifact (e.g. a screenshot you captured) goes in as base64:
 

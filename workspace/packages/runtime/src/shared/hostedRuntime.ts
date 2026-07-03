@@ -213,7 +213,10 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
     "vcs",
     createVcsClient(
       <T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args),
-      rpc
+      rpc,
+      // Userland dispatch has no host caller-context resolution — default both
+      // the history log AND the push source to THIS runtime's own context head.
+      { logHead: `ctx:${host.contextId}`, pushSourceHead: `ctx:${host.contextId}` }
     )
   );
   const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));

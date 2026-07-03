@@ -26,8 +26,16 @@ export interface FrameworkAdapter {
   /** Additional esbuild plugins (e.g., svelte compiler) */
   readonly plugins?: () => esbuild.Plugin[];
 
-  /** Generate the entry wrapper that imports the user module and mounts it */
-  generateEntry(exposeEntryFile: string, entryFile: string): string;
+  /**
+   * Generate the entry wrapper that imports the user module and mounts it.
+   *
+   * `frameworkModule` overrides the workspace module the wrapper imports the
+   * auto-mount contract from (see `platformModules.FRAMEWORK_MODULES`); when
+   * omitted, the adapter uses the platform default for its framework. Set per
+   * unit via the `vibez1.frameworkModule` manifest field. Adapters without an
+   * auto-mount module (vanilla) ignore it.
+   */
+  generateEntry(exposeEntryFile: string, entryFile: string, frameworkModule?: string): string;
 
   // --- Fallback HTML generation (only used when no template HTML is found) ---
 

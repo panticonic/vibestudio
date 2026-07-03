@@ -52,6 +52,9 @@ export interface DurableObjectRelayDeps {
   callerPanelId?: string;
   /** Correlation id for this call; lets the DO match a later deferred reply. */
   requestId?: string;
+  /** Host-minted on-behalf-of correlation nonce for vcs-DO dispatches
+   *  (narrow-host-vcs §4). Opaque; never identity-bearing. */
+  invocationToken?: string;
   /** Optional dedup key, propagated so reissued calls collapse server-side. */
   idempotencyKey?: string;
   /** Read-only containment flag propagated through the request envelope. */
@@ -189,6 +192,7 @@ export async function postToDurableObject(
       fromId: caller.callerId,
       method,
       args,
+      ...(deps.invocationToken ? { invocationToken: deps.invocationToken } : {}),
     },
   });
   return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps));

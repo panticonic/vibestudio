@@ -72,7 +72,7 @@ export const CONFIG_LOADER_JS = `(async () => {
   };
 
   let cfg = null;
-  const shell = globalThis.__vibez1Shell ?? globalThis.__vibez1Electron;
+  const shell = globalThis.__vibez1Shell;
 
   if (shell && typeof shell.getPanelInit === "function") {
     try {

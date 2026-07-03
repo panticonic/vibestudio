@@ -21,7 +21,7 @@ type PanelRuntimeRpc = Pick<RpcClient, "call" | "emit" | "on">;
 
 let _rpc: PanelRuntimeRpc | null = null;
 let _runtime: PanelRuntimeApi | null = null;
-const shell = (globalThis as any).__vibez1Shell ?? (globalThis as any).__vibez1Electron;
+const shell = (globalThis as any).__vibez1Shell;
 
 export function _initPanelHandleBridge(
   rpc: PanelRuntimeRpc,

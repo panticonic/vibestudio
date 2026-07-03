@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionContext, UserlandApprovalRequest } from "@vibez1/extension";
+import { userlandApprovalRequestSchema } from "@vibez1/shared/approvals";
 import { activate } from "./index.js";
 import type { SessionInfoEvent } from "./types.js";
 
@@ -49,11 +50,9 @@ describe("@workspace-extensions/shell", () => {
     const approval = request.mock.calls[0]![0];
     expect(approval.subject.label).toBeDefined();
     expect(approval.summary).toBeDefined();
-    expect(approval.subject.label!.length).toBeLessThanOrEqual(80);
-    expect(approval.summary!.length).toBeLessThanOrEqual(1000);
-    for (const detail of approval.details ?? []) {
-      expect(detail.value.length).toBeLessThanOrEqual(200);
-    }
+    // Validate against the authoritative schema so its field bounds can't
+    // drift from hand-copied numbers here.
+    expect(() => userlandApprovalRequestSchema.parse(approval)).not.toThrow();
   });
 
   it("maps denied open approval to EACCES before spawning a session", async () => {

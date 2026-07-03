@@ -149,4 +149,102 @@ describe("createPanelTransport", () => {
       })
     );
   });
+
+  // §1.6 upload hop: with the bridge stream surface present, the transport gains
+  // `streamBody` (bodies pump across the bridge); without it there is no hook and
+  // the RPC core throws its loud "uploads require the WebRTC transport" error.
+  describe("bridge upload surface", () => {
+    function makeStreamShell() {
+      let streamHandler: ((msg: unknown) => void) | null = null;
+      const sentBodyChunks: unknown[] = [];
+      const shell = makeShell({
+        streamChunkFormat: "base64",
+        streamOpen: vi.fn((msg: { opId: string }) => {
+          // Respond head+end on the next microtask, like a host with an
+          // empty-bodied 200 response.
+          queueMicrotask(() => {
+            streamHandler?.({
+              kind: "head",
+              opId: msg.opId,
+              status: 200,
+              statusText: "OK",
+              headers: [["content-type", "text/plain"]],
+            });
+            streamHandler?.({ kind: "end", opId: msg.opId });
+          });
+        }),
+        streamBodyChunk: vi.fn(async (msg: unknown) => {
+          sentBodyChunks.push(msg);
+        }),
+        streamAbort: vi.fn(),
+        streamAck: vi.fn(),
+        onStreamMessage: vi.fn((handler: (msg: unknown) => void) => {
+          streamHandler = handler;
+          return () => {
+            streamHandler = null;
+          };
+        }),
+      } as never);
+      return { shell, sentBodyChunks };
+    }
+
+    function streamRequestEnvelope(): RpcEnvelope {
+      return envelope("main", {
+        type: "stream-request",
+        requestId: "sreq-1",
+        fromId: "panel:panel-1",
+        method: "gateway.fetch",
+        args: [{ path: "/upload" }],
+      } as RpcMessage);
+    }
+
+    it("wires streamBody from the shell bridge surface and pumps the body across", async () => {
+      const { shell, sentBodyChunks } = makeStreamShell();
+      g.__vibez1Shell = shell as never;
+      const transport = createPanelTransport();
+      expect(typeof transport.streamBody).toBe("function");
+
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      });
+      const response = await transport.streamBody!(streamRequestEnvelope(), null, body);
+      expect(response.status).toBe(200);
+
+      await vi.waitFor(() => {
+        // 1 data chunk + the done marker.
+        expect(sentBodyChunks.length).toBe(2);
+      });
+      expect(sentBodyChunks[0]).toMatchObject({ seq: 1, chunk: expect.any(String) });
+      expect(sentBodyChunks[1]).toMatchObject({ seq: 2, done: true });
+      expect(
+        (shell as unknown as { streamOpen: ReturnType<typeof vi.fn> }).streamOpen
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bodyId: expect.any(String),
+          envelope: expect.objectContaining({ target: "main" }),
+        })
+      );
+    });
+
+    it("leaves streamBody undefined when the bridge has no upload surface", () => {
+      g.__vibez1Shell = makeShell();
+      const transport = createPanelTransport();
+      expect(transport.streamBody).toBeUndefined();
+    });
+
+    it("passes the upload body through a first-class shell.stream verbatim", async () => {
+      const stream = vi.fn(async () => new Response(null, { status: 204 }));
+      g.__vibez1Shell = makeShell({ stream } as never);
+      const transport = createPanelTransport();
+      const body = new ReadableStream<Uint8Array>();
+      const sentEnvelope = streamRequestEnvelope();
+
+      await transport.stream!(sentEnvelope, null, body);
+
+      expect(stream).toHaveBeenCalledWith(sentEnvelope, null, body);
+    });
+  });
 });

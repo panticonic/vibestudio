@@ -17,8 +17,21 @@ import {
   type FlagSpec,
   type ParsedInvocation,
 } from "../commandTable.js";
-import { EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
+import { CliError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
+import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
+import type { RpcClient } from "../rpcClient.js";
+
+/** Adapt the CLI RpcClient to the target-capable {@link RpcCallerLike} the
+ *  userland `vcs` service client needs (P3: push is userland-dispatched). */
+function userlandRpcFor(client: RpcClient): RpcCallerLike {
+  return {
+    call: <T>(targetId: string, method: string, callArgs: unknown[]): Promise<T> =>
+      targetId === "main"
+        ? client.call<T>(method, callArgs)
+        : client.callTarget<T>(targetId, method, callArgs),
+  };
+}
 
 /**
  * `vibez1 vcs ...` — per-repo GAD-native version control.
@@ -201,9 +214,12 @@ async function push(inv: ParsedInvocation): Promise<number> {
     const sourceHead = headForContext(contextId);
     const message = typeof inv.flags["message"] === "string" ? inv.flags["message"] : undefined;
 
-    const result = await client.call<VcsPushResult>("vcs.push", [
-      { repoPaths, sourceHead, ...(message ? { message } : {}) },
-    ]);
+    // Push is userland-dispatched (P3 flip): route to the gad-store DO's
+    // `vcsPush` via the `vcs` manifest service, not the host `vcs.push` service.
+    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsPushResult>(
+      "vcsPush",
+      { repoPaths, sourceHead, ...(message ? { message } : {}) }
+    );
 
     if (json) {
       // Always emit the full discriminated union under --json.
@@ -372,10 +388,19 @@ async function log(inv: ParsedInvocation): Promise<number> {
     const repo = requireRepo(inv);
     const { client } = resolveSessionScope(inv);
     const limit = typeof inv.flags["limit"] === "string" ? Number(inv.flags["limit"]) : undefined;
-    // Server log signature: (repoPath, limit?, head?). Scope to this repo.
-    const result = await client.call<RepoLogEntry[]>("vcs.log", [
+    // vcs.log is USERLAND-dispatched (P5c): resolve the `vcs` manifest service
+    // (gad-store DO) and call its vcsLog(repoPath, limit?, head?) — the head
+    // defaults to `main`, matching the CLI shell caller's previous default.
+    const service = await client.call<{ kind: string; targetId?: string }>(
+      "workers.resolveService",
+      ["vibez1.vcs.v1", null]
+    );
+    if (service.kind !== "durable-object" || !service.targetId) {
+      throw new CliError("workspace vcs service is not a durable-object service");
+    }
+    const result = await client.callTarget<RepoLogEntry[]>(service.targetId, "vcsLog", [
       repo,
-      limit && Number.isFinite(limit) ? limit : undefined,
+      limit && Number.isFinite(limit) ? limit : null,
     ]);
     printResult(result, {
       json,

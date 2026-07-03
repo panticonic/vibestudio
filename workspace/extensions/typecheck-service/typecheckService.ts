@@ -10,11 +10,9 @@
  *   - typecheck.check          — diagnostics for a file or whole project
  *   - typecheck.getTypeInfo    — hover info at a position
  *   - typecheck.getCompletions — completion list at a position
- *
- * The old getPackageTypes/getPackageTypesBatch RPCs were removed along with
- * their only caller (the deleted panel-side TypeDefinitionClient). Code
- * completion in Monaco panels uses Monaco's own TypeScript service — it
- * doesn't talk to this file.
+ *   - typecheck.getBrowserTypeDefinitions
+ *       — bundled Monaco/TypeScript declaration files, plus optional package
+ *         .d.ts payloads loaded from node_modules for browser editors.
  */
 
 import * as fs from "fs/promises";
@@ -23,8 +21,13 @@ import * as path from "path";
 import * as crypto from "crypto";
 import {
   TypeCheckService,
+  createTypeDefinitionLoader,
   createDiskFileSource,
+  getBrowserTypeDefinitions,
+  getDefaultNodeModulesPaths,
   loadSourceFiles,
+  type BrowserTypeDefinitions,
+  type LoadedTypeDefinitions,
   type TypeCheckDiagnostic,
   discoverWorkspaceContext,
   type WorkspaceContext,
@@ -38,6 +41,28 @@ const nodeModulesPathCache = new Map<string, string[]>();
 
 export interface TypeCheckRpcOptions {
   workspaceContext?: WorkspaceContext | null;
+}
+
+export interface BrowserPackageTypeDefinitionFile {
+  packageName: string;
+  relativePath: string;
+  filePath: string;
+  content: string;
+}
+
+export interface SerializedPackageTypeDefinitions {
+  packageName: string;
+  files: Record<string, string>;
+  entryPoint: string | null;
+  errors: string[];
+  referencedPackages: string[];
+  subpaths: Record<string, string>;
+  typeDefinitionFiles: BrowserPackageTypeDefinitionFile[];
+}
+
+export interface BrowserTypeDefinitionsResponse extends BrowserTypeDefinitions {
+  packageTypes: SerializedPackageTypeDefinitions[];
+  packageTypeDefinitionFiles: BrowserPackageTypeDefinitionFile[];
 }
 
 interface PackageJson {
@@ -243,6 +268,106 @@ function serializeDiagnostics(diagnostics: TypeCheckDiagnostic[]): SerializedDia
   }));
 }
 
+const NPM_PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/i;
+const MAX_BROWSER_PACKAGE_TYPES = 64;
+
+function normalizeBrowserPackageNames(packageNames?: readonly string[]): string[] {
+  if (packageNames === undefined) return [];
+  if (!Array.isArray(packageNames)) {
+    throw new Error("typecheck.getBrowserTypeDefinitions: packageNames must be an array");
+  }
+  if (packageNames.length > MAX_BROWSER_PACKAGE_TYPES) {
+    throw new Error(
+      `typecheck.getBrowserTypeDefinitions: packageNames is limited to ${MAX_BROWSER_PACKAGE_TYPES} packages`,
+    );
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const packageName of packageNames) {
+    if (typeof packageName !== "string" || !NPM_PACKAGE_NAME_PATTERN.test(packageName)) {
+      throw new Error(
+        `typecheck.getBrowserTypeDefinitions: invalid package name ${JSON.stringify(packageName)}`,
+      );
+    }
+    if (seen.has(packageName)) continue;
+    seen.add(packageName);
+    normalized.push(packageName);
+  }
+  return normalized;
+}
+
+function mapToSortedRecord(map: Map<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    [...map.entries()].sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
+function toPackageTypeDefinitionFilePath(packageName: string, relativePath: string): string {
+  const normalized = relativePath.split(path.sep).join("/");
+  const safeRelative = normalized.startsWith("../")
+    ? normalized.replace(/\.\.\//g, "__parent__/")
+    : normalized;
+  return `file:///node_modules/${packageName}/${safeRelative}`;
+}
+
+function serializeLoadedPackageTypeDefinitions(
+  packageName: string,
+  loaded: LoadedTypeDefinitions | null,
+): SerializedPackageTypeDefinitions {
+  if (!loaded) {
+    return {
+      packageName,
+      files: {},
+      entryPoint: null,
+      errors: [`No type definitions found for package: ${packageName}`],
+      referencedPackages: [],
+      subpaths: {},
+      typeDefinitionFiles: [],
+    };
+  }
+
+  const files = mapToSortedRecord(loaded.files);
+  return {
+    packageName,
+    files,
+    entryPoint: loaded.entryPoint,
+    errors: [...loaded.errors],
+    referencedPackages: [...loaded.referencedPackages],
+    subpaths: mapToSortedRecord(loaded.subpaths),
+    typeDefinitionFiles: Object.entries(files).map(([relativePath, content]) => ({
+      packageName,
+      relativePath,
+      filePath: toPackageTypeDefinitionFilePath(packageName, relativePath),
+      content,
+    })),
+  };
+}
+
+async function loadBrowserPackageTypeDefinitions(
+  panelPath: string,
+  packageNames: readonly string[],
+  options?: TypeCheckRpcOptions,
+): Promise<SerializedPackageTypeDefinitions[]> {
+  const resolved = path.resolve(panelPath);
+  const nodeModulesPaths = [
+    ...await resolveTypecheckNodeModulesPaths(resolved, options),
+    ...getDefaultNodeModulesPaths(resolved),
+  ];
+  const loader = createTypeDefinitionLoader({
+    nodeModulesPaths: [...new Set(nodeModulesPaths)],
+  });
+
+  return Promise.all(
+    packageNames.map(async (packageName) =>
+      serializeLoadedPackageTypeDefinitions(
+        packageName,
+        await loader.loadPackageTypes(packageName),
+      ),
+    ),
+  );
+}
+
 // =============================================================================
 // RPC methods
 // =============================================================================
@@ -336,6 +461,29 @@ export const typeCheckRpcMethods = {
 
     return {
       entries: completions.entries.map(e => ({ name: e.name, kind: e.kind })),
+    };
+  },
+
+  "typecheck.getBrowserTypeDefinitions": async (
+    panelPath?: string,
+    packageNames?: string[],
+    options?: TypeCheckRpcOptions,
+  ): Promise<BrowserTypeDefinitionsResponse> => {
+    const normalizedPackageNames = normalizeBrowserPackageNames(packageNames);
+    if (normalizedPackageNames.length > 0 && !panelPath) {
+      throw new Error(
+        "typecheck.getBrowserTypeDefinitions: panelPath is required when packageNames are requested",
+      );
+    }
+
+    const packageTypes = panelPath
+      ? await loadBrowserPackageTypeDefinitions(panelPath, normalizedPackageNames, options)
+      : [];
+
+    return {
+      ...getBrowserTypeDefinitions(),
+      packageTypes,
+      packageTypeDefinitionFiles: packageTypes.flatMap((pkg) => pkg.typeDefinitionFiles),
     };
   },
 };

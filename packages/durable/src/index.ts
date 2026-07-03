@@ -85,6 +85,7 @@ export abstract class DurableObjectBase {
   private currentRpcCallerPanelId: string | null = null;
   private currentRpcRequestId: string | null = null;
   private currentRpcIdempotencyKey: string | null = null;
+  private currentInvocationToken: string | undefined = undefined;
   private currentObjectKey: string | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -289,6 +290,33 @@ export abstract class DurableObjectBase {
 
   protected get rpcIdempotencyKey(): string | null {
     return this.currentRpcIdempotencyKey;
+  }
+
+  /**
+   * The host-minted invocation token for the dispatch currently being served, or
+   * `undefined` when the inbound call carried none (a non-relayed / non-`vcs`
+   * dispatch, or a self-initiated DO call). Opaque correlation nonce, NOT a
+   * credential — see `RpcRequest.invocationToken` and
+   * docs/narrow-host-vcs-plan.md §4. A DO orchestrating a host write echoes it
+   * into `refs.updateMains` so the host can resolve on-behalf-of attribution
+   * against its own invocation table.
+   *
+   * SCOPING CONTRACT (identical to `caller`/`rpcRequestId`): this reflects the
+   * dispatch whose handler is CURRENTLY executing its synchronous entry. The DO
+   * multiplexes — at any non-storage `await` a concurrent inbound dispatch can be
+   * delivered and rebind this field — so a handler MUST read it synchronously at
+   * entry and capture it into a local before its first `await`. Read that way it
+   * is provably the current dispatch's token: the value is set synchronously in
+   * `dispatchInboundEnvelope` and the handler runs one microtask later
+   * (`handleRequest` schedules it via `Promise.resolve().then`), and no other
+   * dispatch — a fresh `fetch`, i.e. a macrotask — can interpose across that
+   * microtask boundary. It is never a concurrent or previous dispatch's token at
+   * that point (each dispatch restores the prior value in a `finally`). Reading
+   * it lazily AFTER an await is unsupported and may observe another in-flight
+   * dispatch's token; capture-at-entry is the contract. Never log it.
+   */
+  protected get invocationToken(): string | undefined {
+    return this.currentInvocationToken;
   }
 
   protected get objectKey(): string {
@@ -522,6 +550,7 @@ export abstract class DurableObjectBase {
       callerPanelId: this.currentRpcCallerPanelId,
       requestId: this.currentRpcRequestId,
       idempotencyKey: this.currentRpcIdempotencyKey,
+      invocationToken: this.currentInvocationToken,
     };
     this.currentVerifiedCaller = caller;
     this.currentRpcCallerId = caller?.callerId ?? null;
@@ -529,6 +558,9 @@ export abstract class DurableObjectBase {
     this.currentRpcCallerPanelId = caller?.callerPanelId ?? null;
     this.currentRpcRequestId = message?.requestId ?? null;
     this.currentRpcIdempotencyKey = envelope.delivery.idempotencyKey ?? null;
+    // Host-minted on-behalf-of nonce, present only on relayed userland `vcs`
+    // dispatches (absent → undefined). Bound per-dispatch; see `invocationToken`.
+    this.currentInvocationToken = message?.invocationToken ?? undefined;
     try {
       return await connectionless.respond(envelope);
     } finally {
@@ -538,6 +570,7 @@ export abstract class DurableObjectBase {
       this.currentRpcCallerPanelId = prev.callerPanelId;
       this.currentRpcRequestId = prev.requestId;
       this.currentRpcIdempotencyKey = prev.idempotencyKey;
+      this.currentInvocationToken = prev.invocationToken;
     }
   }
 

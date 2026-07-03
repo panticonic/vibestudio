@@ -22,7 +22,11 @@ action-bar components, feedback_custom) interact with the conversation.
 ```typescript
 interface ChatSandboxValue {
   /** Publish an event to the channel */
-  publish(eventType: string, payload: unknown, options?: { idempotencyKey?: string }): Promise<unknown>;
+  publish(
+    eventType: string,
+    payload: unknown,
+    options?: { idempotencyKey?: string }
+  ): Promise<unknown>;
 
   /** Send a visible user-authored message to the channel */
   send(content: string, options?: { idempotencyKey?: string }): Promise<unknown>;
@@ -52,7 +56,11 @@ interface ChatSandboxValue {
   callMethod(participantId: string, method: string, args: unknown): Promise<unknown>;
 
   /** Call a method and return the full transport result envelope */
-  callMethodResult(participantId: string, method: string, args: unknown): Promise<{
+  callMethodResult(
+    participantId: string,
+    method: string,
+    args: unknown
+  ): Promise<{
     content: unknown;
     attachments?: unknown[];
     contentType?: string;
@@ -60,13 +68,19 @@ interface ChatSandboxValue {
 
   /** Resolve a participant by handle, accepting "gmail" or "@gmail" (async:
    *  the same surface works server-side, where the roster is fetched over RPC) */
-  participantByHandle(handle: string): Promise<{ id: string; metadata: Record<string, unknown> } | null>;
+  participantByHandle(
+    handle: string
+  ): Promise<{ id: string; metadata: Record<string, unknown> } | null>;
 
   /** Call by participant handle and return the provider payload */
   callMethodByHandle(handle: string, method: string, args: unknown): Promise<unknown>;
 
   /** Call by participant handle and return the full invocation envelope */
-  callMethodResultByHandle(handle: string, method: string, args: unknown): Promise<{
+  callMethodResultByHandle(
+    handle: string,
+    method: string,
+    args: unknown
+  ): Promise<{
     content: unknown;
     attachments?: unknown[];
     contentType?: string;
@@ -186,18 +200,15 @@ Full RPC bridge to all server and main-process services. Same as `rpc` from `@wo
 const content = await chat.rpc.call("main", "fs.readFile", ["src/index.ts", "utf-8"]);
 
 // Database
-Call a Durable Object method that stores data with `this.sql`.
+// Call a Durable Object method that stores data with `this.sql`.
 const rows = await chat.rpc.call("main", "db.query", [handle, "SELECT * FROM items"]);
 
 // Build
 const build = await chat.rpc.call("main", "build.getBuild", ["panels/my-app"]);
 
-// Browser data
-const browsers = await chat.rpc.call(
-  "main",
-  "extensions.invoke",
-  ["@workspace-extensions/browser-data", "detectBrowsers", []],
-);
+// Browser data (panel/component runtime; resolves the manifest-declared broker)
+import { browserData } from "@workspace/panel-browser";
+const browsers = await browserData.detectBrowsers();
 
 // Workers (running worker instances)
 const instances = await chat.rpc.call("main", "runtime.listEntities", [{ kind: "worker" }]);
@@ -208,8 +219,8 @@ const instances = await chat.rpc.call("main", "runtime.listEntities", [{ kind: "
 Read-only identifiers for the current panel context and PubSub channel.
 
 ```typescript
-console.log("Context:", chat.contextId);   // e.g., "ctx-tree-new-abc123"
-console.log("Channel:", chat.channelId);   // e.g., "chat-504fef6a"
+console.log("Context:", chat.contextId); // e.g., "ctx-tree-new-abc123"
+console.log("Channel:", chat.channelId); // e.g., "chat-504fef6a"
 ```
 
 ## Sender Identity

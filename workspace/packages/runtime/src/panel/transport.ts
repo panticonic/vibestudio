@@ -1,6 +1,9 @@
 import {
   ELECTRON_LOCAL_SERVICE_NAMES,
+  bridgeStreamSurfaceOf,
+  openBridgeUploadStream,
   responseEnvelopeFor,
+  type BridgeStreamShellSurface,
   type EnvelopeRpcTransport,
   type RpcEnvelope,
   type RpcRequest,
@@ -19,7 +22,7 @@ import type { RecoveryCoordinator, RecoveryKind } from "@vibez1/shared/shell/rec
  * and delivers the demuxed inbound envelopes back via `onEnvelope`. There is no
  * panel-side socket and no direct `ws://…/rpc` connection.
  */
-type vibez1ShellBridge = {
+type vibez1ShellBridge = Partial<BridgeStreamShellSurface> & {
   /** Post one RPC envelope to the host (→ this panel's logical session on the pipe). */
   postEnvelope: (envelope: RpcEnvelope) => void | Promise<void>;
   /** Subscribe to inbound envelopes the host demuxes for this panel's session. */
@@ -30,9 +33,14 @@ type vibez1ShellBridge = {
    * Optional first-class streaming: the host physically streams the response
    * body over the **bulk channel** and returns a `Response`. When absent, the
    * RPC client transparently falls back to the duplex stream-request /
-   * stream-frame envelope path over `postEnvelope`/`onEnvelope`.
+   * stream-frame envelope path over `postEnvelope`/`onEnvelope`. A bridge that
+   * exposes this MUST honour the `body` param (or throw) — never drop it.
    */
-  stream?: (envelope: RpcEnvelope, signal?: AbortSignal | null) => Promise<Response>;
+  stream?: (
+    envelope: RpcEnvelope,
+    signal?: AbortSignal | null,
+    body?: ReadableStream<Uint8Array> | null
+  ) => Promise<Response>;
   /** Electron-only: IPC dispatch for electron-local services (kept as-is). */
   serviceCall?: (method: string, ...args: unknown[]) => Promise<unknown>;
 };
@@ -40,9 +48,7 @@ type vibez1ShellBridge = {
 export const recoveryCoordinator: RecoveryCoordinator = createRecoveryCoordinator();
 
 function getShellBridge(): vibez1ShellBridge {
-  const shell = ((globalThis as any).__vibez1Shell ?? (globalThis as any).__vibez1Electron) as
-    | vibez1ShellBridge
-    | undefined;
+  const shell = (globalThis as any).__vibez1Shell as vibez1ShellBridge | undefined;
   if (
     !shell ||
     typeof shell.postEnvelope !== "function" ||
@@ -176,7 +182,28 @@ export function createPanelTransport(): EnvelopeRpcTransport {
   // Otherwise the RPC client falls back to the duplex envelope path above.
   if (typeof shell.stream === "function") {
     const streamFn = shell.stream.bind(shell);
-    transport.stream = (envelope, signal) => streamFn(envelope, signal ?? null);
+    // Pass `body` through verbatim — a bridge stream() that cannot carry one
+    // must throw (§1.6); dropping it here would be a silent-upload-loss bug.
+    transport.stream = (envelope, signal, body) => streamFn(envelope, signal ?? null, body ?? null);
+  }
+
+  // §1.6 upload hop: when the shell bridge exposes the stream surface
+  // (streamOpen/streamBodyChunk/…), streaming REQUEST bodies pump across the
+  // bridge as chunk messages and the HOST feeds them to this panel's WebRTC
+  // session (see @vibez1/rpc bridgeStream.ts). The RPC client calls this ONLY
+  // for requests WITH a body — body-less streams keep the duplex envelope path
+  // byte-identical. Without the surface, a body throws loudly in the client
+  // core ("uploads require the WebRTC transport").
+  const uploadSurface = bridgeStreamSurfaceOf(shell);
+  if (uploadSurface) {
+    transport.streamBody = (envelope, signal, body) => {
+      if (!body) {
+        return Promise.reject(
+          new Error("panel bridge streamBody() requires a request body — body-less streams ride the duplex envelope path")
+        );
+      }
+      return openBridgeUploadStream(uploadSurface, envelope, signal ?? null, body);
+    };
   }
 
   return transport;

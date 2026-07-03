@@ -8,7 +8,7 @@
  * visible on disk and accessible to server-side tools and agents. Commits
  * from inside a context land on the context head (see WorkspaceVcs).
  *
- * The actual fork/materialize lives server-side (gadVcs); this class owns the
+ * The actual fork/materialize lives server-side (vcsHost); this class owns the
  * id validation, in-flight dedupe, and readiness state, and is the surface
  * fsService/contextMiddleware depend on.
  */

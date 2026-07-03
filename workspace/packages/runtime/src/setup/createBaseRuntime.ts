@@ -95,7 +95,7 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
   };
 
   // Theme events come from:
-  // - Electron: via __vibez1Electron.addEventListener
+  // - Electron: via __vibez1Shell.addEventListener
   // - Server WS: via rpc.on (for both Electron and standalone)
   const themeUnsubscribers = [rpc.on("runtime:theme", (event) => onThemeEvent(event.payload))];
 
@@ -146,8 +146,8 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     rpc.on("runtime:palette-run", (event) => onPaletteRunEvent(event.payload)),
   ];
 
-  // Wire __vibez1Electron events if available (Electron mode)
-  const electron = (globalThis as any).__vibez1Shell ?? (globalThis as any).__vibez1Electron;
+  // Wire __vibez1Shell events if available (Electron mode)
+  const electron = (globalThis as any).__vibez1Shell;
   let electronListenerId: number | undefined;
   if (electron?.addEventListener) {
     electronListenerId = electron.addEventListener((event: string, payload: unknown) => {

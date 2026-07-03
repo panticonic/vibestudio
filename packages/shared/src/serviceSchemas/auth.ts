@@ -71,6 +71,8 @@ export const authMethods = defineServiceMethods({
       expiresInMs: z.number(),
       expiresAt: z.number(),
       deepLink: z.string().nullable(),
+      // The invite's freshly minted signaling room (null without WebRTC ingress).
+      room: z.string().nullable(),
     }),
     policy: { allowed: ["server", "shell", "app"] },
     access: AUTH_PAIRING_ACCESS,

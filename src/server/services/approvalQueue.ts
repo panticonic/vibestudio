@@ -16,6 +16,7 @@ import type {
   ApprovalPrincipal,
   ApprovalRequesterCategory,
   ApprovalRequesterIdentity,
+  DiffReviewEntry,
   PendingApproval,
   PendingCapabilityApproval,
   PendingCredentialApproval,
@@ -45,6 +46,12 @@ interface ApprovalQueueRequestBase {
   effectiveVersion: string;
   requesterCategory?: ApprovalRequesterCategory;
   operation?: ApprovalOperationDescriptor;
+  /**
+   * Host-computed diff-review payload (narrow-host-vcs-plan §5.1), forwarded
+   * verbatim onto the pending approval. Set by the main-advance gate for
+   * capability (advance/delete/restore) and unit-batch (meta) prompts.
+   */
+  diffReview?: DiffReviewEntry[];
   signal?: AbortSignal;
 }
 
@@ -512,6 +519,7 @@ export function createApprovalQueue(deps: {
       ...(callerTitle !== undefined ? { callerTitle } : {}),
       ...(requester ? { requester } : {}),
       operation,
+      ...(req.diffReview ? { diffReview: req.diffReview } : {}),
     };
     if (req.kind === "capability") {
       return {

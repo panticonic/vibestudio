@@ -117,7 +117,7 @@ imports), or avoid the dependency by embedding the small bit of logic directly.
 ```ts
 // Component lives in a file whose nearest package.json lists "lodash";
 // the panel resolves the import when it compiles the file.
-inline_ui({ path: ".vibez1/ui/shuffler.tsx", props: { items: ["Apple", "Banana", "Cherry"] } })
+inline_ui({ path: ".vibez1/ui/shuffler.tsx", props: { items: ["Apple", "Banana", "Cherry"] } });
 ```
 
 ```tsx
@@ -130,8 +130,14 @@ export default function Shuffler({ props = {} }) {
   const [items, setItems] = useState(props.items ?? []);
   return (
     <Flex direction="column" gap="2">
-      <Button size="1" onClick={() => setItems(_.shuffle([...items]))}>Shuffle</Button>
-      {items.map((item, i) => <Text key={i} size="2">{item}</Text>)}
+      <Button size="1" onClick={() => setItems(_.shuffle([...items]))}>
+        Shuffle
+      </Button>
+      {items.map((item, i) => (
+        <Text key={i} size="2">
+          {item}
+        </Text>
+      ))}
     </Flex>
   );
 }
@@ -143,9 +149,9 @@ and bare package imports are inferred from the nearest `package.json` when
 possible:
 
 ```ts
-eval({ path: ".vibez1/eval/audit.ts" })
-inline_ui({ path: ".vibez1/ui/audit-panel.tsx", props: { runId } })
-feedback_custom({ path: ".vibez1/ui/confirm-audit.tsx", title: "Confirm audit" })
+eval({ path: ".vibez1/eval/audit.ts" });
+inline_ui({ path: ".vibez1/ui/audit-panel.tsx", props: { runId } });
+feedback_custom({ path: ".vibez1/ui/confirm-audit.tsx", title: "Confirm audit" });
 ```
 
 ## Call an API with a URL-bound credential
@@ -169,14 +175,18 @@ const credential = await credentials.store({
   material: { type: "bearer-token", token },
 });
 
-const response = await credentials.fetch("https://api.notion.com/v1/search", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "Notion-Version": "2022-06-28",
+const response = await credentials.fetch(
+  "https://api.notion.com/v1/search",
+  {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Notion-Version": "2022-06-28",
+    },
+    body: JSON.stringify({ query: "meeting notes" }),
   },
-  body: JSON.stringify({ query: "meeting notes" }),
-}, { credentialId: credential.id });
+  { credentialId: credential.id }
+);
 const results = await response.json();
 ```
 
@@ -207,7 +217,8 @@ import { approvals } from "@workspace/runtime";
 const decision = await approvals.request({
   subject: { id: "demo-report-service:send", label: "Report sending service" },
   title: "Allow report service access?",
-  summary: "A custom report service wants to let this caller send reports through its shared backend.",
+  summary:
+    "A custom report service wants to let this caller send reports through its shared backend.",
 });
 
 console.log(decision);
@@ -223,7 +234,8 @@ import { approvals } from "@workspace/runtime";
 const decision = await approvals.request({
   subject: { id: "demo-report-service:send", label: "Report sending service" },
   title: "Allow report service access?",
-  summary: "A custom report service wants to let this caller send reports through its shared backend.",
+  summary:
+    "A custom report service wants to let this caller send reports through its shared backend.",
   promptOptions: "choices",
   options: [
     { value: "allow", label: "Send", tone: "primary" },
@@ -249,9 +261,10 @@ imports; those built-in APIs have their own trust scopes. See
 ## Browser data (cookies/passwords/bookmarks/history/tabs)
 
 `browserData` from `@workspace/panel-browser` is a **panel/component runtime**
-capability: it goes through the `@workspace-extensions/browser-data` extension,
-which only accepts **shell** callers. Server-side eval (caller kind `server`)
-cannot use it — run browser-data work from panel code or an
+capability: it resolves the manifest-declared broker from
+`providers.browserData.extension` and invokes that extension, which only accepts
+**shell** callers. Server-side eval (caller kind `server`) cannot use it — run
+browser-data work from panel code or an
 `inline_ui`/`feedback_custom` component:
 
 ```tsx
@@ -396,8 +409,9 @@ export default function SqlRunner({ props, chat }) {
 ## Open a Website and Import Its Cookies
 
 `openPanel` works from server-side eval, panels, workers, and DOs. `browserData`
-goes through the browser-data extension, so this combined cookie-import recipe
-still runs from panel code or an `inline_ui`/`feedback_custom` component:
+goes through the manifest-declared browser-data broker, so this combined
+cookie-import recipe still runs from panel code or an
+`inline_ui`/`feedback_custom` component:
 
 ```tsx
 import { openPanel } from "@workspace/runtime";

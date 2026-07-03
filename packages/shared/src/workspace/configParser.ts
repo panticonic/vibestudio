@@ -4,8 +4,17 @@ import type {
   WorkspaceConfig,
   WorkspaceExtensionDecl,
   WorkspaceHeartbeatDecl,
+  WorkspaceHostTargetDecl,
+  WorkspaceHostTargetName,
+  WorkspaceTrustDecl,
+} from "./types.js";
+import {
+  WORKSPACE_APP_PACKAGE_SCOPE,
+  WORKSPACE_EXTENSION_PACKAGE_SCOPE,
 } from "./types.js";
 import { WORKSPACE_SOURCE_DIRS } from "./sourceDirs.js";
+
+export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
 export function parseWorkspaceConfigContentWithId(content: string, id: string): WorkspaceConfig {
   const config = YAML.parse(content) as WorkspaceConfig;
@@ -21,7 +30,7 @@ const WORKSPACE_SOURCE_DIR_SET = new Set<string>(WORKSPACE_SOURCE_DIRS);
 interface DeclaredUnitDescriptor<Decl extends { source: string }> {
   section: "extensions" | "apps";
   sourceRoot: "extensions" | "apps";
-  packageScope: "@workspace-extensions/" | "@workspace-apps/";
+  packageScope: typeof WORKSPACE_EXTENSION_PACKAGE_SCOPE | typeof WORKSPACE_APP_PACKAGE_SCOPE;
   singular: "extension" | "app";
   values: Decl[] | undefined;
   validate?: (decl: Decl) => void;
@@ -108,18 +117,21 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
   validateDeclaredUnitList<WorkspaceExtensionDecl>({
     section: "extensions",
     sourceRoot: "extensions",
-    packageScope: "@workspace-extensions/",
+    packageScope: WORKSPACE_EXTENSION_PACKAGE_SCOPE,
     singular: "extension",
     values: config.extensions,
   });
   validateDeclaredUnitList<WorkspaceAppDecl>({
     section: "apps",
     sourceRoot: "apps",
-    packageScope: "@workspace-apps/",
+    packageScope: WORKSPACE_APP_PACKAGE_SCOPE,
     singular: "app",
     values: config.apps,
   });
   validateHeartbeats(config.heartbeats);
+  validateTrust(config.trust);
+  validateHostTargets(config.hostTargets);
+  validateProviders(config);
 }
 
 const DECL_NAME_RE = /^[A-Za-z0-9._:-]+$/;
@@ -238,4 +250,224 @@ function resolveDeclaredUnits<Decl extends { source: string; ref?: string }>(
     source: decl.source.trim(),
     ref: (decl.ref ?? "main").trim(),
   }));
+}
+
+// =============================================================================
+// trust / hostTargets / providers — manifest-declared host contracts
+// =============================================================================
+
+const WORKSPACE_HOST_TARGETS: readonly WorkspaceHostTargetName[] = [
+  "electron",
+  "react-native",
+  "terminal",
+];
+
+interface CanonicalUnitKind {
+  sourceRoot: "apps" | "extensions";
+  packageScope: typeof WORKSPACE_APP_PACKAGE_SCOPE | typeof WORKSPACE_EXTENSION_PACKAGE_SCOPE;
+}
+
+const APP_UNIT: CanonicalUnitKind = {
+  sourceRoot: "apps",
+  packageScope: WORKSPACE_APP_PACKAGE_SCOPE,
+};
+const EXTENSION_UNIT: CanonicalUnitKind = {
+  sourceRoot: "extensions",
+  packageScope: WORKSPACE_EXTENSION_PACKAGE_SCOPE,
+};
+
+/**
+ * Canonicalize a declared app/extension identity to its workspace-relative
+ * repo path (`apps/name` / `extensions/name`). Accepts either the repo-path
+ * form or the scoped package-name form. Throws with the offending manifest
+ * field on anything else.
+ */
+function canonicalUnitRepoPath(value: unknown, kind: CanonicalUnitKind, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`meta/vibez1.yml: \`${field}\` must be a non-empty string`);
+  }
+  const normalized = normalizeDeclaredUnitSource(value);
+  const identity = normalized.startsWith(`${kind.sourceRoot}/`)
+    ? normalized.slice(kind.sourceRoot.length + 1)
+    : normalized.startsWith(kind.packageScope)
+      ? normalized.slice(kind.packageScope.length)
+      : null;
+  if (!identity || !/^[^/\s]+$/.test(identity) || identity.endsWith(".git")) {
+    throw new Error(
+      `meta/vibez1.yml: \`${field}\` must be \`${kind.sourceRoot}/name\` or \`${kind.packageScope}name\` (got ${JSON.stringify(value)})`,
+    );
+  }
+  return `${kind.sourceRoot}/${identity}`;
+}
+
+/** `apps/name` | `@workspace-apps/name` → `@workspace-apps/name`. */
+export function workspaceAppPackageName(source: string): string {
+  const repoPath = canonicalUnitRepoPath(source, APP_UNIT, "app source");
+  return `${WORKSPACE_APP_PACKAGE_SCOPE}${repoPath.slice("apps/".length)}`;
+}
+
+/** `extensions/name` | `@workspace-extensions/name` → `@workspace-extensions/name`. */
+export function workspaceExtensionPackageName(source: string): string {
+  const repoPath = canonicalUnitRepoPath(source, EXTENSION_UNIT, "extension source");
+  return `${WORKSPACE_EXTENSION_PACKAGE_SCOPE}${repoPath.slice("extensions/".length)}`;
+}
+
+function validateUnitSourceList(
+  values: unknown,
+  kind: CanonicalUnitKind,
+  field: string,
+): string[] {
+  if (values === undefined) return [];
+  if (!Array.isArray(values)) {
+    throw new Error(`meta/vibez1.yml: \`${field}\` must be a list`);
+  }
+  const seen = new Set<string>();
+  const canonical: string[] = [];
+  for (const value of values) {
+    const repoPath = canonicalUnitRepoPath(value, kind, `${field}[]`);
+    if (seen.has(repoPath)) {
+      throw new Error(`meta/vibez1.yml: duplicate \`${field}\` entry for "${repoPath}"`);
+    }
+    seen.add(repoPath);
+    canonical.push(repoPath);
+  }
+  return canonical;
+}
+
+function validateTrust(trust: WorkspaceTrustDecl | undefined): void {
+  if (trust === undefined) return;
+  if (trust === null || typeof trust !== "object" || Array.isArray(trust)) {
+    throw new Error("meta/vibez1.yml: `trust` must be a mapping");
+  }
+  validateUnitSourceList(trust.chromeApps, APP_UNIT, "trust.chromeApps");
+  validateUnitSourceList(
+    trust.connectionManagementApps,
+    APP_UNIT,
+    "trust.connectionManagementApps",
+  );
+}
+
+function validateHostTargets(
+  hostTargets: WorkspaceConfig["hostTargets"] | undefined,
+): void {
+  if (hostTargets === undefined) return;
+  if (hostTargets === null || typeof hostTargets !== "object" || Array.isArray(hostTargets)) {
+    throw new Error("meta/vibez1.yml: `hostTargets` must be a mapping");
+  }
+  for (const [target, decl] of Object.entries(hostTargets)) {
+    if (!(WORKSPACE_HOST_TARGETS as readonly string[]).includes(target)) {
+      throw new Error(
+        `meta/vibez1.yml: unknown \`hostTargets\` key "${target}" (expected one of ${WORKSPACE_HOST_TARGETS.join(", ")})`,
+      );
+    }
+    if (decl === null || decl === undefined) continue;
+    if (typeof decl !== "object" || Array.isArray(decl)) {
+      throw new Error(`meta/vibez1.yml: \`hostTargets.${target}\` must be a mapping`);
+    }
+    canonicalUnitRepoPath((decl as WorkspaceHostTargetDecl).app, APP_UNIT, `hostTargets.${target}.app`);
+    validateUnitSourceList(
+      (decl as WorkspaceHostTargetDecl).requiresExtensions,
+      EXTENSION_UNIT,
+      `hostTargets.${target}.requiresExtensions`,
+    );
+  }
+}
+
+function requireProviderSource(value: unknown, field: string): string {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`meta/vibez1.yml: \`${field}\` must be a mapping with a \`source\``);
+  }
+  const source = (value as { source?: unknown }).source;
+  if (typeof source !== "string" || source.trim().length === 0) {
+    throw new Error(`meta/vibez1.yml: \`${field}.source\` must be a non-empty string`);
+  }
+  return source.trim();
+}
+
+function validateProviders(config: WorkspaceConfig): void {
+  const providers = config.providers;
+  if (providers === undefined) return;
+  if (providers === null || typeof providers !== "object" || Array.isArray(providers)) {
+    throw new Error("meta/vibez1.yml: `providers` must be a mapping");
+  }
+  if (providers.evalEngine !== undefined) {
+    requireProviderSource(providers.evalEngine, "providers.evalEngine");
+  }
+  if (providers.evalRuntime !== undefined) {
+    requireProviderSource(providers.evalRuntime, "providers.evalRuntime");
+  }
+  if (providers.cdpClient !== undefined) {
+    requireProviderSource(providers.cdpClient, "providers.cdpClient");
+  }
+  if (providers.browserData !== undefined) {
+    const decl = providers.browserData;
+    if (decl === null || typeof decl !== "object" || Array.isArray(decl)) {
+      throw new Error("meta/vibez1.yml: `providers.browserData` must be a mapping with an `extension`");
+    }
+    const repoPath = canonicalUnitRepoPath(
+      (decl as { extension?: unknown }).extension,
+      EXTENSION_UNIT,
+      "providers.browserData.extension",
+    );
+    const declared = (config.extensions ?? []).some(
+      (extension) =>
+        typeof extension?.source === "string" &&
+        canonicalUnitRepoPath(extension.source, EXTENSION_UNIT, "extensions[].source") === repoPath,
+    );
+    if (!declared) {
+      throw new Error(
+        `meta/vibez1.yml: \`providers.browserData.extension\` (${repoPath}) must also be declared under \`extensions\``,
+      );
+    }
+  }
+}
+
+/**
+ * Resolve the manifest's app trust grants to canonical repo paths
+ * (`apps/name`). Missing `trust` (or a missing list) resolves to an empty
+ * grant list — trust is never assumed.
+ */
+export function resolveWorkspaceTrustGrants(config: WorkspaceConfig): {
+  chromeApps: string[];
+  connectionManagementApps: string[];
+} {
+  return {
+    chromeApps: validateUnitSourceList(config.trust?.chromeApps, APP_UNIT, "trust.chromeApps"),
+    connectionManagementApps: validateUnitSourceList(
+      config.trust?.connectionManagementApps,
+      APP_UNIT,
+      "trust.connectionManagementApps",
+    ),
+  };
+}
+
+/**
+ * Resolve one host target's declared app (canonical `apps/name` repo path)
+ * and its required extensions (canonical `extensions/name`). Returns null
+ * when the manifest declares nothing for the target.
+ */
+export function resolveHostTargetDecl(
+  config: WorkspaceConfig,
+  target: WorkspaceHostTargetName,
+): { appSource: string; requiresExtensions: string[] } | null {
+  const decl = config.hostTargets?.[target];
+  if (!decl || typeof decl !== "object") return null;
+  return {
+    appSource: canonicalUnitRepoPath(decl.app, APP_UNIT, `hostTargets.${target}.app`),
+    requiresExtensions: validateUnitSourceList(
+      decl.requiresExtensions,
+      EXTENSION_UNIT,
+      `hostTargets.${target}.requiresExtensions`,
+    ),
+  };
+}
+
+/**
+ * The browser-data broker extension's package name
+ * (`@workspace-extensions/name`), or null when no broker is declared.
+ */
+export function browserDataBrokerPackageName(config: WorkspaceConfig): string | null {
+  const declared = config.providers?.browserData?.extension;
+  if (typeof declared !== "string" || declared.trim().length === 0) return null;
+  return workspaceExtensionPackageName(declared);
 }

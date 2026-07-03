@@ -1,4 +1,4 @@
-import { envelopeFromMessage, bytesToBase64, type RpcEnvelope } from "@vibez1/rpc";
+import { envelopeFromMessage, type RpcEnvelope } from "@vibez1/rpc";
 
 export interface GatewayFetchConfig {
   serverUrl: string;
@@ -23,11 +23,15 @@ export type GatewayFetch = (path: string, init?: RequestInit) => Promise<Respons
 const GATEWAY_FETCH_METHOD = "gateway.fetch";
 
 type ShellStreamBridge = {
-  stream: (envelope: RpcEnvelope, signal?: AbortSignal | null) => Promise<Response>;
+  stream: (
+    envelope: RpcEnvelope,
+    signal?: AbortSignal | null,
+    body?: ReadableStream<Uint8Array> | null
+  ) => Promise<Response>;
 };
 
 function getShellBridge(): unknown {
-  return (globalThis as any).__vibez1Shell ?? (globalThis as any).__vibez1Electron;
+  return (globalThis as any).__vibez1Shell;
 }
 
 export interface GatewayFetchDeps {
@@ -38,12 +42,16 @@ export interface GatewayFetchDeps {
    * mobile and desktop), so panel gatewayFetch prefers it over a direct
    * `shell.stream()`. Server-side contexts (worker/eval) omit it — they fetch the
    * loopback gateway directly and never tunnel.
+   *
+   * `options.body` is the streaming REQUEST body (plan §1.6 — uploads ride the
+   * bulk channel, never base64 inside the descriptor). Transports without a
+   * body-capable stream path THROW when one is passed — fail loud, no fallback.
    */
   rpcStream?: (
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { signal?: AbortSignal | null }
+    options?: { signal?: AbortSignal | null; body?: ReadableStream<Uint8Array> | null }
   ) => Promise<Response>;
 }
 
@@ -109,22 +117,35 @@ export function createGatewayFetch(
       const gatewayPath = toGatewayRelativePath(absoluteTarget, gatewayBase);
       const probe = new Request(absoluteTarget, init);
       const headers = Object.fromEntries(probe.headers.entries());
+      // Request bodies stream over the pipe's bulk channel (plan §1.6) — never
+      // as base64 inside the descriptor (the server's schema rejects that).
+      // Buffered here (webview bodies are already in memory on a Request) then
+      // handed off as a one-chunk stream.
       const bodyBuffer = await probe.arrayBuffer();
+      const body: ReadableStream<Uint8Array> | null =
+        bodyBuffer.byteLength > 0
+          ? new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array(bodyBuffer));
+                controller.close();
+              },
+            })
+          : null;
       const descriptor = {
         path: gatewayPath,
         method: (init.method ?? probe.method ?? "GET").toUpperCase(),
         headers,
-        bodyBase64:
-          bodyBuffer.byteLength > 0 ? bytesToBase64(new Uint8Array(bodyBuffer)) : undefined,
       };
       // Prefer the RPC client's stream: it transparently falls back to the duplex
       // stream-request/stream-frame envelope path when the host bridge exposes no
       // first-class stream() (the case on both mobile and desktop). Only with no
       // rpcStream wired do we require a direct shell.stream() — then a missing one
-      // is a real, loud error rather than the silent default.
+      // is a real, loud error rather than the silent default. A body over a
+      // transport with no body-capable stream path throws loudly (plan §1.6).
       if (deps.rpcStream) {
         return deps.rpcStream("main", GATEWAY_FETCH_METHOD, [descriptor], {
           signal: init.signal ?? null,
+          body,
         });
       }
       const shell = getShellBridge() as Partial<ShellStreamBridge> | undefined;
@@ -147,7 +168,7 @@ export function createGatewayFetch(
           args: [descriptor],
         },
       });
-      return (shell as ShellStreamBridge).stream(envelope, init.signal ?? null);
+      return (shell as ShellStreamBridge).stream(envelope, init.signal ?? null, body);
     }
   };
 }

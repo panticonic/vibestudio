@@ -272,6 +272,36 @@ services:
         - do
     durableObject:
       className: GadWorkspaceDO
+  # Userland VCS (P5c/P5d): the vcs read/history surface (vcsFileHistory,
+  # vcsLog, vcsCommitEdits, vcsCommitAncestors, vcsEditsBy*), the edit/commit
+  # composition (applyEditOps/commitWorking/revertWorking), status semantics
+  # (vcsStatus/vcsPushStatus), ctx-target merge orchestration (vcsMerge/
+  # vcsAbortMerge) and the context semantics (vcsPinContext/
+  # vcsResolveContextView/vcsContextStatus/vcsRebaseContext/vcsDropContext/
+  # vcsContextRepoStates) run in the gad-store DO against its own storage plus
+  # the host blobstore.*/refs.* primitives. Host `vcs.*` keeps only the
+  # operations that genuinely need host resources (push build gate +
+  # protected-ref group CAS, main-target mergeGroup, fork/delete/restore disk
+  # + ref lifecycle, disk projection, scan triggers, content-store reads).
+  # This declaration is ALSO how the host locates the store DO (attach,
+  # provenance follower, bootstrap main-binding) — there is no separate
+  # provider slot.
+  - source: workers/gad-store
+    name: vcs
+    title: Workspace VCS (userland)
+    protocols:
+      - vibez1.vcs.v1
+    policy:
+      allowed:
+        - panel
+        - shell
+        - server
+        - worker
+        - do
+        # git-bridge extension: vcsLog / ingestWorktreeState / listStateFiles
+        - extension
+    durableObject:
+      className: GadWorkspaceDO
   - source: workers/pubsub-channel
     name: channel
     title: Workspace Channel Service
@@ -318,6 +348,7 @@ services:
       className: TestkitDriverDO
 routes: []
 extensions:
+  - source: extensions/git-bridge
   - source: extensions/image-service
   - source: extensions/file-tools
   - source: extensions/typecheck-service
@@ -330,3 +361,34 @@ apps:
   - source: apps/shell
   - source: apps/mobile
   - source: apps/remote-cli
+# Provider slots: which workspace units fulfil host-integrated roles. A missing
+# slot cleanly disables the corresponding host feature (no hardcoded fallback).
+providers:
+  evalEngine:
+    source: "@workspace/eval"
+  evalRuntime:
+    source: "@workspace/runtime"
+  cdpClient:
+    source: "@workspace/cdp-client"
+  browserData:
+    extension: extensions/browser-data
+# App trust grants (approval-gated like every meta edit): which workspace apps
+# may render host chrome and which may manage connections/pairing.
+trust:
+  chromeApps:
+    - apps/shell
+    - apps/mobile
+  connectionManagementApps:
+    - apps/shell
+    - apps/remote-cli
+# Preferred app per host target, plus startup-ordering constraints
+# (extensions that must run before the app can build).
+hostTargets:
+  electron:
+    app: apps/shell
+  react-native:
+    app: apps/mobile
+    requiresExtensions:
+      - extensions/react-native
+  terminal:
+    app: apps/remote-cli

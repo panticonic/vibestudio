@@ -1,0 +1,41 @@
+{
+  "name": "@vibez1/userland-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.12.4",
+  "scripts": {
+    "build": "pnpm --filter \"@workspace/*\" --filter \"@workspace-about/*\" --filter \"@workspace-apps/*\" --filter \"@workspace-extensions/*\" --filter \"@workspace-panels/*\" --filter \"@workspace-skills/*\" --filter \"@workspace-workers/*\" build",
+    "type-check": "../node_modules/.bin/tsc --project tsconfig.json && ../node_modules/.bin/tsc --project tsconfig.integration.json && ../node_modules/.bin/tsc --project tsconfig.integration.mobile.json",
+    "test": "../node_modules/.bin/vitest run --root .. --config vitest.userland.config.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.2"
+  },
+  "pnpm": {
+    "allowedBuilds": [
+      "electron",
+      "esbuild",
+      "node-pty",
+      "node-datachannel"
+    ],
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "node-pty",
+      "node-datachannel"
+    ],
+    "//overrides": "react-native 0.79 peerDeps react ^19.0.0. Pinning here prevents hoisted React 18 (pulled in transitively by workspace deps) from shadowing RN's requirement in the mobile bundle. protobufjs ^7.5.5 patches RCE GHSA-xq3m-2v4x-88gg reachable via @google/genai -> pi-ai. Revisit when bumping RN.",
+    "overrides": {
+      "react": "19.0.0",
+      "react-dom": "19.0.0",
+      "@earendil-works/pi-ai": "0.78.0",
+      "protobufjs": "^7.5.5"
+    },
+    "patchedDependencies": {
+      "re2@1.24.0": "../patches/re2@1.24.0.patch",
+      "@earendil-works/pi-ai@0.78.0": "packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch"
+    }
+  }
+}

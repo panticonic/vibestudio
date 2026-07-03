@@ -179,6 +179,12 @@ export const vcsCommitInputSchema = z.object({
     .string()
     .optional()
     .describe("Head to commit (default: the caller's own context head). `main` is rejected."),
+  invocationId: z
+    .string()
+    .optional()
+    .describe(
+      "Authoring agent tool-call id (the model tool-call / invocation that sealed this commit). Recorded on the commit event so the commit itself — not only its edit ops — is attributable into the agentic trajectory. Self-asserted by the calling agent runtime, consistent with `vcs.edit`."
+    ),
 });
 export type VcsCommitInput = z.infer<typeof vcsCommitInputSchema>;
 
@@ -280,7 +286,9 @@ export type VcsResolveHeadResult = z.infer<typeof vcsResolveHeadResultSchema>;
 export const vcsWorkspaceViewResultSchema = z.object({
   stateHash: z
     .string()
-    .describe("Workspace-rooted composed state hash, suitable for build.getBuild's immutable ref argument."),
+    .describe(
+      "Workspace-rooted composed state hash, suitable for build.getBuild's immutable ref argument."
+    ),
 });
 export type VcsWorkspaceViewResult = z.infer<typeof vcsWorkspaceViewResultSchema>;
 
@@ -428,15 +436,12 @@ export const vcsPushInputSchema = z.object({
     .describe(
       "Head to push from into each repo's main (e.g. a `ctx:…` context head). Omit to push the caller's own context head."
     ),
-  message: z.string().optional().describe("Optional log summary recorded on the pushed repo commit(s)."),
+  message: z
+    .string()
+    .optional()
+    .describe("Optional log summary recorded on the pushed repo commit(s)."),
 });
 export type VcsPushInput = z.infer<typeof vcsPushInputSchema>;
-
-/** A merge conflict that blocked a repo's push (the per-repo conflict shape). */
-export const vcsPushConflictSchema = vcsMergeConflictSchema.extend({
-  repoPath: z.string(),
-});
-export type VcsPushConflict = z.infer<typeof vcsPushConflictSchema>;
 
 /** Per-repo divergence in a rejected fast-forward-only push: `main` advanced past
  *  the ctx head's merge-base. Reconcile with an explicit vcs.merge. */
@@ -580,6 +585,13 @@ const repoPathArgOptional = z
     "Workspace-relative repo path scoping this read to one repo's head. Omit to route by path (readFile) or read the whole composed context view (listFiles)."
   );
 
+// NOTE (P5c): the read/history traversals — commitEdits, fileHistory,
+// commitAncestors, editsByActor, editsByTurn, editsByInvocation, log — are
+// USERLAND-dispatched: they run in the gad-store DO behind the `vcs` manifest
+// service (vibez1.vcs.v1) and are called through
+// `createDurableObjectServiceClient`, not this host service table. Their row
+// schemas above (VcsEditOpRow, VcsCommitAncestor, VcsLogEntry) remain the wire
+// contract.
 export const vcsMethods = defineServiceMethods({
   edit: {
     description:
@@ -618,54 +630,6 @@ export const vcsMethods = defineServiceMethods({
     returns: z.object({ discarded: z.number().int().nonnegative(), stateHash: z.string() }),
     access: { ...WRITE_ACCESS, sensitivity: "destructive" },
     examples: [{ args: ["panels/chat"] }],
-  },
-  commitEdits: {
-    description:
-      "List the edit-ops a commit owns (commit → its edits), by commit event id. Index-backed; ordered by the edit replay order.",
-    args: z.tuple([repoPathArg, z.object({ eventId: z.string() })]),
-    returns: z.array(vcsEditOpRowSchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["panels/chat", { eventId: "evt-123" }] }],
-  },
-  fileHistory: {
-    description:
-      "File history / blame: every edit to a path in COMMIT-lineage order (committed commits first, then the uncommitted working tail on the given head). Index-backed.",
-    args: z.tuple([repoPathArg, z.string(), z.string().optional(), z.number().optional()]),
-    returns: z.array(vcsEditOpRowSchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["panels/chat", "notes.md"] }],
-  },
-  commitAncestors: {
-    description:
-      "Walk a commit's ancestry in the event-keyed commit DAG (by commit event id, not state hash — distinct commits can share content). Returns each commit's parents.",
-    args: z.tuple([repoPathArg, z.string(), z.number().optional()]),
-    returns: z.array(vcsCommitAncestorSchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["panels/chat", "evt-123"] }],
-  },
-  editsByActor: {
-    description:
-      "Every edit authored by an actor (author provenance), across commits — index-backed.",
-    args: z.tuple([z.string(), z.number().optional()]),
-    returns: z.array(vcsEditOpRowSchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["agent:scribe"] }],
-  },
-  editsByTurn: {
-    description:
-      "Every edit authored in an agent turn (causal provenance — ties VCS edits to the agentic trajectory). Index-backed.",
-    args: z.tuple([z.string()]),
-    returns: z.array(vcsEditOpRowSchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["turn-abc"] }],
-  },
-  editsByInvocation: {
-    description:
-      "Every edit authored in a single tool-call invocation (causal provenance). Index-backed.",
-    args: z.tuple([z.string()]),
-    returns: z.array(vcsEditOpRowSchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["inv-xyz"] }],
   },
   previewBuild: {
     description:
@@ -732,14 +696,6 @@ export const vcsMethods = defineServiceMethods({
     access: READ_ACCESS,
     examples: [{ args: ["panels/chat"] }],
   },
-  log: {
-    description:
-      "Commit log for a repo's head, most recent first, capped by limit (default 50). repoPath is required (per-repo VCS).",
-    args: z.tuple([repoPathArg, z.number().optional(), z.string().optional()]),
-    returns: z.array(vcsLogEntrySchema),
-    access: READ_ACCESS,
-    examples: [{ args: ["packages/core", 10] }],
-  },
   diff: {
     description:
       "Diff two GAD states by their `state:…` hashes, returning the added/removed/changed files between them.",
@@ -783,9 +739,7 @@ export const vcsMethods = defineServiceMethods({
         })
       ),
     ]),
-    returns: z.array(
-      vcsMergeResultSchema.extend({ repoPath: z.string() })
-    ),
+    returns: z.array(vcsMergeResultSchema.extend({ repoPath: z.string() })),
     access: { ...WRITE_ACCESS },
   },
   abortMerge: {
@@ -806,7 +760,7 @@ export const vcsMethods = defineServiceMethods({
   },
   push: {
     description:
-      "Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances. FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). Shell/server may pass sourceHead explicitly; context callers may only push their own ctx head.",
+      "Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances (a gated compare-and-swap on the server's protected `main` ref per repo). FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). A concurrent advance that cannot be classified as a divergence throws a RETRYABLE error with code `REF_CONFLICT` — re-read main and re-push. Shell/server may pass sourceHead explicitly; context callers may only push their own ctx head.",
     args: z.tuple([vcsPushInputSchema]),
     returns: vcsPushResultSchema,
     access: { ...WRITE_ACCESS, sensitivity: "admin" },

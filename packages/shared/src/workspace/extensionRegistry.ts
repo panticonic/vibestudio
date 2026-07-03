@@ -1,5 +1,5 @@
 /**
- * Generates the `@workspace/runtime` extension-registry barrel.
+ * Generates the workspace extension-registry barrel.
  *
  * Extensions augment a global type registry: each extension's `index.ts`
  * declares `interface WorkspaceExtensions { "@scope/name": Api }` via
@@ -12,24 +12,54 @@
  *
  * The barrel closes that gap through ordinary imports rather than per-surface
  * special-casing: it type-only re-exports each extension's `Api`, which pulls
- * the extension module into the program (activating its augmentation). It is
- * re-exported from `shared/extensions.ts`, which every panel reaches by
- * importing `@workspace/runtime` — so the registry propagates exactly like any
- * other type. The set mirrors `include: workspace/**` (every extension package
- * present in the workspace), keeping all type-check surfaces consistent.
+ * the extension module into the program (activating its augmentation). The
+ * runtime SDK package re-exports it from its extensions surface, which every
+ * panel reaches by importing `@workspace/runtime` — so the registry propagates
+ * exactly like any other type. The set mirrors `include: workspace/**` (every
+ * extension package present in the workspace), keeping all type-check surfaces
+ * consistent.
+ *
+ * ## Delivery contract (host ⇄ workspace)
+ *
+ * The barrel is host-generated content delivered into WORKSPACE-OWNED source.
+ * The host does not decide where it lives — the workspace does, by opting in:
+ *
+ *   - A workspace package declares a registry *sink* by checking in a file
+ *     named {@link EXTENSION_REGISTRY_SINK_FILENAME} whose first line is the
+ *     {@link EXTENSION_REGISTRY_SINK_DIRECTIVE} directive comment.
+ *   - {@link writeExtensionRegistry} discovers sinks by scanning
+ *     `<workspace>/packages/*` and rewrites each sink's contents in place
+ *     (preserving the directive, so the file stays a sink).
+ *   - No sink ⇒ no write. The workspace can opt out by deleting the file or
+ *     removing the directive, and can relocate the registry by moving the
+ *     file — the host follows the directive, not a hardcoded path.
+ *   - The checked-in sink contents are the workspace-owned fallback: the
+ *     package type-checks without host generation, using whatever registry
+ *     was last committed (an empty registry `export {};` is valid).
+ *
+ * Today the sole sink lives in the runtime SDK package (`@workspace/runtime`
+ * — see `src/server/buildV2/platformModules.ts` for the host's other runtime
+ * package expectations), at `packages/runtime/src/shared/extensions-registry.ts`.
+ * The generated exports are type-only, so bundlers erase the barrel from
+ * built artifacts; only type-check surfaces consume it.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 
-/** Location of the generated barrel within a workspace source tree. */
-export const EXTENSION_REGISTRY_RELATIVE_PATH = path.join(
-  "packages",
-  "runtime",
-  "src",
-  "shared",
-  "extensions-registry.ts",
-);
+/**
+ * File name a workspace package uses to declare a registry sink. The name is
+ * part of the contract; the location within the package is the workspace's
+ * choice.
+ */
+export const EXTENSION_REGISTRY_SINK_FILENAME = "extensions-registry.ts";
+
+/**
+ * Directive comment that marks a file as a registry sink. Must appear on the
+ * first line of the file. Generated output always starts with it, so a sink
+ * stays a sink across regenerations.
+ */
+export const EXTENSION_REGISTRY_SINK_DIRECTIVE = "// @vibez1-extension-registry-sink";
 
 interface ExtensionManifest {
   name?: string;
@@ -38,6 +68,9 @@ interface ExtensionManifest {
 
 /** Matches an extension's `declare module "@vibez1/extension" { ... }` block. */
 const REGISTRY_AUGMENTATION = /declare\s+module\s+["']@vibez1\/extension["']/;
+
+/** Directory names never descended into while scanning for sinks. */
+const SINK_SCAN_SKIP_DIRS = new Set(["node_modules", "dist", "lib", "build", "out"]);
 
 function aliasFor(packageName: string): string {
   return "Ext_" + packageName.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -103,17 +136,75 @@ export function discoverExtensionPackageNames(workspacePath: string): string[] {
   return names;
 }
 
+/** Whether a file's contents declare it as a registry sink. */
+function isSinkContent(content: string): boolean {
+  return content.startsWith(EXTENSION_REGISTRY_SINK_DIRECTIVE);
+}
+
+function collectSinksIn(dir: string, sinks: string[]): void {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (SINK_SCAN_SKIP_DIRS.has(entry.name)) continue;
+      collectSinksIn(full, sinks);
+      continue;
+    }
+    if (!entry.isFile() || entry.name !== EXTENSION_REGISTRY_SINK_FILENAME) continue;
+    try {
+      if (isSinkContent(fs.readFileSync(full, "utf-8"))) sinks.push(full);
+    } catch {
+      /* unreadable — not a sink */
+    }
+  }
+}
+
+/**
+ * Absolute paths of every declared registry sink under
+ * `<workspacePath>/packages/*`. A sink is a workspace-owned file named
+ * {@link EXTENSION_REGISTRY_SINK_FILENAME} that starts with the
+ * {@link EXTENSION_REGISTRY_SINK_DIRECTIVE} directive.
+ */
+export function findExtensionRegistrySinks(workspacePath: string): string[] {
+  const sinks: string[] = [];
+  const packagesRoot = path.join(workspacePath, "packages");
+  let packageDirs: fs.Dirent[];
+  try {
+    packageDirs = fs.readdirSync(packagesRoot, { withFileTypes: true });
+  } catch {
+    return sinks;
+  }
+  for (const entry of packageDirs) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    collectSinksIn(path.join(packagesRoot, entry.name), sinks);
+  }
+  return sinks.sort();
+}
+
 /** Render the barrel contents for a set of extension package names. */
 export function renderExtensionRegistry(packageNames: Iterable<string>): string {
   const sorted = [...new Set(packageNames)].sort();
   const header =
-    "// @generated by @vibez1/shared/workspace/extensionRegistry — do not edit by hand.\n" +
+    `${EXTENSION_REGISTRY_SINK_DIRECTIVE}\n` +
+    "// Workspace-owned registry sink — the Vibez1 host rewrites everything below the\n" +
+    "// directive line whenever the workspace extension set changes (generator:\n" +
+    "// @vibez1/shared/workspace/extensionRegistry). Keep the directive to stay\n" +
+    "// subscribed; remove it (or delete the file) to opt out; move the file to\n" +
+    "// relocate the registry. The committed contents are the fallback used when the\n" +
+    "// host has not (re)generated the registry.\n" +
     "//\n" +
     "// Type-only re-exports that pull each workspace extension's module into the\n" +
     '// type-check program so its `declare module "@vibez1/extension"` registry\n' +
-    "// augmentation is active. Re-exported from `./extensions.ts`, so any panel that\n" +
-    '// imports `@workspace/runtime` can type-check `extensions.use("...")` against the\n' +
-    "// full registry — the same set the repo-wide `tsc` sees via `include`.\n\n";
+    "// augmentation is active. Re-exported from the runtime SDK's extensions\n" +
+    '// surface, so any panel that imports `@workspace/runtime` can type-check\n' +
+    '// `extensions.use("...")` against the full registry — the same set the\n' +
+    "// repo-wide `tsc` sees via `include`.\n\n";
   if (sorted.length === 0) {
     return header + "export {};\n";
   }
@@ -125,21 +216,26 @@ export function renderExtensionRegistry(packageNames: Iterable<string>): string 
 }
 
 /**
- * Regenerate the registry barrel for a workspace. Returns whether the file
- * changed. No-op (returns false) when the workspace has no runtime package.
+ * Regenerate the registry barrel for a workspace, writing to every declared
+ * sink (see module docs for the sink contract). Returns whether any sink
+ * changed. No-op (returns false) when the workspace declares no sink.
  */
 export function writeExtensionRegistry(workspacePath: string): boolean {
-  const barrelPath = path.join(workspacePath, EXTENSION_REGISTRY_RELATIVE_PATH);
-  if (!fs.existsSync(path.dirname(barrelPath))) return false;
+  const sinks = findExtensionRegistrySinks(workspacePath);
+  if (sinks.length === 0) return false;
 
   const content = renderExtensionRegistry(discoverExtensionPackageNames(workspacePath));
-  let existing: string | null = null;
-  try {
-    existing = fs.readFileSync(barrelPath, "utf-8");
-  } catch {
-    /* file does not exist yet */
+  let changed = false;
+  for (const sinkPath of sinks) {
+    let existing: string | null = null;
+    try {
+      existing = fs.readFileSync(sinkPath, "utf-8");
+    } catch {
+      /* treat as absent */
+    }
+    if (existing === content) continue;
+    fs.writeFileSync(sinkPath, content);
+    changed = true;
   }
-  if (existing === content) return false;
-  fs.writeFileSync(barrelPath, content);
-  return true;
+  return changed;
 }

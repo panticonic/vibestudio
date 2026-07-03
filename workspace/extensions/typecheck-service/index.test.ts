@@ -3,6 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearTypeCheckCache } from "./typecheckService.js";
+import {
+  FS_TYPE_DEFINITIONS,
+  GLOBAL_TYPE_DEFINITIONS,
+  PATH_TYPE_DEFINITIONS,
+  TS_LIB_FILES,
+} from "@vibez1/typecheck";
 
 import { activate } from "./index.js";
 
@@ -79,6 +85,24 @@ describe("@workspace-extensions/typecheck-service", () => {
     } finally {
       fs.rmSync(panelPath, { recursive: true, force: true });
     }
+  });
+
+  it("exposes browser TypeScript definitions through the extension API", async () => {
+    const service = await api();
+
+    const result = await service.getBrowserTypeDefinitions();
+
+    expect(result.FS_TYPE_DEFINITIONS).toBe(FS_TYPE_DEFINITIONS);
+    expect(result.PATH_TYPE_DEFINITIONS).toBe(PATH_TYPE_DEFINITIONS);
+    expect(result.GLOBAL_TYPE_DEFINITIONS).toBe(GLOBAL_TYPE_DEFINITIONS);
+    expect(result.TS_LIB_FILES["lib.es5.d.ts"]).toBe(TS_LIB_FILES["lib.es5.d.ts"]);
+    expect(result.typeDefinitionFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ filePath: "file:///node_modules/fs/index.d.ts" }),
+        expect.objectContaining({ filePath: "file:///node_modules/path/index.d.ts" }),
+        expect.objectContaining({ filePath: "file:///vibez1/globals.d.ts" }),
+      ]),
+    );
   });
 
   it("resolves checkPanel against an explicit context", async () => {

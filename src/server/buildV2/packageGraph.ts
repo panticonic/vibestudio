@@ -1,16 +1,16 @@
 /**
  * Package Graph — DAG discovery from workspace package.json files.
  *
- * Scans workspace/packages/, workspace/panels/, workspace/apps/,
- * workspace/about/, workspace/workers/, workspace/extensions/,
- * workspace/templates/ and builds
- * an adjacency-list DAG of internal dependencies.
- * Detects cycles, produces topological ordering.
+ * Scans the buildable-unit directories declared by BUILDABLE_UNIT_DIRS in
+ * @vibez1/shared/workspace/sourceDirs (packages, panels, apps, about, workers,
+ * extensions, skills, templates) and builds an adjacency-list DAG of internal
+ * dependencies. Detects cycles, produces topological ordering.
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import type { PackageManifest } from "@vibez1/shared/types";
+import { BUILDABLE_UNIT_DIRS, WORKSPACE_PACKAGE_SCOPES } from "@vibez1/shared/workspace/sourceDirs";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -142,18 +142,8 @@ export class PackageGraph {
 // Discovery
 // ---------------------------------------------------------------------------
 
-const WORKSPACE_SCOPES = [
-  "@workspace/",
-  "@workspace-panels/",
-  "@workspace-about/",
-  "@workspace-workers/",
-  "@workspace-skills/",
-  "@workspace-extensions/",
-  "@workspace-apps/",
-];
-
 function isInternalDep(name: string): boolean {
-  return WORKSPACE_SCOPES.some((scope) => name.startsWith(scope));
+  return WORKSPACE_PACKAGE_SCOPES.some((scope) => name.startsWith(scope));
 }
 
 function validateInternalDepSpec(depName: string, rawSpec: string): string | null {
@@ -319,41 +309,18 @@ function scanTemplates(dir: string, workspaceRoot: string): GraphNode[] {
 export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
   const graph = new PackageGraph();
 
-  const packagesDir = path.join(workspaceRoot, "packages");
-  const panelsDir = path.join(workspaceRoot, "panels");
-  const appsDir = path.join(workspaceRoot, "apps");
-  const aboutDir = path.join(workspaceRoot, "about");
-  const workersDir = path.join(workspaceRoot, "workers");
-  const extensionsDir = path.join(workspaceRoot, "extensions");
-
-  for (const node of scanDirectory(packagesDir, workspaceRoot, "package")) {
-    graph.addNode(node);
-  }
-  for (const node of scanDirectory(panelsDir, workspaceRoot, "panel")) {
-    graph.addNode(node);
-  }
-  for (const node of scanDirectory(appsDir, workspaceRoot, "app")) {
-    graph.addNode(node);
-  }
-  for (const node of scanDirectory(aboutDir, workspaceRoot, "panel")) {
-    graph.addNode(node);
-  }
-  for (const node of scanDirectory(workersDir, workspaceRoot, "worker")) {
-    graph.addNode(node);
-  }
-  for (const node of scanDirectory(extensionsDir, workspaceRoot, "extension")) {
-    graph.addNode(node);
-  }
-
-  const skillsDir = path.join(workspaceRoot, "skills");
-  for (const node of scanDirectory(skillsDir, workspaceRoot, "package")) {
-    graph.addNode(node);
-  }
-
-  // Scan workspace templates
-  const templatesDir = path.join(workspaceRoot, "templates");
-  for (const node of scanTemplates(templatesDir, workspaceRoot)) {
-    graph.addNode(node);
+  // Scan every buildable-unit directory declared by the shared taxonomy, in the
+  // declared order. Templates use a dedicated scanner (template.json, synthetic
+  // `template:*` names); all other dirs are standard package.json scans.
+  for (const { dir, kind } of BUILDABLE_UNIT_DIRS) {
+    const absDir = path.join(workspaceRoot, dir);
+    const discovered =
+      kind === "template"
+        ? scanTemplates(absDir, workspaceRoot)
+        : scanDirectory(absDir, workspaceRoot, kind);
+    for (const node of discovered) {
+      graph.addNode(node);
+    }
   }
 
   // The template workspace may contain packages whose real package name is not

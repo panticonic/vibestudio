@@ -163,7 +163,7 @@ describe("vcsService", () => {
     it("rejects non-state-hash diff args with actionable VCS guidance", async () => {
       const diffStates = vi.fn();
       const service = createVcsService({
-        workspaceVcs: { vcs: { diffStates } } as never,
+        workspaceVcs: { diffStates } as never,
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
@@ -171,6 +171,22 @@ describe("vcsService", () => {
         service.handler({ caller: panelCaller() }, "diff", ["main", "state:abc"])
       ).rejects.toThrow("vcs.diff expects left to be a GAD state hash");
       expect(diffStates).not.toHaveBeenCalled();
+    });
+
+    it("routes diff through the content-store diffStates (not the gad DO)", async () => {
+      const diffStates = vi.fn(async () => ({ added: [], removed: [], changed: [] }));
+      const service = createVcsService({
+        workspaceVcs: { diffStates } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      const result = await service.handler({ caller: panelCaller() }, "diff", [
+        "state:aaa",
+        "state:bbb",
+      ]);
+
+      expect(diffStates).toHaveBeenCalledWith("state:aaa", "state:bbb");
+      expect(result).toEqual({ added: [], removed: [], changed: [] });
     });
 
     it("composes a buildable workspace state from a repo state", async () => {
@@ -282,7 +298,7 @@ describe("vcsService", () => {
       expect(result.status).toBe("merged");
     });
 
-    it("does NOT pass a main-advance hook into merge (merge never advances main)", async () => {
+    it("does NOT pass a main-advance context into merge (a ctx reconcile never advances main)", async () => {
       const approve = vi.fn(async () => {});
       const mergeHeads = vi.fn(async () => ({
         status: "merged" as const,
@@ -308,9 +324,32 @@ describe("vcsService", () => {
         string,
         Record<string, unknown>,
       ];
-      // No beforeAdvance/main approval threads through a reconcile.
-      expect(mergeOpts).not.toHaveProperty("beforeAdvance");
+      // No main-advance context threads through a ctx-head reconcile.
+      expect(mergeOpts).not.toHaveProperty("mainAdvance");
       expect(approve).not.toHaveBeenCalled();
+    });
+
+    it("passes the caller advance context into mergeGroup (main targets hit the ref gate)", async () => {
+      const mergeGroup = vi.fn(async () => []);
+      const service = createVcsService({
+        workspaceVcs: { mergeGroup } as never,
+      });
+      const shell = createVerifiedCaller("shell:dev_cli", "shell");
+
+      await service.handler({ caller: shell }, "mergeGroup", [
+        [{ repoPath: "panels/source", sourceHead: "ctx:ctx-1", targetHead: "main" }],
+      ]);
+
+      expect(mergeGroup).toHaveBeenCalledWith(
+        [{ repoPath: "panels/source", sourceHead: "ctx:ctx-1", targetHead: "main" }],
+        expect.objectContaining({
+          mainAdvance: expect.objectContaining({
+            kind: "caller",
+            operation: "merge",
+            caller: shell,
+          }),
+        })
+      );
     });
 
     it("lets a privileged shell caller reconcile an explicit ctx head", async () => {
@@ -331,8 +370,25 @@ describe("vcsService", () => {
     });
   });
 
+  describe("adoptImportedRepo surface removed (finding 2)", () => {
+    it("no longer resolves — git import publishes through the gated DO import path", async () => {
+      const adoptMainFromStore = vi.fn(async () => {});
+      const service = createVcsService({
+        workspaceVcs: { adoptMainFromStore } as never,
+      });
+      const extension = createVerifiedCaller("@workspace-extensions/git-bridge", "extension");
+
+      await expect(
+        service.handler({ caller: extension }, "adoptImportedRepo", ["projects/bgkit"])
+      ).rejects.toThrow(/Unknown vcs method: adoptImportedRepo/);
+      expect(adoptMainFromStore).not.toHaveBeenCalled();
+    });
+  });
+
   describe("abortMerge authorization", () => {
-    it("gates shell aborts of pending main merges", async () => {
+    it("aborts a pending main merge WITHOUT a main-advance gate (no ref moves)", async () => {
+      // Aborting a pending merge restores the pre-merge tree; the main ref
+      // never moved while the merge was parked, so there is nothing to gate.
       const abortMerge = vi.fn(async () => ({ aborted: true }));
       const approve = vi.fn(async () => {});
       const service = createVcsService({
@@ -353,41 +409,11 @@ describe("vcsService", () => {
       };
 
       expect(result.aborted).toBe(true);
-      expect(abortMerge).toHaveBeenCalledWith(
-        "main",
-        expect.objectContaining({
-          actor: { id: "shell:dev_cli", kind: "shell" },
-          beforeAdvance: expect.any(Function),
-          repoPath: "panels/source",
-        })
-      );
-
-      const [, abortOpts] = abortMerge.mock.calls[0] as unknown as [
-        string,
-        { beforeAdvance?: (event: never) => Promise<void> | void },
-      ];
-      const beforeAdvance = abortOpts.beforeAdvance;
-      const event = {
-        head: "main",
-        stateHash: "state:ours",
-        sinceStateHash: "state:provisional",
-        eventId: null,
-        headHash: null,
+      expect(abortMerge).toHaveBeenCalledWith("main", {
         actor: { id: "shell:dev_cli", kind: "shell" },
-        transitionKind: "merge-resolution",
-        changedPaths: ["apps/shell/index.tsx"],
-        fileChanges: [],
-        editOps: [],
-      } as never;
-      await beforeAdvance?.(event);
-
-      expect(approve).toHaveBeenCalledWith(
-        expect.objectContaining({
-          caller: shell,
-          event,
-          operation: "abort-merge",
-        })
-      );
+        repoPath: "panels/source",
+      });
+      expect(approve).not.toHaveBeenCalled();
     });
 
     it("defaults pendingMerge(repoPath) to the caller's own context head", async () => {
@@ -451,7 +477,7 @@ describe("vcsService", () => {
       );
       // No main-advance hook is threaded into a working edit.
       const [editArg] = recordEdit.mock.calls[0] as unknown as [Record<string, unknown>];
-      expect(editArg).not.toHaveProperty("beforeAdvance");
+      expect(editArg).not.toHaveProperty("mainAdvance");
       expect(result.committed).toBe(false);
       expect(result.status).toBe("uncommitted");
       expect(result.stateHash).toBe("state:next");
@@ -721,143 +747,22 @@ describe("vcsService", () => {
   });
 
   describe("push authorization (per-repo, build-gated)", () => {
-    function pushService(opts: { entityCache?: EntityCache } = {}) {
-      const push = vi.fn(async () => ({
-        status: "pushed" as const,
-        repoPaths: ["panels/source"],
-        reports: [],
-      }));
+    // `push` is USERLAND-dispatched since the P3 flip: the build-gated main
+    // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
+    // manifest service), NOT this host service. The host case is deleted, so the
+    // service rejects `push` outright — the client routes to the DO directly
+    // (the relay mints the on-behalf-of token with the originating caller).
+    it("no longer handles `push` on the host service (moved to the userland DO)", async () => {
+      const push = vi.fn();
       const service = createVcsService({
         workspaceVcs: { push } as never,
-        ...(opts.entityCache ? { entityCache: opts.entityCache } : {}),
-      });
-      return { service, push };
-    }
-
-    it("pushes the panel caller's repo (build-gated, atomic)", async () => {
-      const { service, push } = pushService({
-        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
-      });
-
-      const result = (await service.handler({ caller: panelCaller() }, "push", [
-        { repoPaths: ["panels/source"] },
-      ])) as { status: string };
-
-      expect(push).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoPaths: ["panels/source"],
-          sourceHead: "ctx:ctx-1",
-        })
-      );
-      expect(result.status).toBe("pushed");
-    });
-
-    it("lets autonomous agents (do/worker) push their own context head", async () => {
-      for (const kind of ["do", "worker"] as const) {
-        const { service, push } = pushService({
-          entityCache: entityCacheWithContext(`${kind}:agent`, "ctx-1"),
-        });
-        const caller = createVerifiedCaller(`${kind}:agent`, kind);
-
-        const result = (await service.handler({ caller }, "push", [
-          { repoPaths: ["panels/source"] },
-        ])) as { status: string };
-
-        expect(push).toHaveBeenCalledWith(
-          expect.objectContaining({ repoPaths: ["panels/source"], sourceHead: "ctx:ctx-1" })
-        );
-        expect(result.status).toBe("pushed");
-      }
-    });
-
-    it("rejects a userland push from a foreign source head", async () => {
-      const { service, push } = pushService({
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
       await expect(
-        service.handler({ caller: panelCaller() }, "push", [
-          { repoPaths: ["panels/source"], sourceHead: "ctx:other" },
-        ])
-      ).rejects.toThrow("Callers may only push their own context head");
+        service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }])
+      ).rejects.toThrow(/Unknown vcs method: push/);
       expect(push).not.toHaveBeenCalled();
-    });
-
-    it("passes the main-advance approval hook into push", async () => {
-      const push = vi.fn(async () => ({
-        status: "pushed" as const,
-        repoPaths: ["panels/source"],
-        reports: [],
-      }));
-      const approve = vi.fn(async () => {});
-      const service = createVcsService({
-        workspaceVcs: { push } as never,
-        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
-        mainAdvanceGate: {
-          approve,
-          approveRepoDeletion: vi.fn(async () => {}),
-          approveRepoRestore: vi.fn(async () => {}),
-        },
-      });
-
-      await service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }]);
-
-      const [pushArg] = push.mock.calls[0] as unknown as [
-        { beforeAdvance?: (event: never) => Promise<void> | void; sourceHead: string },
-      ];
-      expect(pushArg.sourceHead).toBe("ctx:ctx-1");
-      expect(pushArg.beforeAdvance).toEqual(expect.any(Function));
-      const event = {
-        head: "main",
-        stateHash: "state:candidate",
-        sinceStateHash: "state:base",
-        eventId: null,
-        headHash: null,
-        actor: { id: "panel-source", kind: "panel" },
-        transitionKind: "merge",
-        changedPaths: ["panels/source/index.tsx"],
-        fileChanges: [],
-        editOps: [],
-      } as never;
-      await pushArg.beforeAdvance?.(event);
-      expect(approve).toHaveBeenCalledWith(
-        expect.objectContaining({ caller: panelCaller(), event, operation: "push" })
-      );
-    });
-
-    it("surfaces a structured divergence (not a conflicted status) to the caller", async () => {
-      // Fast-forward-only push no longer has a "conflicted" status; a push that
-      // can't fast-forward returns `diverged` with per-repo divergences for the
-      // caller to reconcile via vcs.merge.
-      const push = vi.fn(async () => ({
-        status: "diverged" as const,
-        divergences: [
-          {
-            repoPath: "panels/source",
-            base: "state:base",
-            mainTip: "state:main",
-            upstreamCommits: [
-              { eventId: "evt-up", message: "upstream", stateHash: "state:up", createdAt: null },
-            ],
-            mergeable: "clean" as const,
-          },
-        ],
-      }));
-      const service = createVcsService({
-        workspaceVcs: { push } as never,
-        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
-      });
-
-      const result = (await service.handler({ caller: panelCaller() }, "push", [
-        { repoPaths: ["panels/source"] },
-      ])) as { status: string; divergences: Array<{ repoPath: string; mergeable: string }> };
-
-      expect(push).toHaveBeenCalledWith(
-        expect.objectContaining({ repoPaths: ["panels/source"], sourceHead: "ctx:ctx-1" })
-      );
-      expect(result.status).toBe("diverged");
-      expect(result.divergences[0]!.repoPath).toBe("panels/source");
-      expect(result.divergences[0]!.mergeable).toBe("clean");
     });
 
     it("reports push status for the requested repos", async () => {

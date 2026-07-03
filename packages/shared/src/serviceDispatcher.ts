@@ -295,6 +295,14 @@ export type ServiceContext = {
    * bypass it regardless of which transport or proxy it calls through.
    */
   readOnly?: boolean;
+  /**
+   * Streaming REQUEST body for stream-request dispatches (WebRTC uploads, plan
+   * §1.6): the client pumps it as bulk-channel DATA frames keyed by the
+   * stream-open's `bodyStreamId`; the transport assembles it into this stream.
+   * Present only when the caller declared a body; consumed by streaming
+   * handlers (e.g. `gateway.fetch`) as the upstream request body.
+   */
+  body?: ReadableStream<Uint8Array>;
 };
 
 export type ServiceHandler = (

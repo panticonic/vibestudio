@@ -6,6 +6,8 @@
  * write-once; lifecycle (status, retiredAt, cleanupComplete, error) is mutable.
  */
 
+import { WORKSPACE_SOURCE_DIRS } from "../workspace/sourceDirs.js";
+
 export type EntityKind = "panel" | "app" | "worker" | "do" | "session" | "shell" | "server";
 
 export interface EntitySource {
@@ -41,25 +43,28 @@ export function buildWorkspaceContext(contextId: string): WorkspaceContext {
 // repos and how (container sections = `section/<name>` is a repo; flat sections
 // = the section dir itself is one repo; content sections = container repos with
 // no build unit). Lives here in @vibez1/shared because every layer depends on
-// it; `src/server/gadVcs/repoDiscovery.ts` and `workspace/remotes.ts` re-import
+// it; `src/server/vcsHost/repoDiscovery.ts` and `workspace/remotes.ts` re-import
 // these rather than re-declaring them.
 
-/** Container sections: each immediate subdir `section/<name>` is its own repo. */
-export const CONTAINER_SECTIONS = new Set([
-  "packages",
-  "panels",
-  "workers",
-  "extensions",
-  "apps",
-  "about",
-  "skills",
-  "templates",
-  "projects",
-]);
-/** Content-only container sections (no build unit; pushes are ungated). */
-export const CONTENT_SECTIONS = new Set(["skills", "templates", "projects"]);
 /** Flat sections: the section dir itself is one repo (single-segment repoPath). */
-export const FLAT_SECTIONS = new Set(["meta"]);
+export const FLAT_SECTIONS = new Set<string>(["meta"]);
+/** Content-only container sections (no build unit; pushes are ungated). */
+export const CONTENT_SECTIONS = new Set<string>(["skills", "templates", "projects"]);
+/**
+ * Workspace source dirs that are NOT part of the repo taxonomy: present in the
+ * source tree but neither a flat repo nor a container of per-name repos.
+ */
+const NON_REPO_SECTIONS = new Set<string>(["agents"]);
+/**
+ * Container sections: each immediate subdir `section/<name>` is its own repo.
+ * Derived from WORKSPACE_SOURCE_DIRS (the canonical dir list) minus the flat and
+ * non-repo sections, so the taxonomy can never drift from the dir list. A new
+ * source dir added to WORKSPACE_SOURCE_DIRS becomes a container section by
+ * default unless it is explicitly classified as flat or non-repo here.
+ */
+export const CONTAINER_SECTIONS = new Set<string>(
+  WORKSPACE_SOURCE_DIRS.filter((d) => !FLAT_SECTIONS.has(d) && !NON_REPO_SECTIONS.has(d))
+);
 
 /** Is this section flat (the section dir itself a repo, single-segment path)? */
 export function isFlatSection(section: string): boolean {

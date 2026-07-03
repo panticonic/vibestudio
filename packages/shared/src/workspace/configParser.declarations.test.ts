@@ -1,0 +1,139 @@
+import { describe, expect, it } from "vitest";
+import {
+  browserDataBrokerPackageName,
+  parseWorkspaceConfigContentWithId,
+  resolveHostTargetDecl,
+  resolveWorkspaceTrustGrants,
+  workspaceAppPackageName,
+  workspaceExtensionPackageName,
+} from "./configParser.js";
+
+const parse = (yaml: string) => parseWorkspaceConfigContentWithId(yaml, "test-ws");
+
+const FULL_MANIFEST = `
+singletonObjects:
+  - source: workers/gad-store
+    className: GadWorkspaceDO
+    key: workspace-gad
+extensions:
+  - source: extensions/browser-data
+apps:
+  - source: apps/shell
+providers:
+  evalEngine:
+    source: "@workspace/eval"
+  evalRuntime:
+    source: "@workspace/runtime"
+  cdpClient:
+    source: "@workspace/cdp-client"
+  browserData:
+    extension: extensions/browser-data
+trust:
+  chromeApps:
+    - apps/shell
+    - "@workspace-apps/mobile"
+  connectionManagementApps:
+    - apps/shell
+hostTargets:
+  electron:
+    app: apps/shell
+  react-native:
+    app: "@workspace-apps/mobile"
+    requiresExtensions:
+      - extensions/react-native
+  terminal:
+    app: apps/remote-cli
+`;
+
+describe("manifest declarations: providers / trust / hostTargets", () => {
+  it("parses a full declaration set", () => {
+    const config = parse(FULL_MANIFEST);
+    expect(config.providers?.evalEngine?.source).toBe("@workspace/eval");
+    expect(config.providers?.cdpClient?.source).toBe("@workspace/cdp-client");
+    expect(config.trust?.chromeApps).toHaveLength(2);
+  });
+
+  it("resolves trust grants to canonical repo paths (both identity forms)", () => {
+    const grants = resolveWorkspaceTrustGrants(parse(FULL_MANIFEST));
+    expect(grants.chromeApps).toEqual(["apps/shell", "apps/mobile"]);
+    expect(grants.connectionManagementApps).toEqual(["apps/shell"]);
+  });
+
+  it("resolves empty grants when trust is absent — trust is never assumed", () => {
+    const grants = resolveWorkspaceTrustGrants(parse("initPanels: []\n"));
+    expect(grants.chromeApps).toEqual([]);
+    expect(grants.connectionManagementApps).toEqual([]);
+  });
+
+  it("resolves host target declarations (canonical forms + requires)", () => {
+    const config = parse(FULL_MANIFEST);
+    expect(resolveHostTargetDecl(config, "electron")).toEqual({
+      appSource: "apps/shell",
+      requiresExtensions: [],
+    });
+    expect(resolveHostTargetDecl(config, "react-native")).toEqual({
+      appSource: "apps/mobile",
+      requiresExtensions: ["extensions/react-native"],
+    });
+    expect(resolveHostTargetDecl(parse("initPanels: []\n"), "electron")).toBeNull();
+  });
+
+  it("resolves the browser-data broker package name (null when undeclared)", () => {
+    expect(browserDataBrokerPackageName(parse(FULL_MANIFEST))).toBe(
+      "@workspace-extensions/browser-data"
+    );
+    expect(browserDataBrokerPackageName(parse("initPanels: []\n"))).toBeNull();
+  });
+
+  it("rejects malformed trust lists", () => {
+    expect(() => parse("trust:\n  chromeApps: apps/shell\n")).toThrow(/must be a list/);
+    expect(() => parse("trust:\n  chromeApps:\n    - panels/chat\n")).toThrow(
+      /trust\.chromeApps/
+    );
+    expect(() =>
+      parse("trust:\n  chromeApps:\n    - apps/shell\n    - \"@workspace-apps/shell\"\n")
+    ).toThrow(/duplicate/);
+  });
+
+  it("rejects unknown host targets and malformed app declarations", () => {
+    expect(() => parse("hostTargets:\n  browser:\n    app: apps/shell\n")).toThrow(
+      /unknown `hostTargets` key/
+    );
+    expect(() => parse("hostTargets:\n  electron:\n    app: extensions/shell\n")).toThrow(
+      /hostTargets\.electron\.app/
+    );
+  });
+
+  it("rejects provider slots without a source", () => {
+    expect(() => parse("providers:\n  evalEngine: {}\n")).toThrow(
+      /providers\.evalEngine\.source/
+    );
+    expect(() => parse("providers:\n  evalRuntime:\n    source: \"\"\n")).toThrow(
+      /providers\.evalRuntime\.source/
+    );
+  });
+
+  it("rejects a browserData broker that is not a declared extension", () => {
+    expect(() =>
+      parse("providers:\n  browserData:\n    extension: extensions/browser-data\n")
+    ).toThrow(/must also be declared under `extensions`/);
+  });
+});
+
+describe("workspace package-name helpers (centralized scopes)", () => {
+  it("maps both identity forms to scoped package names", () => {
+    expect(workspaceAppPackageName("apps/shell")).toBe("@workspace-apps/shell");
+    expect(workspaceAppPackageName("@workspace-apps/shell")).toBe("@workspace-apps/shell");
+    expect(workspaceExtensionPackageName("extensions/browser-data")).toBe(
+      "@workspace-extensions/browser-data"
+    );
+    expect(workspaceExtensionPackageName("@workspace-extensions/browser-data")).toBe(
+      "@workspace-extensions/browser-data"
+    );
+  });
+
+  it("rejects non-unit-shaped identities", () => {
+    expect(() => workspaceAppPackageName("panels/chat")).toThrow();
+    expect(() => workspaceExtensionPackageName("apps/shell")).toThrow();
+  });
+});

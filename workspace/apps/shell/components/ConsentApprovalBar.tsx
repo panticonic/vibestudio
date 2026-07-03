@@ -19,16 +19,19 @@ import {
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
 } from "@vibez1/shared/shell/approvalState";
-import { events, onRpcEvent, shellApproval, shellPresence } from "../shell/client";
+import { blobstore, events, onRpcEvent, shellApproval, shellPresence } from "../shell/client";
 import { useShellContentOverlay, type ContentOverlayBounds } from "../shell/useShellContentOverlay";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";
 import { useNavigation } from "./NavigationContext";
 import { ApprovalKindIcon } from "./ApprovalCard";
 import {
+  diffReviewPayloadHashes,
+  getDiffReviewPayload,
   highestPendingTone,
   resolveCallerInfo,
   type ApprovalCardIntent,
   type ApprovalTone,
+  type BlobResult,
   type CallerInfo,
 } from "./approvalCardModel";
 import type { OverlayThemeInfo } from "../overlay/types";
@@ -48,6 +51,12 @@ export function ConsentApprovalBar() {
   const [minimized, setMinimized] = useState(false);
   const [browseIndex, setBrowseIndex] = useState(0);
   const [attentionSeq, setAttentionSeq] = useState(0);
+  // Diff-review (P3.5): host-served blob cache, keyed by content hash, fetched
+  // lazily on the overlay surface's behalf (the surface has no RPC).
+  const [blobResults, setBlobResults] = useState<Record<string, BlobResult>>({});
+  const blobResultsRef = useRef(blobResults);
+  blobResultsRef.current = blobResults;
+  const inFlightBlobsRef = useRef<Set<string>>(new Set());
   const seenApprovalIdsRef = useRef<Set<string>>(new Set());
   const { navigateToId } = useNavigation();
   const effectiveTheme = useAtomValue(effectiveThemeAtom);
@@ -106,10 +115,36 @@ export function ConsentApprovalBar() {
   const canPrev = queueLength > 1 && browseIndex > 0;
   const canNext = queueLength > 1 && browseIndex < queueLength - 1;
   const currentCaller = current ? resolveCallerInfo(current) : null;
+  const diffReview = current ? getDiffReviewPayload(current) : null;
+  const payloadHashes = diffReview ? diffReviewPayloadHashes(diffReview) : null;
 
   useEffect(() => {
     setDecisionError((error) => (error && error.approvalId !== current?.approvalId ? null : error));
+    // A new approval starts with an empty blob cache — payload hashes are
+    // per-approval, and nothing should carry over between them.
+    setBlobResults({});
+    inFlightBlobsRef.current.clear();
   }, [current?.approvalId]);
+
+  // Fetch one payload blob on the surface's behalf. Only hashes named in the
+  // current approval's payload are fetchable; any other hash is ignored.
+  const fetchBlob = (hash: string) => {
+    if (!payloadHashes || !payloadHashes.has(hash)) return;
+    if (blobResultsRef.current[hash] || inFlightBlobsRef.current.has(hash)) return;
+    inFlightBlobsRef.current.add(hash);
+    void blobstore
+      .getText(hash)
+      .then((text) =>
+        setBlobResults((prev) => ({ ...prev, [hash]: text == null ? { missing: true } : { text } }))
+      )
+      .catch((err: unknown) =>
+        setBlobResults((prev) => ({
+          ...prev,
+          [hash]: { error: err instanceof Error ? err.message : "Blob fetch failed" },
+        }))
+      )
+      .finally(() => inFlightBlobsRef.current.delete(hash));
+  };
 
   // Drained queue → reset to expanded so the next approval greets as a card.
   useEffect(() => {
@@ -240,6 +275,9 @@ export function ConsentApprovalBar() {
       case "resolve-userland":
         resolveUserland(intent.choice);
         return;
+      case "fetch-blob":
+        fetchBlob(intent.hash);
+        return;
     }
   };
 
@@ -276,6 +314,9 @@ export function ConsentApprovalBar() {
               decisionError && decisionError.approvalId === current.approvalId
                 ? decisionError.message
                 : null,
+            diffReview,
+            blobResults,
+            appearance: effectiveTheme,
           },
         }
       : null,

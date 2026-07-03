@@ -14,7 +14,11 @@ import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@vibez1/e
 import YAML from "yaml";
 import dotenv from "dotenv";
 import { createDevLogger } from "@vibez1/dev-log";
-import { parseWorkspaceConfigContentWithId } from "./configParser.js";
+import {
+  parseWorkspaceConfigContentWithId,
+  resolveWorkspaceTrustGrants,
+} from "./configParser.js";
+import { setWorkspaceAppTrust } from "../chromeTrust.js";
 export { resolveDeclaredApps, resolveDeclaredExtensions } from "./configParser.js";
 
 const log = createDevLogger("Workspace");
@@ -452,7 +456,15 @@ export function deleteWorkspaceDir(name: string): void {
 }
 
 /**
- * Load and parse vibez1.yml from a workspace directory
+ * Load and parse vibez1.yml from a workspace directory.
+ *
+ * Loading the ACTIVE workspace manifest also seeds this process's workspace
+ * app trust grants (`trust.chromeApps` / `trust.connectionManagementApps` →
+ * chromeTrust.ts). This is the single establishment point for manifest-
+ * declared app trust: any process that owns a workspace on disk (server,
+ * local Electron main) enforces the declared lists; parse-only consumers
+ * (historical-commit previews via `parseWorkspaceConfigContent*`) do NOT
+ * seed, so previewing a candidate manifest never changes live trust.
  */
 export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
   const configPath = path.join(workspacePath, WORKSPACE_CONFIG_FILE);
@@ -462,7 +474,9 @@ export function loadWorkspaceConfig(workspacePath: string): WorkspaceConfig {
   }
 
   const content = fs.readFileSync(configPath, "utf-8");
-  return parseWorkspaceConfigContent(content, workspacePath);
+  const config = parseWorkspaceConfigContent(content, workspacePath);
+  setWorkspaceAppTrust(resolveWorkspaceTrustGrants(config));
+  return config;
 }
 
 export function parseWorkspaceConfigContent(

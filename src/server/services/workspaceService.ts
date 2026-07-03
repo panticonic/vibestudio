@@ -49,7 +49,7 @@ import type {
   WorkspaceUnitStatus,
 } from "@vibez1/shared/serviceSchemas/workspace";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import type { WorkspaceTreeScanner } from "../gadVcs/workspaceTree.js";
+import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
 // Wire data types live in the shared schema module (single source of truth
