@@ -19,7 +19,7 @@ import {
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
 } from "@vibez1/shared/shell/approvalState";
-import { blobstore, events, onRpcEvent, shellApproval, shellPresence } from "../shell/client";
+import { blobstore, events, onRpcEvent, panel, shellApproval, shellPresence } from "../shell/client";
 import { useShellContentOverlay, type ContentOverlayBounds } from "../shell/useShellContentOverlay";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";
 import { useNavigation } from "./NavigationContext";
@@ -33,6 +33,7 @@ import {
   type ApprovalTone,
   type BlobResult,
   type CallerInfo,
+  type GadBrowserTarget,
 } from "./approvalCardModel";
 import type { OverlayThemeInfo } from "../overlay/types";
 
@@ -41,6 +42,28 @@ import type { OverlayThemeInfo } from "../overlay/types";
  * floating approval card overlay to the top-right of the panel viewport.
  */
 export const APPROVAL_OVERLAY_HOST_ID = "app-approval-host";
+
+/** Workspace source path of the gad-browser panel (the file-inspection surface
+ *  the diff-review escape hatch deep-links into). */
+const GAD_BROWSER_SOURCE = "panels/gad-browser";
+
+/** Minimal structural view of a panel-tree node — enough to locate an existing
+ *  gad-browser panel by its snapshot source without importing the full type. */
+interface TreePanelNode {
+  id: string;
+  snapshot?: { source?: string };
+  children?: TreePanelNode[];
+}
+
+/** Depth-first search for the first live gad-browser panel in the tree. */
+function findGadBrowserPanel(nodes: TreePanelNode[]): TreePanelNode | null {
+  for (const node of nodes) {
+    if (node.snapshot?.source === GAD_BROWSER_SOURCE) return node;
+    const child = node.children ? findGadBrowserPanel(node.children) : null;
+    if (child) return child;
+  }
+  return null;
+}
 
 export function ConsentApprovalBar() {
   const [pendingAccess, setPendingAccess] = useState<PendingApproval[]>([]);
@@ -238,6 +261,28 @@ export function ConsentApprovalBar() {
       .resolveUserland(current.approvalId, choice)
       .catch((err: unknown) => console.error("[ConsentApprovalBar] resolveUserland failed:", err));
   };
+  // Diff-review escape hatch: reuse the open gad-browser panel if one exists
+  // (navigate it to the new target + focus), otherwise create one. The target
+  // rides along as launch state-args the panel consumes on mount/param-change.
+  const openInGadBrowser = (target: GadBrowserTarget) => {
+    const stateArgs = { diffTarget: target };
+    void (async () => {
+      try {
+        const snapshot = await panel.getTreeSnapshot();
+        const existing = findGadBrowserPanel(
+          (snapshot.rootPanels ?? []) as unknown as TreePanelNode[]
+        );
+        if (existing) {
+          await panel.navigate(existing.id, GAD_BROWSER_SOURCE, { stateArgs });
+          navigateToId(existing.id);
+        } else {
+          await panel.createPanel(GAD_BROWSER_SOURCE, { stateArgs });
+        }
+      } catch (err: unknown) {
+        console.error("[ConsentApprovalBar] open-in-gad-browser failed:", err);
+      }
+    })();
+  };
 
   const handleIntent = (payload: unknown) => {
     if (typeof payload !== "object" || payload === null) return;
@@ -277,6 +322,9 @@ export function ConsentApprovalBar() {
         return;
       case "fetch-blob":
         fetchBlob(intent.hash);
+        return;
+      case "open-in-gad-browser":
+        openInGadBrowser(intent.target);
         return;
     }
   };

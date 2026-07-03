@@ -86,6 +86,7 @@ export abstract class DurableObjectBase {
   private currentRpcRequestId: string | null = null;
   private currentRpcIdempotencyKey: string | null = null;
   private currentInvocationToken: string | undefined = undefined;
+  private currentCallerContextId: string | undefined = undefined;
   private currentObjectKey: string | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -317,6 +318,17 @@ export abstract class DurableObjectBase {
    */
   protected get invocationToken(): string | undefined {
     return this.currentInvocationToken;
+  }
+
+  /**
+   * The originating caller's HOST-RESOLVED context registration id for the
+   * dispatch currently being served (or `undefined`). HOST-VERIFIED, never
+   * client-asserted — read-at-entry like {@link invocationToken}. Threaded on
+   * relayed userland `vcs` dispatches for source-head confinement
+   * (docs/narrow-host-vcs-plan.md §3, register row 11).
+   */
+  protected get callerContextId(): string | undefined {
+    return this.currentCallerContextId;
   }
 
   protected get objectKey(): string {
@@ -551,6 +563,7 @@ export abstract class DurableObjectBase {
       requestId: this.currentRpcRequestId,
       idempotencyKey: this.currentRpcIdempotencyKey,
       invocationToken: this.currentInvocationToken,
+      callerContextId: this.currentCallerContextId,
     };
     this.currentVerifiedCaller = caller;
     this.currentRpcCallerId = caller?.callerId ?? null;
@@ -561,6 +574,9 @@ export abstract class DurableObjectBase {
     // Host-minted on-behalf-of nonce, present only on relayed userland `vcs`
     // dispatches (absent → undefined). Bound per-dispatch; see `invocationToken`.
     this.currentInvocationToken = message?.invocationToken ?? undefined;
+    // Host-resolved source-head confinement context (register row 11), present
+    // only on relayed userland `vcs` dispatches. Bound per-dispatch.
+    this.currentCallerContextId = message?.callerContextId ?? undefined;
     try {
       return await connectionless.respond(envelope);
     } finally {
@@ -571,6 +587,7 @@ export abstract class DurableObjectBase {
       this.currentRpcRequestId = prev.requestId;
       this.currentRpcIdempotencyKey = prev.idempotencyKey;
       this.currentInvocationToken = prev.invocationToken;
+      this.currentCallerContextId = prev.callerContextId;
     }
   }
 

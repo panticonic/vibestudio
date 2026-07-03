@@ -2753,15 +2753,26 @@ export class RpcServer {
     // retries) within this dispatch's lifetime; the record is cleared when the
     // relayed call settles, so later replay fails closed.
     const vcsWriterIdentity = this.deps.getVcsWriterIdentity?.() ?? null;
-    const invocation =
-      this.deps.vcsInvocations && vcsWriterIdentity !== null && targetId === vcsWriterIdentity
-        ? this.deps.vcsInvocations.mint({
-            caller: this.verifiedCallerFor(callerId, callerKind),
-            via: targetId,
-            method,
-            ...(meta?.requestId ? { requestId: meta.requestId } : {}),
-          })
-        : null;
+    const vcsInvocations =
+      vcsWriterIdentity !== null && targetId === vcsWriterIdentity
+        ? this.deps.vcsInvocations
+        : undefined;
+    const targetsVcsWriter = vcsInvocations !== undefined;
+    const invocation = vcsInvocations
+      ? vcsInvocations.mint({
+          caller: this.verifiedCallerFor(callerId, callerKind),
+          via: targetId,
+          method,
+          ...(meta?.requestId ? { requestId: meta.requestId } : {}),
+        })
+      : null;
+    // Source-head confinement (register row 11): thread the caller's
+    // HOST-RESOLVED context registration id alongside the token so the writer DO
+    // can reject a sandboxed push proposing a FOREIGN `ctx:` source head. Never
+    // client-asserted — resolved here at the same chokepoint that mints the
+    // token. Absent when the caller has no context (chrome/server) or the target
+    // is not the writer DO.
+    const callerContextId = targetsVcsWriter ? (cache?.resolveContext(callerId) ?? null) : null;
 
     const dispatch = async () => {
       if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {
@@ -2787,6 +2798,7 @@ export class RpcServer {
         ...(meta?.idempotencyKey ? { idempotencyKey: meta.idempotencyKey } : {}),
         ...(meta?.readOnly ? { readOnly: true } : {}),
         ...(invocation ? { invocationToken: invocation.token } : {}),
+        ...(callerContextId ? { callerContextId } : {}),
       });
       return result;
     };

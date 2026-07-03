@@ -807,6 +807,13 @@ async function main() {
     contextsRoot: path.join(statePath, ".contexts"),
     buildSourcesRoot: path.join(getUserDataPath(), "build-sources"),
     refs: refService,
+    // On-behalf-of attribution for chrome merge-to-main (register row 12): the
+    // host mints an invocation record and threads it to the DO's `vcsMerge`.
+    vcsInvocations: vcsInvocationTable,
+    getVcsWriterIdentity: () => {
+      const binding = resolveVcsStoreBinding(workspaceDecls);
+      return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
+    },
   });
   const readWorkspaceFileAtCommit = async (
     commit: string,
@@ -2527,8 +2534,14 @@ async function main() {
         // every repo main into the protected-ref store (idempotent set-if-
         // absent on every startup).
         await workspaceVcs.attachGad({
-          call: <T>(method: string, input: unknown): Promise<T> =>
-            doDispatch.dispatch(gadRef, method, input) as Promise<T>,
+          call: <T>(
+            method: string,
+            input: unknown,
+            opts?: { invocationToken?: string }
+          ): Promise<T> =>
+            (opts?.invocationToken
+              ? doDispatch.dispatchOnBehalf(gadRef, method, [input], opts.invocationToken)
+              : doDispatch.dispatch(gadRef, method, input)) as Promise<T>,
         });
         workspaceVcs.enableMemoryIndexing();
         console.log(`[Vcs] Attached to VCS store DO (${source}:${className})`);

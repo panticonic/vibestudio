@@ -188,6 +188,7 @@ export abstract class DurableObjectBase {
   protected _currentRpcRequestId: string | null = null;
   protected _currentRpcIdempotencyKey: string | null = null;
   protected _currentInvocationToken: string | undefined = undefined;
+  protected _currentCallerContextId: string | undefined = undefined;
   private _currentVerifiedCaller: AuthenticatedCaller | null = null;
   private _panelRuntime: PanelRuntimeApi | null = null;
   private _credentials: CredentialClient | null = null;
@@ -309,6 +310,11 @@ export abstract class DurableObjectBase {
     args: unknown[];
     error?: string;
     caller?: AuthenticatedCaller | null;
+    /** Host-minted on-behalf-of nonce carried on the method-path envelope
+     *  (`__invocationToken`), used when the HOST dispatches a token-attributed
+     *  write to this DO via `DODispatch` (e.g. chrome merge-to-main, register
+     *  row 12). Never client-asserted; the host controls this envelope. */
+    invocationToken?: string;
   } {
     const parsed = JSON.parse(body);
     if (Array.isArray(parsed)) {
@@ -320,6 +326,11 @@ export abstract class DurableObjectBase {
       ("__instanceToken" in parsed || "__instanceId" in parsed) &&
       Array.isArray((parsed as { args?: unknown }).args)
     ) {
+      const invocationTokenRaw = (parsed as { __invocationToken?: unknown }).__invocationToken;
+      const invocationToken =
+        typeof invocationTokenRaw === "string" && invocationTokenRaw.length > 0
+          ? invocationTokenRaw
+          : undefined;
       const caller = (parsed as { __caller?: unknown }).__caller;
       if (caller && typeof caller === "object") {
         const record = caller as Record<string, unknown>;
@@ -333,10 +344,14 @@ export abstract class DurableObjectBase {
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
             } as AuthenticatedCaller,
+            ...(invocationToken ? { invocationToken } : {}),
           };
         }
       }
-      return { args: (parsed as { args: unknown[] }).args };
+      return {
+        args: (parsed as { args: unknown[] }).args,
+        ...(invocationToken ? { invocationToken } : {}),
+      };
     }
     return { args: [parsed] };
   }
@@ -482,6 +497,22 @@ export abstract class DurableObjectBase {
    */
   protected get invocationToken(): string | undefined {
     return this._currentInvocationToken;
+  }
+
+  /**
+   * The originating caller's HOST-RESOLVED context registration id for the
+   * dispatch currently being served (or `undefined` when the caller has none /
+   * the call was not a relayed userland `vcs` dispatch). HOST-VERIFIED, never
+   * client-asserted (docs/narrow-host-vcs-plan.md §3, register row 11): the vcs
+   * writer DO reads it to structurally confine a sandboxed push's `ctx:` source
+   * head to the caller's own context.
+   *
+   * READ-AT-ENTRY CONTRACT (same as {@link invocationToken} / {@link caller}):
+   * capture it into a local at handler entry, before the first `await` — a
+   * concurrent inbound dispatch rebinds it at any await boundary.
+   */
+  protected get callerContextId(): string | undefined {
+    return this._currentCallerContextId;
   }
 
   /** Dedup key of the inbound call, when the caller stamped one. */
@@ -745,6 +776,7 @@ export abstract class DurableObjectBase {
     try {
       let args: unknown[] = [];
       let verifiedCallerFromBody: AuthenticatedCaller | null = null;
+      let invocationTokenFromBody: string | undefined;
       if (request.method === "POST") {
         const body = await request.text();
         if (body) {
@@ -757,6 +789,7 @@ export abstract class DurableObjectBase {
           }
           args = result.args;
           verifiedCallerFromBody = result.caller ?? null;
+          invocationTokenFromBody = result.invocationToken;
         }
       }
 
@@ -824,6 +857,7 @@ export abstract class DurableObjectBase {
           fromId: caller.callerId || "unknown",
           method,
           args,
+          ...(invocationTokenFromBody ? { invocationToken: invocationTokenFromBody } : {}),
         },
       });
       const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
@@ -915,6 +949,7 @@ export abstract class DurableObjectBase {
       requestId: this._currentRpcRequestId,
       idempotencyKey: this._currentRpcIdempotencyKey,
       invocationToken: this._currentInvocationToken,
+      callerContextId: this._currentCallerContextId,
     };
     this._currentVerifiedCaller = caller;
     this._currentRpcCallerId = caller?.callerId ?? null;
@@ -925,6 +960,9 @@ export abstract class DurableObjectBase {
     // On-behalf-of token (§4): bound per-dispatch, read-at-entry (see the
     // `invocationToken` getter). Restored in the finally like the caller fields.
     this._currentInvocationToken = message?.invocationToken ?? undefined;
+    // Host-resolved source-head confinement context (register row 11): bound
+    // per-dispatch, read-at-entry (see the `callerContextId` getter).
+    this._currentCallerContextId = message?.callerContextId ?? undefined;
     try {
       const denial = this.inboundCallerDenial(message?.method, caller);
       if (denial) {
@@ -945,6 +983,7 @@ export abstract class DurableObjectBase {
       this._currentRpcRequestId = prev.requestId;
       this._currentRpcIdempotencyKey = prev.idempotencyKey;
       this._currentInvocationToken = prev.invocationToken;
+      this._currentCallerContextId = prev.callerContextId;
     }
   }
 

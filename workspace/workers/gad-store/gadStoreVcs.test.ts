@@ -147,6 +147,26 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     return blobText(entry.contentHash);
   }
 
+  it("rejects non-canonical repo path aliases on the vcs surface", () => {
+    // The DO's normalizeRepoPathArg must agree with the host's
+    // normalizeRepoPathForLog / refService.validateRepoPath: `.`/`..`/empty
+    // segments are rejected, not silently canonicalized, so one string backs
+    // the `vcs:repo:<path>` log id and the on-disk projection.
+    for (const bad of [
+      "packages/./demo",
+      "packages//demo",
+      "./packages/demo",
+      "packages/demo/",
+      "/packages/demo",
+      "..",
+      "a/../b",
+    ]) {
+      expect(() => doi.vcsLog(bad), bad).toThrow(/Invalid workspace repo path/);
+    }
+    // The canonical form is accepted (empty log, but no throw).
+    expect(doi.vcsLog(REPO)).toEqual([]);
+  });
+
   it("applyEditOps composes the working state internally and mirrors it", async () => {
     const r1 = await doi.applyEditOps({
       logId: LOG,

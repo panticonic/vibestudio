@@ -114,6 +114,28 @@ describe("WorktreeStore snapshot/materialize", () => {
     expect(await readTree(outDir)).toEqual(tree);
   });
 
+  it("survives concurrent sidecar writers to the same dir (unique tmp paths)", async () => {
+    await writeTree(workDir, { "a.txt": "one", "src/index.ts": "export const x = 1;\n" });
+    // Two in-process writers racing on the same dir's `.gad/CHECKOUT.json` — the
+    // projection reaction can run outside the per-repo stateKey lock. With
+    // pid-only tmp names both would target the identical `.tmp` path and the
+    // loser's writeFile/rename ENOENTs (or clobbers the winner); unique tmp
+    // names (pid + randomUUID) let both land cleanly.
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => vcs.localState(workDir, { updateSidecar: true }))
+    );
+    const expectedStateHash = results[0]?.stateHash;
+    expect(expectedStateHash).toBeDefined();
+    for (const r of results) {
+      expect(r.stateHash).toBe(expectedStateHash);
+    }
+    const sidecar = await fsp.readFile(path.join(workDir, ".gad", "CHECKOUT.json"), "utf8");
+    expect(JSON.parse(sidecar)).toMatchObject({ stateHash: expectedStateHash });
+    // No stray `.tmp` leftovers from a raced rename.
+    const gadEntries = await fsp.readdir(path.join(workDir, ".gad"));
+    expect(gadEntries.filter((n) => n.endsWith(".tmp"))).toHaveLength(0);
+  });
+
   it("skips ingest when nothing changed (durable no-change, survives sidecar amnesia)", async () => {
     await writeTree(workDir, { "a.txt": "one" });
     const first = await vcs.snapshotDir(workDir, { logId: FIXTURE_LOG });

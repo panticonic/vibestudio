@@ -102,7 +102,15 @@ export async function postToDOWithToken(
   args: unknown[],
   deps: PostToDOWithTokenDeps,
   callerId?: string,
-  caller?: DOCallerEnvelope
+  caller?: DOCallerEnvelope,
+  /**
+   * Host-minted on-behalf-of nonce (narrow-host-vcs §4) threaded on the
+   * method-path envelope as `__invocationToken`. Set ONLY by trusted host
+   * dispatchers (e.g. chrome merge-to-main, register row 12) — the DO reads it
+   * read-at-entry and echoes it into `refs.updateMains` so the approval gate
+   * attributes to the originating principal. Never identity-bearing.
+   */
+  invocationToken?: string
 ): Promise<unknown> {
   // 1. Build the instance ID for this DO: "do:{source}:{className}:{objectKey}"
   const instanceId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
@@ -121,6 +129,7 @@ export async function postToDOWithToken(
     __instanceId: instanceId,
     __parentId: callerId ?? undefined,
     __caller: caller ?? undefined,
+    __invocationToken: invocationToken ?? undefined,
   };
 
   const headers: Record<string, string> = {
@@ -156,6 +165,7 @@ export interface InstanceTokenEnvelope {
   __instanceId?: unknown;
   __parentId?: unknown;
   __caller?: unknown;
+  __invocationToken?: unknown;
 }
 
 export interface VerifyInstanceTokenResult {
@@ -318,6 +328,25 @@ export class DODispatch {
   }
 
   /**
+   * Like `dispatch`, but attaches a host-minted on-behalf-of invocation token
+   * (narrow-host-vcs §4, register row 12) to the method-path envelope. The DO
+   * reads it read-at-entry and echoes it into `refs.updateMains`, so a
+   * host-dispatched write (chrome merge-to-main) attributes to the originating
+   * principal instead of the writer DO. `args` is the already-collected arg
+   * array (not spread) so the trailing token cannot be mistaken for an arg.
+   */
+  async dispatchOnBehalf(
+    ref: DORef,
+    method: string,
+    args: unknown[],
+    invocationToken: string | undefined
+  ): Promise<unknown> {
+    return this.withSlowWarning(`${doRefKey(ref)}.${method}`, () =>
+      this.dispatchImpl(ref, method, args, false, invocationToken)
+    );
+  }
+
+  /**
    * Like `dispatch`, but for a HELD long-running handler (the EvalDO's `executeRun`): the server→DO
    * fetch uses a no-`headersTimeout` dispatcher so it isn't reaped at undici's ~300s while the DO
    * holds the response. Pair with the DO disabling its own `respond` reaper (`respondTimeoutMs`).
@@ -360,7 +389,8 @@ export class DODispatch {
     ref: DORef,
     method: string,
     args: unknown[],
-    held = false
+    held = false,
+    invocationToken?: string
   ): Promise<unknown> {
     await Promise.resolve(this.beforeDispatchFn?.(ref));
 
@@ -379,7 +409,15 @@ export class DODispatch {
       });
       const serverCaller: DOCallerEnvelope = { callerId: "main", callerKind: "server" };
       try {
-        return await postToDOWithToken(ref, method, args, buildDeps(), "main", serverCaller);
+        return await postToDOWithToken(
+          ref,
+          method,
+          args,
+          buildDeps(),
+          "main",
+          serverCaller,
+          invocationToken
+        );
       } catch (err) {
         if (this.ensureDOFn && this.isRetryable(err)) {
           console.warn(
@@ -387,7 +425,15 @@ export class DODispatch {
           );
           await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
           await Promise.resolve(this.beforeDispatchFn?.(ref));
-          return await postToDOWithToken(ref, method, args, buildDeps(), "main", serverCaller);
+          return await postToDOWithToken(
+            ref,
+            method,
+            args,
+            buildDeps(),
+            "main",
+            serverCaller,
+            invocationToken
+          );
         }
         throw err;
       }

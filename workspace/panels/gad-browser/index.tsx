@@ -12,15 +12,24 @@ import {
   Text,
   Theme,
 } from "@radix-ui/themes";
-import { ReloadIcon } from "@radix-ui/react-icons";
+import { Cross2Icon, ExternalLinkIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { gad } from "@workspace/runtime";
 import { useIsMobile, usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import { PanelChrome } from "@workspace/ui";
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
+import {
+  describeDiffTarget,
+  parseDiffTarget,
+  rowMatchesDiffTarget,
+  shortHash,
+  type DiffTarget,
+} from "./diffTarget";
 
 interface StateArgs {
   branchId?: string;
+  /** Diff-review escape-hatch target (open in gad-browser). See `diffTarget.ts`. */
+  diffTarget?: unknown;
 }
 
 type Row = Record<string, unknown>;
@@ -65,11 +74,72 @@ function DataTable({ rows, columns }: { rows: Row[]; columns: string[] }) {
   );
 }
 
+/**
+ * Banner shown when the panel is deep-linked from the approval card's "open in
+ * gad-browser" escape hatch. Names the repo/path and both tree states, and lets
+ * the reviewer toggle the Files-tab focus filter on/off. gad-browser has no
+ * side-by-side compare view, so this lands them on the file at the new state.
+ */
+function DiffTargetBanner({
+  target,
+  filterActive,
+  onToggleFilter,
+}: {
+  target: DiffTarget;
+  filterActive: boolean;
+  onToggleFilter: () => void;
+}) {
+  return (
+    <Box
+      style={{
+        flexShrink: 0,
+        border: "1px solid var(--gray-a6)",
+        borderRadius: 8,
+        background: "var(--color-panel-translucent)",
+        padding: "8px 12px",
+      }}
+    >
+      <Flex align="center" gap="3" wrap="wrap">
+        <ExternalLinkIcon />
+        <Flex direction="column" style={{ minWidth: 0, flex: 1 }}>
+          <Text size="2" weight="medium" truncate>
+            {describeDiffTarget(target)}
+          </Text>
+          <Text size="1" color="gray" truncate as="div">
+            {target.newState === null
+              ? "File removed at the new state · no two-state compare available yet"
+              : `old ${shortHash(target.oldState)} → new ${shortHash(target.newState)} · showing the file at the new state`}
+          </Text>
+        </Flex>
+        <Button size="1" variant="soft" color="gray" onClick={onToggleFilter}>
+          {filterActive ? (
+            <>
+              <Cross2Icon /> Clear filter
+            </>
+          ) : (
+            "Focus target file"
+          )}
+        </Button>
+      </Flex>
+    </Box>
+  );
+}
+
 function App() {
   const appearance = usePanelTheme();
   const appTheme = useAppTheme();
   const isMobile = useIsMobile();
   const stateArgs = useStateArgs<StateArgs>();
+  // Diff-review deep link (approval card → "open in gad-browser"). gad-browser
+  // has no two-state compare view; the deepest link it supports is landing on
+  // the Files tab filtered to the target path at the new state, plus a banner
+  // naming both states. A real side-by-side compare is a noted follow-up.
+  const diffTarget = useMemo<DiffTarget | null>(
+    () => parseDiffTarget(stateArgs.diffTarget),
+    [stateArgs.diffTarget]
+  );
+  const [focusActive, setFocusActive] = useState(true);
+  const [activeTab, setActiveTab] = useState("files");
   const [branches, setBranches] = useState<Row[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(
     stateArgs.branchId ?? null
@@ -178,6 +248,14 @@ function App() {
     void refresh();
   }, []);
 
+  // A newly-arrived diff-review target re-activates the focus filter and jumps
+  // to the Files tab (also handles live state-arg updates on a reused panel).
+  useEffect(() => {
+    if (!diffTarget) return;
+    setFocusActive(true);
+    setActiveTab("files");
+  }, [diffTarget]);
+
   useEffect(() => {
     if (!selectedBranchId) return;
     void Promise.all([
@@ -196,6 +274,16 @@ function App() {
         .then((result) => setEnvelopes(result.rows)),
     ]);
   }, [selectedBranchId]);
+
+  // When a diff-review target is active, the Files tab is filtered to the
+  // target row(s) so the reviewer lands directly on the file they came for.
+  const visibleFiles = useMemo(
+    () =>
+      diffTarget && focusActive
+        ? files.filter((row) => rowMatchesDiffTarget(row, diffTarget))
+        : files,
+    [diffTarget, focusActive, files]
+  );
 
   const actionButtons = (
     <>
@@ -256,6 +344,13 @@ function App() {
                 {actionButtons}
               </Flex>
             ) : null}
+            {diffTarget ? (
+              <DiffTargetBanner
+                target={diffTarget}
+                filterActive={focusActive}
+                onToggleFilter={() => setFocusActive((active) => !active)}
+              />
+            ) : null}
             <Grid
               columns={{ initial: "1", md: "260px 1fr" }}
               gap="3"
@@ -285,7 +380,8 @@ function App() {
             </ScrollArea>
 
             <Tabs.Root
-              defaultValue="files"
+              value={activeTab}
+              onValueChange={setActiveTab}
               style={{ minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}
             >
               <Tabs.List
@@ -342,10 +438,17 @@ function App() {
                     />
                   </Tabs.Content>
                   <Tabs.Content value="files">
-                    <DataTable
-                      rows={files}
-                      columns={["path", "content_hash", "mode", "file_version_id"]}
-                    />
+                    {diffTarget && focusActive && visibleFiles.length === 0 ? (
+                      <Text color="gray" size="2">
+                        No file matching “{diffTarget.path}” on this branch. It may live on a
+                        different branch — clear the filter above to browse all files.
+                      </Text>
+                    ) : (
+                      <DataTable
+                        rows={visibleFiles}
+                        columns={["path", "content_hash", "mode", "file_version_id"]}
+                      />
+                    )}
                   </Tabs.Content>
                   <Tabs.Content value="invocations">
                     <DataTable

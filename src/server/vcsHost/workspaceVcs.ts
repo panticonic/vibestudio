@@ -71,12 +71,21 @@ import {
 import { WorktreeStore, collectTreeFiles } from "./worktreeStore.js";
 import { discoverRepos } from "./repoDiscovery.js";
 import { EMPTY_STATE_HASH } from "@vibez1/shared/contentTree/worktreeHash";
-import { ProvenanceFollower } from "./provenanceFollower.js";
 import { DiskProjector } from "./diskProjector.js";
 
 /** Narrow call surface onto the gad-store DO. */
 interface GadCaller {
-  call<T = unknown>(method: string, input: unknown): Promise<T>;
+  /**
+   * Dispatch a method to the gad-store DO. `opts.invocationToken` (register row
+   * 12) attaches a host-minted on-behalf-of nonce to the dispatch so a
+   * host-driven main advance (chrome merge-to-main) attributes to the
+   * originating principal — the DO echoes it into `refs.updateMains`.
+   */
+  call<T = unknown>(
+    method: string,
+    input: unknown,
+    opts?: { invocationToken?: string }
+  ): Promise<T>;
 }
 
 type WorktreeHeadRef = NonNullable<Awaited<ReturnType<WorktreeStore["resolveWorktreeHead"]>>>;
@@ -119,6 +128,10 @@ function participantFromLabel(
   return { kind: label.slice(0, idx), id: label.slice(idx + 1) };
 }
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+/** Bounded in-line retry backoff for a direct `main` provenance recording. On
+ *  exhaustion the record gives up and the DO's publish-drift heal is the
+ *  backstop — there is no background retry queue (that was the follower). */
+const RECORD_RETRY_DELAYS_MS = [25, 100, 400];
 
 interface WorkspaceVcsDeps {
   blobsDir: string;
@@ -135,8 +148,18 @@ interface WorkspaceVcsDeps {
    * commit/provenance chain but is no longer the main-head authority.
    */
   refs: RefService;
-  /** Provenance-follower tuning (tests inject fast retry schedules). */
-  followerRetry?: { retryDelaysMs?: number[]; slowRetryMs?: number };
+  /**
+   * Host-side on-behalf-of invocation table (narrow-host-vcs §4). A host-driven
+   * main advance that dispatches to the DO OUTSIDE the token-minting RPC relay —
+   * chrome merge-to-main (register row 12) — mints a record here for the
+   * verified originating caller and threads the token to the DO's `vcsMerge`, so
+   * the advance attributes to that caller instead of the writer DO. Absent in
+   * in-process test fixtures (the merge then attributes to the DO, as before).
+   */
+  vcsInvocations?: import("../services/vcsInvocationTable.js").VcsInvocationTable;
+  /** The single-writer vcs DO identity, for the `via` field of a minted
+   *  merge-attribution record. */
+  getVcsWriterIdentity?: () => string | null;
 }
 
 interface CommitResult extends SnapshotResult {
@@ -314,11 +337,19 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    *  mergeHeads/abortMerge, consumed by the scan prepare, re-seeded at attach. */
   private readonly mainPendingMerges = new Set<string>();
   /**
-   * The async provenance follower (P5a): records system/scan `main` ref
-   * advances in the gad DO AFTER the fact, per-repo serialized, with retry.
-   * The DO is never a blocking dependency of the build/freshness path.
+   * In-flight direct provenance recordings, keyed by repo `logId` (P5a, narrow
+   * host). Each scan/freshness `main` advance records its ref transition in the
+   * gad DO AFTER the fact via a DIRECT ingest — fire-and-forget from the build
+   * path (which never blocks on the DO), but chained PER REPO through this map
+   * so recordings land in ref order (and independently across repos). The
+   * settled promise per repo lets lineage ops ({@link syncMainProvenance}) await
+   * a record that is still landing before reading the DO's main lineage. A
+   * failed/abandoned recording is NOT retried in the background: the DO's
+   * publish-drift heal (at attach, or on-demand from the next lineage op) is the
+   * single backstop — synthetic-stamped, the same degradation class the old
+   * follower's crash window had.
    */
-  readonly provenanceFollower: ProvenanceFollower;
+  private readonly inFlightRecords = new Map<string, Promise<void>>();
   /**
    * The disk-projection FOLLOWER (P5c): the one module that writes working
    * trees. Every operation path invokes it POST-advance with the state hash
@@ -345,23 +376,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       worktrees: this.worktrees,
       workspaceRoot: deps.workspaceRoot,
       contextsRoot: deps.contextsRoot,
-    });
-    this.provenanceFollower = new ProvenanceFollower({
-      blobsDir: deps.blobsDir,
-      gad: () => this.gadCaller,
-      ...(deps.followerRetry?.retryDelaysMs
-        ? { retryDelaysMs: deps.followerRetry.retryDelaysMs }
-        : {}),
-      ...(deps.followerRetry?.slowRetryMs ? { slowRetryMs: deps.followerRetry.slowRetryMs } : {}),
-      // Once a merge-resolution scan is recorded, consume the DO's parked
-      // pending merge and drop the on-disk conflict summary.
-      onRecorded: async (task) => {
-        if (!task.clearPendingMerge) return;
-        await this.gad()
-          .call("clearPendingMerge", { logId: task.logId, head: VCS_MAIN_HEAD })
-          .catch(() => {});
-        await this.syncConflictSummary(VCS_MAIN_HEAD, task.repoPath).catch(() => {});
-      },
     });
     // Register the SINGLE post-advance reaction on the shared protected-ref
     // store (narrow-host P3): every successful updateMains — the in-process host
@@ -521,11 +535,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * The authoritative `main` head of a repo AS a worktree-head ref: the state
    * comes from the protected ref; the commit event identity from the gad
    * store's provenance row. Because scan advances record provenance
-   * ASYNCHRONOUSLY (the follower), this is a synchronization point for
-   * lineage ops (push/merge): drain the repo's follower queue, then — if the
-   * DO is still behind (crash gap) — heal it through the reconciler. Only a
-   * DO that STILL disagrees after healing is true corruption, and that fails
-   * loudly here.
+   * ASYNCHRONOUSLY (a direct fire-and-forget DO ingest), this is a
+   * synchronization point for lineage ops (push/merge): await the repo's
+   * in-flight recording, then — if the DO is still behind (crash gap) — heal it
+   * through the DO's publish-drift heal. Only a DO that STILL disagrees after
+   * healing is true corruption, and that fails loudly here.
    */
   private async mainWorktreeHead(repoPath: string, logId: string): Promise<WorktreeHeadRef | null> {
     const value = this.mainRefState(repoPath);
@@ -542,9 +556,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   /**
    * Bring the gad DO's main lineage for a repo into lockstep with the
    * protected ref: drain the follower's queued recordings, then reconcile any
-   * remaining drift (ref→DO catch-up ingest). The synchronous-DO entry gate
-   * for user-initiated lineage ops (push/merge/fork/delete) — the build path
-   * never calls this.
+   * remaining drift. First await any in-flight direct recording for the repo
+   * (the fire-and-forget scan record may still be landing); then, if the DO's
+   * recorded main still lags the ref (record failed / crash gap / pre-attach
+   * advance), drive the DO's publish-drift heal to rejoin the ref lineage. The
+   * synchronous-DO entry gate for user-initiated lineage ops
+   * (push/merge/fork/delete) — the build path never calls this.
    */
   private async syncMainProvenance(
     repoPath: string,
@@ -552,16 +569,157 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     refValue?: string | null
   ): Promise<void> {
     const norm = normalizeRepoPathForLog(repoPath);
-    await this.provenanceFollower.flush(norm);
+    await this.awaitInFlightRecord(logId);
     const value = refValue !== undefined ? refValue : this.mainRefState(norm);
     if (!value) return;
     const doState = await this.worktrees.resolveWorktreeRef(VCS_MAIN_HEAD, logId);
     if (doState === value) return;
-    await this.provenanceFollower.reconcile(norm, logId, value);
+    // Still behind: the DO owns the reconcile now (narrow-host P3). Its
+    // publish-drift heal completes any covering publish intent with full
+    // fidelity, else records a synthetic catch-up ingest of the ref's tree.
+    await this.gad().call("vcsHealPublishDrift", {});
   }
 
-  /** Advance a repo's protected `main` ref (CAS + injected approval gate).
-   *  Returns the committed ref record (its `seq` orders follower recording). */
+  /** Await the in-flight direct provenance recording for a repo (no-op when
+   *  none is pending). Never rejects — recording failures are swallowed into
+   *  the publish-drift heal backstop, not surfaced to lineage callers. */
+  private async awaitInFlightRecord(logId: string): Promise<void> {
+    await (this.inFlightRecords.get(logId) ?? Promise.resolve());
+  }
+
+  /**
+   * Await EVERY in-flight direct recording, then heal any residual drift — the
+   * all-repos flush lineage ops that span the whole workspace (rebase) need
+   * before dispatching to the DO. Also the test oracle's drain point.
+   */
+  async flushMainProvenance(): Promise<void> {
+    await Promise.allSettled([...this.inFlightRecords.values()]);
+    if (this.attached) {
+      await this.gad()
+        .call("vcsHealPublishDrift", {})
+        .catch((error) => {
+          console.warn("[Vcs] flushMainProvenance: publish-drift heal failed:", error);
+        });
+    }
+  }
+
+  /**
+   * Record a `main` ref advance (scan/freshness commit) in the gad DO AFTER the
+   * fact — the direct replacement for the deleted ProvenanceFollower. Launched
+   * fire-and-forget from {@link commitMainHead} and chained per repo through
+   * {@link inFlightRecords} so recordings apply in ref order. Never a blocking
+   * dependency of the build path.
+   *
+   * Payload fidelity is EXACTLY what the follower sent: the scan's file listing
+   * (no per-file editOps — scan advances adopt the user's on-disk tree and carry
+   * no recorded hunks), plus actor/summary/merge-parents. Idempotent: a
+   * transition the DO already holds (its head == `next`) is skipped; a DO whose
+   * head is neither `next` nor our base `prev` has DRIFTED (a prior record
+   * failed / crash gap) — we do NOT force a false-parent record, we leave it to
+   * the publish-drift heal, which rejoins the ref lineage honestly.
+   *
+   * A transient DO failure gets a small bounded retry; on exhaustion (or an
+   * unattached store) it gives up silently and the heal is the backstop.
+   */
+  private async recordMainAdvance(task: {
+    repoPath: string;
+    logId: string;
+    prev: string | null;
+    next: string;
+    files: VcsFileEntry[];
+    actor: { id: string; kind: string };
+    summary: string;
+    eventKind: "state.snapshot_ingested" | "state.merge_applied";
+    parentStateHashes?: string[];
+    parentEventIds?: string[];
+    clearPendingMerge?: boolean;
+  }): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      const gad = this.gadCaller;
+      if (!gad) return; // unattached (bootstrap window) — attach heal covers it
+      try {
+        const doState =
+          (
+            await gad.call<{ stateHash: string } | null>("resolveWorktreeHead", {
+              logId: task.logId,
+              head: VCS_MAIN_HEAD,
+            })
+          )?.stateHash ?? null;
+        if (doState !== task.next) {
+          if (task.prev !== null && doState !== task.prev) {
+            // Drift: the DO is off the base this transition extends. Leave the
+            // reconcile to the publish-drift heal (honest lineage rejoin).
+            return;
+          }
+          const result = await gad.call<{ stateHash: string }>("ingestWorktreeState", {
+            logId: task.logId,
+            head: VCS_MAIN_HEAD,
+            logKind: "vcs",
+            actor: vcsLogActor(task.actor),
+            files: task.files,
+            baseStateHash: task.prev ?? undefined,
+            ...(task.prev !== null ? { expectedRefStateHash: task.prev } : {}),
+            eventKind: task.eventKind,
+            summary: task.summary,
+            ...(task.parentStateHashes?.length
+              ? { parentStateHashes: task.parentStateHashes }
+              : {}),
+            ...(task.parentEventIds?.length ? { parentEventIds: task.parentEventIds } : {}),
+          });
+          if (result.stateHash !== task.next) {
+            // Deterministic corruption (shared worktree hashing diverged):
+            // retrying cannot help. Scream and leave it to the heal / integrity.
+            console.error(
+              `[Vcs] main provenance for ${task.repoPath}: DO recorded ${result.stateHash} but ` +
+                `the ref advanced to ${task.next} (shared worktree hashing diverged)`
+            );
+            return;
+          }
+        }
+        // Recorded (or already present): a merge-resolution scan now consumes
+        // the DO's parked pending merge and drops the on-disk conflict summary.
+        if (task.clearPendingMerge) {
+          await gad
+            .call("clearPendingMerge", { logId: task.logId, head: VCS_MAIN_HEAD })
+            .catch(() => {});
+          await this.syncConflictSummary(VCS_MAIN_HEAD, task.repoPath).catch(() => {});
+        }
+        return;
+      } catch (error) {
+        if (attempt >= RECORD_RETRY_DELAYS_MS.length) {
+          console.warn(
+            `[Vcs] main provenance record for ${task.repoPath} failed after retries; ` +
+              `leaving to the publish-drift heal:`,
+            error instanceof Error ? error.message : error
+          );
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, RECORD_RETRY_DELAYS_MS[attempt]));
+      }
+    }
+  }
+
+  /** Launch a per-repo-ordered direct provenance recording for a `main`
+   *  advance. Fire-and-forget: the build path never awaits it, but each repo's
+   *  recordings are serialized so they apply in ref order. */
+  private enqueueMainRecord(
+    logId: string,
+    task: Parameters<WorkspaceVcs["recordMainAdvance"]>[0]
+  ): void {
+    const prior = this.inFlightRecords.get(logId) ?? Promise.resolve();
+    const next = prior.then(() => this.recordMainAdvance(task));
+    // A record body never rejects (it swallows into the heal backstop); guard
+    // anyway so an unexpected throw never surfaces as an unhandled rejection.
+    next.catch((error) => {
+      console.error(`[Vcs] unexpected main provenance record error for ${task.repoPath}:`, error);
+    });
+    this.inFlightRecords.set(logId, next);
+    void next.finally(() => {
+      if (this.inFlightRecords.get(logId) === next) this.inFlightRecords.delete(logId);
+    });
+  }
+
+  /** Advance a repo's protected `main` ref (CAS + injected approval gate). */
   private async advanceMainRef(input: {
     repoPath: string;
     expectedOld: string | null;
@@ -569,13 +727,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     actor: { id: string; kind: string };
     reason: string;
     context: RefAdvanceGateContext;
-  }): Promise<{ seq: number }> {
+  }): Promise<void> {
     // In-process, caller-context write through the single batch primitive (P1
     // proves prompt parity; the RPC surface never admits this path). Each
     // host-internal advance is a one-entry atomic batch.
     const operation =
       input.context.kind === "caller" && input.context.operation === "merge" ? "merge" : "push";
-    const result = await this.deps.refs.updateMains({
+    await this.deps.refs.updateMains({
       entries: [
         {
           repoPath: normalizeRepoPathForLog(input.repoPath),
@@ -588,7 +746,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       writer: `${input.actor.kind}:${input.actor.id}`,
       gateContext: input.context,
     });
-    return { seq: result.updated[0]?.seq ?? 0 };
   }
 
   private async compensateMainRef(input: {
@@ -808,12 +965,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (prepared.kind === "unchanged") return prepared.result;
       const candidate = prepared.candidate;
 
-      let advanced: { seq: number };
       try {
         // CAS from the value the candidate was COMPUTED against (not a fresh
         // read): a concurrent advance between prepare and here must conflict
         // and re-prepare — a stale scan may never overwrite a newer ref.
-        advanced = await this.advanceMainRef({
+        await this.advanceMainRef({
           repoPath,
           expectedOld: candidate.prev,
           next: candidate.stateHash,
@@ -833,10 +989,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // bookkeeping + ASYNC provenance; nothing here may block on the DO.
       this.lastState.set(sk, candidate.stateHash);
       if (candidate.pending) this.mainPendingMerges.delete(logId);
-      void this.provenanceFollower.enqueueRecord({
+      this.enqueueMainRecord(logId, {
         repoPath,
         logId,
-        seq: advanced.seq,
         prev: candidate.prev,
         next: candidate.stateHash,
         files: candidate.files,
@@ -856,7 +1011,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       this.emitter.emit("state-advanced", candidate.event);
       return {
         stateHash: candidate.stateHash,
-        // The provenance event is recorded asynchronously by the follower —
+        // The provenance event is recorded asynchronously (direct DO ingest) —
         // there is no DO event identity at commit time (pre-release break).
         eventId: "",
         headHash: "",
@@ -1542,9 +1697,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }> {
     const head = vcsContextHead(contextId);
     // The DO resolves each repo's `main` through the protected ref and
-    // requires its own lineage in lockstep — drain every queued recording
+    // requires its own lineage in lockstep — await every in-flight recording
     // (and heal crash gaps) before dispatching.
-    await this.provenanceFollower.flush();
+    await this.flushMainProvenance();
     const result = await this.gad().call<{
       repos: Array<{ repoPath: string; status: "up-to-date" | "merged" | "conflicted" }>;
       baseView: string;
@@ -1892,6 +2047,25 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * callers reach this (mergeGroup); sandboxed callers are confined to their
    * own ctx heads upstream.
    */
+  /**
+   * Mint a host-side on-behalf-of invocation record for a chrome merge-to-main
+   * (register row 12) from the gate context's VERIFIED caller. Returns null when
+   * no invocation table is wired (in-process fixtures) or the advance carries no
+   * caller-kind context — the merge then attributes to the writer DO, as before.
+   */
+  private mintMergeInvocation(
+    mainAdvance: RefAdvanceGateContext | undefined
+  ): { token: string; release: () => void } | null {
+    if (!this.deps.vcsInvocations) return null;
+    if (!mainAdvance || mainAdvance.kind !== "caller") return null;
+    const via = this.deps.getVcsWriterIdentity?.() ?? "do:vcs";
+    return this.deps.vcsInvocations.mint({
+      caller: mainAdvance.caller,
+      via,
+      method: "vcs.merge",
+    });
+  }
+
   private async mergeIntoMainHead(
     sourceHead: string,
     opts: {
@@ -1915,7 +2089,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       // follower first so the DO's recorded main lineage is in lockstep with the
       // protected ref (it rejects otherwise), then project/acknowledge.
       if (repoPath) await this.syncMainProvenance(repoPath, logId);
-      const outcome = await this.gad().call<
+      // On-behalf-of attribution (register row 12): this dispatch goes to the DO
+      // OUTSIDE the token-minting RPC relay, so mint an invocation record here
+      // for the verified originating caller and thread its token to `vcsMerge`.
+      // The DO echoes it into `refs.updateMains`, so the approval gate resolves
+      // the ORIGINATING principal (a chrome merge stays promptless on chrome
+      // trust) rather than attributing the advance to the writer DO. Absent
+      // caller/table (in-process fixtures) → no token → DO-attributed, as before.
+      // The record is live for the whole dispatch, incl. the DO's held approval.
+      const invocation = this.mintMergeInvocation(opts.mainAdvance);
+      let outcome:
         | {
             status: "up-to-date";
             stateHash: string;
@@ -1936,13 +2119,21 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             conflictPaths: string[];
             theirsHead: string;
             upstreamCommits: UpstreamCommit[];
-          }
-      >("vcsMerge", {
-        logId,
-        targetHead,
-        sourceHead,
-        actor: logActor,
-      });
+          };
+      try {
+        outcome = await this.gad().call<typeof outcome>(
+          "vcsMerge",
+          {
+            logId,
+            targetHead,
+            sourceHead,
+            actor: logActor,
+          },
+          invocation ? { invocationToken: invocation.token } : undefined
+        );
+      } finally {
+        invocation?.release();
+      }
 
       if (outcome.status === "up-to-date") {
         return {

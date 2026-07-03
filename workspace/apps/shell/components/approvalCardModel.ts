@@ -51,8 +51,29 @@ export type ApprovalCardIntentBody =
   // Diff-review (P3.5): the overlay surface has no RPC, so the presentational
   // card asks the chrome coordinator to fetch a payload blob by content hash,
   // and the result comes back down as an updated `blobResults` prop.
-  | { type: "fetch-blob"; hash: string };
+  | { type: "fetch-blob"; hash: string }
+  // Diff-review escape hatch: the reviewer wants to inspect a file in the
+  // gad-browser panel (the only surface with a real file-inspection view).
+  // The chrome coordinator opens/focuses gad-browser with this target as
+  // launch state-args. Emitted both for degraded (binary/oversized) rows and
+  // as a quiet secondary action on normal file headers.
+  | { type: "open-in-gad-browser"; target: GadBrowserTarget };
 export type ApprovalCardIntent = { approvalId: string } & ApprovalCardIntentBody;
+
+/**
+ * Deep-link target for the "open in gad-browser" escape hatch. Carries the
+ * repo + path + the two content hashes and two tree states named in the
+ * diff-review payload, so the gad-browser panel can land on the file at (at
+ * least) the new state. Mirrors the per-file fields of a `DiffReviewEntry`.
+ */
+export interface GadBrowserTarget {
+  repoPath: string;
+  path: string;
+  oldHash?: string;
+  newHash?: string;
+  oldState: string;
+  newState: string | null;
+}
 
 /**
  * Result of one chrome-side blob fetch, pushed back down to the overlay surface.

@@ -47,7 +47,7 @@ function callerFor(gad: TestGad): GadCaller {
 
 /**
  * Reference unit hashes: the DO's durable per-repo `main` listings (recorded
- * through the async provenance follower — drained first), re-rooted under
+ * through the direct provenance ingest — drained first), re-rooted under
  * their repo paths and re-hashed with the shared reference implementation
  * (`buildWorktreeManifest().subtreeHash`). Since P5a the composed workspace
  * view is SERVER-minted (the DO never holds a state row for it), so the
@@ -60,7 +60,7 @@ async function referenceUnitHashes(
   stateHash: string,
   paths: string[]
 ): Promise<Record<string, string | null>> {
-  await vcs.provenanceFollower.flush();
+  await vcs.flushMainProvenance();
   const heads = gad.instance.listWorktreeHeads({
     logIdPrefix: "vcs:repo:",
     head: "main",

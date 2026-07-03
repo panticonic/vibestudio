@@ -1,16 +1,17 @@
 /**
- * P5a — the gad DO as an ASYNC PROVENANCE FOLLOWER of the protected-ref main.
+ * P5a — the gad DO as an ASYNC PROVENANCE recorder of the protected-ref main,
+ * via a DIRECT per-repo-ordered ingest (the ProvenanceFollower class is gone).
  *
  * Pins the eviction-stage invariants:
  *  - the build/freshness path (ensureFresh → scan → advanceRef) COMPLETES and
  *    all build-facing reads work while the DO's ingest is failing — the DO is
- *    never a blocking dependency of builds; the follower catches up when the
- *    DO recovers;
- *  - per-repo recording is ordered (ref-transition chain reproduced in the
- *    DO's log) and independent across repos (one repo's dead queue never
- *    blocks another's);
- *  - the ref→DO reconciler heals a crash gap (ref advanced, provenance never
- *    recorded) both at attach and on demand from a lineage op;
+ *    never a blocking dependency of builds;
+ *  - the normal path (DO up) records the EXACT ref transition directly, in ref
+ *    order per repo, independent across repos;
+ *  - a transient DO failure is retried inline and the record still lands;
+ *  - when the direct record cannot land (DO down beyond retries / crash gap /
+ *    pre-attach advance), the DO's publish-drift heal is the single backstop —
+ *    at attach (synthetic catch-up) or on demand from a lineage op;
  *  - lineage ops (push/merge — the `mainWorktreeHead` consumers) work after
  *    healing instead of failing on drift.
  *
@@ -30,6 +31,14 @@ import { VCS_MAIN_HEAD, logIdForRepo, vcsContextHead } from "../../../src/server
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
 import { createRefService, type RefService } from "../../../src/server/services/refService.js";
 
+async function waitFor(predicate: () => Promise<boolean> | boolean, what = "condition") {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`${what} was not reached`);
+}
+
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 const USER = { id: "user", kind: "user" };
@@ -48,15 +57,7 @@ function callerFor(gad: TestGad): GadCaller {
   };
 }
 
-async function waitFor(predicate: () => Promise<boolean> | boolean, what = "condition") {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`${what} was not reached`);
-}
-
-describe("ProvenanceFollower — async provenance for the freshness path", () => {
+describe("main provenance — direct per-repo recording + heal backstop", () => {
   let root: string;
   let workspaceRoot: string;
   let refsPath: string;
@@ -91,8 +92,6 @@ describe("ProvenanceFollower — async provenance for the freshness path", () =>
       contextsRoot: path.join(root, ".contexts"),
       buildSourcesRoot: path.join(root, "build-sources"),
       refs,
-      // Fast, bounded retries so tests observe stall + recovery quickly.
-      followerRetry: { retryDelaysMs: [10, 20, 30], slowRetryMs: 40 },
     });
   }
 
@@ -105,7 +104,7 @@ describe("ProvenanceFollower — async provenance for the freshness path", () =>
   }
 
   beforeEach(async () => {
-    root = await fsp.mkdtemp(path.join(os.tmpdir(), "gad-follower-"));
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "gad-mainprov-"));
     workspaceRoot = path.join(root, "workspace");
     refsPath = path.join(root, "refs");
     await fsp.mkdir(workspaceRoot);
@@ -122,18 +121,58 @@ describe("ProvenanceFollower — async provenance for the freshness path", () =>
   });
 
   afterEach(async () => {
-    vcs.provenanceFollower.stop();
     await fsp.rm(root, { recursive: true, force: true });
   });
 
-  it("(a) freshness completes while DO ingest fails; the follower catches up on recovery", async () => {
+  it("(happy) the direct record lands the exact ref transition when the DO is up", async () => {
     await vcs.attachGad(faultableCaller());
     const before = await vcs.ensureFresh();
+    await vcs.flushMainProvenance();
     const refBefore = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
     expect(refBefore).toBeTruthy();
     expect(await doMainState(FOO)).toBe(refBefore);
 
-    // The DO's ingest goes down; the working tree moves.
+    await write(`${FOO}/index.ts`, "export const x = 2;\n");
+    const fresh = await vcs.ensureFresh();
+    expect(fresh.stateHash).not.toBe(before.stateHash);
+    await vcs.flushMainProvenance();
+
+    const refAfter = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
+    expect(refAfter).not.toBe(refBefore);
+    expect(await doMainState(FOO)).toBe(refAfter);
+    const log = await gad.instance.vcsLog(FOO, 3, VCS_MAIN_HEAD);
+    // Recorded as the real transition (not a synthetic catch-up).
+    expect(log[0]).toMatchObject({ summary: "workspace scan", outputStateHash: refAfter });
+  });
+
+  it("(retry) a transient DO ingest failure is retried inline and the record still lands", async () => {
+    await vcs.attachGad(faultableCaller());
+    await vcs.ensureFresh();
+    await vcs.flushMainProvenance();
+
+    // Fail the FIRST ingest attempt only; the inline bounded retry recovers.
+    let ingestAttempts = 0;
+    failWhen = (method) => method === "ingestWorktreeState" && ++ingestAttempts <= 1;
+    await write(`${FOO}/index.ts`, "export const x = 2;\n");
+    await vcs.ensureFresh();
+    await vcs.flushMainProvenance();
+
+    const refAfter = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
+    expect(await doMainState(FOO)).toBe(refAfter);
+    expect(ingestAttempts).toBeGreaterThan(1); // it retried
+    const log = await gad.instance.vcsLog(FOO, 3, VCS_MAIN_HEAD);
+    // The real transition landed — no synthetic catch-up was needed.
+    expect(log[0]?.summary).toBe("workspace scan");
+    expect(log[0]?.outputStateHash).toBe(refAfter);
+  });
+
+  it("(backstop) freshness completes while the DO is down; a later heal catches the DO up", async () => {
+    await vcs.attachGad(faultableCaller());
+    const before = await vcs.ensureFresh();
+    await vcs.flushMainProvenance();
+    const refBefore = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
+
+    // The DO's ingest goes down for good; the working tree moves.
     failWhen = (method) => method === "ingestWorktreeState";
     await write(`${FOO}/index.ts`, "export const x = 2;\n");
 
@@ -152,52 +191,36 @@ describe("ProvenanceFollower — async provenance for the freshness path", () =>
     const listing = await vcs.listFiles(fresh.stateHash);
     expect(listing.map((f) => f.path)).toContain(`${FOO}/index.ts`);
 
-    // The DO is (deliberately) behind — provenance lag, not build lag.
+    // The direct record gave up; the DO is (deliberately) behind — provenance
+    // lag, not build lag. A repeat freshness call during the outage stays green.
     expect(await doMainState(FOO)).toBe(refBefore);
-    expect(vcs.provenanceFollower.pendingCount(FOO)).toBeGreaterThan(0);
-
-    // A repeat freshness call during the outage stays green (unchanged scan).
     const again = await vcs.ensureFresh();
     expect(again.stateHash).toBe(fresh.stateHash);
 
-    // Recovery: the follower drains and records the exact ref transition.
+    // Recovery: with the DO back, the publish-drift heal (the backstop) catches
+    // the recorded lineage up to the ref.
     failWhen = () => false;
-    await waitFor(async () => (await doMainState(FOO)) === refAfter, "DO caught up to the ref");
-    expect(vcs.provenanceFollower.pendingCount()).toBe(0);
-    const log = await gad.instance.vcsLog(FOO, 3, VCS_MAIN_HEAD);
-    expect(log[0]).toMatchObject({ summary: "workspace scan", outputStateHash: refAfter });
+    await vcs.flushMainProvenance();
+    expect(await doMainState(FOO)).toBe(refAfter);
   });
 
-  it("(c) per-repo ordering under concurrent scans; a dead repo queue never blocks another repo", async () => {
+  it("(ordering) direct records apply in ref order per repo, and one repo never blocks another", async () => {
     await write(`${BAR}/package.json`, '{ "name": "@workspace-panels/bar" }\n');
     await write(`${BAR}/index.ts`, "export const b = 1;\n");
     await vcs.attachGad(faultableCaller());
     await vcs.ensureFresh();
+    await vcs.flushMainProvenance();
     const fooV1 = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
 
-    // Only FOO's ingests fail — BAR's recording must proceed independently.
-    failWhen = (method, input) =>
-      method === "ingestWorktreeState" && (input as { logId?: string }).logId === logIdForRepo(FOO);
-
+    // Happy-path ordering: three FOO scans record directly, chained in ref order.
     await write(`${FOO}/index.ts`, "export const x = 2;\n");
     await vcs.commitHead(VCS_MAIN_HEAD, { repoPath: FOO, summary: "scan v2" });
     const fooV2 = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
     await write(`${FOO}/index.ts`, "export const x = 3;\n");
     await vcs.commitHead(VCS_MAIN_HEAD, { repoPath: FOO, summary: "scan v3" });
     const fooV3 = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
-    await write(`${BAR}/index.ts`, "export const b = 2;\n");
-    await vcs.commitHead(VCS_MAIN_HEAD, { repoPath: BAR, summary: "bar scan" });
-    const barV2 = await vcs.resolveHead(VCS_MAIN_HEAD, BAR);
-
-    expect(vcs.provenanceFollower.pendingCount(FOO)).toBe(2);
-    // BAR drains despite FOO's dead queue.
-    await waitFor(async () => (await doMainState(BAR)) === barV2, "BAR recorded");
-    expect(await doMainState(FOO)).toBe(fooV1);
-
-    // FOO recovers: both transitions land, in ref order, with an unbroken
-    // input→output chain.
-    failWhen = () => false;
-    await waitFor(async () => (await doMainState(FOO)) === fooV3, "FOO caught up");
+    await vcs.flushMainProvenance();
+    expect(await doMainState(FOO)).toBe(fooV3);
     const events = (await callerFor(gad).call("readLog", {
       logId: logIdForRepo(FOO),
       head: VCS_MAIN_HEAD,
@@ -205,55 +228,72 @@ describe("ProvenanceFollower — async provenance for the freshness path", () =>
     })) as Array<{ payloadKind: string; payload: Record<string, unknown> }>;
     const transitions = events
       .filter((e) => e.payloadKind === "state.snapshot_ingested")
-      .map((e) => ({
-        input: e.payload["inputStateHash"],
-        output: e.payload["outputStateHash"],
-      }));
+      .map((e) => ({ input: e.payload["inputStateHash"], output: e.payload["outputStateHash"] }));
     expect(transitions.slice(-2)).toEqual([
       { input: fooV1, output: fooV2 },
       { input: fooV2, output: fooV3 },
     ]);
+
+    // Independence: only FOO's ingests fail — BAR's recording proceeds directly.
+    failWhen = (method, input) =>
+      method === "ingestWorktreeState" && (input as { logId?: string }).logId === logIdForRepo(FOO);
+    await write(`${FOO}/index.ts`, "export const x = 4;\n");
+    await vcs.commitHead(VCS_MAIN_HEAD, { repoPath: FOO, summary: "scan v4" });
+    await write(`${BAR}/index.ts`, "export const b = 2;\n");
+    await vcs.commitHead(VCS_MAIN_HEAD, { repoPath: BAR, summary: "bar scan" });
+    const barV2 = await vcs.resolveHead(VCS_MAIN_HEAD, BAR);
+
+    // BAR's own direct record lands despite FOO's dead record (separate per-repo
+    // chains); FOO stays behind (its record fails, no heal yet).
+    await waitFor(async () => (await doMainState(BAR)) === barV2, "BAR recorded");
+    expect(await doMainState(FOO)).toBe(fooV3);
+
+    // FOO recovers via the heal backstop.
+    failWhen = () => false;
+    await vcs.flushMainProvenance();
+    const fooV4 = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
+    expect(await doMainState(FOO)).toBe(fooV4);
   });
 
   it("(b) attach heals a crash gap: ref advanced, provenance never recorded", async () => {
     await vcs.attachGad(faultableCaller());
     await vcs.ensureFresh();
+    await vcs.flushMainProvenance();
     const before = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
 
-    // Crash window: the ref advances, then the process dies before the
-    // follower records (stop() models the death of the queue).
-    vcs.provenanceFollower.stop();
+    // Crash window: the ref advances, but the direct record can never land (its
+    // ingest is blocked, modelling a process that died before recording). The
+    // fault stays on so the original server's background record never revives.
+    failWhen = (method) => method === "ingestWorktreeState";
     await write(`${FOO}/index.ts`, "export const x = 9;\n");
     await vcs.ensureFresh();
     const refValue = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
     expect(refValue).not.toBe(before);
     expect(await doMainState(FOO)).toBe(before); // the gap
 
-    // "Restart": a fresh server over the same refs/blobs/workspace + DO.
+    // "Restart": a fresh server over the same refs/blobs/workspace + DO, with a
+    // healthy caller (its calls bypass the fault). Attach's GAD-OWNED
+    // publish-drift heal (narrow-host P3) closes the gap: no covering publish
+    // intent existed, so it uses a SYNTHETIC catch-up ingest of the ref's tree.
     refs = createRefService({ statePath: refsPath, gate: async () => {} });
     const vcs2 = newVcs();
     await vcs2.attachGad(callerFor(gad));
-    try {
-      expect(await doMainState(FOO)).toBe(refValue);
-      const log = await gad.instance.vcsLog(FOO, 3, VCS_MAIN_HEAD);
-      // Attach-time heal is now GAD-OWNED (narrow-host P3): the crash gap had no
-      // covering publish intent (the freshness follower was stopped), so the DO
-      // heals it via a SYNTHETIC catch-up ingest of the ref's tree.
-      expect(log[0]?.summary).toMatch(/synthetic catch-up .* to ref state/);
-      expect(log[0]?.outputStateHash).toBe(refValue);
-    } finally {
-      vcs2.provenanceFollower.stop();
-    }
+    expect(await doMainState(FOO)).toBe(refValue);
+    const log = await gad.instance.vcsLog(FOO, 3, VCS_MAIN_HEAD);
+    expect(log[0]?.summary).toMatch(/synthetic catch-up .* to ref state/);
+    expect(log[0]?.outputStateHash).toBe(refValue);
   });
 
   it("(b+d) a lineage op heals drift on demand and proceeds (push over a crash gap)", async () => {
     await vcs.attachGad(faultableCaller());
     await vcs.ensureFresh();
+    await vcs.flushMainProvenance();
     const before = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
 
-    // Same crash gap as above, healed IN-PROCESS by the next lineage op
-    // instead of an attach.
-    vcs.provenanceFollower.stop();
+    // Same crash gap, healed IN-PROCESS by the next lineage op instead of an
+    // attach. The fault stays on so the original server's record never revives
+    // (vcs2's caller bypasses the fault entirely).
+    failWhen = (method) => method === "ingestWorktreeState";
     await write(`${FOO}/index.ts`, "export const x = 10;\n");
     await vcs.ensureFresh();
     const refValue = await vcs.resolveHead(VCS_MAIN_HEAD, FOO);
@@ -262,42 +302,38 @@ describe("ProvenanceFollower — async provenance for the freshness path", () =>
     refs = createRefService({ statePath: refsPath, gate: async () => {} });
     const vcs2 = newVcs();
     await gadAttachWithoutHealing(vcs2);
-    try {
-      // Precondition: the gap survived the (heal-suppressed) attach.
-      expect(await doMainState(FOO)).toBe(before);
+    // Precondition: the gap survived the (heal-suppressed) attach.
+    expect(await doMainState(FOO)).toBe(before);
 
-      // The lineage op: a real edit → commit → push. mainWorktreeHead heals
-      // the DO to the ref before computing fast-forwardability.
-      const head = vcsContextHead("after-gap");
-      await vcs2.recordEdit({
-        head,
-        repoPath: FOO,
-        actor: USER,
-        edits: [{ kind: "write", path: "index.ts", content: text("export const x = 11;\n") }],
-      });
-      await vcs2.commit({ head, repoPath: FOO, message: "post-gap edit", actor: USER });
-      const pushed = await pushToMain(gad, { repoPaths: [FOO], sourceHead: head, actor: USER });
-      expect(pushed.status).toBe("pushed");
+    // The lineage op: a real edit → commit → push. mainWorktreeHead heals the
+    // DO to the ref before computing fast-forwardability.
+    const head = vcsContextHead("after-gap");
+    await vcs2.recordEdit({
+      head,
+      repoPath: FOO,
+      actor: USER,
+      edits: [{ kind: "write", path: "index.ts", content: text("export const x = 11;\n") }],
+    });
+    await vcs2.commit({ head, repoPath: FOO, message: "post-gap edit", actor: USER });
+    const pushed = await pushToMain(gad, { repoPaths: [FOO], sourceHead: head, actor: USER });
+    expect(pushed.status).toBe("pushed");
 
-      // The DO now records the FULL lineage: healed ref value, then the push.
-      const mainNow = await vcs2.resolveHead(VCS_MAIN_HEAD, FOO);
-      expect(await doMainState(FOO)).toBe(mainNow);
-      const log = await gad.instance.vcsLog(FOO, 5, VCS_MAIN_HEAD);
-      expect(log.map((entry) => entry.outputStateHash)).toContain(refValue);
-      expect(log[0]?.outputStateHash).toBe(mainNow);
+    // The DO now records the FULL lineage: healed ref value, then the push.
+    const mainNow = await vcs2.resolveHead(VCS_MAIN_HEAD, FOO);
+    expect(await doMainState(FOO)).toBe(mainNow);
+    const log = await gad.instance.vcsLog(FOO, 5, VCS_MAIN_HEAD);
+    expect(log.map((entry) => entry.outputStateHash)).toContain(refValue);
+    expect(log[0]?.outputStateHash).toBe(mainNow);
 
-      // And merges (the other mainWorktreeHead consumer) work post-heal.
-      const merge = await vcs2.mergeHeads(head, VCS_MAIN_HEAD, { repoPath: FOO, actor: USER });
-      expect(merge.status).toBe("up-to-date");
-    } finally {
-      vcs2.provenanceFollower.stop();
-    }
+    // And merges (the other mainWorktreeHead consumer) work post-heal.
+    const merge = await vcs2.mergeHeads(head, VCS_MAIN_HEAD, { repoPath: FOO, actor: USER });
+    expect(merge.status).toBe("up-to-date");
   });
 
   /** Attach while suppressing the attach-time heal, so the on-demand healing
-   *  path is what gets exercised. The attach heal is now the DO's
-   *  `vcsHealPublishDrift` RPC (narrow-host P3), so suppression means
-   *  no-op'ing that one call; every other call passes through. */
+   *  path is what gets exercised. The attach heal is the DO's
+   *  `vcsHealPublishDrift` RPC (narrow-host P3), so suppression means no-op'ing
+   *  that one call; every other call passes through. */
   async function gadAttachWithoutHealing(target: WorkspaceVcs): Promise<void> {
     const base = callerFor(gad);
     let suppress = true;

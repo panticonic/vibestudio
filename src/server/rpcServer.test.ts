@@ -767,6 +767,83 @@ describe("RpcServer relay behavior", () => {
     expect(vcsInvocations.resolve(tokenSeen!)).toBeNull();
   });
 
+  it("threads the caller's HOST-RESOLVED context id to the writer DO (row 11)", async () => {
+    // Source-head confinement: the relay resolves the ORIGINATING caller's
+    // context registration (`entityCache.resolveContext`) at the same chokepoint
+    // that mints the token, and threads it as `message.callerContextId`. The
+    // writer DO uses it to confine a sandboxed push to its own `ctx:` head. Never
+    // client-asserted — resolved host-side here.
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => targetId,
+    });
+    // Register the caller with a context registration.
+    entityCache._onActivate(makeRecord("panel:ctx-a", "panel", { contextId: "ctx-42" }));
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let contextSeen: string | undefined;
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as { message?: { callerContextId?: string } };
+      contextSeen = envelope.message?.callerContextId;
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: { status: "pushed" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testServer(server).relayToDO("panel:ctx-a", "panel", targetId, "vcsPush", [
+      { repoPaths: ["packages/a"], sourceHead: "ctx:ctx-42" },
+    ]);
+    expect(contextSeen).toBe("ctx-42");
+  });
+
+  it("does NOT thread a context id to a NON-writer DO dispatch (row 11)", async () => {
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const writerId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const otherId = "do:workers/example:Store:key";
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => writerId,
+    });
+    entityCache._onActivate(makeRecord("panel:ctx-a", "panel", { contextId: "ctx-42" }));
+    entityCache._onActivate(makeRecord(otherId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let contextSeen: string | undefined = "unset";
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as { message?: { callerContextId?: string } };
+      contextSeen = envelope.message?.callerContextId;
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "x", result: { ok: true } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await testServer(server).relayToDO("panel:ctx-a", "panel", otherId, "ping", []);
+    expect(contextSeen).toBeUndefined();
+  });
+
   it("does NOT mint an invocation token for a NON-writer DO dispatch", async () => {
     // Only the single-writer DO identity mints a token; any other DO target
     // (targetId !== vcsWriterIdentity) relays without one.

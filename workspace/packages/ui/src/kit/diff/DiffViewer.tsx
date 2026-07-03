@@ -18,7 +18,7 @@
  * on any fetch or highlight completing.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Box, Button, Flex, Text } from "@radix-ui/themes";
+import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
@@ -37,9 +37,12 @@ export interface DiffViewerProps {
   /** Drives shiki theme selection; defaults to light. */
   appearance?: HighlightAppearance;
   /**
-   * Escape hatch for binary/oversized files. When omitted, the degraded row
-   * simply explains why it can't render inline (the shell may leave this
-   * unimplemented for now).
+   * Escape hatch into gad-browser's file-inspection surface. Rendered as the
+   * primary action on degraded (binary/oversized) rows — which can't render
+   * inline — and as a quiet secondary icon on normal file headers, for
+   * reviewers who want full context beyond the unified diff. When omitted, the
+   * degraded row simply explains why it can't render inline and normal headers
+   * carry no extra action (the shell may leave this unimplemented for now).
    */
   onOpenInGadBrowser?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
 }
@@ -165,46 +168,65 @@ function DiffFileRow({
       data-diff-file={file.path}
       style={{ border: "1px solid var(--gray-a5)", borderRadius: 6, overflow: "hidden" }}
     >
-      <button
-        type="button"
-        data-diff-file-header=""
-        onClick={degraded ? undefined : onToggle}
-        aria-expanded={degraded ? undefined : expanded}
-        disabled={degraded}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          width: "100%",
-          padding: "5px 8px",
-          background: "var(--gray-a2)",
-          border: "none",
-          textAlign: "left",
-          cursor: degraded ? "default" : "pointer",
-          minWidth: 0,
-        }}
-      >
-        <span style={{ flexShrink: 0, color: "var(--gray-10)", display: "inline-flex" }}>
-          {degraded ? <FileIcon /> : expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
-        </span>
-        <Badge color={badge.color} variant="soft" radius="full" style={{ flexShrink: 0 }}>
-          {badge.label}
-        </Badge>
-        <Text
-          size="1"
+      <Flex align="center" style={{ background: "var(--gray-a2)", minWidth: 0 }}>
+        <button
+          type="button"
+          data-diff-file-header=""
+          onClick={degraded ? undefined : onToggle}
+          aria-expanded={degraded ? undefined : expanded}
+          disabled={degraded}
           style={{
-            fontFamily: "var(--code-font-family, monospace)",
-            overflowWrap: "anywhere",
-            minWidth: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
             flex: 1,
+            padding: "5px 8px",
+            background: "transparent",
+            border: "none",
+            textAlign: "left",
+            cursor: degraded ? "default" : "pointer",
+            minWidth: 0,
           }}
         >
-          {file.path}
-        </Text>
-        {diff.result ? (
-          <DiffStatCounts insertions={diff.result.insertions} deletions={diff.result.deletions} />
+          <span style={{ flexShrink: 0, color: "var(--gray-10)", display: "inline-flex" }}>
+            {degraded ? <FileIcon /> : expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+          </span>
+          <Badge color={badge.color} variant="soft" radius="full" style={{ flexShrink: 0 }}>
+            {badge.label}
+          </Badge>
+          <Text
+            size="1"
+            style={{
+              fontFamily: "var(--code-font-family, monospace)",
+              overflowWrap: "anywhere",
+              minWidth: 0,
+              flex: 1,
+            }}
+          >
+            {file.path}
+          </Text>
+          {diff.result ? (
+            <DiffStatCounts insertions={diff.result.insertions} deletions={diff.result.deletions} />
+          ) : null}
+        </button>
+        {/* Quiet secondary escape hatch on NORMAL rows — degraded rows carry the
+            primary action in their body note instead, so we skip it here. */}
+        {onOpenInGadBrowser && !degraded ? (
+          <Tooltip content="Open in gad-browser">
+            <IconButton
+              size="1"
+              variant="ghost"
+              color="gray"
+              data-diff-open-gad-browser=""
+              aria-label={`Open ${file.path} in gad-browser`}
+              onClick={() => onOpenInGadBrowser(file, entry)}
+              style={{ flexShrink: 0, margin: "0 6px" }}
+            >
+              <ExternalLinkIcon />
+            </IconButton>
+          </Tooltip>
         ) : null}
-      </button>
+      </Flex>
 
       {degraded ? (
         <DegradedFileNote file={file} entry={entry} onOpenInGadBrowser={onOpenInGadBrowser} />
