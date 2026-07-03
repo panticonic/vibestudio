@@ -12,9 +12,14 @@
  *
  * Entry points:
  *  - {@link project}: materialize a (repoPath, head) at a state (the follower
- *    step after edit/commit/merge/push/restore advances).
- *  - {@link removeRepo}: drop a repo's subtree from the active context's
- *    workspace-root checkout (deleteRepo).
+ *    step after edit/commit/merge/push/restore advances). Only `ctx:*` heads
+ *    have a checkout — under `{contextsRoot}/{contextId}`.
+ *  - {@link exportMainToSource}: the write-only dev extraction bridge — project a
+ *    repo's new `main` state OUT to the source dir (`workspaceRoot/{repoPath}`)
+ *    on a main advance. NOT a checkout: `main` stays a pure ref for all context
+ *    logic; this is a one-way export gated on a configured dev source dir.
+ *  - {@link removeRepo}: drop a repo's subtree from the source dir (deleteRepo,
+ *    the extraction counterpart of {@link exportMainToSource}).
  *  - {@link writeConflictSummary}: sync the worktree-visible merge-conflict
  *    summary file from pending-merge DATA passed in by the caller.
  */
@@ -24,7 +29,6 @@ import * as path from "node:path";
 
 import {
   MERGE_CONFLICTS_FILE,
-  VCS_ACTIVE_CONTEXT_ID,
   contextIdFromVcsHead,
   normalizeRepoPathForLog,
   validateVcsContextId,
@@ -33,15 +37,12 @@ import type { WorktreeStore } from "./worktreeStore.js";
 
 interface DiskProjectorDeps {
   worktrees: WorktreeStore;
-  /** The user's live workspace directory — the ACTIVE context's working tree
-   *  (D2: `main` has no checkout; the workspace root IS `ctx:{activeContextId}`). */
+  /** The persistent source dir — the one-way dev extraction target
+   *  ({@link exportMainToSource}). `main` has no checkout; it is projected here
+   *  write-only on an advance, never scanned back (except the boot seed). */
   workspaceRoot: string;
   /** Root for context-folder working trees (`{contextsRoot}/{contextId}`). */
   contextsRoot: string;
-  /** The context whose checkout is the workspace root (defaults to the
-   *  well-known {@link VCS_ACTIVE_CONTEXT_ID}). Every OTHER `ctx:*` head lives
-   *  under `{contextsRoot}/{contextId}`. */
-  activeContextId?: string;
 }
 
 /** A pending merge's disk-visible facts (data in, disk out — no store reads here). */
@@ -95,36 +96,42 @@ export class DiskProjector {
     return dir;
   }
 
-  private get activeContextId(): string {
-    return this.deps.activeContextId ?? VCS_ACTIVE_CONTEXT_ID;
-  }
-
   /**
-   * Working-tree dir for a (repoPath, head). ONLY `ctx:*` heads have a checkout:
-   * the ACTIVE context's subtree lives under the workspace root, every other
-   * context under its `{contextsRoot}/{contextId}` folder. `main` is a pure ref
-   * with no working tree (D1) — asking for its dir is a programming error.
-   *
-   * Single-context sync rule (D2): the workspace root is the active context's
-   * ONE checkout, fed by two channels — DO working rows (`vcs.edit`) and the
-   * disk scan. The DO working state is authoritative; {@link project} keeps this
-   * checkout in sync with it; a scan (`snapshotDir`/`worktree.scan`) diffs disk
-   * against the last projected state (the `.gad` sidecar baseline) so it adopts
-   * only genuine EXTERNAL drift and never misreads an un-projected DO edit as a
-   * deletion. Callers must therefore project after every `vcs.edit` before a
-   * subsequent scan.
+   * Working-tree dir for a (repoPath, head). ONLY `ctx:*` heads have a checkout —
+   * under `{contextsRoot}/{contextId}`. `main` is a pure ref with no working tree
+   * (D1) — asking for its dir is a programming error (the write-only source
+   * export goes through {@link exportMainToSource}, not this path).
    */
   dirForRepoHead(repoPath: string | undefined, head: string): string {
     const base = head.startsWith("ctx:")
-      ? contextIdFromVcsHead(head) === this.activeContextId
-        ? this.deps.workspaceRoot
-        : this.contextDir(contextIdFromVcsHead(head))
+      ? this.contextDir(contextIdFromVcsHead(head))
       : (() => {
           throw new Error(
             `No working tree for head: ${head} (main is a pure ref; only ctx:* heads have checkouts)`
           );
         })();
     return repoPath ? path.join(base, ...normalizeRepoPathForLog(repoPath).split("/")) : base;
+  }
+
+  /** The source-dir location for a repo's subtree — `workspaceRoot/{repoPath}`.
+   *  The {@link exportMainToSource}/{@link removeRepo} target; NOT a context
+   *  checkout (`main` is never given a `dirForRepoHead`). */
+  private sourceDirForRepo(repoPath: string): string {
+    return path.join(this.deps.workspaceRoot, ...normalizeRepoPathForLog(repoPath).split("/"));
+  }
+
+  /**
+   * Write-only dev extraction: materialize a repo's `main` `stateHash` OUT to the
+   * source dir (`workspaceRoot/{repoPath}`) so a push to `main` flows back into
+   * the real monorepo checkout. Uses the same content-store→disk projection
+   * primitive as {@link project} but resolves the destination directly (main has
+   * no checkout mapping). `clean` removes untracked files so the export mirrors
+   * the state exactly.
+   */
+  async exportMainToSource(repoPath: string, stateHash: string): Promise<void> {
+    await this.deps.worktrees.materializeState(stateHash, this.sourceDirForRepo(repoPath), {
+      clean: true,
+    });
   }
 
   /**
@@ -154,10 +161,11 @@ export class DiskProjector {
     await run;
   }
 
-  /** Remove a repo's projection from the workspace root — the ACTIVE context's
-   *  checkout (repo deletion drops the subtree from the live workspace tree). */
+  /** Remove a repo's subtree from the source dir — the extraction counterpart
+   *  of {@link exportMainToSource} (repo deletion drops the subtree from the
+   *  real monorepo checkout on a `main` removal). */
   async removeRepo(repoPath: string): Promise<void> {
-    await fsp.rm(this.dirForRepoHead(repoPath, `ctx:${this.activeContextId}`), {
+    await fsp.rm(this.sourceDirForRepo(repoPath), {
       recursive: true,
       force: true,
     });

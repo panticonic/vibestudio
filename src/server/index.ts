@@ -807,6 +807,13 @@ async function main() {
     contextsRoot: path.join(statePath, ".contexts"),
     buildSourcesRoot: path.join(getUserDataPath(), "build-sources"),
     refs: refService,
+    // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
+    // the source dir only when there is a persistent dev source to extract to.
+    // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
+    // `<appRoot>/workspace` template); the rsync mirror below then bridges the
+    // exported source dir to that checkout. Off in production ephemeral
+    // workspaces, which have no source dir. Computed just above this block.
+    extractMainToSource: devTemplateMirrorDir !== null,
     // On-behalf-of attribution for chrome merge-to-main (register row 12): the
     // host mints an invocation record and threads it to the DO's `vcsMerge`.
     vcsInvocations: vcsInvocationTable,
@@ -1183,17 +1190,17 @@ async function main() {
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-    onWorkspaceSourceChanged: async (ctx, summary) => {
-      // Per-repo model: a git import mutates one or more repo subtrees on disk
-      // (e.g. importProject rewrites meta/vibez1.yml). Snapshot EVERY present
-      // repo's disk state onto its `vcs:repo:<path>` main —
-      // committing out-of-band changes to EXISTING repos (which
-      // `ensureRepoLogsFromDisk` skips because they already have a main) AND
-      // initializing logs for newly cloned repos. There is no whole-tree commit.
-      await workspaceVcs.snapshotRepoLogsFromDisk({
-        summary,
-        actor: { id: ctx.caller.runtime.id, kind: ctx.caller.runtime.kind },
-      });
+    onWorkspaceSourceChanged: async (_ctx, _summary) => {
+      // Phase-2 revision §5 (INTERIM — see design fork in the revision report):
+      // the actual repo→`main` publish for a git import already runs through
+      // `initRepoLog` → git-bridge `importRepoTree` → `importPublish` (gated,
+      // DO-owned). The removed `ctx:workspace` freshness scan is gone; here we
+      // only seed a `main` for any newly-present-on-disk repo that lacks one
+      // (set-if-absent, host-computed from disk), so a freshly cloned dependency
+      // is usable. NOT the §5 target (routing a caller-initiated import into the
+      // caller's `ctx:{id}` head, absent from `main` until pushed): that requires
+      // a new clone-into-context trigger and is surfaced as a design fork.
+      await workspaceVcs.ensureRepoLogsFromDisk();
     },
   });
   container.registerRpc(gitInteropDefinition);

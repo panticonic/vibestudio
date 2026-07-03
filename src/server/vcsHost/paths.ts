@@ -13,30 +13,6 @@ import * as path from "node:path";
 
 export const VCS_MAIN_HEAD = "main";
 
-/**
- * The ACTIVE context (D2, narrow-host boundary refactor). `main` is a pure ref
- * with no on-disk checkout; the human's live workspace directory is THIS
- * context's editable working tree. Out-of-band disk edits and agent `vcs.edit`
- * calls target this one context head through two channels (the disk scan and the
- * DO working rows) and adopt as working edits on its `ctx:*` heads — never an
- * ungated `main` advance.
- *
- * It is a single well-known constant on purpose: the least-invasive "active
- * context" identity. There is no pre-existing notion of a current/active context
- * in the host (contexts are per-caller `ctx:{panelId}` forks), so rather than
- * inventing a mutable, per-caller selection mechanism (new RPC surface + UI
- * plumbing), the workspace root is bound to one reserved context id. The
- * workspace context needs no explicit pin: the DO composes its view as the live
- * union of every repo's `main` overlaid with this context's working edits (see
- * `vcsResolveContextView` → `computeContextView` with a null base), so with no
- * drift it equals the plain workspace/main view.
- */
-export const VCS_ACTIVE_CONTEXT_ID = "workspace";
-
-/** The active context's head (`ctx:workspace`) — the head the workspace-root
- *  disk projects and freshness adopts into. */
-export const VCS_ACTIVE_CONTEXT_HEAD = `ctx:${VCS_ACTIVE_CONTEXT_ID}`;
-
 /** Head-name prefix for an archived (deleted) repo's preserved history. A repo
  *  log carrying an `archived:*` head was retired through `vcs.deleteRepo`: its
  *  `main` is gone but its lineage is parked here (recoverable). Used to refuse
