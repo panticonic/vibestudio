@@ -29,16 +29,11 @@ const vibez1App = {
     notifications: {
       call: (method: string, ...args: unknown[]) => serviceCall(`notification.${method}`, ...args),
     },
-    tray: {
-      call: async () => {
-        throw new Error("Native tray capability is not implemented by this app host");
-      },
-    },
-    globalShortcut: {
-      call: async () => {
-        throw new Error("Native global shortcut capability is not implemented by this app host");
-      },
-    },
+    // No `tray` / `globalShortcut` bridges: the `tray` and `global-shortcut`
+    // capabilities are declarable in the unit manifest but are NOT in this host's
+    // supported set (ELECTRON_APP_HOST_CAPABILITIES in src/main/appOrchestrator.ts),
+    // so an app requesting them is rejected before it ever loads. Exposing a
+    // throwing stub here would only be a capability that lies about existing.
     fs: {
       call: (method: string, ...args: unknown[]) => serviceCall(`fs.${method}`, ...args),
     },

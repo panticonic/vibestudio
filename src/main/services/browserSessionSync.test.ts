@@ -7,7 +7,10 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { toElectronCookie } from "./browserSessionSync.js";
+import { createBrowserSessionSyncService, toElectronCookie } from "./browserSessionSync.js";
+import type { BrowserDataClient } from "@vibez1/browser-data";
+import type { EventService } from "@vibez1/shared/eventsService";
+import type { ServerClient } from "../serverClient.js";
 
 function storedCookie(partial: Partial<StoredCookie>): StoredCookie {
   return {
@@ -29,6 +32,57 @@ function storedCookie(partial: Partial<StoredCookie>): StoredCookie {
     ...partial,
   };
 }
+
+function makeSyncService(workspaceConfig: unknown) {
+  const eventService = {
+    subscribe: vi.fn(),
+    unsubscribe: vi.fn(),
+  } as unknown as EventService;
+  const serverClient = {
+    call: vi.fn(async (service: string, method: string) => {
+      if (service === "workspace" && method === "getConfig") return workspaceConfig;
+      return undefined;
+    }),
+  } as unknown as ServerClient;
+  const browserDataClient = {
+    cookies: { getByDomain: vi.fn(async () => []) },
+  } as unknown as BrowserDataClient;
+  const service = createBrowserSessionSyncService({
+    eventService,
+    serverClient,
+    browserDataClient,
+  });
+  return { service, eventService, serverClient };
+}
+
+describe("createBrowserSessionSyncService (manifest-declared broker)", () => {
+  it("subscribes to the declared broker's import-complete event", async () => {
+    const { service, eventService, serverClient } = makeSyncService({
+      id: "ws",
+      extensions: [{ source: "extensions/browser-data" }],
+      providers: { browserData: { extension: "extensions/browser-data" } },
+    });
+
+    await service.start!(vi.fn() as never);
+
+    const expectedEvent = "extensions:@workspace-extensions/browser-data::import-complete";
+    expect(eventService.subscribe).toHaveBeenCalledWith(
+      expectedEvent,
+      "browser-session-sync",
+      expect.anything()
+    );
+    expect(serverClient.call).toHaveBeenCalledWith("events", "subscribe", [expectedEvent]);
+  });
+
+  it("disables cookie sync when the manifest declares no broker", async () => {
+    const { service, eventService, serverClient } = makeSyncService({ id: "ws" });
+
+    await service.start!(vi.fn() as never);
+
+    expect(eventService.subscribe).not.toHaveBeenCalled();
+    expect(serverClient.call).not.toHaveBeenCalledWith("events", "subscribe", expect.anything());
+  });
+});
 
 describe("toElectronCookie", () => {
   it("preserves host-only cookies by omitting domain", () => {

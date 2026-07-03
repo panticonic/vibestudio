@@ -13,7 +13,7 @@ import type { Alias } from "vite";
 // (vitest.config.ts) excludes *.browser.test.tsx; this config runs only those.
 
 const workspaceTsconfig = JSON.parse(
-  readFileSync(path.resolve(__dirname, "tsconfig.workspace.json"), "utf-8"),
+  readFileSync(path.resolve(__dirname, "workspace/tsconfig.json"), "utf-8"),
 );
 const tsconfigPaths: Record<string, string[]> = workspaceTsconfig.compilerOptions?.paths ?? {};
 

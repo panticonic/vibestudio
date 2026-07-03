@@ -51,9 +51,23 @@ export {
   type WorkspaceImportParts,
 } from "./lib/index.js";
 
-// Virtual type definitions — used by Monaco editor in panels to
+// Browser-facing type definition payloads — used by Monaco editor in panels to
 // configure its in-browser TypeScript service. Not used by the server-side
 // TypeCheckService.
+export {
+  getBrowserTypeDefinitions,
+  getBrowserTypeDefinitionFiles,
+  getMonacoTsLibFilePath,
+  MONACO_FS_TYPE_DEFINITIONS_PATH,
+  MONACO_PATH_TYPE_DEFINITIONS_PATH,
+  MONACO_GLOBAL_TYPE_DEFINITIONS_PATH,
+  MONACO_TYPESCRIPT_LIB_ROOT,
+  type BrowserTypeDefinitions,
+  type BrowserTypeDefinitionFile,
+} from "./browser.js";
+
+// Raw virtual type definitions. Prefer `getBrowserTypeDefinitions()` for
+// browser/RPC delivery because it also includes stable Monaco file paths.
 export {
   FS_TYPE_DEFINITIONS,
   PATH_TYPE_DEFINITIONS,

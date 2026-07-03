@@ -1,5 +1,10 @@
-import { contextBridge, ipcRenderer } from "electron";
+/**
+ * Autofill preload — the defensive `??` fallback for the browser-panel surface
+ * (PanelView.createViewForBrowser uses `browserPreloadPath ?? autofillPreloadPath`).
+ * browserPreload.ts is the live path; this entry point exposes the identical
+ * `__vibez1_autofill` bridge via the shared helper so the two cannot drift.
+ */
 
-contextBridge.exposeInMainWorld("__vibez1_autofill", {
-  ping: () => ipcRenderer.send("vibez1:autofill:ping"),
-});
+import { exposeAutofillBridge } from "./autofillBridge.js";
+
+exposeAutofillBridge();

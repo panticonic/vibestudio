@@ -18,7 +18,7 @@ At audit time, the RPC framework in `@vibez1/rpc` was a transport-agnostic bridg
 
 However, the implementation has substantive gaps between the declared policy model and the effective enforcement surface. The most important findings:
 
-1. **Policy is not enforced on Electron IPC** (`src/main/index.ts` `vibez1:serviceCall` and `src/main/ipcDispatcher.ts`). `ServiceDispatcher.dispatch()` never calls `checkServiceAccess`; only the WS/HTTP RPC server does. In Electron mode panels can invoke Electron-local services with policies like `{ allowed: ["shell"] }` (app/panel/view/menu/adblock/settings services) simply by issuing `__vibez1Electron.serviceCall("app.xxx", …)`. The `callerKind` at dispatch is heuristically set to `"panel"` for non-shell webContents but the dispatcher ignores it.
+1. **Policy is not enforced on Electron IPC** (`src/main/index.ts` `vibez1:serviceCall` and `src/main/ipcDispatcher.ts`). `ServiceDispatcher.dispatch()` never calls `checkServiceAccess`; only the WS/HTTP RPC server does. In Electron mode panels can invoke Electron-local services with policies like `{ allowed: ["shell"] }` (app/panel/view/menu/adblock/settings services) simply by issuing `__vibez1Shell.serviceCall("app.xxx", …)`. The `callerKind` at dispatch is heuristically set to `"panel"` for non-shell webContents but the dispatcher ignores it.
 
 2. **Several server services over-allow `panel` callers on privilege-sensitive methods.** Examples: `authTokens.getProviderToken` (any panel can read stored OAuth/API keys), `authTokens.persist` / `authTokens.logout` (any panel can overwrite/delete them), `auth.startOAuthLogin` / `auth.logout`, `credentials.revokeConsent` (destructive and unbounded), `credentials.renameConnection`, `workspace.setConfigField` (arbitrary config write by a panel), `workspace.select` (forces a workspace relaunch). The old `git.getTokenForPanel` / `git.revokeTokenForPanel` RPC surface has been removed.
 
@@ -226,7 +226,7 @@ same authenticated RPC relay used by other participants.
 
   `dispatcher.dispatch` only validates zod args. There is no `checkServiceAccess` call on this path.
 
-- Attack path in Electron mode: sandboxed panel calls `__vibez1Electron.serviceCall("menu.X", …)` or `app.relaunch` or `settings.setModelRoles(...)`, or any service declared `{ allowed: ["shell"] }`. Even if the service handler `throw`s on unknown method, reaching the handler means policy was bypassed.
+- Attack path in Electron mode: sandboxed panel calls `__vibez1Shell.serviceCall("menu.X", …)` or `app.relaunch` or `settings.setModelRoles(...)`, or any service declared `{ allowed: ["shell"] }`. Even if the service handler `throw`s on unknown method, reaching the handler means policy was bypassed.
 - Remediation: add `checkServiceAccess(parsed.service, callerKind, dispatcher, parsed.method)` before `dispatcher.dispatch`. Ideally move the check inside `ServiceDispatcher.dispatch` itself so every transport inherits it (WS server can then stop calling it at the handler level).
 
 ### 4.6 HIGH — `IpcDispatcher` hard-codes `callerKind: "shell"`

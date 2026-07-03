@@ -2347,7 +2347,7 @@ app.on("ready", async () => {
     dispatcher.markInitialized();
 
     // =========================================================================
-    // Register ipcMain.handle handlers for __vibez1Electron (panel preload)
+    // Register ipcMain.handle handlers for __vibez1Shell (panel preload)
     // =========================================================================
     // These handlers service panel IPC calls. Caller identity is resolved
     // via ViewManager's findViewIdByWebContentsId (which tracks the

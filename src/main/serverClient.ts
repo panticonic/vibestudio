@@ -5,10 +5,12 @@
 import { WebSocket } from "ws";
 import {
   createRpcClient,
+  type DecodedFramedStream,
   type RpcClient,
   type RpcCallOptions,
   type RpcConnectionStatus,
   type RpcEnvelope,
+  type RpcStreamOptions,
 } from "@vibez1/rpc";
 import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
 import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
@@ -38,10 +40,24 @@ export type ServerMessageListener = (envelope: RpcEnvelope) => void;
 export interface PanelSession {
   send(envelope: RpcEnvelope): Promise<void> | void;
   onMessage(listener: ServerMessageListener): () => void;
-  /** Status of the underlying session — the relay re-creates a dead one. */
+  /** Status of the underlying session (observability; NOT the recycle signal). */
   status?(): ConnectionStatus;
-  /** True once the session is terminally closed (WebRTC). */
+  /**
+   * True once the session is TERMINALLY closed (lease revoke / teardown). This
+   * is the ONLY liveness signal the ipcDispatcher relay recycles on (§3.3):
+   * transport-down is transient and the transport auto-reopens sessions.
+   */
   isClosed?(): boolean;
+  /**
+   * First-class duplex stream with a §1.6 streaming REQUEST body — the WebRTC
+   * session's bulk-channel path. Absent on the loopback WS session: panel
+   * uploads then fail loudly ("uploads require the WebRTC transport").
+   */
+  streamReadable?(
+    envelope: RpcEnvelope,
+    signal?: AbortSignal | null,
+    body?: ReadableStream<Uint8Array> | null
+  ): Promise<DecodedFramedStream>;
   close(): void;
 }
 
@@ -75,9 +91,16 @@ export interface ServerClient {
   /**
    * Stream a backend service method's `Response` over the pipe's bulk channel
    * (chunked) — for large/streamed bodies (e.g. `gateway.fetch` panel assets)
-   * that exceed the control-channel message-size limit.
+   * that exceed the control-channel message-size limit. `options.body` streams
+   * a REQUEST body the same way (plan §1.6 — WebRTC transport only; other
+   * transports throw).
    */
-  stream(service: string, method: string, args: unknown[]): Promise<Response>;
+  stream(
+    service: string,
+    method: string,
+    args: unknown[],
+    options?: RpcStreamOptions
+  ): Promise<Response>;
   /** Check if connected */
   isConnected(): boolean;
   /** Current connection status */
@@ -239,8 +262,13 @@ export async function createServerClient(
     ): Promise<unknown> {
       return rpc.call("main", `${service}.${method}`, args, options);
     },
-    stream(service: string, method: string, args: unknown[]): Promise<Response> {
-      return rpc.stream("main", `${service}.${method}`, args);
+    stream(
+      service: string,
+      method: string,
+      args: unknown[],
+      options?: RpcStreamOptions
+    ): Promise<Response> {
+      return rpc.stream("main", `${service}.${method}`, args, options);
     },
     async callAs(
       caller: ScopedServerCaller,
@@ -296,6 +324,12 @@ export async function createServerClient(
         send: (envelope: RpcEnvelope) => panelTransport.send(envelope),
         onMessage: (listener: ServerMessageListener) => panelTransport.onMessage(listener),
         status: () => panelTransport.status?.() ?? "disconnected",
+        // reconnect:false — a dropped socket never comes back, so "disconnected"
+        // IS terminal here. This keeps the relay's isClosed()-only recycle
+        // (§3.3) correct on the loopback WS path too.
+        isClosed: () => (panelTransport.status?.() ?? "disconnected") === "disconnected",
+        // No streamReadable: the WS panel session has no first-class stream
+        // plane, so §1.6 uploads fail loudly instead of falling back.
         close: () => {
           void panelTransport.close();
         },

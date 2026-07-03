@@ -1,3 +1,5 @@
+import { redactToken } from "@vibez1/shared/redact";
+
 /**
  * CLI output + exit-code conventions.
  *
@@ -83,9 +85,18 @@ export function printResult(value: unknown, options: { json: boolean; human?: ()
   else console.log(JSON.stringify(value, null, 2));
 }
 
+const REFRESH_TOKEN_COMPOSITE = /\brefresh:([^:\s]+):([^\s"'`<>]+)/g;
+const BEARER_TOKEN = /\bBearer\s+([A-Za-z0-9._~+/=-]{9,})\b/g;
+
+export function redactCliSecrets(message: string): string {
+  return message
+    .replace(REFRESH_TOKEN_COMPOSITE, (token) => redactToken(token))
+    .replace(BEARER_TOKEN, (_match, token: string) => `Bearer ${redactToken(token)}`);
+}
+
 /** Print an error and return the exit code it maps to. */
 export function printError(error: unknown, options: { json: boolean }): number {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = redactCliSecrets(error instanceof Error ? error.message : String(error));
   const exitCode = error instanceof CliError ? error.exitCode : EXIT_ERROR;
   if (options.json) {
     console.error(JSON.stringify({ error: message, exitCode }));
