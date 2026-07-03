@@ -6,7 +6,7 @@
  * values stay local and are only emitted on submit.
  */
 import { useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import {
   Badge,
   Box,
@@ -242,6 +242,19 @@ export function ApprovalCard({
                 entries={diffReview}
                 fetchContent={fetchContent}
                 appearance={appearance}
+                onOpenInGadBrowser={(file, entry) =>
+                  emitForApproval({
+                    type: "open-in-gad-browser",
+                    target: {
+                      repoPath: entry.repoPath,
+                      path: file.path,
+                      oldHash: file.oldHash,
+                      newHash: file.newHash,
+                      oldState: entry.oldState,
+                      newState: entry.newState,
+                    },
+                  })
+                }
               />
             ) : null}
 
@@ -306,10 +319,12 @@ function DiffReviewSection({
   entries,
   fetchContent,
   appearance,
+  onOpenInGadBrowser,
 }: {
   entries: DiffReviewEntry[];
   fetchContent: DiffContentFetcher;
   appearance: "light" | "dark";
+  onOpenInGadBrowser: ComponentProps<typeof DiffViewer>["onOpenInGadBrowser"];
 }) {
   // Line totals are shown only when EVERY entry carries them — the host omits
   // insertions/deletions for any entry with a skipped (binary/oversized/
@@ -370,7 +385,12 @@ function DiffReviewSection({
                 {entry.truncated ? " · truncated" : ""}
               </Text>
             </Flex>
-            <DiffViewer entry={entry} fetchContent={fetchContent} appearance={appearance} />
+            <DiffViewer
+              entry={entry}
+              fetchContent={fetchContent}
+              appearance={appearance}
+              onOpenInGadBrowser={onOpenInGadBrowser}
+            />
           </Box>
         ))}
       </Flex>

@@ -749,10 +749,13 @@ describe("vcsService", () => {
   describe("push authorization (per-repo, build-gated)", () => {
     // `push` is USERLAND-dispatched since the P3 flip: the build-gated main
     // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
-    // manifest service), NOT this host service. The host case is deleted, so the
-    // service rejects `push` outright — the client routes to the DO directly
-    // (the relay mints the on-behalf-of token with the originating caller).
-    it("no longer handles `push` on the host service (moved to the userland DO)", async () => {
+    // manifest service), NOT this host service. `push` stays in the advertised
+    // `vcsMethods` schema for typed clients, but its host case throws a DIRECTED
+    // error (not the generic "Unknown vcs method" fallthrough) that points the
+    // caller at the DO / runtime-client route — the client routes to the DO
+    // directly (the relay mints the on-behalf-of token with the originating
+    // caller).
+    it("throws a directed userland-dispatch error on the host service (moved to the DO)", async () => {
       const push = vi.fn();
       const service = createVcsService({
         workspaceVcs: { push } as never,
@@ -761,7 +764,12 @@ describe("vcsService", () => {
 
       await expect(
         service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }])
-      ).rejects.toThrow(/Unknown vcs method: push/);
+      ).rejects.toThrow(/userland-dispatched.*vcsPush|no host handler/);
+      // Directed at the runtime client's push override / manifest service — not
+      // the generic "Unknown vcs method" fallthrough.
+      await expect(
+        service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }])
+      ).rejects.toThrow(/vcsClient\.ts|manifest service/);
       expect(push).not.toHaveBeenCalled();
     });
 

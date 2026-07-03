@@ -97,6 +97,28 @@ describe("DiffViewer", () => {
     expect(onOpenInGadBrowser.mock.calls[0]?.[0].path).toBe("logo.png");
   });
 
+  it("offers a quiet secondary escape hatch on normal file headers", () => {
+    const onOpenInGadBrowser = vi.fn();
+    const fetchContent = vi.fn<DiffContentFetcher>(async () => "x\n");
+    renderViewer(CHANGED_ENTRY, fetchContent, { onOpenInGadBrowser });
+
+    // The secondary action is present without expanding, and fetches nothing.
+    const openButton = screen.getByRole("button", {
+      name: /Open src\/util\.txt in gad-browser/,
+    });
+    fireEvent.click(openButton);
+    expect(fetchContent).not.toHaveBeenCalled();
+    expect(onOpenInGadBrowser).toHaveBeenCalledTimes(1);
+    expect(onOpenInGadBrowser.mock.calls[0]?.[0].path).toBe("src/util.txt");
+    expect(onOpenInGadBrowser.mock.calls[0]?.[1].repoPath).toBe("packages/demo");
+  });
+
+  it("omits the secondary escape hatch when no handler is supplied", () => {
+    const fetchContent = vi.fn<DiffContentFetcher>(async () => "x\n");
+    renderViewer(CHANGED_ENTRY, fetchContent);
+    expect(screen.queryByRole("button", { name: /in gad-browser/ })).toBeNull();
+  });
+
   it("keeps rendering (never throws) while a fetch is still pending", async () => {
     const resolvers: ((v: string) => void)[] = [];
     const fetchContent = vi.fn<DiffContentFetcher>(

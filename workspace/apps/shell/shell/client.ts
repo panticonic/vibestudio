@@ -203,6 +203,7 @@ export const panel = {
       name?: string;
       isRoot?: boolean;
       ref?: string;
+      stateArgs?: Record<string, unknown>;
     }
   ) =>
     panelTreeClient.create(source, {
@@ -210,6 +211,7 @@ export const panel = {
       ref: options?.ref,
       parentId: options?.isRoot === false ? undefined : null,
       focus: true,
+      stateArgs: options?.stateArgs,
     }),
   createChild: (
     parentId: string,

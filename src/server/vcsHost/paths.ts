@@ -45,9 +45,20 @@ export function repoPathFromLogId(logId: string): string | null {
  * repo subdirs (today `meta`) are single-segment repos.
  */
 export function normalizeRepoPathForLog(repoPath: string): string {
-  const normalized = repoPath.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
-  if (!normalized || normalized.includes("..")) {
+  // Canonical repo identity — one string backs the log id (`vcs:repo:<norm>`),
+  // the materializedFor cache, and the projection dir. Reject every non-canonical
+  // alias `refService.validateRepoPath` rejects (`.`/`..`/empty segments, so no
+  // interior `//`, and no leading/trailing slash) rather than silently rewriting,
+  // so aliases like `panels/./chat`, `panels//chat`, and `panels/chat/` can never
+  // split into a second identity that collides on disk with `panels/chat`.
+  const normalized = repoPath.replace(/\\/g, "/");
+  if (!normalized) {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
+  }
+  for (const segment of normalized.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new Error(`Invalid workspace repo path: ${repoPath}`);
+    }
   }
   return normalized;
 }

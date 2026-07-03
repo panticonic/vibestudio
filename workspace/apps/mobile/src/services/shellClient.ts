@@ -45,7 +45,12 @@ import { panelRuntimeMethods } from "@vibez1/shared/serviceSchemas/panelRuntime"
 import { credentialsMethods } from "@vibez1/shared/serviceSchemas/credentials";
 import { pushMethods } from "@vibez1/shared/serviceSchemas/push";
 import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
-import { vcsMethods } from "@vibez1/shared/serviceSchemas/vcs";
+import {
+  vcsMethods,
+  type VcsPushInput,
+  type VcsPushResult,
+} from "@vibez1/shared/serviceSchemas/vcs";
+import { createVcsUserlandClient } from "@vibez1/shared/userlandServiceRpc";
 import {
   HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
   isLaunchSessionEventFor,
@@ -94,9 +99,28 @@ function createWorkspaceRpcClient(transport: MobileRpcClient) {
 }
 
 function createVcsClient(transport: MobileRpcClient) {
-  return createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
+  const client = createTypedServiceClient("vcs", vcsMethods, (service, method, args) =>
     transport.call("main", `${service}.${method}`, args)
   );
+  // Push is USERLAND-dispatched (P3 flip): the build-gated main advance runs in
+  // the gad-store DO's `vcsPush`, reached via the `vcs` manifest service — NOT
+  // the host `vcs.push` service (which now throws a directed error). Mirror
+  // packages/runtime vcsClient.ts and route directly to the DO so the relay
+  // mints the on-behalf-of invocation token with the originating caller; a host
+  // forward would erase it. The mobile transport is `RpcCallerLike`
+  // (call(targetId, method, args)), so it can reach the DO dispatch. Mobile is a
+  // shell caller with no own ctx head default, so `sourceHead` comes from input.
+  const userland = createVcsUserlandClient(transport);
+  return {
+    ...client,
+    push(input: VcsPushInput): Promise<VcsPushResult> {
+      return userland.call<VcsPushResult>("vcsPush", {
+        repoPaths: input.repoPaths,
+        ...(input.sourceHead !== undefined ? { sourceHead: input.sourceHead } : {}),
+        ...(input.message !== undefined ? { message: input.message } : {}),
+      });
+    },
+  };
 }
 
 type ShellApprovalClient = ReturnType<typeof createShellApprovalClient>;

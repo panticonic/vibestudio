@@ -20,6 +20,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import {
   buildWorktreeManifest,
@@ -266,7 +267,7 @@ export class WorktreeStore {
   private async writeSidecar(dir: string, state: SidecarState): Promise<void> {
     const sidecarPath = this.sidecarPath(dir);
     await fsp.mkdir(path.dirname(sidecarPath), { recursive: true });
-    const tmp = `${sidecarPath}.${process.pid}.tmp`;
+    const tmp = `${sidecarPath}.${process.pid}.${randomUUID()}.tmp`;
     await fsp.writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`);
     await fsp.rename(tmp, sidecarPath);
   }
@@ -712,7 +713,7 @@ export class WorktreeStore {
   ): Promise<void> {
     const tmp = path.join(
       path.dirname(absPath),
-      `.${path.basename(absPath)}.${process.pid}.${Date.now()}.tmp`
+      `.${path.basename(absPath)}.${process.pid}.${randomUUID()}.tmp`
     );
     await fsp.rm(tmp, { force: true });
     await fsp.copyFile(source, tmp);

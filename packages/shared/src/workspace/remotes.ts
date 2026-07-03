@@ -31,12 +31,20 @@ export interface SyncDeclaredRemoteResult {
 }
 
 export function normalizeWorkspaceRepoPath(repoPath: string): string {
-  const normalized = repoPath.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
-  if (!normalized || normalized.includes("..")) {
+  const normalized = repoPath.replace(/\\/g, "/");
+  if (!normalized) {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
   }
   const segments = normalized.split("/");
-  if (segments.some((segment) => !SAFE_REPO_SEGMENT.test(segment))) {
+  // `.` and `..` are complete segments the regex would otherwise admit (`.` is in
+  // the char class); reject them alongside empty segments (leading/trailing slash
+  // or interior `//`) so this agrees with refService.validateRepoPath — one
+  // canonical string, no on-disk-colliding aliases.
+  if (
+    segments.some(
+      (segment) => segment === "." || segment === ".." || !SAFE_REPO_SEGMENT.test(segment)
+    )
+  ) {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
   }
   // Single-segment paths are only valid for the designated flat-section repos

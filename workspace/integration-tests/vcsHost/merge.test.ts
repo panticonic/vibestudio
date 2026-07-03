@@ -527,6 +527,57 @@ describe("WorkspaceVcs merge", () => {
     expect(await readAt(CTX_HEAD, "shared.txt")).toBe("CTX\nline2\nline3\n");
   });
 
+  it("abortMerge drops leftover resolution edits — no half-resolution survives", async () => {
+    await divergedSetup({ conflict: true });
+    const merge = await vcs.mergeHeads(CTX_HEAD, VCS_MAIN_HEAD, { actor: AGENT, repoPath: REPO });
+    expect(merge.status).toBe("conflicted");
+
+    // Partially resolve the conflict via a working edit (recorded, NOT committed).
+    await vcs.recordEdit({
+      head: CTX_HEAD,
+      repoPath: REPO,
+      edits: [{ kind: "write", path: "shared.txt", content: text("half-resolved\nline2\nline3\n") }],
+      actor: AGENT,
+    });
+    // The uncommitted resolution row exists while the merge is pending.
+    expect(
+      gad.instance.listWorkingEdits({ logId: REPO_LOG, head: CTX_HEAD }).length
+    ).toBeGreaterThan(0);
+
+    const aborted = await vcs.abortMerge(CTX_HEAD, { repoPath: REPO });
+    expect(aborted.aborted).toBe(true);
+    expect(await vcs.pendingMerge(CTX_HEAD, REPO)).toBeNull();
+
+    // The leftover resolution rows are gone — abort is atomic with clearing the
+    // pending merge (the discardWorkingEdits semantic).
+    expect(gad.instance.listWorkingEdits({ logId: REPO_LOG, head: CTX_HEAD })).toEqual([]);
+
+    // Compose/status shows the clean restored (committed) state, not the
+    // abandoned half-resolution — no resurrection onto the composed view.
+    expect(await readAt(CTX_HEAD, "shared.txt")).toBe("CTX\nline2\nline3\n");
+    // And on disk (the projected working view) it matches the restore, too.
+    expect(await readDisk(CTX_HEAD, "shared.txt")).toBe("CTX\nline2\nline3\n");
+  });
+
+  it("abortMerge on a main-head merge (no working rows) still clears the pending", async () => {
+    await divergedSetup({ conflict: true });
+    // Merge INTO main parks a pending merge on the `main` head (a main head
+    // never carries working edit rows — applyEditOps rejects main edits).
+    const merge = await vcs.mergeHeads(VCS_MAIN_HEAD, CTX_HEAD, { actor: USER, repoPath: REPO });
+    expect(merge.status).toBe("conflicted");
+    expect(await vcs.pendingMerge(VCS_MAIN_HEAD, REPO)).not.toBeNull();
+    expect(
+      gad.instance.listWorkingEdits({ logId: REPO_LOG, head: VCS_MAIN_HEAD })
+    ).toEqual([]);
+
+    const aborted = await vcs.abortMerge(VCS_MAIN_HEAD, { repoPath: REPO });
+    expect(aborted.aborted).toBe(true);
+    expect(await vcs.pendingMerge(VCS_MAIN_HEAD, REPO)).toBeNull();
+    expect(
+      gad.instance.listWorkingEdits({ logId: REPO_LOG, head: VCS_MAIN_HEAD })
+    ).toEqual([]);
+  });
+
   it("merge base over multi-parent history stays correct after a merge", async () => {
     await divergedSetup({ conflict: false });
     // Reconcile #1: pull main into ctx → a merge commit on the ctx head (the

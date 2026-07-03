@@ -113,6 +113,17 @@ describe("collectFindings — import-violation category", () => {
     expect(result.every((f) => f.category === "import-violation")).toBe(true);
   });
 
+  it("flags type-only imports/exports (type coupling is still coupling)", () => {
+    const text = [
+      `import type A from "@workspace/x";`,
+      `import { type B } from "@workspace-apps/shell";`,
+      `export type { C } from "@workspace-workers/gad-store";`,
+    ].join("\n");
+    const result = findings(text);
+    expect(result).toHaveLength(3);
+    expect(result.every((f) => f.category === "import-violation")).toBe(true);
+  });
+
   it("does not flag ordinary imports", () => {
     const result = findings(
       `import React from "react";\nimport x from "./local";\nimport y from "../sibling";`

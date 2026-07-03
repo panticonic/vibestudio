@@ -486,7 +486,18 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
         // manifest service), not here. Client-side routing is load-bearing —
         // the relay mints the on-behalf-of invocation token with the
-        // originating caller only when the DO is called directly.
+        // originating caller only when the DO is called directly. The method
+        // is kept in the advertised `vcsMethods` schema for typed clients, but
+        // reaching this host handler means the caller skipped that routing.
+        case "push":
+          throw new Error(
+            "vcs.push has no host handler: it is userland-dispatched (P3 flip) to the " +
+              "gad-store DO's `vcsPush`, reached via the `vcs` manifest service " +
+              "(workers.resolveService → DO). Route it through the runtime client's push " +
+              "override (packages/runtime/src/shared/vcsClient.ts createVcsClient), which " +
+              "mints the on-behalf-of invocation token with the originating caller — a host " +
+              "forward would erase it."
+          );
         case "pushStatus": {
           const [repoArgs] = args as [string[]];
           const repoPaths = repoArgs.map((r) => normalizeWorkspaceRepoPath(r));

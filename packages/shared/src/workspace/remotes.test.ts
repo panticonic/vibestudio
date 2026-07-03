@@ -7,6 +7,7 @@ import {
   getDeclaredRemoteForRepo,
   getDeclaredRemotesForRepo,
   isDeclaredRemoteRepoPath,
+  normalizeWorkspaceRepoPath,
   removeDeclaredRemoteFromConfig,
   setDeclaredRemoteInConfig,
   syncDeclaredRemoteForRepo,
@@ -28,6 +29,24 @@ describe("workspace remotes", () => {
     expect(isDeclaredRemoteRepoPath("panels/chat")).toBe(true);
     expect(isDeclaredRemoteRepoPath("tmp-git-stash-test")).toBe(false);
     expect(isDeclaredRemoteRepoPath("../tmp-git-stash-test")).toBe(false);
+  });
+
+  it("rejects non-canonical aliases that would collide with a canonical repo path", () => {
+    // `.`/`..`/empty segments must be rejected (not silently canonicalized) so a
+    // single string backs the log id, ref, projection dir, and caches — matching
+    // refService.validateRepoPath.
+    for (const bad of [
+      "panels/./chat",
+      "panels//chat",
+      "./panels/chat",
+      "panels/chat/",
+      "/panels/chat",
+      "..",
+      "a/../b",
+    ]) {
+      expect(isDeclaredRemoteRepoPath(bad), bad).toBe(false);
+      expect(() => normalizeWorkspaceRepoPath(bad), bad).toThrow(/Invalid workspace repo path/);
+    }
   });
 
   it("stores remote names as keys under the section/repo declaration", () => {

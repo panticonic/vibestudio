@@ -107,7 +107,7 @@ export function attachLocalHostBridges(
       return await putTree(blobsDir, entries, putOpts);
     },
   };
-  Object.defineProperty(instance, "contentStore", { value: () => store });
+  Object.defineProperty(instance, "contentStore", { value: () => store, configurable: true });
   const refsStore = {
     async readMain(repoPath: string): Promise<{ stateHash: string } | null> {
       const record = currentRefs()?.readMain(repoPath) ?? null;
@@ -151,10 +151,10 @@ export function attachLocalHostBridges(
         .map((e) => ({ seq: e.seq, old: e.old, new: e.new, operation: e.operation }));
     },
   };
-  Object.defineProperty(instance, "refsStore", { value: () => refsStore });
+  Object.defineProperty(instance, "refsStore", { value: () => refsStore, configurable: true });
   const buildStore = {
     validate: (input: { viewHash: string; repoPaths: string[]; baseViewHash?: string }) =>
       opts.buildValidate ? opts.buildValidate(input) : Promise.resolve([] as RepoBuildReport[]),
   };
-  Object.defineProperty(instance, "buildStore", { value: () => buildStore });
+  Object.defineProperty(instance, "buildStore", { value: () => buildStore, configurable: true });
 }

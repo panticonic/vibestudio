@@ -21,9 +21,16 @@ import { WorkspaceVcs } from "../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../src/server/vcsHost/paths.js";
 import type { GadCaller } from "../../src/server/vcsHost/testSupport.js";
 import { createRefService } from "../../src/server/services/refService.js";
+import type { RepoBuildReport } from "../../src/server/buildV2/index.js";
 
 const USER = { id: "user", kind: "user" };
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
+
+function report(
+  partial: Pick<RepoBuildReport, "repoPath" | "required" | "status">
+): RepoBuildReport {
+  return { kind: "content", role: "pushed", builds: [], ...partial };
+}
 
 function callerFor(gad: TestGad): GadCaller {
   return {
@@ -56,10 +63,20 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
         viewHash: string;
         repoPaths: string[];
         baseViewHash?: string;
-      }) => Promise<Array<{ required?: boolean; status: string; [k: string]: unknown }>>)
+      }) => Promise<RepoBuildReport[]>)
     | null = null;
+  // Per-test approval-gate override — lets a test PARK a push inside
+  // `refs.updateMains`' critical section (before the CAS swap), reproducing the
+  // unbounded human-decision window in which a concurrent heal must not reap the
+  // parked intent (plan §11).
+  let gateOverride: (() => Promise<void>) | null = null;
 
-  const doInstance = () => gad.instance as unknown as Record<string, (a: unknown) => Promise<unknown>>;
+  const doInstance = () =>
+    gad.instance as unknown as {
+      vcsPush: (a: unknown) => Promise<unknown>;
+      vcsMerge: (a: unknown) => Promise<unknown>;
+      vcsHealPublishDrift: (a: unknown) => Promise<unknown>;
+    };
   const push = (input: PushInput) =>
     doInstance().vcsPush(input) as Promise<
       | { status: "pushed" | "up-to-date"; repoPaths: string[] }
@@ -110,9 +127,15 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "do-push-"));
     await fsp.mkdir(path.join(root, "workspace"));
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
-    refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    refs = createRefService({
+      statePath: path.join(root, "refs"),
+      gate: async () => {
+        if (gateOverride) await gateOverride();
+      },
+    });
     buildFail = false;
     buildValidateOverride = null;
+    gateOverride = null;
     attachLocalHostBridges(gad.instance, {
       blobsDir: path.join(root, "blobs"),
       refs: () => refs,
@@ -120,7 +143,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
         buildValidateOverride
           ? buildValidateOverride(input)
           : buildFail
-            ? input.repoPaths.map((p) => ({ unit: p, required: true, status: "failed" }))
+            ? input.repoPaths.map((p) => report({ repoPath: p, required: true, status: "failed" }))
             : [],
     });
     vcs = new WorkspaceVcs({
@@ -231,6 +254,84 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
     }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
     expect(head?.stateHash).toBe(stateHash);
+  });
+
+  it("does not stale-reap a concurrent op's in-flight intent, but reaps a genuine orphan", async () => {
+    const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
+    const sql = (gad.instance as unknown as {
+      sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+    }).sql;
+    const pendingIntents = () => sql.exec("SELECT intent_id FROM gad_publish_intents").toArray() as Array<{ intent_id: string }>;
+    const inFlight = (gad.instance as unknown as { inFlightPublishIntents: Set<string> }).inFlightPublishIntents;
+
+    // Park a push inside `refs.updateMains`' approval gate: intent recorded and
+    // marked in-flight, but the CAS not yet applied (main still at expectedOld,
+    // no ref-log transition into `next`) — so `intentIsStale` sees it as stale.
+    let releaseGate!: () => void;
+    const gateBlocked = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    gateOverride = () => gateBlocked;
+    const pushPromise = push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER });
+    // Wait until the push has recorded its intent and parked on the gate.
+    for (let i = 0; i < 100 && pendingIntents().length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(pendingIntents()).toHaveLength(1);
+    expect(readMain("packages/a")).toBe(null); // CAS has not landed.
+    const parkedId = pendingIntents()[0]!.intent_id;
+    expect(inFlight.has(parkedId)).toBe(true);
+
+    // A concurrent heal (host-driven attach heal, or another op's on-demand
+    // reconcile) runs while the intent is parked in-flight: it must NOT reap it,
+    // even though the intent LOOKS stale (CAS not landed).
+    const healedDuring = (await doInstance().vcsHealPublishDrift({})) as { pendingIntents: number };
+    expect(healedDuring.pendingIntents).toBe(1);
+    expect(pendingIntents().map((r) => r.intent_id)).toContain(parkedId);
+
+    // Release the gate: the parked push completes, the CAS lands, provenance is
+    // recorded and the intent is cleared (and removed from the in-flight set).
+    releaseGate();
+    gateOverride = null;
+    await pushPromise;
+    expect(readMain("packages/a")).toBe(stateHash);
+    expect(pendingIntents()).toHaveLength(0);
+    expect(inFlight.has(parkedId)).toBe(false);
+
+    // Genuine-orphan case: an intent present in the DB but NOT in the in-flight
+    // set (a crashed op's leftover / a fresh instance whose in-memory set is
+    // empty). Its CAS never landed → a heal correctly reaps it.
+    const inst = gad.instance as unknown as {
+      recordPublishIntent: (i: unknown) => void;
+      transaction: (f: () => void) => void;
+    };
+    const orphanNext = "abcabc12".repeat(8);
+    inst.transaction(() =>
+      inst.recordPublishIntent({
+        intentId: "orphan-1",
+        operation: "push",
+        entries: [
+          {
+            repoPath: "packages/a",
+            logId: "vcs:repo:packages/a",
+            expectedOld: stateHash, // main is at stateHash; this intent never landed
+            next: orphanNext,
+            parentEventId: null,
+            parentStateHash: orphanNext,
+            files: [],
+            editOps: [],
+          },
+        ],
+        message: null,
+        actor: USER,
+        sourceHead: vcsContextHead("c1"),
+      })
+    );
+    expect(pendingIntents().map((r) => r.intent_id)).toContain("orphan-1");
+    expect(inFlight.has("orphan-1")).toBe(false);
+    const healedOrphan = (await doInstance().vcsHealPublishDrift({})) as { pendingIntents: number };
+    expect(healedOrphan.pendingIntents).toBe(0);
+    expect(pendingIntents()).toHaveLength(0);
   });
 
   it("rejects an editOps sequence that breaks first-parent chain continuity (A2/U2)", async () => {
@@ -406,15 +507,30 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
   // ── Scenarios ported from the deleted host push pipeline (workspaceVcs.push
   //    .test.ts): the DO's vcsPush is now the sole executor of these paths. ──
 
-  it("rejects duplicate repoPaths after normalization", async () => {
+  it("rejects duplicate repoPaths in one batch", async () => {
     await seedCommit("c1", "packages/a", "a.txt", "A\n");
     await expect(
       push({
-        repoPaths: ["packages/a", "packages/a/"],
+        repoPaths: ["packages/a", "packages/a"],
         sourceHead: vcsContextHead("c1"),
         actor: USER,
       })
     ).rejects.toThrow(/duplicate repoPath "packages\/a"/);
+    expect(readMain("packages/a")).toBeNull();
+  });
+
+  it("rejects a non-canonical repoPath alias outright", async () => {
+    await seedCommit("c1", "packages/a", "a.txt", "A\n");
+    // A trailing slash (or any `.`/empty segment) is a non-canonical alias for
+    // "packages/a" that would collide on disk; it is now rejected at the
+    // normalizer rather than silently stripped, so aliases never reach dedup.
+    await expect(
+      push({
+        repoPaths: ["packages/a/"],
+        sourceHead: vcsContextHead("c1"),
+        actor: USER,
+      })
+    ).rejects.toThrow(/Invalid workspace repo path/);
     expect(readMain("packages/a")).toBeNull();
   });
 
@@ -445,8 +561,8 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
   it("a non-required (regression-gated) build failure does NOT block the push", async () => {
     const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
     buildValidateOverride = async () => [
-      { unit: "packages/a", required: true, status: "ok" },
-      { unit: "panels/dependent", required: false, status: "failed" },
+      report({ repoPath: "packages/a", required: true, status: "ok" }),
+      report({ repoPath: "panels/dependent", required: false, status: "failed" }),
     ];
     const result = await push({
       repoPaths: ["packages/a"],
@@ -497,5 +613,199 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
     }
     // main carries c2's change (the winner of the race), not c1's.
     expect(readMain("packages/a")).not.toBe(mainBase);
+  });
+
+  it("completes provenance from the parked intent when a lost-response retry surfaces as a conflict (own CAS landed)", async () => {
+    const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
+    const sql = (gad.instance as unknown as {
+      sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+    }).sql;
+    // Simulate the httpClient auto-retry hazard: attempt 1 commits host-side but
+    // its response is lost, so the DO re-POSTs and hits the ref it ALREADY
+    // advanced → a compare-and-swap conflict. The intent must NOT be discarded
+    // before that conflict is classified; the CAS landed, so provenance must be
+    // recorded with full fidelity (NOT a spurious success with the intent thrown
+    // away, and NOT a degraded synthetic catch-up).
+    const refsBridge = (gad.instance as unknown as {
+      refsStore: () => { updateMains: (i: unknown) => Promise<unknown> };
+    }).refsStore();
+    const originalUpdate = refsBridge.updateMains.bind(refsBridge);
+    let applied = false;
+    refsBridge.updateMains = async (input: unknown) => {
+      if (!applied) {
+        applied = true;
+        await originalUpdate(input); // attempt 1 lands host-side (ref advances)
+        // ...its response is lost; the retry POST conflicts on the ref we moved.
+        throw new Error("Main-ref group compare-and-swap conflict: lost response");
+      }
+      return originalUpdate(input);
+    };
+
+    const result = await push({
+      repoPaths: ["packages/a"],
+      sourceHead: vcsContextHead("c1"),
+      actor: USER,
+    });
+    // The ref landed; the outcome is a clean up-to-date/pushed, never an error.
+    expect(["pushed", "up-to-date"]).toContain(result.status);
+    expect(readMain("packages/a")).toBe(stateHash);
+
+    // Provenance recorded with full fidelity: the DO main head matches the ref.
+    const head = (gad.instance as unknown as {
+      resolveWorktreeHeadInternal: (
+        l: string,
+        h: string
+      ) => { stateHash: string; commitEventId: string | null } | null;
+    }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
+    expect(head?.stateHash).toBe(stateHash);
+    // The main commit's ops are REAL (from the parked intent), not the crash-heal
+    // synthetic catch-up the old delete-then-synthesize path would have produced.
+    const ops = sql
+      .exec(
+        "SELECT synthetic FROM gad_worktree_edit_ops WHERE committed_event_id = ?",
+        head?.commitEventId
+      )
+      .toArray() as Array<{ synthetic: number | null }>;
+    expect(ops.length).toBeGreaterThan(0);
+    expect(ops.every((o) => o.synthetic == null)).toBe(true);
+
+    // Intent completed + cleared (not left parked, not deleted without provenance).
+    const pending = sql.exec("SELECT * FROM gad_publish_intents").toArray();
+    expect(pending).toHaveLength(0);
+  });
+
+  it("parks then heal-reaps the write-ahead intent on a pre-CAS approval denial (no ref move, no synthetic)", async () => {
+    await seedCommit("c1", "packages/a", "a.txt", "A\n");
+    const sql = (gad.instance as unknown as {
+      sql: { exec: (s: string, ...a: unknown[]) => { toArray: () => unknown[] } };
+    }).sql;
+    // The approval gate denies INSIDE updateMains, before the swap: no ref moves.
+    // This surfaces to the DO as a non-conflict throw — indistinguishable by error
+    // type from a post-apply transport error — so the DO does NOT eagerly delete;
+    // it parks the write-ahead intent for the ref-log reconciliation to settle.
+    gateOverride = async () => {
+      throw new Error("approval denied by policy");
+    };
+    await expect(
+      push({ repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER })
+    ).rejects.toThrow(/approval denied/);
+    gateOverride = null;
+
+    // No ref advanced.
+    expect(readMain("packages/a")).toBe(null);
+    // Parked (not eagerly deleted), and NOT in-flight after the failed attempt.
+    const parked = sql.exec("SELECT intent_id FROM gad_publish_intents").toArray();
+    expect(parked).toHaveLength(1);
+    const inFlight = (gad.instance as unknown as { inFlightPublishIntents: Set<string> })
+      .inFlightPublishIntents;
+    expect(inFlight.size).toBe(0);
+
+    // Heal reconciles against the ref log: the CAS never landed (main absent, no
+    // log transition into `next`) → the intent is a genuine orphan and is reaped.
+    const healed = (await doInstance().vcsHealPublishDrift({})) as { pendingIntents: number };
+    expect(healed.pendingIntents).toBe(0);
+    expect(sql.exec("SELECT * FROM gad_publish_intents").toArray()).toHaveLength(0);
+    // No synthetic catch-up was fabricated for a main that never moved.
+    expect(readMain("packages/a")).toBe(null);
+    const head = (gad.instance as unknown as {
+      resolveWorktreeHeadInternal: (l: string, h: string) => { stateHash: string } | null;
+    }).resolveWorktreeHeadInternal("vcs:repo:packages/a", "main");
+    expect(head).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Source-head confinement (register row 11): a sandboxed caller may only push
+  // its OWN `ctx:` head. The context is HOST-VERIFIED — threaded on the dispatch
+  // envelope (`message.callerContextId`), never client-asserted. We drive the DO
+  // through the REAL `__rpc` envelope path (as the relay does) so the read-at-
+  // entry `this.caller` / `this.callerContextId` binding is exercised.
+  // -------------------------------------------------------------------------
+  describe("source-head confinement", () => {
+    async function pushViaEnvelope(
+      caller: { callerId: string; callerKind: string },
+      callerContextId: string | undefined,
+      input: { repoPaths: string[]; sourceHead: string; actor?: { id: string; kind: string } }
+    ): Promise<{ status: string; repoPaths?: string[] }> {
+      const objectKey = "workspace-gad";
+      const fetchable = gad.instance as unknown as { fetch(r: Request): Promise<Response> };
+      const envelope = {
+        from: caller.callerId,
+        target: `do:test:${objectKey}`,
+        delivery: { caller },
+        provenance: [],
+        message: {
+          type: "request",
+          requestId: crypto.randomUUID(),
+          fromId: caller.callerId,
+          method: "vcsPush",
+          args: [input],
+          ...(callerContextId ? { callerContextId } : {}),
+        },
+      };
+      const res = await fetchable.fetch(
+        new Request(`http://test/${objectKey}/__rpc`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(envelope),
+        })
+      );
+      const text = await res.text();
+      const respEnv = (text ? JSON.parse(text) : {}) as {
+        message?: { type?: string; result?: unknown; error?: unknown };
+      };
+      const msg = respEnv.message;
+      if (msg?.type === "response" && msg.error != null) {
+        throw new Error(typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error));
+      }
+      return msg?.result as { status: string; repoPaths?: string[] };
+    }
+
+    it("rejects a sandboxed caller pushing a FOREIGN context head", async () => {
+      await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      await expect(
+        pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c2", {
+          repoPaths: ["packages/a"],
+          sourceHead: vcsContextHead("c1"),
+          actor: USER,
+        })
+      ).rejects.toThrow(/may only push their own context head \(ctx:c2\)/);
+      expect(readMain("packages/a")).toBe(null);
+    });
+
+    it("fails closed when a sandboxed caller has NO registered context", async () => {
+      await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      await expect(
+        pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, undefined, {
+          repoPaths: ["packages/a"],
+          sourceHead: vcsContextHead("c1"),
+          actor: USER,
+        })
+      ).rejects.toThrow(/has no registered context/);
+      expect(readMain("packages/a")).toBe(null);
+    });
+
+    it("allows a sandboxed caller to push its OWN context head", async () => {
+      const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      const result = await pushViaEnvelope({ callerId: "panel:p1", callerKind: "panel" }, "c1", {
+        repoPaths: ["packages/a"],
+        sourceHead: vcsContextHead("c1"),
+        actor: USER,
+      });
+      expect(result.status).toBe("pushed");
+      expect(readMain("packages/a")).toBe(stateHash);
+    });
+
+    it("leaves privileged (server/chrome) callers UNRESTRICTED — any source head", async () => {
+      // A server caller with no context registration pushes a `ctx:` head that is
+      // not "its own" — the old `isPrivilegedCaller` short-circuit still applies.
+      const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      const result = await pushViaEnvelope(
+        { callerId: "server", callerKind: "server" },
+        undefined,
+        { repoPaths: ["packages/a"], sourceHead: vcsContextHead("c1"), actor: USER }
+      );
+      expect(result.status).toBe("pushed");
+      expect(readMain("packages/a")).toBe(stateHash);
+    });
   });
 });

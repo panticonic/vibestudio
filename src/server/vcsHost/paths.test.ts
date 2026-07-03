@@ -1,6 +1,31 @@
 import { describe, it, expect } from "vitest";
 
-import { assertSafeVcsPath } from "./paths.js";
+import { assertSafeVcsPath, normalizeRepoPathForLog } from "./paths.js";
+
+describe("normalizeRepoPathForLog", () => {
+  it("accepts canonical repo paths", () => {
+    for (const ok of ["panels/chat", "packages/foo", "projects/vault/sub", "meta"]) {
+      expect(normalizeRepoPathForLog(ok), ok).toBe(ok);
+    }
+  });
+
+  it("rejects non-canonical aliases that would collide on disk", () => {
+    // These are the aliases refService.validateRepoPath also rejects: they must
+    // never split into a second identity backing the same projection dir/cache.
+    for (const bad of [
+      "panels/./chat",
+      "panels//chat",
+      "./panels/chat",
+      "panels/chat/",
+      "/panels/chat",
+      "..",
+      "a/../b",
+      "",
+    ]) {
+      expect(() => normalizeRepoPathForLog(bad), bad).toThrow(/Invalid workspace repo path/);
+    }
+  });
+});
 
 describe("assertSafeVcsPath", () => {
   it("rejects escapes, absolute paths, and NUL", () => {

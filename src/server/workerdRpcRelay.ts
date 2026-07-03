@@ -55,6 +55,11 @@ export interface DurableObjectRelayDeps {
   /** Host-minted on-behalf-of correlation nonce for vcs-DO dispatches
    *  (narrow-host-vcs §4). Opaque; never identity-bearing. */
   invocationToken?: string;
+  /** Host-resolved context registration id of the originating caller, threaded
+   *  alongside {@link invocationToken} on vcs-DO dispatches so the writer DO can
+   *  structurally confine a sandboxed push's `ctx:` source head (register row
+   *  11). HOST-VERIFIED, never client-asserted. */
+  callerContextId?: string;
   /** Optional dedup key, propagated so reissued calls collapse server-side. */
   idempotencyKey?: string;
   /** Read-only containment flag propagated through the request envelope. */
@@ -193,6 +198,7 @@ export async function postToDurableObject(
       method,
       args,
       ...(deps.invocationToken ? { invocationToken: deps.invocationToken } : {}),
+      ...(deps.callerContextId ? { callerContextId: deps.callerContextId } : {}),
     },
   });
   return unwrapResponseEnvelope(await postEnvelopeToDO(ref, envelope, deps));

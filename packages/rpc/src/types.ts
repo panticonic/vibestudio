@@ -33,6 +33,17 @@ export interface RpcRequest {
    */
   invocationToken?: string;
   /**
+   * Set only by the HOST on a userland `vcs` DO dispatch, at the SAME relay
+   * chokepoint that mints {@link invocationToken}: the originating caller's
+   * host-resolved context registration id (`entityCache.resolveContext`), or
+   * absent when the caller has none. HOST-VERIFIED, never client-asserted — a
+   * sandboxed caller cannot set or influence it. The vcs writer DO reads it
+   * read-at-entry to structurally confine a sandboxed push's `ctx:` source head
+   * to the caller's OWN context (docs/narrow-host-vcs-plan.md §3, register row
+   * 11). Carries no authority of its own; it only scopes source-head selection.
+   */
+  callerContextId?: string;
+  /**
    * Explicit opt-in (set ONLY by `callDeferred`) that this call may complete
    * out-of-band: a human-gated server method (approval, credential use) may
    * park the call, ack immediately with `{deferred, requestId}`, and deliver

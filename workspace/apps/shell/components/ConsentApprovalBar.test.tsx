@@ -19,6 +19,12 @@ const shellClient = vi.hoisted(() => ({
   unsubscribe: vi.fn(() => Promise.resolve()),
   onRpcEvent: vi.fn((_event: string, _listener: (event: { payload: unknown }) => void) => () => {}),
   getText: vi.fn<(hash: string) => Promise<string | null>>(() => Promise.resolve("blob-text")),
+  getTreeSnapshot: vi.fn<() => Promise<{ rootPanels: unknown[] }>>(() =>
+    Promise.resolve({ rootPanels: [] })
+  ),
+  navigate: vi.fn(() => Promise.resolve(null)),
+  createPanel: vi.fn(() => Promise.resolve(null)),
+  navigateToId: vi.fn(),
 }));
 
 // Capture what the coordinator drives the content overlay with, and the intent
@@ -43,6 +49,11 @@ vi.mock("../shell/client", () => ({
   events: { subscribe: shellClient.subscribe, unsubscribe: shellClient.unsubscribe },
   onRpcEvent: shellClient.onRpcEvent,
   blobstore: { getText: shellClient.getText },
+  panel: {
+    getTreeSnapshot: shellClient.getTreeSnapshot,
+    navigate: shellClient.navigate,
+    createPanel: shellClient.createPanel,
+  },
 }));
 
 vi.mock("../shell/useShellContentOverlay", () => ({
@@ -67,7 +78,7 @@ vi.mock("../state/themeAtoms", async () => {
 });
 
 vi.mock("./NavigationContext", () => ({
-  useNavigation: () => ({ navigateToId: vi.fn() }),
+  useNavigation: () => ({ navigateToId: shellClient.navigateToId }),
 }));
 
 import { ConsentApprovalBar } from "./ConsentApprovalBar";
@@ -301,6 +312,61 @@ describe("ConsentApprovalBar coordinator", () => {
     emit({ type: "fetch-blob", hash: "not-in-payload", approvalId: "d1" } as unknown as ApprovalCardIntent);
     await Promise.resolve();
     expect(shellClient.getText).not.toHaveBeenCalledWith("not-in-payload");
+  });
+
+  const gadTarget = {
+    repoPath: "packages/demo",
+    path: "logo.png",
+    oldHash: "h-old",
+    newHash: "h-new",
+    oldState: "state:a",
+    newState: "state:b",
+  };
+
+  it("creates a gad-browser panel with the target on an open-in-gad-browser intent", async () => {
+    shellClient.getTreeSnapshot.mockResolvedValueOnce({ rootPanels: [] });
+    shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({
+      type: "open-in-gad-browser",
+      target: gadTarget,
+      approvalId: "d1",
+    } as unknown as ApprovalCardIntent);
+
+    await waitFor(() => {
+      expect(shellClient.createPanel).toHaveBeenCalledWith("panels/gad-browser", {
+        stateArgs: { diffTarget: gadTarget },
+      });
+    });
+    expect(shellClient.navigate).not.toHaveBeenCalled();
+  });
+
+  it("reuses and focuses an existing gad-browser panel instead of creating one", async () => {
+    shellClient.getTreeSnapshot.mockResolvedValueOnce({
+      rootPanels: [
+        { id: "other", snapshot: { source: "panels/chat" }, children: [] },
+        { id: "gadb", snapshot: { source: "panels/gad-browser" }, children: [] },
+      ],
+    });
+    shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
+    mountBar();
+    await waitFor(() => expect(overlay.options?.open).toBe(true));
+
+    emit({
+      type: "open-in-gad-browser",
+      target: gadTarget,
+      approvalId: "d1",
+    } as unknown as ApprovalCardIntent);
+
+    await waitFor(() => {
+      expect(shellClient.navigate).toHaveBeenCalledWith("gadb", "panels/gad-browser", {
+        stateArgs: { diffTarget: gadTarget },
+      });
+      expect(shellClient.navigateToId).toHaveBeenCalledWith("gadb");
+    });
+    expect(shellClient.createPanel).not.toHaveBeenCalled();
   });
 
   it("keeps decisions working while a diff approval is active", async () => {

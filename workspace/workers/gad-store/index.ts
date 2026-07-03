@@ -625,9 +625,14 @@ function normalizePath(path: string): string {
 /** Normalize a workspace-relative repo path (the `vcs:repo:<path>` key) —
  *  kept semantically identical to the host's normalizeRepoPathForLog. */
 function normalizeRepoPathArg(repoPath: string): string {
-  const normalized = repoPath.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
-  if (!normalized || normalized.includes("..")) {
+  const normalized = repoPath.replace(/\\/gu, "/");
+  if (!normalized) {
     throw new Error(`Invalid workspace repo path: ${repoPath}`);
+  }
+  for (const segment of normalized.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") {
+      throw new Error(`Invalid workspace repo path: ${repoPath}`);
+    }
   }
   return normalized;
 }
@@ -1031,6 +1036,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
   // `synthetic` column on gad_worktree_edit_ops (crash-heal chain restarts).
   static override schemaVersion = 22;
+
+  /**
+   * IntentIds of publish intents this live instance is actively driving — added
+   * SYNCHRONOUSLY at `recordPublishIntent` and cleared in a `finally` covering
+   * the whole publish attempt. A concurrent `healPublishDrift` (on-demand from
+   * another push/merge/import, or host-driven `vcsHealPublishDrift`) must NOT
+   * stale-reap an intent parked here across its (potentially long, human-gated)
+   * `refs.updateMains` critical section — the CAS may still land. The set is
+   * in-memory ON PURPOSE: it dies with the instance, which is exactly when a
+   * parked intent becomes genuinely orphaned (crash / eviction after the CAS but
+   * before completion); a fresh instance starts with an empty set, so its
+   * startup heal correctly reaps and completes the crashed op's intent (§6).
+   */
+  private readonly inFlightPublishIntents = new Set<string>();
 
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
@@ -4544,6 +4563,32 @@ export class GadWorkspaceDO extends DurableObjectBase {
       .toArray() as JsonRecord[];
   }
 
+  /** Drop a head's uncommitted (working) edit-op rows and return how many were
+   *  removed. Scoped to the exact (logId, head), committed rows untouched. Must
+   *  be called inside a transaction by the caller when clearing a pending merge
+   *  alongside it, so the abort is atomic. */
+  private deleteUncommittedWorkingEdits(logId: string, head: string): number {
+    const removed = Number(
+      (
+        this.sql
+          .exec(
+            `SELECT COUNT(*) AS c FROM gad_worktree_edit_ops
+             WHERE log_id = ? AND head = ? AND committed_event_id IS NULL`,
+            logId,
+            head
+          )
+          .toArray()[0] as { c: number }
+      ).c ?? 0
+    );
+    this.sql.exec(
+      `DELETE FROM gad_worktree_edit_ops
+       WHERE log_id = ? AND head = ? AND committed_event_id IS NULL`,
+      logId,
+      head
+    );
+    return removed;
+  }
+
   /** Apply one persisted edit-op row to a working file map (replay uses the
    *  row's post-content hash; hunks are pure provenance, never applied). */
   private applyWorkingRowToFiles(files: Map<string, WorkingFileEntry>, row: JsonRecord): void {
@@ -5223,24 +5268,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   discardWorkingEdits(input: { logId: string; head: string }): { discarded: number } {
     this.ensureReady();
     return this.transaction(() => {
-      const discarded = Number(
-        (
-          this.sql
-            .exec(
-              `SELECT COUNT(*) AS c FROM gad_worktree_edit_ops
-               WHERE log_id = ? AND head = ? AND committed_event_id IS NULL`,
-              input.logId,
-              input.head
-            )
-            .toArray()[0] as { c: number }
-        ).c ?? 0
-      );
-      this.sql.exec(
-        `DELETE FROM gad_worktree_edit_ops
-         WHERE log_id = ? AND head = ? AND committed_event_id IS NULL`,
-        input.logId,
-        input.head
-      );
+      const discarded = this.deleteUncommittedWorkingEdits(input.logId, input.head);
       this.deleteStateValue(`merge:${input.logId}:${input.head}`);
       return { discarded };
     });
@@ -6158,15 +6186,76 @@ export class GadWorkspaceDO extends DurableObjectBase {
     actor?: ParticipantRef | null;
   }): Promise<VcsPushResultDo> {
     // READ-AT-ENTRY (durable invocation-token contract): capture the
-    // on-behalf-of token AND the verified caller synchronously, before ANY
-    // await — a concurrent dispatch can rebind either across an await boundary.
+    // on-behalf-of token, the HOST-RESOLVED caller context, AND the verified
+    // caller synchronously, before ANY await — a concurrent dispatch can rebind
+    // any of them across an await boundary.
     const invocationToken = this.invocationToken;
+    const confinement = this.pushSourceConfinement();
     // `actor` is derived from the verified caller (client-side flip: userland
     // callers no longer thread it). An explicit actor (in-process host callers)
     // still wins for parity with the pre-flip contract.
     const actor = input.actor ?? this.callerParticipant();
     this.ensureReady();
+    // Structural source-head confinement (register row 11): a sandboxed caller
+    // may only push its OWN `ctx:` head. The context is HOST-VERIFIED (threaded
+    // via the relay, never client-asserted); enforced BEFORE any read/publish.
+    this.assertSourceHeadConfined(input.sourceHead, confinement);
     return this.runVcsPush({ ...input, actor }, invocationToken, false);
+  }
+
+  /**
+   * Snapshot the source-head confinement inputs read-at-entry: the caller kind
+   * (sandboxed vs privileged) and the HOST-RESOLVED context id threaded on the
+   * dispatch. Both must be captured synchronously at handler entry.
+   */
+  private pushSourceConfinement(): { callerKind: string | null; callerContextId: string | null } {
+    return {
+      callerKind: this.caller?.callerKind ?? null,
+      callerContextId: this.callerContextId ?? null,
+    };
+  }
+
+  /**
+   * Structural source-head confinement (docs/narrow-host-vcs-plan.md §3,
+   * register row 11): recovers the deleted host `resolvePushSourceHead` policy
+   * from the HOST-VERIFIED context instead of trusting the client-supplied head.
+   *
+   * - Privileged callers (chrome `shell`, `server`, DO-internal `do`, or a
+   *   system/in-process call with no verified caller) are UNRESTRICTED — they
+   *   may push any source head (matching the old `isPrivilegedCaller` short-
+   *   circuit and the in-process host push path).
+   * - Sandboxed callers (`panel`/`app`/`worker`/`extension`) pushing a `ctx:`
+   *   source head must own it: the head must equal `ctx:{host-resolved context}`.
+   *   A foreign `ctx:` head is REJECTED; an absent context fails CLOSED (the old
+   *   "vcs.push … requires a context" error). Only a `ctx:` head is confined — a
+   *   sandboxed caller naming `main`/`import:` as a push source gains nothing (the
+   *   FF/phantom guards reject it), matching the old policy's scope.
+   */
+  private assertSourceHeadConfined(
+    sourceHead: string,
+    confinement: { callerKind: string | null; callerContextId: string | null }
+  ): void {
+    const { callerKind, callerContextId } = confinement;
+    const isSandboxed =
+      callerKind === "panel" ||
+      callerKind === "app" ||
+      callerKind === "worker" ||
+      callerKind === "extension";
+    if (!isSandboxed) return;
+    if (!sourceHead.startsWith("ctx:")) return;
+    if (!callerContextId) {
+      throw new Error(
+        `push: ${callerKind} caller pushed context head "${sourceHead}" but has no registered ` +
+          `context — refusing (a sandboxed push must originate from its own context).`
+      );
+    }
+    const ownHead = `ctx:${callerContextId}`;
+    if (sourceHead !== ownHead) {
+      throw new Error(
+        `push: ${callerKind} callers may only push their own context head (${ownHead}), ` +
+          `not ${sourceHead}.`
+      );
+    }
   }
 
   /** The verified caller as a provenance participant, read synchronously at
@@ -6333,44 +6422,74 @@ export class GadWorkspaceDO extends DurableObjectBase {
       actor: input.actor,
       sourceHead,
     };
+    // Mark in-flight BEFORE the durable record + the (human-gated) CAS window so
+    // a concurrent heal never stale-reaps this parked intent (see field doc).
+    this.inFlightPublishIntents.add(intent.intentId);
     this.transaction(() => this.recordPublishIntent(intent));
-
     try {
-      await this.refsStore().updateMains({
-        entries: entries.map((e) => ({ repoPath: e.repoPath, expectedOld: e.expectedOld, next: e.next })),
-        reason: input.message ?? `push ${repoPaths.join(", ")} from ${sourceHead}`,
-        operation: "push",
-        ...(invocationToken ? { invocationToken } : {}),
-      });
-    } catch (error) {
-      this.transaction(() => this.deletePublishIntent(intent.intentId));
-      if (this.isRefConflictError(error)) {
-        if (!isRetry) return this.runVcsPush(input, invocationToken, true);
-        const race = await this.pushRaceResult(advancing, reports);
-        if (race) return race;
+      try {
+        await this.refsStore().updateMains({
+          entries: entries.map((e) => ({ repoPath: e.repoPath, expectedOld: e.expectedOld, next: e.next })),
+          reason: input.message ?? `push ${repoPaths.join(", ")} from ${sourceHead}`,
+          operation: "push",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        if (this.isRefConflictError(error)) {
+          // A conflict may be our OWN duplicate POST: attempt 1 committed
+          // host-side, its response was lost, and the auto-retry then hit the ref
+          // we already advanced. Do NOT delete before classifying — if our
+          // candidate IS the current main the CAS landed and we owe provenance,
+          // not a spurious success without it.
+          //
+          // First-attempt conflict: re-drive with a fresh intent. THIS intent
+          // stays parked; the re-drive's entry heal (healPublishDrift) completes
+          // it if our CAS actually landed (lost response) — it is in-flight, so
+          // that heal never stale-reaps it — else a later heal discards it against
+          // the ref log. The outer finally clears this intent's in-flight marker.
+          if (!isRetry) return this.runVcsPush(input, invocationToken, true);
+          const race = await this.pushRaceResult(advancing, reports);
+          if (race) {
+            // up-to-date ⇒ every candidate equals the current main ⇒ our CAS
+            // landed (lost response): record provenance (idempotent — skips
+            // entries whose recorded main already equals `next`) before returning,
+            // instead of reporting success with the provenance thrown away.
+            if (race.status === "up-to-date") this.completePublishIntent(intent);
+            return race;
+          }
+          // Indeterminate conflict: leave the intent parked; healPublishDrift
+          // completes it if the CAS landed or discards it against the ref log.
+          throw error;
+        }
+        // Non-conflict failure (approval denial, or a lost-response transport
+        // error that may or may not have applied): do NOT delete. The write-ahead
+        // intent exists precisely to survive a crash between the CAS and its
+        // provenance — healPublishDrift completes it if the CAS landed, else
+        // discards it against the ref log. Deleting here would fall back to the
+        // degraded synthetic catch-up ingest (lineage/attribution/hunk loss).
         throw error;
       }
-      // Approval denial or any other failure: no ref moved, intent discarded.
-      throw error;
-    }
 
-    // Success: record provenance with full fidelity, then complete (delete) the
-    // intent. A crash between the CAS and here is healed on next start / push.
-    this.completePublishIntent(intent);
-    for (const c of advancing) {
-      await this.mirrorStateToContentStore(store, c.files, c.candidateState);
+      // Success: record provenance with full fidelity, then complete (delete) the
+      // intent. A crash between the CAS and here is healed on next start / push.
+      this.completePublishIntent(intent);
+      for (const c of advancing) {
+        await this.mirrorStateToContentStore(store, c.files, c.candidateState);
+      }
+      // Re-pin the ctx source's base view to the freshly-published workspace view
+      // (host did this at workspaceVcs.ts push tail): the context now reads from
+      // the advanced main, so subsequent reads/edits diff against it, not the
+      // stale pre-push base.
+      if (sourceHead.startsWith("ctx:")) {
+        await this.vcsPinContext({
+          contextId: sourceHead.slice("ctx:".length),
+          baseView: candidateView,
+        }).catch(() => {});
+      }
+      return { status: "pushed", repoPaths: advancing.map((c) => c.repoPath), reports };
+    } finally {
+      this.inFlightPublishIntents.delete(intent.intentId);
     }
-    // Re-pin the ctx source's base view to the freshly-published workspace view
-    // (host did this at workspaceVcs.ts push tail): the context now reads from
-    // the advanced main, so subsequent reads/edits diff against it, not the
-    // stale pre-push base.
-    if (sourceHead.startsWith("ctx:")) {
-      await this.vcsPinContext({
-        contextId: sourceHead.slice("ctx:".length),
-        baseView: candidateView,
-      }).catch(() => {});
-    }
-    return { status: "pushed", repoPaths: advancing.map((c) => c.repoPath), reports };
   }
 
   /**
@@ -6466,27 +6585,36 @@ export class GadWorkspaceDO extends DurableObjectBase {
       actor: input.actor,
       sourceHead: input.sourceHead,
     };
+    // Mark in-flight BEFORE the durable record + the (human-gated) CAS window so
+    // a concurrent heal never stale-reaps this parked intent (see field doc).
+    this.inFlightPublishIntents.add(intent.intentId);
     this.transaction(() => this.recordPublishIntent(intent));
-
     try {
-      await this.refsStore().updateMains({
-        entries: [{ repoPath: entry.repoPath, expectedOld: entry.expectedOld, next: entry.next }],
-        reason: input.message ?? `import ${repoPath} from git`,
-        operation: "import",
-        ...(invocationToken ? { invocationToken } : {}),
-      });
-    } catch (error) {
-      // Approval denial or a CAS conflict: no ref moved, discard the intent.
-      // Import is idempotent (re-scan + re-publish), so no in-place retry loop.
-      this.transaction(() => this.deletePublishIntent(intent.intentId));
-      throw error;
-    }
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath: entry.repoPath, expectedOld: entry.expectedOld, next: entry.next }],
+          reason: input.message ?? `import ${repoPath} from git`,
+          operation: "import",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        // updateMains may have landed host-side before throwing (a lost-response
+        // duplicate POST surfacing as a conflict or transport error). Do NOT
+        // delete: leave the write-ahead intent parked so healPublishDrift
+        // completes it with full provenance if the CAS landed, or discards it
+        // against the ref log if it never did. Import is idempotent (re-scan +
+        // re-publish), so no in-place retry loop is needed.
+        throw error;
+      }
 
-    // Success: record provenance with full fidelity, then complete the intent.
-    // A crash between the CAS and here is healed on next start / push.
-    this.completePublishIntent(intent);
-    await this.mirrorStateToContentStore(store, files, candidateState);
-    return { status: "published", repoPath, stateHash: candidateState };
+      // Success: record provenance with full fidelity, then complete the intent.
+      // A crash between the CAS and here is healed on next start / push.
+      this.completePublishIntent(intent);
+      await this.mirrorStateToContentStore(store, files, candidateState);
+      return { status: "published", repoPath, stateHash: candidateState };
+    } finally {
+      this.inFlightPublishIntents.delete(intent.intentId);
+    }
   }
 
   /** After a CAS conflict exhausted retries: reclassify each advancing repo
@@ -6628,7 +6756,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
         continue;
       }
       if (!anyLanded && (await this.intentIsStale(intent))) {
-        this.transaction(() => this.deletePublishIntent(intent.intentId));
+        // Never stale-reap an intent a live op is actively driving: it is parked
+        // across its (possibly human-gated) `refs.updateMains` window and its CAS
+        // may still land — the appearance of staleness is exactly that window,
+        // not a genuine orphan. Its repoPaths are already in `coveredMains`
+        // (added above for every entry), so skipping the reap does NOT let the
+        // synthetic pass below synthesize over it. A genuinely orphaned intent
+        // (owner crashed/evicted) is absent from the set on the fresh instance's
+        // startup heal and is reaped there, completing recovery (§6).
+        if (!this.inFlightPublishIntents.has(intent.intentId)) {
+          this.transaction(() => this.deletePublishIntent(intent.intentId));
+        }
         continue;
       }
       // Mixed / indeterminate: complete the landed entries, keep the rest for a
@@ -7035,32 +7173,42 @@ export class GadWorkspaceDO extends DurableObjectBase {
         actor,
         sourceHead,
       };
+      // Mark in-flight BEFORE the durable record + the (human-gated) CAS window
+      // so a concurrent heal never stale-reaps this parked intent (see field doc).
+      this.inFlightPublishIntents.add(intent.intentId);
       this.transaction(() => this.recordPublishIntent(intent));
       try {
-        await this.refsStore().updateMains({
-          entries: [{ repoPath, expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState, next: mergedState }],
-          reason: `merge ${repoPath} from ${sourceHead}`,
-          operation: "merge",
-          ...(invocationToken ? { invocationToken } : {}),
-        });
-      } catch (error) {
-        this.transaction(() => this.deletePublishIntent(intent.intentId));
-        // A concurrent main advance changed the merge base — the caller
-        // recomputes and re-drives (best-effort per-repo, like the host path).
-        throw error;
+        try {
+          await this.refsStore().updateMains({
+            entries: [{ repoPath, expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState, next: mergedState }],
+            reason: `merge ${repoPath} from ${sourceHead}`,
+            operation: "merge",
+            ...(invocationToken ? { invocationToken } : {}),
+          });
+        } catch (error) {
+          // A concurrent main advance changed the merge base — the caller
+          // recomputes and re-drives (best-effort per-repo, like the host path).
+          // Do NOT delete: updateMains may have landed host-side before throwing
+          // (a lost-response duplicate POST). Leave the write-ahead intent parked
+          // so healPublishDrift completes it with full provenance if the CAS
+          // landed, or discards it against the ref log if it never did.
+          throw error;
+        }
+        this.completePublishIntent(intent);
+        const headRef = this.resolveWorktreeHeadInternal(logId, "main");
+        return {
+          status: "merged",
+          stateHash: mergedState,
+          eventId: headRef?.commitEventId ?? theirsEventId ?? "",
+          headHash: headRef?.commitEventId ?? mergedState,
+          previousStateHash: oursState,
+          conflicts: [],
+          mergeable: "clean",
+          upstreamCommits,
+        };
+      } finally {
+        this.inFlightPublishIntents.delete(intent.intentId);
       }
-      this.completePublishIntent(intent);
-      const headRef = this.resolveWorktreeHeadInternal(logId, "main");
-      return {
-        status: "merged",
-        stateHash: mergedState,
-        eventId: headRef?.commitEventId ?? theirsEventId ?? "",
-        headHash: headRef?.commitEventId ?? mergedState,
-        previousStateHash: oursState,
-        conflicts: [],
-        mergeable: "clean",
-        upstreamCommits,
-      };
     }
 
     // Conflicted-to-main: stage + mirror the provisional (conflict-marked) tree
@@ -7111,7 +7259,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.ensureReady();
     const pending = this.getPendingMerge(input).info;
     if (!pending) return { aborted: false, restoreStateHash: null };
-    this.clearPendingMerge(input);
+    // Abort atomically: drop any uncommitted resolution edits made during
+    // conflict resolution AND clear the parked pending in one txn. Otherwise
+    // leftover working rows replay over the committed base after the pending is
+    // gone, resurrecting the abandoned half-resolution (diverging from the
+    // restoreStateHash the host just projected). Mirrors discardWorkingEdits.
+    this.transaction(() => {
+      this.deleteUncommittedWorkingEdits(input.logId, input.head);
+      this.deleteStateValue(`merge:${input.logId}:${input.head}`);
+    });
     return { aborted: true, restoreStateHash: pending.oursStateHash };
   }
 
