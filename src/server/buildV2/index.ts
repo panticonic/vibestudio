@@ -1016,9 +1016,10 @@ export async function initBuildSystemV2(
    * eagerly-maintained buildable units (panels/about/workers), matching the set
    * the state trigger keeps warm at main and the GC active set; extensions/apps
    * are activation-gated (not baseline-built) so they are intentionally out of
-   * this coarse read. A unit is `ok` when its runtime build key is in the store,
-   * `failed` when the most recent recorded diagnostics for that key carry
-   * errors, else `unknown` (never validated at this EV).
+   * this coarse read. A unit is `failed` when the most recent recorded
+   * diagnostics for that key carry errors, `ok` when no error diagnostics are
+   * recorded and its runtime build key is in the store, else `unknown` (never
+   * validated at this EV).
    */
   const statusAtImpl = async (viewHash: string): Promise<BuildStatusAt> => {
     let view: GraphView;
@@ -1041,17 +1042,15 @@ export async function initBuildSystemV2(
       anyChecked = true;
       const buildKey = computeBuildUnitKey(node, ev);
       let status: UnitBuildStatus["status"];
-      if (buildStore.has(buildKey)) {
+      const diagnostics = diagnosticsForBuildKey(buildKey);
+      if (diagnostics && hasErrors(diagnostics)) {
+        status = "failed";
+        anyFailed = true;
+      } else if (buildStore.has(buildKey)) {
         status = "ok";
       } else {
-        const diagnostics = diagnosticsForBuildKey(buildKey);
-        if (diagnostics && hasErrors(diagnostics)) {
-          status = "failed";
-          anyFailed = true;
-        } else {
-          status = "unknown";
-          anyUnknown = true;
-        }
+        status = "unknown";
+        anyUnknown = true;
       }
       unitStatuses.push({ unit: node.name, status });
     }
