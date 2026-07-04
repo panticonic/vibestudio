@@ -356,6 +356,23 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       expect(lifecycleIntents()).toHaveLength(0);
     });
 
+    it("(a2) REPEATED denial of the same fork compensates each time — unwind heads must not collide", async () => {
+      // `intent.next` is content-derived, so the same denied fork repeats it; the
+      // unwind archive head is keyed by intentId precisely so the second denial's
+      // archiveRepoMain does not reject a duplicate head and strand the intent.
+      gateHook = async () => {
+        throw new Error("fork denied");
+      };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await expect(fork("packages/foo", "packages/clone")).rejects.toThrow(
+          /fork denied|ref create denied/
+        );
+        expect(refs.readMain("packages/clone")).toBeNull();
+        expect(await worktreeHead("packages/clone", VCS_MAIN_HEAD)).toBeNull();
+        expect(lifecycleIntents()).toHaveLength(0);
+      }
+    });
+
     it("(b) CAS conflict removes the created lineage", async () => {
       throwWithoutApply(new Error("Main-ref group compare-and-swap conflict"));
       await expect(fork("packages/foo", "packages/clone")).rejects.toThrow(

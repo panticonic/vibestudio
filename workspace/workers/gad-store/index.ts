@@ -1489,6 +1489,12 @@ interface ProjectionKey {
   head: string;
 }
 
+/** Fail-closed uncovered-main drift (§6): a protected ref moved with NO
+ *  covering intent, so heal cannot reconstruct the authored transition. Typed
+ *  so callers that only need the authoritative STATE (the merge-source read)
+ *  can tolerate exactly this case — every other heal failure must propagate. */
+class UncoveredMainDriftError extends Error {}
+
 export class GadWorkspaceDO extends DurableObjectBase {
   // v24: merge of the local v23 schema cut and origin/fabling's v23 lineage
   // schema. Both physical layouts used version 23, so the unified schema needs
@@ -10488,7 +10494,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const logId = logIdForRepoPath(repoPath);
       const recorded = this.resolveWorktreeHeadInternal(logId, "main")?.stateHash ?? null;
       if (recorded === ref.stateHash) continue;
-      throw new Error(
+      throw new UncoveredMainDriftError(
         `vcsHealPublishDrift: protected ref for ${repoPath} is ${ref.stateHash}, ` +
           `but the DO recorded main is ${recorded ?? "<absent>"} and no publish intent covers it`
       );
@@ -10642,7 +10648,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     if (this.resolveWorktreeHeadInternal(toLogId, VCS_MAIN)) {
       this.archiveRepoMain({
         logId: toLogId,
-        archiveHead: `${VCS_ARCHIVE_HEAD_PREFIX}fork-unwind:${intent.next ?? crypto.randomUUID()}`,
+        // Keyed by intentId, NOT the forked state hash: `next` is content-derived
+        // and repeats when the same fork is denied twice, and archiveRepoMain
+        // rejects a duplicate archive head — the unwind must be unique per attempt.
+        archiveHead: `${VCS_ARCHIVE_HEAD_PREFIX}fork-unwind:${intent.intentId}`,
       });
     }
   }
@@ -10828,10 +10837,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
         // healPublishDrift fails closed on a main NO intent covers (seeded
         // host-side, or authored by another instance) — that path is fine here:
         // we only need the source STATE and adopt the ref directly below rather
-        // than fabricating lineage, so swallow that (repo-unrelated) drift error.
+        // than fabricating lineage. Tolerate exactly that typed drift error;
+        // any OTHER heal failure (SQL, ref-store RPC, lifecycle reconcile) means
+        // recovery itself is broken and must surface, not be masked by a merge.
         try {
           await this.healPublishDrift();
-        } catch {
+        } catch (error) {
+          if (!(error instanceof UncoveredMainDriftError)) throw error;
           // uncovered-main drift: refs remain the authority; adopt below.
         }
         doHead = this.resolveWorktreeHeadInternal(logId, "main");
