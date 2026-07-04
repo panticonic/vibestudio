@@ -836,6 +836,33 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     ).toBe(false);
   });
 
+  it("tears down setup when the started-card publish fails", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.channelPublishFailures.add("subagent-started:inv-1");
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      task: "this started publish will fail",
+    });
+
+    expect(out).toMatchObject({
+      isError: true,
+      result: "publish failed: subagent-started:inv-1",
+    });
+    expect(probe.subagentRunForTest("inv-1")).toBeNull();
+    expect(
+      probe.rpcCalls.some(
+        (call) =>
+          call.target === "main" &&
+          call.method === "runtime.destroyContext" &&
+          JSON.stringify(call.args).includes("ctx-child")
+      )
+    ).toBe(true);
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-seed:inv-1")
+    ).toBe(false);
+  });
+
   it("tears down a running setup-failure row once the retry terminal publishes", async () => {
     const probe = await makeSubagentSpawnProbe();
     probe.channelPublishFailures.add("subagent-seed:inv-1");
@@ -969,6 +996,30 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         }),
       })
     );
+  });
+
+  it("keeps child completion retryable when waking the parent fails", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+    probe.handleIncomingSpy.mockRejectedValueOnce(new Error("wake failed"));
+
+    await expect(
+      probe.completeSubagentForTest("inv-1", "All checks passed.", "success")
+    ).rejects.toThrow("wake failed");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "running" });
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-terminal:inv-1")
+    ).toBe(true);
+
+    await probe.completeSubagentForTest("inv-1", "All checks passed.", "success");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
+    expect(probe.handleIncomingSpy).toHaveBeenCalledTimes(2);
   });
 });
 

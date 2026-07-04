@@ -28,17 +28,19 @@ import {
 } from "./truncate.js";
 const readSchema = Type.Object({
   path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-  // MANDATORY (§7.1): the agent's context budget for this read. Choose from what
+  // Optional (§7.1): the agent's context budget for this read. Choose from what
   // you are doing right now (merely using code / executing a set plan / planning
   // a change) crossed with how provenance has been behaving on this codebase
   // lately (insightful vs redundant) — not a fixed lookup.
   //  · none     — file content only, no attachment.
   //  · moderate — blame + FTS recall + 1-hop density re-rank (cheap, ~5 items).
   //  · deep     — moderate + 2-hop density + claim-relation walk (~10 items).
-  provenance: Type.Union([Type.Literal("none"), Type.Literal("moderate"), Type.Literal("deep")], {
-    description:
-      "REQUIRED context budget for this read. 'none' = content only; 'moderate' = blame + recall + 1-hop density (~5 items); 'deep' = + 2-hop density + claim relations (~10 items). Choose from your situation and how useful provenance has been lately, not a constant.",
-  }),
+  provenance: Type.Optional(
+    Type.Union([Type.Literal("none"), Type.Literal("moderate"), Type.Literal("deep")], {
+      description:
+        "Optional context budget for this read. Omit to read content only. 'none' = content only; 'moderate' = blame + recall + 1-hop density (~5 items); 'deep' = + 2-hop density + claim relations (~10 items). Choose from your situation and how useful provenance has been lately, not a constant.",
+    })
+  ),
   offset: Type.Optional(
     Type.Number({ description: "Line number to start reading from (1-indexed)" })
   ),

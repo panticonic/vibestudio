@@ -3791,8 +3791,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  /** Publish the terminal subagent card, then mark the run terminal to keep
-   *  delivery retryable if the parent outcome write fails. `spawn_subagent`
+  /** Publish the terminal subagent card and wake the parent, then mark the run
+   *  terminal to keep delivery retryable if either terminal side effect fails.
+   *  `spawn_subagent`
    *  returns when the child is launched; child completion is a later event, not
    *  the terminal for the original tool.
    */
@@ -3804,12 +3805,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     opts: { wakeParent?: boolean } = {}
   ): Promise<void> {
     await this.publishSubagentTerminal(run, outcome, text, merge);
-    this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
     if (opts.wakeParent) {
-      await this.wakeParentForSubagentTerminal(run, outcome, text).catch((err) => {
-        console.error(`[AgentVessel] subagent completion wake failed for ${run.runId}:`, err);
-      });
+      await this.wakeParentForSubagentTerminal(run, outcome, text);
     }
+    this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
   }
 
   private async wakeParentForSubagentTerminal(
@@ -3888,14 +3887,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       },
       createdAt: new Date().toISOString(),
     } as unknown as AgenticEvent;
-    await this.createChannelClient(run.parentChannelId)
-      .publishAgenticEvent(participantId, event, {
-        idempotencyKey: `subagent-started:${run.runId}`,
-        senderMetadata: actor.metadata,
-      })
-      .catch((err) => {
-        console.error(`[AgentVessel] subagent started emit failed for ${run.runId}:`, err);
-      });
+    await this.createChannelClient(run.parentChannelId).publishAgenticEvent(participantId, event, {
+      idempotencyKey: `subagent-started:${run.runId}`,
+      senderMetadata: actor.metadata,
+    });
   }
 
   private async publishSubagentTerminal(

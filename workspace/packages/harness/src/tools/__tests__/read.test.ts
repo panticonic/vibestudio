@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { Value } from "@sinclair/typebox/value";
 import type { VcsProvItem, VcsProvenanceForFileResult } from "@vibez1/shared/serviceSchemas/vcs";
 import { createReadTool, type ReadProvenanceDeps } from "../read.js";
 import { StubFs } from "./stub-fs.js";
@@ -12,6 +13,16 @@ describe("createReadTool", () => {
     const result = await tool.execute("call-1", { path: "hello.txt", provenance: "none" });
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
     expect(result.details.path).toBe("hello.txt");
+  });
+
+  it("validates and executes serialized calls that omit provenance", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
+    const tool = createReadTool(CWD, fs);
+    const input = { path: "hello.txt" };
+
+    expect(Value.Check(tool.parameters, input)).toBe(true);
+    const result = await tool.execute("call-1", input);
+    expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
   });
 
   it("respects offset and limit", async () => {
