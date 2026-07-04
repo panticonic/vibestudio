@@ -15,6 +15,17 @@ function streamOf(bytes: Uint8Array | string): ReadableStream<Uint8Array> {
   });
 }
 
+async function readStream(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+}
+
 function immutableResponse(body: string, over: Partial<FetchedResponse> = {}): FetchedResponse {
   return {
     status: 200,
@@ -243,6 +254,22 @@ describe("AssetDiskCache", () => {
     // Old digest blob is gone; new one exists.
     expect(fs.existsSync(path.join(dir, "blobs", digest1!))).toBe(false);
     expect(fs.existsSync(path.join(dir, "blobs", digest2!))).toBe(true);
+  });
+
+  it("passes through oversized immutable responses without caching them", async () => {
+    const cache = await newCache(100);
+    const fetcher = vi.fn(async () => immutableResponse("x".repeat(500)));
+
+    const first = await cache.serve("/assets/big-abc.js", fetcher);
+    expect(first.kind).toBe("passthrough");
+    if (first.kind === "passthrough") {
+      expect((await readStream(first.response.body!)).toString()).toBe("x".repeat(500));
+    }
+    expect(cache.digestFor("/assets/big-abc.js")).toBeUndefined();
+
+    const second = await cache.serve("/assets/big-abc.js", fetcher);
+    expect(second.kind).toBe("passthrough");
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("prunes oldest-by-mtime blobs when over the size cap", async () => {

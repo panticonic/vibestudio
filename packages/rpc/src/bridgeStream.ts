@@ -55,7 +55,7 @@ export type BridgeChunkPayload = Uint8Array | string;
 /** Panel → host: open one upload stream (the bridge's stream-request message). */
 export interface BridgeStreamOpen {
   opId: string;
-  /** The `stream-request` envelope, relayed raw onto the panel's session. */
+  /** The `stream-request` envelope; host bridges stamp the authenticated panel identity. */
   envelope: RpcEnvelope;
   /** Key the request-body chunks arrive under. REQUIRED — this hop is upload-only. */
   bodyId: string;

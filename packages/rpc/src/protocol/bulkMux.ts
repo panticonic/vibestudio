@@ -28,13 +28,7 @@
  * a different dialect must fail loud, not corrupt streams silently.
  */
 
-import {
-  FRAME_DATA,
-  FRAME_END,
-  FRAME_ERROR,
-  FRAME_HEAD,
-  type FrameType,
-} from "./streamCodec.js";
+import { FRAME_DATA, FRAME_END, FRAME_ERROR, FRAME_HEAD, type FrameType } from "./streamCodec.js";
 
 /** The frame-type vocabulary is the existing streamCodec one — no second set. */
 export type StreamFrameType = FrameType;
@@ -49,11 +43,21 @@ const MUX_TYPE_MASK = 0x07;
 const MUX_KNOWN_BITS = 0x0f;
 
 /**
- * Cap on the bytes a single continued HEAD/ERROR may accumulate before the
- * final (MORE unset) message. A conforming peer sends a few KB of JSON; a
- * broken or hostile one must fail loud instead of ballooning the receiver.
+ * Catastrophe fuse on the bytes a single continued HEAD/ERROR may accumulate
+ * before the final (MORE unset) message. A conforming peer sends a few KB of
+ * JSON; this exists only to stop an unbounded receiver allocation.
  */
-export const BULK_MUX_ACCUMULATION_CAP_BYTES = 4 * 1024 * 1024;
+export const BULK_MUX_ACCUMULATION_CAP_BYTES = 64 * 1024 * 1024;
+
+/** Catastrophe fuse on simultaneous continued HEAD/ERROR streams held by one demux. */
+export const BULK_MUX_PARTIAL_STREAM_CAP = 65_536;
+
+export interface BulkDemuxLimits {
+  /** Defaults to `BULK_MUX_ACCUMULATION_CAP_BYTES`. */
+  maxAccumulationBytes?: number;
+  /** Defaults to `BULK_MUX_PARTIAL_STREAM_CAP`. */
+  maxPartialStreams?: number;
+}
 
 /**
  * A peer violated the bulk mux protocol. The transport treats this as
@@ -82,11 +86,11 @@ export function encodeBulkMessage(
   streamId: number,
   type: StreamFrameType,
   payload: Uint8Array,
-  more = false,
+  more = false
 ): Uint8Array {
   if (more && (type === FRAME_DATA || type === FRAME_END)) {
     throw new BulkProtocolViolation(
-      `MORE flag is only valid on HEAD/ERROR frames (got type 0x${type.toString(16)})`,
+      `MORE flag is only valid on HEAD/ERROR frames (got type 0x${type.toString(16)})`
     );
   }
   const message = new Uint8Array(BULK_MUX_HEADER_BYTES + payload.byteLength);
@@ -120,7 +124,7 @@ export interface DecodedBulkMessage {
 export function decodeBulkMessage(message: Uint8Array): DecodedBulkMessage {
   if (message.byteLength < BULK_MUX_HEADER_BYTES) {
     throw new BulkProtocolViolation(
-      `bulk message shorter than the ${BULK_MUX_HEADER_BYTES}-byte header (${message.byteLength} bytes)`,
+      `bulk message shorter than the ${BULK_MUX_HEADER_BYTES}-byte header (${message.byteLength} bytes)`
     );
   }
   const streamId =
@@ -132,7 +136,7 @@ export function decodeBulkMessage(message: Uint8Array): DecodedBulkMessage {
   const flags = message[4] ?? 0;
   if ((flags & ~MUX_KNOWN_BITS) !== 0) {
     throw new BulkProtocolViolation(
-      `unknown bulk flag bits 0x${(flags & ~MUX_KNOWN_BITS).toString(16)} (flags 0x${flags.toString(16)})`,
+      `unknown bulk flag bits 0x${(flags & ~MUX_KNOWN_BITS).toString(16)} (flags 0x${flags.toString(16)})`
     );
   }
   const type = flags & MUX_TYPE_MASK;
@@ -142,7 +146,7 @@ export function decodeBulkMessage(message: Uint8Array): DecodedBulkMessage {
   const more = (flags & MUX_FLAG_MORE) !== 0;
   if (more && (type === FRAME_DATA || type === FRAME_END)) {
     throw new BulkProtocolViolation(
-      `MORE flag set on ${type === FRAME_DATA ? "DATA" : "END"} frame (stream ${streamId})`,
+      `MORE flag set on ${type === FRAME_DATA ? "DATA" : "END"} frame (stream ${streamId})`
     );
   }
   return { streamId, type, more, payload: message.subarray(BULK_MUX_HEADER_BYTES) };
@@ -168,7 +172,8 @@ export interface BulkDemux {
  *   passes through (typically empty).
  * - HEAD and ERROR with MORE accumulate per streamId until the final (MORE
  *   unset) message, then emit the concatenated JSON payload once. Accumulation
- *   is capped at `BULK_MUX_ACCUMULATION_CAP_BYTES` per stream.
+ *   is capped at `BULK_MUX_ACCUMULATION_CAP_BYTES` per stream and
+ *   `BULK_MUX_PARTIAL_STREAM_CAP` simultaneous partial streams.
  * - While a stream has a partial HEAD/ERROR, any message for that stream of a
  *   *different* type is a protocol violation (the sender interleaved inside
  *   its own continuation — its frame can never complete).
@@ -177,9 +182,28 @@ export interface BulkDemux {
  * into the pushed message (valid during the callback; copy to retain);
  * reassembled payloads are freshly allocated and caller-owned.
  */
+function resolvePositiveLimit(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer`);
+  }
+  return value;
+}
+
 export function createBulkDemux(
   onFrame: (streamId: number, type: StreamFrameType, payload: Uint8Array) => void,
+  limits: BulkDemuxLimits = {}
 ): BulkDemux {
+  const maxAccumulationBytes = resolvePositiveLimit(
+    limits.maxAccumulationBytes,
+    BULK_MUX_ACCUMULATION_CAP_BYTES,
+    "maxAccumulationBytes"
+  );
+  const maxPartialStreams = resolvePositiveLimit(
+    limits.maxPartialStreams,
+    BULK_MUX_PARTIAL_STREAM_CAP,
+    "maxPartialStreams"
+  );
   // Partial HEAD/ERROR continuations, keyed by streamId.
   let pending = new Map<number, { type: StreamFrameType; chunks: Uint8Array[]; bytes: number }>();
   return {
@@ -189,7 +213,7 @@ export function createBulkDemux(
       if (partial && partial.type !== type) {
         pending.delete(streamId);
         throw new BulkProtocolViolation(
-          `frame type 0x${type.toString(16)} interleaved inside a continued 0x${partial.type.toString(16)} (stream ${streamId})`,
+          `frame type 0x${type.toString(16)} interleaved inside a continued 0x${partial.type.toString(16)} (stream ${streamId})`
         );
       }
       if (!partial && !more) {
@@ -197,12 +221,17 @@ export function createBulkDemux(
         onFrame(streamId, type, payload);
         return;
       }
+      if (!partial && pending.size >= maxPartialStreams) {
+        throw new BulkProtocolViolation(
+          `continued frame partial stream count exceeds ${maxPartialStreams}`
+        );
+      }
       const entry = partial ?? { type, chunks: [], bytes: 0 };
       entry.bytes += payload.byteLength;
-      if (entry.bytes > BULK_MUX_ACCUMULATION_CAP_BYTES) {
+      if (entry.bytes > maxAccumulationBytes) {
         pending.delete(streamId);
         throw new BulkProtocolViolation(
-          `continued ${type === FRAME_HEAD ? "HEAD" : "ERROR"} exceeds ${BULK_MUX_ACCUMULATION_CAP_BYTES} bytes (stream ${streamId})`,
+          `continued ${type === FRAME_HEAD ? "HEAD" : "ERROR"} exceeds ${maxAccumulationBytes} bytes (stream ${streamId})`
         );
       }
       // Copy: continuation chunks are held across messages until the set completes.

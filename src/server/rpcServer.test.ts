@@ -2171,6 +2171,73 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
     await expect(readAll(body)).rejects.toThrow(/pre-open buffer/);
   });
 
+  it("caps the total bytes buffered across pre-open upload streams", async () => {
+    const { server } = createServer({
+      uploadPreopenLimits: { maxBufferedBytes: 3 },
+    });
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    p.emitBulk(1, FRAME_DATA, new Uint8Array([1, 2]));
+    p.emitBulk(2, FRAME_DATA, new Uint8Array([3, 4]));
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 2,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "aggregate-cap",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const body = shim!.takeInboundBody("aggregate-cap")!;
+    await expect(readAll(body)).rejects.toThrow(/aggregate cap/);
+    p.emitDown("test complete");
+  });
+
+  it("caps the number of pending pre-open upload stream ids", async () => {
+    const { server } = createServer({
+      uploadPreopenLimits: { maxPendingStreams: 2 },
+    });
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    p.emitBulk(1, FRAME_DATA, utf8("x"));
+    p.emitBulk(2, FRAME_DATA, utf8("x"));
+    p.emitBulk(3, FRAME_DATA, utf8("x"));
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 3,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "stream-cap",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const body = shim!.takeInboundBody("stream-cap")!;
+    await expect(readAll(body)).rejects.toThrow(/too many pending streams/);
+    p.emitDown("test complete");
+  });
+
   it("frames pumped after the body settles drop (retired id) instead of buffering as pre-open", async () => {
     const { shim, p } = setupUpload();
     const body = shim.takeInboundBody("up-1")!;

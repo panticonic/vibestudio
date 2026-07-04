@@ -34,6 +34,13 @@ import * as path from "node:path";
 
 const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024; // 1 GiB
 
+class CachePopulationTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`cacheable asset exceeded cache byte budget (${maxBytes} bytes)`);
+    this.name = "CachePopulationTooLargeError";
+  }
+}
+
 /**
  * A normalized upstream response, produced by the façade from the pipe Response.
  * The cache is transport/HTTP-agnostic: the façade decides `cacheable`, `gzip`,
@@ -162,7 +169,25 @@ export class AssetDiskCache {
         settle(null);
         return { kind: "passthrough", response };
       }
-      const asset = await this.persist(cacheKey, response);
+      const [cacheBody, passthroughBody] = response.body.tee();
+      const passthroughResponse: FetchedResponse = {
+        ...response,
+        cacheable: false,
+        body: passthroughBody,
+      };
+      let asset: ServedAsset;
+      try {
+        asset = await this.persist(cacheKey, { ...response, body: cacheBody });
+      } catch (err) {
+        if (err instanceof CachePopulationTooLargeError) {
+          settle(null);
+          console.warn(`[AssetDiskCache] ${err.message}; serving ${cacheKey} without caching`);
+          return { kind: "passthrough", response: passthroughResponse };
+        }
+        void passthroughBody.cancel(err).catch(() => {});
+        throw err;
+      }
+      void passthroughBody.cancel().catch(() => {});
       settle(asset);
       return { kind: "asset", asset };
     } catch (err) {
@@ -225,7 +250,7 @@ export class AssetDiskCache {
   }
 
   private async persist(cacheKey: string, response: FetchedResponse): Promise<ServedAsset> {
-    const body = await streamToBuffer(response.body!);
+    const body = await streamToBuffer(response.body!, this.maxBytes);
     const digest = createHash("sha256").update(body).digest("hex");
     const metadataKey = createHash("sha256").update(cacheKey).digest("hex");
 
@@ -372,14 +397,26 @@ function parseIndexEntry(value: unknown): IndexEntry | null {
   return null;
 }
 
-async function streamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+async function streamToBuffer(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number
+): Promise<Buffer> {
   const reader = stream.getReader();
   const chunks: Buffer[] = [];
+  let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (value && value.byteLength > 0) chunks.push(Buffer.from(value));
+      if (value && value.byteLength > 0) {
+        if (total + value.byteLength > maxBytes) {
+          const err = new CachePopulationTooLargeError(maxBytes);
+          void reader.cancel(err).catch(() => {});
+          throw err;
+        }
+        chunks.push(Buffer.from(value));
+        total += value.byteLength;
+      }
     }
   } finally {
     reader.releaseLock();

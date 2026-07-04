@@ -29,6 +29,11 @@ export const FORWARD_REQUEST_HEADERS: readonly string[] = [
   "user-agent",
 ];
 
+export function hasRangeRequestHeader(headers: Record<string, string> | undefined): boolean {
+  if (!headers) return false;
+  return Object.keys(headers).some((name) => name.toLowerCase() === "range");
+}
+
 /**
  * Response headers that describe the buffered / re-framed hop and must NOT be
  * echoed to the webview: the body is fully re-sent, so length is recomputed and

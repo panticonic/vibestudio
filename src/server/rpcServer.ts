@@ -169,6 +169,22 @@ type ResolvedExtensionParentCaller = {
   contextId?: string;
 };
 
+export interface RpcServerUploadPreopenLimits {
+  maxPendingStreams?: number;
+  maxBufferedBytes?: number;
+}
+
+const DEFAULT_UPLOAD_PREOPEN_STREAM_CAP = 65_536;
+const DEFAULT_UPLOAD_PREOPEN_TOTAL_CAP_BYTES = 1024 * 1024 * 1024;
+
+function resolvePositiveLimit(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer`);
+  }
+  return value;
+}
+
 function relayCallOptions(
   meta?: RelayCallMeta
 ): { idempotencyKey?: string; readOnly?: boolean } | undefined {
@@ -466,6 +482,7 @@ export class RpcServer {
   private sessions: SessionRegistry;
 
   private readonly bootId = randomUUID();
+  private readonly uploadPreopenLimits: Required<RpcServerUploadPreopenLimits>;
 
   private static readonly DISCONNECT_GRACE_MS = 3000;
 
@@ -539,9 +556,22 @@ export class RpcServer {
         callerKind: CallerKind;
         deviceCredential?: { deviceId: string; refreshToken: string };
       } | null;
+      uploadPreopenLimits?: RpcServerUploadPreopenLimits;
     }
   ) {
     this.dispatcher = deps.dispatcher;
+    this.uploadPreopenLimits = {
+      maxPendingStreams: resolvePositiveLimit(
+        deps.uploadPreopenLimits?.maxPendingStreams,
+        DEFAULT_UPLOAD_PREOPEN_STREAM_CAP,
+        "uploadPreopenLimits.maxPendingStreams"
+      ),
+      maxBufferedBytes: resolvePositiveLimit(
+        deps.uploadPreopenLimits?.maxBufferedBytes,
+        DEFAULT_UPLOAD_PREOPEN_TOTAL_CAP_BYTES,
+        "uploadPreopenLimits.maxBufferedBytes"
+      ),
+    };
     deps.runtimeCoordinator?.setCloseConnection((panelId, connectionId, code, reason) => {
       this.connections.closeConnection(panelId, connectionId, code, reason);
     });
@@ -3289,6 +3319,7 @@ export class RpcServer {
       // arrive on it) — free the frames and cancel their TTL timers.
       for (const pending of pendingBodies.values()) clearTimeout(pending.timer);
       pendingBodies.clear();
+      pendingBodyBytes = 0;
       // Body stream ids are monotonic only within one client transport. A fresh
       // reconnect starts at 1 again, so retired ids from the old pipe generation
       // must not cause valid early DATA on the new generation to be dropped.
@@ -3314,16 +3345,19 @@ export class RpcServer {
     }
     const inboundBodies = new Map<number, InboundBodyEntry>();
     // Pre-open frames awaiting their stream-open, keyed by bodyStreamId.
-    // Bounded two ways: total buffered bytes per stream (UPLOAD_RECEIVE_CAP_BYTES,
-    // the same cap a registered body enforces) and a TTL (UPLOAD_PREOPEN_TTL_MS).
-    // Breaching either CONDEMNS the id: buffered frames are freed, and an open
-    // arriving later fails the body loudly — never a silently truncated upload.
+    // Bounded four ways: total buffered bytes per stream (UPLOAD_RECEIVE_CAP_BYTES,
+    // the same cap a registered body enforces), catastrophic total buffered bytes
+    // across the pipe, catastrophic total pending ids, and a TTL
+    // (UPLOAD_PREOPEN_TTL_MS). Breaching any fuse CONDEMNS the id: buffered frames
+    // are freed, and an open arriving later fails the body loudly — never a
+    // silently truncated upload.
     interface PendingBodyBuffer {
       frames: Array<{ type: StreamFrameType; payload: Uint8Array }>;
       bytes: number;
       timer: ReturnType<typeof setTimeout>;
     }
     const pendingBodies = new Map<number, PendingBodyBuffer>();
+    let pendingBodyBytes = 0;
     // Terminal per-id outcomes, FIFO-bounded (bodyStreamIds are monotonic per
     // client, so old entries only shield against ever-later stragglers):
     //   null  — the body existed and settled: late frames drop silently.
@@ -3344,6 +3378,7 @@ export class RpcServer {
       if (pending) {
         clearTimeout(pending.timer);
         pendingBodies.delete(bodyStreamId);
+        pendingBodyBytes -= pending.bytes;
       }
       retireBodyId(bodyStreamId, error);
     };
@@ -3355,6 +3390,15 @@ export class RpcServer {
       if (retiredBodyIds.has(streamId)) return; // settled/condemned — drop
       let pending = pendingBodies.get(streamId);
       if (!pending) {
+        if (pendingBodies.size >= this.uploadPreopenLimits.maxPendingStreams) {
+          const error = new Error(
+            `upload pre-open buffer has too many pending streams ` +
+              `(cap ${this.uploadPreopenLimits.maxPendingStreams})`
+          );
+          log.warn(`WebRTC pipe: ${error.message}; condemning upload stream ${streamId}`);
+          retireBodyId(streamId, error);
+          return;
+        }
         const timer = setTimeout(
           () =>
             // Never opened within the TTL — the legitimate drop case (client
@@ -3374,7 +3418,24 @@ export class RpcServer {
         pendingBodies.set(streamId, pending);
       }
       if (type === FRAME_DATA && payload.byteLength === 0) return;
+      if (
+        payload.byteLength > 0 &&
+        pendingBodyBytes + payload.byteLength > this.uploadPreopenLimits.maxBufferedBytes
+      ) {
+        const error = new Error(
+          `upload pre-open buffers exceeded the ` +
+            `${this.uploadPreopenLimits.maxBufferedBytes}-byte aggregate cap`
+        );
+        log.warn(
+          `WebRTC pipe: upload stream ${streamId} would take pre-open buffers to ` +
+            `${pendingBodyBytes + payload.byteLength} bytes ` +
+            `(cap ${this.uploadPreopenLimits.maxBufferedBytes}) — condemning the stream`
+        );
+        condemnPending(streamId, error);
+        return;
+      }
       pending.bytes += payload.byteLength;
+      pendingBodyBytes += payload.byteLength;
       if (pending.bytes > RpcServer.UPLOAD_RECEIVE_CAP_BYTES) {
         log.warn(
           `WebRTC pipe: upload stream ${streamId} buffered ${pending.bytes} bytes ` +
@@ -3456,6 +3517,7 @@ export class RpcServer {
       if (pending) {
         clearTimeout(pending.timer);
         pendingBodies.delete(bodyStreamId);
+        pendingBodyBytes -= pending.bytes;
         for (const frame of pending.frames) {
           if (!inboundBodies.has(bodyStreamId)) break;
           deliverBodyFrame(bodyStreamId, frame.type, frame.payload);

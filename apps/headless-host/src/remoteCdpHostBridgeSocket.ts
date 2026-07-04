@@ -8,17 +8,46 @@ export interface RemoteCdpHostBridgeSocketOptions {
   rpc: Pick<RpcClient, "call" | "stream">;
   hostConnectionId: string;
   sessionId?: string;
+  ndjsonLimits?: RemoteCdpNdjsonLimits;
+}
+
+export interface RemoteCdpNdjsonLimits {
+  maxChunkBytes?: number;
+  maxLineBytes?: number;
+}
+
+export const DEFAULT_MAX_NDJSON_CHUNK_BYTES = 256 * 1024 * 1024;
+export const DEFAULT_MAX_NDJSON_LINE_BYTES = 256 * 1024 * 1024;
+
+function resolvePositiveLimit(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer`);
+  }
+  return value;
 }
 
 export class RemoteCdpHostBridgeSocket extends EventEmitter implements CdpHostBridgeSocket {
   readyState: number = WebSocket.CONNECTING;
   private readonly sessionId: string;
+  private readonly maxNdjsonChunkBytes: number;
+  private readonly maxNdjsonLineBytes: number;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private closed = false;
 
   constructor(private readonly options: RemoteCdpHostBridgeSocketOptions) {
     super();
     this.sessionId = options.sessionId ?? randomUUID();
+    this.maxNdjsonChunkBytes = resolvePositiveLimit(
+      options.ndjsonLimits?.maxChunkBytes,
+      DEFAULT_MAX_NDJSON_CHUNK_BYTES,
+      "maxChunkBytes"
+    );
+    this.maxNdjsonLineBytes = resolvePositiveLimit(
+      options.ndjsonLimits?.maxLineBytes,
+      DEFAULT_MAX_NDJSON_LINE_BYTES,
+      "maxLineBytes"
+    );
     void this.open();
   }
 
@@ -76,11 +105,21 @@ export class RemoteCdpHostBridgeSocket extends EventEmitter implements CdpHostBr
   private async readLoop(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
     const decoder = new TextDecoder();
     let buffered = "";
+    let bufferedLineBytes = 0;
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (value.byteLength > this.maxNdjsonChunkBytes) {
+        throw new Error(`CDP host provider frame exceeded ${this.maxNdjsonChunkBytes} bytes`);
+      }
+      bufferedLineBytes = observeNdjsonLineBytes(
+        value,
+        bufferedLineBytes,
+        this.maxNdjsonLineBytes
+      );
       buffered += decoder.decode(value, { stream: true });
       buffered = this.emitBufferedMessages(buffered);
+      if (buffered.length === 0) bufferedLineBytes = 0;
     }
     buffered += decoder.decode();
     this.emitBufferedMessages(buffered);
@@ -112,4 +151,23 @@ export class RemoteCdpHostBridgeSocket extends EventEmitter implements CdpHostBr
     this.emit("error", error);
     this.close();
   }
+}
+
+function observeNdjsonLineBytes(
+  chunk: Uint8Array,
+  initialLineBytes: number,
+  maxLineBytes: number
+): number {
+  let lineBytes = initialLineBytes;
+  for (const byte of chunk) {
+    if (byte === 0x0a) {
+      lineBytes = 0;
+      continue;
+    }
+    lineBytes += 1;
+    if (lineBytes > maxLineBytes) {
+      throw new Error(`CDP host provider NDJSON line exceeded ${maxLineBytes} bytes`);
+    }
+  }
+  return lineBytes;
 }
