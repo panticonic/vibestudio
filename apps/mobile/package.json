@@ -64,6 +64,12 @@
   "jest": {
     "preset": "react-native",
     "moduleNameMapper": {
+      "^jotai$": "<rootDir>/../../node_modules/jotai",
+      "^jotai/(.*)$": "<rootDir>/../../node_modules/jotai/$1",
+      "^react$": "<rootDir>/../../node_modules/react",
+      "^react/(.*)$": "<rootDir>/../../node_modules/react/$1",
+      "^react-native$": "<rootDir>/../../node_modules/react-native",
+      "^react-test-renderer$": "<rootDir>/../../node_modules/react-test-renderer",
       "^(\\.{1,2}/.*)\\.js$": "$1"
     },
     "roots": [

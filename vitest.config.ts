@@ -7,7 +7,7 @@ import type { Alias } from "vite";
 // This is the single source of truth for resolving workspace/vibez1
 // package imports to source .ts files — no dist needed.
 const workspaceTsconfig = JSON.parse(
-  readFileSync(path.resolve(__dirname, "workspace/tsconfig.json"), "utf-8"),
+  readFileSync(path.resolve(__dirname, "workspace/tsconfig.json"), "utf-8")
 );
 const tsconfigPaths: Record<string, string[]> = workspaceTsconfig.compilerOptions?.paths ?? {};
 
@@ -17,7 +17,9 @@ function escapeRegex(value: string): string {
 
 const sourceAliases: Alias[] = [];
 // Sort by specificity (longer paths first) so subpath exports match before bare imports
-for (const [importPath, [sourcePath]] of Object.entries(tsconfigPaths).sort((a, b) => b[0].length - a[0].length)) {
+for (const [importPath, [sourcePath]] of Object.entries(tsconfigPaths).sort(
+  (a, b) => b[0].length - a[0].length
+)) {
   if (!sourcePath) continue;
 
   if (importPath.includes("*") && sourcePath.includes("*")) {
@@ -35,6 +37,26 @@ for (const [importPath, [sourcePath]] of Object.entries(tsconfigPaths).sort((a, 
 export default defineConfig({
   resolve: {
     alias: [
+      {
+        find: /^react$/,
+        replacement: path.resolve(__dirname, "node_modules/react/index.js"),
+      },
+      {
+        find: /^react\/(.+)$/,
+        replacement: path.resolve(__dirname, "node_modules/react/$1"),
+      },
+      {
+        find: /^react-dom$/,
+        replacement: path.resolve(__dirname, "node_modules/react-dom/index.js"),
+      },
+      {
+        find: /^react-dom\/(.+)$/,
+        replacement: path.resolve(__dirname, "node_modules/react-dom/$1"),
+      },
+      {
+        find: /^react-native$/,
+        replacement: path.resolve(__dirname, "tests/stubs/reactNative.ts"),
+      },
       ...sourceAliases,
       // Resolve workspace panel dependencies from the hoisted node_modules
       // (version-agnostic — the versioned .pnpm store paths go stale on
@@ -103,6 +125,7 @@ export default defineConfig({
         inline: [
           /node_modules\/\.pnpm\/@radix-ui\+/,
           /node_modules\/\.pnpm\/radix-ui@/,
+          /node_modules\/\.pnpm\/jotai@/,
           /node_modules\/use-stick-to-bottom/,
         ],
       },
