@@ -78,3 +78,14 @@ Everything below changed an existing expectation. Pre-release, no backward compa
 
 - `packages/rpc`/WebRTC changes in this tree belong to the concurrent WebRTC v2 session (all green; one file fails `format:check` on their side).
 - `docs/` mentions of deleted APIs are changelog/design-history context, kept deliberately.
+
+## I. Fork, workspace-template, and bridge cleanup (2026-07-04)
+
+49. Fork seed plumbing no longer treats `appendSeed` as a privileged operation. The child channel consumes only the pending `forkSeedMarker` for one-shot/idempotent recovery; old `forkSeedAuth` state is ignored, with no migration or compatibility shim.
+50. Channel and agent `postClone` now require the clone's `newContextId`. A clone that cannot be re-homed into its fresh fork context fails instead of falling back to the parent's context.
+51. Subagent lifecycle rows use an explicit `starting` setup phase. Re-drive tears down stale `starting` rows; `running` rows retry the idempotent task seed; terminal publish must succeed before terminal status/teardown.
+52. Dependency resolution for server-side builds now prefers a packaged `workspace-template` only when it contains dependency metadata (`package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml`). Source-only templates fall back to the active workspace's dependency files.
+53. `refs.updateMains` requires an explicit `operation`; seed-style updates must say `operation:"seed"`. Older callers without the operation field fail schema validation.
+54. The repo requires Node `>=22.13.0` in both host and userland package manifests.
+55. The panel asset disk cache uses sha256 blob filenames plus per-cache-key metadata sidecars. Old cache/index layouts are not read; dangling entries are dropped and refetched.
+56. Git bridge export/import state lives entirely in extension storage and uses the protected import publish path. Pre-existing host-side markers are orphaned; the first export/import under the new bridge establishes fresh markers.
