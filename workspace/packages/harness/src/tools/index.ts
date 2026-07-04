@@ -8,7 +8,22 @@
  */
 
 export { createReadTool } from "./read.js";
-export type { ReadToolInput, ReadToolDetails, ReadToolDeps } from "./read.js";
+export type {
+  ReadToolInput,
+  ReadToolDetails,
+  ReadToolDeps,
+  ReadProvenanceDeps,
+} from "./read.js";
+
+export { createProvenanceTool } from "./provenance.js";
+export type {
+  ProvenanceToolInput,
+  ProvenanceToolDetails,
+  ProvenanceToolDeps,
+} from "./provenance.js";
+
+export { renderProvenanceBlock } from "./provenance-format.js";
+export type { ProvenanceBlockInput } from "./provenance-format.js";
 
 export { createEditTool } from "./edit.js";
 export type { EditToolInput, EditToolDetails } from "./edit.js";
@@ -16,7 +31,32 @@ export type { EditToolInput, EditToolDetails } from "./edit.js";
 export { createWriteTool } from "./write.js";
 export type { WriteToolInput, WriteToolDetails } from "./write.js";
 
-export { createToolVcs } from "./tool-vcs.js";
+export { createCommitTool } from "./commit.js";
+export type { CommitToolInput, CommitToolDetails, CommitClaimsDeps } from "./commit.js";
+
+export {
+  createRecordClaimTool,
+  createRelateClaimsTool,
+  createReviseClaimTool,
+  createRetractClaimTool,
+  stripClaimHandle,
+} from "./claims.js";
+export type {
+  KnowledgeToolDeps,
+  ClaimPayload,
+  ClaimDuplicate,
+  RecordClaimResult,
+  RecordClaimInput,
+  RecordClaimDetails,
+  RelateClaimsInput,
+  RelateClaimsDetails,
+  ReviseClaimInput,
+  ReviseClaimDetails,
+  RetractClaimInput,
+  RetractClaimDetails,
+} from "./claims.js";
+
+export { createToolVcs, withInvocationId } from "./tool-vcs.js";
 export type {
   ToolVcs,
   ToolVcsCommitResult,

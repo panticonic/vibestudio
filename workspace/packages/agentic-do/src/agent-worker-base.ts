@@ -13,7 +13,13 @@ import {
   createGrepTool,
   createLsTool,
   createReadTool,
+  createProvenanceTool,
   createWriteTool,
+  createCommitTool,
+  createRecordClaimTool,
+  createRelateClaimsTool,
+  createReviseClaimTool,
+  createRetractClaimTool,
   createCloseTurnWithoutResponseTool,
   createEvalTool,
   createDocsSearchTool,
@@ -23,8 +29,17 @@ import {
   loadVibez1Resources,
 } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
-import type { ParticipantDescriptor } from "@workspace/harness";
+import type { ParticipantDescriptor, KnowledgeToolDeps, RecordClaimResult } from "@workspace/harness";
 import type { AgentTurnContextPolicy, ThinkingLevel } from "@workspace/agent-loop";
+import { ids } from "@workspace/agent-loop";
+import {
+  createVcsUserlandClient,
+  type RpcCallerLike,
+} from "@vibez1/shared/userlandServiceRpc";
+import type {
+  VcsProvenanceForFileResult,
+  VcsProvenanceForSessionResult,
+} from "@vibez1/shared/serviceSchemas/vcs";
 import { AgentVesselBase, type AgentPromptResources, type ApprovalLevel } from "./agent-vessel.js";
 import {
   AgentHeartbeatLoop,
@@ -273,21 +288,100 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     // Push is userland-dispatched (P3): route it to the gad-store DO via the
     // `vcs` manifest service on `this.rpc`, with THIS agent's context head as
     // the source (the same head its edit/commit land on).
+    const userlandRpc = this.rpc as unknown as RpcCallerLike;
     const vcs = createToolVcs(
       <T>(method: string, methodArgs: unknown[]) => this.rpc.call<T>("main", method, methodArgs),
       {
-        rpc: this.rpc as unknown as import("@vibez1/shared/userlandServiceRpc").RpcCallerLike,
+        rpc: userlandRpc,
         // Lazy: the channel subscription is only guaranteed at push time.
         sourceHead: () => `ctx:${this.subscriptions.getContextId(channelId)}`,
       }
     );
+    // §6/§7 provenance: the read attachment + the drill-down `provenance` tool
+    // reach the gad-store DO's provenanceFor* @rpc surface via the same userland
+    // `vcs` manifest service the history reads / push use. Session identity is
+    // THIS agent's trajectory branch (logId === head for the loop), distinct
+    // from the vcs `head` (ctx:<contextId>) where files live.
+    const provClient = createVcsUserlandClient(userlandRpc);
+    const sessionLogId = ids.logIdForChannel(channelId);
+    // Lazy + throw-safe: getContextId throws until the channel is subscribed;
+    // an empty head makes the provenance call skip (best-effort, never fatal).
+    const headFor = () => {
+      try {
+        return `ctx:${this.subscriptions.getContextId(channelId)}`;
+      } catch {
+        return "";
+      }
+    };
+    const provenanceForFile = (input: {
+      repoPath: string;
+      path: string;
+      head: string;
+      tier: "none" | "moderate" | "deep";
+      sessionLogId: string;
+      sessionHead: string;
+      invocationId?: string | null;
+      recallKeywords?: string[] | null;
+      after?: string | null;
+      skipSuppression?: boolean | null;
+    }) => provClient.call<VcsProvenanceForFileResult>("provenanceForFile", input);
+    const provenanceForClaim = (input: {
+      claimId: string;
+      sessionLogId: string;
+      sessionHead: string;
+      invocationId?: string | null;
+      after?: string | null;
+    }) => provClient.call<VcsProvenanceForFileResult>("provenanceForClaim", input);
+    const provenanceForSession = (input: {
+      sessionLogId: string;
+      sessionHead: string;
+      after?: string | null;
+    }) => provClient.call<VcsProvenanceForSessionResult>("provenanceForSession", input);
+    // §8 knowledge capture: the commit tool's `claims:` + the standalone
+    // record/relate/revise/retract tools write to the gad-store DO's knowledge
+    // @rpc surface on THIS agent's own trajectory (logId === head for the loop),
+    // reached via the SAME userland manifest service the provenance reads use
+    // (both `gad` and `vcs` resolve to the one DO; dispatch is by method name,
+    // gated by the 'do' caller kind in the knowledge* @rpc allowlist). Claim
+    // content NEVER travels through vcsService (strict §8 layering).
+    const knowledge: KnowledgeToolDeps = {
+      recordClaim: (input) => provClient.call<RecordClaimResult>("knowledgeRecordClaim", input),
+      relateClaims: (input) =>
+        provClient.call<{ ledgerEntryId: string; related: number }>("knowledgeRelateClaims", input),
+      reviseClaim: (input) =>
+        provClient.call<{ claimId: string; ledgerEntryId: string }>("knowledgeReviseClaim", input),
+      retractClaim: (input) =>
+        provClient.call<{ claimId: string; ledgerEntryId: string }>("knowledgeRetractClaim", input),
+      logId: sessionLogId,
+      head: sessionLogId,
+    };
     const base = [
-      createReadTool(cwd, fs),
+      createReadTool(cwd, fs, {
+        provenance: {
+          provenanceForFile,
+          head: headFor,
+          sessionLogId,
+          sessionHead: sessionLogId,
+        },
+      }),
+      createProvenanceTool(cwd, {
+        provenanceForFile,
+        provenanceForClaim,
+        provenanceForSession,
+        head: headFor,
+        sessionLogId,
+        sessionHead: sessionLogId,
+      }),
       createLsTool(cwd, fs),
       createGrepTool(cwd, fs),
       createFindTool(cwd, fs),
       createEditTool(cwd, vcs),
       createWriteTool(cwd, vcs),
+      createCommitTool(vcs, knowledge),
+      createRecordClaimTool(knowledge),
+      createRelateClaimsTool(knowledge),
+      createReviseClaimTool(knowledge),
+      createRetractClaimTool(knowledge),
       createEvalTool(
         <T>(method: string, methodArgs: unknown[]) => this.rpc.call<T>("main", method, methodArgs),
         // Scope the agent's EvalDO per channel (matches the old per-(channel,panel) scope),

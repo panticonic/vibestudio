@@ -127,6 +127,9 @@ export interface ToolVcs {
     message: string;
     repoPaths?: string[];
     exclude?: string[];
+    /** Authoring tool-call id — the commit event's causality edge (T1). Stamped
+     *  mechanically by {@link withInvocationId}; callers do not hand-pass it. */
+    invocationId?: string;
   }): Promise<ToolVcsCommitResult[]>;
   /** Build-gate one or more repos' committed snapshots into `main` (atomic group). */
   push(input: { repoPaths: string[]; message?: string }): Promise<ToolVcsPushResult>;
@@ -147,6 +150,43 @@ export interface ToolVcs {
   }): Promise<ToolVcsDiffResult>;
   /** Drop a repo's uncommitted working edits + any pending merge on the caller's head. */
   discardEdits(repoPath: string): Promise<{ discarded: number; stateHash: string }>;
+}
+
+/**
+ * T2 seam — mechanical invocation stamping for the ToolVcs adapter.
+ *
+ * Every file-mutating tool call must carry the authoring `invocationId` (the
+ * tool-call id) so the edit/commit rows anchor the native provenance edge
+ * (file → edit → invocation → turn → session). Rather than have each tool
+ * hand-pass `invocationId: toolCallId` on every vcs call (easy to forget in a
+ * new tool), tools wrap their shared adapter ONCE at the top of `execute` with
+ * this binder — `withInvocationId(vcs, toolCallId)` — and the stamp is injected
+ * into every write call automatically.
+ *
+ * Why a per-call binding rather than a fully-ambient stamp: local-tool
+ * invocations dispatch CONCURRENTLY (the driver runs a turn's due invocation
+ * effects in one `Promise.all`, so parallel tool calls interleave their awaits).
+ * A single mutable "current invocation" on the shared adapter would race and
+ * mis-attribute an edit to another in-flight call's invocation — and edit→
+ * invocation is a native, integrity-covered edge (blame, §5), not a soft
+ * signal. The `toolCallId` is the one race-safe per-call channel (an `execute`
+ * argument), so the binder derives from it. An explicit `invocationId` on the
+ * input still wins (callers that already resolved one are not overridden).
+ */
+export function withInvocationId(vcs: ToolVcs, invocationId: string): ToolVcs {
+  return {
+    // Write calls get the stamp injected (unless the caller already resolved one).
+    edit: (input) => vcs.edit(input.invocationId ? input : { ...input, invocationId }),
+    commit: (input) => vcs.commit(input.invocationId ? input : { ...input, invocationId }),
+    // Everything else delegates unchanged (explicit rather than a spread, so a
+    // class-instance adapter whose methods live on the prototype stays whole).
+    readFile: (path) => vcs.readFile(path),
+    push: (input) => vcs.push(input),
+    merge: (input) => vcs.merge(input),
+    pick: (input) => vcs.pick(input),
+    contextDiff: (input) => vcs.contextDiff(input),
+    discardEdits: (repoPath) => vcs.discardEdits(repoPath),
+  };
 }
 
 /** Build a {@link ToolVcs} from a main-RPC call function. `pushRoute` supplies

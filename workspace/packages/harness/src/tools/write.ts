@@ -8,7 +8,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
-import { toVcsPath, type ToolVcs } from "./tool-vcs.js";
+import { toVcsPath, withInvocationId, type ToolVcs } from "./tool-vcs.js";
 
 const writeSchema = Type.Object({
   path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
@@ -43,10 +43,10 @@ export function createWriteTool(
       // A whole-file write recorded as an uncommitted working edit on the
       // current head (overwrite semantics). No commit, no build — disk reflects
       // the working content immediately, sealed later by vcs.commit. Tagged with
-      // the authoring tool-call so file → edit → invocation → turn is traversable.
-      await vcs.edit({
+      // the authoring tool-call so file → edit → invocation → turn is traversable;
+      // the invocationId is stamped by the shared adapter seam (T2).
+      await withInvocationId(vcs, toolCallId).edit({
         edits: [{ kind: "write", path: relPath, content: { kind: "text", text: content } }],
-        invocationId: toolCallId,
       });
       if (signal?.aborted) throw new Error("Operation aborted");
 
