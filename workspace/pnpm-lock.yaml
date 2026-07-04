@@ -624,6 +624,9 @@ importers:
       '@workspace/agentic-protocol':
         specifier: workspace:*
         version: link:../agentic-protocol
+      '@workspace/channel-fork':
+        specifier: workspace:*
+        version: link:../channel-fork
       '@workspace/eval':
         specifier: workspace:*
         version: link:../eval
@@ -633,6 +636,9 @@ importers:
       '@workspace/tool-ui':
         specifier: workspace:*
         version: link:../tool-ui
+      '@workspace/ui':
+        specifier: workspace:*
+        version: link:../ui
       highlight.js:
         specifier: ^11.11.1
         version: 11.11.1

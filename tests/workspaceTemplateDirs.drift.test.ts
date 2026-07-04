@@ -48,6 +48,7 @@ describe("packaged workspace template staging drift guard", () => {
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
       "tsconfig.integration.json",
+      "tsconfig.integration.mobile.json",
       "tsconfig.json",
     ]);
   });

@@ -63,6 +63,7 @@ export const WORKSPACE_TEMPLATE_ROOT_FILES = [
   "pnpm-workspace.yaml",
   "tsconfig.json",
   "tsconfig.integration.json",
+  "tsconfig.integration.mobile.json",
 ];
 
 export const WORKSPACE_TEMPLATE_SUPPORT_DIRS = ["packages", "patches"];
