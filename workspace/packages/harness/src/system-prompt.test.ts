@@ -63,4 +63,12 @@ describe("composeSystemPrompt", () => {
       "Use proper grammar in commentary/intermediate messages."
     );
   });
+
+  it("includes core conversation fork and subagent operating guidance", () => {
+    expect(VIBEZ1_BASE_SYSTEM_PROMPT).toContain("## Conversation Forks And Subagents");
+    expect(VIBEZ1_BASE_SYSTEM_PROMPT).toContain("do not conflate them");
+    expect(VIBEZ1_BASE_SYSTEM_PROMPT).toContain("context window cache is shared");
+    expect(VIBEZ1_BASE_SYSTEM_PROMPT).toContain("complete({ report, outcome })");
+    expect(VIBEZ1_BASE_SYSTEM_PROMPT).toContain("skills/subagents/SKILL.md");
+  });
 });
