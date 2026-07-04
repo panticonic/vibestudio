@@ -736,20 +736,7 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
         to: [{ kind: "participant", participantId: "participant-child" }],
       },
     });
-    const directDelivery = probe.rpcCalls.find((call) => call.method === "onChannelEnvelope");
-    expect(directDelivery).toMatchObject({
-      target: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
-      args: [
-        "task-inv-1",
-        {
-          kind: "log",
-          event: {
-            messageId: "subagent-seed:inv-1",
-            senderId: AGENT_ID,
-          },
-        },
-      ],
-    });
+    expect(probe.rpcCalls.some((call) => call.method === "onChannelEnvelope")).toBe(false);
   });
 
   it("relays child task-channel activity onto the parent subagent card", async () => {

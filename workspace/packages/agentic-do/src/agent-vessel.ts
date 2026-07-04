@@ -3523,29 +3523,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           },
           createdAt: new Date().toISOString(),
         };
-        const published = await this.createChannelClient(taskChannelId).publishAgenticEvent(
+        await this.createChannelClient(taskChannelId).publishAgenticEvent(
           participantId,
           seedEvent,
           { idempotencyKey: messageId, senderMetadata }
         );
-        if (childParticipantId) {
-          await this.rpc.call(childHandle.targetId, "onChannelEnvelope", [
-            taskChannelId,
-            {
-              kind: "log",
-              phase: "live",
-              event: {
-                id: typeof published.id === "number" ? published.id : 0,
-                messageId,
-                type: AGENTIC_EVENT_PAYLOAD_KIND,
-                payload: seedEvent,
-                senderId: participantId,
-                senderMetadata,
-                ts: Date.now(),
-              },
-            } satisfies RpcChannelMessage,
-          ]);
-        }
       }
 
       // 7) Durable run record on the parent's home channel (the subagent card).
