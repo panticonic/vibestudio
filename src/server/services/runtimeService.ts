@@ -202,6 +202,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     }
   }
 
+  function isTrustedRuntimeHost(caller: VerifiedCaller): boolean {
+    return caller.runtime.kind === "shell" || caller.runtime.kind === "server";
+  }
+
+  function requireTrustedRuntimeHost(caller: VerifiedCaller, method: string): void {
+    if (isTrustedRuntimeHost(caller)) return;
+    throw new Error(`runtime.${method} is restricted to trusted host callers`);
+  }
+
   async function resolveContextPolicy(
     caller: VerifiedCaller,
     requested: string | null | undefined,
@@ -793,27 +802,58 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   }
 
   /** Idempotently record a context-relationship edge (provenance/authz metadata). */
-  async function recordContextEdge(args: {
-    contextId: string;
-    ownerContextId: string;
-    kind: ContextEdgeKind;
-    ownerEntityId?: string;
-  }): Promise<void> {
+  async function recordContextEdge(
+    caller: VerifiedCaller,
+    args: {
+      contextId: string;
+      ownerContextId: string;
+      kind: ContextEdgeKind;
+      ownerEntityId?: string;
+    }
+  ): Promise<void> {
+    requireTrustedRuntimeHost(caller, "recordContextEdge");
     await store.recordContextEdge(args);
   }
 
-  /**
-   * Create a subagent's child context off a parent, composing the existing
-   * primitives (the vessel must NOT hand-roll this): a deterministic child
-   * contextId from `targetKey` → fork the parent's file state into it (uncommitted
-   * intact; provenance recorded gad-store side) → materialize its folder → record
-   * the 'lifecycle' edge (owner = parentContextId). Idempotent under `targetKey`.
-   */
-  async function createSubagentContext(args: {
-    parentContextId: string;
-    ownerEntityId: string;
-    targetKey: string;
-  }): Promise<{ contextId: string }> {
+  async function assertSubagentOwnerAllowed(
+    caller: VerifiedCaller,
+    args: {
+      parentContextId: string;
+      ownerEntityId: string;
+    }
+  ): Promise<void> {
+    const owner = await store.resolveRecord(args.ownerEntityId);
+    if (!owner || owner.status !== "active") {
+      throw new Error(`createSubagentContext: owner entity ${args.ownerEntityId} is not active`);
+    }
+    if (owner.contextId !== args.parentContextId) {
+      throw new Error(
+        `createSubagentContext: owner entity ${args.ownerEntityId} is not in parent context ${args.parentContextId}`
+      );
+    }
+    if (isTrustedRuntimeHost(caller)) return;
+    if (caller.runtime.id === owner.id || owner.parentId === caller.runtime.id) return;
+    throw new Error(
+      `createSubagentContext: caller ${caller.runtime.id} cannot create subagent contexts for owner ${owner.id}`
+    );
+  }
+
+  async function createSubagentContext(
+    caller: VerifiedCaller,
+    args: {
+      parentContextId: string;
+      ownerEntityId: string;
+      targetKey: string;
+    }
+  ): Promise<{ contextId: string }> {
+    await assertSubagentOwnerAllowed(caller, args);
+    await gateContextLaunch(caller, args.parentContextId, {
+      kind: "runtime",
+      verb: "Create subagent context",
+      targetLabel: args.ownerEntityId,
+      groupKey: `context-boundary:subagent:${args.parentContextId}:${args.ownerEntityId}`,
+    });
+
     const contextId = deriveContextId(args.targetKey);
     // Order mirrors cloneContext: fork file state, then materialize the folder.
     await deps.vcsContexts?.forkContext?.(args.parentContextId, contextId);
@@ -918,14 +958,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
               ownerEntityId?: string;
             },
           ];
-          await recordContextEdge(edgeArgs);
+          await recordContextEdge(ctx.caller, edgeArgs);
           return;
         }
         case "createSubagentContext": {
           const [subArgs] = args as [
             { parentContextId: string; ownerEntityId: string; targetKey: string },
           ];
-          return await createSubagentContext(subArgs);
+          return await createSubagentContext(ctx.caller, subArgs);
         }
         case "setTitle": {
           // Access is enforced by the per-method policy on `runtimeMethods.setTitle`

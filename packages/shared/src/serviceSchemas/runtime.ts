@@ -152,9 +152,7 @@ export const ClonedContextSchema = z
     ownerNewContextId: z
       .string()
       .nullable()
-      .describe(
-        "Cloned owner of this context in the clone tree (null for the root fork context)."
-      ),
+      .describe("Cloned owner of this context in the clone tree (null for the root fork context)."),
   })
   .strict();
 
@@ -427,7 +425,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   recordContextEdge: {
     description:
-      "Idempotently upsert a context-relationship edge into the registry. Written by the runtime (clone/subagent creation) and by the fork op (lineage). Provenance/authz metadata — a forged edge only grants read access to a context the caller can already name.",
+      "Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead.",
     args: z.tuple([
       z.object({
         contextId: z.string().describe("Child/dependent/descendant context."),
@@ -441,7 +439,7 @@ export const runtimeMethods = defineServiceMethods({
     ]),
     returns: z.void(),
     access: { sensitivity: "write" },
-    policy: { allowed: ["shell", "server", "panel", "worker", "do"] },
+    policy: { allowed: ["shell", "server"] },
     examples: [
       {
         args: [{ contextId: "ctx-child", ownerContextId: "ctx-parent", kind: "lifecycle" }],
@@ -450,7 +448,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   createSubagentContext: {
     description:
-      "Create a subagent's child context off a parent: mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; the vessel must NOT hand-roll this.",
+      "Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; the vessel must NOT hand-roll this.",
     args: z.tuple([
       z.object({
         parentContextId: z.string().describe("Parent context the subagent forks from."),
@@ -466,7 +464,11 @@ export const runtimeMethods = defineServiceMethods({
     examples: [
       {
         args: [
-          { parentContextId: "ctx-parent", ownerEntityId: "do:workers/agent:AgentDO:a1", targetKey: "run:r1" },
+          {
+            parentContextId: "ctx-parent",
+            ownerEntityId: "do:workers/agent:AgentDO:a1",
+            targetKey: "run:r1",
+          },
         ],
       },
     ],

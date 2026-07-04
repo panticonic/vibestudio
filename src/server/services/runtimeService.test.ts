@@ -1510,15 +1510,36 @@ describe("runtimeService context-relationship registry", () => {
     expect(res.contexts).toHaveLength(1);
     expect(res.contexts[0]!.ownerEntityId).toBe("e2");
   });
+
+  it("rejects userland attempts to forge context edges before writing the registry", async () => {
+    const { service } = await buildDeps();
+
+    await expect(
+      service.handler({ caller: workerCaller() }, "recordContextEdge", [
+        {
+          contextId: "ctx-forged-child",
+          ownerContextId: "ctx-forged-parent",
+          kind: "lifecycle",
+          ownerEntityId: "worker:workers/fork:fork",
+        },
+      ])
+    ).rejects.toThrow(/trusted host callers/i);
+
+    const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-forged-parent", kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(owned.contexts).toHaveLength(0);
+  });
 });
 
 describe("runtimeService.createSubagentContext", () => {
   it("forks the parent, materializes the folder, records a lifecycle edge, idempotent under targetKey", async () => {
     const forkContext = vi.fn(async () => {});
     const { service, contextFolders } = await buildDeps({ vcsContexts: { forkContext } });
+    const owner = await seedDO(service, "ctx-parent", "a1");
 
     const out1 = (await service.handler({ caller: serverCaller }, "createSubagentContext", [
-      { parentContextId: "ctx-parent", ownerEntityId: "do:agent:a1", targetKey: "run:r1" },
+      { parentContextId: "ctx-parent", ownerEntityId: owner.id, targetKey: "run:r1" },
     ])) as { contextId: string };
     expect(out1.contextId).toMatch(/^ctx-[0-9a-f]{32}$/);
     expect(forkContext).toHaveBeenCalledWith("ctx-parent", out1.contextId);
@@ -1528,17 +1549,82 @@ describe("runtimeService.createSubagentContext", () => {
       { contextId: "ctx-parent", kind: "lifecycle" },
     ])) as OwnedContexts;
     expect(owned.contexts).toEqual([
-      { contextId: out1.contextId, kind: "lifecycle", ownerEntityId: "do:agent:a1" },
+      { contextId: out1.contextId, kind: "lifecycle", ownerEntityId: owner.id },
     ]);
 
     // Idempotent retry returns the same child, no duplicate edge.
     const out2 = (await service.handler({ caller: serverCaller }, "createSubagentContext", [
-      { parentContextId: "ctx-parent", ownerEntityId: "do:agent:a1", targetKey: "run:r1" },
+      { parentContextId: "ctx-parent", ownerEntityId: owner.id, targetKey: "run:r1" },
     ])) as { contextId: string };
     expect(out2.contextId).toBe(out1.contextId);
     const owned2 = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
       { contextId: "ctx-parent", kind: "lifecycle" },
     ])) as OwnedContexts;
     expect(owned2.contexts).toHaveLength(1);
+  });
+
+  it("allows the owner DO to create its own subagent context", async () => {
+    const forkContext = vi.fn(async () => {});
+    const { service, approvalQueue } = await buildDeps({ vcsContexts: { forkContext } });
+    const owner = await seedDO(service, "ctx-parent-do", "owner");
+
+    const out = (await service.handler(
+      { caller: createVerifiedCaller(owner.id, "do") },
+      "createSubagentContext",
+      [{ parentContextId: "ctx-parent-do", ownerEntityId: owner.id, targetKey: "run:owner" }]
+    )) as { contextId: string };
+
+    expect(forkContext).toHaveBeenCalledWith("ctx-parent-do", out.contextId);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("rejects owner spoofing before forking or recording a lifecycle edge", async () => {
+    const forkContext = vi.fn(async () => {});
+    const { service } = await buildDeps({ vcsContexts: { forkContext } });
+    const owner = await seedDO(service, "ctx-parent-spoof", "owner");
+
+    await expect(
+      service.handler({ caller: workerCaller() }, "createSubagentContext", [
+        { parentContextId: "ctx-parent-spoof", ownerEntityId: owner.id, targetKey: "run:spoof" },
+      ])
+    ).rejects.toThrow(/cannot create subagent contexts/i);
+
+    expect(forkContext).not.toHaveBeenCalled();
+    const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-parent-spoof", kind: "lifecycle" },
+    ])) as OwnedContexts;
+    expect(owned.contexts).toHaveLength(0);
+  });
+
+  it("gates a caller-created owner before forking a foreign existing parent context", async () => {
+    const forkContext = vi.fn(async () => {});
+    const { service, entityCache, approvalQueue } = await buildDeps({
+      approvalDecision: "deny",
+      vcsContexts: { forkContext },
+    });
+    const caller = panelCaller("panel:subagent-owner", "ctx-caller");
+    entityCache._onActivate({
+      id: caller.runtime.id,
+      kind: "panel",
+      source: { repoPath: "panels/caller", effectiveVersion: "v1" },
+      contextId: "ctx-caller",
+      key: "subagent-owner",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: true,
+    });
+    const owner = await seedDO(service, "ctx-foreign-parent", "owner", caller);
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    await expect(
+      service.handler({ caller }, "createSubagentContext", [
+        { parentContextId: "ctx-foreign-parent", ownerEntityId: owner.id, targetKey: "run:deny" },
+      ])
+    ).rejects.toThrow(/denied/i);
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: "context.boundary" })
+    );
+    expect(forkContext).not.toHaveBeenCalled();
   });
 });

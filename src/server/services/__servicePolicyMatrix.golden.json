@@ -267,7 +267,7 @@
       "destroyContext": null,
       "listEntities": null,
       "listOwnedContexts": null,
-      "recordContextEdge": ["do", "panel", "server", "shell", "worker"],
+      "recordContextEdge": ["server", "shell"],
       "resolveContext": null,
       "retireEntity": null,
       "setTitle": ["app", "do", "panel", "worker"]
