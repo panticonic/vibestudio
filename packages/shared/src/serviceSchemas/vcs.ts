@@ -842,9 +842,11 @@ export const vcsMethods = defineServiceMethods({
       "Reconcile divergence: pull a SOURCE (`main`, or a context you own/forked) INTO the caller's context head, producing a MERGE COMMIT per repo. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Commit-gated on BOTH sides: uncommitted edits on the source (or target) are rejected before any merge. Omit repoPaths to reconcile every repo your context branch touches. Returns one result per repo. After merging main, the context head descends from main so push fast-forwards.",
     args: z.tuple([
       z.object({
-        source: vcsMergeSourceSchema.describe(
-          'Merge source: `"main"` (the protected workspace baseline) or `{ contextId }` for another context you own/forked.'
-        ),
+        source: vcsMergeSourceSchema
+          .optional()
+          .describe(
+            'Merge source: `"main"` (the protected workspace baseline) or `{ contextId }` for another context you own/forked. Omit for `"main"`.'
+          ),
         repoPaths: z
           .array(z.string())
           .optional()

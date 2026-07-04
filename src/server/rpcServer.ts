@@ -3438,13 +3438,14 @@ export class RpcServer {
           }
         },
       };
-      // A condemned id (pre-open buffer breached its cap or TTL before this
-      // open arrived): fail the body loudly — the leading frames are gone, so
-      // completing the upload would silently truncate it.
-      const condemned = retiredBodyIds.get(bodyStreamId);
-      if (condemned) {
-        // Not registered, so no retire bookkeeping — just error the fresh body.
-        controller.error(condemned);
+      // A retired id must never be re-registered. Condemned ids fail loudly
+      // because leading frames were dropped; normally retired ids close
+      // immediately so a duplicate stream-open cannot resurrect the route.
+      if (retiredBodyIds.has(bodyStreamId)) {
+        const condemned = retiredBodyIds.get(bodyStreamId);
+        // Not registered, so no retire bookkeeping — just settle the fresh body.
+        if (condemned) controller.error(condemned);
+        else controller.close();
         return body;
       }
       inboundBodies.set(bodyStreamId, entry);

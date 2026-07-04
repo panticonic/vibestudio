@@ -75,6 +75,35 @@ describe("bridgeAdapter CDP routing", () => {
 });
 
 describe("bridgeAdapter panel session relay", () => {
+  it("reuses a session whose transport is reconnecting but not closed", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = makePanelSession({
+      status: jest.fn(() => "connecting" as RpcConnectionStatus),
+      isClosed: jest.fn(() => false),
+    });
+    const openPanelSession = jest.fn().mockResolvedValue(session);
+    const adapter = createAdapter({
+      panelManager: {} as never,
+      transport: { openPanelSession } as never,
+      callbacks: { navigateToPanel: jest.fn() },
+      deliverToPanel: jest.fn(),
+      getPanelLease: jest.fn(() => ({
+        runtimeEntityId: "panel:runtime-a" as PanelEntityId,
+        connectionId: "conn-a",
+      })),
+    });
+
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-1" }]);
+    await waitFor(() => expect(session.send).toHaveBeenCalledWith({ id: "msg-1" }));
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-2" }]);
+    await waitFor(() => expect(session.send).toHaveBeenCalledWith({ id: "msg-2" }));
+
+    expect(openPanelSession).toHaveBeenCalledTimes(1);
+    expect(session.close).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it("reopens the panel session when the cached session is closed", async () => {
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
     let firstClosed = false;

@@ -251,6 +251,5 @@ function panelLeaseKey(lease: PanelLease): string {
 }
 
 function isPanelSessionLive(session: WebRtcSession): boolean {
-  if (session.isClosed()) return false;
-  return (session.status?.() ?? "connected") === "connected";
+  return !session.isClosed();
 }

@@ -50,6 +50,7 @@ function makeService(
 function update(overrides: Partial<UpdateMainsInput> = {}): UpdateMainsInput {
   return {
     entries: [{ repoPath: "packages/journal", expectedOld: null, next: STATE_A }],
+    operation: "push",
     ...overrides,
   };
 }

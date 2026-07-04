@@ -89,7 +89,7 @@ describe("full-gateway attribution (row 11)", () => {
       // current-value comparison.
       async updateMains(input: {
         entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
-        operation?: "push" | "import" | "delete" | "restore";
+        operation: "push" | "import" | "delete" | "restore" | "seed";
         reason?: string;
         invocationToken?: string;
       }) {

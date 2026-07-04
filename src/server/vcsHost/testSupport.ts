@@ -141,7 +141,7 @@ export function attachLocalHostBridges(
     // `{repoPath, stateHash, seq}` per entry.
     async updateMains(input: {
       entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
-      operation?: "push" | "import" | "delete" | "restore";
+      operation: "push" | "import" | "delete" | "restore" | "seed";
       reason?: string;
       invocationToken?: string;
     }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }> {
@@ -151,7 +151,7 @@ export function attachLocalHostBridges(
       return refs.updateMains({
         entries: input.entries,
         ...(gateContext !== undefined ? { gateContext } : {}),
-        ...(input.operation ? { operation: input.operation } : {}),
+        operation: input.operation,
         ...(input.reason !== undefined ? { reason: input.reason } : {}),
       });
     },

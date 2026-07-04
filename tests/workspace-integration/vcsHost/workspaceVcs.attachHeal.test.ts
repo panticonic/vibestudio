@@ -112,6 +112,7 @@ describe("WorkspaceVcs attach-time publish-drift heal (DO-owned)", () => {
     // exact drift attach must now reject.
     await refs.updateMains({
       entries: [{ repoPath: REPO, expectedOld: v1, next: v2 }],
+      operation: "push",
       gateContext: { kind: "system" },
     });
     // Precondition: the DO's recorded main still lags at v1.

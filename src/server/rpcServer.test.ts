@@ -2007,6 +2007,53 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
     await expect(readAll(body)).resolves.toBe("early bird");
   });
 
+  it("does not resurrect a successfully retired bodyStreamId on a duplicate stream-open", async () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    p.emitBulk(8, FRAME_DATA, utf8("done"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 4 })));
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const firstBody = shim!.takeInboundBody("up-1")!;
+    await expect(readAll(firstBody)).resolves.toBe("done");
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 8,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-2",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const duplicateBody = shim!.takeInboundBody("up-2")!;
+    p.emitBulk(8, FRAME_DATA, utf8("late"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 4 })));
+    await expect(readAll(duplicateBody)).resolves.toBe("");
+  });
+
   it("flushes pre-open frames ahead of post-open frames, preserving order", async () => {
     const { server } = createServer();
     let shim: SessionWebSocketShim | undefined;

@@ -249,6 +249,36 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
     expect(ingress.status()).toEqual([]);
   });
 
+  it("a stale pipe-factory failure does not delete a freshly re-armed room", async () => {
+    let rejectFirst!: (error: Error) => void;
+    let calls = 0;
+    const { ingress, attached } = makeHarness({
+      createPipe: (room) => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<WebRtcAnswererPipe>((_resolve, reject) => {
+            rejectFirst = reject;
+          });
+        }
+        return Promise.resolve(makeFakePipe(room).pipe);
+      },
+    });
+
+    ingress.armRoom("room-a", { inviteCode: "a" });
+    const disarmed = ingress.disarmRoom("room-a");
+    ingress.armRoom("room-a", { deviceId: "dev-a" });
+    await flush();
+
+    rejectFirst(new Error("old create failed"));
+    await disarmed;
+    await flush();
+
+    expect(attached).toHaveLength(1);
+    expect(ingress.status()).toEqual([
+      { room: "room-a", status: "disconnected", deviceId: "dev-a", candidateType: null },
+    ]);
+  });
+
   // --- relay alarm telemetry (§9.8) -----------------------------------------
 
   it("status() surfaces each pipe's candidateType (null while no peer is up)", async () => {

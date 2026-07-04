@@ -799,6 +799,17 @@ describe("blobstoreService", () => {
       await expect(fsp.readdir(outside)).resolves.toEqual([]);
     });
 
+    it("materializeTree refuses an exact symlink output directory", async () => {
+      const { rootTree } = await seedFixtureTree();
+      const outside = path.join(rootDir, "outside-exact-target");
+      const outDir = path.join(rootDir, "symlink-exact-out");
+      await fsp.mkdir(outside, { recursive: true });
+      await fsp.symlink(outside, outDir);
+
+      await expect(materializeTree(blobsDir, rootTree, outDir)).rejects.toThrow(/symlink output/);
+      await expect(fsp.readdir(outside)).resolves.toEqual([]);
+    });
+
     it("materializeTree resolves an outDir under a symlinked parent (no false positive)", async () => {
       const { rootTree } = await seedFixtureTree();
       const realParent = path.join(rootDir, "real-parent");

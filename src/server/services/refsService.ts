@@ -131,7 +131,7 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
           return await deps.refs.updateMains({
             entries: input.entries,
             gateContext,
-            ...(input.operation ? { operation: input.operation } : {}),
+            operation: input.operation,
             ...(input.reason !== undefined ? { reason: input.reason } : {}),
             writer: ctx.caller.runtime.id,
             onBehalfOf: gateCaller,

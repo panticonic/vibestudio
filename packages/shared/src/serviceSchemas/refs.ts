@@ -55,15 +55,13 @@ export type MainUpdateEntry = z.infer<typeof MainUpdateEntrySchema>;
 
 /** The VCS operation a main movement represents — recorded verbatim in the
  *  host main-ref log so render paths can label a main advance (§2/§4.1). */
-export const MainRefOperationSchema = z.enum(["push", "import", "delete", "restore"]);
+export const MainRefOperationSchema = z.enum(["push", "import", "delete", "restore", "seed"]);
 export type MainRefOperation = z.infer<typeof MainRefOperationSchema>;
 
 export const updateMainsInputSchema = z.object({
   entries: z.array(MainUpdateEntrySchema).min(1),
-  /** The VCS operation this batch performs — logged as movement provenance.
-   *  Optional so the host's own bootstrap seeding (no operation) still writes a
-   *  row; the single DO writer always supplies it. */
-  operation: MainRefOperationSchema.optional(),
+  /** The VCS operation this batch performs, logged as movement provenance. */
+  operation: MainRefOperationSchema,
   /** Free-text movement reason (e.g. a push message), logged for the audit
    *  trail. Never a semantic input to the CAS. */
   reason: z.string().optional(),

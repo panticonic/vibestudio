@@ -82,10 +82,10 @@ export interface UpdateMainsInput {
    * Movement provenance recorded to the main-ref log (§2). The RPC layer
    * (`refsService`) resolves these before they are discarded: `operation`/
    * `reason` come from the wire request, `writer` is the single VCS writer DO,
-   * `onBehalfOf` is the token-resolved originating principal. Absent for
-   * host-internal seeding (logged as operation `seed`).
+   * `onBehalfOf` is the token-resolved originating principal. Host-internal
+   * seeding passes operation `seed`.
    */
-  operation?: MainRefOperation;
+  operation: MainRefOperation;
   reason?: string;
   writer?: string;
   onBehalfOf?: unknown;
@@ -461,6 +461,9 @@ export function createRefService(deps: RefServiceDeps): RefService {
       if (input.entries.length === 0) {
         throw new RefValidationError("updateMains requires at least one entry");
       }
+      if (!input.operation) {
+        throw new RefValidationError("updateMains requires an operation");
+      }
       const seen = new Set<string>();
       for (const entry of input.entries) {
         validateRepoPath(entry.repoPath);
@@ -542,7 +545,7 @@ export function createRefService(deps: RefServiceDeps): RefService {
             id: rowSeq,
             repoPath: entry.repoPath,
             ref: "main",
-            operation: input.operation ?? "seed",
+            operation: input.operation,
             old,
             new: entry.next,
             writer: input.writer ?? null,
@@ -602,6 +605,7 @@ export function createRefService(deps: RefServiceDeps): RefService {
       try {
         await service.updateMains({
           entries: [{ repoPath: input.repoPath, expectedOld: null, next: input.value }],
+          operation: "seed",
           gateContext: { kind: "system", actor: { id: "seed", kind: "system" } },
         });
       } catch (error) {

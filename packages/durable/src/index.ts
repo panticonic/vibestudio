@@ -169,6 +169,7 @@ export abstract class DurableObjectBase {
     args: unknown[];
     error?: string;
     caller?: AuthenticatedCaller | null;
+    invocationToken?: string;
   } {
     const parsed = JSON.parse(body);
     if (Array.isArray(parsed)) return { args: parsed };
@@ -184,6 +185,9 @@ export abstract class DurableObjectBase {
         if (typeof record["callerId"] === "string" && typeof record["callerKind"] === "string") {
           return {
             args: (parsed as { args: unknown[] }).args,
+            ...(typeof (parsed as { __invocationToken?: unknown }).__invocationToken === "string"
+              ? { invocationToken: (parsed as { __invocationToken: string }).__invocationToken }
+              : {}),
             caller: {
               callerId: record["callerId"],
               callerKind: record["callerKind"] as AuthenticatedCaller["callerKind"],
@@ -194,7 +198,12 @@ export abstract class DurableObjectBase {
           };
         }
       }
-      return { args: (parsed as { args: unknown[] }).args };
+      return {
+        args: (parsed as { args: unknown[] }).args,
+        ...(typeof (parsed as { __invocationToken?: unknown }).__invocationToken === "string"
+          ? { invocationToken: (parsed as { __invocationToken: string }).__invocationToken }
+          : {}),
+      };
     }
     return { args: [parsed] };
   }
@@ -426,6 +435,7 @@ export abstract class DurableObjectBase {
 
       let args: unknown[] = [];
       let verifiedCallerFromBody: AuthenticatedCaller | null = null;
+      let invocationTokenFromBody: string | undefined;
       if (request.method === "POST") {
         const body = await request.text();
         if (body) {
@@ -438,6 +448,7 @@ export abstract class DurableObjectBase {
           }
           args = result.args;
           verifiedCallerFromBody = result.caller ?? null;
+          invocationTokenFromBody = result.invocationToken;
         }
       }
 
@@ -483,6 +494,7 @@ export abstract class DurableObjectBase {
           fromId: caller.callerId || "unknown",
           method,
           args,
+          ...(invocationTokenFromBody !== undefined ? { invocationToken: invocationTokenFromBody } : {}),
         },
       });
       const responseEnvelope = await this.dispatchInboundEnvelope(envelope);

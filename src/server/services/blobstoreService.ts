@@ -926,7 +926,25 @@ export async function diffTrees(blobsDir: string, refA: string, refB: string): P
  * canonical existing root plus the tail segments still to be created.
  */
 async function resolveMaterializeRoot(outDir: string): Promise<{ root: string; tail: string[] }> {
-  let cur = path.resolve(outDir);
+  const resolvedOutDir = path.resolve(outDir);
+  try {
+    const st = await fsp.lstat(resolvedOutDir);
+    if (st.isSymbolicLink()) {
+      throw new Error(
+        `materializeTree: refusing to use symlink output directory ${JSON.stringify(outDir)}`
+      );
+    }
+    if (!st.isDirectory()) {
+      throw new Error(
+        `materializeTree: refusing to use output path ${JSON.stringify(outDir)} because it is not a directory`
+      );
+    }
+    return { root: await fsp.realpath(resolvedOutDir), tail: [] };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  let cur = resolvedOutDir;
   const tail: string[] = [];
   for (;;) {
     try {
