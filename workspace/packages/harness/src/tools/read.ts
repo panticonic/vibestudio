@@ -35,13 +35,10 @@ const readSchema = Type.Object({
   //  · none     — file content only, no attachment.
   //  · moderate — blame + FTS recall + 1-hop density re-rank (cheap, ~5 items).
   //  · deep     — moderate + 2-hop density + claim-relation walk (~10 items).
-  provenance: Type.Union(
-    [Type.Literal("none"), Type.Literal("moderate"), Type.Literal("deep")],
-    {
-      description:
-        "REQUIRED context budget for this read. 'none' = content only; 'moderate' = blame + recall + 1-hop density (~5 items); 'deep' = + 2-hop density + claim relations (~10 items). Choose from your situation and how useful provenance has been lately, not a constant.",
-    }
-  ),
+  provenance: Type.Union([Type.Literal("none"), Type.Literal("moderate"), Type.Literal("deep")], {
+    description:
+      "REQUIRED context budget for this read. 'none' = content only; 'moderate' = blame + recall + 1-hop density (~5 items); 'deep' = + 2-hop density + claim relations (~10 items). Choose from your situation and how useful provenance has been lately, not a constant.",
+  }),
   offset: Type.Optional(
     Type.Number({ description: "Line number to start reading from (1-indexed)" })
   ),
@@ -218,12 +215,12 @@ export function createReadTool(
         if (err instanceof Error && err.message.includes("is a directory, not a file")) throw err;
         // stat failures fall through — the read below reports them naturally.
       }
-      // §7.2: run the provenance attachment against the gad-store DO in parallel
-      // with the byte read (different services — wall-clock is max, not sum).
-      // Content NEVER moves onto the DO. `attach` appends the §7.5 block AFTER the
-      // file content, on text results only, unless the block is suppressed/empty.
-      const provenancePromise = startProvenance(toolCallId, input);
+      // §7.2: content NEVER moves onto the DO. Start provenance only after the
+      // read has succeeded so failed reads do not record false observed touches.
+      // `attach` appends the §7.5 block AFTER the file content, on text results
+      // only, unless the block is suppressed/empty.
       const attach = async (result: ReadResult): Promise<ReadResult> => {
+        const provenancePromise = startProvenance(toolCallId, input);
         if (!provenancePromise) return result;
         const prov = await provenancePromise;
         if (!prov || prov.result.suppressed) return result;
@@ -322,7 +319,9 @@ export function createReadTool(
       }
       // --- Text branch -------------------------------------------------------------------
       const textContent = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8");
-      return await attach(formatTextResult(textContent, path, offset, limit, fileToolsFallbackReason));
+      return await attach(
+        formatTextResult(textContent, path, offset, limit, fileToolsFallbackReason)
+      );
     },
   };
 }

@@ -364,6 +364,42 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
     expect(relay.size()).toBe(0);
   });
 
+  it("constructs null-body responses for statuses that forbid a body", async () => {
+    const { surface, relay } = connect(async () => decodedResponse(bytes(), { status: 204 }));
+
+    const response = await openBridgeUploadStream(
+      surface,
+      streamRequestEnvelope(),
+      null,
+      bodyStreamOf(bytes(1))
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.body).toBeNull();
+    expect(await response.text()).toBe("");
+    await vi.waitFor(() => expect(relay.size()).toBe(0));
+  });
+
+  it.each([101, 103, 199, 600])(
+    "maps invalid bridge response status %s to 502 before constructing Response",
+    async (status) => {
+      const { surface, relay } = connect(async () =>
+        decodedResponse(new TextEncoder().encode("bad status"), { status })
+      );
+
+      const response = await openBridgeUploadStream(
+        surface,
+        streamRequestEnvelope(),
+        null,
+        bodyStreamOf(bytes(1))
+      );
+
+      expect(response.status).toBe(502);
+      expect(await response.text()).toBe("bad status");
+      await vi.waitFor(() => expect(relay.size()).toBe(0));
+    }
+  );
+
   it("rejects when the host session cannot stream a request body", async () => {
     const { surface } = connect(async () => {
       throw new Error(

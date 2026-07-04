@@ -487,7 +487,11 @@ export function bridgeStreamSurfaceOf(shell: unknown): BridgeStreamShellSurface 
 }
 
 /** Statuses whose `Response` must have a null body. */
-const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
+function constructibleResponseStatus(status: number): number {
+  return status >= 200 && status <= 599 ? status : 502;
+}
 
 /**
  * Open one upload stream over the shell bridge: pump `body` across as awaited
@@ -694,10 +698,11 @@ export async function openBridgeUploadStream(
   })();
 
   const head = await headPromise;
-  if (NULL_BODY_STATUSES.has(head.status)) {
+  const status = constructibleResponseStatus(head.status);
+  if (NULL_BODY_STATUSES.has(status)) {
     // These statuses forbid a Response body; the wire sends no chunks for them.
     return new Response(null, {
-      status: head.status,
+      status,
       statusText: head.statusText,
       headers: head.headers,
     });
@@ -707,7 +712,7 @@ export async function openBridgeUploadStream(
   // whatwg-fetch typings (checked when the mobile host compiles this module
   // graph) disagree — but RN hosts use the relay side of this file, never this.
   return new Response(responseBody as never, {
-    status: head.status,
+    status,
     statusText: head.statusText,
     headers: head.headers,
   });

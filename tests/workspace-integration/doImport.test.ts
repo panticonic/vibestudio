@@ -94,7 +94,14 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
       refs: () => refs,
       buildValidate: async (input) => {
         buildValidateCalls += 1;
-        return input.repoPaths.map((p) => ({ unit: p, required: true, status: "ok" }));
+        return input.repoPaths.map((p) => ({
+          repoPath: p,
+          kind: "package",
+          role: "pushed" as const,
+          required: true,
+          status: "ok" as const,
+          builds: [],
+        }));
       },
     });
 
@@ -142,8 +149,7 @@ describe("git import (staged-lineage → gated single-writer publish, P4)", () =
             ? entries.map((e) => ({
                 path: e.path,
                 kind: e.kind,
-                contentHash: e.contentHash,
-                mode: e.mode,
+                ...(e.kind === "file" ? { contentHash: e.contentHash, mode: e.mode } : {}),
               }))
             : null;
         },

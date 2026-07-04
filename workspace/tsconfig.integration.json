@@ -2,15 +2,11 @@
   "extends": "./tsconfig.json",
   "include": [
     "../tests/workspace-integration/credentialService.test.ts",
+    "../tests/workspace-integration/doImport.test.ts",
     "../tests/workspace-integration/doVcsPush.test.ts",
+    "../tests/workspace-integration/gatewayAttribution.test.ts",
     "../tests/workspace-integration/userlandVcsDispatch.test.ts",
     "../tests/workspace-integration/vcsHost/**/*.test.ts"
   ],
-  "exclude": [
-    "apps/mobile/**/*",
-    "node_modules",
-    "../node_modules",
-    "**/dist",
-    "**/node_modules"
-  ]
+  "exclude": ["apps/mobile/**/*", "node_modules", "../node_modules", "**/dist", "**/node_modules"]
 }

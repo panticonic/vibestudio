@@ -2135,6 +2135,59 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
     p.emitBulk(8, FRAME_DATA, utf8("late"));
     p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 4 })));
   });
+
+  it("does not carry retired body ids across pipe down and session reopen", async () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const firstBody = shim!.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("old"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 3 })));
+    await expect(readAll(firstBody)).resolves.toBe("old");
+
+    p.emitDown("ICE failed");
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c2" });
+
+    // A fresh client transport starts body stream ids from 1 again. If the old
+    // retired-id map survived pipe-down, these early frames would be dropped
+    // before the new stream-open arrives.
+    p.emitBulk(8, FRAME_DATA, utf8("new"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 3 })));
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 9,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-2",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+
+    const secondBody = shim!.takeInboundBody("up-2")!;
+    await expect(readAll(secondBody)).resolves.toBe("new");
+  });
 });
 
 describe("RpcServer stream-request dispatch — body threading (§1.6)", () => {

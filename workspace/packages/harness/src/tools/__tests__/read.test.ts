@@ -1,8 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import type {
-  VcsProvItem,
-  VcsProvenanceForFileResult,
-} from "@vibez1/shared/serviceSchemas/vcs";
+import type { VcsProvItem, VcsProvenanceForFileResult } from "@vibez1/shared/serviceSchemas/vcs";
 import { createReadTool, type ReadProvenanceDeps } from "../read.js";
 import { StubFs } from "./stub-fs.js";
 
@@ -21,7 +18,12 @@ describe("createReadTool", () => {
     const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n");
     const fs = new StubFs({ files: { [`${CWD}/big.txt`]: lines } });
     const tool = createReadTool(CWD, fs);
-    const result = await tool.execute("call-1", { path: "big.txt", provenance: "none", offset: 3, limit: 2 });
+    const result = await tool.execute("call-1", {
+      path: "big.txt",
+      provenance: "none",
+      offset: 3,
+      limit: 2,
+    });
     const text = (result.content[0] as { text: string }).text;
     // Selected slice "line 3\nline 4" plus a continuation hint.
     expect(text).toContain("line 3");
@@ -43,7 +45,12 @@ describe("createReadTool", () => {
     };
     const tool = createReadTool(CWD, fs, { rpc });
 
-    const result = await tool.execute("call-1", { path: "big.txt", provenance: "none", offset: 3, limit: 2 });
+    const result = await tool.execute("call-1", {
+      path: "big.txt",
+      provenance: "none",
+      offset: 3,
+      limit: 2,
+    });
 
     expect((result.content[0] as { text: string }).text).toBe("line 3\nline 4");
     expect(rpc.call).toHaveBeenCalledWith(
@@ -73,7 +80,12 @@ describe("createReadTool", () => {
     const onUpdate = vi.fn();
     const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
 
-    const result = await tool.execute("call-1", { path: "hello.txt", provenance: "none" }, undefined, onUpdate);
+    const result = await tool.execute(
+      "call-1",
+      { path: "hello.txt", provenance: "none" },
+      undefined,
+      onUpdate
+    );
 
     expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
     expect(result.details).toMatchObject({
@@ -119,7 +131,12 @@ describe("createReadTool", () => {
     const onUpdate = vi.fn();
     const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
 
-    const result = await tool.execute("call-1", { path: "hello.txt", provenance: "none" }, undefined, onUpdate);
+    const result = await tool.execute(
+      "call-1",
+      { path: "hello.txt", provenance: "none" },
+      undefined,
+      onUpdate
+    );
 
     expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
     expect(result.details).toMatchObject({
@@ -174,7 +191,9 @@ describe("createReadTool", () => {
   it("throws when file is missing", async () => {
     const fs = new StubFs();
     const tool = createReadTool(CWD, fs);
-    await expect(tool.execute("call-1", { path: "missing.txt", provenance: "none" })).rejects.toThrow(/not found/i);
+    await expect(
+      tool.execute("call-1", { path: "missing.txt", provenance: "none" })
+    ).rejects.toThrow(/not found/i);
   });
 
   it("returns ImageContent when the image service extension detects an image type", async () => {
@@ -214,7 +233,9 @@ describe("createReadTool", () => {
     const tool = createReadTool(CWD, fs);
     const ac = new AbortController();
     ac.abort();
-    await expect(tool.execute("call-1", { path: "foo.txt", provenance: "none" }, ac.signal)).rejects.toThrow(/abort/i);
+    await expect(
+      tool.execute("call-1", { path: "foo.txt", provenance: "none" }, ac.signal)
+    ).rejects.toThrow(/abort/i);
   });
 });
 
@@ -291,7 +312,9 @@ describe("createReadTool provenance attachment (§7.5)", () => {
     const tool = createReadTool(REPO_CWD, fs, {
       provenance: makeProvenance(
         {
-          items: [{ line: "claim#1 foo", handle: "claim#1", kind: "claim", exception: false, score: 1 }],
+          items: [
+            { line: "claim#1 foo", handle: "claim#1", kind: "claim", exception: false, score: 1 },
+          ],
           shown: 1,
           total: 1,
           suppressed: true,
@@ -325,6 +348,20 @@ describe("createReadTool provenance attachment (§7.5)", () => {
     await tool.execute("i", { path: "skills/orient/SKILL.md", provenance: "moderate" });
     await tool.execute("i", { path: "loose.txt", provenance: "moderate" });
     expect(calls).toHaveLength(1);
+  });
+
+  it("does not record a provenance touch when the file read fails", async () => {
+    const fs = new StubFs();
+    const calls: Array<Record<string, unknown>> = [];
+    const tool = createReadTool(REPO_CWD, fs, {
+      provenance: makeProvenance({ items: [], shown: 0, total: 0 }, calls),
+    });
+
+    await expect(
+      tool.execute("i", { path: "packages/foo/missing.ts", provenance: "moderate" })
+    ).rejects.toThrow(/not found/i);
+
+    expect(calls).toHaveLength(0);
   });
 
   it("never fails the read when the provenance call rejects", async () => {

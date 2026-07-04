@@ -3289,6 +3289,10 @@ export class RpcServer {
       // arrive on it) — free the frames and cancel their TTL timers.
       for (const pending of pendingBodies.values()) clearTimeout(pending.timer);
       pendingBodies.clear();
+      // Body stream ids are monotonic only within one client transport. A fresh
+      // reconnect starts at 1 again, so retired ids from the old pipe generation
+      // must not cause valid early DATA on the new generation to be dropped.
+      retiredBodyIds.clear();
     });
 
     // Upload seam (plan §1.6): request bodies arrive as inbound bulk DATA

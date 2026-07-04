@@ -1296,6 +1296,10 @@ async function main() {
         project: (repoPath, head, stateHash) =>
           workspaceVcs.projectWorktree(repoPath, head, stateHash),
         dependentRepos: (repoPath) => workspaceVcs.deleteDependents(repoPath),
+        getVcsWriterIdentity: () => {
+          const binding = resolveVcsStoreBinding(workspaceDecls);
+          return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
+        },
       })
     );
     let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;
