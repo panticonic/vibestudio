@@ -251,6 +251,7 @@
   "refs": {
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
+      "listMainRefLog": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "listMains": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "readMain": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "updateMains": ["do"]

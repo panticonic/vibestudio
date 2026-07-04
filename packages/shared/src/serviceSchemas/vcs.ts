@@ -453,6 +453,12 @@ export const vcsRecallInputSchema = z.object({
     .describe(
       "Restrict recall to these repos' indices (workspace-relative repo paths); omit to search across all repos."
     ),
+  recallKeywords: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Optional steering keywords OR-appended to the query's FTS match to widen recall; never load-bearing (a bonus signal, not a filter)."
+    ),
 });
 export type VcsRecallInput = z.infer<typeof vcsRecallInputSchema>;
 

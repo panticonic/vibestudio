@@ -732,12 +732,26 @@ interface HostRefsStore {
     operation: "push" | "import" | "delete" | "restore";
     invocationToken?: string;
   }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }>;
-  /** The host ref log for a repo (audit trail of main movement) — the
-   *  stale-intent discard consults this, not just current values (§6). */
-  readMainLog(
+  /** The host main-ref movement log for a repo (§2 audit trail: operation,
+   *  host-verified writer + token-resolved on-behalf-of principal, reason,
+   *  old→new). Render paths read main-advance attribution from here; the
+   *  stale-intent discard consults it, not just current values (§6). `sinceId`
+   *  pages movements after a known id (omit for the full log). */
+  listMainRefLog(
     repoPath: string,
-    limit?: number
-  ): Promise<Array<{ seq: number; old: string | null; new: string | null; operation: string }>>;
+    sinceId?: number
+  ): Promise<
+    Array<{
+      id: number;
+      operation: string;
+      old: string | null;
+      new: string | null;
+      writer: string | null;
+      onBehalfOf: unknown;
+      reason: string | null;
+      createdAt: number;
+    }>
+  >;
 }
 
 /** The slice of the host `build.*` RPC surface the push gate needs (§2.2):
@@ -7051,12 +7065,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *  ref log records no transition INTO `next` (consult the log, not just the
    *  current value — a later push may have moved past it). */
   private async intentIsStale(intent: PublishIntent): Promise<boolean> {
-    const readLog = this.refsStore().readMainLog?.bind(this.refsStore());
+    const readLog = this.refsStore().listMainRefLog?.bind(this.refsStore());
     for (const e of intent.entries) {
       const current = (await this.refsStore().readMain(e.repoPath))?.stateHash ?? null;
       if (current === e.next) return false;
       if (readLog) {
-        const log = await readLog(e.repoPath, 200);
+        const log = await readLog(e.repoPath);
         if (log.some((entry) => entry.new === e.next)) return false;
       }
     }
@@ -8006,9 +8020,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       readMain: (repoPath) => this.rpc.call("main", "refs.readMain", [repoPath]),
       listMains: () => this.rpc.call("main", "refs.listMains", []),
       updateMains: (input) => this.rpc.call("main", "refs.updateMains", [input]),
-      readMainLog: (repoPath, limit) =>
-        this.rpc.call("main", "refs.readMainLog", [
-          { repoPath, ...(limit !== undefined ? { limit } : {}) },
+      listMainRefLog: (repoPath, sinceId) =>
+        this.rpc.call("main", "refs.listMainRefLog", [
+          { repoPath, ...(sinceId !== undefined ? { sinceId } : {}) },
         ]),
     };
   }

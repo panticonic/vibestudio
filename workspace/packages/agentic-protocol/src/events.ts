@@ -84,7 +84,8 @@ export type EventKind =
   | "system.compaction_recorded"
   | "knowledge.claim_recorded"
   | "knowledge.claim_updated"
-  | "knowledge.claim_retracted";
+  | "knowledge.claim_retracted"
+  | "knowledge.claims_related";
 
 export interface EventCausality {
   parentEventId?: EventId;
@@ -653,6 +654,15 @@ export interface BuildCompletedPayload {
   metadata?: Record<string, unknown>;
 }
 
+export type ClaimRelationKind = "supports" | "contradicts" | "about" | "refines" | "depends_on";
+
+export interface KnowledgeRelation {
+  src: string;
+  relation: ClaimRelationKind;
+  dst: string;
+  weight?: number;
+}
+
 export interface KnowledgePayload {
   protocol: "agentic.trajectory.v1";
   id?: string;
@@ -660,7 +670,15 @@ export interface KnowledgePayload {
   predicate?: string;
   object?: string;
   claimId?: string;
+  /** Pointer to the durable knowledge-ledger entry that owns this claim's content (§8.1). */
+  ledgerEntryId?: string;
+  /** Free-text claim statement (nullable alongside subject/predicate/object). */
+  text?: string;
+  /** Claim kind (entity | predicate | statement, etc.). */
+  kind?: string;
   status?: string;
+  /** Asserted relations carried by knowledge.claims_related events. */
+  relations?: KnowledgeRelation[];
   body?: unknown;
   metadata?: Record<string, unknown>;
 }

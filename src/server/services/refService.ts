@@ -4,17 +4,20 @@
  *
  * The host tracks exactly one canonical `main` state per repo path:
  * `repoPath → { stateHash, updatedAt }`. There is no generic `(repo, ref)`
- * namespace, no VCS-operation awareness, no movement log, and no provenance.
- * The whole write surface is a single atomic group compare-and-swap —
- * `updateMains` — plus movement-limited host-internal seeding (`seedMain`,
+ * namespace. The whole write surface is a single atomic group compare-and-swap
+ * — `updateMains` — plus movement-limited host-internal seeding (`seedMain`,
  * set-if-absent, implemented through `updateMains`). `next === null` removes the
  * ref.
  *
- * `updateMains` is CONTENT-only: it validates every non-null `next` is fully
- * present in the content store (`assertTreeComplete`), runs the injected
- * approval gate once (host-enforced user consent, D3), then swaps. It knows
- * nothing about push/merge/delete/restore and records no writer/reason/seq —
- * those semantics all live in the userland gad-store DO.
+ * `updateMains` is CONTENT-only for the SWAP decision: it validates every
+ * non-null `next` is fully present in the content store (`assertTreeComplete`),
+ * runs the injected approval gate once (host-enforced user consent, D3), then
+ * swaps. It makes no push/merge/delete/restore branching decision. But every
+ * movement it commits is APPENDED to the host **main-ref log** (§2): a durable,
+ * host-verified `(operation, writer, onBehalfOf, reason, old→new, seq)` audit
+ * trail the RPC layer feeds it (the token-resolved principal, captured here
+ * before it is discarded). The log is the design's native main-advance
+ * provenance signal, read back via `listMainRefLog`.
  *
  * After a successful swap it emits a DUMB `onRefsChanged` signal — just the
  * changed `repoPath → stateHash` pairs (null = removed), no operation label, no
@@ -22,12 +25,13 @@
  * post-advance effects (build EV-baseline promotion, memory-index reaction);
  * the CAS neither knows nor cares what they are.
  *
- * DURABILITY: the whole main table lives in ONE JSON file replaced atomically
- * via writeJsonFileAtomic (temp file + fsync + rename + best-effort dir fsync).
- * The single rename is the sole commit point, so a crash at any moment leaves
- * either the complete old table or the complete new table. A batch writes ALL
- * its entries in that one replace: there is no partial persist and nothing to
- * roll back.
+ * DURABILITY: the whole main table AND its movement log live in ONE JSON file
+ * replaced atomically via writeJsonFileAtomic (temp file + fsync + rename +
+ * best-effort dir fsync). The single rename is the sole commit point, so a
+ * crash at any moment leaves either the complete old {table, log} or the
+ * complete new one — a ref advance and its log row commit together, never one
+ * without the other. A batch writes ALL its entries + log rows in that one
+ * replace: there is no partial persist and nothing to roll back.
  *
  * CONCURRENCY: a single server process owns the store, so an in-process
  * per-repoPath queue (serializeByKey) is sufficient. A batch acquires every
@@ -61,6 +65,10 @@ export interface MainUpdateEntry {
   next: string | null;
 }
 
+/** The VCS operation a movement represents, recorded in the main-ref log.
+ *  `seed` is the host-internal bootstrap set-if-absent (no wire operation). */
+export type MainRefOperation = "push" | "import" | "delete" | "restore" | "seed";
+
 export interface UpdateMainsInput {
   entries: MainUpdateEntry[];
   /**
@@ -69,10 +77,48 @@ export interface UpdateMainsInput {
    * — advancement policy stays injected.
    */
   gateContext?: unknown;
+  /**
+   * Movement provenance recorded to the main-ref log (§2). The RPC layer
+   * (`refsService`) resolves these before they are discarded: `operation`/
+   * `reason` come from the wire request, `writer` is the single VCS writer DO,
+   * `onBehalfOf` is the token-resolved originating principal. Absent for
+   * host-internal seeding (logged as operation `seed`).
+   */
+  operation?: MainRefOperation;
+  reason?: string;
+  writer?: string;
+  onBehalfOf?: unknown;
 }
 
 export interface UpdateMainsResult {
-  updated: Array<{ repoPath: string; stateHash: string | null }>;
+  updated: Array<{
+    repoPath: string;
+    stateHash: string | null;
+    /** The main-ref log id assigned to this movement (equal to the current max
+     *  seq for a no-op removal that recorded no row). */
+    seq: number;
+  }>;
+}
+
+/** One durable row of the host main-ref movement log (§2). */
+export interface MainRefLogRow {
+  /** Monotonic global id (this movement's `seq`). */
+  id: number;
+  repoPath: string;
+  /** Always `main` today — one protected ref per repo. */
+  ref: string;
+  operation: MainRefOperation;
+  /** Ref value before the movement; null when created. */
+  old: string | null;
+  /** Ref value after the movement; null when removed. */
+  new: string | null;
+  /** The single VCS writer DO identity, or null for host-internal seeding. */
+  writer: string | null;
+  /** The token-resolved originating principal, or null. */
+  onBehalfOf: unknown;
+  reason: string | null;
+  /** Movement timestamp (ms since epoch). */
+  createdAt: number;
 }
 
 /** Per-repo view the gate receives: the ACTUAL current value (validated equal
@@ -135,6 +181,13 @@ export interface RefServiceDeps {
 export interface RefService {
   readMain(repoPath: string): MainRefRecord | null;
   listMains(): MainRefRecord[];
+  /**
+   * The main-ref movement log for one repo (§2), oldest first. `sinceId` returns
+   * only movements with a greater id (omit for the full log). The render paths
+   * read main-advance attribution from here; the DO's stale-intent discard
+   * consults it.
+   */
+  listMainRefLog(repoPath: string, sinceId?: number): MainRefLogRow[];
   /**
    * Atomic group compare-and-swap. Every entry's `expectedOld` must match the
    * current value (null = must-not-exist) or the WHOLE batch fails with a
@@ -240,12 +293,21 @@ function validateValue(label: string, value: unknown): asserts value is string {
 // Persistence
 // ---------------------------------------------------------------------------
 
+// STORE_VERSION stays 3: the movement `log`/`seq` fields are ADDITIVE and
+// default-empty, so an existing v3 store (written before the log existed) loads
+// intact and starts logging from its next movement. Bumping the version would
+// brick startup on a running install (loadStore treats an unknown version as
+// fatal), orphaning every protected main — never acceptable for this table.
 const STORE_VERSION = 3;
 const STORE_FILE_NAME = "refs.json";
 
 interface StoredRefStore {
   version: number;
   mains: MainRefRecord[];
+  /** The main-ref movement log (§2). Absent in pre-log v3 stores. */
+  log?: MainRefLogRow[];
+  /** The highest movement id assigned so far. Absent ⇒ 0. */
+  seq?: number;
 }
 
 function isMainRefRecord(value: unknown): value is MainRefRecord {
@@ -258,12 +320,34 @@ function isMainRefRecord(value: unknown): value is MainRefRecord {
   );
 }
 
-function loadStore(filePath: string, mains: Map<string, MainRefRecord>): void {
+function isMainRefLogRow(value: unknown): value is MainRefLogRow {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Partial<MainRefLogRow>;
+  return (
+    typeof row.id === "number" &&
+    typeof row.repoPath === "string" &&
+    typeof row.ref === "string" &&
+    typeof row.operation === "string" &&
+    (row.old === null || typeof row.old === "string") &&
+    (row.new === null || typeof row.new === "string") &&
+    (row.writer === null || typeof row.writer === "string") &&
+    (row.reason === null || typeof row.reason === "string") &&
+    typeof row.createdAt === "number"
+  );
+}
+
+/** Load persisted state into the in-memory `mains`/`log` collections and return
+ *  the highest movement id seen (the seq to continue from). */
+function loadStore(
+  filePath: string,
+  mains: Map<string, MainRefRecord>,
+  log: MainRefLogRow[]
+): number {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return 0;
     throw err;
   }
   // Corruption is fatal by design: a protected-ref store that silently reset to
@@ -282,6 +366,13 @@ function loadStore(filePath: string, mains: Map<string, MainRefRecord>): void {
     if (!isMainRefRecord(record)) throw new Error(`Corrupt main-ref record in ${filePath}`);
     mains.set(record.repoPath, { ...record });
   }
+  let maxId = 0;
+  for (const row of parsed.log ?? []) {
+    if (!isMainRefLogRow(row)) throw new Error(`Corrupt main-ref log row in ${filePath}`);
+    log.push({ ...row });
+    if (row.id > maxId) maxId = row.id;
+  }
+  return Math.max(parsed.seq ?? 0, maxId);
 }
 
 // ---------------------------------------------------------------------------
@@ -292,18 +383,25 @@ export function createRefService(deps: RefServiceDeps): RefService {
   const now = deps.now ?? (() => Date.now());
   const filePath = path.join(deps.statePath, STORE_FILE_NAME);
   const mains = new Map<string, MainRefRecord>();
+  const log: MainRefLogRow[] = [];
   const chains = new Map<string, Promise<unknown>>();
   const refsChangedListeners = new Set<OnRefsChanged>();
 
-  loadStore(filePath, mains);
+  let seq = loadStore(filePath, mains, log);
 
-  /** Write the full store atomically. The rename is the sole commit point;
-   *  callers adopt into memory only after this returns. */
-  const persistStore = (nextMains: Iterable<MainRefRecord>): void => {
+  /** Write the full store (mains + movement log) atomically. The rename is the
+   *  sole commit point; callers adopt into memory only after this returns. */
+  const persistStore = (
+    nextMains: Iterable<MainRefRecord>,
+    nextLog: MainRefLogRow[],
+    nextSeq: number
+  ): void => {
     fs.mkdirSync(deps.statePath, { recursive: true, mode: 0o700 });
     writeJsonFileAtomic(filePath, {
       version: STORE_VERSION,
       mains: [...nextMains],
+      log: nextLog,
+      seq: nextSeq,
     } satisfies StoredRefStore);
   };
 
@@ -318,6 +416,15 @@ export function createRefService(deps: RefServiceDeps): RefService {
       return [...mains.values()]
         .sort((a, b) => a.repoPath.localeCompare(b.repoPath))
         .map((record) => ({ ...record }));
+    },
+
+    listMainRefLog(repoPath, sinceId) {
+      validateRepoPath(repoPath);
+      const floor = sinceId ?? 0;
+      // `log` is append-ordered ⇒ already ascending by id.
+      return log
+        .filter((row) => row.repoPath === repoPath && row.id > floor)
+        .map((row) => ({ ...row }));
     },
 
     async updateMains(input) {
@@ -373,17 +480,23 @@ export function createRefService(deps: RefServiceDeps): RefService {
           ...(input.gateContext !== undefined ? { gateContext: input.gateContext } : {}),
         });
 
-        // 4) Swap: build the full next store and persist in ONE atomic replace.
+        // 4) Swap: build the full next store (mains + appended log rows) and
+        //    persist in ONE atomic replace. seq/log stay LOCAL until the rename
+        //    succeeds, so a failed persist leaves memory untouched.
         const timestamp = now();
         const nextMains = new Map(mains);
         const updated: UpdateMainsResult["updated"] = [];
         const batchChanges: RefChange[] = [];
+        const newRows: MainRefLogRow[] = [];
+        let nextSeq = seq;
         for (const entry of input.entries) {
           const current = mains.get(entry.repoPath) ?? null;
+          const old = current?.stateHash ?? null;
           if (entry.next === null) {
-            // Removal. A no-op removal of an absent main records nothing.
+            // Removal. A no-op removal of an absent main moves nothing — no log
+            // row; report the current max seq.
             if (!current) {
-              updated.push({ repoPath: entry.repoPath, stateHash: null });
+              updated.push({ repoPath: entry.repoPath, stateHash: null, seq: nextSeq });
               continue;
             }
             nextMains.delete(entry.repoPath);
@@ -394,13 +507,28 @@ export function createRefService(deps: RefServiceDeps): RefService {
               updatedAt: timestamp,
             });
           }
-          updated.push({ repoPath: entry.repoPath, stateHash: entry.next });
+          const rowSeq = ++nextSeq;
+          newRows.push({
+            id: rowSeq,
+            repoPath: entry.repoPath,
+            ref: "main",
+            operation: input.operation ?? "seed",
+            old,
+            new: entry.next,
+            writer: input.writer ?? null,
+            onBehalfOf: input.onBehalfOf ?? null,
+            reason: input.reason ?? null,
+            createdAt: timestamp,
+          });
+          updated.push({ repoPath: entry.repoPath, stateHash: entry.next, seq: rowSeq });
           batchChanges.push({ repoPath: entry.repoPath, stateHash: entry.next });
         }
-        persistStore(nextMains.values());
+        persistStore(nextMains.values(), [...log, ...newRows], nextSeq);
         // Only reached when the rename succeeded — adopt into memory.
         mains.clear();
         for (const record of nextMains.values()) mains.set(record.repoPath, record);
+        for (const row of newRows) log.push(row);
+        seq = nextSeq;
         changes = batchChanges;
         return { updated };
       };

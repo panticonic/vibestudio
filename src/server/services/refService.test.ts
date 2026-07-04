@@ -60,7 +60,7 @@ describe("refService.updateMains", () => {
     expect(service.readMain("notes/journal")).toBeNull();
 
     const result = await service.updateMains(update());
-    expect(result.updated).toEqual([{ repoPath: "notes/journal", stateHash: STATE_A }]);
+    expect(result.updated).toEqual([{ repoPath: "notes/journal", stateHash: STATE_A, seq: 1 }]);
     expect(service.readMain("notes/journal")).toEqual({
       repoPath: "notes/journal",
       stateHash: STATE_A,
@@ -154,8 +154,8 @@ describe("refService.updateMains", () => {
         })
       );
       expect(result.updated).toEqual([
-        { repoPath: "a", stateHash: STATE_C },
-        { repoPath: "b", stateHash: null },
+        { repoPath: "a", stateHash: STATE_C, seq: 3 },
+        { repoPath: "b", stateHash: null, seq: 4 },
       ]);
       expect(service.readMain("a")?.stateHash).toBe(STATE_C);
       expect(service.readMain("b")).toBeNull();
@@ -468,6 +468,138 @@ describe("refService.updateMains", () => {
       const { service, statePath } = makeService();
       await service.updateMains(update());
       expect(fs.readdirSync(statePath).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+    });
+  });
+
+  describe("main-ref movement log (§2)", () => {
+    const ON_BEHALF_OF = { runtime: { id: "chat-1", kind: "panel" } };
+    const WRITER = "do:workers/gad-store:GadStore:vcs";
+
+    it("records a row per movement with operation/writer/onBehalfOf/reason/old→new/seq", async () => {
+      const { service } = makeService();
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "docs/notes", expectedOld: null, next: STATE_A }],
+          operation: "push",
+          reason: "initial push",
+          writer: WRITER,
+          onBehalfOf: ON_BEHALF_OF,
+        })
+      );
+      const rows = service.listMainRefLog("docs/notes");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        id: 1,
+        repoPath: "docs/notes",
+        ref: "main",
+        operation: "push",
+        old: null,
+        new: STATE_A,
+        writer: WRITER,
+        onBehalfOf: ON_BEHALF_OF,
+        reason: "initial push",
+      });
+      expect(typeof rows[0]!.createdAt).toBe("number");
+    });
+
+    it("filters by repo and pages movements after sinceId (oldest first)", async () => {
+      const { service } = makeService();
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "a", expectedOld: null, next: STATE_A }],
+          operation: "push",
+        })
+      ); // seq 1
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "b", expectedOld: null, next: STATE_B }],
+          operation: "push",
+        })
+      ); // seq 2
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "a", expectedOld: STATE_A, next: STATE_C }],
+          operation: "push",
+        })
+      ); // seq 3
+      expect(service.listMainRefLog("a").map((r) => r.id)).toEqual([1, 3]);
+      expect(service.listMainRefLog("a", 1).map((r) => r.id)).toEqual([3]);
+      expect(service.listMainRefLog("b").map((r) => r.new)).toEqual([STATE_B]);
+    });
+
+    it("logs a removal with new:null but records nothing for a no-op removal", async () => {
+      const { service } = makeService();
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "r", expectedOld: null, next: STATE_A }],
+          operation: "push",
+        })
+      ); // seq 1
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "r", expectedOld: STATE_A, next: null }],
+          operation: "delete",
+        })
+      ); // seq 2
+      const result = await service.updateMains(
+        update({
+          entries: [{ repoPath: "absent", expectedOld: null, next: null }],
+          operation: "delete",
+        })
+      ); // no movement
+      expect(result.updated).toEqual([{ repoPath: "absent", stateHash: null, seq: 2 }]);
+      expect(service.listMainRefLog("absent")).toEqual([]);
+      expect(service.listMainRefLog("r").map((r) => [r.operation, r.old, r.new])).toEqual([
+        ["push", null, STATE_A],
+        ["delete", STATE_A, null],
+      ]);
+    });
+
+    it("persists the log across a reload and continues the seq", async () => {
+      const { service, statePath } = makeService();
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "r", expectedOld: null, next: STATE_A }],
+          operation: "push",
+        })
+      ); // seq 1
+      const reloaded = makeService({ statePath }).service;
+      expect(reloaded.listMainRefLog("r").map((r) => r.id)).toEqual([1]);
+      const result = await reloaded.updateMains(
+        update({
+          entries: [{ repoPath: "r", expectedOld: STATE_A, next: STATE_B }],
+          operation: "push",
+        })
+      );
+      expect(result.updated[0]!.seq).toBe(2);
+      expect(reloaded.listMainRefLog("r").map((r) => r.id)).toEqual([1, 2]);
+    });
+
+    it("logs host-internal seeding as operation 'seed' with a null writer", async () => {
+      const { service } = makeService();
+      await service.seedMain({ repoPath: "r", value: STATE_A });
+      const rows = service.listMainRefLog("r");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ operation: "seed", old: null, new: STATE_A, writer: null });
+    });
+
+    it("writes no log row when the batch fails the CAS (nothing persisted)", async () => {
+      const { service } = makeService();
+      await service.updateMains(
+        update({
+          entries: [{ repoPath: "r", expectedOld: null, next: STATE_A }],
+          operation: "push",
+        })
+      ); // seq 1
+      await expect(
+        service.updateMains(
+          update({
+            entries: [{ repoPath: "r", expectedOld: STATE_B, next: STATE_C }],
+            operation: "push",
+          })
+        )
+      ).rejects.toBeInstanceOf(RefBatchConflictError);
+      expect(service.listMainRefLog("r").map((r) => r.id)).toEqual([1]);
     });
   });
 

@@ -397,6 +397,17 @@ function isTreeObjectBytes(bytes: Buffer): boolean {
   }
 }
 
+/**
+ * Sweep unreferenced tree-object blobs from the shared CAS.
+ *
+ * A5 (owner-derived roots only): `referenced` MUST be the OWNER-DERIVED live
+ * set — mains reachability ∪ the DO's `runGadGcMark().liveBlobDigests`, as
+ * `WorkspaceVcs.runGc` (the sole caller) supplies it. It is deliberately an
+ * internal pure-function seam, NOT an RPC: a caller-supplied `referenced` list
+ * is never authority, so there is no `blobstore.prune*` method to reach it from
+ * userland (the old `pruneUnreferencedBlobs` RPC was deleted). Do not re-expose
+ * one, and never feed this an untrusted list.
+ */
 export async function pruneUnreferencedTreeObjects(
   blobsDir: string,
   opts: { referenced: string[]; dryRun?: boolean; olderThanMs?: number; limit?: number }

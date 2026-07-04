@@ -252,6 +252,112 @@ describe("@workspace/agentic-protocol schemas", () => {
     expect(result.success ? "" : result.error.issues[0]?.message).toContain("terminalOutcome");
   });
 
+  it("accepts knowledge.claim_recorded with text, kind, and ledgerEntryId", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claim_recorded",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-1") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        claimId: "claim-1",
+        ledgerEntryId: "led-1",
+        text: "the DO is the sole publisher of main refs",
+        kind: "statement",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(true);
+    expect(result.success ? result.data.payload : undefined).toMatchObject({
+      claimId: "claim-1",
+      ledgerEntryId: "led-1",
+      text: "the DO is the sole publisher of main refs",
+      kind: "statement",
+    });
+  });
+
+  it("accepts knowledge.claims_related with a relations array", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claims_related",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-2") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        ledgerEntryId: "led-rel-1",
+        relations: [
+          { src: "claim-1", relation: "supports", dst: "claim-2" },
+          { src: "claim-3", relation: "contradicts", dst: "claim-4", weight: 0.5 },
+        ],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(true);
+    const relations =
+      result.success && result.data.kind === "knowledge.claims_related"
+        ? result.data.payload.relations
+        : undefined;
+    expect(relations).toEqual([
+      { src: "claim-1", relation: "supports", dst: "claim-2" },
+      { src: "claim-3", relation: "contradicts", dst: "claim-4", weight: 0.5 },
+    ]);
+  });
+
+  it("accepts every declared claim relation kind", () => {
+    for (const relation of ["supports", "contradicts", "about", "refines", "depends_on"] as const) {
+      const result = agenticEventSchema.safeParse({
+        kind: "knowledge.claims_related",
+        actor: agent,
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          relations: [{ src: "a", relation, dst: "b" }],
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects an unknown claim relation kind", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claims_related",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        relations: [{ src: "a", relation: "reticulates", dst: "b" }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown fields on knowledge payloads (strict)", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claim_recorded",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        claimId: "claim-1",
+        // schema rejection fixture: unknown field on a strict payload
+        confidence: 0.9,
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts knowledge.claims_related on the stored event path", () => {
+    const result = storedAgenticEventSchema.safeParse({
+      kind: "knowledge.claims_related",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-3") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        relations: [{ src: "claim-1", relation: "refines", dst: "claim-2" }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("rejects mismatched terminalOutcome on stored invocation terminal events", () => {
     const result = storedAgenticEventSchema.safeParse({
       kind: "invocation.failed",

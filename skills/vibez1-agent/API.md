@@ -344,6 +344,7 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 |--------|-------------|
 | `refs.readMain` | Current record of one repo's protected `main` (repoPath → state), or null when absent. |
 | `refs.listMains` | Every repo's protected `main`, sorted by repoPath. |
+| `refs.listMainRefLog` | The host main-ref movement log for a repo (§2): every `main` advance with its operation, host-verified writer/on-behalf-of attribution, reason, and old→new values, oldest first. `sinceId` pages movements after a known id (omit for the full log). The render paths read main-advance provenance from here; the DO's stale-intent discard consults it (§6). |
 
 ## `runtime`
 

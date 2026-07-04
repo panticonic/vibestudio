@@ -23,5 +23,12 @@ export {
   type EditOp,
   type WorkingFileEntry,
 } from "./editEngine.js";
+export {
+  blameChain,
+  type BlameOpRow,
+  type BlameHunk,
+  type BlameResolution,
+  type BlameResult,
+} from "./blame.js";
 export { VCS_IGNORED_DIRS, VCS_IGNORED_FILES } from "./paths.js";
 export { discoverRepoPaths } from "./repos.js";

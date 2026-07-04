@@ -7,8 +7,16 @@ export const DEFAULT_VCS_GC_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_VCS_GC_INTERVAL_MS = 60 * 60 * 1000;
 export const DEFAULT_VCS_GC_INITIAL_DELAY_MS = 60_000;
 
+/** The maintenance surface the hourly scheduler drives: blob GC plus the two
+ *  provenance-adjacent passes (the U5 post-replay reindex kick and the DO's
+ *  soft-state prune). */
+type SchedulerVcs = Pick<
+  WorkspaceVcs,
+  "attached" | "runGc" | "reindexKnownRepos" | "pruneProvenanceSoftState"
+>;
+
 export interface VcsGcSchedulerDeps {
-  workspaceVcs: Pick<WorkspaceVcs, "attached" | "runGc">;
+  workspaceVcs: SchedulerVcs;
   minAgeMs?: number;
   intervalMs?: number;
   initialDelayMs?: number;
@@ -16,7 +24,7 @@ export interface VcsGcSchedulerDeps {
 }
 
 export class VcsGcScheduler {
-  private readonly workspaceVcs: Pick<WorkspaceVcs, "attached" | "runGc">;
+  private readonly workspaceVcs: SchedulerVcs;
   private readonly minAgeMs: number;
   private readonly intervalMs: number;
   private readonly initialDelayMs: number;
@@ -51,11 +59,31 @@ export class VcsGcScheduler {
     if (this.running || !this.workspaceVcs.attached) return false;
     this.running = true;
     try {
-      await this.workspaceVcs.runGc({ minAgeMs: this.minAgeMs });
-      return true;
-    } catch (err) {
-      this.logger.warn("[VcsGcScheduler] GC run failed:", err);
-      return false;
+      let ok = true;
+      // Blob/tree GC (owner-derived roots ∪ the DO's live blob set).
+      try {
+        await this.workspaceVcs.runGc({ minAgeMs: this.minAgeMs });
+      } catch (err) {
+        ok = false;
+        this.logger.warn("[VcsGcScheduler] GC run failed:", err);
+      }
+      // Periodic file-index kick — closes the post-replay `memidx:` wipe window
+      // (U5); the per-repo marker fast-path keeps already-indexed repos cheap.
+      try {
+        await this.workspaceVcs.reindexKnownRepos();
+      } catch (err) {
+        ok = false;
+        this.logger.warn("[VcsGcScheduler] reindex kick failed:", err);
+      }
+      // Provenance soft-state prune (touches / render log / provenance cache).
+      // Tolerant of the DO method not having landed yet (see WorkspaceVcs).
+      try {
+        await this.workspaceVcs.pruneProvenanceSoftState();
+      } catch (err) {
+        ok = false;
+        this.logger.warn("[VcsGcScheduler] provenance soft-state prune failed:", err);
+      }
+      return ok;
     } finally {
       this.running = false;
     }

@@ -83,11 +83,14 @@ describe("full-gateway attribution (row 11)", () => {
       async listMains() {
         return refs.listMains().map((r) => ({ repoPath: r.repoPath, stateHash: r.stateHash }));
       },
-      // Phase 5: the host ref movement LOG is gone (semantics-free CAS). The DO
-      // consults `readMainLog` only via optional chaining, so the bridge omits
-      // it and the DO falls back to current-value comparison.
+      // The real host records a main-ref movement log (§2), but this stub only
+      // exercises updateMains ATTRIBUTION; the DO consults `listMainRefLog` only
+      // via optional chaining, so the bridge omits it and the DO falls back to
+      // current-value comparison.
       async updateMains(input: {
         entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
+        operation?: "push" | "import" | "delete" | "restore";
+        reason?: string;
         invocationToken?: string;
       }) {
         // The production RPC hop: the DO calls refs.updateMains; the host

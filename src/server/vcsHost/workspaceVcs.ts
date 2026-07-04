@@ -280,6 +280,15 @@ function readContentFromBytes(bytes: Buffer): VcsFileReadContent {
   return { kind: "bytes", base64: bytes.toString("base64") };
 }
 
+/** True when a DO dispatch failed because the method is not (yet) registered —
+ *  the host surfaces such a miss as a 404 "Unknown method" from doDispatch. Lets
+ *  a scheduler call an @rpc whose DO implementation lands in a later wave
+ *  without failing until it does. */
+function isUnknownDoMethodError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /Unknown method|dispatch failed \(404\)/.test(message);
+}
+
 interface LocalWorkspaceState {
   stateHash: string;
   subtreeHash(path: string): string | null;
@@ -1950,14 +1959,45 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // Catch up on whatever happened while the server was down: index each
     // discovered repo's current main.
     this.memoryIndexQueue = this.memoryIndexQueue
-      .then(async () => {
-        for (const repo of await this.discoverRepos()) {
-          await this.indexRepoFiles(repo.repoPath).catch((error) =>
-            console.warn(`[VcsMemory] initial index for ${repo.repoPath} failed:`, error)
-          );
-        }
-      })
+      .then(() => this.reindexKnownRepos())
       .catch((error) => console.warn("[VcsMemory] initial index failed:", error));
+  }
+
+  /**
+   * Re-run the per-repo file index over every discovered repo. The `memidx:`
+   * marker fast-path makes an already-indexed repo a cheap no-op, so the point
+   * is to REBUILD the file leg after the DO's markers were wiped — a
+   * `rebuildTrajectoryProjections` replay clears them but re-indexes only
+   * message/claim rows (file text lives in the host CAS, U5), leaving an
+   * empty-file-recall window until the next per-repo `main` advance. Driven at
+   * attach (catch-up) and hourly by the GC scheduler. Per-repo failures are
+   * logged, never fatal.
+   */
+  async reindexKnownRepos(): Promise<void> {
+    if (!this.attached) return;
+    for (const repo of await this.discoverRepos()) {
+      await this.indexRepoFiles(repo.repoPath).catch((error) =>
+        console.warn(`[VcsMemory] reindex for ${repo.repoPath} failed:`, error)
+      );
+    }
+  }
+
+  /**
+   * Kick the DO's provenance soft-state prune (C6 `pruneProvenanceSoftState`):
+   * age out low-value touches, stale render-log rows, and disposable provenance
+   * cache entries. Wired into the hourly GC scheduler next to `runGc`. The DO
+   * @rpc lands in a later wave; until then a "method not found" from the DO is
+   * tolerated so the scheduler stays green — any other failure propagates to
+   * the scheduler's per-run guard.
+   */
+  async pruneProvenanceSoftState(): Promise<void> {
+    if (!this.attached) return;
+    try {
+      await this.gad().call("pruneProvenanceSoftState", {});
+    } catch (error) {
+      if (isUnknownDoMethodError(error)) return;
+      throw error;
+    }
   }
 
   /** Index a single repo's `main` head into the FTS index (W8). */
@@ -2038,6 +2078,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     kinds?: string[];
     limit?: number;
     repoPaths?: string[];
+    /** Steering keywords OR-appended to the FTS match in the DO (C6); a bonus
+     *  widening signal, never load-bearing. Threaded through untouched. */
+    recallKeywords?: string[];
   }): Promise<unknown> {
     const { repoPaths, ...rest } = input;
     const prefixes =

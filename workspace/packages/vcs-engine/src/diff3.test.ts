@@ -153,7 +153,7 @@ describe("diff3Merge", () => {
 
 describe("mergeHunksVsOurs (origin-annotated provenance)", () => {
   it("returns no hunks when the merge equals ours", () => {
-    expect(mergeHunksVsOurs("a\nb\nc\n", "a\nB\nc\n", "a\nB\nc\n")).toEqual([]);
+    expect(mergeHunksVsOurs("a\nb\nc\n", "a\nB\nc\n", "a\nb\nc\n", "a\nB\nc\n")).toEqual([]);
   });
 
   it("labels a region only theirs changed as origin 'theirs'", () => {
@@ -161,8 +161,9 @@ describe("mergeHunksVsOurs (origin-annotated provenance)", () => {
     // adopts it, and ours left it untouched, so the hunk is theirs-originated.
     const base = "a\nb\nc\n";
     const ours = "a\nb\nc\n";
+    const theirs = "a\nB\nc\n";
     const merged = "a\nB\nc\n";
-    const hunks = mergeHunksVsOurs(base, ours, merged);
+    const hunks = mergeHunksVsOurs(base, ours, theirs, merged);
     expect(hunks).toHaveLength(1);
     expect(hunks[0]?.origin).toBe("theirs");
     // Char offsets index OURS; the hunk covers the changed line and its newText
@@ -177,10 +178,114 @@ describe("mergeHunksVsOurs (origin-annotated provenance)", () => {
     // OURS also touched is 'resolved'.
     const base = "x\ny\nz\n";
     const ours = "x\nY-ours\nz\n";
+    const theirs = "x\ny\nY-theirs\nz\n";
     const merged = "x\nY-ours\nY-theirs\nz\n";
-    const hunks = mergeHunksVsOurs(base, ours, merged);
+    const hunks = mergeHunksVsOurs(base, ours, theirs, merged);
     expect(hunks.length).toBeGreaterThan(0);
     expect(hunks.some((h) => h.newText.includes("Y-theirs"))).toBe(true);
     expect(hunks.some((h) => h.origin === "resolved" || h.origin === "theirs")).toBe(true);
+  });
+});
+
+describe("mergeHunksVsOurs theirsStart/theirsEnd (cross-parent routing coordinates)", () => {
+  // The blame invariant for a clean take-theirs block: the recorded THEIRS char
+  // span slices back to exactly the hunk's newText, so blame can carry an
+  // offset inside the hunk into the other parent's own coordinates (§5.2).
+  const takeTheirs = (h: { theirsStart?: number; theirsEnd?: number }, theirs: string): string =>
+    theirs.slice(h.theirsStart ?? -1, h.theirsEnd ?? -1);
+
+  it("maps a single mid-file theirs line back to its THEIRS char span", () => {
+    const base = "a\nb\nc\n";
+    const ours = "a\nb\nc\n";
+    const theirs = "a\nB\nc\n";
+    const merged = "a\nB\nc\n";
+    const hunks = mergeHunksVsOurs(base, ours, theirs, merged);
+    expect(hunks).toHaveLength(1);
+    const h = hunks[0]!;
+    expect(h.origin).toBe("theirs");
+    expect(h.theirsStart).toBe(2);
+    expect(h.theirsEnd).toBe(4);
+    expect(takeTheirs(h, theirs)).toBe(h.newText);
+    expect(h.theirsEnd! - h.theirsStart!).toBe(h.newText.length);
+  });
+
+  it("maps two disjoint theirs regions each to their own THEIRS span", () => {
+    const base = "a\nb\nc\nd\ne\n";
+    const ours = "a\nb\nc\nd\ne\n";
+    const theirs = "a\nB\nc\nD\ne\n";
+    const merged = "a\nB\nc\nD\ne\n";
+    const hunks = mergeHunksVsOurs(base, ours, theirs, merged);
+    expect(hunks).toHaveLength(2);
+    for (const h of hunks) {
+      expect(h.origin).toBe("theirs");
+      expect(takeTheirs(h, theirs)).toBe(h.newText);
+    }
+    expect([hunks[0]!.theirsStart, hunks[0]!.theirsEnd]).toEqual([2, 4]);
+    expect([hunks[1]!.theirsStart, hunks[1]!.theirsEnd]).toEqual([6, 8]);
+  });
+
+  it("maps a theirs INSERTION to its THEIRS span", () => {
+    const base = "a\nc\n";
+    const ours = "a\nc\n";
+    const theirs = "a\nb\nc\n";
+    const merged = "a\nb\nc\n";
+    const hunks = mergeHunksVsOurs(base, ours, theirs, merged);
+    expect(hunks).toHaveLength(1);
+    const h = hunks[0]!;
+    expect(h.origin).toBe("theirs");
+    expect(takeTheirs(h, theirs)).toBe(h.newText);
+    expect(h.newText).toBe("b\n");
+  });
+
+  it("keeps the theirs span exact when THEIRS lacks a trailing newline", () => {
+    const base = "a\nb";
+    const ours = "a\nb";
+    const theirs = "a\nB";
+    const merged = "a\nB";
+    const hunks = mergeHunksVsOurs(base, ours, theirs, merged);
+    expect(hunks).toHaveLength(1);
+    const h = hunks[0]!;
+    expect(h.origin).toBe("theirs");
+    expect(takeTheirs(h, theirs)).toBe(h.newText);
+    expect(h.theirsEnd).toBe(theirs.length);
+  });
+
+  it("leaves theirsStart/theirsEnd unset on a 'resolved' hunk", () => {
+    // Ours changed line 2 (b->B1) and theirs changed line 3 (c->C1); a merged
+    // deviation over the region OURS touched is 'resolved' and never routes to
+    // theirs, so it carries no theirs coordinates. The theirs-only line does.
+    const base = "a\nb\nc\n";
+    const ours = "a\nB1\nc\n";
+    const theirs = "a\nb\nC1\n";
+    const merged = "a\nB1\nC1\n";
+    const hunks = mergeHunksVsOurs(base, ours, theirs, merged);
+    const resolved = hunks.filter((h) => h.origin === "resolved");
+    const theirsHunks = hunks.filter((h) => h.origin === "theirs");
+    for (const h of resolved) {
+      expect(h.theirsStart).toBeUndefined();
+      expect(h.theirsEnd).toBeUndefined();
+    }
+    for (const h of theirsHunks) {
+      expect(takeTheirs(h, theirs)).toBe(h.newText);
+    }
+  });
+
+  it("agrees with the real MergeEngine chunk alignment via diff3Merge", () => {
+    // Drive the same base/ours/theirs through diff3Merge, then assert every
+    // theirs hunk slices back out of THEIRS exactly — proving the recorded
+    // ranges track diff3's own alignment rather than a re-derivation.
+    const base = "l1\nl2\nl3\nl4\nl5\n";
+    const ours = "L1\nl2\nl3\nl4\nl5\n"; // ours edits line 1
+    const theirs = "l1\nl2\nT3\nl4\nT5\n"; // theirs edits lines 3 and 5
+    const result = diff3Merge(base, ours, theirs);
+    expect(result.ok).toBe(true);
+    const hunks = mergeHunksVsOurs(base, ours, theirs, result.text);
+    const theirsHunks = hunks.filter((h) => h.origin === "theirs");
+    expect(theirsHunks.length).toBeGreaterThan(0);
+    for (const h of theirsHunks) {
+      expect(theirs.slice(h.theirsStart, h.theirsEnd)).toBe(h.newText);
+    }
+    // The ours-side edit (L1) is ours' own content — never a theirs hunk.
+    expect(hunks.every((h) => !h.newText.includes("L1"))).toBe(true);
   });
 });

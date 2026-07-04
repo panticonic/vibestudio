@@ -546,6 +546,23 @@ const buildCompletedPayloadSchema = z
   })
   .strict();
 
+const claimRelationKindSchema = z.enum([
+  "supports",
+  "contradicts",
+  "about",
+  "refines",
+  "depends_on",
+]);
+
+const knowledgeRelationSchema = z
+  .object({
+    src: z.string(),
+    relation: claimRelationKindSchema,
+    dst: z.string(),
+    weight: z.number().optional(),
+  })
+  .strict();
+
 const knowledgePayloadSchema = z
   .object({
     protocol: protocolSchema,
@@ -554,7 +571,11 @@ const knowledgePayloadSchema = z
     predicate: z.string().optional(),
     object: z.string().optional(),
     claimId: z.string().optional(),
+    ledgerEntryId: z.string().optional(),
+    text: z.string().optional(),
+    kind: z.string().optional(),
     status: z.string().optional(),
+    relations: z.array(knowledgeRelationSchema).optional(),
     body: z.unknown().optional(),
     metadata: z.record(z.unknown()).optional(),
   })
@@ -632,6 +653,7 @@ export const eventKindSchemas = {
   "knowledge.claim_recorded": eventSchema("knowledge.claim_recorded", knowledgePayloadSchema),
   "knowledge.claim_updated": eventSchema("knowledge.claim_updated", knowledgePayloadSchema),
   "knowledge.claim_retracted": eventSchema("knowledge.claim_retracted", knowledgePayloadSchema),
+  "knowledge.claims_related": eventSchema("knowledge.claims_related", knowledgePayloadSchema),
 } as const;
 
 export const agenticEventSchema = z

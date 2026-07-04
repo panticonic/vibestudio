@@ -71,6 +71,19 @@ describe("refsService", () => {
       expect(await service.handler(ctx, "readMain", ["docs/other"])).toBeNull();
       expect(await service.handler(ctx, "listMains", [])).toHaveLength(1);
     });
+
+    it("listMainRefLog surfaces the movement log over the RPC surface", async () => {
+      const { service } = makeService();
+      const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") } as never;
+      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        { entries: oneAdvance(), operation: "push" },
+      ]);
+      const rows = (await service.handler(ctx, "listMainRefLog", [
+        { repoPath: "docs/notes" },
+      ])) as Array<{ operation: string; new: string | null }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ operation: "push", new: STATE_A });
+    });
   });
 
   describe("single-writer policy", () => {
@@ -232,6 +245,37 @@ describe("refsService", () => {
       if (ctx.kind !== "caller") throw new Error("unreachable");
       expect(ctx.caller.runtime.id).toBe(WRITER_ID);
       expect(ctx.via).toBeUndefined();
+    });
+
+    it("captures the resolved attribution into the main-ref log (writer=DO, onBehalfOf=panel)", async () => {
+      const { service, refs, invocations } = makeService();
+      const upstream = panelCaller();
+      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
+
+      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        { entries: oneAdvance(), invocationToken: token, operation: "push", reason: "landed" },
+      ]);
+
+      const rows = refs.listMainRefLog("docs/notes");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        operation: "push",
+        reason: "landed",
+        writer: WRITER_ID,
+        old: null,
+        new: STATE_A,
+      });
+      expect((rows[0]!.onBehalfOf as { runtime: { id: string } }).runtime.id).toBe("chat-1");
+    });
+
+    it("logs a no-token advance attributed to the DO itself (writer === onBehalfOf)", async () => {
+      const { service, refs } = makeService();
+      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        { entries: oneAdvance(), operation: "push" },
+      ]);
+      const row = refs.listMainRefLog("docs/notes")[0]!;
+      expect(row.writer).toBe(WRITER_ID);
+      expect((row.onBehalfOf as { runtime: { id: string } }).runtime.id).toBe(WRITER_ID);
     });
   });
 

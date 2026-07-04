@@ -73,6 +73,10 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
         case "listMains": {
           return deps.refs.listMains();
         }
+        case "listMainRefLog": {
+          const [input] = args as [{ repoPath: string; sinceId?: number }];
+          return deps.refs.listMainRefLog(input.repoPath, input.sinceId);
+        }
         case "updateMains": {
           const input = updateMainsInputSchema.parse(args[0]);
 
@@ -120,9 +124,17 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
             ...(via ? { via } : {}),
           };
 
+          // Capture the token-resolved attribution into the main-ref log BEFORE
+          // it is discarded (§2/§4.1): `writer` is the single VCS writer DO
+          // (this call's runtime identity), `onBehalfOf` is the originating
+          // principal (`gateCaller` — the DO itself when no token was resolved).
           return await deps.refs.updateMains({
             entries: input.entries,
             gateContext,
+            ...(input.operation ? { operation: input.operation } : {}),
+            ...(input.reason !== undefined ? { reason: input.reason } : {}),
+            writer: ctx.caller.runtime.id,
+            onBehalfOf: gateCaller,
           });
         }
         default:

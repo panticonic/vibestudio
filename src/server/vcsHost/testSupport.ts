@@ -38,7 +38,7 @@ export function pushToMain(
   return instance.vcsPush(input);
 }
 
-type RefsLike = Pick<RefService, "readMain" | "listMains" | "updateMains">;
+type RefsLike = Pick<RefService, "readMain" | "listMains" | "updateMains" | "listMainRefLog">;
 
 /** A stub build validator for the DO push gate — returns per-repo reports.
  *  Defaults to "no required failures" so the gate passes. */
@@ -135,23 +135,51 @@ export function attachLocalHostBridges(
     },
     // P3/P5: the single-writer group CAS. In-process tests bypass the RPC-layer
     // token resolution — the RefService's own gate (a no-op in fixtures) stands
-    // in for approval; on-behalf-of is not exercised here. The host RefService
-    // is now a semantics-free CAS (Phase 5): `operation`/`reason`/`writer`/`seq`
-    // and the movement log are gone, so the bridge forwards only `entries`
-    // (+ an optional test-supplied gate context) and returns
-    // `{repoPath, stateHash}` pairs. The DO still PASSES `operation`/`reason` in
-    // its call shape (committed userland); those extra props are simply ignored.
+    // in for approval, and on-behalf-of is not resolved here (no `writer`/
+    // `onBehalfOf`). The DO still passes `operation`/`reason`; forward them so
+    // the RefService records a faithful main-ref log row (§2). Returns
+    // `{repoPath, stateHash, seq}` per entry.
     async updateMains(input: {
       entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
+      operation?: "push" | "import" | "delete" | "restore";
+      reason?: string;
       invocationToken?: string;
-    }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null }> }> {
+    }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }> {
       const refs = currentRefs();
       if (!refs) throw new Error("attachLocalHostBridges: no RefService for updateMains");
       const gateContext = opts.gateContext?.();
       return refs.updateMains({
         entries: input.entries,
         ...(gateContext !== undefined ? { gateContext } : {}),
+        ...(input.operation ? { operation: input.operation } : {}),
+        ...(input.reason !== undefined ? { reason: input.reason } : {}),
       });
+    },
+    async listMainRefLog(
+      repoPath: string,
+      sinceId?: number
+    ): Promise<
+      Array<{
+        id: number;
+        operation: string;
+        old: string | null;
+        new: string | null;
+        writer: string | null;
+        onBehalfOf: unknown;
+        reason: string | null;
+        createdAt: number;
+      }>
+    > {
+      return (currentRefs()?.listMainRefLog(repoPath, sinceId) ?? []).map((row) => ({
+        id: row.id,
+        operation: row.operation,
+        old: row.old,
+        new: row.new,
+        writer: row.writer,
+        onBehalfOf: row.onBehalfOf,
+        reason: row.reason,
+        createdAt: row.createdAt,
+      }));
     },
   };
   Object.defineProperty(instance, "refsStore", { value: () => refsStore, configurable: true });

@@ -5,12 +5,14 @@
  * The host tracks exactly one canonical `main` state per repo path. There is no
  * generic `(repo, ref)` namespace and no public arbitrary-tree `advanceRef`
  * (deleted in the narrow-host-vcs P1 — see docs/narrow-host-vcs-plan.md §2.1):
- * the only write is `updateMains`, a semantics-free atomic group
- * compare-and-swap restricted to the single VCS writer (the gad-store DO
- * backing the workspace `vcs` service declaration). It carries NO VCS-operation
- * label, reason, or movement log — provenance lives in the DO
- * (narrow-host-boundary-refactor Phase 5). Reads (`readMain`/`listMains`) are
- * plain lookups available to any caller who can hold source.
+ * the only write is `updateMains`, an atomic group compare-and-swap restricted
+ * to the single VCS writer (the gad-store DO backing the workspace `vcs`
+ * service declaration). The CAS itself is semantics-free, but every movement it
+ * commits is captured in the host-owned **main-ref log** (`operation`, resolved
+ * `writer`/`onBehalfOf`, `reason`, `old`→`new`, monotonic `seq`) — the §2
+ * host-verified provenance signal read back through `listMainRefLog`. Reads
+ * (`readMain`/`listMains`/`listMainRefLog`) are plain lookups available to any
+ * caller who can hold source.
  */
 
 import { z } from "zod";
@@ -51,8 +53,20 @@ export const MainUpdateEntrySchema = z.object({
 });
 export type MainUpdateEntry = z.infer<typeof MainUpdateEntrySchema>;
 
+/** The VCS operation a main movement represents — recorded verbatim in the
+ *  host main-ref log so render paths can label a main advance (§2/§4.1). */
+export const MainRefOperationSchema = z.enum(["push", "import", "delete", "restore"]);
+export type MainRefOperation = z.infer<typeof MainRefOperationSchema>;
+
 export const updateMainsInputSchema = z.object({
   entries: z.array(MainUpdateEntrySchema).min(1),
+  /** The VCS operation this batch performs — logged as movement provenance.
+   *  Optional so the host's own bootstrap seeding (no operation) still writes a
+   *  row; the single DO writer always supplies it. */
+  operation: MainRefOperationSchema.optional(),
+  /** Free-text movement reason (e.g. a push message), logged for the audit
+   *  trail. Never a semantic input to the CAS. */
+  reason: z.string().optional(),
   /**
    * On-behalf-of correlation nonce (§4). NOT a credential: an opaque handle the
    * host resolves against its own invocation table to attribute this write to
@@ -67,10 +81,45 @@ export const UpdateMainsResultSchema = z.object({
       repoPath: z.string(),
       /** null = the main was removed. */
       stateHash: RefValueSchema.nullable(),
+      /** The main-ref log id assigned to this movement (the log row's monotonic
+       *  `seq`); equals the current max seq for a no-op removal that moved
+       *  nothing. */
+      seq: z.number(),
     })
   ),
 });
 export type UpdateMainsResult = z.infer<typeof UpdateMainsResultSchema>;
+
+/** One row of the host main-ref movement log (§2): a single main advance with
+ *  host-verified attribution. `writer` is the single VCS writer DO; `onBehalfOf`
+ *  is the token-resolved originating principal (absent token = the DO itself). */
+export const MainRefLogRowSchema = z.object({
+  /** Monotonic global id (the movement's `seq`). */
+  id: z.number(),
+  repoPath: z.string(),
+  /** Always `main` today — the host tracks one protected ref per repo. */
+  ref: z.string(),
+  operation: z.string(),
+  /** The ref value before the movement; null when it was created. */
+  old: RefValueSchema.nullable(),
+  /** The ref value after the movement; null when it was removed. */
+  new: RefValueSchema.nullable(),
+  /** The single VCS writer DO identity, or null for host-internal seeding. */
+  writer: z.string().nullable(),
+  /** The token-resolved originating principal (VerifiedCaller), or null. */
+  onBehalfOf: z.unknown().nullable(),
+  reason: z.string().nullable(),
+  /** Movement timestamp (ms since epoch). */
+  createdAt: z.number(),
+});
+export type MainRefLogRow = z.infer<typeof MainRefLogRowSchema>;
+
+export const listMainRefLogInputSchema = z.object({
+  repoPath: z.string().min(1),
+  /** Return only movements with id greater than this cursor; omit for the full
+   *  log. */
+  sinceId: z.number().optional(),
+});
 
 export const refsMethods = defineServiceMethods({
   readMain: {
@@ -88,6 +137,18 @@ export const refsMethods = defineServiceMethods({
     returns: z.array(MainRefRecordSchema),
     policy: REFS_POLICY,
     access: READ_ACCESS,
+  },
+  listMainRefLog: {
+    description:
+      "The host main-ref movement log for a repo (§2): every `main` advance with its operation, " +
+      "host-verified writer/on-behalf-of attribution, reason, and old→new values, oldest first. " +
+      "`sinceId` pages movements after a known id (omit for the full log). The render paths read " +
+      "main-advance provenance from here; the DO's stale-intent discard consults it (§6).",
+    args: z.tuple([listMainRefLogInputSchema]),
+    returns: z.array(MainRefLogRowSchema),
+    policy: REFS_POLICY,
+    access: READ_ACCESS,
+    examples: [{ args: [{ repoPath: "docs/notes" }], returns: [] }],
   },
   updateMains: {
     description:
