@@ -49,7 +49,7 @@
     "type-check:userland": "node scripts/require-userland-install.mjs && pnpm --dir workspace type-check",
     "type-check:mobile": "pnpm --dir apps/mobile type-check",
     "type-check:watch": "tsc --noEmit --watch --preserveWatchOutput",
-    "test": "pnpm run check:runtime-docs && pnpm run check:agent-docs && pnpm run test:host && pnpm run test:userland && pnpm run test:mobile",
+    "test": "pnpm run check:runtime-docs && pnpm run check:agent-docs && pnpm run test:host && pnpm run test:browser && pnpm run test:userland && pnpm run test:mobile",
     "test:host": "vitest run --config vitest.host.config.ts",
     "test:userland": "node scripts/require-userland-install.mjs && pnpm --dir workspace test",
     "test:mobile": "pnpm --dir apps/mobile test --runInBand",
