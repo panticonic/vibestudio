@@ -316,6 +316,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   /** Local main-head state served while the gad store is unreachable. */
   private localMain: LocalWorkspaceState | null = null;
   /**
+   * Attach-time disk adoption seeds the protected-ref table from the already
+   * scanned source tree. Those seed rows are not authored workspace advances;
+   * letting them flow through `onMainsUpdated` exposes partial repo sets while
+   * bootstrap is still walking the workspace.
+   */
+  private suppressMainRefReactions = 0;
+  /**
    * The disk-projection FOLLOWER (P5c): the one module that writes working
    * trees. Every operation path invokes it POST-advance with the state hash
    * the (userland) VCS semantics decided on; no projection logic is inlined
@@ -346,7 +353,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // store (narrow-host P3): every successful updateMains — the in-process host
     // push path AND the DO's refs.updateMains RPC — projects + drives the build
     // trigger from HERE, exactly once. No operation path re-does these effects.
-    this.deps.refs.onRefsChanged((changes) => this.onMainsUpdated(changes));
+    this.deps.refs.onRefsChanged((changes) => {
+      if (this.suppressMainRefReactions > 0) return;
+      return this.onMainsUpdated(changes);
+    });
   }
 
   /**
@@ -363,11 +373,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    */
   private async onMainsUpdated(changes: RefChange[]): Promise<void> {
     if (!this.attached) return;
-    let workspaceStateHash: string | undefined;
+    let workspaceStateHash: string;
     try {
       workspaceStateHash = await this.composeRepoStatesLocal(await this.collectRepoMainStates());
-    } catch {
-      workspaceStateHash = undefined;
+    } catch (error) {
+      console.error("[Vcs] onMainsUpdated: failed to compose workspace view:", error);
+      return;
     }
     // `main` is a pure ref (D1): a main advance is always a plain state
     // replacement from the consumer's view. Operation classification (the old
@@ -410,7 +421,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             actor: null,
             transitionKind,
             repoPath,
-            ...(workspaceStateHash ? { workspaceStateHash } : {}),
+            workspaceStateHash,
           });
           this.emitter.emit("state-advanced", removalEvent);
           continue;
@@ -437,7 +448,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           actor: null,
           transitionKind,
           repoPath,
-          ...(workspaceStateHash ? { workspaceStateHash } : {}),
+          workspaceStateHash,
         });
         this.emitter.emit("state-advanced", advanceEvent);
       } catch (error) {
@@ -464,7 +475,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       this.localMain = null;
       this.lastState.delete(VCS_MAIN_HEAD);
     }
-    await this.ensureRepoLogsFromDisk();
+    await this.withSuppressedMainRefReactions(() => this.ensureRepoLogsFromDisk());
     // Attach-time publish-intent heal is GAD-owned. The DO records every main
     // advance synchronously in its publish path (push/import) and replays any
     // parked publish intents with full provenance here; remaining no-intent ref
@@ -884,15 +895,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const workspaceStateHash =
       input.head === VCS_MAIN_HEAD
         ? (input.workspaceStateHash ??
-          (await this.workspaceViewWithRepoAtSafe(repoPath, input.stateHash)) ??
-          input.stateHash)
+          (await this.workspaceViewWithRepoAt(repoPath, input.stateHash)))
         : ctxId
-          ? await this.resolveContextView(ctxId).catch(() => input.stateHash)
+          ? await this.resolveContextView(ctxId)
           : input.stateHash;
     const sinceStateHash =
       input.head === VCS_MAIN_HEAD
-        ? ((await this.workspaceViewWithRepoAtSafe(repoPath, input.previousStateHash)) ??
-          input.previousStateHash)
+        ? await this.workspaceViewWithRepoAt(repoPath, input.previousStateHash)
         : ctxId
           ? await this.gad()
               .call<{ stateHash: string }>("vcsComposedViewWithRepoAt", {
@@ -901,7 +910,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
                 repoStateHash: input.previousStateHash,
               })
               .then((r) => r.stateHash)
-              .catch(() => input.previousStateHash)
           : input.previousStateHash;
     return {
       head: input.head,
@@ -920,20 +928,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       fileChanges: fileChanges.map((change) => ({ ...change, path: reroot(change.path) })),
       editOps: (input.editOps ?? []).map((op) => ({ ...op, path: reroot(op.path) })),
     };
-  }
-
-  /** Best-effort composed workspace view with one repo overlaid. Used while a
-   *  candidate `main` advance is still uncommitted, so approval/build events see
-   *  the state that WOULD exist after the candidate rather than stale live main. */
-  private async workspaceViewWithRepoAtSafe(
-    repoPath: string,
-    repoStateHash: string | null
-  ): Promise<string | null> {
-    try {
-      return await this.workspaceViewWithRepoAt(repoPath, repoStateHash);
-    } catch {
-      return null;
-    }
   }
 
   onStateAdvanced(cb: (event: StateAdvancedEvent) => void): () => void {
@@ -2287,7 +2281,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (existing) {
         // Already in the store — adopt into the protected-ref store (no-op
         // when already seeded).
-        await this.deps.refs.seedMain({ repoPath, value: existing });
+        const seeded = await this.deps.refs.seedMain({ repoPath, value: existing });
+        this.lastState.set(this.stateKey(logId, VCS_MAIN_HEAD), seeded.record.stateHash);
         continue;
       }
       // BOOTSTRAP/ADOPTION DOOR (the one remaining disk→main seed): read the
@@ -2308,8 +2303,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         })
       );
       // Bootstrap adoption of on-disk content — seed, not a gated advance.
-      await this.deps.refs.seedMain({ repoPath, value: snap.stateHash });
-      this.lastState.set(this.stateKey(logId, VCS_MAIN_HEAD), snap.stateHash);
+      const seeded = await this.deps.refs.seedMain({ repoPath, value: snap.stateHash });
+      this.lastState.set(this.stateKey(logId, VCS_MAIN_HEAD), seeded.record.stateHash);
+    }
+  }
+
+  private async withSuppressedMainRefReactions<T>(fn: () => Promise<T>): Promise<T> {
+    this.suppressMainRefReactions += 1;
+    try {
+      return await fn();
+    } finally {
+      this.suppressMainRefReactions -= 1;
     }
   }
 

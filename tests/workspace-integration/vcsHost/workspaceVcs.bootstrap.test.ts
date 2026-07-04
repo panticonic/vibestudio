@@ -111,6 +111,60 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     await vcs.dropContext(seedId);
   }
 
+  it("does not emit state-advanced while attach seeds protected refs from disk", async () => {
+    const coldRoot = path.join(root, "cold-attach");
+    const coldWorkspaceRoot = path.join(coldRoot, "source");
+    await fsp.mkdir(path.join(coldWorkspaceRoot, "packages/a"), { recursive: true });
+    await fsp.writeFile(
+      path.join(coldWorkspaceRoot, "packages/a/index.ts"),
+      "export const a = 1;\n"
+    );
+    await fsp.mkdir(path.join(coldWorkspaceRoot, "packages/b"), { recursive: true });
+    await fsp.writeFile(
+      path.join(coldWorkspaceRoot, "packages/b/index.ts"),
+      "export const b = 1;\n"
+    );
+    await fsp.mkdir(path.join(coldWorkspaceRoot, "meta"), { recursive: true });
+    await fsp.writeFile(path.join(coldWorkspaceRoot, "meta/vibez1.yml"), "name: cold\n");
+
+    const coldGad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad-cold-attach" });
+    const coldRefs = createRefService({
+      statePath: path.join(coldRoot, "refs"),
+      gate: async () => {},
+    });
+    attachLocalHostBridges(coldGad.instance, {
+      blobsDir: path.join(coldRoot, "blobs"),
+      refs: coldRefs,
+    });
+    const coldVcs = new WorkspaceVcs({
+      blobsDir: path.join(coldRoot, "blobs"),
+      workspaceRoot: coldWorkspaceRoot,
+      contextsRoot: path.join(coldRoot, ".contexts"),
+      buildSourcesRoot: path.join(coldRoot, "build-sources"),
+      refs: coldRefs,
+    });
+    const events: StateAdvancedEvent[] = [];
+    const off = coldVcs.onStateAdvanced((event) => events.push(event));
+    try {
+      await coldVcs.attachGad(callerFor(coldGad));
+    } finally {
+      off();
+    }
+
+    expect(events).toEqual([]);
+    expect(
+      coldRefs
+        .listMains()
+        .map((record) => record.repoPath)
+        .sort()
+    ).toEqual(["meta", "packages/a", "packages/b"]);
+    const view = await coldVcs.workspaceView();
+    expect((await coldVcs.readFile(view.stateHash, "packages/a/index.ts"))?.content).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("a = 1"),
+    });
+  });
+
   it("creates a per-repo main for EVERY on-disk repo (content + build + meta), with content", async () => {
     // The content repo must have a main with its files — this is the onboarding bug.
     const skillsMain = await vcs.resolveHead(VCS_MAIN_HEAD, "skills/onboarding");
@@ -121,6 +175,58 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     expect(await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo")).toBeTruthy();
     expect(await vcs.resolveHead(VCS_MAIN_HEAD, "panels/chat")).toBeTruthy();
     expect(await vcs.resolveHead(VCS_MAIN_HEAD, "meta")).toBeTruthy();
+  });
+
+  it("a main push emits a build event whose state is the composed workspace view", async () => {
+    const ctxId = "ctx-main-build";
+    const head = vcsContextHead(ctxId);
+    await vcs.recordEdit({
+      head,
+      actor: USER,
+      repoPath: "packages/foo",
+      edits: [{ kind: "write", path: "index.ts", content: text("export const x = 42;\n") }],
+    });
+    await vcs.commit({ head, repoPath: "packages/foo", message: "edit foo", actor: USER });
+
+    const events: StateAdvancedEvent[] = [];
+    const off = vcs.onStateAdvanced((event) => events.push(event));
+    try {
+      const pushed = await pushToMain(gad, {
+        repoPaths: ["packages/foo"],
+        sourceHead: head,
+        actor: USER,
+      });
+      expect(pushed.status).toBe("pushed");
+    } finally {
+      off();
+    }
+
+    const event = events.find(
+      (candidate) => candidate.head === VCS_MAIN_HEAD && candidate.repoPath === "packages/foo"
+    );
+    expect(event).toBeTruthy();
+    expect(event!.changedPaths).toContain("packages/foo/index.ts");
+    expect(event!.repoStateHash).toBe(await vcs.resolveHead(VCS_MAIN_HEAD, "packages/foo"));
+    expect(event!.stateHash).toBe((await vcs.workspaceView()).stateHash);
+    expect(event!.stateHash).not.toBe(event!.repoStateHash);
+
+    expect((await vcs.readFile(event!.stateHash, "packages/foo/index.ts"))?.content).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("x = 42"),
+    });
+    expect(
+      (await vcs.readFile(event!.stateHash, "skills/onboarding/ActionBar.tsx"))?.content
+    ).toMatchObject({ kind: "text" });
+    expect(event!.sinceStateHash).toBeTruthy();
+    expect(
+      (await vcs.readFile(event!.sinceStateHash!, "packages/foo/index.ts"))?.content
+    ).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("x = 1"),
+    });
+    expect(
+      (await vcs.readFile(event!.sinceStateHash!, "skills/onboarding/ActionBar.tsx"))?.content
+    ).toMatchObject({ kind: "text" });
   });
 
   it("ensureFresh returns the current main view (no disk scan, no ctx:workspace adoption)", async () => {
