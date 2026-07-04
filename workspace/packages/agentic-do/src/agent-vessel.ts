@@ -45,6 +45,7 @@ import {
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
+import { toSubscriptionConfig } from "@workspace/agentic-core";
 import { serializeByKey } from "@vibez1/shared/keyedSerializer";
 import {
   createVcsUserlandClient,
@@ -107,6 +108,7 @@ const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 4;
  *  by the supervisor TTL alarm (overridable via `config.subagentTtlMs`). */
 const DEFAULT_SUBAGENT_TTL_MS = 30 * 60 * 1000;
 const SUBAGENT_TTL_ALARM_SOURCE = "subagent-ttl";
+const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 export type ApprovalLevel = 0 | 1 | 2;
 
@@ -156,6 +158,33 @@ export function resolveRespondFromHandles(
   return respondFrom.map((entry) => handleToId.get(entry) ?? entry);
 }
 
+function configuredParticipantHandle(config: unknown): string | null {
+  if (!config || typeof config !== "object") return null;
+  const handle = (config as Record<string, unknown>)["handle"];
+  return typeof handle === "string" && handle.length > 0 ? handle : null;
+}
+
+function sanitizeParticipantHandlePart(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+export function deriveSubagentParticipantHandle(
+  baseHandle: string,
+  runId: string,
+  objectKey?: string
+): string {
+  if (objectKey && PARTICIPANT_HANDLE_PATTERN.test(objectKey)) return objectKey;
+
+  const base = sanitizeParticipantHandlePart(baseHandle) || "agent";
+  const suffixSource = sanitizeParticipantHandlePart(objectKey ?? runId) || "subagent";
+  const suffix = suffixSource.slice(-16);
+  const maxBaseLength = Math.max(1, 63 - suffix.length);
+  const trimmedBase = base.slice(0, maxBaseLength).replace(/[-_]+$/g, "") || "agent";
+  const candidate = `${trimmedBase}-${suffix}`;
+  const handle = /^[a-zA-Z]/.test(candidate) ? candidate : `a-${candidate}`;
+  return handle.slice(0, 64);
+}
+
 /**
  * Summarize a loop's folded turn state for `agent.describe()` — derived status +
  * the live pending-effect counts. Pure (given the folded `AgentState`) + exported
@@ -185,6 +214,49 @@ export interface AgentPromptResources {
 export interface AgentPromptOverride {
   systemPrompt?: string;
   systemPromptMode?: SystemPromptMode;
+}
+
+export interface SubagentIdentity {
+  runId: string;
+  parentRef: string;
+  parentChannelId: string;
+  parentContextId: string;
+  depth: number;
+  mode?: "fresh" | "fork";
+}
+
+export function subagentRuntimePrompt(subagent: SubagentIdentity): string {
+  const forkPrefix =
+    subagent.mode === "fork"
+      ? `## Forked Subagent Scope
+
+You are a forked subagent. You inherited the parent's current trajectory, and the context window cache is shared. That sharing is why the parent chose a fork: do not spend tokens reconstructing broad context the parent already has unless the task specifically requires it.
+
+Assume the parent agent owns the main line of work. Your job is to focus narrowly on the particular task the parent gave you, produce useful findings or isolated child-context edits, and hand the result back. Do not broaden scope, take over the whole project, or redo parent work unless it is necessary for your assigned task.`
+      : "";
+
+  const base = `## Subagent Operating Contract
+
+You are operating as a subagent spawned by a parent agent.
+
+- Run id: ${subagent.runId}
+- Parent channel id: ${subagent.parentChannelId}
+
+Your task channel is a working transcript, not the user's main conversation. Do the assigned task in this child context, read required skills/docs yourself, and keep ordinary messages concise.
+
+Progress:
+- Use \`say\` sparingly for meaningful parent-visible milestones, blockers, or verification results.
+- Ordinary messages and \`say\` updates are progress only. They do not finish the run.
+
+Completion:
+- Finish exactly once by calling \`complete({ report, outcome })\`.
+- Use \`outcome: "success"\` only when the assigned task is complete enough for the parent to act on.
+- Use \`outcome: "failed"\` when blocked or unable to complete; include what you tried, the blocking condition, and whether partial work exists.
+- Idle, turn closure, and a normal final assistant message are not terminal. Only \`complete\` ends this subagent run.
+
+When you produce durable work, commit it in the child context if the task asks for a repository artifact, and report verification and uncertainties in \`complete.report\`.`;
+
+  return [forkPrefix, base].filter((part) => part.length > 0).join("\n\n").trim();
 }
 
 type BrowserOpenMode = "internal" | "external";
@@ -375,6 +447,29 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   protected abstract getParticipantInfo(channelId: string, config?: unknown): ParticipantDescriptor;
 
+  protected getEffectiveParticipantInfo(
+    channelId: string,
+    config?: unknown
+  ): ParticipantDescriptor {
+    const descriptor = this.getParticipantInfo(channelId, config);
+    const subagent = this.subagentIdentity();
+    if (!subagent) return descriptor;
+
+    const configuredHandle = configuredParticipantHandle(config);
+    if (configuredHandle) return { ...descriptor, handle: configuredHandle };
+
+    let objectKey: string | undefined;
+    try {
+      objectKey = this.objectKey;
+    } catch {
+      objectKey = undefined;
+    }
+    return {
+      ...descriptor,
+      handle: deriveSubagentParticipantHandle(descriptor.handle, subagent.runId, objectKey),
+    };
+  }
+
   /** Workspace-level prompt resources. Workspace agents load AGENTS.md and the
    *  skill index here; non-workspace agents may return nothing. */
   protected loadPromptResources(
@@ -405,7 +500,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /** Final system prompt text for a channel (blob-spilled; its hash rides every
-   *  model request descriptor). */
+   *  model request descriptor). Keep run-specific volatile instructions out of
+   *  this path so provider prompt-cache keys stay stable. */
   protected async composePrompt(channelId: string): Promise<string> {
     const resources = await this.loadPromptResources(channelId);
     const agentPrompt = this.getAgentPrompt(channelId);
@@ -421,6 +517,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         ? { systemPromptMode: override.systemPromptMode }
         : {}),
     });
+  }
+
+  /** Per-request prompt appended at the end of the model message context. */
+  protected immediatePrompt(_channelId: string): string | undefined {
+    const subagent = this.subagentIdentity();
+    return subagent ? subagentRuntimePrompt(subagent) : undefined;
   }
 
   /** Local tools registered with the local-tool executor. */
@@ -551,7 +653,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   protected selfRef(channelId: string): ParticipantRef {
-    const descriptor = this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId));
+    const descriptor = this.getEffectiveParticipantInfo(
+      channelId,
+      this.subscriptions.getConfig(channelId)
+    );
     return {
       kind: "agent",
       id: this.participantId(),
@@ -1073,12 +1178,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private loopConfig(channelId: string): AgentLoopConfig {
     const settings = this.getAgentSettings();
     const publishPolicy = this.getPublishPolicy(channelId);
+    const immediatePrompt = this.immediatePrompt(channelId);
     return {
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
       approvalLevel: settings.approvalLevel,
       respondPolicy: settings.respondPolicy,
       systemPromptHash: this.getStateValue(`agent:promptHash:${channelId}`) ?? "",
+      ...(immediatePrompt ? { immediatePrompt } : {}),
       toolSchemasHash: this.getStateValue(`agent:toolsHash:${channelId}`) ?? undefined,
       activeToolNames: JSON.parse(
         this.getStateValue(`agent:toolNames:${channelId}`) ?? "[]"
@@ -1187,8 +1294,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       actor: {
         kind: "agent",
         id: participantId,
-        displayName: this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId))
-          .name,
+        displayName: this.getEffectiveParticipantInfo(
+          channelId,
+          this.subscriptions.getConfig(channelId)
+        ).name,
       },
       causality: { messageId: messageId as never },
       payload: {
@@ -1328,7 +1437,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     replay?: boolean;
   }): Promise<{ ok: boolean; participantId: string }> {
     this.ensureIdentity();
-    const descriptor = this.getParticipantInfo(opts.channelId, opts.config);
+    const descriptor = this.getEffectiveParticipantInfo(opts.channelId, opts.config);
     // Subscription is MEMBERSHIP + presentation only. Behavior config (model,
     // approvalLevel, respondPolicy, …) is per-agent and seeded at creation from
     // STATE_ARGS.agentConfig — it does NOT ride the subscription. `config` here
@@ -1638,8 +1747,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       actor: {
         kind: "agent",
         id: participantId,
-        displayName: this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId))
-          .name,
+        displayName: this.getEffectiveParticipantInfo(
+          channelId,
+          this.subscriptions.getConfig(channelId)
+        ).name,
       },
       turnId: descriptor.turnId as never,
       causality: { messageId: messageId as never },
@@ -2239,7 +2350,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       case "send": {
         const [content, options] = a as [string, { idempotencyKey?: string } | undefined];
         const messageId = options?.idempotencyKey ?? crypto.randomUUID();
-        const descriptor = this.getParticipantInfo(
+        const descriptor = this.getEffectiveParticipantInfo(
           channelId,
           this.subscriptions.getConfig(channelId)
         );
@@ -2462,7 +2573,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     channelId: string,
     participantId: string
   ): ActorRef & { participantId?: string; metadata?: Record<string, unknown> } {
-    const descriptor = this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId));
+    const descriptor = this.getEffectiveParticipantInfo(
+      channelId,
+      this.subscriptions.getConfig(channelId)
+    );
     return {
       kind: "agent",
       id: participantId,
@@ -3124,6 +3238,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     seq: number;
     taskChannelId: string;
     contextId: string;
+    config?: unknown;
   }): Promise<{ ok: boolean; participantId: string }> {
     this.ensureIdentity();
     // Fix identity for parity with postClone (a fresh DO already has it correct).
@@ -3146,6 +3261,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return this.subscribeChannel({
       channelId: opts.taskChannelId,
       contextId: opts.contextId,
+      config: opts.config,
       replay: false,
     });
   }
@@ -3155,13 +3271,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** This agent's own subagent identity (set in `STATE_ARGS.subagent` at spawn),
    *  or null for a top-level agent. Drives depth accounting + the child `complete`
    *  tool gate. */
-  protected subagentIdentity(): {
-    runId: string;
-    parentRef: string;
-    parentChannelId: string;
-    parentContextId: string;
-    depth: number;
-  } | null {
+  protected subagentIdentity(): SubagentIdentity | null {
     const stateArgs = this.env["STATE_ARGS"];
     const raw =
       stateArgs && typeof stateArgs === "object"
@@ -3182,6 +3292,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       parentChannelId: s["parentChannelId"],
       parentContextId: typeof s["parentContextId"] === "string" ? s["parentContextId"] : "",
       depth: typeof s["depth"] === "number" ? s["depth"] : 0,
+      mode: s["mode"] === "fork" || s["mode"] === "fresh" ? s["mode"] : undefined,
     };
   }
 
@@ -3260,6 +3371,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             : "subagent";
       const childConfig =
         p.config && typeof p.config === "object" ? (p.config as Record<string, unknown>) : undefined;
+      const childSubscriptionConfig = toSubscriptionConfig(childConfig);
       const source =
         typeof p.source === "string" && p.source ? p.source : String(this.env["WORKER_SOURCE"] ?? "");
       const className =
@@ -3296,6 +3408,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               ...(childConfig ? { agentConfig: childConfig } : {}),
               subagent: {
                 runId,
+                mode,
                 parentRef: ownerEntityId,
                 parentChannelId: channelId,
                 parentContextId,
@@ -3341,11 +3454,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             seq: parentSeq,
             taskChannelId,
             contextId,
+            config: childSubscriptionConfig,
           },
         ]);
       } else {
         await this.rpc.call(childHandle.targetId, "subscribeChannel", [
-          { channelId: taskChannelId, contextId, config: {}, replay: false },
+          { channelId: taskChannelId, contextId, config: childSubscriptionConfig, replay: false },
         ]);
       }
 

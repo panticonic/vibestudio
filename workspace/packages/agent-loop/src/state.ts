@@ -42,6 +42,10 @@ export interface AgentLoopConfig {
   approvalLevel: 0 | 1 | 2;
   respondPolicy: RespondPolicy;
   systemPromptHash: string;
+  /** Per-call instruction appended to the model message context, not the
+   *  provider system prompt. Use for run-specific guidance that should not
+   *  churn the system prompt/cache key. */
+  immediatePrompt?: string;
   skillIndexHash?: string;
   toolSchemasHash?: string;
   activeToolNames: string[];
@@ -120,6 +124,8 @@ export interface ModelRequestDescriptor {
   modelBaseUrl?: string;
   thinkingLevel: ThinkingLevel;
   systemPromptHash: string;
+  /** Per-call instruction appended after the hydrated transcript. */
+  immediatePrompt?: string;
   skillIndexHash?: string;
   toolSchemasHash?: string;
   activeToolNames: string[];

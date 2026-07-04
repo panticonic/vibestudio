@@ -67,6 +67,7 @@ function modelStartItems(
     model,
     thinkingLevel: config.thinkingLevel,
     systemPromptHash: config.systemPromptHash,
+    ...(config.immediatePrompt ? { immediatePrompt: config.immediatePrompt } : {}),
     ...(config.skillIndexHash ? { skillIndexHash: config.skillIndexHash } : {}),
     ...(config.toolSchemasHash ? { toolSchemasHash: config.toolSchemasHash } : {}),
     activeToolNames: config.activeToolNames,

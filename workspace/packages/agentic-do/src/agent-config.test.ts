@@ -6,12 +6,26 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { ParticipantDescriptor } from "@workspace/harness";
-import { AgentVesselBase, resolveRespondFromHandles } from "./agent-vessel.js";
+import {
+  AgentVesselBase,
+  deriveSubagentParticipantHandle,
+  resolveRespondFromHandles,
+  subagentRuntimePrompt,
+} from "./agent-vessel.js";
 
 /** Minimal concrete vessel + test handles onto the protected managers. */
 class TestAgentVessel extends AgentVesselBase {
   protected getParticipantInfo(): ParticipantDescriptor {
     return { type: "agent", name: "Test", handle: "test" } as ParticipantDescriptor;
+  }
+  participantForTest(config?: unknown): ParticipantDescriptor {
+    return this.getEffectiveParticipantInfo("ch-1", config);
+  }
+  promptForTest(channelId = "ch-1"): Promise<string> {
+    return this.composePrompt(channelId);
+  }
+  immediatePromptForTest(channelId = "ch-1"): string | undefined {
+    return this.immediatePrompt(channelId);
   }
   driverForTest(): { dropLoop: (channelId: string) => void } {
     return this.driver as unknown as { dropLoop: (channelId: string) => void };
@@ -40,6 +54,117 @@ describe("resolveRespondFromHandles", () => {
 
   it("is a no-op on an empty allowlist", () => {
     expect(resolveRespondFromHandles([], [{ participantId: "p", metadata: { handle: "@p" } }])).toEqual([]);
+  });
+});
+
+describe("subagent participant handles", () => {
+  it("uses the child object key as the handle when it is already valid", async () => {
+    const vessel = await makeVessel({
+      __objectKey: "ai-chat-6cdc-3f10f1ed",
+      STATE_ARGS: {
+        subagent: {
+          runId:
+            "call_pvAoQf2smkmA9mfbqmPt4i3H|fc_068771be153a5f7a016a48f4f3fb4c81978442476a01b8a1a5",
+          parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+          parentChannelId: "ch-parent",
+        },
+      },
+    });
+
+    expect(vessel.participantForTest().handle).toBe("ai-chat-6cdc-3f10f1ed");
+  });
+
+  it("honors an explicit subscription handle for subagents", async () => {
+    const vessel = await makeVessel({
+      __objectKey: "ai-chat-6cdc-3f10f1ed",
+      STATE_ARGS: {
+        subagent: {
+          runId: "run-1",
+          parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+          parentChannelId: "ch-parent",
+        },
+      },
+    });
+
+    expect(vessel.participantForTest({ handle: "pdf-pilot" }).handle).toBe("pdf-pilot");
+  });
+
+  it("synthesizes a schema-valid handle when the object key is not a valid handle", () => {
+    const handle = deriveSubagentParticipantHandle("ai-chat", "call:bad|run", "subagent:bad|run");
+
+    expect(handle).toMatch(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/);
+    expect(handle).toContain("ai-chat");
+    expect(handle).not.toBe("ai-chat");
+  });
+});
+
+describe("subagent prompt contract", () => {
+  it("keeps child-specific completion guidance out of the system prompt and in the immediate prompt", async () => {
+    const vessel = await makeVessel({
+      STATE_ARGS: {
+        subagent: {
+          runId: "run-1",
+          mode: "fork",
+          parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+          parentChannelId: "ch-parent",
+          parentContextId: "ctx-parent",
+          depth: 1,
+        },
+      },
+    });
+
+    const prompt = await vessel.promptForTest();
+    const immediatePrompt = vessel.immediatePromptForTest();
+
+    expect(prompt).not.toContain("## Subagent Operating Contract");
+    expect(prompt).not.toContain("Run id: run-1");
+    expect(immediatePrompt).toContain("## Subagent Operating Contract");
+    expect(immediatePrompt).toContain("## Forked Subagent Scope");
+    expect(immediatePrompt).toContain("Run id: run-1");
+    expect(immediatePrompt).toContain("context window cache is shared");
+    expect(immediatePrompt).toContain("focus narrowly on the particular task the parent gave you");
+    expect(immediatePrompt).toContain("complete({ report, outcome })");
+    expect(immediatePrompt).toContain(
+      "Idle, turn closure, and a normal final assistant message are not terminal"
+    );
+  });
+
+  it("does not inject the child contract for top-level agents", async () => {
+    const vessel = await makeVessel();
+
+    await expect(vessel.promptForTest()).resolves.not.toContain("## Subagent Operating Contract");
+    expect(vessel.immediatePromptForTest()).toBeUndefined();
+  });
+
+  it("keeps the standalone subagent runtime prompt focused on terminal semantics", () => {
+    const prompt = subagentRuntimePrompt({
+      runId: "run-2",
+      parentRef: "parent",
+      parentChannelId: "ch-parent",
+      parentContextId: "ctx-parent",
+      depth: 2,
+    });
+
+    expect(prompt).toContain("Use `say` sparingly");
+    expect(prompt).toContain("Finish exactly once");
+    expect(prompt).toContain("Only `complete` ends this subagent run");
+    expect(prompt).not.toContain("## Forked Subagent Scope");
+  });
+
+  it("adds a narrow-scope prefix for forked subagents", () => {
+    const prompt = subagentRuntimePrompt({
+      runId: "run-3",
+      parentRef: "parent",
+      parentChannelId: "ch-parent",
+      parentContextId: "ctx-parent",
+      depth: 2,
+      mode: "fork",
+    });
+
+    expect(prompt).toContain("## Forked Subagent Scope");
+    expect(prompt).toContain("context window cache is shared");
+    expect(prompt).toContain("Assume the parent agent owns the main line of work");
+    expect(prompt).toContain("Do not broaden scope");
   });
 });
 

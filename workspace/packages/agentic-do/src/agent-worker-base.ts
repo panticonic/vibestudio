@@ -450,7 +450,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         }
         const participantId = this.subscriptions.getParticipantId(channelId);
         if (!participantId) throw new Error("agent is not subscribed to the channel");
-        const descriptor = this.getParticipantInfo(
+        const descriptor = this.getEffectiveParticipantInfo(
           channelId,
           this.subscriptions.getConfig(channelId)
         );
@@ -487,18 +487,20 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "spawn_subagent",
         label: "spawn_subagent",
         description:
-          "Delegate a sub-task to a child agent in its own forked context. mode:'fresh' seeds a new agent with `task`; mode:'fork' re-roots a child from your current trajectory. Returns once the child completes; inspect/merge/pick its work with the other *_subagent tools.",
+          "Delegate separable work to a child agent in its own task channel and child context. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId, steer with send_to_subagent, read transcript with read_subagent, inspect files with inspect_subagent, then merge/pick/close. The child finishes only by calling complete.",
         parameters: {
           type: "object",
           properties: {
             mode: {
               type: "string",
               enum: ["fresh", "fork"],
-              description: "'fresh' = new agent seeded via the task; 'fork' = branch from your trajectory.",
+              description:
+                "'fresh' = new agent seeded via the task; 'fork' = branch from your trajectory, useful when the child needs your current context and can benefit from the shared context window cache.",
             },
             task: {
               type: "string",
-              description: "The task/instruction for the subagent (required for 'fresh').",
+              description:
+                "Self-contained task/instructions. Include goal, relevant files/docs/skills, constraints, expected output, progress expectations, done criteria, and what to do if blocked. Required for 'fresh'.",
             },
             source: { type: "string", description: "Optional agent source repo path (defaults to your own)." },
             config: { type: "object", description: "Optional child agent config (model/handle/etc.)." },
@@ -513,7 +515,8 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       {
         name: "send_to_subagent",
         label: "send_to_subagent",
-        description: "Post a message into a running subagent's task channel.",
+        description:
+          "Post steering or new information into a running subagent's task channel. Use this to correct course or add context, not to poll for progress.",
         parameters: {
           type: "object",
           properties: {
@@ -531,7 +534,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "inspect_subagent",
         label: "inspect_subagent",
         description:
-          "Inspect a subagent's working tree (child context) via vcs: query 'status', 'diff', 'log', or a file path.",
+          "Inspect a subagent's child-context workspace state via VCS. Use this for what the child changed: query 'status', 'diff', 'log', or a file path. Use read_subagent instead for what the child said.",
         parameters: {
           type: "object",
           properties: {
@@ -552,7 +555,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "merge_subagent",
         label: "merge_subagent",
         description:
-          "Take EVERYTHING from a subagent: merge its child context into yours (commit-gated on both sides).",
+          "Take EVERYTHING from a subagent by merging its child context into yours. Inspect status/diff first. Merge is commit-gated on both sides; if parent or child is dirty, commit deliberately, then retry. This does not push main.",
         parameters: {
           type: "object",
           properties: { runId: { type: "string", description: "The subagent run id." } },
@@ -567,7 +570,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "pick_from_subagent",
         label: "pick_from_subagent",
         description:
-          "Selectively cherry-pick commits/paths from a subagent's child context (see vcs.pick picks).",
+          "Selectively take commits or paths from a subagent's child context. Inspect status/diff/log first. Path picks land as parent working edits; commit picks follow vcs.pick semantics.",
         parameters: {
           type: "object",
           properties: {
@@ -589,7 +592,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "read_subagent",
         label: "read_subagent",
         description:
-          "Read a subagent's task-channel messages since a cursor. Returns the child's messages + the next cursor.",
+          "Read what a subagent said on its task channel since a cursor. Returns messages plus nextSeq; pass nextSeq as afterSeq when reading again. Use inspect_subagent instead for child files/status/diff/log.",
         parameters: {
           type: "object",
           properties: {
@@ -610,7 +613,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "close_subagent",
         label: "close_subagent",
         description:
-          "Close a subagent run: cancels it if still open, then tears down its context (and its own subagents).",
+          "Close a subagent run when you are done inspecting it. Cancels it if still open, then tears down its context and its own subagents. Set discard:true when intentionally dropping unmerged work.",
         parameters: {
           type: "object",
           properties: {
@@ -630,7 +633,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "complete",
         label: "complete",
         description:
-          "Finish this subagent run and hand your report back to the parent. This is the explicit terminal trigger (turn closure and idle are NOT terminal).",
+          "Finish this subagent run exactly once and hand your report back to the parent. This is the explicit terminal trigger: ordinary final text, turn closure, and idle are NOT terminal. Use outcome:'failed' when blocked or unable to complete, with a report explaining what was tried and whether partial work exists.",
         parameters: {
           type: "object",
           properties: {
