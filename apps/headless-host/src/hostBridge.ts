@@ -35,7 +35,7 @@ export interface CdpHostBridgeSocket {
   close(code?: number, reason?: string): void;
   on(event: "open", listener: () => void): this;
   on(event: "message", listener: (data: unknown) => void): this;
-  on(event: "close", listener: () => void): this;
+  on(event: "close", listener: (code?: number, reason?: unknown) => void): this;
   on(event: "error", listener: (error: unknown) => void): this;
 }
 
@@ -52,12 +52,44 @@ interface BridgeMessage {
   reason?: string;
 }
 
+export type CdpHostBridgeDiagnosticState =
+  | "idle"
+  | "connecting"
+  | "open"
+  | "authenticating"
+  | "authenticated"
+  | "closed"
+  | "error"
+  | "retrying";
+
+export interface CdpHostBridgeDiagnostic {
+  state: CdpHostBridgeDiagnosticState;
+  attempt: number;
+  url: string;
+  opened: boolean;
+  authSent: boolean;
+  authenticated: boolean;
+  lastError?: string;
+  lastCloseCode?: number;
+  lastCloseReason?: string;
+  lastMessageType?: string;
+  nextRetryMs?: number;
+}
+
 export class CdpHostBridgeClient {
   private socket: CdpHostBridgeSocket | null = null;
   private stopped = false;
   private authenticated = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly targets = new Map<string, number>(); // targetId(slotId) → tabId
+  private diagnostic: CdpHostBridgeDiagnostic = {
+    state: "idle",
+    attempt: 0,
+    url: "",
+    opened: false,
+    authSent: false,
+    authenticated: false,
+  };
 
   constructor(
     private readonly opts: {
@@ -66,6 +98,7 @@ export class CdpHostBridgeClient {
       getToken: () => string | Promise<string>;
       handlers: HostBridgeHandlers;
       onAuthenticated?: () => void;
+      onDiagnostic?: (diagnostic: CdpHostBridgeDiagnostic) => void;
       socketFactory?: (url: string) => CdpHostBridgeSocket;
     }
   ) {}
@@ -86,6 +119,10 @@ export class CdpHostBridgeClient {
 
   isConnected(): boolean {
     return this.authenticated && this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  getDiagnostic(): CdpHostBridgeDiagnostic {
+    return { ...this.diagnostic };
   }
 
   registerTarget(targetId: string, tabId: number): void {
@@ -109,18 +146,31 @@ export class CdpHostBridgeClient {
   private connect(): void {
     if (this.stopped) return;
     const url = this.wsUrl();
+    this.updateDiagnostic({
+      state: "connecting",
+      attempt: this.diagnostic.attempt + 1,
+      url,
+      opened: false,
+      authSent: false,
+      authenticated: false,
+      nextRetryMs: undefined,
+    });
     const socket =
       this.opts.socketFactory?.(url) ?? new WebSocket(url, { maxPayload: 256 * 1024 * 1024 });
     this.socket = socket;
     this.authenticated = false;
 
     socket.on("open", () => {
+      this.updateDiagnostic({ state: "open", opened: true });
       void (async () => {
         try {
           const token = await this.opts.getToken();
           socket.send(JSON.stringify({ type: "vibez1:cdp-auth", token }));
+          this.updateDiagnostic({ state: "authenticating", authSent: true });
         } catch (error) {
-          log.warn(`failed to get bridge token: ${String(error)}`);
+          const message = errorMessage(error);
+          this.updateDiagnostic({ state: "error", lastError: `failed to get token: ${message}` });
+          log.warn(`failed to get bridge token: ${message}`);
           socket.close();
         }
       })();
@@ -128,18 +178,27 @@ export class CdpHostBridgeClient {
     socket.on("message", (data) => {
       void this.handleMessage(String(data));
     });
-    socket.on("close", () => {
+    socket.on("close", (code, reason) => {
       this.authenticated = false;
       if (this.socket === socket) this.socket = null;
+      this.updateDiagnostic({
+        state: "closed",
+        authenticated: false,
+        lastCloseCode: typeof code === "number" ? code : undefined,
+        lastCloseReason: closeReasonText(reason),
+      });
       this.scheduleReconnect();
     });
     socket.on("error", (error) => {
-      log.warn(`bridge socket error: ${String(error)}`);
+      const message = errorMessage(error);
+      this.updateDiagnostic({ state: "error", lastError: message });
+      log.warn(`bridge socket error: ${message}`);
     });
   }
 
   private scheduleReconnect(): void {
     if (this.stopped || this.reconnectTimer) return;
+    this.updateDiagnostic({ state: "retrying", nextRetryMs: RECONNECT_DELAY_MS });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
@@ -156,11 +215,14 @@ export class CdpHostBridgeClient {
     try {
       message = JSON.parse(raw);
     } catch {
+      this.updateDiagnostic({ lastMessageType: "<invalid-json>" });
       return;
     }
+    if (message.type) this.updateDiagnostic({ lastMessageType: message.type });
     switch (message.type) {
       case "vibez1:cdp-auth-ok": {
         this.authenticated = true;
+        this.updateDiagnostic({ state: "authenticated", authenticated: true });
         // Re-register every hosted target (initial connect and reconnects).
         for (const [targetId, tabId] of this.targets) {
           this.send({ type: "cdp:register", targetId, tabId });
@@ -233,4 +295,23 @@ export class CdpHostBridgeClient {
         return;
     }
   }
+
+  private updateDiagnostic(patch: Partial<CdpHostBridgeDiagnostic>): void {
+    this.diagnostic = { ...this.diagnostic, ...patch };
+    this.opts.onDiagnostic?.(this.getDiagnostic());
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function closeReasonText(reason: unknown): string | undefined {
+  if (reason === undefined || reason === null) return undefined;
+  if (typeof reason === "string") return reason || undefined;
+  if (Buffer.isBuffer(reason)) {
+    const text = reason.toString();
+    return text || undefined;
+  }
+  return String(reason) || undefined;
 }

@@ -56,6 +56,9 @@ describe("HeadlessHost lifecycle guards", () => {
     );
 
     await host.start();
+    expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "panelRuntime.registerClient", [
+      { ...host.registration, loadOnLeaseAssignment: false },
+    ]);
     expect(rpc.call).toHaveBeenCalledWith("main", "panelRuntime.registerClient", [
       host.registration,
     ]);
@@ -66,9 +69,21 @@ describe("HeadlessHost lifecycle guards", () => {
 
     await recover!();
 
-    expect(
-      rpc.call.mock.calls.filter((call) => call[1] === "panelRuntime.registerClient")
-    ).toHaveLength(2);
+    const registerCalls = rpc.call.mock.calls.filter(
+      (call) => call[1] === "panelRuntime.registerClient"
+    );
+    expect(registerCalls).toHaveLength(3);
+    expect(registerCalls[0]).toEqual([
+      "main",
+      "panelRuntime.registerClient",
+      [{ ...host.registration, loadOnLeaseAssignment: false }],
+    ]);
+    expect(registerCalls[1]).toEqual(["main", "panelRuntime.registerClient", [host.registration]]);
+    expect(registerCalls[2]).toEqual([
+      "main",
+      "panelRuntime.registerClient",
+      [{ ...host.registration, loadOnLeaseAssignment: false }],
+    ]);
     expect(rpc.call.mock.calls.filter((call) => call[1] === "events.subscribe")).toHaveLength(2);
     expect(reconcile).toHaveBeenCalledTimes(2);
     await host.stop("test");

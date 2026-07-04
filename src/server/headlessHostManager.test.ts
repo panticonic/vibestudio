@@ -119,6 +119,45 @@ describe("HeadlessHostManager keep-alive", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  it("keeps a registered child alive past the registration timeout while waiting for CDP readiness", async () => {
+    const spawnFn = vi.fn((_entry: string): ChildProcess => {
+      const child = new MockChild();
+      children.push(child);
+      return child as unknown as ChildProcess;
+    });
+    const manager = new HeadlessHostManager({
+      tokenManager,
+      coordinator,
+      isHostAvailable: () => true,
+      getServerUrl: () => "http://127.0.0.1:0",
+      config: {
+        enabled: true,
+        entryPath: "/fake/entry.js",
+        spawnTimeoutMs: 100,
+      },
+      spawnFn,
+    });
+
+    const pending = manager.ensureDefaultHost();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+
+    const child = children[0];
+    if (!child) throw new Error("expected a spawned child");
+    child.emit("message", { type: "registered", clientSessionId: "headless-1" });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(child.kill).not.toHaveBeenCalled();
+
+    registerHeadless("headless-1");
+    await vi.advanceTimersByTimeAsync(250);
+    await expect(pending).resolves.toMatchObject({ clientSessionId: "headless-1" });
+    await manager.stop();
+  });
+
   it("degrades gracefully and disables auto-spawn after repeated failures", async () => {
     // Host never connects → each spawn times out and records a failure. After
     // maxRestarts the manager disables itself instead of looping forever.

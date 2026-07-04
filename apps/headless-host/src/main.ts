@@ -85,6 +85,17 @@ async function main(): Promise<void> {
     if (ipcInit.label) overrides.label = ipcInit.label;
   }
   const config = resolveConfig(overrides);
+  config.lifecycle = {
+    onRegistered: () => {
+      process.send?.({ type: "registered", clientSessionId: config.clientSessionId });
+    },
+    onBridgeDiagnostic: (diagnostic) => {
+      process.send?.({ type: "bridge", clientSessionId: config.clientSessionId, diagnostic });
+    },
+    onReady: () => {
+      process.send?.({ type: "ready", clientSessionId: config.clientSessionId });
+    },
+  };
   const host = new HeadlessHost(config);
 
   const shutdown = (signal: string) => {
@@ -94,7 +105,6 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"));
 
   await host.start();
-  process.send?.({ type: "ready", clientSessionId: config.clientSessionId });
   await host.done;
 }
 

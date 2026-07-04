@@ -53,6 +53,7 @@ export class HeadlessHost implements PanelHost {
   private browserGeneration = 0;
   private browserRecovery: Promise<void> | null = null;
   readonly registration: PanelHostRegistration;
+  private readonly bootstrapRegistration: PanelHostRegistration;
   /** Resolves when stop() completes; main.ts awaits this. */
   readonly done: Promise<void>;
   private resolveDone!: () => void;
@@ -65,6 +66,10 @@ export class HeadlessHost implements PanelHost {
       supportsCdp: true,
       loadOnLeaseAssignment: true,
     });
+    this.bootstrapRegistration = {
+      ...this.registration,
+      loadOnLeaseAssignment: false,
+    };
     this.tracker = new LeaseTracker(config.clientSessionId);
     this.done = new Promise((resolve) => {
       this.resolveDone = resolve;
@@ -81,7 +86,8 @@ export class HeadlessHost implements PanelHost {
       this.config.clientSessionId
     );
 
-    await this.registerClient();
+    await this.registerClient(this.bootstrapRegistration);
+    this.config.lifecycle?.onRegistered?.();
     connection.onServerEvent((event, payload) => {
       if (event === "panel:runtimeLeaseChanged") {
         void this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
@@ -90,7 +96,9 @@ export class HeadlessHost implements PanelHost {
     await connection.rpc.call("main", "events.subscribe", ["panel:runtimeLeaseChanged"]);
     connection.onResubscribe(async () => {
       try {
-        await this.registerClient();
+        await this.registerClient(
+          this.bridge?.isConnected() ? this.registration : this.bootstrapRegistration
+        );
         await connection.rpc.call("main", "events.subscribe", ["panel:runtimeLeaseChanged"]);
         await this.reconcile();
       } catch (error) {
@@ -99,7 +107,8 @@ export class HeadlessHost implements PanelHost {
     });
 
     await this.startBrowser();
-    this.startBridge();
+    await this.startBridge();
+    await this.registerClient(this.registration);
     await this.reconcile();
 
     this.idleTimer = setInterval(() => this.checkIdle(), IDLE_CHECK_INTERVAL_MS);
@@ -107,6 +116,7 @@ export class HeadlessHost implements PanelHost {
     log.info(
       `headless host ready (session ${this.config.clientSessionId}, max ${this.config.maxPanels} panels)`
     );
+    this.config.lifecycle?.onReady?.();
   }
 
   async stop(reason: string): Promise<void> {
@@ -135,8 +145,8 @@ export class HeadlessHost implements PanelHost {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  private async registerClient(): Promise<void> {
-    await this.connection!.rpc.call("main", "panelRuntime.registerClient", [this.registration]);
+  private async registerClient(registration: PanelHostRegistration): Promise<void> {
+    await this.connection!.rpc.call("main", "panelRuntime.registerClient", [registration]);
   }
 
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
@@ -204,7 +214,12 @@ export class HeadlessHost implements PanelHost {
     }
   }
 
-  private startBridge(): void {
+  private startBridge(): Promise<void> {
+    let resolveFirstAuthenticated!: () => void;
+    const firstAuthenticated = new Promise<void>((resolve) => {
+      resolveFirstAuthenticated = resolve;
+    });
+    let authenticatedOnce = false;
     this.bridge = new CdpHostBridgeClient({
       serverUrl: this.config.serverUrl,
       hostConnectionId: this.config.clientSessionId,
@@ -228,8 +243,22 @@ export class HeadlessHost implements PanelHost {
           log.warn(`dropped panel ${targetId} after register rejection (${reason})`);
         },
       },
+      onAuthenticated: () => {
+        if (!authenticatedOnce) {
+          authenticatedOnce = true;
+          resolveFirstAuthenticated();
+          return;
+        }
+        void this.registerClient(this.registration).catch((error) => {
+          log.warn(`failed to refresh ready registration after bridge auth: ${String(error)}`);
+        });
+      },
+      onDiagnostic: (diagnostic) => {
+        this.config.lifecycle?.onBridgeDiagnostic?.(diagnostic);
+      },
     });
     this.bridge.start();
+    return firstAuthenticated;
   }
 
   private async handleHostCommand(

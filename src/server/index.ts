@@ -3479,7 +3479,11 @@ async function main() {
           coordinator: panelRuntimeCoordinator,
           isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId),
           getServerUrl: () => `http://127.0.0.1:${gatewayPort}`,
-          config: { enabled: autospawnEnabled, spawnTimeoutMs, keepAlive: keepAliveEnabled },
+          config: {
+            enabled: autospawnEnabled,
+            spawnTimeoutMs,
+            keepAlive: keepAliveEnabled,
+          },
         });
         headlessHostManager = manager;
         if (keepAliveEnabled) manager.startKeepAlive();
