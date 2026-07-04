@@ -119,29 +119,38 @@ describe("WorkspaceVcs.indexRepoFiles marker discipline (A4)", () => {
 
   it("advances the marker and omits deliberately skipped files (oversized / binary)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const ok = await putBytes(blobsDir, Buffer.from("small text file", "utf8"));
-    const oversized = await putBytes(blobsDir, Buffer.alloc(MAX_INDEXED_FILE_BYTES + 1, 0x61));
-    const binary = await putBytes(blobsDir, Buffer.from([0x41, 0x00, 0x42, 0x43]));
+    const previousLogLevel = process.env["VIBEZ1_LOG_LEVEL"];
+    process.env["VIBEZ1_LOG_LEVEL"] = "info";
+    try {
+      const ok = await putBytes(blobsDir, Buffer.from("small text file", "utf8"));
+      const oversized = await putBytes(blobsDir, Buffer.alloc(MAX_INDEXED_FILE_BYTES + 1, 0x61));
+      const binary = await putBytes(blobsDir, Buffer.from([0x41, 0x00, 0x42, 0x43]));
 
-    const run = makeFakeThis({
-      blobsDir,
-      stateHash: "state:target2",
-      markerValue: null,
-      stateFiles: [
-        { path: "keep.txt", content_hash: ok.digest },
-        { path: "big.bin", content_hash: oversized.digest },
-        { path: "data.bin", content_hash: binary.digest },
-      ],
-    });
-    await WorkspaceVcs.prototype.indexRepoFiles.call(run.self, "panels/demo");
+      const run = makeFakeThis({
+        blobsDir,
+        stateHash: "state:target2",
+        markerValue: null,
+        stateFiles: [
+          { path: "keep.txt", content_hash: ok.digest },
+          { path: "big.bin", content_hash: oversized.digest },
+          { path: "data.bin", content_hash: binary.digest },
+        ],
+      });
+      await WorkspaceVcs.prototype.indexRepoFiles.call(run.self, "panels/demo");
 
-    // Marker advanced: deliberate skips are not a retry condition.
-    expect(run.getMarker()).toBe("state:target2");
-    expect(run.indexed).toHaveLength(1);
-    const files = run.indexed[0]!.files as Array<{ path: string }>;
-    expect(files).toHaveLength(1);
-    expect(files[0]!.path).toBe("panels/demo/keep.txt");
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("over index size cap"));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("binary content"));
+      // Marker advanced: deliberate skips are not a retry condition.
+      expect(run.getMarker()).toBe("state:target2");
+      expect(run.indexed).toHaveLength(1);
+      const files = run.indexed[0]!.files as Array<{ path: string }>;
+      expect(files).toHaveLength(1);
+      expect(files[0]!.path).toBe("panels/demo/keep.txt");
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      if (previousLogLevel === undefined) {
+        delete process.env["VIBEZ1_LOG_LEVEL"];
+      } else {
+        process.env["VIBEZ1_LOG_LEVEL"] = previousLogLevel;
+      }
+    }
   });
 });

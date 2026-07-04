@@ -15,6 +15,7 @@
  */
 
 import { EventEmitter } from "events";
+import { createDevLogger } from "@vibez1/dev-log";
 import { serializeByKey } from "@vibez1/shared/keyedSerializer";
 import * as crypto from "node:crypto";
 import * as fsp from "node:fs/promises";
@@ -104,6 +105,7 @@ interface MergeComputation {
 const BUILDS_LOG_ID = "builds:workspace";
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const USER_ACTOR = { id: "user", kind: "user" } as const;
+const memoryLog = createDevLogger("VcsMemory");
 
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -2038,14 +2040,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         return;
       }
       if (bytes.length > MAX_INDEXED_FILE_BYTES) {
-        console.warn(
-          `[VcsMemory] skip ${reroot(file.path)}: over index size cap ` +
+        memoryLog.verbose(
+          `skip ${reroot(file.path)}: over index size cap ` +
             `(${bytes.length} > ${MAX_INDEXED_FILE_BYTES} bytes)`
         );
         continue;
       }
       if (bytes.subarray(0, 8192).includes(0)) {
-        console.warn(`[VcsMemory] skip ${reroot(file.path)}: binary content (null byte sniff)`);
+        memoryLog.verbose(`skip ${reroot(file.path)}: binary content (null byte sniff)`);
         continue;
       }
       files.push({
