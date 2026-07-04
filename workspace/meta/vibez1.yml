@@ -349,6 +349,7 @@ routes: []
 extensions:
   - source: extensions/git-bridge
   - source: extensions/image-service
+  - source: extensions/pdf-ingest
   - source: extensions/file-tools
   - source: extensions/typecheck-service
   - source: extensions/test-runner

@@ -60,6 +60,7 @@
       "@workspace-extensions/shell": ["workspace/extensions/shell/index.ts"],
       "@workspace-extensions/file-tools": ["workspace/extensions/file-tools/index.ts"],
       "@workspace-extensions/image-service": ["workspace/extensions/image-service/index.ts"],
+      "@workspace-extensions/pdf-ingest": ["workspace/extensions/pdf-ingest/index.ts"],
       "@workspace-extensions/react-native": ["workspace/extensions/react-native/index.ts"],
       "@workspace-extensions/browser-data": ["workspace/extensions/browser-data/index.ts"],
       "@workspace-extensions/mobile-debug": ["workspace/extensions/mobile-debug/index.ts"],
