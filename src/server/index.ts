@@ -26,6 +26,7 @@ import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildP
 import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
+import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -740,12 +741,7 @@ async function main() {
     isPnpmDevMode && workspaceIsEphemeral && hasDevTemplate && templateDiffersFromActive
       ? templateDir
       : null;
-  const buildDependencyWorkspaceRoot =
-    fs.existsSync(path.join(templateDir, "package.json")) ||
-    fs.existsSync(path.join(templateDir, "pnpm-lock.yaml")) ||
-    fs.existsSync(path.join(templateDir, "pnpm-workspace.yaml"))
-      ? templateDir
-      : workspacePath;
+  const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(appRoot, workspacePath);
   if (process.env["VIBEZ1_DOGFOOD"] === "1") {
     console.warn(
       "[Dogfood] VIBEZ1_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +

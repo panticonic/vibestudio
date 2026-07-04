@@ -149,11 +149,45 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
             mode: number;
           }>,
         // Test double of the DO's `vcsImportPublish`: adopt the ingested
-        // staging head into the ref map. The gated single-writer publish is
-        // exercised in doImport.test.ts.
+        // staging head into the ref map and mirror the publish on the main log.
+        // The gated single-writer publish is exercised in doImport.test.ts.
         importPublish: async ({ repoPath, sourceHead }) => {
           const head = doi.resolveWorktreeHead({ logId: `vcs:repo:${repoPath}`, head: sourceHead });
           const stateHash = head?.stateHash ? String(head.stateHash) : "";
+          if (stateHash && refs.get(`${repoPath} main`) !== stateHash) {
+            const listing = await mem.store.listTree(stateHash);
+            if (!listing) throw new Error(`missing mirrored tree for ${stateHash}`);
+            const files = listing
+              .filter(
+                (
+                  entry
+                ): entry is {
+                  path: string;
+                  kind: string;
+                  contentHash: string;
+                  mode: number;
+                } => entry.kind === "file" && !!entry.contentHash
+              )
+              .map((entry) => ({
+                path: entry.path,
+                contentHash: entry.contentHash,
+                size: mem.blobs.get(entry.contentHash)?.byteLength ?? 0,
+                mode: entry.mode ?? 33188,
+              }));
+            const published = await doi.ingestWorktreeState({
+              logId: `vcs:repo:${repoPath}`,
+              head: "main",
+              logKind: "vcs",
+              actor: { id: "git-bridge", kind: "system" },
+              files,
+              summary: "import publish",
+            });
+            if (published.stateHash !== stateHash) {
+              throw new Error(
+                `publish mirror returned ${published.stateHash}, expected ${stateHash}`
+              );
+            }
+          }
           refs.set(`${repoPath} main`, stateHash);
           published.push(repoPath);
           return { status: "published" as const, repoPath, stateHash };
@@ -289,6 +323,98 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     expect(entries).toEqual(["bridge"]);
   });
 
+  it("does not persist checkout tracking before deletion staging succeeds", async () => {
+    await commitRepo({ "a.txt": "one\n", "b.txt": "bee\n" });
+    await bridge.exportRepoHead(REPO);
+
+    await commitRepo({ "a.txt": "two\n" });
+    const originalStage = (
+      bridge as unknown as {
+        stageMaterializedChanges(
+          gitDir: string,
+          materialized: { tracked: unknown; stagePaths: string[]; removePaths: string[] }
+        ): Promise<void>;
+      }
+    ).stageMaterializedChanges.bind(bridge);
+    let fail = true;
+    (
+      bridge as unknown as {
+        stageMaterializedChanges(
+          gitDir: string,
+          materialized: { tracked: unknown; stagePaths: string[]; removePaths: string[] }
+        ): Promise<void>;
+      }
+    ).stageMaterializedChanges = async () => {
+      if (fail) {
+        fail = false;
+        throw new Error("staging failed");
+      }
+    };
+
+    await expect(bridge.exportRepoHead(REPO)).rejects.toThrow("staging failed");
+    (
+      bridge as unknown as {
+        stageMaterializedChanges(
+          gitDir: string,
+          materialized: { tracked: unknown; stagePaths: string[]; removePaths: string[] }
+        ): Promise<void>;
+      }
+    ).stageMaterializedChanges = originalStage;
+    await bridge.exportRepoHead(REPO);
+
+    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(tree).toEqual(["a.txt"]);
+  });
+
+  it("exports tracked directory-to-file path swaps", async () => {
+    await commitRepo({ "foo/bar.txt": "nested\n" });
+    await commitRepo({ foo: "file\n" });
+
+    await bridge.exportRepoHead(REPO);
+
+    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(tree).toEqual(["foo"]);
+    expect(await fsp.readFile(path.join(repoDir, "foo"), "utf8")).toBe("file\n");
+  });
+
+  it("does not stage untracked checkout files during export", async () => {
+    await commitRepo({ "a.txt": "one\n" });
+    await bridge.exportRepoHead(REPO);
+
+    await fsp.writeFile(path.join(repoDir, "local-only.txt"), "do not export\n");
+    await commitRepo({ "a.txt": "two\n" });
+    await bridge.exportRepoHead(REPO);
+
+    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(tree).toEqual(["a.txt"]);
+    expect(await fsp.readFile(path.join(repoDir, "local-only.txt"), "utf8")).toBe(
+      "do not export\n"
+    );
+    expect(git(repoDir, ["status", "--porcelain"])).toContain("?? local-only.txt");
+  });
+
+  it("refreshes unchanged tracked files from the content store before export", async () => {
+    await commitRepo({ "a.txt": "one\n" });
+    await bridge.exportRepoHead(REPO);
+
+    await fsp.writeFile(path.join(repoDir, "a.txt"), "tampered locally\n");
+    await commitRepo({ "a.txt": "one\n", "b.txt": "bee\n" });
+    await bridge.exportRepoHead(REPO);
+
+    expect(await fsp.readFile(path.join(repoDir, "a.txt"), "utf8")).toBe("one\n");
+    expect(git(repoDir, ["show", "HEAD:a.txt"])).toBe("one\n");
+    expect(git(repoDir, ["show", "HEAD:b.txt"])).toBe("bee\n");
+  });
+
   it("imports an edited git tree as a snapshot transition and adopts main", async () => {
     await commitRepo({ "a.txt": "one\n" });
     await bridge.exportRepoHead(REPO);
@@ -326,6 +452,44 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
     // Unchanged re-import no-ops against the adopted protected ref.
     const again = await bridge.importRepoTree(REPO);
     expect(again).toEqual({ stateHash: imported.stateHash, changed: false });
+  });
+
+  it("round-trips an external git edit through import and a later export", async () => {
+    await commitRepo({ "foo/bar.txt": "nested\n", "keep.txt": "keep\n" });
+    await bridge.exportRepoHead(REPO);
+
+    git(repoDir, ["config", "user.email", "ext@example.com"]);
+    git(repoDir, ["config", "user.name", "External"]);
+    await fsp.rm(path.join(repoDir, "foo"), { recursive: true, force: true });
+    await fsp.writeFile(path.join(repoDir, "foo"), "file now\n");
+    await fsp.writeFile(path.join(repoDir, "external.txt"), "from git\n");
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "external directory-to-file swap"]);
+
+    const imported = await bridge.importRepoTree(REPO, { summary: "external sync" });
+    expect(imported.changed).toBe(true);
+    expect(refs.get(`${REPO} main`)).toBe(imported.stateHash);
+
+    const immediate = await bridge.exportRepoHead(REPO);
+    expect(immediate.exported).toBe(0);
+
+    await commitRepo({
+      foo: "file now\n",
+      "keep.txt": "keep\n",
+      "external.txt": "from git\n",
+      "after.txt": "after import\n",
+    });
+    const exported = await bridge.exportRepoHead(REPO);
+    expect(exported.exported).toBe(1);
+
+    const tree = git(repoDir, ["ls-tree", "-r", "--name-only", "HEAD"])
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(tree).toEqual(["after.txt", "external.txt", "foo", "keep.txt"]);
+    expect(await fsp.readFile(path.join(repoDir, "foo"), "utf8")).toBe("file now\n");
+    expect(await fsp.readFile(path.join(repoDir, "after.txt"), "utf8")).toBe("after import\n");
+    expect(git(repoDir, ["status", "--porcelain"]).trim()).toBe("");
   });
 
   it("rejects an extension ingesting directly onto a repo main lineage (finding 2)", async () => {

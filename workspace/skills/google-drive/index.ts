@@ -21,7 +21,6 @@ export interface GoogleDriveVerificationResult {
   valid: boolean;
   credentialId?: string;
   email?: string;
-  rootFolderId?: string;
   about?: DriveAbout;
   error?: string;
 }
@@ -120,11 +119,14 @@ function buildStatus(input: {
 }): GoogleDriveOnboardingStatus {
   const connected = input.googleWorkspace.stage === "verified";
   const verified = input.verification?.valid === true;
-  const stage: GoogleDriveOnboardingStage = input.googleWorkspace.stage === "verified"
-    ? "ready"
-    : input.googleWorkspace.stage === "error"
+  const stage: GoogleDriveOnboardingStage =
+    input.googleWorkspace.stage === "error"
       ? "error"
-      : "needs-google-workspace";
+      : input.googleWorkspace.stage !== "verified"
+        ? "needs-google-workspace"
+        : input.verification && !input.verification.valid
+          ? "error"
+          : "ready";
 
   const status: GoogleDriveOnboardingStatus = {
     stage,
@@ -137,7 +139,10 @@ function buildStatus(input: {
     credentials: input.credentials,
     nextActions: [],
     warnings: input.warnings ?? [],
-    error: input.googleWorkspace.error,
+    error:
+      input.verification && !input.verification.valid
+        ? input.verification.error
+        : input.googleWorkspace.error,
   };
   status.nextActions = getNextActions(status);
   return status;
@@ -160,7 +165,6 @@ export async function verifyGoogleDriveAccess(
       valid: true,
       credentialId: handle.credentialId,
       email: about.user?.emailAddress,
-      rootFolderId: about.rootFolderId,
       about,
     };
   } catch (error) {

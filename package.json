@@ -73,6 +73,9 @@
   "author": "Gabriel Pickard",
   "license": "MIT",
   "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "pnpm": {
     "allowedBuilds": [
       "electron",

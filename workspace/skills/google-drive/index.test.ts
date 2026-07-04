@@ -75,7 +75,7 @@ describe("google-drive skill facade", () => {
     googleWorkspaceMock.getGoogleOnboardingStatus.mockResolvedValue(googleWorkspaceStatus);
     driveClientMock.createDriveClient.mockReturnValue({
       handle: vi.fn().mockResolvedValue({ credentialId: "cred-google", fetch: vi.fn() }),
-      about: vi.fn().mockResolvedValue({ user: { emailAddress: "user@example.com" }, rootFolderId: "root" }),
+      about: vi.fn().mockResolvedValue({ user: { emailAddress: "user@example.com" } }),
     });
   });
 
@@ -119,8 +119,32 @@ describe("google-drive skill facade", () => {
       valid: true,
       credentialId: "cred-google",
       email: "user@example.com",
-      rootFolderId: "root",
     });
+    expect(result).not.toHaveProperty("rootFolderId");
+  });
+
+  it("reports an error status when live Drive verification fails", async () => {
+    driveClientMock.createDriveClient.mockReturnValueOnce({
+      handle: vi.fn().mockResolvedValue({ credentialId: "cred-google", fetch: vi.fn() }),
+      about: vi.fn().mockRejectedValue(new Error("Google Drive API 400 Bad Request: Invalid field selection rootFolderId")),
+    });
+
+    const status = await getGoogleDriveOnboardingStatus({ verify: true });
+
+    expect(status.stage).toBe("error");
+    expect(status.connected).toBe(true);
+    expect(status.verified).toBe(false);
+    expect(status.credentialId).toBe("cred-google");
+    expect(status.drive).toMatchObject({
+      valid: false,
+      error: "Google Drive API 400 Bad Request: Invalid field selection rootFolderId",
+    });
+    expect(status.error).toBe("Google Drive API 400 Bad Request: Invalid field selection rootFolderId");
+    expect(status.warnings).toEqual([
+      "Google Drive verification failed: Google Drive API 400 Bad Request: Invalid field selection rootFolderId",
+    ]);
+    expect(status.nextActions.join(" ")).toContain("Fix the reported Google Workspace or Drive verification error");
+    expect(status.nextActions.join(" ")).not.toContain("start browsing or syncing files");
   });
 
   it("formats onboarding status compactly", () => {

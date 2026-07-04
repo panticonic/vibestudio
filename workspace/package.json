@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "build": "pnpm --filter \"@workspace/*\" --filter \"@workspace-about/*\" --filter \"@workspace-apps/*\" --filter \"@workspace-extensions/*\" --filter \"@workspace-panels/*\" --filter \"@workspace-skills/*\" --filter \"@workspace-workers/*\" build",
     "type-check": "tsc --project tsconfig.json && tsc --project tsconfig.integration.json && tsc --project tsconfig.integration.mobile.json",

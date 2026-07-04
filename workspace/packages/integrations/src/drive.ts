@@ -48,6 +48,14 @@ export interface DriveUploadMedia {
   body: DriveUploadBody;
 }
 
+export interface DriveFileBytes {
+  bytes: Uint8Array;
+  size: number;
+  mimeType?: string;
+  filename?: string;
+  responseUrl?: string;
+}
+
 export interface DriveOwner {
   displayName?: string;
   emailAddress?: string;
@@ -164,7 +172,6 @@ export interface DriveAbout {
   kind?: string;
   user?: DriveUser;
   storageQuota?: DriveStorageQuota;
-  rootFolderId?: string;
   [key: string]: unknown;
 }
 
@@ -298,7 +305,9 @@ export interface DriveClient {
   listFiles(options?: DriveListFilesOptions): Promise<DriveFileList>;
   getFile(fileId: string, options?: DriveGetFileOptions): Promise<DriveFile>;
   downloadFile(fileId: string, options?: DriveGetFileOptions): Promise<Response>;
+  downloadFileBytes(fileId: string, options?: DriveGetFileOptions): Promise<DriveFileBytes>;
   exportFile(fileId: string, mimeType: string, options?: { supportsAllDrives?: boolean; fields?: string }): Promise<Response>;
+  exportFileBytes(fileId: string, mimeType: string, options?: { supportsAllDrives?: boolean; fields?: string }): Promise<DriveFileBytes>;
   createFile(
     metadata: Partial<DriveFile>,
     options?: DriveFileMutationOptions & { media?: DriveUploadMedia },
@@ -547,6 +556,92 @@ async function parseRawResponse(response: Response, serviceName: string): Promis
   return response;
 }
 
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function splitHeaderParameters(value: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quoted) {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === ";" && !quoted) {
+      parts.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
+}
+
+function unquoteHeaderValue(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+    return trimmed.slice(1, -1).replace(/\\(["\\])/g, "$1");
+  }
+  return trimmed;
+}
+
+function decodeExtendedHeaderValue(value: string): string {
+  const normalized = unquoteHeaderValue(value);
+  const match = /^([^']*)'[^']*'(.*)$/.exec(normalized);
+  const encoded = match ? match[2] ?? "" : normalized;
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+}
+
+function filenameFromContentDisposition(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const params = new Map<string, string>();
+  for (const part of splitHeaderParameters(value).slice(1)) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    const name = part.slice(0, separator).trim().toLowerCase();
+    const paramValue = part.slice(separator + 1);
+    if (name) params.set(name, paramValue);
+  }
+  const extended = params.get("filename*");
+  if (extended) return decodeExtendedHeaderValue(extended);
+  const filename = params.get("filename");
+  return filename ? unquoteHeaderValue(filename) : undefined;
+}
+
+async function responseToDriveFileBytes(response: Response, operation: string): Promise<DriveFileBytes> {
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    throw new Error(`${operation} response body read failed: ${getErrorMessage(error)}`);
+  }
+  const mimeType = response.headers.get("content-type") ?? undefined;
+  const filename = filenameFromContentDisposition(response.headers.get("content-disposition"));
+  const responseUrl = response.url || undefined;
+  return {
+    bytes,
+    size: bytes.byteLength,
+    ...(mimeType ? { mimeType } : {}),
+    ...(filename ? { filename } : {}),
+    ...(responseUrl ? { responseUrl } : {}),
+  };
+}
+
 async function executeJson<T>(
   auth: UrlCredentialHandle,
   url: string,
@@ -615,6 +710,9 @@ export function createDriveClient(
       acknowledgeAbuse: options.acknowledgeAbuse,
     })}&alt=media`), undefined, "Google Drive"));
 
+  const downloadFileBytes = async (fileId: string, options: DriveGetFileOptions = {}): Promise<DriveFileBytes> =>
+    responseToDriveFileBytes(await downloadFile(fileId, options), "Google Drive download");
+
   const exportFile = async (
     fileId: string,
     mimeType: string,
@@ -631,6 +729,13 @@ export function createDriveClient(
         undefined,
         "Google Drive",
       ));
+
+  const exportFileBytes = async (
+    fileId: string,
+    mimeType: string,
+    options: { supportsAllDrives?: boolean; fields?: string } = {},
+  ): Promise<DriveFileBytes> =>
+    responseToDriveFileBytes(await exportFile(fileId, mimeType, options), "Google Drive export");
 
   const createFile = async (
     metadata: Partial<DriveFile>,
@@ -859,7 +964,7 @@ export function createDriveClient(
     });
 
   const about = async (): Promise<DriveAbout> =>
-    withHandle((auth) => executeJson<DriveAbout>(auth, apiUrl("/about?fields=kind,user,storageQuota,rootFolderId"), undefined, "Google Drive"));
+    withHandle((auth) => executeJson<DriveAbout>(auth, apiUrl("/about?fields=kind,user,storageQuota"), undefined, "Google Drive"));
 
   const getStartPageToken = async (options: DriveGetStartPageTokenOptions = {}): Promise<DriveStartPageToken> =>
     withHandle((auth) =>
@@ -948,7 +1053,9 @@ export function createDriveClient(
     listFiles,
     getFile,
     downloadFile,
+    downloadFileBytes,
     exportFile,
+    exportFileBytes,
     createFile,
     updateFile,
     moveFile,
