@@ -10789,6 +10789,43 @@ export class GadWorkspaceDO extends DurableObjectBase {
     );
   }
 
+  private contextForkDescendsFrom(contextId: string, ancestorContextId: string): boolean {
+    const seen = new Set<string>();
+    let cursor = contextId;
+    while (!seen.has(cursor)) {
+      seen.add(cursor);
+      const row = this.sql
+        .exec(
+          `SELECT parent_context_id AS parent FROM vcs_context_provenance WHERE context_id = ?`,
+          cursor
+        )
+        .toArray()[0] as JsonRecord | undefined;
+      const parent = asString(row?.["parent"]);
+      if (!parent) return false;
+      if (parent === ancestorContextId) return true;
+      cursor = parent;
+    }
+    return false;
+  }
+
+  private assertContextReadAllowed(method: string, targetContextId: string): void {
+    const callerKind = this.caller?.callerKind ?? null;
+    if (callerKind === null || callerKind === "server" || callerKind === "shell") return;
+    const ownContextId = this.callerContextId ?? null;
+    if (!ownContextId) {
+      throw new Error(
+        `${method}: caller ${callerKind} has no context registration; ` +
+          `inspection of ${targetContextId} is denied`
+      );
+    }
+    if (ownContextId === targetContextId) return;
+    if (this.contextForkDescendsFrom(targetContextId, ownContextId)) return;
+    throw new Error(
+      `${method}: context ${targetContextId} is not the caller's context or fork descendant ` +
+        `of ${ownContextId}; inspection denied`
+    );
+  }
+
   /**
    * LINEAGE-TRUE context fork — the real locus of fork (host `forkContext` is a
    * thin wrapper). For every repo the source context touches:
@@ -10875,6 +10912,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
   async vcsResolveContextView(input: { contextId: string }): Promise<{ stateHash: string }> {
     this.ensureReady();
+    this.assertContextReadAllowed("vcsResolveContextView", input.contextId);
     const store = this.contentStore();
     const baseView = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
     const fingerprint = this.contextWorkingFingerprint(input.contextId);
@@ -11013,6 +11051,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }>
   > {
     this.ensureReady();
+    this.assertContextReadAllowed("vcsContextStatus", input.contextId);
     const store = this.contentStore();
     const baseView = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
     const baseRepos = baseView

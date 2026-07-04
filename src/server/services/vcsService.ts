@@ -476,6 +476,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const [requested, repoArg] = args as [string | undefined, string];
           const repoPath = normalizeWorkspaceRepoPath(repoArg);
           const head = requested ?? headForCaller(ctx, deps);
+          await authorizeReadHead(ctx, deps, head);
           return { head, stateHash: await vcs.resolveHead(head, repoPath) };
         }
         case "workspaceViewWithRepoAt": {

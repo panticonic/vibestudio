@@ -125,6 +125,37 @@ describe("vcsService", () => {
       expect(result).toEqual({ head: "main", stateHash: "state:mainhead" });
     });
 
+    it("allows resolveHead for a foreign context the caller owns/forked", async () => {
+      const resolveHead = vi.fn(async () => "state:foreign");
+      const service = createVcsService({
+        workspaceVcs: { resolveHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [{ contextId: "ctx-2" }] }),
+      });
+
+      const result = await service.handler({ caller: panelCaller() }, "resolveHead", [
+        "ctx:ctx-2",
+        "panels/source",
+      ]);
+
+      expect(resolveHead).toHaveBeenCalledWith("ctx:ctx-2", "panels/source");
+      expect(result).toEqual({ head: "ctx:ctx-2", stateHash: "state:foreign" });
+    });
+
+    it("denies resolveHead for an unowned foreign context", async () => {
+      const resolveHead = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { resolveHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [] }),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "resolveHead", ["ctx:ctx-2", "panels/source"])
+      ).rejects.toThrow("is not owned or forked");
+      expect(resolveHead).not.toHaveBeenCalled();
+    });
+
     it("allows context callers to inspect a foreign head they own/forked", async () => {
       // WS-2 tightened cross-context reads to DENY-not-prompt: a context caller
       // may inspect a FOREIGN ctx head ONLY when the runtime ownership/lineage

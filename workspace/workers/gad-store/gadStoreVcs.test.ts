@@ -145,6 +145,19 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     return blobText(entry.contentHash);
   }
 
+  function bindRuntimeCaller(callerKind: string, callerContextId?: string): void {
+    const runtime = doi as unknown as {
+      _currentVerifiedCaller: { callerId: string; callerKind: string } | null;
+      _currentRpcCallerId: string | null;
+      _currentRpcCallerKind: string | null;
+      _currentCallerContextId: string | undefined;
+    };
+    runtime._currentVerifiedCaller = { callerId: `${callerKind}:test`, callerKind };
+    runtime._currentRpcCallerId = `${callerKind}:test`;
+    runtime._currentRpcCallerKind = callerKind;
+    runtime._currentCallerContextId = callerContextId;
+  }
+
   it("rejects non-canonical repo path aliases on the vcs surface", () => {
     // The DO's normalizeRepoPathArg must agree with the host's
     // normalizeRepoPathForLog / refService.validateRepoPath: `.`/`..`/empty
@@ -417,6 +430,36 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     // The working state composes over the SLICE (repo-relative pinned.txt).
     expect(await fileAt(r.stateHash, "pinned.txt")).toBe("pinned\n");
     expect(await fileAt(r.stateHash, "extra.txt")).toBe("e\n");
+  });
+
+  it("confines composed context read surfaces to the caller's context lineage", async () => {
+    const emptyView = await mem.store.putTree([], { root: true });
+    doi.setContextBase({ contextId: "owner", stateHash: emptyView.stateHash! });
+    doi.setContextBase({ contextId: "other", stateHash: emptyView.stateHash! });
+    await doi.vcsForkContext({ sourceContextId: "owner", targetContextId: "child" });
+
+    bindRuntimeCaller("panel", "owner");
+
+    await expect(doi.vcsResolveContextView({ contextId: "owner" })).resolves.toEqual({
+      stateHash: emptyView.stateHash,
+    });
+    await expect(doi.vcsContextStatus({ contextId: "owner" })).resolves.toEqual([]);
+    await expect(doi.vcsResolveContextView({ contextId: "child" })).resolves.toEqual({
+      stateHash: emptyView.stateHash,
+    });
+    await expect(doi.vcsContextStatus({ contextId: "child" })).resolves.toEqual([]);
+
+    await expect(doi.vcsResolveContextView({ contextId: "other" })).rejects.toThrow(
+      /not the caller's context/
+    );
+    await expect(doi.vcsContextStatus({ contextId: "other" })).rejects.toThrow(
+      /not the caller's context/
+    );
+
+    bindRuntimeCaller("worker");
+    await expect(doi.vcsResolveContextView({ contextId: "owner" })).rejects.toThrow(
+      /has no context registration/
+    );
   });
 
   it("the userland vcs read surface returns camelCase rows (positional args)", async () => {
