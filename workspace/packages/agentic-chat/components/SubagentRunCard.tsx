@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { Badge, Box, Button, Card, Flex, IconButton, Text } from "@radix-ui/themes";
 import { ExternalLinkIcon, MagnifyingGlassIcon, UpdateIcon } from "@radix-ui/react-icons";
 import type { ChatMessage, SubagentRunState } from "@workspace/agentic-core";
@@ -48,6 +48,65 @@ function updateLines(output: string | undefined): string[] {
     .filter((line) => line.length > 0);
 }
 
+type ProgressTone = "blue" | "green" | "red" | "amber" | "gray";
+
+interface ProgressItem {
+  title: string;
+  body: string;
+  tone: ProgressTone;
+}
+
+function stripMarkdownLabel(value: string): string {
+  return value.replace(/\*\*/g, "").trim();
+}
+
+function parseProgressLine(line: string): ProgressItem {
+  const said = /^Said:\s*(?:(?:\*\*([^*]+)\*\*)\s*)?(.*)$/i.exec(line);
+  if (said) {
+    return {
+      title: stripMarkdownLabel(said[1] || "Said"),
+      body: stripMarkdownLabel(said[2] || ""),
+      tone: "blue",
+    };
+  }
+  if (/^Started working$/i.test(line)) {
+    return { title: "Started working", body: "", tone: "blue" };
+  }
+  const started = /^Started\s+(.+)$/i.exec(line);
+  if (started) {
+    return { title: `Started ${stripMarkdownLabel(started[1] ?? "")}`, body: "", tone: "blue" };
+  }
+  if (/^Turn finished/i.test(line)) {
+    return {
+      title: "Turn finished",
+      body: stripMarkdownLabel(line.replace(/^Turn finished[:\s]*/i, "")),
+      tone: "green",
+    };
+  }
+  if (/^Tool completed/i.test(line)) {
+    return {
+      title: "Tool completed",
+      body: stripMarkdownLabel(line.replace(/^Tool completed[:\s]*/i, "")),
+      tone: "green",
+    };
+  }
+  if (/^Tool failed/i.test(line)) {
+    return {
+      title: "Tool failed",
+      body: stripMarkdownLabel(line.replace(/^Tool failed[:\s]*/i, "")),
+      tone: "red",
+    };
+  }
+  if (/cancelled|abandoned/i.test(line)) {
+    return { title: "Stopped", body: stripMarkdownLabel(line), tone: "amber" };
+  }
+  return { title: stripMarkdownLabel(line), body: "", tone: "gray" };
+}
+
+function progressPreview(item: ProgressItem): string {
+  return item.body ? `${item.title}: ${item.body}` : item.title;
+}
+
 function compactId(value: string | undefined): string | null {
   if (!value) return null;
   if (value.length <= 36) return value;
@@ -62,6 +121,7 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
     () => updateLines(invocation?.execution.consoleOutput),
     [invocation?.execution.consoleOutput]
   );
+  const progressFeed = useMemo(() => sayFeed.map(parseProgressLine), [sayFeed]);
   const subagent = invocation?.subagent;
   if (!invocation || !subagent) return null;
 
@@ -72,11 +132,11 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const canReview = Boolean(forkState && subagent.contextId);
   // Live say / turn-report entries relayed onto the run, folded into
   // `consoleOutput` (newline-joined) by the chat projection.
-  const latestUpdate =
-    sayFeed.length > 0
-      ? sayFeed[sayFeed.length - 1]
-      : invocation.execution.description.trim() ||
-        (status === "pending" ? "Waiting for the child agent to start" : "No child updates yet");
+  const latestProgress = progressFeed.length > 0 ? progressFeed[progressFeed.length - 1] : null;
+  const latestUpdate = latestProgress
+    ? progressPreview(latestProgress)
+    : invocation.execution.description.trim() ||
+      (status === "pending" ? "Waiting for the child agent to start" : "No child updates yet");
   const detailsLabel = detailsOpen ? "Hide details" : "Show details";
   const detailRows = [
     ["Run", subagent.runId],
@@ -95,10 +155,25 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
       forkState?.actions.reviewContext({ kind: "subagent", contextId: subagent.contextId, label });
     }
   };
+  const toggleDetails = () => setDetailsOpen((open) => !open);
+  const stopActionClick = (event: MouseEvent) => event.stopPropagation();
 
   return (
     <Box className="message-row message-row-agent">
-      <Card className="message-card message-card-subagent" data-testid="subagent-run-card">
+      <Card
+        className="message-card message-card-subagent"
+        data-testid="subagent-run-card"
+        role="button"
+        tabIndex={0}
+        aria-expanded={detailsOpen}
+        onClick={toggleDetails}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggleDetails();
+          }
+        }}
+      >
         <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
           <Flex align="center" gap="2" className="subagent-card-header">
             <span
@@ -137,7 +212,10 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                 title={detailsLabel}
                 aria-label={detailsLabel}
                 aria-expanded={detailsOpen}
-                onClick={() => setDetailsOpen((open) => !open)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleDetails();
+                }}
               >
                 <ExpandableChevron expanded={detailsOpen} />
               </Button>
@@ -146,7 +224,10 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                 variant="ghost"
                 color="gray"
                 disabled={!canOpen}
-                onClick={handleOpen}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleOpen();
+                }}
                 title="Open subagent chat"
                 aria-label="Open subagent chat"
               >
@@ -156,7 +237,10 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                 size="1"
                 variant="ghost"
                 disabled={!canReview}
-                onClick={handleReview}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleReview();
+                }}
                 title="Review and pick changes"
                 aria-label="Review and pick changes"
               >
@@ -172,7 +256,7 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
               </Text>
               {sayFeed.length > 1 && (
                 <Badge size="1" variant="soft" color="gray">
-                  {sayFeed.length}
+                  {sayFeed.length} updates
                 </Badge>
               )}
             </Flex>
@@ -198,18 +282,28 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                   {invocation.execution.description}
                 </Text>
               )}
-              {sayFeed.length > 0 && (
-                <Box className="subagent-say-feed">
+              {progressFeed.length > 0 && (
+                <Box className="subagent-progress-feed" onClick={stopActionClick}>
                   <Flex direction="column" gap="1">
-                    {sayFeed.map((line, i) => (
-                      <Text key={i} size="1" className="subagent-say-line">
-                        {line}
-                      </Text>
+                    {progressFeed.map((item, i) => (
+                      <Box
+                        key={`${i}-${item.title}`}
+                        className={`subagent-progress-item subagent-progress-${item.tone}`}
+                      >
+                        <Text size="1" weight="medium" className="subagent-progress-title">
+                          {item.title}
+                        </Text>
+                        {item.body && (
+                          <Text size="1" className="subagent-progress-body">
+                            {item.body}
+                          </Text>
+                        )}
+                      </Box>
                     ))}
                   </Flex>
                 </Box>
               )}
-              {sayFeed.length === 0 && (
+              {progressFeed.length === 0 && (
                 <Text size="1" color="gray" className="subagent-empty-feed">
                   The child has not published progress yet. Open the task chat to inspect the live
                   transcript.

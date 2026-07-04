@@ -4,10 +4,7 @@
  * (consumer extras) → compaction.
  */
 
-import {
-  AGENTIC_PROTOCOL_VERSION,
-  type ParticipantRef,
-} from "@workspace/agentic-protocol";
+import { AGENTIC_PROTOCOL_VERSION, type ParticipantRef } from "@workspace/agentic-protocol";
 import { ids } from "../ids.js";
 import type { AppendItem, ChannelCallEffect, EffectDescriptor } from "../effects.js";
 import type { StepOutput, StepPolicy } from "../step.js";
@@ -20,7 +17,7 @@ export const DEFAULT_SAFE_TOOL_NAMES = new Set([
   "ls",
   "ask_user",
   "set_title",
-  "close_turn_without_response",
+  "suspend_turn",
 ]);
 
 function invocationStartedItems(output: StepOutput): Array<{
@@ -369,8 +366,7 @@ export function publishPolicyPolicy(): StepPolicy {
     items.map((item) => {
       if (item.payloadKind === "message.started") return { ...item, publish: false };
       if (
-        (item.payloadKind === "message.completed" ||
-          item.payloadKind === "message.failed") &&
+        (item.payloadKind === "message.completed" || item.payloadKind === "message.failed") &&
         (item.payload as { tier?: string }).tier === "secondary"
       )
         return { ...item, publish: false };

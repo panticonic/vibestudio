@@ -20,7 +20,7 @@ import {
   createRelateClaimsTool,
   createReviseClaimTool,
   createRetractClaimTool,
-  createCloseTurnWithoutResponseTool,
+  createSuspendTurnTool,
   createEvalTool,
   createDocsSearchTool,
   createDocsOpenTool,
@@ -29,22 +29,20 @@ import {
   loadVibez1Resources,
 } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
-import type { ParticipantDescriptor, KnowledgeToolDeps, RecordClaimResult } from "@workspace/harness";
+import type {
+  ParticipantDescriptor,
+  KnowledgeToolDeps,
+  RecordClaimResult,
+} from "@workspace/harness";
 import type { AgentTurnContextPolicy, ThinkingLevel } from "@workspace/agent-loop";
 import { ids } from "@workspace/agent-loop";
-import {
-  createVcsUserlandClient,
-  type RpcCallerLike,
-} from "@vibez1/shared/userlandServiceRpc";
+import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
 import type {
   VcsProvenanceForFileResult,
   VcsProvenanceForSessionResult,
 } from "@vibez1/shared/serviceSchemas/vcs";
 import { AgentVesselBase, type AgentPromptResources, type ApprovalLevel } from "./agent-vessel.js";
-import {
-  AgentHeartbeatLoop,
-  type AgentHeartbeatLoopDeps,
-} from "./agent-heartbeat-loop.js";
+import { AgentHeartbeatLoop, type AgentHeartbeatLoopDeps } from "./agent-heartbeat-loop.js";
 import {
   DEFAULT_APPROVAL_LEVEL,
   DEFAULT_MODEL,
@@ -80,9 +78,7 @@ const PROMPT_RESOURCE_CACHE_TTL_MS = 5_000;
 const DEFAULT_WORKSPACE_AGENT_MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 export abstract class AgentWorkerBase extends AgentVesselBase {
-  private promptResourceCache:
-    | { value: AgentPromptResources; expiresAt: number }
-    | null = null;
+  private promptResourceCache: { value: AgentPromptResources; expiresAt: number } | null = null;
   private promptResourceLoad: Promise<AgentPromptResources> | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -112,8 +108,9 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
   protected override getModelCredentialSetupProps(
     providerId: string
   ): Record<string, unknown> | null {
-    return (PROVIDER_CREDENTIAL_SETUPS as Record<string, Record<string, unknown>>)[providerId] ??
-      null;
+    return (
+      (PROVIDER_CREDENTIAL_SETUPS as Record<string, Record<string, unknown>>)[providerId] ?? null
+    );
   }
 
   protected override async loadPromptResources(_channelId: string): Promise<AgentPromptResources> {
@@ -124,10 +121,12 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     if (this.promptResourceLoad) return this.promptResourceLoad;
 
     const load = loadVibez1Resources({ rpc: this.rpc })
-      .then((resources): AgentPromptResources => ({
-        workspacePrompt: resources.systemPrompt,
-        skillIndex: resources.skillIndex,
-      }))
+      .then(
+        (resources): AgentPromptResources => ({
+          workspacePrompt: resources.systemPrompt,
+          skillIndex: resources.skillIndex,
+        })
+      )
       .then((value) => {
         this.promptResourceCache = {
           value,
@@ -396,7 +395,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createDocsOpenTool(<T>(method: string, methodArgs: unknown[]) =>
         this.rpc.call<T>("main", method, methodArgs)
       ),
-      createCloseTurnWithoutResponseTool(),
+      createSuspendTurnTool(),
       this.createAskUserTool(),
       ...createWebTools({
         rpc: {
@@ -404,9 +403,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         },
         hasCredentialForOrigin: async (origin) => {
           try {
-            const credential = await this.rpc.call<unknown>("main", "credentials.resolveCredential", [
-              { url: origin },
-            ]);
+            const credential = await this.rpc.call<unknown>(
+              "main",
+              "credentials.resolveCredential",
+              [{ url: origin }]
+            );
             return credential != null;
           } catch {
             return false;
@@ -487,7 +488,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "spawn_subagent",
         label: "spawn_subagent",
         description:
-          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId, steer with send_to_subagent, read transcript with read_subagent, inspect files with inspect_subagent, then merge/pick/close. The child finishes only by calling complete.",
+          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then merge/pick/close. Progress is pushed; do not poll read_subagent. If nothing foreground remains, call suspend_turn({ reason:'waiting_for_background' }). The child finishes only by calling complete.",
         parameters: {
           type: "object",
           properties: {
@@ -502,8 +503,14 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
               description:
                 "Self-contained task/instructions. Include goal, relevant files/docs/skills, constraints, expected output, progress expectations, done criteria, and what to do if blocked. Required for 'fresh'.",
             },
-            source: { type: "string", description: "Optional agent source repo path (defaults to your own)." },
-            config: { type: "object", description: "Optional child agent config (model/handle/etc.)." },
+            source: {
+              type: "string",
+              description: "Optional agent source repo path (defaults to your own).",
+            },
+            config: {
+              type: "object",
+              description: "Optional child agent config (model/handle/etc.).",
+            },
             label: { type: "string", description: "Optional short label for the run." },
           },
           required: ["mode"],
@@ -577,7 +584,8 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             runId: { type: "string", description: "The subagent run id." },
             picks: {
               type: "array",
-              description: "Pick specs: {kind:'commit',repoPath,eventId} | {kind:'paths',paths:[…]}.",
+              description:
+                "Pick specs: {kind:'commit',repoPath,eventId} | {kind:'paths',paths:[…]}.",
               items: { type: "object" },
             },
           },
@@ -592,12 +600,15 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "read_subagent",
         label: "read_subagent",
         description:
-          "Read what a subagent said on its task channel since a cursor. Returns messages plus nextSeq; pass nextSeq as afterSeq when reading again. Use inspect_subagent instead for child files/status/diff/log.",
+          "Catch up on what a subagent said on its task channel since a cursor. Returns messages plus nextSeq; pass nextSeq as afterSeq only for deliberate transcript catch-up or debugging. Do not poll this tool waiting for progress; progress is pushed, and suspend_turn({ reason:'waiting_for_background' }) parks the parent when no foreground work remains. Use inspect_subagent instead for child files/status/diff/log.",
         parameters: {
           type: "object",
           properties: {
             runId: { type: "string", description: "The subagent run id." },
-            afterSeq: { type: "number", description: "Return messages after this channel seq (default 0)." },
+            afterSeq: {
+              type: "number",
+              description: "Return messages after this channel seq (default 0).",
+            },
           },
           required: ["runId"],
         } as never,
@@ -618,7 +629,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           type: "object",
           properties: {
             runId: { type: "string", description: "The subagent run id." },
-            discard: { type: "boolean", description: "Discard the child's work (record it as discarded)." },
+            discard: {
+              type: "boolean",
+              description: "Discard the child's work (record it as discarded).",
+            },
           },
           required: ["runId"],
         } as never,
@@ -740,7 +754,8 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       },
       {
         name: "getAgentSettings",
-        description: "Read effective model, effort, approval, chattiness, and stream watchdog settings",
+        description:
+          "Read effective model, effort, approval, chattiness, and stream watchdog settings",
       },
       { name: "getDebugState", description: "Read agent DO persisted and in-memory debug state" },
       {

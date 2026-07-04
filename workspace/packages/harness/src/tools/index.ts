@@ -8,12 +8,7 @@
  */
 
 export { createReadTool } from "./read.js";
-export type {
-  ReadToolInput,
-  ReadToolDetails,
-  ReadToolDeps,
-  ReadProvenanceDeps,
-} from "./read.js";
+export type { ReadToolInput, ReadToolDetails, ReadToolDeps, ReadProvenanceDeps } from "./read.js";
 
 export { createProvenanceTool } from "./provenance.js";
 export type {
@@ -77,8 +72,8 @@ export type { FindToolInput, FindToolDetails } from "./find.js";
 export { createLsTool } from "./ls.js";
 export type { LsToolInput, LsToolDetails } from "./ls.js";
 
-export { createCloseTurnWithoutResponseTool } from "./close-turn.js";
-export type { CloseTurnInput } from "./close-turn.js";
+export { createSuspendTurnTool } from "./suspend-turn.js";
+export type { SuspendTurnInput, SuspendTurnDetails } from "./suspend-turn.js";
 
 export { createEvalTool, formatEvalResult, type EvalRunResult } from "./eval.js";
 export type { EvalToolInput } from "./eval.js";

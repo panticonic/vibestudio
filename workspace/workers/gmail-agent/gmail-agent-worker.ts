@@ -66,7 +66,7 @@ const GMAIL_UI_IMPORTS = {
   "@radix-ui/themes": "npm:^3.2.1",
   "@radix-ui/react-icons": "npm:^1.3.2",
 } satisfies Record<string, string>;
-const GMAIL_UNIVERSAL_LOOP_TOOL_NAMES = new Set(["close_turn_without_response", "ask_user"]);
+const GMAIL_UNIVERSAL_LOOP_TOOL_NAMES = new Set(["suspend_turn", "ask_user"]);
 
 /** Preferred cheap triage tier per provider; falls back to the channel model. */
 const TRIAGE_MODEL_BY_PROVIDER: Record<string, string> = {

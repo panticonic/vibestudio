@@ -25,7 +25,12 @@ import type { DeferredPrompt } from "./state.js";
 import { applyEvent } from "./fold.js";
 import { ids } from "./ids.js";
 import { classifyModelFailure, type ModelFailureInfo } from "./model-errors.js";
-import type { AgentLoopConfig, AgentState, AgentTurnMetadata, ModelRequestDescriptor } from "./state.js";
+import type {
+  AgentLoopConfig,
+  AgentState,
+  AgentTurnMetadata,
+  ModelRequestDescriptor,
+} from "./state.js";
 import type { LogEnvelope } from "@workspace/agentic-protocol";
 
 export interface StepOutput {
@@ -105,7 +110,9 @@ function turnConfig(state: AgentState): AgentLoopConfig {
   return { ...state.config, ...patch };
 }
 
-function turnMetadata(command: Extract<Command, { kind: "prompt" | "steer" }>): AgentTurnMetadata | undefined {
+function turnMetadata(
+  command: Extract<Command, { kind: "prompt" | "steer" }>
+): AgentTurnMetadata | undefined {
   return command.metadata;
 }
 
@@ -327,10 +334,7 @@ function turnWaitingItem(
   turnId: string,
   waitingCount: number,
   opts: {
-    reason:
-      | "model_usage_limit_reset"
-      | "model_credential_required"
-      | "model_credential_reconnect_required";
+    reason: string;
     summary?: string;
   }
 ): AppendItem {
@@ -546,6 +550,36 @@ function wakeGuardSatisfied(state: AgentState): boolean {
   return currentAttempts.size === 0;
 }
 
+function payloadObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function suspendTurnFromInvocationPayload(
+  payload: Record<string, unknown>
+): { reason: string; summary: string } | null {
+  const result = payloadObject(payload["result"]);
+  const details = payloadObject(result?.["details"]);
+  if (details?.["suspendTurn"] !== true) return null;
+  const reason =
+    typeof details["reason"] === "string" && details["reason"].trim()
+      ? details["reason"].trim()
+      : "no_foreground_work";
+  const note =
+    typeof details["noteToSelf"] === "string" && details["noteToSelf"].trim()
+      ? details["noteToSelf"].trim()
+      : undefined;
+  return {
+    reason,
+    summary:
+      note ??
+      (reason === "waiting_for_background"
+        ? "Suspended until background work or user input arrives"
+        : "Suspended until new relevant input arrives"),
+  };
+}
+
 function hasFreshInput(state: AgentState): boolean {
   if (state.steeringQueue.length > 0) return true;
   // fresh tool results since the last model call: the last entry is a
@@ -732,7 +766,9 @@ function alreadyIngested(state: AgentState, recvEnvelopeId: string): boolean {
 function commandStep(state: AgentState, command: Command, ctx: StepContext): StepOutput {
   switch (command.kind) {
     case "prompt": {
-      if (alreadyIngested(state, ids.recvUserMessage(command.channelId, command.source.envelopeId))) {
+      if (
+        alreadyIngested(state, ids.recvUserMessage(command.channelId, command.source.envelopeId))
+      ) {
         return EMPTY;
       }
       // Send-after-turn while a turn is open: append the recv (the fold stashes
@@ -842,7 +878,8 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
         if (flushed) return flushed;
       }
       if (!state.openTurn) return EMPTY;
-      const reason = command.kind === "abort" ? (command.reason ?? "work_failed") : "user_interrupted";
+      const reason =
+        command.kind === "abort" ? (command.reason ?? "work_failed") : "user_interrupted";
       const marker: AppendItem = {
         envelopeId: ids.systemEvent(state.openTurn.turnId, "interrupt"),
         payloadKind: "system.event",
@@ -938,7 +975,11 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
       // 2a. crash between model terminal and tool expansion: the last assistant
       // entry carries toolCall blocks with neither a pending invocation nor a
       // tool-result — re-expand them (idempotent via deterministic ids).
-      if (afterOrphan.openTurn && !afterOrphan.openTurn.interrupted && !afterOrphan.inFlightModelCall) {
+      if (
+        afterOrphan.openTurn &&
+        !afterOrphan.openTurn.interrupted &&
+        !afterOrphan.inFlightModelCall
+      ) {
         const lastAssistant = [...afterOrphan.entries]
           .reverse()
           .find((entry) => entry.kind === "assistant");
@@ -951,8 +992,7 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
           const unprocessed = lastAssistant.blocks
             .filter(isToolCallBlock)
             .filter(
-              (block) =>
-                !(block.id in afterOrphan.pendingInvocations) && !settled.has(block.id)
+              (block) => !(block.id in afterOrphan.pendingInvocations) && !settled.has(block.id)
             );
           if (unprocessed.length > 0) {
             const expansion = expandToolCalls(
@@ -971,7 +1011,9 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
         afterOrphan.openTurn &&
         !afterOrphan.openTurn.interrupted &&
         wakeGuardSatisfied(afterOrphan) &&
-        (hasFreshInput(afterOrphan) || afterOrphan.openTurn.modelCallCount === 0 || append.length > 0)
+        (hasFreshInput(afterOrphan) ||
+          afterOrphan.openTurn.modelCallCount === 0 ||
+          append.length > 0)
       ) {
         const next = nextModelCall(afterOrphan, append.length, ctx);
         return { append: [...append, ...next.append], effects: next.effects };
@@ -1047,7 +1089,13 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
     const blocks = Array.isArray(payload["blocks"]) ? (payload["blocks"] as unknown[]) : [];
     const toolCalls = blocks.filter(isToolCallBlock);
     if (toolCalls.length > 0) {
-      return expandToolCalls(state, toolCalls, String(causality["messageId"] ?? ""), turn.turnId, ctx);
+      return expandToolCalls(
+        state,
+        toolCalls,
+        String(causality["messageId"] ?? ""),
+        turn.turnId,
+        ctx
+      );
     }
     // no tool calls
     if (state.steeringQueue.length > 0) return nextModelCall(state, 0, ctx);
@@ -1105,6 +1153,20 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
     if (Object.keys(state.pendingInvocations).length > 0) return EMPTY; // not last yet
     if (Object.keys(state.pendingApprovals).length > 0) return EMPTY;
     if (Object.keys(state.pendingCredentialWaits).length > 0) return EMPTY;
+    if (kind === "invocation.completed") {
+      const suspension = suspendTurnFromInvocationPayload(payload);
+      if (suspension) {
+        return {
+          append: [
+            turnWaitingItem(turn.turnId, turn.waitingCount, {
+              reason: suspension.reason,
+              summary: suspension.summary,
+            }),
+          ],
+          effects: [],
+        };
+      }
+    }
     return nextModelCall(state, 0, ctx);
   }
 
@@ -1142,7 +1204,10 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
   if (kind === "system.event") {
     const details = (payload["details"] ?? {}) as Record<string, unknown>;
     if (details["kind"] === "interrupt" && state.openTurn && !state.inFlightModelCall) {
-      return { append: interruptCleanupItems(state, String(details["reason"] ?? "user_interrupted")), effects: [] };
+      return {
+        append: interruptCleanupItems(state, String(details["reason"] ?? "user_interrupted")),
+        effects: [],
+      };
     }
     if (
       (details["kind"] === "credential.wait_resolved" && details["resolved"] === true) ||
@@ -1182,7 +1247,7 @@ function effectFailedStep(
     if (messageId) {
       append.push({
         envelopeId: ids.messageTerminal(messageId),
-          payloadKind: "message.failed",
+        payloadKind: "message.failed",
         payload: modelFailurePayload(failure, false),
         causality: { messageId: messageId as never },
         publish: true,
@@ -1205,7 +1270,10 @@ function effectFailedStep(
           ],
           outcome: "completed",
         },
-        causality: { messageId: `diag:${turn.turnId}:${incoming.effectId}` as never, turnId: turn.turnId },
+        causality: {
+          messageId: `diag:${turn.turnId}:${incoming.effectId}` as never,
+          turnId: turn.turnId,
+        },
         publish: true,
       });
       append.push(turnClosedItem(turn.turnId, { reason: "work_failed" }));
@@ -1226,7 +1294,11 @@ function effectFailedStep(
           protocol: AGENTIC_PROTOCOL_VERSION,
           kind: "credential.wait_expired",
           credKey: wait.credKey,
-          details: { kind: "credential.wait_expired", credKey: wait.credKey, providerId: wait.providerId },
+          details: {
+            kind: "credential.wait_expired",
+            credKey: wait.credKey,
+            providerId: wait.providerId,
+          },
         },
         causality: { turnId: wait.turnId },
         publish: true,

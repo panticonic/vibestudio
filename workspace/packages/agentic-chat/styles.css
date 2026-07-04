@@ -4,10 +4,12 @@
 
 /* Cursor blink animation for streaming messages */
 @keyframes cursor-blink {
-  0%, 50% {
+  0%,
+  50% {
     opacity: 1;
   }
-  51%, 100% {
+  51%,
+  100% {
     opacity: 0;
   }
 }
@@ -19,7 +21,9 @@
 
 /* Three-dot typing indicator animation */
 @keyframes typing-bounce {
-  0%, 60%, 100% {
+  0%,
+  60%,
+  100% {
     transform: translateY(0);
     opacity: 1;
   }
@@ -71,7 +75,8 @@
 
 /* Pulse animation for roster activity indicator */
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
   }
   50% {
@@ -101,8 +106,12 @@
   transition: opacity 0.15s ease-in-out;
 }
 @media (hover: hover) {
-  .message-card .copy-button { opacity: 0.25; }
-  .message-card .copy-button:hover { opacity: 1; }
+  .message-card .copy-button {
+    opacity: 0.25;
+  }
+  .message-card .copy-button:hover {
+    opacity: 1;
+  }
 }
 @media (pointer: coarse) {
   .message-card .copy-button {
@@ -130,10 +139,11 @@
   box-sizing: border-box;
 }
 
-.agentic-chat-root :where(
-  button:not(:disabled):not([data-disabled]):not([aria-disabled="true"]),
-  [role="button"]:not([aria-disabled="true"]):not([data-disabled])
-) {
+.agentic-chat-root
+  :where(
+    button:not(:disabled):not([data-disabled]):not([aria-disabled="true"]),
+    [role="button"]:not([aria-disabled="true"]):not([data-disabled])
+  ) {
   cursor: pointer;
 }
 
@@ -213,7 +223,6 @@
 .chat-surface-card::after {
   box-shadow: none;
 }
-
 
 /* Geometry of the default composer + its docked send control. The composer
    defaults to two lines; the dock is a bottom-anchored band the height of that
@@ -467,10 +476,20 @@
   border-color: var(--gray-a6);
   border-radius: 7px;
   box-shadow: none;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
 }
 
 .message-card-subagent::before {
   background: var(--accent-a5);
+}
+
+.message-card-subagent:hover,
+.message-card-subagent:focus-visible {
+  background-color: color-mix(in srgb, var(--gray-3) 82%, var(--accent-3));
+  border-color: var(--accent-a6);
 }
 
 .subagent-card-header,
@@ -621,17 +640,119 @@
   margin-block-start: 4px;
 }
 
+.subagent-progress-feed,
 .subagent-say-feed {
   max-block-size: 160px;
   overflow-y: auto;
-  border-inline-start: 2px solid var(--gray-a5);
-  padding-inline-start: 8px;
+  padding-inline-start: 2px;
+  cursor: default;
 }
 
+.subagent-progress-item {
+  position: relative;
+  display: grid;
+  gap: 1px;
+  padding: 4px 8px 4px 12px;
+  border-inline-start: 2px solid var(--gray-a5);
+}
+
+.subagent-progress-item::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -5px;
+  inset-block-start: 9px;
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 999px;
+  background: var(--gray-8);
+  box-shadow: 0 0 0 2px var(--gray-2);
+}
+
+.subagent-progress-title,
+.subagent-progress-body,
 .subagent-say-line {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.subagent-progress-title {
+  color: var(--gray-12);
+}
+
+.subagent-progress-body,
+.subagent-say-line {
   color: var(--gray-11);
+}
+
+.subagent-progress-blue {
+  border-color: var(--blue-a6);
+}
+
+.subagent-progress-blue::before {
+  background: var(--blue-9);
+}
+
+.subagent-progress-green {
+  border-color: var(--green-a6);
+}
+
+.subagent-progress-green::before {
+  background: var(--green-9);
+}
+
+.subagent-progress-red {
+  border-color: var(--red-a7);
+  background: var(--red-a2);
+}
+
+.subagent-progress-red::before {
+  background: var(--red-9);
+}
+
+.subagent-progress-amber {
+  border-color: var(--amber-a7);
+}
+
+.subagent-progress-amber::before {
+  background: var(--amber-9);
+}
+
+.supervision-action-summary {
+  display: grid;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--blue-a5);
+  border-radius: 6px;
+  background: var(--blue-a2);
+}
+
+.supervision-action-warning {
+  border-color: var(--red-a7);
+  background: var(--red-a3);
+}
+
+.supervision-warning-text,
+.supervision-action-result {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.supervision-action-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: baseline;
+}
+
+.supervision-action-key {
+  color: var(--gray-a10);
+}
+
+.supervision-action-value {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  color: var(--gray-12);
 }
 
 .message-lifecycle-icon {
@@ -821,7 +942,17 @@
   border: 0;
   color: var(--gray-12);
   white-space: pre;
-  font-family: var(--code-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-family: var(
+    --code-font-family,
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    "Liberation Mono",
+    "Courier New",
+    monospace
+  );
   font-size: var(--font-size-2);
   line-height: var(--line-height-2);
 }
@@ -1123,12 +1254,7 @@
 
 /* Ambient turn rhythm: a soft shimmer on the typing row. */
 .typing-indicator-shimmer {
-  background-image: linear-gradient(
-    90deg,
-    transparent 0%,
-    var(--gray-a4) 50%,
-    transparent 100%
-  );
+  background-image: linear-gradient(90deg, transparent 0%, var(--gray-a4) 50%, transparent 100%);
   background-size: 200% 100%;
   animation: ambient-shimmer 2.4s linear infinite;
 }

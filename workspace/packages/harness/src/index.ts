@@ -51,7 +51,7 @@ export {
   createGrepTool,
   createFindTool,
   createLsTool,
-  createCloseTurnWithoutResponseTool,
+  createSuspendTurnTool,
   createEvalTool,
   formatEvalResult,
   type EvalRunResult,
