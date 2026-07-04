@@ -3,6 +3,7 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 import {
   createRpcClient,
@@ -46,8 +47,7 @@ interface CdpEndpoint {
   token: string;
 }
 
-const RUN_HEADLESS_PANEL_INTEGRATION =
-  process.env["VIBEZ1_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
+const RUN_HEADLESS_PANEL_INTEGRATION = process.env["VIBEZ1_RUN_HEADLESS_PANEL_INTEGRATION"] === "1";
 const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
 const headlessHostEntry = findHeadlessHostEntry();
 const maybeDescribe =
@@ -98,15 +98,7 @@ maybeDescribe("headless browser panel integration", () => {
 
     serverProc = spawn(
       process.execPath,
-      [
-        serverPath,
-        "--ephemeral",
-        "--init",
-        "--serve-panels",
-        "--no-vpn-detect",
-        "--ready-file",
-        readyFile,
-      ],
+      [serverPath, "--ephemeral", "--init", "--serve-panels", "--ready-file", readyFile],
       {
         cwd: process.cwd(),
         env: {
@@ -179,10 +171,18 @@ maybeDescribe("headless browser panel integration", () => {
     }
 
     await shellConnection.rpc.call("main", "shellPresence.heartbeat", []);
-    const [endpoint] = await Promise.all([
-      workerConnection.rpc.call<CdpEndpoint>("main", "panelCdp.getCdpEndpoint", [panel.id]),
-      resolveCapabilityApproval(ready, shell.shellToken, "panel.automate").then(() => undefined),
-    ]);
+    const endpointPromise = workerConnection.rpc.call<CdpEndpoint>(
+      "main",
+      "panelCdp.getCdpEndpoint",
+      [panel.id]
+    );
+    await resolveCapabilityApprovalIfPending(
+      ready,
+      shell.shellToken,
+      "context.boundary",
+      endpointPromise
+    );
+    const endpoint = await endpointPromise;
 
     cdpClient = await CdpClient.connect(endpoint);
     await cdpClient.send("Runtime.enable");
@@ -227,11 +227,10 @@ maybeDescribe("headless browser panel integration", () => {
     ).resolves.toBe(true);
 
     const lease = await workerConnection.rpc.call<{
-      leased: boolean;
       supportsCdp?: boolean;
       hostConnectionId?: string;
-    }>("main", "panelTree.getRuntimeLease", [panel.id]);
-    expect(lease.leased).toBe(true);
+    } | null>("main", "panelTree.getRuntimeLease", [panel.id]);
+    if (!lease) throw new Error("Expected panel runtime lease");
     expect(lease.supportsCdp).toBe(true);
     expect(lease.hostConnectionId).toMatch(/^headless-/);
   }, 240_000);
@@ -319,28 +318,60 @@ async function rpc<T = unknown>(
       "Content-Type": "application/json",
       Authorization: `Bearer ${shellToken}`,
     },
-    body: JSON.stringify({ method, args }),
+    body: JSON.stringify(
+      envelopeFromMessage({
+        from: "headless-panel-integration",
+        target: "main",
+        callerKind: "shell",
+        message: {
+          type: "request",
+          requestId: randomUUID(),
+          fromId: "headless-panel-integration",
+          method,
+          args,
+        },
+      })
+    ),
   });
-  const body = (await response.json()) as { result?: T; error?: string };
-  if (!response.ok || body.error) {
-    throw new Error(body.error ?? `RPC ${method} failed with status ${response.status}`);
+  const json = (await response.json()) as
+    | { error?: string }
+    | { message?: { result?: T; error?: string } }
+    | { envelope?: { message?: { result?: T; error?: string } } };
+  const body =
+    "envelope" in json ? json.envelope?.message : "message" in json ? json.message : json;
+  if (!response.ok || body?.error) {
+    throw new Error(body?.error ?? `RPC ${method} failed with status ${response.status}`);
   }
-  return body.result as T;
+  return body?.result as T;
 }
 
-async function resolveCapabilityApproval(
+async function resolveCapabilityApprovalIfPending(
   ready: ReadyPayload,
   shellToken: string,
-  capability: string
+  capability: string,
+  until: Promise<unknown>
 ): Promise<void> {
-  const approval = await waitFor(async () => {
+  let settled = false;
+  void until
+    .finally(() => {
+      settled = true;
+    })
+    .catch(() => undefined);
+
+  const deadline = Date.now() + 20_000;
+  while (!settled && Date.now() < deadline) {
     const pending = await rpc<
       Array<{ approvalId: string; kind: string; capability?: string; title?: string }>
     >(ready, shellToken, "shellApproval.listPending", []);
-    return pending.find((entry) => entry.kind === "capability" && entry.capability === capability);
-  }, undefined);
-  if (!approval) throw new Error(`No pending ${capability} approval found`);
-  await rpc(ready, shellToken, "shellApproval.resolve", [approval.approvalId, "session"]);
+    const approval = pending.find(
+      (entry) => entry.kind === "capability" && entry.capability === capability
+    );
+    if (approval) {
+      await rpc(ready, shellToken, "shellApproval.resolve", [approval.approvalId, "session"]);
+      return;
+    }
+    await delay(100);
+  }
 }
 
 interface RpcWsConnection {
