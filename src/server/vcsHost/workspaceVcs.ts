@@ -2362,7 +2362,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       .sort()
       .join("\n");
     const cached = this.composedViewCache.get(key);
-    if (cached) return cached;
+    if (cached) {
+      if (await this.cachedComposedViewIsResolvable(key, cached)) return cached;
+      this.composedViewCache.delete(key);
+    }
     const files: Array<{ path: string; contentHash: string; mode: number }> = [];
     for (const repo of repos) {
       await this.worktrees.ensureStateMirrored(repo.stateHash);
@@ -2388,6 +2391,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
     this.composedViewCache.set(key, stateHash);
     return stateHash;
+  }
+
+  private async cachedComposedViewIsResolvable(key: string, stateHash: string): Promise<boolean> {
+    try {
+      return (await collectTreeReachableDigests(this.deps.blobsDir, stateHash)) !== null;
+    } catch (err) {
+      console.warn(
+        `[WorkspaceVcs] dropping composed workspace cache entry with missing backing tree: ${key}`,
+        err
+      );
+      return false;
+    }
   }
 
   /**
@@ -2509,6 +2524,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       for (const digest of reachable.contentDigests) protectedBlobDigests.add(digest);
       for (const digest of reachable.treeDigests) protectedTreeDigests.add(digest);
+    }
+
+    for (const [key, stateHash] of this.composedViewCache) {
+      try {
+        const reachable = await collectTreeReachableDigests(this.deps.blobsDir, stateHash);
+        if (!reachable) {
+          this.composedViewCache.delete(key);
+          continue;
+        }
+        for (const digest of reachable.contentDigests) protectedBlobDigests.add(digest);
+        for (const digest of reachable.treeDigests) protectedTreeDigests.add(digest);
+      } catch (err) {
+        console.warn(
+          `[WorkspaceVcs] dropping composed workspace cache entry during GC root collection: ${key}`,
+          err
+        );
+        this.composedViewCache.delete(key);
+      }
     }
 
     return {

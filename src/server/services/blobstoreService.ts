@@ -94,6 +94,14 @@ export async function statBlob(blobsDir: string, digest: string): Promise<BlobSt
   }
 }
 
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
 async function putBlob(
   blobsDir: string,
   req: IncomingMessage
@@ -991,9 +999,9 @@ async function mkdirNoFollow(dir: string): Promise<void> {
  * hardlink from the CAS by default (`link: false` copies); executables are
  * always COPIED then chmod'd so the shared CAS inode's mode is never touched
  * (a chmod on a hardlink would flip every build-source checkout sharing the
- * blob). The outDir is treated as immutable-per-tree: an existing file whose
- * size matches the source blob is trusted and skipped. Writes are tmp+rename
- * so a crash never leaves a half-written file at a final path. Entry names
+ * blob). The outDir is treated as immutable-per-tree: an existing file is
+ * skipped only when its byte size and content hash match the source blob.
+ * Writes are tmp+rename so a crash never leaves a half-written file at a final path. Entry names
  * come from strictly-decoded nodes (no separators/`..`), so the tree cannot
  * write outside `outDir`. Directory descent is additionally no-follow: `outDir`
  * is realpath-resolved once up front and every directory component created or
@@ -1045,8 +1053,11 @@ export async function materializeTree(
         // real file below (rm removes the link itself, no-follow).
         const [sourceStat, targetStat] = await Promise.all([fsp.stat(source), fsp.lstat(target)]);
         if (targetStat.isFile() && targetStat.size === sourceStat.size) {
-          unchanged += 1;
-          continue;
+          const targetDigest = await sha256File(target);
+          if (targetDigest === entry.contentHash) {
+            unchanged += 1;
+            continue;
+          }
         }
       } catch {
         // Missing target — fall through to write.

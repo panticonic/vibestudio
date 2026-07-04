@@ -93,6 +93,17 @@ export type VcsClient = VcsRpcClient &
      * userland-dispatched to the gad-store DO's `vcsPush`, not host `vcs.push`.
      */
     push(input: VcsPushInput): Promise<VcsPushResult>;
+    forkRepo(
+      fromPath: string,
+      toPath: string
+    ): Promise<{
+      repoPath: string;
+      head: string;
+      inherited: number;
+      stateHash: string;
+    }>;
+    deleteRepo(input: { repoPath: string; force?: boolean }): Promise<unknown>;
+    restoreRepo(input: { repoPath: string }): Promise<unknown>;
     /**
      * Subscribe to head advances (commits by any actor on `head`). Fires on each
      * advance with the previous/new state, producing event, actor, file-level

@@ -3,12 +3,10 @@ import type {
   RepoBuildReport,
   VcsApplyEditsInput,
   VcsCommitResult,
-  VcsDeleteRepoResult,
   VcsEditResult,
   VcsPushResult,
   VcsPushStatus,
   VcsRepoDivergence,
-  VcsRestoreRepoResult,
   VcsStatusResult,
 } from "@vibez1/shared/serviceSchemas/vcs";
 import {
@@ -21,6 +19,23 @@ import { CliError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } f
 import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
 import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
 import type { RpcClient } from "../rpcClient.js";
+
+interface VcsDeleteRepoResult {
+  repoPath: string;
+  archived: boolean;
+  archiveHead: string | null;
+  removedPaths: string[];
+  dependents: string[];
+  stateHash: string;
+}
+
+interface VcsRestoreRepoResult {
+  repoPath: string;
+  restored: boolean;
+  fromArchiveHead: string | null;
+  restoredPaths: string[];
+  stateHash: string;
+}
 
 /** Adapt the CLI RpcClient to the target-capable {@link RpcCallerLike} the
  *  userland `vcs` service client needs (P3: push is userland-dispatched). */

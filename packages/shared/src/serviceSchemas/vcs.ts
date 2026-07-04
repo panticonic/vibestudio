@@ -612,35 +612,6 @@ export const vcsPushStatusSchema = z.object({
 });
 export type VcsPushStatus = z.infer<typeof vcsPushStatusSchema>;
 
-export const vcsDeleteRepoResultSchema = z.object({
-  repoPath: z.string(),
-  /** True when a `main` head existed and was archived (false would be a no-op,
-   *  but the service rejects missing repos before reaching here). */
-  archived: z.boolean(),
-  /** The non-`main` head the history was moved to (restorable), or null. */
-  archiveHead: nullableString,
-  /** Workspace-relative paths removed from main by the deletion. */
-  removedPaths: z.array(z.string()),
-  /** Live repos that depended on the deleted one (non-empty only under force). */
-  dependents: z.array(z.string()),
-  /** The composed workspace view AFTER removal. */
-  stateHash: z.string(),
-});
-export type VcsDeleteRepoResult = z.infer<typeof vcsDeleteRepoResultSchema>;
-
-export const vcsRestoreRepoResultSchema = z.object({
-  repoPath: z.string(),
-  /** True when an archived head was found and re-pointed at main. */
-  restored: z.boolean(),
-  /** The archive head the repo was recovered from, or null. */
-  fromArchiveHead: nullableString,
-  /** Workspace-relative paths re-added to main by the restore. */
-  restoredPaths: z.array(z.string()),
-  /** The composed workspace view AFTER restoration. */
-  stateHash: z.string(),
-});
-export type VcsRestoreRepoResult = z.infer<typeof vcsRestoreRepoResultSchema>;
-
 export const vcsRecallResultSchema = z.object({
   results: z.array(
     z.object({
@@ -938,53 +909,9 @@ export const vcsMethods = defineServiceMethods({
     access: READ_ACCESS,
     examples: [{ args: [["panels/chat"]] }],
   },
-  forkRepo: {
-    description:
-      "Fork a repo to a new path, preserving history: the new repo's log descends from the source's lineage (its `log` shows the inherited commits), so you can edit on top of the forked history. The package.json `name` leaf is rewritten to the new path so the fork is build-valid; deeper renames (component/class names) are yours to make, then push.",
-    args: z.tuple([
-      z.string().describe("Source repo path, e.g. panels/chat"),
-      z.string().describe("Destination repo path, e.g. panels/mychat"),
-    ]),
-    returns: z.object({
-      repoPath: z.string(),
-      head: z.string(),
-      inherited: z.number().describe("Number of commits inherited from the source's history."),
-      stateHash: z.string(),
-    }),
-    access: { ...WRITE_ACCESS, sensitivity: "admin" },
-    examples: [{ args: ["panels/chat", "panels/mychat"] }],
-  },
-  deleteRepo: {
-    description:
-      "SEVERE, global-state action: permanently remove a whole repo from the workspace. Distinct from edits — it archives the repo's history (moved to a recoverable archive head) and drops the repo from workspace main, deleting its working tree. Requires explicit user approval every time (a dedicated per-repo deletion grant that the ordinary write grant never covers). REFUSES if other repos depend on this one unless `force` is set (their builds will break). Rejects the `meta` repo and any path with no committed main.",
-    args: z.tuple([
-      z.object({
-        repoPath: z.string().describe("Workspace-relative repo path to delete, e.g. panels/old"),
-        force: z
-          .boolean()
-          .optional()
-          .describe("Delete even when other repos depend on this one (their builds may break)."),
-      }),
-    ]),
-    returns: vcsDeleteRepoResultSchema,
-    access: { ...WRITE_ACCESS, sensitivity: "destructive" },
-    examples: [{ args: [{ repoPath: "panels/old" }] }],
-  },
-  restoreRepo: {
-    description:
-      "Recover a previously deleted repo by re-pointing its main at its archived history. FAILS if a different repo now occupies that path (re-created since the deletion) rather than clobbering it, and if there is nothing archived to restore. Requires user approval (re-adds the repo to workspace main).",
-    args: z.tuple([
-      z.object({
-        repoPath: z.string().describe("Workspace-relative repo path to restore, e.g. panels/old"),
-      }),
-    ]),
-    returns: vcsRestoreRepoResultSchema,
-    access: { ...WRITE_ACCESS, sensitivity: "admin" },
-    examples: [{ args: [{ repoPath: "panels/old" }] }],
-  },
   contextStatus: {
     description:
-      "Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace (vcs.deleteRepo) while your branch still references it — a push will be refused, so drop/rebase your context or restore the repo. Only repos with changes or drift are returned. Pass a context you own/forked to summarize ITS branch instead of your own.",
+      "Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace while your branch still references it — a push will be refused, so drop/rebase your context. Only repos with changes or drift are returned. Pass a context you own/forked to summarize ITS branch instead of your own.",
     args: z.tuple([contextScopeArg]),
     returns: z.array(
       z.object({

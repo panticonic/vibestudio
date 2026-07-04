@@ -76,7 +76,7 @@ describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
     }
   });
 
-  it("the host vcs service no longer declares the moved read/history methods", () => {
+  it("the host vcs service no longer declares moved userland methods", () => {
     const hostMethods = new Set(Object.keys(vcsMethods));
     for (const moved of [
       "commitEdits",
@@ -89,11 +89,16 @@ describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
       // Publishing is no longer a public host RPC: push dispatches userland to
       // the gad-store DO's vcsPush (runtime VcsClient.push / `vibez1 vcs push`).
       "push",
+      // Repo lifecycle sagas are also direct userland dispatches. The host
+      // service must not validate methods it will reject as unknown.
+      "forkRepo",
+      "deleteRepo",
+      "restoreRepo",
     ]) {
       expect(hostMethods.has(moved)).toBe(false);
     }
     // The host remnant keeps the operations that need host resources.
-    for (const kept of ["forkRepo", "deleteRepo", "restoreRepo", "edit", "commit"]) {
+    for (const kept of ["edit", "commit"]) {
       expect(hostMethods.has(kept)).toBe(true);
     }
   });
