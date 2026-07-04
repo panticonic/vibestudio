@@ -41,7 +41,12 @@ export class StubVcs implements ToolVcs {
   lastEditInput?: { edits: ToolVcsEditOp[]; repoPath?: string; invocationId?: string };
   /** The most recent `commit` call's input — lets tests assert the commit tool
    *  stamps its toolCallId as `invocationId` (T1/T2) through the shared seam. */
-  lastCommitInput?: { message: string; repoPaths?: string[]; exclude?: string[]; invocationId?: string };
+  lastCommitInput?: {
+    message: string;
+    repoPaths?: string[];
+    exclude?: string[];
+    invocationId?: string;
+  };
   private readonly commitOverrides: StubVcsInit["commitResult"];
   private version = 0;
 
@@ -114,11 +119,11 @@ export class StubVcs implements ToolVcs {
     this.lastCommitInput = input;
     this.version++;
     const repoPaths = input.repoPaths ?? ["meta"];
-    return repoPaths.map((repoPath) => ({
+    return repoPaths.map((repoPath, i) => ({
       repoPath,
       head: "ctx:test",
       stateHash: `state-${this.version}`,
-      eventId: `event-${this.version}`,
+      eventId: repoPaths.length === 1 ? `event-${this.version}` : `event-${this.version}-${i + 1}`,
       headHash: `head-${this.version}`,
       editCount: this.commitOverrides?.editCount ?? 0,
       status: this.commitOverrides?.status ?? ("committed" as const),
@@ -144,10 +149,7 @@ export class StubVcs implements ToolVcs {
     }));
   }
 
-  async pick(input: {
-    source: ToolVcsSource;
-    picks: ToolVcsPick[];
-  }): Promise<ToolVcsEditResult[]> {
+  async pick(input: { source: ToolVcsSource; picks: ToolVcsPick[] }): Promise<ToolVcsEditResult[]> {
     return input.picks.map((_pick, i) => editResult([], `state-${this.version}`, i));
   }
 

@@ -71,9 +71,7 @@ function createMemoryHostStore() {
       const out: Array<{ path: string; kind: string; contentHash?: string; mode?: number }> = [];
       walk(root, "", out);
       const prefix = opts?.prefix;
-      return prefix
-        ? out.filter((e) => e.path === prefix || e.path.startsWith(`${prefix}/`))
-        : out;
+      return prefix ? out.filter((e) => e.path === prefix || e.path.startsWith(`${prefix}/`)) : out;
     },
     async getTree(ref: string) {
       const root = resolveRoot(ref);
@@ -544,7 +542,13 @@ describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)"
     // Accept: binary new content (threaded into the `binary` column, no hunks).
     expect(
       insertWorking("ctx:w-bin", [
-        { kind: "write", path: "a.bin", oldContentHash: "old", newContentHash: "new", binary: true },
+        {
+          kind: "write",
+          path: "a.bin",
+          oldContentHash: "old",
+          newContentHash: "new",
+          binary: true,
+        },
       ]).editSeq
     ).toBe(1);
     expect(doi.listWorkingEdits({ logId: LOG, head: "ctx:w-bin" })[0]!["binary"]).toBe(1);
@@ -646,9 +650,7 @@ describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)"
         edits: [{ kind: "write", path: "asset", content: { kind: "text", text: "now text\n" } }],
       })
     ).resolves.toBeTruthy();
-    const row = doi
-      .listWorkingEdits({ logId: LOG, head: CTX })
-      .find((r) => r["kind"] === "write");
+    const row = doi.listWorkingEdits({ logId: LOG, head: CTX }).find((r) => r["kind"] === "write");
     expect(row?.["binary"]).toBe(1);
     // Blame attributes the line to the write op, flagged degraded 'binary'.
     const blame = await doi.vcsBlameLines(REPO, "asset", 1, 1, CTX);
@@ -713,7 +715,11 @@ describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)"
       actorJson: ACTOR_JSON,
       invocationId: "inv-edit",
       edits: [
-        { kind: "replace", path: "f.txt", hunks: [{ start: 6, end: 10, oldText: "beta", newText: "BETA" }] },
+        {
+          kind: "replace",
+          path: "f.txt",
+          hunks: [{ start: 6, end: 10, oldText: "beta", newText: "BETA" }],
+        },
       ],
     });
     const c2 = await doi.commitWorking({
@@ -756,7 +762,11 @@ describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)"
       actorJson: ACTOR_JSON,
       invocationId: "inv-working",
       edits: [
-        { kind: "replace", path: "f.txt", hunks: [{ start: 0, end: 5, oldText: "alpha", newText: "ALPHA" }] },
+        {
+          kind: "replace",
+          path: "f.txt",
+          hunks: [{ start: 0, end: 5, oldText: "alpha", newText: "ALPHA" }],
+        },
       ],
     });
     const tail = await doi.vcsBlameLines(REPO, "f.txt", 1, 1, CTX);
@@ -765,6 +775,62 @@ describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)"
       invocationId: "inv-working",
       degraded: null,
     });
+  });
+
+  it("blame: an inline edit later in a line attributes that line to the edit", async () => {
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-create-inline",
+      edits: [
+        {
+          kind: "create",
+          path: "inline.txt",
+          content: { kind: "text", text: "alpha beta gamma\nsecond\n" },
+        },
+      ],
+    });
+    await doi.commitWorking({
+      logId: LOG,
+      head: CTX,
+      message: "create inline",
+      actor: ACTOR,
+      invocationId: "inv-create-inline",
+    });
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-inline",
+      edits: [
+        {
+          kind: "replace",
+          path: "inline.txt",
+          hunks: [{ start: 6, end: 10, oldText: "beta", newText: "BETA" }],
+        },
+      ],
+    });
+    const c2 = await doi.commitWorking({
+      logId: LOG,
+      head: CTX,
+      message: "inline edit",
+      actor: ACTOR,
+      invocationId: "inv-inline",
+    });
+
+    const blame = await doi.vcsBlameLines(REPO, "inline.txt", 1, 1, CTX);
+    expect(blame).toEqual([
+      expect.objectContaining({
+        commitEventId: c2.eventId,
+        commitMessage: "inline edit",
+        invocationId: "inv-inline",
+        kind: "replace",
+        degraded: null,
+      }),
+    ]);
   });
 
   it("blame: a real merge routes theirs-origin lines to the other parent; a whole-file take degrades", async () => {
@@ -792,7 +858,9 @@ describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)"
       actorId: ACTOR.id,
       actorJson: ACTOR_JSON,
       invocationId: "inv-ours",
-      edits: [{ kind: "write", path: "f.txt", content: { kind: "text", text: "OURS\nL2\nL3\nL4\n" } }],
+      edits: [
+        { kind: "write", path: "f.txt", content: { kind: "text", text: "OURS\nL2\nL3\nL4\n" } },
+      ],
     });
     const cOurs = await doi.commitWorking({
       logId: LOG,

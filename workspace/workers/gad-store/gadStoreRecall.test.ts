@@ -73,9 +73,7 @@ function createMemoryHostStore() {
       const out: Array<{ path: string; kind: string; contentHash?: string; mode?: number }> = [];
       walk(root, "", out);
       const prefix = opts?.prefix;
-      return prefix
-        ? out.filter((e) => e.path === prefix || e.path.startsWith(`${prefix}/`))
-        : out;
+      return prefix ? out.filter((e) => e.path === prefix || e.path.startsWith(`${prefix}/`)) : out;
     },
     async getTree(ref: string) {
       const root = resolveRoot(ref);
@@ -258,7 +256,10 @@ describe("GadWorkspaceDO — recall dedup / touches / prune / turn ordinal", () 
     doi = gad.instance;
   });
 
-  async function queryRows(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
+  async function queryRows(
+    sql: string,
+    params: unknown[] = []
+  ): Promise<Record<string, unknown>[]> {
     const res = (await gad.call("query", sql, params)) as { rows: Record<string, unknown>[] };
     return res.rows;
   }
@@ -366,9 +367,7 @@ describe("GadWorkspaceDO — recall dedup / touches / prune / turn ordinal", () 
       dstId: "a.txt",
       invocationId: "inv-3",
     });
-    const total = Number(
-      (await queryRows(`SELECT COUNT(*) AS n FROM gad_touches`))[0]!["n"]
-    );
+    const total = Number((await queryRows(`SELECT COUNT(*) AS n FROM gad_touches`))[0]!["n"]);
     expect(total).toBe(2);
   });
 
@@ -389,7 +388,12 @@ describe("GadWorkspaceDO — recall dedup / touches / prune / turn ordinal", () 
     );
     // Cache: old (prune) + recent (survive).
     gad.sql.exec(
-      `INSERT INTO gad_provenance_cache (head, path, created_at) VALUES ('h','old.ts',?),('h','new.ts',?)`,
+      `INSERT INTO gad_provenance_cache (
+         log_id, head, path, session_log_id, session_head, recall_key, turn_seq,
+         touch_version, knowledge_version, content_stamp, rendered_json, created_at
+       ) VALUES
+         ('log','h','old.ts','s','h','[]',0,0,0,'stamp','[]',?),
+         ('log','h','new.ts','s','h','[]',0,0,0,'stamp','[]',?)`,
       days(30),
       days(0)
     );
@@ -407,12 +411,12 @@ describe("GadWorkspaceDO — recall dedup / touches / prune / turn ordinal", () 
       await queryRows(`SELECT dst_id FROM gad_touches ORDER BY dst_id`)
     ).map((r) => r["dst_id"]);
     expect(survivingTouches).toEqual(["new-1hit", "old-3hit"]);
-    expect(Number((await queryRows(`SELECT COUNT(*) AS n FROM gad_provenance_cache`))[0]!["n"])).toBe(
-      1
-    );
-    expect(Number((await queryRows(`SELECT COUNT(*) AS n FROM gad_prov_render_log`))[0]!["n"])).toBe(
-      1
-    );
+    expect(
+      Number((await queryRows(`SELECT COUNT(*) AS n FROM gad_provenance_cache`))[0]!["n"])
+    ).toBe(1);
+    expect(
+      Number((await queryRows(`SELECT COUNT(*) AS n FROM gad_prov_render_log`))[0]!["n"])
+    ).toBe(1);
 
     // Idempotent second pass — nothing left below the floors.
     expect(doi.pruneProvenanceSoftState({})).toEqual({ touches: 0, cache: 0, renderLog: 0 });

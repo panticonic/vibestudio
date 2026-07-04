@@ -16,7 +16,13 @@ function makeKnowledge(responses: RecordClaimResult[] = []): {
     head: "branch:channel:ch",
     recordClaim: async (input) => {
       calls.push(input);
-      return queue.shift() ?? { claimId: `claim-${calls.length}`, ledgerEntryId: `l${calls.length}`, duplicates: [] };
+      return (
+        queue.shift() ?? {
+          claimId: `claim-${calls.length}`,
+          ledgerEntryId: `l${calls.length}`,
+          duplicates: [],
+        }
+      );
     },
   };
   return { deps, calls };
@@ -63,10 +69,38 @@ describe("createCommitTool", () => {
     expect(vcs.lastCommitInput).not.toHaveProperty("claims");
   });
 
+  it("does not guess a commit anchor for multi-repo claims, and honors explicit repoPath", async () => {
+    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
+    const { deps, calls } = makeKnowledge([
+      { claimId: "claim-b", ledgerEntryId: "led-b", duplicates: [] },
+      { claimId: "claim-general", ledgerEntryId: "led-general", duplicates: [] },
+    ]);
+    const tool = createCommitTool(vcs, deps);
+    const result = await tool.execute("call-1", {
+      message: "seal two repos",
+      repoPaths: ["packages/a", "packages/b"],
+      claims: [
+        { text: "repo b owns the scheduler boundary", repoPath: "packages/b" },
+        { text: "the two repos share a rollout concern" },
+      ],
+    });
+
+    expect(calls[0]).toMatchObject({
+      anchor: { commitEventId: "event-1-2", repoPath: "packages/b" },
+    });
+    expect(calls[1]).not.toHaveProperty("anchor");
+    expect(result.details.claimsRecorded).toEqual(["claim-b", "claim-general"]);
+    expect(text(result)).toContain("claim left unanchored");
+  });
+
   it("surfaces dedup candidates but never blocks the commit", async () => {
     const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
     const { deps } = makeKnowledge([
-      { duplicates: [{ claimId: "claim-old", text: "scheduler owns the retry budget", score: 0.82 }] },
+      {
+        duplicates: [
+          { claimId: "claim-old", text: "scheduler owns the retry budget", score: 0.82 },
+        ],
+      },
     ]);
     const tool = createCommitTool(vcs, deps);
     const result = await tool.execute("call-1", {
@@ -83,7 +117,9 @@ describe("createCommitTool", () => {
   });
 
   it("nudges on a non-trivial diff (>=3 files) when no claims were passed", async () => {
-    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts", "b.ts", "c.ts"], editCount: 3 } });
+    const vcs = new StubVcs({
+      commitResult: { changedPaths: ["a.ts", "b.ts", "c.ts"], editCount: 3 },
+    });
     const { deps } = makeKnowledge();
     const tool = createCommitTool(vcs, deps);
     const result = await tool.execute("call-1", { message: "refactor across files" });
@@ -92,7 +128,9 @@ describe("createCommitTool", () => {
   });
 
   it("does NOT nudge when claims were passed", async () => {
-    const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts", "b.ts", "c.ts"], editCount: 3 } });
+    const vcs = new StubVcs({
+      commitResult: { changedPaths: ["a.ts", "b.ts", "c.ts"], editCount: 3 },
+    });
     const { deps } = makeKnowledge();
     const tool = createCommitTool(vcs, deps);
     const result = await tool.execute("call-1", {

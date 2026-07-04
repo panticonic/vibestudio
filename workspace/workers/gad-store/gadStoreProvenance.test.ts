@@ -148,9 +148,33 @@ describe("GadWorkspaceDO — provenance density + attachment (DO-4)", () => {
 
   const untyped = () =>
     doi as unknown as {
+      currentTurnOrdinal(logId: string, head: string): number;
+      knowledgeVersion(): number;
       touchVersion(sessionLogId: string, sessionHead: string): number;
-      writeProvenanceCache(head: string, path: string, version: number, items: unknown[]): void;
+      provenanceCacheKey(input: {
+        logId: string;
+        head: string;
+        path: string;
+        sessionLogId: string;
+        sessionHead: string;
+        turnSeq: number;
+        recallKeywords: string[] | null;
+      }): unknown;
+      writeProvenanceCache(key: unknown, items: unknown[]): void;
     };
+
+  const cacheKey = (path: string, opts?: { recallKeywords?: string[] | null }) => {
+    const u = untyped();
+    return u.provenanceCacheKey({
+      logId: LOG,
+      head: CTX,
+      path,
+      sessionLogId: SESSION_LOG,
+      sessionHead: SESSION_HEAD,
+      turnSeq: u.currentTurnOrdinal(SESSION_LOG, SESSION_HEAD),
+      recallKeywords: opts?.recallKeywords ?? null,
+    });
+  };
 
   /** A density sentinel: distinguishable, above the salience floor, no exception —
    *  stands in for a real (cacheable) density leg without exercising the pipeline. */
@@ -429,8 +453,8 @@ describe("GadWorkspaceDO — provenance density + attachment (DO-4)", () => {
     // the first file read would invalidate every OTHER warmed file. Cache two
     // files at the same version and confirm BOTH serve their first read.
     const version = u.touchVersion(SESSION_LOG, SESSION_HEAD);
-    u.writeProvenanceCache(CTX, "w1.txt", version, densitySentinel("w1"));
-    u.writeProvenanceCache(CTX, "w2.txt", version, densitySentinel("w2"));
+    u.writeProvenanceCache(cacheKey("w1.txt"), densitySentinel("w1"));
+    u.writeProvenanceCache(cacheKey("w2.txt"), densitySentinel("w2"));
 
     const first = pf({ path: "w1.txt", tier: "moderate" });
     expect(first.items).toEqual(densitySentinel("w1"));
@@ -447,7 +471,7 @@ describe("GadWorkspaceDO — provenance density + attachment (DO-4)", () => {
     const u = untyped();
     // A warm density leg is stashed at turn.opened, BEFORE any concurrency exists.
     const version = u.touchVersion(SESSION_LOG, SESSION_HEAD);
-    u.writeProvenanceCache(CTX, "hot.txt", version, densitySentinel("hot"));
+    u.writeProvenanceCache(cacheKey("hot.txt"), densitySentinel("hot"));
 
     // AFTER the warm write, another session lands an uncommitted edit on the same
     // path — the exact cross-session collision the concurrency line exists to warn
@@ -468,6 +492,57 @@ describe("GadWorkspaceDO — provenance density + attachment (DO-4)", () => {
     // read with the exception still present suppresses (unchanged signature)…
     const again = pf({ path: "hot.txt", tier: "moderate" });
     expect(again.suppressed).toBe(true);
+  });
+
+  it("moderate cache is isolated by recall keywords", () => {
+    const u = untyped();
+    u.writeProvenanceCache(
+      cacheKey("kw.txt", { recallKeywords: ["alpha"] }),
+      densitySentinel("alpha")
+    );
+
+    const beta = pf({ path: "kw.txt", tier: "moderate", recallKeywords: ["beta"] });
+    expect(beta.items).not.toContainEqual(densitySentinel("alpha")[0]);
+  });
+
+  it("claim revision/retraction advance the cache eras and stale density is not served", () => {
+    const u = untyped();
+    const claimId = recordClaim("old cache claim text");
+    const afterRecordTouch = u.touchVersion(SESSION_LOG, SESSION_HEAD);
+    const afterRecordKnowledge = u.knowledgeVersion();
+    u.writeProvenanceCache(cacheKey("claim-cache.txt"), densitySentinel("stale-claim"));
+
+    const realDensity = (doi as unknown as { fileDensityBlock: (input: unknown) => unknown })
+      .fileDensityBlock;
+    Object.defineProperty(doi, "fileDensityBlock", {
+      configurable: true,
+      value: () => densitySentinel("fresh-claim"),
+    });
+    try {
+      doi.knowledgeReviseClaim({
+        logId: SESSION_LOG,
+        head: SESSION_HEAD,
+        claimId,
+        patch: { text: "new cache claim text" },
+      });
+      expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBeGreaterThan(afterRecordTouch);
+      expect(u.knowledgeVersion()).toBeGreaterThan(afterRecordKnowledge);
+
+      const afterReviseTouch = u.touchVersion(SESSION_LOG, SESSION_HEAD);
+      const afterReviseKnowledge = u.knowledgeVersion();
+      const revised = pf({ path: "claim-cache.txt", tier: "moderate" });
+      expect(revised.items).toContainEqual(densitySentinel("fresh-claim")[0]);
+      expect(revised.items).not.toContainEqual(densitySentinel("stale-claim")[0]);
+
+      doi.knowledgeRetractClaim({ logId: SESSION_LOG, head: SESSION_HEAD, claimId });
+      expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBeGreaterThan(afterReviseTouch);
+      expect(u.knowledgeVersion()).toBeGreaterThan(afterReviseKnowledge);
+    } finally {
+      Object.defineProperty(doi, "fileDensityBlock", {
+        configurable: true,
+        value: realDensity,
+      });
+    }
   });
 
   it("degrade path: the stashed density leg is servable by the next moderate read, and live exceptions render ahead of the hint", async () => {

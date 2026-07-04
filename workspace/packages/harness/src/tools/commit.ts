@@ -19,7 +19,7 @@
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
-import { withInvocationId, type ToolVcs } from "./tool-vcs.js";
+import { withInvocationId, type ToolVcs, type ToolVcsCommitResult } from "./tool-vcs.js";
 import { formatDuplicates, type ClaimPayload, type KnowledgeToolDeps } from "./claims.js";
 
 /** Nudge when the diff is non-trivial and no claims were passed (T4). "Files"
@@ -30,18 +30,28 @@ import { formatDuplicates, type ClaimPayload, type KnowledgeToolDeps } from "./c
  *  it does receive. */
 const NUDGE_MIN_FILES = 3;
 const NUDGE_MIN_EDIT_OPS = 8;
-const NUDGE_LINE = 'Anything durable to record? (`claims:` on commit, or `record_claim`)';
+const NUDGE_LINE = "Anything durable to record? (`claims:` on commit, or `record_claim`)";
 
 const claimPayloadSchema = Type.Object(
   {
     text: Type.Optional(
-      Type.String({ description: "The claim as one durable sentence. Provide this OR subject/predicate/object." })
+      Type.String({
+        description: "The claim as one durable sentence. Provide this OR subject/predicate/object.",
+      })
     ),
     subject: Type.Optional(Type.String()),
     predicate: Type.Optional(Type.String()),
     object: Type.Optional(Type.String()),
     kind: Type.Optional(
-      Type.String({ description: "Optional claim kind: invariant | ownership | gotcha | decision | …" })
+      Type.String({
+        description: "Optional claim kind: invariant | ownership | gotcha | decision | …",
+      })
+    ),
+    repoPath: Type.Optional(
+      Type.String({
+        description:
+          "Optional repo path to anchor this claim when the commit seals multiple repos. Omit only for single-repo commits or repo-agnostic claims.",
+      })
     ),
   },
   { additionalProperties: false }
@@ -61,7 +71,7 @@ const commitSchema = Type.Object(
     claims: Type.Optional(
       Type.Array(claimPayloadSchema, {
         description:
-          "Durable insight this work taught you (invariants, ownership boundaries, gotchas, decisions + reasons), recorded as claims anchored to this commit — costs no extra tool call. Dedup candidates come back in the result; the commit stands regardless.",
+          "Durable insight this work taught you (invariants, ownership boundaries, gotchas, decisions + reasons), recorded as claims anchored to this commit — costs no extra tool call. When committing multiple repos, include repoPath on repo-specific claims. Dedup candidates come back in the result; the commit stands regardless.",
       })
     ),
   },
@@ -125,7 +135,9 @@ export function createCommitTool(
         lines.push("Nothing to commit — no uncommitted edits on your head.");
       } else {
         for (const r of committed) {
-          lines.push(`committed ${r.repoPath} (${r.editCount} edit${r.editCount === 1 ? "" : "s"}).`);
+          lines.push(
+            `committed ${r.repoPath} (${r.editCount} edit${r.editCount === 1 ? "" : "s"}).`
+          );
         }
       }
 
@@ -134,14 +146,17 @@ export function createCommitTool(
       const claimsRecorded: string[] = [];
       let claimDuplicates = 0;
       const claims = Array.isArray(input.claims) ? input.claims : [];
-      const anchorResult = committed.find((r) => r.eventId);
+      const committedWithEvent = committed.filter(
+        (r): r is ToolVcsCommitResult & { eventId: string } => !!r.eventId
+      );
       if (claims.length > 0 && knowledge) {
-        const anchor = anchorResult
-          ? { commitEventId: anchorResult.eventId, repoPath: anchorResult.repoPath }
-          : undefined;
         for (const raw of claims) {
           const claim = normalizeClaim(raw);
           if (!claim) continue;
+          const anchorResult = anchorResultForClaim(raw, committedWithEvent);
+          const anchor = anchorResult
+            ? { commitEventId: anchorResult.eventId, repoPath: anchorResult.repoPath }
+            : undefined;
           const res = await knowledge.recordClaim({
             logId: knowledge.logId,
             head: knowledge.head,
@@ -152,12 +167,23 @@ export function createCommitTool(
           if (res.claimId) {
             claimsRecorded.push(res.claimId);
             lines.push(`recorded claim#${res.claimId}.`);
+            if (!anchor && committedWithEvent.length > 1) {
+              lines.push(
+                "  claim left unanchored: multiple repos committed; pass repoPath to anchor it."
+              );
+            }
             if (res.duplicates.length > 0) {
-              lines.push("  similar existing claims (consider relating):", ...formatDuplicates(res.duplicates));
+              lines.push(
+                "  similar existing claims (consider relating):",
+                ...formatDuplicates(res.duplicates)
+              );
             }
           } else {
             claimDuplicates += res.duplicates.length;
-            lines.push("claim not recorded — near-duplicate of:", ...formatDuplicates(res.duplicates));
+            lines.push(
+              "claim not recorded — near-duplicate of:",
+              ...formatDuplicates(res.duplicates)
+            );
             lines.push("  revise/relate one of these, or record_claim(force:true).");
           }
         }
@@ -203,4 +229,13 @@ function normalizeClaim(raw: {
   };
   const hasContent = claim.text || (claim.subject && claim.predicate && claim.object);
   return hasContent ? claim : null;
+}
+
+function anchorResultForClaim(
+  raw: { repoPath?: string },
+  committedWithEvent: Array<ToolVcsCommitResult & { eventId: string }>
+): (ToolVcsCommitResult & { eventId: string }) | undefined {
+  const requestedRepo = typeof raw.repoPath === "string" ? raw.repoPath.trim() : "";
+  if (requestedRepo) return committedWithEvent.find((r) => r.repoPath === requestedRepo);
+  return committedWithEvent.length === 1 ? committedWithEvent[0] : undefined;
 }

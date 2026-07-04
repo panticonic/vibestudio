@@ -3951,7 +3951,7 @@ describe("knowledge ledger + claims (§8.1)", () => {
       "SELECT value FROM state WHERE key = 'schema_version'",
       []
     );
-    expect(version.rows[0]?.value).toBe("25");
+    expect(version.rows[0]?.value).toBe("26");
 
     // The ledger survived the gad_% drop sweep.
     const ledger = await second.call<{ rows: Array<{ kind: string }> }>(

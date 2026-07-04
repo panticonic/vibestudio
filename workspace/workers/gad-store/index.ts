@@ -249,6 +249,19 @@ interface ProvSeed {
   activation: number;
 }
 
+interface ProvenanceCacheKey {
+  logId: string;
+  head: string;
+  path: string;
+  sessionLogId: string;
+  sessionHead: string;
+  recallKey: string;
+  turnSeq: number;
+  touchVersion: number;
+  knowledgeVersion: number;
+  contentStamp: string;
+}
+
 /** Tables that must exist before a schema version is recorded as ready
  *  (validated by DurableObjectBase after every createTables()). Lazily
  *  created tables (memory index) are deliberately absent. */
@@ -795,14 +808,19 @@ function assertHunkCompleteness(
   );
 }
 
-/** Char offset of each 1-based line's first character (blame §5.2 step 1). A
- *  trailing newline does not open an empty final line. */
-function computeLineStartOffsets(text: string): number[] {
-  const starts = [0];
+/** Char span of each 1-based line, excluding the terminating newline. A trailing
+ *  newline does not open an empty final line. */
+function computeLineSpans(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let start = 0;
   for (let i = 0; i < text.length; i += 1) {
-    if (text[i] === "\n" && i + 1 < text.length) starts.push(i + 1);
+    if (text[i] === "\n") {
+      spans.push({ start, end: i });
+      start = i + 1;
+    }
   }
-  return starts;
+  if (start < text.length) spans.push({ start, end: text.length });
+  return spans;
 }
 
 /** Two adjacent lines share a blame resolution iff every attribution field
@@ -838,6 +856,22 @@ function coalesceBlameLines(
     }
   });
   return out;
+}
+
+function blameLinePriority(r: Omit<VcsBlameLineWire, "startLine" | "endLine">): number {
+  const attribution = r.degraded === null ? 2 : r.opId !== null ? 1 : 0;
+  return attribution * 1_000_000_000 + (r.opId ?? -1);
+}
+
+/** Pick the newest concrete attribution observed anywhere on the line. */
+function representativeLineBlame(
+  resolutions: Array<Omit<VcsBlameLineWire, "startLine" | "endLine">>
+): Omit<VcsBlameLineWire, "startLine" | "endLine"> {
+  let best = resolutions[0]!;
+  for (const r of resolutions.slice(1)) {
+    if (blameLinePriority(r) > blameLinePriority(best)) best = r;
+  }
+  return best;
 }
 
 /** Normalize a workspace-relative repo path (the `vcs:repo:<path>` key) —
@@ -1408,6 +1442,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // working row was cherry-picked from; UX-only provenance).
   // v23 (local gad-system-review): merge of the two v22 lines below; both cuts,
   // one schema.
+  // v26: provenance cache key hardening — cache rows are now scoped by repo log,
+  // session, recall-key, turn ordinal, content stamp, and knowledge graph version.
   // v25 (gad-provenance-fibers big bang): the provenance graph substrate —
   // gad_touches (soft behavioral signal), gad_claim_relations + gad_knowledge_ledger
   // (durable, dropPersistenceTables-exempt claim system of record; own version key
@@ -1436,7 +1472,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // identical content states don't conflate).
   // v18: schema cut removes unimplemented knowledge sidecar projection tables.
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
-  static override schemaVersion = 25;
+  static override schemaVersion = 26;
 
   /**
    * IntentIds of publish intents this live instance is actively driving — added
@@ -2018,15 +2054,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_touches_coalesce ON gad_touches(kind, session_log_id, session_head, dst_kind, dst_id)`
     );
-    // §7.3 warm cache: disposable, keyed (head, path), invalidated by touch_version.
+    // §7.3 warm cache: disposable density blocks. Keyed by every input that can
+    // change the cached density leg; live exceptions stay outside the cache.
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS gad_provenance_cache (
+        log_id TEXT NOT NULL,
         head TEXT NOT NULL,
         path TEXT NOT NULL,
-        touch_version INTEGER,
-        rendered_json TEXT,
+        session_log_id TEXT NOT NULL,
+        session_head TEXT NOT NULL,
+        recall_key TEXT NOT NULL,
+        turn_seq INTEGER NOT NULL,
+        touch_version INTEGER NOT NULL,
+        knowledge_version INTEGER NOT NULL,
+        content_stamp TEXT NOT NULL,
+        rendered_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        PRIMARY KEY (head, path)
+        PRIMARY KEY (log_id, head, path, session_log_id, session_head, recall_key, turn_seq)
       )
     `);
     // §12 instrumentation: counted upserts for the four behavioral counters.
@@ -4435,6 +4479,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.setStateValue(this.touchVersionKey(sessionLogId, sessionHead), String(next));
   }
 
+  private knowledgeVersionKey(): string {
+    return "knowledgever";
+  }
+
+  private knowledgeVersion(): number {
+    const raw = this.getStateValue(this.knowledgeVersionKey());
+    return raw == null ? 0 : asNumber(raw);
+  }
+
+  private bumpKnowledgeVersion(): void {
+    const next = this.knowledgeVersion() + 1;
+    this.setStateValue(this.knowledgeVersionKey(), String(next));
+  }
+
   /**
    * §6.3 turn-decay basis: the highest turn ordinal stamped on this (log_id,
    * head) branch (projectTurn stamps `ordinal` = count of prior turns; fork-fold
@@ -4556,6 +4614,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       });
       // §12 counter #3: claims recorded, split commit-borne vs standalone.
       this.bumpProvMetric("claims_recorded", input.anchor?.commitEventId ? "commit" : "standalone");
+      // Claim content is a global density input; invalidate every warm cache era
+      // that was computed against the previous claim graph.
+      this.bumpKnowledgeVersion();
       // §7.3 density-seed era: a new asserted claim re-seeds this session's
       // spreading activation (§6.1), so invalidate its warm density cache.
       this.bumpTouchVersion(input.logId, input.head);
@@ -4623,6 +4684,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       // §7.3 density-seed era: new claim↔claim relations change the edges the
       // §6.1 spread traverses (and the contradiction set), so invalidate the
       // session's warm density cache.
+      this.bumpKnowledgeVersion();
       this.bumpTouchVersion(input.logId, input.head);
       return { ledgerEntryId, related: relations.length };
     });
@@ -4700,6 +4762,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
           },
         ],
       });
+      // Claim content is rendered into cacheable density items; a revise must
+      // invalidate both the global claim graph era and this session's seed era.
+      this.bumpKnowledgeVersion();
+      this.bumpTouchVersion(input.logId, input.head);
       return { claimId: input.claimId, ledgerEntryId };
     });
   }
@@ -4757,6 +4823,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
           },
         ],
       });
+      // A retracted claim must stop surfacing from any cached density leg.
+      this.bumpKnowledgeVersion();
+      this.bumpTouchVersion(input.logId, input.head);
       return { claimId: input.claimId, ledgerEntryId };
     });
   }
@@ -6960,18 +7029,34 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // 1. Materialize the file at head; no line blame for a missing or binary file.
     const text = await this.fileTextAtHead(store, logId, resolvedHead, path);
     if (text === null || text.length === 0) return [];
-    const lineStarts = computeLineStartOffsets(text);
+    const lineSpans = computeLineSpans(text);
     const from = Math.max(1, Math.trunc(startLine));
-    const to = Math.min(Math.trunc(endLine), lineStarts.length);
+    const to = Math.min(Math.trunc(endLine), lineSpans.length);
     if (to < from) return [];
     const offsets: number[] = [];
-    for (let ln = from; ln <= to; ln += 1) offsets.push(lineStarts[ln - 1]!);
+    const lineOffsetCounts: number[] = [];
+    for (let ln = from; ln <= to; ln += 1) {
+      const span = lineSpans[ln - 1]!;
+      const before = offsets.length;
+      if (span.end > span.start) {
+        for (let offset = span.start; offset < span.end; offset += 1) offsets.push(offset);
+      } else {
+        offsets.push(span.start);
+      }
+      lineOffsetCounts.push(offsets.length - before);
+    }
 
     // 2. Gather the head's first-parent chain and compose each offset back.
     const headOps = this.blameChainRows(logId, resolvedHead, path);
-    const perLine = blameChain(headOps, offsets).map((r) =>
+    const perOffset = blameChain(headOps, offsets).map((r) =>
       this.blameResolvedFor(logId, path, r.resolution)
     );
+    const perLine: Array<Omit<VcsBlameLineWire, "startLine" | "endLine">> = [];
+    let cursor = 0;
+    for (const count of lineOffsetCounts) {
+      perLine.push(representativeLineBlame(perOffset.slice(cursor, cursor + count)));
+      cursor += count;
+    }
     // 3. Coalesce contiguous identical resolutions into ranges.
     return coalesceBlameLines(from, perLine);
   }
@@ -7229,14 +7314,22 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
 
     // §7.3 warm-cache serve: the disposable cache holds the DENSITY/recall leg
-    // ONLY — never the exception class. A `moderate` density leg cached under the
-    // session's current touch_version is served verbatim; `deep` always
-    // recomputes; a paging/drill request bypasses the cache (it needs the full
-    // ranked tail). Exceptions are spliced in LIVE below, on every path.
-    const version = this.touchVersion(input.sessionLogId, input.sessionHead);
+    // ONLY — never the exception class. A `moderate` density leg is served only
+    // when its full density fingerprint still matches; `deep` always recomputes;
+    // a paging/drill request bypasses the cache (it needs the full ranked tail).
+    // Exceptions are spliced in LIVE below, on every path.
+    const cacheKey = this.provenanceCacheKey({
+      logId,
+      head: input.head,
+      path: norm,
+      sessionLogId: input.sessionLogId,
+      sessionHead: input.sessionHead,
+      turnSeq,
+      recallKeywords: input.recallKeywords ?? null,
+    });
     let density: ProvItem[] | null = null;
     if (tier === "moderate" && !drilldown) {
-      density = this.readProvenanceCache(input.head, norm, version);
+      density = this.readProvenanceCache(cacheKey);
     }
 
     // §7.5 exception class — asserted contradictions + cross-session concurrency —
@@ -7278,7 +7371,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           invocationId: input.invocationId ?? null,
           turnSeq: observedTurnSeq,
         });
-        this.writeProvenanceCache(input.head, norm, version, density);
+        this.writeProvenanceCache(cacheKey, density);
         const hint = this.degradeHintItem(input.repoPath, norm);
         const items = [...exceptions, hint];
         return {
@@ -7446,13 +7539,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   /**
    * §7.3 speculative warm: on `turn.opened`, precompute `moderate` blocks for the
-   * session's recently-edited files into the disposable cache, keyed by the
-   * session's touch_version. Best-effort — a failure never breaks the append.
+   * session's recently-edited files into the disposable cache, keyed by the full
+   * density fingerprint (session era, claim graph era, file stamp, turn, recall).
+   * Best-effort — a failure never breaks the append.
    */
   private warmProvenanceForTurn(sessionLogId: string, sessionHead: string): void {
     try {
       const turnSeq = this.currentTurnOrdinal(sessionLogId, sessionHead);
-      const version = this.touchVersion(sessionLogId, sessionHead);
       const files = this.sql
         .exec(
           `SELECT eo.log_id AS log_id, eo.head AS head, eo.path AS path, MAX(eo.id) AS recency
@@ -7484,7 +7577,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
           turnSeq,
           recallKeywords: null,
         });
-        this.writeProvenanceCache(head, path, version, block);
+        const cacheKey = this.provenanceCacheKey({
+          logId,
+          head,
+          path,
+          sessionLogId,
+          sessionHead,
+          turnSeq,
+          recallKeywords: null,
+        });
+        this.writeProvenanceCache(cacheKey, block);
       }
     } catch {
       // Warm is disposable, never authority (§7.3) — swallow and move on.
@@ -8359,15 +8461,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   // ---- block signature, render log, warm cache -----------------------------
 
-  /** §7.1 block signature: (path content hash, latest edit-op id, sorted
-   *  exception handles). Unchanged ⇒ the block is suppressed; a content change
-   *  or a new exception item re-attaches. */
-  private blockSignature(
-    logId: string,
-    path: string,
-    head: string,
-    exceptionHandles: string[]
-  ): string {
+  private fileContentStamp(logId: string, path: string, head: string): string {
     const working = this.sql
       .exec(
         `SELECT id, new_content_hash FROM gad_worktree_edit_ops
@@ -8391,7 +8485,48 @@ export class GadWorkspaceDO extends DurableObjectBase {
         .toArray()[0] as JsonRecord | undefined);
     const contentHash = latest ? (asString(latest["new_content_hash"]) ?? "") : "";
     const opId = latest ? String(latest["id"]) : "";
-    return sha256HexSyncText(`${contentHash}|${opId}|${exceptionHandles.join(",")}`);
+    return `${contentHash}|${opId}`;
+  }
+
+  private provenanceRecallKey(recallKeywords: string[] | null | undefined): string {
+    return JSON.stringify(recallTokens(recallKeywords));
+  }
+
+  private provenanceCacheKey(input: {
+    logId: string;
+    head: string;
+    path: string;
+    sessionLogId: string;
+    sessionHead: string;
+    turnSeq: number;
+    recallKeywords: string[] | null;
+  }): ProvenanceCacheKey {
+    return {
+      logId: input.logId,
+      head: input.head,
+      path: input.path,
+      sessionLogId: input.sessionLogId,
+      sessionHead: input.sessionHead,
+      recallKey: this.provenanceRecallKey(input.recallKeywords),
+      turnSeq: input.turnSeq,
+      touchVersion: this.touchVersion(input.sessionLogId, input.sessionHead),
+      knowledgeVersion: this.knowledgeVersion(),
+      contentStamp: this.fileContentStamp(input.logId, input.path, input.head),
+    };
+  }
+
+  /** §7.1 block signature: (path content hash, latest edit-op id, sorted
+   *  exception handles). Unchanged ⇒ the block is suppressed; a content change
+   *  or a new exception item re-attaches. */
+  private blockSignature(
+    logId: string,
+    path: string,
+    head: string,
+    exceptionHandles: string[]
+  ): string {
+    return sha256HexSyncText(
+      `${this.fileContentStamp(logId, path, head)}|${exceptionHandles.join(",")}`
+    );
   }
 
   private lastObservedBlockSig(
@@ -8456,15 +8591,31 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
-  private readProvenanceCache(head: string, path: string, version: number): ProvItem[] | null {
+  private readProvenanceCache(key: ProvenanceCacheKey): ProvItem[] | null {
     const row = this.sql
       .exec(
-        `SELECT touch_version, rendered_json FROM gad_provenance_cache WHERE head = ? AND path = ?`,
-        head,
-        path
+        `SELECT touch_version, knowledge_version, content_stamp, rendered_json
+           FROM gad_provenance_cache
+          WHERE log_id = ? AND head = ? AND path = ?
+            AND session_log_id = ? AND session_head = ?
+            AND recall_key = ? AND turn_seq = ?`,
+        key.logId,
+        key.head,
+        key.path,
+        key.sessionLogId,
+        key.sessionHead,
+        key.recallKey,
+        key.turnSeq
       )
       .toArray()[0] as JsonRecord | undefined;
-    if (!row || asNumber(row["touch_version"]) !== version) return null;
+    if (
+      !row ||
+      asNumber(row["touch_version"]) !== key.touchVersion ||
+      asNumber(row["knowledge_version"]) !== key.knowledgeVersion ||
+      asString(row["content_stamp"]) !== key.contentStamp
+    ) {
+      return null;
+    }
     try {
       const parsed = JSON.parse(asString(row["rendered_json"]) ?? "[]");
       return Array.isArray(parsed) ? (parsed as ProvItem[]) : null;
@@ -8473,22 +8624,29 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
   }
 
-  private writeProvenanceCache(
-    head: string,
-    path: string,
-    version: number,
-    items: ProvItem[]
-  ): void {
+  private writeProvenanceCache(key: ProvenanceCacheKey, items: ProvItem[]): void {
     this.sql.exec(
-      `INSERT INTO gad_provenance_cache (head, path, touch_version, rendered_json, created_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(head, path) DO UPDATE SET
+      `INSERT INTO gad_provenance_cache (
+         log_id, head, path, session_log_id, session_head, recall_key, turn_seq,
+         touch_version, knowledge_version, content_stamp, rendered_json, created_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(log_id, head, path, session_log_id, session_head, recall_key, turn_seq) DO UPDATE SET
          touch_version = excluded.touch_version,
+         knowledge_version = excluded.knowledge_version,
+         content_stamp = excluded.content_stamp,
          rendered_json = excluded.rendered_json,
          created_at = excluded.created_at`,
-      head,
-      path,
-      version,
+      key.logId,
+      key.head,
+      key.path,
+      key.sessionLogId,
+      key.sessionHead,
+      key.recallKey,
+      key.turnSeq,
+      key.touchVersion,
+      key.knowledgeVersion,
+      key.contentStamp,
       JSON.stringify(items),
       nowIso()
     );
@@ -11483,7 +11641,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     for (const row of rows) {
       const kind = String(row["kind"]);
       const eventId = asString(row["event_id"]);
-      const key = `${kind} ${eventId ?? `t:${String(row["text"])}`}`;
+      const key = `${kind}\u0001${eventId ?? `t:${String(row["text"])}`}`;
       const slot = slotByKey.get(key);
       if (slot === undefined) {
         slotByKey.set(key, kept.length);
