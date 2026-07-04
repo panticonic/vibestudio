@@ -4,6 +4,7 @@ import {
   originOfEnvelope,
   responseEnvelopeFor,
   retargetEnvelope,
+  stampEnvelopeCaller,
 } from "./envelope.js";
 
 describe("envelope helpers", () => {
@@ -59,5 +60,41 @@ describe("envelope helpers", () => {
     expect(response.from).toBe("worker:1");
     expect(response.target).toBe("panel:1");
     expect(response.provenance).toBe(request.provenance);
+  });
+
+  it("stamps caller identity while preserving payload and delivery options", () => {
+    const forged = envelopeFromMessage({
+      selfId: "panel:forged",
+      from: "panel:forged",
+      target: "main",
+      callerKind: "panel",
+      idempotencyKey: "idem-1",
+      readOnly: true,
+      message: {
+        type: "request",
+        requestId: "r1",
+        fromId: "panel:forged",
+        method: "workspace.getInfo",
+        args: [],
+      },
+    });
+
+    const stamped = stampEnvelopeCaller(forged, authenticatedCaller("panel:runtime", "panel"));
+
+    expect(stamped.from).toBe("panel:runtime");
+    expect(stamped.target).toBe("main");
+    expect(stamped.delivery).toEqual({
+      caller: { callerId: "panel:runtime", callerKind: "panel" },
+      idempotencyKey: "idem-1",
+      readOnly: true,
+    });
+    expect(stamped.provenance).toEqual([{ callerId: "panel:runtime", callerKind: "panel" }]);
+    expect(stamped.message).toEqual({
+      type: "request",
+      requestId: "r1",
+      fromId: "panel:runtime",
+      method: "workspace.getInfo",
+      args: [],
+    });
   });
 });

@@ -21,9 +21,11 @@
  * scan gap) and FLUSHED — in order — the instant the second peer joins, rather
  * than dropped for want of a relay target. The buffer is ephemeral: it is
  * bounded (`MAX_BUFFERED_FRAMES`; excess is dropped loudly, never grown) and
- * cleared when the room empties, so a (re)used room never replays a dead
- * session's offer. The frames stay opaque — the room buffers bytes, it does not
- * parse SDP.
+ * cleared when the room empties. Buffered frames carry only source-role
+ * provenance, so a same-role reconnect drops that old role's stale SDP/ICE
+ * while preserving any opposite-role frames that are still useful to the new
+ * socket. The frames stay opaque — the room buffers bytes, it does not parse
+ * SDP.
  *
  * The two peers fill ROLE-KEYED slots: a join MUST declare `?role=offerer` or
  * `?role=answerer` (missing/invalid → HTTP 400, no upgrade). Relaying always
@@ -60,6 +62,10 @@ const CLOSE_SUPERSEDED = 4001;
 // per-value storage cap. The zero-padded seq orders the keys lexicographically.
 const PENDING_FRAME_PREFIX = "pending-frame:";
 const PENDING_SEQ_KEY = "pending-seq";
+interface PendingFrame {
+  sourceRole: SignalingRole;
+  text: string;
+}
 /**
  * Hard cap on pre-join buffered frames. An offer plus a session's worth of
  * trickled ICE candidates fits comfortably; beyond this the room is being
@@ -180,6 +186,7 @@ export class SignalingRoom implements DurableObject {
         // Already closing; the close handler reconciles the roster.
       }
     }
+    await this.clearPendingFrames(role);
 
     this.state.acceptWebSocket(server, [roleTag]);
 
@@ -195,7 +202,7 @@ export class SignalingRoom implements DurableObject {
     // This join completes the pair: deliver anything the counterpart sent while
     // it was alone, in order, before any live frame can reach the new joiner.
     if (others.length > 0) {
-      await this.flushPendingTo(server);
+      await this.flushPendingTo(server, role === "offerer" ? "answerer" : "offerer");
     }
 
     return new Response(null, { status: 101, webSocket: client });
@@ -234,7 +241,7 @@ export class SignalingRoom implements DurableObject {
       // No counterpart yet (the answerer is still arriving). Hold the frame so
       // it is delivered on join instead of dropped — the connection no longer
       // depends on who reaches the room first.
-      await this.bufferFrame(text);
+      await this.bufferFrame(roleTag === "role:offerer" ? "offerer" : "answerer", text);
       return;
     }
     // Throw-safe relay: a counterpart that is mid-close throws on send. If NO
@@ -244,7 +251,7 @@ export class SignalingRoom implements DurableObject {
     let delivered = 0;
     for (const other of others) if (sendRaw(other, text)) delivered++;
     if (delivered === 0) {
-      await this.bufferFrame(text);
+      await this.bufferFrame(roleTag === "role:offerer" ? "offerer" : "answerer", text);
     }
   }
 
@@ -287,27 +294,34 @@ export class SignalingRoom implements DurableObject {
    * limit (the offer and early candidates — all that is needed to connect —
    * arrive first and are well within the cap).
    */
-  private async bufferFrame(text: string): Promise<void> {
-    const seq = (await this.state.storage.get<number>(PENDING_SEQ_KEY)) ?? 0;
-    if (seq >= MAX_BUFFERED_FRAMES) {
+  private async bufferFrame(sourceRole: SignalingRole, text: string): Promise<void> {
+    const pending = await this.state.storage.list<PendingFrame>({ prefix: PENDING_FRAME_PREFIX });
+    if (pending.size >= MAX_BUFFERED_FRAMES) {
       console.warn(
         `[signaling] pre-join buffer full (cap ${MAX_BUFFERED_FRAMES}); dropping frame until the second peer joins`
       );
       return;
     }
+    const seq = (await this.state.storage.get<number>(PENDING_SEQ_KEY)) ?? 0;
     // One batched put: the frame and the advanced sequence counter commit together
     // (atomic — no torn state where the frame is stored but the counter didn't move).
     await this.state.storage.put({
-      [PENDING_FRAME_PREFIX + String(seq).padStart(6, "0")]: text,
+      [PENDING_FRAME_PREFIX + String(seq).padStart(6, "0")]: { sourceRole, text },
       [PENDING_SEQ_KEY]: seq + 1,
     });
   }
 
-  /** Delete every buffered frame and the sequence counter. */
-  private async clearPendingFrames(): Promise<void> {
-    const keys = [...(await this.state.storage.list({ prefix: PENDING_FRAME_PREFIX })).keys()];
+  /** Delete buffered frames, optionally only those sourced by one role. */
+  private async clearPendingFrames(sourceRole?: SignalingRole): Promise<void> {
+    const pending = await this.state.storage.list<PendingFrame>({ prefix: PENDING_FRAME_PREFIX });
+    const keys =
+      sourceRole === undefined
+        ? [...pending.keys()]
+        : [...pending.entries()]
+            .filter(([, frame]) => frame.sourceRole === sourceRole)
+            .map(([key]) => key);
     if (keys.length > 0) await this.state.storage.delete(keys);
-    await this.state.storage.delete(PENDING_SEQ_KEY);
+    if (sourceRole === undefined) await this.state.storage.delete(PENDING_SEQ_KEY);
   }
 
   /**
@@ -317,12 +331,20 @@ export class SignalingRoom implements DurableObject {
    * mid-flush re-delivers (duplicate offer/candidate is harmless) rather than
    * losing the offer.
    */
-  private async flushPendingTo(ws: WebSocket): Promise<void> {
+  private async flushPendingTo(ws: WebSocket, sourceRole: SignalingRole): Promise<void> {
     // list() returns keys in lexicographic order; the zero-padded seq makes that
     // numeric, so send order == arrival order.
-    const pending = await this.state.storage.list<string>({ prefix: PENDING_FRAME_PREFIX });
+    const pending = await this.state.storage.list<PendingFrame>({ prefix: PENDING_FRAME_PREFIX });
     if (pending.size === 0) return;
-    for (const frame of pending.values()) ws.send(frame);
-    await this.clearPendingFrames();
+    const sentKeys: string[] = [];
+    for (const [key, frame] of pending) {
+      if (frame.sourceRole !== sourceRole) continue;
+      ws.send(frame.text);
+      sentKeys.push(key);
+    }
+    if (sentKeys.length > 0) await this.state.storage.delete(sentKeys);
+    if ((await this.state.storage.list({ prefix: PENDING_FRAME_PREFIX })).size === 0) {
+      await this.state.storage.delete(PENDING_SEQ_KEY);
+    }
   }
 }

@@ -5,6 +5,7 @@ import { externalOpenMethods } from "@vibez1/shared/serviceSchemas/externalOpen"
 import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
 import {
   createBridgeStreamRelay,
+  stampEnvelopeCaller,
   type BridgeBodyChunk,
   type BridgeStreamOpen,
   type BridgeStreamRelay,
@@ -56,13 +57,21 @@ export function createBridgeAdapter(deps: {
   // ambiguity, and all RpcMessage types relay without per-type handling.
   const panelSessions = new Map<string, Promise<PanelSessionEntry>>();
 
-  function ensurePanelSession(panelId: string): Promise<WebRtcSession> {
+  function requirePanelLease(panelId: string): PanelLease {
     const lease = deps.getPanelLease(panelId);
     if (!lease) {
+      throw new Error(`Panel ${panelId} has no runtime lease yet — cannot open panel session`);
+    }
+    return lease;
+  }
+
+  function ensurePanelSession(panelId: string): Promise<WebRtcSession> {
+    let lease: PanelLease;
+    try {
+      lease = requirePanelLease(panelId);
+    } catch (err) {
       closePanelSession(panelId);
-      return Promise.reject(
-        new Error(`Panel ${panelId} has no runtime lease yet — cannot open panel session`)
-      );
+      return Promise.reject(err);
     }
     const expectedLeaseKey = panelLeaseKey(lease);
     const existing = panelSessions.get(panelId);
@@ -97,7 +106,10 @@ export function createBridgeAdapter(deps: {
     panelId: string,
     lease: PanelLease
   ): Promise<PanelSessionEntry> {
-    const session = await deps.transport.openPanelSession(lease.runtimeEntityId, lease.connectionId);
+    const session = await deps.transport.openPanelSession(
+      lease.runtimeEntityId,
+      lease.connectionId
+    );
     session.onMessage((envelope) => deps.deliverToPanel(panelId, envelope));
     return { session, leaseKey: panelLeaseKey(lease) };
   }
@@ -130,13 +142,18 @@ export function createBridgeAdapter(deps: {
       chunkFormat: "base64",
       openStream: async (envelope, signal, body) => {
         const session = await ensurePanelSession(panelId);
+        const lease = requirePanelLease(panelId);
         if (typeof session.streamReadable !== "function") {
           throw new Error(
             "Streaming request bodies (uploads) require the WebRTC transport; " +
               "this panel's host session cannot stream a request body"
           );
         }
-        return session.streamReadable(envelope, signal, body);
+        return session.streamReadable(
+          stampEnvelopeCaller(envelope, { callerId: lease.runtimeEntityId, callerKind: "panel" }),
+          signal,
+          body
+        );
       },
       sendToPanel: (msg) => deps.deliverToPanel(panelId, { __vibez1BridgeStream: true, msg }),
     });
@@ -207,7 +224,15 @@ export function createBridgeAdapter(deps: {
           void ensurePanelSession(panelId)
             // Return the send promise so a send rejection is caught here rather
             // than becoming an unhandled rejection (Finding 5).
-            .then((session) => session.send(envelope))
+            .then((session) => {
+              const lease = requirePanelLease(panelId);
+              return session.send(
+                stampEnvelopeCaller(envelope, {
+                  callerId: lease.runtimeEntityId,
+                  callerKind: "panel",
+                })
+              );
+            })
             .catch((err) =>
               console.warn(`[bridgeAdapter] postEnvelope relay failed (panel ${panelId}):`, err)
             );

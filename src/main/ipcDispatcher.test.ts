@@ -282,7 +282,16 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() => {
       expect(openPanelSession).toHaveBeenCalledWith("entity-1", "conn-1");
-      expect(panelSend).toHaveBeenCalledWith(envelope);
+      expect(panelSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: "entity-1",
+          delivery: expect.objectContaining({
+            caller: { callerId: "entity-1", callerKind: "panel" },
+          }),
+          provenance: [{ callerId: "entity-1", callerKind: "panel" }],
+          message: expect.objectContaining({ requestId: "req-1", fromId: "entity-1" }),
+        })
+      );
     });
     // The panel's full surface rides its own session — it never reaches the
     // shell/app server path (call / callAs).
@@ -810,7 +819,11 @@ describe("IpcDispatcher", () => {
         );
       });
       expect(seen.body).toEqual(new Uint8Array([1, 2, 3]));
+      expect(seen.envelope?.from).toBe("entity-1");
       expect(seen.envelope?.message.type).toBe("stream-request");
+      expect(
+        seen.envelope?.message.type === "stream-request" ? seen.envelope.message.fromId : null
+      ).toBe("entity-1");
       expect(panelWc.send).toHaveBeenCalledWith(
         "vibez1:rpc:stream-message",
         expect.objectContaining({ kind: "head", opId: "op-1", status: 201 })

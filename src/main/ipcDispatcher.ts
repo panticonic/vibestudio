@@ -10,6 +10,7 @@ import {
   ELECTRON_LOCAL_SERVICE_NAMES,
   createBridgeStreamRelay,
   responseEnvelopeFor,
+  stampEnvelopeCaller,
   type BridgeBodyChunk,
   type BridgeStreamOpen,
   type BridgeStreamRelay,
@@ -283,13 +284,18 @@ export class IpcDispatcher {
       chunkFormat: "binary",
       openStream: async (envelope, signal, body) => {
         const session = await this.ensurePanelSession(sender, callerId);
+        const conn = this.requirePanelRuntimeConnection(callerId);
         if (typeof session.streamReadable !== "function") {
           throw new Error(
             "Streaming request bodies (uploads) require the WebRTC transport; " +
               "this panel's host session cannot stream a request body"
           );
         }
-        return session.streamReadable(envelope, signal, body);
+        return session.streamReadable(
+          stampEnvelopeCaller(envelope, { callerId: conn.runtimeEntityId, callerKind: "panel" }),
+          signal,
+          body
+        );
       },
       sendToPanel: (msg) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
@@ -444,7 +450,12 @@ export class IpcDispatcher {
    */
   private relayPanelEnvelope(sender: WebContents, callerId: string, envelope: RpcEnvelope): void {
     void this.ensurePanelSession(sender, callerId)
-      .then((session) => session.send(envelope))
+      .then((session) => {
+        const conn = this.requirePanelRuntimeConnection(callerId);
+        return session.send(
+          stampEnvelopeCaller(envelope, { callerId: conn.runtimeEntityId, callerKind: "panel" })
+        );
+      })
       .catch((err: unknown) => {
         const message = envelope.message;
         if (message?.type === "request") {
@@ -461,6 +472,12 @@ export class IpcDispatcher {
       });
   }
 
+  private requirePanelRuntimeConnection(callerId: string): PanelRuntimeConnection {
+    const conn = this.deps.getPanelRuntimeConnection?.(callerId);
+    if (!conn) throw new Error(`No runtime lease for panel ${callerId}`);
+    return conn;
+  }
+
   /**
    * Open (or reuse) the relay session for a panel principal, redeeming its runtime
    * lease. Only a TERMINALLY closed session (lease revoke / session teardown) is
@@ -469,12 +486,14 @@ export class IpcDispatcher {
    * panel webview is destroyed.
    */
   private ensurePanelSession(sender: WebContents, callerId: string): Promise<PanelSession> {
-    const conn = this.deps.getPanelRuntimeConnection?.(callerId);
-    if (!conn) {
+    let conn: PanelRuntimeConnection;
+    try {
+      conn = this.requirePanelRuntimeConnection(callerId);
+    } catch (err) {
       const pending = this.panelSessions.get(callerId);
       this.panelSessions.delete(callerId);
       if (pending) void pending.then((entry) => entry.session.close()).catch(() => undefined);
-      return Promise.reject(new Error(`No runtime lease for panel ${callerId}`));
+      return Promise.reject(err);
     }
     const expectedLeaseKey = panelRuntimeConnectionKey(conn);
     const existing = this.panelSessions.get(callerId);
