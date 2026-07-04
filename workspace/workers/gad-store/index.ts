@@ -44,6 +44,8 @@ import {
   decodeUtf8Text,
   discoverRepoPaths,
   hasConflictMarkers,
+  normalizeWorkspaceRepoPath,
+  VCS_CONTAINER_SECTIONS,
   type BlameOpRow,
   type BlameResolution,
   type EditOp as VcsEditOp,
@@ -877,16 +879,24 @@ function representativeLineBlame(
 /** Normalize a workspace-relative repo path (the `vcs:repo:<path>` key) —
  *  kept semantically identical to the host's normalizeRepoPathForLog. */
 function normalizeRepoPathArg(repoPath: string): string {
-  const normalized = repoPath.replace(/\\/gu, "/");
-  if (!normalized) {
-    throw new Error(`Invalid workspace repo path: ${repoPath}`);
-  }
-  for (const segment of normalized.split("/")) {
-    if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`Invalid workspace repo path: ${repoPath}`);
+  return normalizeWorkspaceRepoPath(repoPath);
+}
+
+function normalizeRepoPathOrSectionPrefixArg(input: string): string {
+  try {
+    return normalizeRepoPathArg(input);
+  } catch (repoError) {
+    const section = input.replace(/\/+$/u, "");
+    if (
+      section === input &&
+      VCS_CONTAINER_SECTIONS.has(section) &&
+      !section.includes("\\") &&
+      !section.includes("\0")
+    ) {
+      return section;
     }
+    throw repoError instanceof Error ? repoError : new Error(String(repoError));
   }
-  return normalized;
 }
 
 /** Per-repo VCS log id for a workspace repo path. */
@@ -11014,7 +11024,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     } else {
       const set = new Set<string>();
       for (const req of input.repos) {
-        const reqNorm = normalizeRepoPathArg(req).replace(/\/+$/u, "");
+        const reqNorm = normalizeRepoPathOrSectionPrefixArg(req);
         for (const repoPath of all) {
           const rn = normalizeRepoPathArg(repoPath);
           if (rn === reqNorm || rn.startsWith(`${reqNorm}/`)) set.add(repoPath);

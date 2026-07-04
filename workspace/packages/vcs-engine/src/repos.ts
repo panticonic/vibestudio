@@ -29,6 +29,52 @@ export const VCS_CONTAINER_SECTIONS: ReadonlySet<string> = new Set([
   "projects",
 ]);
 
+const SAFE_REPO_SEGMENT = /^[A-Za-z0-9._@-]+$/;
+const MAX_REPO_PATH_LENGTH = 256;
+
+export function normalizeWorkspaceRepoPath(repoPath: string): string {
+  if (typeof repoPath !== "string" || repoPath.length === 0) {
+    throw new Error("Invalid workspace repo path: empty");
+  }
+  if (repoPath.length > MAX_REPO_PATH_LENGTH) {
+    throw new Error(`Invalid workspace repo path: exceeds ${MAX_REPO_PATH_LENGTH} characters`);
+  }
+  if (repoPath.includes("\\") || repoPath.includes("\0")) {
+    throw new Error(`Invalid workspace repo path: ${JSON.stringify(repoPath)}`);
+  }
+  const segments = repoPath.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        segment === "" || segment === "." || segment === ".." || !SAFE_REPO_SEGMENT.test(segment)
+    )
+  ) {
+    throw new Error(`Invalid workspace repo path: ${JSON.stringify(repoPath)}`);
+  }
+  if (segments.length === 1) {
+    if (VCS_FLAT_SECTIONS.has(segments[0]!)) return segments[0]!;
+    throw new Error(`Invalid workspace repo path: ${JSON.stringify(repoPath)} is not a flat repo`);
+  }
+  if (segments.length === 2) {
+    const [section, name] = segments as [string, string];
+    if (VCS_CONTAINER_SECTIONS.has(section)) return `${section}/${name}`;
+  }
+  throw new Error(
+    `Invalid workspace repo path: ${JSON.stringify(
+      repoPath
+    )} (expected "meta" or "<container-section>/<name>")`
+  );
+}
+
+export function isWorkspaceRepoPath(repoPath: string): boolean {
+  try {
+    normalizeWorkspaceRepoPath(repoPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Discover the repo set from a workspace-rooted file-path list (the file
  * paths of a composed workspace/base view). Pure function of tracked paths —

@@ -1288,7 +1288,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // package-rename bootstrap commit, the gated ref creation, and disk
     // projection all run in the gad-store DO over the host primitives. In-process
     // shim ONLY for the host integration tests; production routes userland → DO.
-    return this.gad().call("vcsForkRepo", { fromPath, toPath, actor });
+    return this.gad().call("vcsForkRepo", {
+      fromPath: normalizeRepoPathForLog(fromPath),
+      toPath: normalizeRepoPathForLog(toPath),
+      actor,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -2169,8 +2173,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // production attributes it to the originating caller via the relay-minted
     // token. `caller` is dropped here — this in-process shim exists ONLY for the
     // host integration tests, which supply the gate caller through the bridge.
+    const repoPath = normalizeRepoPathForLog(input.repoPath);
     return this.gad().call("vcsDeleteRepo", {
-      repoPath: input.repoPath,
+      repoPath,
       actor: input.actor,
       ...(input.force ? { force: true } : {}),
     });
@@ -2202,8 +2207,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // D3), and the write-only source-dir re-export of the restored main. In-process shim ONLY for
     // the host integration tests (which drive the DO via `this.gad()` and supply
     // the gate caller through the bridge); production routes userland → DO.
+    const repoPath = normalizeRepoPathForLog(input.repoPath);
     return this.gad().call("vcsRestoreRepo", {
-      repoPath: input.repoPath,
+      repoPath,
       actor: input.actor,
     });
   }

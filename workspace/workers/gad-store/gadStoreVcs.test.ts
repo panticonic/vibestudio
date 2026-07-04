@@ -171,6 +171,9 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
       "/packages/demo",
       "..",
       "a/../b",
+      "packages",
+      "agents/demo",
+      "packages/demo/extra",
     ]) {
       expect(() => doi.vcsLog(bad), bad).toThrow(/Invalid workspace repo path/);
     }

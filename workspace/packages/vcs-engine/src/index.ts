@@ -31,4 +31,10 @@ export {
   type BlameResult,
 } from "./blame.js";
 export { VCS_IGNORED_DIRS, VCS_IGNORED_FILES } from "./paths.js";
-export { discoverRepoPaths } from "./repos.js";
+export {
+  VCS_CONTAINER_SECTIONS,
+  VCS_FLAT_SECTIONS,
+  discoverRepoPaths,
+  isWorkspaceRepoPath,
+  normalizeWorkspaceRepoPath,
+} from "./repos.js";

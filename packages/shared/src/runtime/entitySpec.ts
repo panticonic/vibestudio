@@ -66,9 +66,64 @@ export const CONTAINER_SECTIONS = new Set<string>(
   WORKSPACE_SOURCE_DIRS.filter((d) => !FLAT_SECTIONS.has(d) && !NON_REPO_SECTIONS.has(d))
 );
 
+/** One repo path segment: no separators, no control chars, no whitespace. */
+const SAFE_REPO_SEGMENT = /^[A-Za-z0-9._@-]+$/;
+const MAX_REPO_PATH_LENGTH = 256;
+
 /** Is this section flat (the section dir itself a repo, single-segment path)? */
 export function isFlatSection(section: string): boolean {
   return FLAT_SECTIONS.has(section);
+}
+
+/**
+ * Canonical workspace repo identity. A repo path is either:
+ * - `meta`, the only flat repo; or
+ * - exactly `section/name`, where `section` is a container section.
+ *
+ * Source roots such as `packages`, non-repo sections such as `agents/foo`, and
+ * deeper paths such as `packages/foo/bar` are workspace paths, not repo ids.
+ */
+export function normalizeWorkspaceRepoPath(repoPath: string): RepoPath {
+  if (typeof repoPath !== "string" || repoPath.length === 0) {
+    throw new Error("Invalid workspace repo path: empty");
+  }
+  if (repoPath.length > MAX_REPO_PATH_LENGTH) {
+    throw new Error(`Invalid workspace repo path: exceeds ${MAX_REPO_PATH_LENGTH} characters`);
+  }
+  if (repoPath.includes("\\") || repoPath.includes("\0")) {
+    throw new Error(`Invalid workspace repo path: ${JSON.stringify(repoPath)}`);
+  }
+  const segments = repoPath.split("/");
+  if (
+    segments.some(
+      (segment) =>
+        segment === "" || segment === "." || segment === ".." || !SAFE_REPO_SEGMENT.test(segment)
+    )
+  ) {
+    throw new Error(`Invalid workspace repo path: ${JSON.stringify(repoPath)}`);
+  }
+  if (segments.length === 1) {
+    if (FLAT_SECTIONS.has(segments[0]!)) return segments[0]!;
+    throw new Error(`Invalid workspace repo path: ${JSON.stringify(repoPath)} is not a flat repo`);
+  }
+  if (segments.length === 2) {
+    const [section, name] = segments as [string, string];
+    if (CONTAINER_SECTIONS.has(section)) return `${section}/${name}`;
+  }
+  throw new Error(
+    `Invalid workspace repo path: ${JSON.stringify(
+      repoPath
+    )} (expected "meta" or "<container-section>/<name>")`
+  );
+}
+
+export function isWorkspaceRepoPath(repoPath: string): boolean {
+  try {
+    normalizeWorkspaceRepoPath(repoPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -236,12 +291,12 @@ export class IdentityCollisionError extends Error {
   readonly code = "IDENTITY_COLLISION" as const;
   constructor(
     readonly id: string,
-    readonly conflict: { field: string; existing: unknown; attempted: unknown },
+    readonly conflict: { field: string; existing: unknown; attempted: unknown }
   ) {
     super(
       `Identity collision on ${id}: ${conflict.field} existing=${JSON.stringify(
-        conflict.existing,
-      )} attempted=${JSON.stringify(conflict.attempted)}`,
+        conflict.existing
+      )} attempted=${JSON.stringify(conflict.attempted)}`
     );
   }
 }
@@ -250,7 +305,7 @@ export class EntityNotCreatedError extends Error {
   readonly code = "DO_NOT_CREATED" as const;
   constructor(readonly id: string) {
     super(
-      `Entity ${id} is not registered as an active runtime entity. Call runtime.createEntity first.`,
+      `Entity ${id} is not registered as an active runtime entity. Call runtime.createEntity first.`
     );
   }
 }

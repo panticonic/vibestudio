@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { VCS_CONTAINER_SECTIONS, VCS_FLAT_SECTIONS, discoverRepoPaths } from "./repos.js";
+import {
+  VCS_CONTAINER_SECTIONS,
+  VCS_FLAT_SECTIONS,
+  discoverRepoPaths,
+  isWorkspaceRepoPath,
+  normalizeWorkspaceRepoPath,
+} from "./repos.js";
 
 describe("repo taxonomy (userland twin of the host section taxonomy)", () => {
   it("discovers container repos, flat repos, and ignores non-repo sections", () => {
@@ -17,9 +23,7 @@ describe("repo taxonomy (userland twin of the host section taxonomy)", () => {
   });
 
   it("needs a name segment for container sections and dedupes", () => {
-    expect(discoverRepoPaths(["packages", "packages/a/x", "packages/a/y"])).toEqual([
-      "packages/a",
-    ]);
+    expect(discoverRepoPaths(["packages", "packages/a/x", "packages/a/y"])).toEqual(["packages/a"]);
   });
 
   it("classifies meta as flat and the container set as containers", () => {
@@ -27,6 +31,26 @@ describe("repo taxonomy (userland twin of the host section taxonomy)", () => {
     expect(VCS_CONTAINER_SECTIONS.has("meta")).toBe(false);
     for (const section of ["panels", "apps", "packages", "workers", "extensions", "projects"]) {
       expect(VCS_CONTAINER_SECTIONS.has(section)).toBe(true);
+    }
+  });
+
+  it("validates canonical repo ids", () => {
+    for (const good of ["meta", "packages/foo", "panels/chat", "projects/vault"]) {
+      expect(normalizeWorkspaceRepoPath(good)).toBe(good);
+      expect(isWorkspaceRepoPath(good)).toBe(true);
+    }
+    for (const bad of [
+      "packages",
+      "panels",
+      "agents/foo",
+      "src",
+      "packages/foo/bar",
+      "packages//foo",
+      "packages/../foo",
+      "packages\\foo",
+    ]) {
+      expect(isWorkspaceRepoPath(bad), bad).toBe(false);
+      expect(() => normalizeWorkspaceRepoPath(bad), bad).toThrow(/Invalid workspace repo path/);
     }
   });
 });

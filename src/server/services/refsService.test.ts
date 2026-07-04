@@ -54,7 +54,7 @@ describe("refsService", () => {
   }
 
   const oneAdvance = (
-    repoPath = "docs/notes",
+    repoPath = "packages/notes",
     expectedOld: string | null = null,
     next: string | null = STATE_A
   ) => [{ repoPath, expectedOld, next }];
@@ -62,13 +62,13 @@ describe("refsService", () => {
   describe("reads", () => {
     it("readMain / listMains surface the store's records", async () => {
       const { service, refs } = makeService();
-      await refs.seedMain({ repoPath: "docs/notes", value: STATE_A });
+      await refs.seedMain({ repoPath: "packages/notes", value: STATE_A });
       const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") } as never;
 
-      expect(await service.handler(ctx, "readMain", ["docs/notes"])).toMatchObject({
+      expect(await service.handler(ctx, "readMain", ["packages/notes"])).toMatchObject({
         stateHash: STATE_A,
       });
-      expect(await service.handler(ctx, "readMain", ["docs/other"])).toBeNull();
+      expect(await service.handler(ctx, "readMain", ["packages/other"])).toBeNull();
       expect(await service.handler(ctx, "listMains", [])).toHaveLength(1);
     });
 
@@ -79,7 +79,7 @@ describe("refsService", () => {
         { entries: oneAdvance(), operation: "push" },
       ]);
       const rows = (await service.handler(ctx, "listMainRefLog", [
-        { repoPath: "docs/notes" },
+        { repoPath: "packages/notes" },
       ])) as Array<{ operation: string; new: string | null }>;
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ operation: "push", new: STATE_A });
@@ -94,7 +94,7 @@ describe("refsService", () => {
       ])) as { updated: Array<{ stateHash: string | null }> };
 
       expect(result.updated[0]).toMatchObject({ stateHash: STATE_A });
-      expect(refs.readMain("docs/notes")?.stateHash).toBe(STATE_A);
+      expect(refs.readMain("packages/notes")?.stateHash).toBe(STATE_A);
       // Gated through the ref gate with a caller-kind context.
       expect(gateBatches).toHaveLength(1);
       const ctx = gateBatches[0]!.gateContext as RefAdvanceGateContext;
@@ -112,7 +112,7 @@ describe("refsService", () => {
       await expect(
         service.handler({ caller } as never, "updateMains", [{ entries: oneAdvance() }])
       ).rejects.toMatchObject({ code: "EACCES" });
-      expect(refs.readMain("docs/notes")).toBeNull();
+      expect(refs.readMain("packages/notes")).toBeNull();
     });
 
     it("rejects a DIFFERENT (non-writer) DO — identity, not runtime.kind", async () => {
@@ -181,11 +181,11 @@ describe("refsService", () => {
       const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
 
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-        { entries: oneAdvance("docs/notes", null, STATE_A), invocationToken: token },
+        { entries: oneAdvance("packages/notes", null, STATE_A), invocationToken: token },
       ]);
       // Second attempt re-uses the SAME token (still in flight); succeeds.
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-        { entries: oneAdvance("docs/notes", STATE_A, STATE_B), invocationToken: token },
+        { entries: oneAdvance("packages/notes", STATE_A, STATE_B), invocationToken: token },
       ]);
 
       expect(gateBatches).toHaveLength(2);
@@ -233,7 +233,7 @@ describe("refsService", () => {
           { entries: oneAdvance(), invocationToken: "forged-token" },
         ])
       ).rejects.toThrow(/invalid or expired invocation token/);
-      expect(refs.readMain("docs/notes")).toBeNull();
+      expect(refs.readMain("packages/notes")).toBeNull();
     });
 
     it("attributes to the DO itself when no token is presented (no inherited grants)", async () => {
@@ -256,7 +256,7 @@ describe("refsService", () => {
         { entries: oneAdvance(), invocationToken: token, operation: "push", reason: "landed" },
       ]);
 
-      const rows = refs.listMainRefLog("docs/notes");
+      const rows = refs.listMainRefLog("packages/notes");
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({
         operation: "push",
@@ -273,7 +273,7 @@ describe("refsService", () => {
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), operation: "push" },
       ]);
-      const row = refs.listMainRefLog("docs/notes")[0]!;
+      const row = refs.listMainRefLog("packages/notes")[0]!;
       expect(row.writer).toBe(WRITER_ID);
       expect((row.onBehalfOf as { runtime: { id: string } }).runtime.id).toBe(WRITER_ID);
     });
@@ -284,11 +284,13 @@ describe("refsService", () => {
     const ctx = { caller: writerDoCaller() } as never;
     await service.handler(ctx, "updateMains", [{ entries: oneAdvance() }]);
     await expect(
-      service.handler(ctx, "updateMains", [{ entries: oneAdvance("docs/notes", null, STATE_C) }])
+      service.handler(ctx, "updateMains", [
+        { entries: oneAdvance("packages/notes", null, STATE_C) },
+      ])
     ).rejects.toMatchObject({ code: "REF_CONFLICT" });
     await expect(
       service.handler(ctx, "updateMains", [
-        { entries: [{ repoPath: "docs/notes", expectedOld: null, next: "not-a-tree-ref" }] },
+        { entries: [{ repoPath: "packages/notes", expectedOld: null, next: "not-a-tree-ref" }] },
       ])
     ).rejects.toThrow();
   });

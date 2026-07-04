@@ -44,6 +44,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { serializeByKey } from "@vibez1/shared/keyedSerializer";
+import { normalizeWorkspaceRepoPath } from "@vibez1/shared/runtime/entitySpec";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 
 // ---------------------------------------------------------------------------
@@ -263,21 +264,12 @@ export class RefValidationError extends Error {
 /** Mirrors the shared TREE_REF_RE (`manifest:<hex64>`/`state:<hex64>`) without
  *  importing content-store modules — this service stays decoupled. */
 const REF_VALUE_RE = /^(state|manifest):[0-9a-f]{64}$/;
-/** One path segment: no separators, no control chars, no whitespace. */
-const SAFE_NAME_SEGMENT = /^[A-Za-z0-9._@-]+$/;
-const MAX_NAME_LENGTH = 256;
-
 function validateRepoPath(name: unknown): asserts name is string {
-  if (typeof name !== "string" || name.length === 0) {
-    throw new RefValidationError("Empty repoPath");
-  }
-  if (name.length > MAX_NAME_LENGTH) {
-    throw new RefValidationError(`repoPath exceeds ${MAX_NAME_LENGTH} characters`);
-  }
-  for (const segment of name.split("/")) {
-    if (segment === "." || segment === ".." || !SAFE_NAME_SEGMENT.test(segment)) {
-      throw new RefValidationError(`Invalid repoPath: ${JSON.stringify(name)}`);
-    }
+  if (typeof name !== "string") throw new RefValidationError("repoPath must be a string");
+  try {
+    normalizeWorkspaceRepoPath(name);
+  } catch (error) {
+    throw new RefValidationError(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -400,11 +392,13 @@ function loadStore(
   }
   for (const record of parsed.mains ?? []) {
     if (!isMainRefRecord(record)) throw new Error(`Corrupt main-ref record in ${filePath}`);
+    validateRepoPath(record.repoPath);
     mains.set(record.repoPath, { ...record });
   }
   let maxId = 0;
   for (const row of parsed.log ?? []) {
     if (!isMainRefLogRow(row)) throw new Error(`Corrupt main-ref log row in ${filePath}`);
+    validateRepoPath(row.repoPath);
     log.push({ ...row });
     if (row.id > maxId) maxId = row.id;
   }

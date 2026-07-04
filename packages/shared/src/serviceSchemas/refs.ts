@@ -129,7 +129,7 @@ export const refsMethods = defineServiceMethods({
     returns: MainRefRecordSchema.nullable(),
     policy: REFS_POLICY,
     access: READ_ACCESS,
-    examples: [{ args: ["docs/notes"], returns: null }],
+    examples: [{ args: ["packages/notes"], returns: null }],
   },
   listMains: {
     description: "Every repo's protected `main`, sorted by repoPath.",
@@ -148,7 +148,7 @@ export const refsMethods = defineServiceMethods({
     returns: z.array(MainRefLogRowSchema),
     policy: REFS_POLICY,
     access: READ_ACCESS,
-    examples: [{ args: [{ repoPath: "docs/notes" }], returns: [] }],
+    examples: [{ args: [{ repoPath: "packages/notes" }], returns: [] }],
   },
   updateMains: {
     description:

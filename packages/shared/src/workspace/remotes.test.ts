@@ -27,6 +27,11 @@ function initRepo(workspaceRoot: string, repoPath: string): void {
 describe("workspace remotes", () => {
   it("classifies only section/repo paths as declared-remote eligible", () => {
     expect(isDeclaredRemoteRepoPath("panels/chat")).toBe(true);
+    expect(isDeclaredRemoteRepoPath("meta")).toBe(true);
+    expect(isDeclaredRemoteRepoPath("projects/vault")).toBe(true);
+    expect(isDeclaredRemoteRepoPath("packages")).toBe(false);
+    expect(isDeclaredRemoteRepoPath("agents/scribe")).toBe(false);
+    expect(isDeclaredRemoteRepoPath("packages/core/src")).toBe(false);
     expect(isDeclaredRemoteRepoPath("tmp-git-stash-test")).toBe(false);
     expect(isDeclaredRemoteRepoPath("../tmp-git-stash-test")).toBe(false);
   });
@@ -41,6 +46,7 @@ describe("workspace remotes", () => {
       "./panels/chat",
       "panels/chat/",
       "/panels/chat",
+      "panels\\chat",
       "..",
       "a/../b",
     ]) {

@@ -40,13 +40,14 @@ describe("WorkspaceVcs.forkRepo (history-preserving)", () => {
   let workspaceRoot: string;
   let vcs: WorkspaceVcs;
   let gad: TestGad;
+  let refs: ReturnType<typeof createRefService>;
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "gadvcs-fork-"));
     workspaceRoot = path.join(root, "workspace");
     await fsp.mkdir(workspaceRoot);
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
-    const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
+    refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
       blobsDir: path.join(root, "blobs"),
@@ -112,6 +113,17 @@ describe("WorkspaceVcs.forkRepo (history-preserving)", () => {
     await seedChat();
     await vcs.forkRepo("panels/chat", "panels/mychat");
     await expect(vcs.forkRepo("panels/chat", "panels/mychat")).rejects.toThrow(/already exists/);
+  });
+
+  it("rejects a taxonomy-invalid destination before creating any destination ref or files", async () => {
+    await seedChat();
+
+    await expect(vcs.forkRepo("panels/chat", "packages")).rejects.toThrow(
+      /Invalid workspace repo path/
+    );
+
+    expect(refs.listMains().map((record) => record.repoPath)).not.toContain("packages");
+    await expect(fsp.access(path.join(workspaceRoot, "packages"))).rejects.toThrow();
   });
 
   it("rejects forking from a repo with no history", async () => {

@@ -27,7 +27,6 @@ import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
 import type { AppCapability } from "@vibez1/shared/unitManifest";
 import type { Workspace, WorkspaceConfig } from "@vibez1/shared/workspace/types";
-import { normalizeWorkspaceRepoPath } from "@vibez1/shared/workspace/remotes";
 import type { ApprovalDetailFormat, ApprovalPrincipal } from "@vibez1/shared/approvals";
 import type {
   HostTarget,
@@ -266,6 +265,27 @@ function collectWorkspaceUnitPaths(nodes: WorkspaceTreeNode[]): Set<string> {
     }
   }
   return units;
+}
+
+const SAFE_WORKSPACE_PATH_SEGMENT = /^[A-Za-z0-9._@-]+$/;
+
+function normalizeWorkspaceRelativePath(input: string): string {
+  const normalized = input.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!normalized || normalized === ".") return "";
+  if (normalized.includes("\\") || normalized.includes("\0")) {
+    throw new Error(`Invalid workspace path: ${JSON.stringify(input)}`);
+  }
+  for (const segment of normalized.split("/")) {
+    if (
+      segment === "" ||
+      segment === "." ||
+      segment === ".." ||
+      !SAFE_WORKSPACE_PATH_SEGMENT.test(segment)
+    ) {
+      throw new Error(`Invalid workspace path: ${JSON.stringify(input)}`);
+    }
+  }
+  return normalized;
 }
 
 function isTrustedWorkspaceCaller(ctx: ServiceContext, deps: WorkspaceServiceDeps): boolean {
@@ -661,7 +681,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
 
         case "findUnitForPath": {
           if (!deps.treeScanner) throw new Error("Workspace source tree is unavailable");
-          const inputPath = normalizeWorkspaceRepoPath(args[0] as string);
+          const inputPath = normalizeWorkspaceRelativePath(args[0] as string);
           const tree = await deps.treeScanner.getSourceTree();
           const units = [...collectWorkspaceUnitPaths(tree.children as WorkspaceTreeNode[])].sort(
             (a, b) => b.length - a.length

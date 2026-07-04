@@ -10,6 +10,7 @@
  */
 
 import * as path from "node:path";
+import { normalizeWorkspaceRepoPath } from "@vibez1/shared/runtime/entitySpec";
 
 export const VCS_MAIN_HEAD = "main";
 
@@ -37,21 +38,11 @@ export function logIdForRepo(repoPath: string): string {
  */
 export function normalizeRepoPathForLog(repoPath: string): string {
   // Canonical repo identity — one string backs the log id (`vcs:repo:<norm>`),
-  // the materializedFor cache, and the projection dir. Reject every non-canonical
-  // alias `refService.validateRepoPath` rejects (`.`/`..`/empty segments, so no
-  // interior `//`, and no leading/trailing slash) rather than silently rewriting,
-  // so aliases like `panels/./chat`, `panels//chat`, and `panels/chat/` can never
-  // split into a second identity that collides on disk with `panels/chat`.
-  const normalized = repoPath.replace(/\\/g, "/");
-  if (!normalized) {
-    throw new Error(`Invalid workspace repo path: ${repoPath}`);
-  }
-  for (const segment of normalized.split("/")) {
-    if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`Invalid workspace repo path: ${repoPath}`);
-    }
-  }
-  return normalized;
+  // the materializedFor cache, and the projection dir. Reject aliases and
+  // workspace paths that are not repo ids (for example `packages` or
+  // `packages/foo/bar`) rather than silently rewriting them into disk-colliding
+  // identities.
+  return normalizeWorkspaceRepoPath(repoPath);
 }
 
 export function vcsContextHead(contextId: string): string {
