@@ -1,7 +1,9 @@
-import { Badge, Box, Button, Card, Flex, Text } from "@radix-ui/themes";
-import { ExternalLinkIcon, MagnifyingGlassIcon } from "@radix-ui/react-icons";
+import { useMemo, useState } from "react";
+import { Badge, Box, Button, Card, Flex, IconButton, Text } from "@radix-ui/themes";
+import { ExternalLinkIcon, MagnifyingGlassIcon, UpdateIcon } from "@radix-ui/react-icons";
 import type { ChatMessage, SubagentRunState } from "@workspace/agentic-core";
 import { useOptionalChatContext } from "../context/ChatContext";
+import { ExpandableChevron } from "./shared/Chevron";
 
 /**
  * SubagentRunCard — a standalone, richer render for an invocation that spawned a
@@ -31,23 +33,39 @@ const MERGE_LABEL: Record<NonNullable<SubagentRunState["merge"]>, { label: strin
   discarded: { label: "Discarded", color: "gray" },
 };
 
+function statusLabel(status: string): string {
+  return status.slice(0, 1).toUpperCase() + status.slice(1);
+}
+
+function updateLines(output: string | undefined): string[] {
+  return (output ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const forkState = useOptionalChatContext()?.forkState;
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const invocation = msg.invocation;
+  const sayFeed = useMemo(
+    () => updateLines(invocation?.execution.consoleOutput),
+    [invocation?.execution.consoleOutput]
+  );
   const subagent = invocation?.subagent;
   if (!invocation || !subagent) return null;
 
   const status = invocation.execution.status;
   const label = subagent.label || invocation.name || "Subagent";
   const merge = subagent.merge ? MERGE_LABEL[subagent.merge] : undefined;
-  const canOpen = Boolean(subagent.taskChannelId && subagent.contextId);
-  const canReview = Boolean(subagent.contextId);
+  const canOpen = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
+  const canReview = Boolean(forkState && subagent.contextId);
   // Live say / turn-report entries relayed onto the run, folded into
   // `consoleOutput` (newline-joined) by the chat projection.
-  const sayFeed = (invocation.execution.consoleOutput ?? "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+  const latestUpdate = sayFeed.length > 0
+    ? sayFeed[sayFeed.length - 1]
+    : invocation.execution.description.trim();
+  const detailsLabel = detailsOpen ? "Hide details" : "Show details";
 
   const handleOpen = () => {
     if (subagent.taskChannelId && subagent.contextId) {
@@ -62,14 +80,15 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
 
   return (
     <Box className="message-row message-row-agent">
-      <Card className="message-card message-card-subagent">
-        <Flex direction="column" gap="2" style={{ minWidth: 0 }}>
-          <Flex align="center" justify="between" gap="2" wrap="wrap">
-            <Flex align="center" gap="2" style={{ minWidth: 0 }}>
-              <Text size="1" aria-hidden="true">
+      <Card className="message-card message-card-subagent" data-testid="subagent-run-card">
+        <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
+          <Flex align="center" gap="2" className="subagent-card-header">
+            <span className={`subagent-status-dot subagent-status-dot-${status}`} aria-hidden="true" />
+            <Flex align="center" gap="2" className="subagent-title-block">
+              <Text className="subagent-glyph" size="1" aria-hidden="true">
                 ⑂
               </Text>
-              <Text size="2" weight="medium" truncate>
+              <Text className="subagent-title" size="2" weight="medium" truncate>
                 {label}
               </Text>
               {subagent.mode && (
@@ -77,54 +96,84 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                   {subagent.mode}
                 </Badge>
               )}
-            </Flex>
-            <Flex align="center" gap="2">
-              <Badge size="1" variant="soft" color={STATUS_COLOR[status] ?? "gray"}>
-                {status}
-              </Badge>
               {merge && (
-                <Badge size="1" variant="soft" color={merge.color}>
+                <Badge className="subagent-merge-badge" size="1" variant="soft" color={merge.color}>
                   {merge.label}
                 </Badge>
               )}
             </Flex>
+            <Flex align="center" gap="1" className="subagent-card-actions">
+              <Badge size="1" variant="soft" color={STATUS_COLOR[status] ?? "gray"}>
+                {statusLabel(status)}
+              </Badge>
+              <Button
+                className="subagent-details-toggle"
+                size="1"
+                variant="ghost"
+                color="gray"
+                title={detailsLabel}
+                aria-label={detailsLabel}
+                aria-expanded={detailsOpen}
+                onClick={() => setDetailsOpen((open) => !open)}
+              >
+                <ExpandableChevron expanded={detailsOpen} />
+              </Button>
+              <IconButton
+                size="1"
+                variant="ghost"
+                color="gray"
+                disabled={!canOpen}
+                onClick={handleOpen}
+                title="Open subagent chat"
+                aria-label="Open subagent chat"
+              >
+                <ExternalLinkIcon />
+              </IconButton>
+              <IconButton
+                size="1"
+                variant="ghost"
+                disabled={!canReview}
+                onClick={handleReview}
+                title="Review and pick changes"
+                aria-label="Review and pick changes"
+              >
+                <MagnifyingGlassIcon />
+              </IconButton>
+            </Flex>
           </Flex>
-          <Text size="1" color="gray" style={{ whiteSpace: "pre-wrap", minWidth: 0 }}>
-            {invocation.execution.description}
-          </Text>
-          {sayFeed.length > 0 && (
-            <Box
-              className="subagent-say-feed"
-              style={{
-                maxHeight: 160,
-                overflowY: "auto",
-                borderLeft: "2px solid var(--gray-a5)",
-                paddingLeft: 8,
-              }}
-            >
-              <Flex direction="column" gap="1">
-                {sayFeed.map((line, i) => (
-                  <Text
-                    key={i}
-                    size="1"
-                    style={{ whiteSpace: "pre-wrap", minWidth: 0, wordBreak: "break-word" }}
-                  >
-                    {line}
-                  </Text>
-                ))}
-              </Flex>
+          {latestUpdate && (
+            <Flex align="center" gap="2" className="subagent-update-preview">
+              <UpdateIcon aria-hidden="true" />
+              <Text size="1" color="gray" truncate>
+                {latestUpdate}
+              </Text>
+              {sayFeed.length > 1 && (
+                <Badge size="1" variant="soft" color="gray">
+                  {sayFeed.length}
+                </Badge>
+              )}
+            </Flex>
+          )}
+          {detailsOpen && (
+            <Box className="subagent-details">
+              {invocation.execution.description && (
+                <Text size="1" color="gray" className="subagent-description">
+                  {invocation.execution.description}
+                </Text>
+              )}
+              {sayFeed.length > 0 && (
+                <Box className="subagent-say-feed">
+                  <Flex direction="column" gap="1">
+                    {sayFeed.map((line, i) => (
+                      <Text key={i} size="1" className="subagent-say-line">
+                        {line}
+                      </Text>
+                    ))}
+                  </Flex>
+                </Box>
+              )}
             </Box>
           )}
-          <Flex align="center" gap="2" wrap="wrap">
-            <Button size="1" variant="soft" color="gray" disabled={!canOpen} onClick={handleOpen}>
-              <ExternalLinkIcon />
-              Open
-            </Button>
-            <Button size="1" variant="soft" disabled={!canReview} onClick={handleReview}>
-              <MagnifyingGlassIcon />
-              Review &amp; pick
-            </Button>
-          </Flex>
         </Flex>
       </Card>
     </Box>

@@ -34,6 +34,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
 }));
 
 import { MessageList } from "./MessageList.js";
+import { SubagentRunCard } from "./SubagentRunCard.js";
 
 function makeMessage(overrides: Record<string, unknown>) {
   return {
@@ -615,5 +616,51 @@ describe("MessageList typing indicators (roster-based)", () => {
       debugSpy.mockRestore();
       errorSpy.mockRestore();
     }
+  });
+});
+
+describe("SubagentRunCard", () => {
+  it("is compact by default and expands the full progress feed on demand", () => {
+    render(React.createElement(SubagentRunCard, {
+      msg: makeMessage({
+        id: "subagent-run-1",
+        contentType: "invocation",
+        invocation: {
+          id: "run-1",
+          name: "spawn_subagent",
+          arguments: {},
+          execution: {
+            status: "pending",
+            description: "Pilot-process one Google Drive PDF into a normalized poetry archive repo.",
+            consoleOutput: [
+              "Downloaded Judith Pickard poems.pdf",
+              "Extracted text from 12 pages",
+              "Writing normalized catalog",
+            ].join("\n"),
+          },
+          subagent: {
+            runId: "run-1",
+            mode: "fresh",
+            taskChannelId: "task-run-1",
+            contextId: "ctx-run-1",
+            label: "PDF poem extraction pilot",
+          },
+        },
+        complete: true,
+      }),
+    } as never));
+
+    expect(screen.getByTestId("subagent-run-card")).toBeTruthy();
+    expect(screen.getByText("PDF poem extraction pilot")).toBeTruthy();
+    expect(screen.getByText("Writing normalized catalog")).toBeTruthy();
+    expect(screen.queryByText("Downloaded Judith Pickard poems.pdf")).toBeNull();
+    expect(screen.queryByText("Extracted text from 12 pages")).toBeNull();
+    expect(screen.queryByText("Pilot-process one Google Drive PDF into a normalized poetry archive repo.")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Show details"));
+
+    expect(screen.getByText("Downloaded Judith Pickard poems.pdf")).toBeTruthy();
+    expect(screen.getByText("Extracted text from 12 pages")).toBeTruthy();
+    expect(screen.getByText("Pilot-process one Google Drive PDF into a normalized poetry archive repo.")).toBeTruthy();
   });
 });
