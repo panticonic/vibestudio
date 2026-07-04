@@ -218,8 +218,66 @@ export const vcsEditOpRowSchema = z.object({
   invocationId: nullableString,
   turnId: nullableString,
   createdAt: nullableString,
+  // Wave 1 / U1 blame provenance: raw hunks_json (parsed by blame consumers),
+  // snapshot-take + binary flags (both drive blame chain-restart semantics).
+  hunksJson: nullableString,
+  synthetic: z.boolean(),
+  binary: z.boolean(),
 });
 export type VcsEditOpRow = z.infer<typeof vcsEditOpRowSchema>;
+
+/** One contiguous line range attributed by `vcs.blameLines` (design §5.2). */
+export const vcsBlameLineSchema = z.object({
+  startLine: z.number().int(),
+  endLine: z.number().int(),
+  opId: z.number().int().nullable(),
+  kind: nullableString,
+  commitEventId: nullableString,
+  commitMessage: nullableString,
+  invocationId: nullableString,
+  turnId: nullableString,
+  actorId: nullableString,
+  degraded: z.enum(["create", "binary", "synthetic", "older-than-log"]).nullable(),
+});
+export type VcsBlameLine = z.infer<typeof vcsBlameLineSchema>;
+
+/**
+ * One rendered read-attachment / drill-down line (design §7.5): a bounded
+ * `insight + handle`. `exception` sorts it first, above density (contradictions,
+ * cross-session concurrency, main movements); `score` is the §6.1 rank (0 for
+ * exceptions — they render regardless). USERLAND-dispatched result shape (the
+ * gad-store DO's `provenanceForFile`/`provenanceForSession`/`provenanceForClaim`).
+ */
+export const vcsProvItemSchema = z.object({
+  line: z.string(),
+  handle: z.string(),
+  kind: z.string(),
+  exception: z.boolean(),
+  score: z.number(),
+});
+export type VcsProvItem = z.infer<typeof vcsProvItemSchema>;
+
+/** The §7.1 read-attachment / drill-down page. `total` is the full ranked list
+ *  (exceptions + floored density); `suppressed` = the block signature was
+ *  unchanged; `degraded` = the compute overran its budget and returned the hint. */
+export const vcsProvenanceForFileResultSchema = z.object({
+  items: z.array(vcsProvItemSchema),
+  shown: z.number().int(),
+  total: z.number().int(),
+  nextCursor: z.string().optional(),
+  suppressed: z.boolean(),
+  degraded: z.boolean().optional(),
+});
+export type VcsProvenanceForFileResult = z.infer<typeof vcsProvenanceForFileResultSchema>;
+
+/** The §7.6 session-orientation page (exceptions-first, then density-ranked). */
+export const vcsProvenanceForSessionResultSchema = z.object({
+  items: z.array(vcsProvItemSchema),
+  shown: z.number().int(),
+  total: z.number().int(),
+  nextCursor: z.string().optional(),
+});
+export type VcsProvenanceForSessionResult = z.infer<typeof vcsProvenanceForSessionResultSchema>;
 
 /** A commit on the source head not yet on the target (upstream-commit shape). */
 export const vcsUpstreamCommitSchema = z.object({
@@ -644,12 +702,14 @@ const contextScopeArg = z
   );
 
 // NOTE (P5c): the read/history traversals — commitEdits, fileHistory,
-// commitAncestors, editsByActor, editsByTurn, editsByInvocation, log — are
-// USERLAND-dispatched: they run in the gad-store DO behind the `vcs` manifest
-// service (vibez1.vcs.v1) and are called through
-// `createDurableObjectServiceClient`, not this host service table. Their row
-// schemas above (VcsEditOpRow, VcsCommitAncestor, VcsLogEntry) remain the wire
-// contract.
+// commitAncestors, editsByActor, editsByTurn, editsByInvocation, log,
+// blameLines — and the §6/§7 provenance surface — provenanceForFile,
+// provenanceForSession, provenanceForClaim — are USERLAND-dispatched: they run
+// in the gad-store DO behind the `vcs` manifest service (vibez1.vcs.v1) and are
+// called through `createDurableObjectServiceClient`, not this host service
+// table. Their row/result schemas above (VcsEditOpRow, VcsBlameLine,
+// VcsCommitAncestor, VcsLogEntry, VcsProvItem/VcsProvenanceForFileResult) remain
+// the wire contract.
 export const vcsMethods = defineServiceMethods({
   edit: {
     description:
@@ -828,7 +888,10 @@ export const vcsMethods = defineServiceMethods({
     examples: [
       {
         args: [
-          { source: { contextId: "ctx_42" }, picks: [{ kind: "paths", paths: ["panels/chat/x.ts"] }] },
+          {
+            source: { contextId: "ctx_42" },
+            picks: [{ kind: "paths", paths: ["panels/chat/x.ts"] }],
+          },
         ],
       },
     ],

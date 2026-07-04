@@ -146,6 +146,12 @@ describe("GadWorkspaceDO unified log (schema v19)", () => {
         "gad_manifest_entries",
         "gad_state_transitions",
         "gad_claims",
+        "gad_claim_relations",
+        "gad_knowledge_ledger",
+        "gad_touches",
+        "gad_provenance_cache",
+        "gad_prov_metrics",
+        "gad_prov_render_log",
       ])
     );
     for (const dropped of [
@@ -1331,9 +1337,9 @@ describe("channel adapters (§3.4)", () => {
     const second = await call<any>("appendChannelEnvelope", input);
 
     expect(second).toEqual(first);
-    expect(await countRows(call, "log_id = ? AND envelope_id = ?", ["channel-1", "env-idempotent"])).toBe(
-      1
-    );
+    expect(
+      await countRows(call, "log_id = ? AND envelope_id = ?", ["channel-1", "env-idempotent"])
+    ).toBe(1);
     await expect(
       call("appendChannelEnvelope", {
         ...input,
@@ -1373,7 +1379,9 @@ describe("channel adapters (§3.4)", () => {
       payload: { typeId: "custom" },
       registryMutation: { kind: "clearMessageType", typeId: "custom" },
     });
-    expect(await call<any>("getMessageType", { channelId: "channel-1", typeId: "custom" })).toBeNull();
+    expect(
+      await call<any>("getMessageType", { channelId: "channel-1", typeId: "custom" })
+    ).toBeNull();
     expect(await call<any[]>("listMessageTypes", { channelId: "channel-1" })).toEqual([]);
 
     // a later upsert at a higher seq wins over the earlier clear
@@ -1668,7 +1676,11 @@ describe("forkLog no-copy (§3.5)", () => {
       payload: { value: 4 },
     });
     expect(
-      await call<any[]>("listChannelEnvelopesAfter", { channelId: "channel-fork", seq: 3, limit: 10 })
+      await call<any[]>("listChannelEnvelopesAfter", {
+        channelId: "channel-fork",
+        seq: 3,
+        limit: 10,
+      })
     ).toEqual([expect.objectContaining({ envelopeId: "env-fork-new", seq: 4 })]);
   });
 });
@@ -2023,9 +2035,7 @@ describe("recursive manifests (§3.8)", () => {
       trajectoryId: "traj-manifest",
       branchId: "a",
     });
-    expect(
-      branchFiles.map((row: any) => [row.path, row.content_hash]).sort()
-    ).toEqual([
+    expect(branchFiles.map((row: any) => [row.path, row.content_hash]).sort()).toEqual([
       ["docs/readme.md", "blob:r1"],
       ["src/a.ts", "blob:a1"],
       ["src/lib/util.ts", "blob:u1"],
@@ -2644,7 +2654,13 @@ describe("stored-value refs (§3.14)", () => {
     });
 
     const refs = await call<{
-      rows: Array<{ log_id: string; head: string; envelope_id: string; field_path: string; digest: string }>;
+      rows: Array<{
+        log_id: string;
+        head: string;
+        envelope_id: string;
+        field_path: string;
+        digest: string;
+      }>;
     }>(
       "query",
       "SELECT log_id, head, envelope_id, field_path, digest FROM log_blob_refs ORDER BY envelope_id, field_path",
@@ -2939,9 +2955,9 @@ describe("lineage queries over causality edges (§3.15)", () => {
 
     const publishedEnvelopeId = sideEnvelopes[0].publication.envelopeId;
     const publicChannel = await call<any[]>("listChannelEnvelopes", { channelId: "main-channel" });
-    expect(
-      publicChannel.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)
-    ).toEqual(["Side task summary for the main session"]);
+    expect(publicChannel.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)).toEqual([
+      "Side task summary for the main session",
+    ]);
     expect(JSON.stringify(publicChannel)).not.toContain("keep this out of PubSub");
 
     const privateLineage = await call<any>("getPrivateLineageForPublishedEnvelope", {
@@ -3329,9 +3345,7 @@ describe("GC reachability protections (§3.18)", () => {
     expect(mark2.liveBlobDigests).not.toContain("blob:edit-new");
     expect(mark2.liveBlobDigests).not.toContain("blob:edit-old");
     const swept2 = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
-    expect(swept2.digests).toEqual(
-      expect.arrayContaining(["blob:edit-new", "blob:edit-old"])
-    );
+    expect(swept2.digests).toEqual(expect.arrayContaining(["blob:edit-new", "blob:edit-old"]));
   });
 
   it("does not sweep a candidate that gained an uncommitted edit-op reference after mark", async () => {
@@ -3453,7 +3467,12 @@ describe("GC reachability protections (§3.18)", () => {
     });
     // Backdate every value past the creation grace window: staged metadata
     // alone is not a permanent root.
-    for (const table of ["gad_worktree_states", "gad_blobs", "gad_manifest_nodes", "gad_file_versions"]) {
+    for (const table of [
+      "gad_worktree_states",
+      "gad_blobs",
+      "gad_manifest_nodes",
+      "gad_file_versions",
+    ]) {
       sql.exec(`UPDATE ${table} SET created_at = ?`, PAST_GRACE);
     }
 
@@ -3796,7 +3815,10 @@ describe("computeMerge (P5b — userland merge semantics)", () => {
       gad.call,
       "vcs:repo:panels/a",
       [{ path: "f.txt", contentHash: baseHash }],
-      [{ path: "f.txt", contentHash: baseHash }, { path: "ours.txt", contentHash: cas.putText("o\n") }],
+      [
+        { path: "f.txt", contentHash: baseHash },
+        { path: "ours.txt", contentHash: cas.putText("o\n") },
+      ],
       "ours"
     );
     // `theirs` is a server-minted state: unknown to the DO, mirrored in the
@@ -3829,5 +3851,450 @@ describe("computeMerge (P5b — userland merge semantics)", () => {
         labels: { ours: "a", theirs: "b" },
       })
     ).rejects.toThrow(/unknown worktree state/);
+  });
+});
+
+describe("knowledge ledger + claims (§8.1)", () => {
+  it("records a claim through the durable ledger and projects gad_claims + FTS", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const res = await call<{
+      claimId?: string;
+      ledgerEntryId?: string;
+      duplicates: Array<{ claimId: string; text: string; score: number }>;
+    }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      invocationId: "inv-1",
+      claim: {
+        text: "The gad store owns all VCS semantics",
+        subject: "gad-store",
+        predicate: "owns",
+        object: "vcs semantics",
+      },
+    });
+    expect(res.claimId).toBeTruthy();
+    expect(res.ledgerEntryId).toBeTruthy();
+    expect(res.duplicates).toEqual([]);
+
+    const ledger = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT entry_id, kind, seq FROM gad_knowledge_ledger",
+      []
+    );
+    expect(ledger.rows.length).toBe(1);
+    expect(ledger.rows[0]).toEqual(
+      expect.objectContaining({ entry_id: res.ledgerEntryId, kind: "claim_recorded", seq: 1 })
+    );
+
+    const claims = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT claim_id, text, subject, predicate, object, status, ledger_entry_id, trajectory_event_id, invocation_id FROM gad_claims",
+      []
+    );
+    expect(claims.rows.length).toBe(1);
+    expect(claims.rows[0]).toEqual(
+      expect.objectContaining({
+        claim_id: res.claimId,
+        text: "The gad store owns all VCS semantics",
+        subject: "gad-store",
+        predicate: "owns",
+        object: "vcs semantics",
+        status: "active",
+        ledger_entry_id: res.ledgerEntryId,
+        invocation_id: "inv-1",
+      })
+    );
+    // trajectory_event_id is the (pre-minted) knowledge event's envelope id.
+    expect(claims.rows[0]?.["trajectory_event_id"]).toBeTruthy();
+
+    const recall = await call<{ results: Array<{ anchor: Record<string, unknown> | null }> }>(
+      "recallMemory",
+      { query: "vcs semantics", kinds: ["claim"] }
+    );
+    expect(recall.results.some((r) => r.anchor?.["claimId"] === res.claimId)).toBe(true);
+
+    const metrics = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT metric, bucket, count FROM gad_prov_metrics",
+      []
+    );
+    expect(metrics.rows).toContainEqual(
+      expect.objectContaining({ metric: "claims_recorded", bucket: "standalone", count: 1 })
+    );
+  });
+
+  it("survives a schema bump: the ledger is exempt from the drop and re-projects claims + relations", async () => {
+    const first = await createTestDO(GadWorkspaceDO);
+    const c1 = await first.call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "durable claim one that outlives the era" },
+    });
+    const c2 = await first.call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "durable claim two, unrelated words entirely" },
+    });
+    await first.call("knowledgeRelateClaims", {
+      logId: "traj-1",
+      head: "main",
+      relations: [{ src: c1.claimId, relation: "contradicts", dst: c2.claimId }],
+    });
+
+    // Stamp an older schema version so reopening the same storage migrates
+    // (drop projections + recreate) — the big-bang "last wipe".
+    first.db.run("UPDATE state SET value = '24' WHERE key = 'schema_version'");
+    const second = await createTestDO(GadWorkspaceDO, undefined, { db: first.db });
+
+    const version = await second.call<{ rows: Array<{ value: string }> }>(
+      "query",
+      "SELECT value FROM state WHERE key = 'schema_version'",
+      []
+    );
+    expect(version.rows[0]?.value).toBe("25");
+
+    // The ledger survived the gad_% drop sweep.
+    const ledger = await second.call<{ rows: Array<{ kind: string }> }>(
+      "query",
+      "SELECT kind FROM gad_knowledge_ledger ORDER BY seq",
+      []
+    );
+    expect(ledger.rows.map((r) => r.kind)).toEqual([
+      "claim_recorded",
+      "claim_recorded",
+      "claims_related",
+    ]);
+
+    // gad_claims was dropped and rebuilt purely by replaying the ledger.
+    const claims = await second.call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT claim_id, text FROM gad_claims ORDER BY text",
+      []
+    );
+    expect(claims.rows.map((r) => r["claim_id"])).toEqual([c1.claimId, c2.claimId]);
+
+    // And so was the relation.
+    const relations = await second.call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT src_claim_id, relation, dst_claim_id FROM gad_claim_relations",
+      []
+    );
+    expect(relations.rows).toEqual([
+      expect.objectContaining({
+        src_claim_id: c1.claimId,
+        relation: "contradicts",
+        dst_claim_id: c2.claimId,
+      }),
+    ]);
+
+    // A later full rebuild must NOT lose the ledger-only claims: post-bump the
+    // trajectory events are gone, so the replay leans on the ledger for claims.
+    await second.call("rebuildTrajectoryProjections", {});
+    const afterReplay = await second.call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(afterReplay.rows[0]?.n).toBe(2);
+    const relAfterReplay = await second.call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claim_relations",
+      []
+    );
+    expect(relAfterReplay.rows[0]?.n).toBe(1);
+  });
+
+  it("dedups on write: near-duplicates return candidates without recording unless forced", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const first = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "system uses log events for provenance" },
+    });
+    expect(first.claimId).toBeTruthy();
+
+    const dup = await call<{
+      claimId?: string;
+      duplicates: Array<{ claimId: string; score: number }>;
+    }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "system uses log events for provenance" },
+    });
+    expect(dup.claimId).toBeUndefined();
+    expect(dup.duplicates.length).toBeGreaterThan(0);
+    expect(dup.duplicates[0]?.claimId).toBe(first.claimId);
+    expect(dup.duplicates[0]?.score).toBeGreaterThanOrEqual(0.6);
+
+    const afterSkip = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(afterSkip.rows[0]?.n).toBe(1);
+
+    const forced = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "system uses log events for provenance" },
+      force: true,
+    });
+    expect(forced.claimId).toBeTruthy();
+    const afterForce = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(afterForce.rows[0]?.n).toBe(2);
+  });
+
+  it("projects claims_related and dedups it across replay + a fork fold", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const c1 = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "claim one about apples and orchards" },
+    });
+    const c2 = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "claim two about oranges and groves" },
+    });
+    const rel = await call<{ ledgerEntryId: string; related: number }>("knowledgeRelateClaims", {
+      logId: "traj-1",
+      head: "main",
+      invocationId: "inv-rel",
+      relations: [{ src: c1.claimId, relation: "contradicts", dst: c2.claimId, weight: 3 }],
+    });
+    expect(rel.related).toBe(1);
+
+    let rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT event_id, src_claim_id, relation, dst_claim_id, weight FROM gad_claim_relations",
+      []
+    );
+    expect(rows.rows.length).toBe(1);
+    expect(rows.rows[0]).toEqual(
+      expect.objectContaining({
+        src_claim_id: c1.claimId,
+        relation: "contradicts",
+        dst_claim_id: c2.claimId,
+        weight: 3,
+      })
+    );
+
+    // Fork the whole trajectory at its tip so the fork inherits the relate event.
+    const tip = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT MAX(seq) AS n FROM log_events WHERE log_id = ? AND head = ?",
+      ["traj-1", "main"]
+    );
+    await call("forkLog", {
+      fromLogId: "traj-1",
+      fromHead: "main",
+      toLogId: "traj-1",
+      toHead: "ctx:fork",
+      atSeq: tip.rows[0]?.n,
+      owner,
+    });
+
+    // Replay projects the SAME relate event under both heads; the unique
+    // identity + INSERT OR IGNORE keeps exactly one relation row.
+    await call("rebuildTrajectoryProjections", {});
+    rows = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claim_relations",
+      []
+    );
+    expect(rows.rows[0]?.["n"]).toBe(1);
+    // Claims dedup by claim_id across the fold too.
+    const claims = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(claims.rows[0]?.n).toBe(2);
+  });
+
+  it("projects a directly-appended knowledge.claims_related event (registration + inline fallback)", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-x",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "rel-ev-1",
+          event: event("knowledge.claims_related", {
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              relations: [{ src: "claim-a", relation: "supports", dst: "claim-b", weight: 2 }],
+            },
+          }),
+        },
+      ],
+    });
+    const rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT event_id, src_claim_id, relation, dst_claim_id, weight FROM gad_claim_relations",
+      []
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({
+        event_id: "rel-ev-1",
+        src_claim_id: "claim-a",
+        relation: "supports",
+        dst_claim_id: "claim-b",
+        weight: 2,
+      }),
+    ]);
+  });
+
+  it("snapshots the anchor (repo, commit message, actor, time) and buckets commit-borne claims", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    // Seed a commit transition so the anchor resolves the message's first line.
+    sql.exec(
+      "INSERT INTO gad_state_transitions (event_id, input_state_hash, output_state_hash, summary, created_at) VALUES (?, ?, ?, ?, ?)",
+      "commit-ev-1",
+      "state:in",
+      "state:out",
+      "Fix the parser\n\nlong body text that is not the first line",
+      "2026-05-20T12:00:00.000Z"
+    );
+    const rec = await call<{ ledgerEntryId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser now handles trailing newlines" },
+      anchor: { commitEventId: "commit-ev-1", repoPath: "packages/parser" },
+    });
+    const ledger = await call<{ rows: Array<{ anchor_json: string }> }>(
+      "query",
+      "SELECT anchor_json FROM gad_knowledge_ledger WHERE entry_id = ?",
+      [rec.ledgerEntryId]
+    );
+    const anchor = JSON.parse(ledger.rows[0]!.anchor_json) as Record<string, unknown>;
+    expect(anchor["repoPath"]).toBe("packages/parser");
+    expect(anchor["commitEventId"]).toBe("commit-ev-1");
+    expect(anchor["commitMessage"]).toBe("Fix the parser");
+    expect(typeof anchor["actorLabel"]).toBe("string");
+    expect(typeof anchor["recordedAt"]).toBe("string");
+
+    const metrics = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT metric, bucket, count FROM gad_prov_metrics",
+      []
+    );
+    expect(metrics.rows).toContainEqual(
+      expect.objectContaining({ metric: "claims_recorded", bucket: "commit", count: 1 })
+    );
+  });
+
+  it("revises and retracts a claim through the ledger", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const rec = await call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { subject: "parser", predicate: "handles", object: "newlines" },
+    });
+    const revised = await call<{ ledgerEntryId: string }>("knowledgeReviseClaim", {
+      logId: "traj-1",
+      head: "main",
+      claimId: rec.claimId,
+      patch: { object: "trailing newlines", kind: "statement" },
+    });
+    let claims = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT subject, predicate, object, claim_kind, status, ledger_entry_id FROM gad_claims WHERE claim_id = ?",
+      [rec.claimId]
+    );
+    expect(claims.rows[0]).toEqual(
+      expect.objectContaining({
+        subject: "parser",
+        predicate: "handles",
+        object: "trailing newlines",
+        claim_kind: "statement",
+        status: "active",
+        ledger_entry_id: revised.ledgerEntryId,
+      })
+    );
+
+    const retracted = await call<{ ledgerEntryId: string }>("knowledgeRetractClaim", {
+      logId: "traj-1",
+      head: "main",
+      claimId: rec.claimId,
+    });
+    claims = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT status, ledger_entry_id FROM gad_claims WHERE claim_id = ?",
+      [rec.claimId]
+    );
+    expect(claims.rows[0]?.["status"]).toBe("retracted");
+    // Retract is status-only: the content pointer stays on the revise entry,
+    // never the retract entry.
+    expect(claims.rows[0]?.["ledger_entry_id"]).toBe(revised.ledgerEntryId);
+    expect(claims.rows[0]?.["ledger_entry_id"]).not.toBe(retracted.ledgerEntryId);
+
+    const ledger = await call<{ rows: Array<{ kind: string }> }>(
+      "query",
+      "SELECT kind FROM gad_knowledge_ledger ORDER BY seq",
+      []
+    );
+    expect(ledger.rows.map((r) => r.kind)).toEqual([
+      "claim_recorded",
+      "claim_revised",
+      "claim_retracted",
+    ]);
+  });
+
+  it("stamps a per-branch turn ordinal on turn.opened", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "t1",
+          event: event("turn.opened", {
+            turnId: "turn-1" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "a" },
+          }),
+        },
+        {
+          eventId: "t2",
+          event: event("turn.opened", {
+            turnId: "turn-2" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "b" },
+          }),
+        },
+      ],
+    });
+    const rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT turn_id, ordinal FROM trajectory_turns ORDER BY ordinal",
+      []
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({ turn_id: "turn-1", ordinal: 0 }),
+      expect.objectContaining({ turn_id: "turn-2", ordinal: 1 }),
+    ]);
+  });
+
+  it("gates the knowledge RPCs to do/server/shell/worker callers", async () => {
+    const { callAs } = await createTestDO(GadWorkspaceDO);
+    const ok = await callAs<{ claimId?: string }>("shell", "knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "shell may record claims" },
+    });
+    expect(ok.claimId).toBeTruthy();
+
+    await expect(
+      callAs("panel", "knowledgeRecordClaim", {
+        logId: "traj-1",
+        head: "main",
+        claim: { text: "panel may not record claims" },
+      })
+    ).rejects.toThrow();
   });
 });

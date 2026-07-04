@@ -459,3 +459,399 @@ describe("GadWorkspaceDO — P5c edit/commit composition (real DO, memory bridge
     expect(doi.vcsLog(REPO)).toHaveLength(0);
   });
 });
+
+/**
+ * U1 (insert-time hunk completeness), U2 (standing per-path chain check), and the
+ * §5.2 blame RPC — against the real DO with the same in-memory host bridges.
+ */
+describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)", () => {
+  let gad: TestGad;
+  let doi: GadWorkspaceDO;
+  let mem: ReturnType<typeof createMemoryHostStore>;
+  let refs: ReturnType<typeof createMemoryRefs>;
+
+  beforeEach(async () => {
+    gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad-blame" });
+    doi = gad.instance;
+    mem = createMemoryHostStore();
+    refs = createMemoryRefs();
+    Object.defineProperty(doi, "contentStore", { value: () => mem.store });
+    Object.defineProperty(doi, "refsStore", { value: () => refs.bridge });
+  });
+
+  type WorkOp = {
+    kind: string;
+    path: string;
+    oldContentHash?: string | null;
+    newContentHash?: string | null;
+    hunks?: unknown;
+    mode?: number | null;
+    binary?: boolean | null;
+  };
+  /** Drive the private working-edit seam directly (the edit engine never emits a
+   *  hunkless text replace, so U1 at this seam is exercised with crafted ops). */
+  function insertWorking(head: string, ops: WorkOp[]): { editSeq: number } {
+    return (
+      doi as unknown as {
+        insertWorkingEditRows: (i: {
+          logId: string;
+          head: string;
+          actorId: string;
+          actorJson: string;
+          eventId: string;
+          ops: WorkOp[];
+          expectedEditSeq: number;
+          expectedCommitHead: string | null;
+        }) => { editSeq: number };
+      }
+    ).insertWorkingEditRows({
+      logId: LOG,
+      head,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      eventId: `evt-${head}`,
+      ops,
+      expectedEditSeq: 0,
+      expectedCommitHead: null,
+    });
+  }
+
+  it("U1 (working seam): rejects hunkless text replace/write; accepts hunks/binary/create/delete/chmod/no-op", () => {
+    // Reject: a content mutation over existing text with no hunks.
+    expect(() =>
+      insertWorking("ctx:w-rep", [
+        { kind: "replace", path: "a.txt", oldContentHash: "old", newContentHash: "new" },
+      ])
+    ).toThrow(/hunk-completeness/);
+    expect(() =>
+      insertWorking("ctx:w-wri", [
+        { kind: "write", path: "a.txt", oldContentHash: "old", newContentHash: "new" },
+      ])
+    ).toThrow(/hunk-completeness/);
+
+    // Accept: hunks present.
+    expect(
+      insertWorking("ctx:w-hunk", [
+        {
+          kind: "replace",
+          path: "a.txt",
+          oldContentHash: "old",
+          newContentHash: "new",
+          hunks: [{ start: 0, end: 3, oldText: "old", newText: "new" }],
+        },
+      ]).editSeq
+    ).toBe(1);
+    // Accept: binary new content (threaded into the `binary` column, no hunks).
+    expect(
+      insertWorking("ctx:w-bin", [
+        { kind: "write", path: "a.bin", oldContentHash: "old", newContentHash: "new", binary: true },
+      ]).editSeq
+    ).toBe(1);
+    expect(doi.listWorkingEdits({ logId: LOG, head: "ctx:w-bin" })[0]!["binary"]).toBe(1);
+    // Accept: first write (no prior content), create, delete, chmod, and no-op writes.
+    expect(
+      insertWorking("ctx:w-fresh", [
+        { kind: "write", path: "a.txt", oldContentHash: null, newContentHash: "new" },
+      ]).editSeq
+    ).toBe(1);
+    expect(
+      insertWorking("ctx:w-create", [
+        { kind: "create", path: "a.txt", oldContentHash: null, newContentHash: "new" },
+      ]).editSeq
+    ).toBe(1);
+    expect(
+      insertWorking("ctx:w-del", [
+        { kind: "delete", path: "a.txt", oldContentHash: "old", newContentHash: null },
+      ]).editSeq
+    ).toBe(1);
+    expect(
+      insertWorking("ctx:w-chmod", [
+        { kind: "chmod", path: "a.txt", oldContentHash: "old", newContentHash: "old", mode: 33261 },
+      ]).editSeq
+    ).toBe(1);
+    expect(
+      insertWorking("ctx:w-noop", [
+        { kind: "write", path: "a.txt", oldContentHash: "same", newContentHash: "same" },
+      ]).editSeq
+    ).toBe(1);
+  });
+
+  it("U1 (ingest editOps seam): rejects hunkless text replace; accepts synthetic/binary/hunked", async () => {
+    const ingest = (head: string, op: Record<string, unknown>) =>
+      doi.ingestWorktreeState({
+        logId: LOG,
+        head,
+        files: [],
+        actor: ACTOR,
+        eventId: `ing-${head}`,
+        editOps: [{ path: "a.txt", ...op }] as never,
+      });
+
+    await expect(
+      ingest("ctx:i-bad", { kind: "replace", oldContentHash: "old", newContentHash: "new" })
+    ).rejects.toThrow(/hunk-completeness/);
+    // Synthetic snapshot ops (import/push/whole-file take) may omit hunks.
+    await expect(
+      ingest("ctx:i-syn", {
+        kind: "replace",
+        oldContentHash: "old",
+        newContentHash: "new",
+        synthetic: true,
+      })
+    ).resolves.toBeTruthy();
+    await expect(
+      ingest("ctx:i-bin", {
+        kind: "write",
+        oldContentHash: "old",
+        newContentHash: "new",
+        binary: true,
+      })
+    ).resolves.toBeTruthy();
+    await expect(
+      ingest("ctx:i-hunk", {
+        kind: "replace",
+        oldContentHash: "old",
+        newContentHash: "new",
+        hunks: [{ start: 0, end: 1, oldText: "o", newText: "n" }],
+      })
+    ).resolves.toBeTruthy();
+    // The synthetic op is stamped on the row; the binary op set the binary column.
+    expect(doi.vcsFileHistory(REPO, "a.txt", "ctx:i-syn")[0]).toMatchObject({ synthetic: true });
+    expect(doi.vcsFileHistory(REPO, "a.txt", "ctx:i-bin")[0]).toMatchObject({ binary: true });
+  });
+
+  it("U1: a write of text over a binary file is a binary boundary (not a rejection)", async () => {
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [
+        {
+          kind: "create",
+          path: "asset",
+          content: { kind: "bytes", base64: Buffer.from([0, 1, 2, 255]).toString("base64") },
+        },
+      ],
+    });
+    // Text over the binary path: no line structure crosses the boundary, so the
+    // op is recorded `binary` (blame chain-restart) rather than U1-rejected.
+    await expect(
+      doi.applyEditOps({
+        logId: LOG,
+        head: CTX,
+        actorId: ACTOR.id,
+        actorJson: ACTOR_JSON,
+        invocationId: "inv-tob",
+        edits: [{ kind: "write", path: "asset", content: { kind: "text", text: "now text\n" } }],
+      })
+    ).resolves.toBeTruthy();
+    const row = doi
+      .listWorkingEdits({ logId: LOG, head: CTX })
+      .find((r) => r["kind"] === "write");
+    expect(row?.["binary"]).toBe(1);
+    // Blame attributes the line to the write op, flagged degraded 'binary'.
+    const blame = await doi.vcsBlameLines(REPO, "asset", 1, 1, CTX);
+    expect(blame[0]).toMatchObject({ invocationId: "inv-tob", degraded: "binary" });
+  });
+
+  it("U2: checkGadIntegrity catches a broken committed chain and passes a clean history", async () => {
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [{ kind: "create", path: "f.txt", content: { kind: "text", text: "L1\nL2\n" } }],
+    });
+    await doi.commitWorking({ logId: LOG, head: CTX, message: "c1", actor: ACTOR });
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [{ kind: "write", path: "f.txt", content: { kind: "text", text: "L1X\nL2\n" } }],
+    });
+    const c2 = await doi.commitWorking({ logId: LOG, head: CTX, message: "c2", actor: ACTOR });
+
+    const clean = await doi.checkGadIntegrity();
+    expect(clean.errors.filter((e) => e["type"] === "edit-op-chain")).toEqual([]);
+
+    // Break op[k+1].old != op[k].new by corrupting the c2 write's old hash.
+    gad.sql.exec(
+      `UPDATE gad_worktree_edit_ops SET old_content_hash = 'deadbeef'
+       WHERE committed_event_id = ? AND kind = 'write'`,
+      c2.eventId
+    );
+    const broken = await doi.checkGadIntegrity();
+    const chainErrors = broken.errors.filter((e) => e["type"] === "edit-op-chain");
+    expect(chainErrors.length).toBeGreaterThan(0);
+    expect(chainErrors[0]).toMatchObject({ path: "f.txt", kind: "write" });
+  });
+
+  it("blame: single-chain edits attribute to their commit; working tail hits the uncommitted op", async () => {
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-create",
+      edits: [
+        { kind: "create", path: "f.txt", content: { kind: "text", text: "alpha\nbeta\ngamma\n" } },
+      ],
+    });
+    const c1 = await doi.commitWorking({
+      logId: LOG,
+      head: CTX,
+      message: "create f",
+      actor: ACTOR,
+      invocationId: "inv-create",
+    });
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-edit",
+      edits: [
+        { kind: "replace", path: "f.txt", hunks: [{ start: 6, end: 10, oldText: "beta", newText: "BETA" }] },
+      ],
+    });
+    const c2 = await doi.commitWorking({
+      logId: LOG,
+      head: CTX,
+      message: "edit line 2",
+      actor: ACTOR,
+      invocationId: "inv-edit",
+    });
+
+    // §9 provenance_for_file view: edit ops ⋈ invocations ⋈ commit message.
+    const view = doi.query(
+      `SELECT path, kind, commit_message, invocation_id
+       FROM provenance_for_file
+       WHERE log_id = ? AND path = 'f.txt' AND commit_event_id = ?`,
+      [LOG, c2.eventId]
+    ).rows;
+    expect(view).toContainEqual(
+      expect.objectContaining({ commit_message: "edit line 2", invocation_id: "inv-edit" })
+    );
+
+    const blame = await doi.vcsBlameLines(REPO, "f.txt", 1, 3, CTX);
+    const l2 = blame.find((b) => b.startLine <= 2 && b.endLine >= 2)!;
+    expect(l2).toMatchObject({
+      commitEventId: c2.eventId,
+      commitMessage: "edit line 2",
+      invocationId: "inv-edit",
+      kind: "replace",
+      degraded: null,
+    });
+    // Unchanged lines existed since creation → a `create` semantic stop on c1.
+    const l1 = blame.find((b) => b.startLine <= 1 && b.endLine >= 1)!;
+    expect(l1).toMatchObject({ commitEventId: c1.eventId, kind: "create", degraded: "create" });
+
+    // Working tail: an uncommitted edit blames to the working op (no commit).
+    await doi.applyEditOps({
+      logId: LOG,
+      head: CTX,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-working",
+      edits: [
+        { kind: "replace", path: "f.txt", hunks: [{ start: 0, end: 5, oldText: "alpha", newText: "ALPHA" }] },
+      ],
+    });
+    const tail = await doi.vcsBlameLines(REPO, "f.txt", 1, 1, CTX);
+    expect(tail[0]).toMatchObject({
+      commitEventId: null,
+      invocationId: "inv-working",
+      degraded: null,
+    });
+  });
+
+  it("blame: a real merge routes theirs-origin lines to the other parent; a whole-file take degrades", async () => {
+    const OURS = "ctx:ours";
+    const THEIRS = "ctx:theirs";
+    // Shared base commit on ours: f.txt (4 lines) + g.txt (2 lines).
+    await doi.applyEditOps({
+      logId: LOG,
+      head: OURS,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [
+        { kind: "create", path: "f.txt", content: { kind: "text", text: "L1\nL2\nL3\nL4\n" } },
+        { kind: "create", path: "g.txt", content: { kind: "text", text: "G1\nG2\n" } },
+      ],
+    });
+    const base = await doi.commitWorking({ logId: LOG, head: OURS, message: "base", actor: ACTOR });
+    // Publish the base as main so a fresh `theirs` head branches from it.
+    refs.set(REPO, "main", base.stateHash);
+
+    // ours changes f.txt line 1 only.
+    await doi.applyEditOps({
+      logId: LOG,
+      head: OURS,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-ours",
+      edits: [{ kind: "write", path: "f.txt", content: { kind: "text", text: "OURS\nL2\nL3\nL4\n" } }],
+    });
+    const cOurs = await doi.commitWorking({
+      logId: LOG,
+      head: OURS,
+      message: "ours edits line 1",
+      actor: ACTOR,
+      invocationId: "inv-ours",
+    });
+
+    // theirs (branched from main=base) changes f.txt line 4 AND all of g.txt.
+    await doi.applyEditOps({
+      logId: LOG,
+      head: THEIRS,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-theirs",
+      edits: [
+        { kind: "write", path: "f.txt", content: { kind: "text", text: "L1\nL2\nL3\nTHEIRS\n" } },
+        { kind: "write", path: "g.txt", content: { kind: "text", text: "G1\nGX\n" } },
+      ],
+    });
+    const cTheirs = await doi.commitWorking({
+      logId: LOG,
+      head: THEIRS,
+      message: "theirs edits line 4 + g",
+      actor: ACTOR,
+      invocationId: "inv-theirs",
+    });
+
+    const merge = await doi.vcsMerge({
+      logId: LOG,
+      targetHead: OURS,
+      sourceHead: THEIRS,
+      actor: ACTOR,
+    });
+    expect(merge.status).toBe("merged");
+
+    // f.txt is line-merged: line 1 stays on the ours chain, line 4 routes to theirs.
+    const fBlame = await doi.vcsBlameLines(REPO, "f.txt", 1, 4, OURS);
+    const f1 = fBlame.find((b) => b.startLine <= 1 && b.endLine >= 1)!;
+    expect(f1).toMatchObject({ commitEventId: cOurs.eventId, invocationId: "inv-ours" });
+    const f4 = fBlame.find((b) => b.startLine <= 4 && b.endLine >= 4)!;
+    expect(f4).toMatchObject({
+      commitEventId: cTheirs.eventId,
+      invocationId: "inv-theirs",
+      degraded: null,
+    });
+
+    // g.txt was a whole-file take-theirs (no line hunks) → synthetic merge op →
+    // a degraded blame stop that reports the merge commit, not the healing actor.
+    const gBlame = await doi.vcsBlameLines(REPO, "g.txt", 1, 1, OURS);
+    expect(gBlame[0]).toMatchObject({
+      commitEventId: (merge as { eventId: string }).eventId,
+      degraded: "synthetic",
+    });
+
+    // The merge left the standing chain check clean (synthetic take restarts; the
+    // line-merged file's hunked op continues the first parent).
+    const integrity = await doi.checkGadIntegrity();
+    expect(integrity.errors.filter((e) => e["type"] === "edit-op-chain")).toEqual([]);
+  });
+});
