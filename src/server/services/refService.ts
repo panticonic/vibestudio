@@ -301,6 +301,42 @@ function validateValue(label: string, value: unknown): asserts value is string {
 const STORE_VERSION = 3;
 const STORE_FILE_NAME = "refs.json";
 
+// The main-ref movement log (§2) is an append-only audit trail written into the
+// single refs.json store, so an unbounded log would grow that file — and every
+// atomic rewrite of it — without limit. Cap it at the most recent
+// MAIN_REF_LOG_MAX_PER_REPO movements PER repoPath (the oldest beyond the cap
+// are dropped on the next write). The cap is per-repo so a chatty repo can never
+// evict a quiet repo's history, and generous enough that the DO's since-id
+// catch-up (which reads far fewer than this between reactions) never misses a
+// movement. `seq` keeps advancing monotonically regardless of pruning.
+const MAIN_REF_LOG_MAX_PER_REPO = 1000;
+
+/** Cap the movement log to the most recent {@link MAIN_REF_LOG_MAX_PER_REPO}
+ *  rows per repoPath, dropping the oldest overflow while preserving the overall
+ *  append (ascending-id) order. Returns the input unchanged when nothing
+ *  overflows, so the common path allocates nothing extra. */
+function capMainRefLog(rows: MainRefLogRow[]): MainRefLogRow[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.repoPath, (counts.get(row.repoPath) ?? 0) + 1);
+  const dropRemaining = new Map<string, number>();
+  for (const [repo, count] of counts) {
+    if (count > MAIN_REF_LOG_MAX_PER_REPO) {
+      dropRemaining.set(repo, count - MAIN_REF_LOG_MAX_PER_REPO);
+    }
+  }
+  if (dropRemaining.size === 0) return rows;
+  const kept: MainRefLogRow[] = [];
+  for (const row of rows) {
+    const remaining = dropRemaining.get(row.repoPath) ?? 0;
+    if (remaining > 0) {
+      dropRemaining.set(row.repoPath, remaining - 1); // drop this (oldest) overflow row
+      continue;
+    }
+    kept.push(row);
+  }
+  return kept;
+}
+
 interface StoredRefStore {
   version: number;
   mains: MainRefRecord[];
@@ -523,11 +559,15 @@ export function createRefService(deps: RefServiceDeps): RefService {
           updated.push({ repoPath: entry.repoPath, stateHash: entry.next, seq: rowSeq });
           batchChanges.push({ repoPath: entry.repoPath, stateHash: entry.next });
         }
-        persistStore(nextMains.values(), [...log, ...newRows], nextSeq);
+        // Cap the log per repo BEFORE persisting so the in-memory and on-disk
+        // logs stay identical (a crash leaves whichever is the pre-rename state).
+        const nextLog = capMainRefLog([...log, ...newRows]);
+        persistStore(nextMains.values(), nextLog, nextSeq);
         // Only reached when the rename succeeded — adopt into memory.
         mains.clear();
         for (const record of nextMains.values()) mains.set(record.repoPath, record);
-        for (const row of newRows) log.push(row);
+        log.length = 0;
+        for (const row of nextLog) log.push(row);
         seq = nextSeq;
         changes = batchChanges;
         return { updated };

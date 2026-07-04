@@ -152,6 +152,12 @@ describe("GadWorkspaceDO — provenance density + attachment (DO-4)", () => {
       writeProvenanceCache(head: string, path: string, version: number, items: unknown[]): void;
     };
 
+  /** A density sentinel: distinguishable, above the salience floor, no exception —
+   *  stands in for a real (cacheable) density leg without exercising the pipeline. */
+  const densitySentinel = (tag: string) => [
+    { line: `SENTINEL ${tag}`, handle: `file:${tag}`, kind: "file", exception: false, score: 0.9 },
+  ];
+
   async function edit(
     head: string,
     edits: Array<Record<string, unknown>>,
@@ -416,28 +422,137 @@ describe("GadWorkspaceDO — provenance density + attachment (DO-4)", () => {
     expect(mainMoved.line).toContain("push");
   });
 
-  it("warm cache: a moderate hit serves the cached block; a touch bumps touch_version and invalidates", () => {
+  it("warm cache: every warmed file serves its first read — an observed read does NOT bump touch_version", () => {
     const u = untyped();
-    const sentinel = [
-      {
-        line: "SENTINEL cached line",
-        handle: "file:sentinel",
-        kind: "file",
-        exception: false,
-        score: 0.9,
-      },
-    ];
-    // Cache a block for (CTX, w.txt) at the session's current touch_version.
+    // §7.3 warm precompute stamps MANY files at ONE session touch_version. The
+    // version is session-global, so if an observed read bumped it (the old bug)
+    // the first file read would invalidate every OTHER warmed file. Cache two
+    // files at the same version and confirm BOTH serve their first read.
     const version = u.touchVersion(SESSION_LOG, SESSION_HEAD);
-    u.writeProvenanceCache(CTX, "w.txt", version, sentinel);
+    u.writeProvenanceCache(CTX, "w1.txt", version, densitySentinel("w1"));
+    u.writeProvenanceCache(CTX, "w2.txt", version, densitySentinel("w2"));
 
-    // First moderate read serves the cache verbatim (version matches).
-    const served = pf({ path: "w.txt", tier: "moderate" });
-    expect(served.items).toEqual(sentinel);
-    // …and its own observed touch advances touch_version, invalidating the row.
-    const second = pf({ path: "w.txt", tier: "moderate" });
-    expect(second.items).not.toEqual(sentinel);
-    expect(second.items).toEqual([]); // bare file recomputes to an empty block
+    const first = pf({ path: "w1.txt", tier: "moderate" });
+    expect(first.items).toEqual(densitySentinel("w1"));
+    // The read's observed touch must NOT advance the era stamp…
+    expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBe(version);
+    // …so the second, distinct warmed file still hits (would MISS→recompute→[]
+    // under the self-invalidation bug).
+    const second = pf({ path: "w2.txt", tier: "moderate" });
+    expect(second.items).toEqual(densitySentinel("w2"));
+    expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBe(version);
+  });
+
+  it("warm/cached moderate hit still renders LIVE exceptions that materialized after the cache write (§7.5/§12)", async () => {
+    const u = untyped();
+    // A warm density leg is stashed at turn.opened, BEFORE any concurrency exists.
+    const version = u.touchVersion(SESSION_LOG, SESSION_HEAD);
+    u.writeProvenanceCache(CTX, "hot.txt", version, densitySentinel("hot"));
+
+    // AFTER the warm write, another session lands an uncommitted edit on the same
+    // path — the exact cross-session collision the concurrency line exists to warn
+    // about. It does not touch this session's version, so the density leg stays a hit.
+    await edit("ctx:other", [
+      { kind: "create", path: "hot.txt", content: { kind: "text", text: "OTHER\n" } },
+    ]);
+    expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBe(version);
+
+    const served = pf({ path: "hot.txt", tier: "moderate" });
+    // The cached density is still served…
+    expect(served.items).toContainEqual(densitySentinel("hot")[0]);
+    // …but the LIVE concurrency exception is spliced ahead of it and renders first.
+    expect(served.items[0]!.kind).toBe("concurrency");
+    expect(served.items[0]!.exception).toBe(true);
+    expect(served.items.find((i) => i.kind === "concurrency")!.handle).toBe("session:ctx:other");
+    // The block signature (suppression) reflects the live exception: a follow-on
+    // read with the exception still present suppresses (unchanged signature)…
+    const again = pf({ path: "hot.txt", tier: "moderate" });
+    expect(again.suppressed).toBe(true);
+  });
+
+  it("degrade path: the stashed density leg is servable by the next moderate read, and live exceptions render ahead of the hint", async () => {
+    // A cross-session edit gives the file a live exception the degrade must not drop.
+    await edit("ctx:other", [
+      { kind: "create", path: "slow.txt", content: { kind: "text", text: "RIVAL\n" } },
+    ]);
+
+    const slowU = doi as unknown as { fileDensityBlock: (input: unknown) => unknown };
+    const realDensity = slowU.fileDensityBlock;
+    // Force the density leg to overrun PROV_BUDGET_MS (150ms) so the read degrades.
+    Object.defineProperty(doi, "fileDensityBlock", {
+      configurable: true,
+      value: () => {
+        const until = Date.now() + 210;
+        while (Date.now() < until) {
+          /* busy-wait past the budget */
+        }
+        return densitySentinel("slow");
+      },
+    });
+
+    const first = pf({ path: "slow.txt", tier: "moderate" });
+    // Degrade returns the one-line hint — but the live concurrency exception first.
+    expect(first.degraded).toBe(true);
+    expect(first.items[0]!.kind).toBe("concurrency");
+    expect(first.items.at(-1)!.kind).toBe("hint");
+
+    // Restore the real (fast) density leg; the follow-on read must SERVE the stash,
+    // not re-degrade (the degrade write is dead under the self-invalidation bug).
+    Object.defineProperty(doi, "fileDensityBlock", {
+      configurable: true,
+      value: realDensity,
+    });
+
+    const second = pf({ path: "slow.txt", tier: "moderate" });
+    expect(second.degraded).toBeFalsy();
+    expect(second.items).toContainEqual(densitySentinel("slow")[0]);
+    // Live exception still spliced ahead of the served (cached) density leg.
+    expect(second.items[0]!.kind).toBe("concurrency");
+    expect(metric("degrade", "budget")).toBe(1);
+  });
+
+  it("repeated same-file moderate reads coalesce the observed touch and suppress on an unchanged signature", async () => {
+    await edit(
+      CTX,
+      [{ kind: "create", path: "r.txt", content: { kind: "text", text: "R\n" } }],
+      "inv-r"
+    );
+    await commit(CTX, "seed r", "inv-r");
+    const u = untyped();
+    const version = u.touchVersion(SESSION_LOG, SESSION_HEAD);
+
+    const first = pf({ path: "r.txt", tier: "moderate" });
+    expect(first.suppressed).toBe(false);
+    const second = pf({ path: "r.txt", tier: "moderate" });
+    expect(second.suppressed).toBe(true);
+
+    // Both reads coalesce onto ONE observed touch row (hits === 2)…
+    const observed = touchRows("observed").filter((row) => String(row["dst_kind"]) === "file");
+    const rRow = observed.find((row) => String(row["dst_id"]).includes("r.txt"));
+    expect(rRow).toBeDefined();
+    expect(Number(rRow!["hits"])).toBe(2);
+    // …and neither observed read advanced the density-seed era stamp.
+    expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBe(version);
+  });
+
+  it("a cited drill-down DOES advance touch_version (a strong new seed invalidates the warm cache)", () => {
+    const u = untyped();
+    const c1 = recordClaim("cited drills reseed the session density");
+    const before = u.touchVersion(SESSION_LOG, SESSION_HEAD);
+    doi.provenanceForClaim({
+      claimId: c1,
+      sessionLogId: SESSION_LOG,
+      sessionHead: SESSION_HEAD,
+      invocationId: "inv-cite2",
+    });
+    expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBeGreaterThan(before);
+  });
+
+  it("recording a claim advances touch_version (a new asserted seed reseeds density)", () => {
+    const u = untyped();
+    const before = u.touchVersion(SESSION_LOG, SESSION_HEAD);
+    recordClaim("a fresh asserted claim reseeds the session");
+    expect(u.touchVersion(SESSION_LOG, SESSION_HEAD)).toBeGreaterThan(before);
   });
 
   it("a claim drill-down writes a cited touch and returns the claim neighborhood", () => {

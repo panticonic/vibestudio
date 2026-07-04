@@ -1,8 +1,17 @@
 # GAD Provenance Graph — Design Spec
 
-Status: proposal, v3 (2026-07-03: v2 rebased onto the narrow-host VCS split in
-progress in the main worktree — see §0.1; handoff to that workstream in
-`docs/gad-provenance-handoff-2026-07.md`).
+Status: **IMPLEMENTED, 2026-07-04** (v3 spec below is the design of record).
+Landed in four waves on `claude/gad-system-review-6r1qpf`: U1/U2/U3-completion
++ blameLines (§5), touches (§4), knowledge ledger + claim tools + `claims:` on
+the commit tool (§8), recall upgrades T3/U5-remainder + `recallKeywords` (§10),
+density-ranked read attachment with mandatory tier + suppression + warm cache
+(§6–§7), `provenance()`/`provenance("session")` (§7.6), host main-ref log (§2 —
+built here, it did not pre-exist), §13 prompt + the three workspace skills,
+and the §12 counters. Deviations of record live in the wave notes/commit
+messages; schema baseline is gad-store v25. The claims seeding pass (§8) and
+the first tuning run (§12.1) remain post-bang follow-ups.
+v3 history (2026-07-03): v2 rebased onto the narrow-host VCS split — see §0.1;
+handoff in `docs/gad-provenance-handoff-2026-07.md`.
 Pre-release; **no backward compatibility** — schema is reset on bump
 (`GadWorkspaceDO.dropPersistenceTables`), so we add/rename freely.
 

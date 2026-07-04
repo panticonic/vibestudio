@@ -854,4 +854,127 @@ describe("GadWorkspaceDO — U1/U2 invariants + blame (real DO, memory bridges)"
     const integrity = await doi.checkGadIntegrity();
     expect(integrity.errors.filter((e) => e["type"] === "edit-op-chain")).toEqual([]);
   });
+
+  it("blame + U2 on a CONFLICTED merge resolution: cleanly-taken incoming files carry merge provenance, resolved regions blame the resolver, and the committed chain stays continuous (blame-1 + blame-2)", async () => {
+    const OURS = "ctx:c-ours";
+    const THEIRS = "ctx:c-theirs";
+    // Shared base commit on ours: f.txt (3 lines) + g.txt (2 lines).
+    await doi.applyEditOps({
+      logId: LOG,
+      head: OURS,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      edits: [
+        { kind: "create", path: "f.txt", content: { kind: "text", text: "L1\nL2\nL3\n" } },
+        { kind: "create", path: "g.txt", content: { kind: "text", text: "G1\nG2\n" } },
+      ],
+    });
+    const base = await doi.commitWorking({ logId: LOG, head: OURS, message: "base", actor: ACTOR });
+    // Publish the base as main so a fresh `theirs` head branches from it.
+    refs.set(REPO, "main", base.stateHash);
+
+    // ours changes f.txt line 1.
+    await doi.applyEditOps({
+      logId: LOG,
+      head: OURS,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-ours",
+      edits: [{ kind: "write", path: "f.txt", content: { kind: "text", text: "OURS\nL2\nL3\n" } }],
+    });
+    await doi.commitWorking({
+      logId: LOG,
+      head: OURS,
+      message: "ours edits line 1",
+      actor: ACTOR,
+      invocationId: "inv-ours",
+    });
+
+    // theirs (branched from main=base) changes f.txt line 1 DIFFERENTLY (→ a
+    // CONFLICT on f.txt), rewrites g.txt line 2 (→ a clean take-theirs), and
+    // adds a brand-new file d.txt (→ a clean incoming create). None of g.txt /
+    // d.txt carry a resolution working row — they are the blame-1 surface.
+    await doi.applyEditOps({
+      logId: LOG,
+      head: THEIRS,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-theirs",
+      edits: [
+        { kind: "write", path: "f.txt", content: { kind: "text", text: "THEIRS\nL2\nL3\n" } },
+        { kind: "write", path: "g.txt", content: { kind: "text", text: "G1\nGX\n" } },
+        { kind: "create", path: "d.txt", content: { kind: "text", text: "D1\n" } },
+      ],
+    });
+    const cTheirs = await doi.commitWorking({
+      logId: LOG,
+      head: THEIRS,
+      message: "theirs edits line 1 + g + adds d",
+      actor: ACTOR,
+      invocationId: "inv-theirs",
+    });
+    expect(cTheirs.status).toBe("committed");
+
+    // Merge theirs → ours: f.txt conflicts; g.txt + d.txt auto-apply cleanly.
+    const merge = await doi.vcsMerge({
+      logId: LOG,
+      targetHead: OURS,
+      sourceHead: THEIRS,
+      actor: ACTOR,
+    });
+    expect(merge.status).toBe("conflicted");
+    expect((merge as { conflictPaths: string[] }).conflictPaths).toContain("f.txt");
+
+    // The agent resolves f.txt via vcs.edit (working ops over the provisional,
+    // conflict-marked base) and seals the merge with a commit.
+    await doi.applyEditOps({
+      logId: LOG,
+      head: OURS,
+      actorId: ACTOR.id,
+      actorJson: ACTOR_JSON,
+      invocationId: "inv-resolve",
+      edits: [
+        { kind: "write", path: "f.txt", content: { kind: "text", text: "RESOLVED\nL2\nL3\n" } },
+      ],
+    });
+    const resolved = await doi.commitWorking({
+      logId: LOG,
+      head: OURS,
+      message: "resolve f.txt conflict",
+      actor: ACTOR,
+      invocationId: "inv-resolve",
+    });
+    expect(resolved.status).toBe("committed");
+    expect(resolved.transitionKind).toBe("merge-resolution");
+
+    // (a) blame-1 — cleanly-taken THEIRS content carries MERGE provenance, never
+    // a silent mis-blame onto the base `create`.
+    //   g.txt line 2 is a whole-file take-theirs → synthetic op on the
+    //   resolution commit (degraded, but pointing at the merge, not the base).
+    const gBlame = await doi.vcsBlameLines(REPO, "g.txt", 2, 2, OURS);
+    expect(gBlame[0]).toMatchObject({ commitEventId: resolved.eventId, degraded: "synthetic" });
+    expect(gBlame[0]!.commitEventId).not.toBe(base.eventId);
+    //   d.txt is a brand-new incoming file → a `create` op on the resolution
+    //   commit (was `older-than-log` with a null commit before the fix).
+    const dBlame = await doi.vcsBlameLines(REPO, "d.txt", 1, 1, OURS);
+    expect(dBlame[0]).toMatchObject({ commitEventId: resolved.eventId, degraded: "create" });
+    expect(dBlame[0]!.commitEventId).not.toBeNull();
+
+    // (b) blame-2 — the resolution commit's per-path chain composes from OURS:
+    // the standing edit-op-chain continuity check stays clean on a conflicted
+    // merge (the OURS→provisional bridge restarts the chain vs the OURS parent).
+    const integrity = await doi.checkGadIntegrity();
+    expect(integrity.errors.filter((e) => e["type"] === "edit-op-chain")).toEqual([]);
+
+    // (c) authorship — a resolved region blames the RESOLVING session's own edit
+    // op (merge-notes invariant 4 survives the bridge restart).
+    const fBlame = await doi.vcsBlameLines(REPO, "f.txt", 1, 1, OURS);
+    expect(fBlame[0]).toMatchObject({
+      commitEventId: resolved.eventId,
+      invocationId: "inv-resolve",
+      degraded: null,
+    });
+    // Sanity: the merge recorded THEIRS as the second parent (event-keyed).
+    expect(cTheirs.eventId).toBeTruthy();
+  });
 });

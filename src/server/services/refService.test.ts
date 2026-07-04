@@ -601,6 +601,63 @@ describe("refService.updateMains", () => {
       ).rejects.toBeInstanceOf(RefBatchConflictError);
       expect(service.listMainRefLog("r").map((r) => r.id)).toEqual([1]);
     });
+
+    it("caps the log at 1000 rows per repo, evicting the oldest and never a quiet repo", async () => {
+      const statePath = tempDir();
+      const makeRow = (id: number, repoPath: string) => ({
+        id,
+        repoPath,
+        ref: "main",
+        operation: "push",
+        old: STATE_A,
+        new: STATE_B,
+        writer: null,
+        onBehalfOf: null,
+        reason: null,
+        createdAt: 1,
+      });
+      // Seed an at-cap chatty repo (1000 rows) alongside a quiet repo (3 rows).
+      const chattyRows = Array.from({ length: 1000 }, (_, i) => makeRow(i + 1, "chatty"));
+      const quietRows = [1001, 1002, 1003].map((id) => makeRow(id, "quiet"));
+      fs.writeFileSync(
+        path.join(statePath, "refs.json"),
+        JSON.stringify({
+          version: 3,
+          mains: [
+            { repoPath: "chatty", stateHash: STATE_A, updatedAt: 1 },
+            { repoPath: "quiet", stateHash: STATE_B, updatedAt: 1 },
+          ],
+          log: [...chattyRows, ...quietRows],
+          seq: 1003,
+        })
+      );
+
+      const { service } = makeService({ statePath });
+      expect(service.listMainRefLog("chatty")).toHaveLength(1000);
+
+      // One more movement on the chatty repo tips it past the cap.
+      const result = await service.updateMains(
+        update({
+          entries: [{ repoPath: "chatty", expectedOld: STATE_A, next: STATE_C }],
+          operation: "push",
+        })
+      );
+      // seq keeps advancing monotonically regardless of pruning.
+      expect(result.updated[0]!.seq).toBe(1004);
+
+      const chatty = service.listMainRefLog("chatty");
+      expect(chatty).toHaveLength(1000);
+      expect(chatty[0]!.id).toBe(2); // the oldest overflow row (id 1) was evicted
+      expect(chatty[chatty.length - 1]!.id).toBe(1004); // the new movement is kept
+      // The quiet repo's history is untouched by the chatty repo's overflow.
+      expect(service.listMainRefLog("quiet").map((r) => r.id)).toEqual([1001, 1002, 1003]);
+
+      // The cap was persisted (not just an in-memory view): a reload sees it too.
+      const reloaded = makeService({ statePath }).service;
+      expect(reloaded.listMainRefLog("chatty")).toHaveLength(1000);
+      expect(reloaded.listMainRefLog("chatty")[0]!.id).toBe(2);
+      expect(reloaded.listMainRefLog("quiet").map((r) => r.id)).toEqual([1001, 1002, 1003]);
+    });
   });
 
   describe("validation", () => {

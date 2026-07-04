@@ -3999,6 +3999,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
         input.at,
         input.claimId
       );
+      // §8.1: a retracted claim must stop surfacing — drop its FTS row so the
+      // dedup-on-write probe and recall never resurrect it (the structural legs
+      // already filter status!='retracted'; the FTS leg has no status column).
+      this.ensureMemoryIndex();
+      this.sql.exec(
+        `DELETE FROM gad_memory_fts WHERE kind = 'claim' AND anchor_json = ?`,
+        JSON.stringify({ claimId: input.claimId })
+      );
       return;
     }
     if (
@@ -4260,7 +4268,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         .toArray() as JsonRecord[];
     }
     const queryTokens = claimTokenSet(text);
-    return rows
+    const candidates = rows
       .map((row) => {
         const anchor = parseRecord(asString(row["anchor_json"]));
         const candidateText = String(row["text"]);
@@ -4270,8 +4278,31 @@ export class GadWorkspaceDO extends DurableObjectBase {
           score: jaccardOverlap(queryTokens, claimTokenSet(candidateText)),
         };
       })
-      .filter((candidate) => candidate.claimId)
+      .filter((candidate) => candidate.claimId);
+    // §8.1: never dedup against a retracted claim (its FTS row is dropped on
+    // retract, but guard the query leg too so a stale row can't block a rewrite).
+    const retracted = this.retractedClaimIds(candidates.map((c) => c.claimId));
+    return candidates
+      .filter((candidate) => !retracted.has(candidate.claimId))
       .sort((a, b) => b.score - a.score);
+  }
+
+  /** The subset of the given claim ids whose claim is currently retracted.
+   *  Used to keep retracted claims out of the FTS-backed dedup/recall legs (the
+   *  FTS row is deleted on retract; this is the belt-and-suspenders query guard). */
+  private retractedClaimIds(ids: Array<string | null | undefined>): Set<string> {
+    const out = new Set<string>();
+    const unique = [...new Set(ids.filter((id): id is string => !!id))];
+    if (unique.length === 0) return out;
+    const placeholders = unique.map(() => "?").join(",");
+    const rows = this.sql
+      .exec(
+        `SELECT claim_id FROM gad_claims WHERE status = 'retracted' AND claim_id IN (${placeholders})`,
+        ...unique
+      )
+      .toArray() as JsonRecord[];
+    for (const row of rows) out.add(String(row["claim_id"]));
+    return out;
   }
 
   /** The trajectory log's owner as a plain {kind,id} — the claim's actor. Falls
@@ -4369,10 +4400,22 @@ export class GadWorkspaceDO extends DurableObjectBase {
       now,
       now
     );
-    // §7.3 warm-cache invalidation: every touch write advances the session's
-    // touch_version so a moderate block cached under the prior version reads as
-    // stale (a miss) on the next read — the counter is the cache's era stamp.
-    this.bumpTouchVersion(input.sessionLogId, input.sessionHead);
+    // §7.3 warm-cache era stamp: touch_version marks the session's DENSITY-SEED
+    // era, not its read count. A `cited` drill adds a strong claim seed (§6.1)
+    // that re-ranks every other file's density leg, so it advances the stamp and
+    // invalidates the warm cache. An `observed` read does NOT bump it: the version
+    // is session-global, so bumping on every read would throw away the whole
+    // turn.opened warm precompute after the first file touched and leave the
+    // degrade stash unservable (the counter would already have moved past it by
+    // the follow-on read). The safety- and redundancy-critical legs never ride on
+    // this stamp — exceptions are recomputed LIVE on every read (§7.5) and re-read
+    // suppression has its own block-signature key (§7.1) — so a stale density era
+    // can never hide a contradiction, a cross-session collision, or a real change.
+    // Claim writes advance the stamp through their own paths (they add/relate the
+    // asserted seeds the density leg spreads from).
+    if (input.kind === "cited") {
+      this.bumpTouchVersion(input.sessionLogId, input.sessionHead);
+    }
   }
 
   /** §7.3 per-session touch_version (state KV). Advances on every touch write;
@@ -4513,6 +4556,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       });
       // §12 counter #3: claims recorded, split commit-borne vs standalone.
       this.bumpProvMetric("claims_recorded", input.anchor?.commitEventId ? "commit" : "standalone");
+      // §7.3 density-seed era: a new asserted claim re-seeds this session's
+      // spreading activation (§6.1), so invalidate its warm density cache.
+      this.bumpTouchVersion(input.logId, input.head);
       return { claimId, ledgerEntryId, duplicates };
     });
   }
@@ -4574,6 +4620,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
           },
         ],
       });
+      // §7.3 density-seed era: new claim↔claim relations change the edges the
+      // §6.1 spread traverses (and the contradiction set), so invalidate the
+      // session's warm density cache.
+      this.bumpTouchVersion(input.logId, input.head);
       return { ledgerEntryId, related: relations.length };
     });
   }
@@ -6473,6 +6523,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
       contentHash: file.contentHash,
       mode: file.mode,
     }));
+    // Merge-resolution provenance (blame invariants 1 + 2/U2): a commit that
+    // seals a pending merge is a merge commit whose first parent is OURS. The
+    // agent's re-keyed working rows only cover the files they hand-resolved and
+    // are anchored to the PROVISIONAL base, not OURS. Synthesize the missing
+    // provenance — an OURS→provisional bridge for each resolved path plus a
+    // whole-file op for every cleanly-taken incoming file — so the committed
+    // chain composes from OURS and nothing incoming is a blame hole. Computed
+    // here (async `stateFilesFor`) before the txn; the txn's CAS re-check aborts
+    // if the head moved under us, so a stale `lineageBase` can't be recorded.
+    const mergeResolutionOps = pending
+      ? this.mergeResolutionEditOps(
+          await this.stateFilesFor(store, lineageBase),
+          baseFiles,
+          fileList,
+          new Set(includedRows.map((row) => String(row["path"])))
+        )
+      : [];
     const result = this.transaction(() => {
       // CAS re-check under the txn: the async compose above may have
       // interleaved with a concurrent commit/merge on this head.
@@ -6501,7 +6568,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
         ...(input.invocationId ? { metadata: { commitInvocationId: input.invocationId } } : {}),
         ...(pending ? { parentStateHashes: [pending.theirsStateHash] } : {}),
         ...(pending?.theirsEventId ? { parentEventIds: [pending.theirsEventId] } : {}),
-        // No editOps — re-key the pre-existing working rows below (NEVER re-insert).
+        // Merge-resolution: SYNTHESIZED provenance for cleanly-taken incoming
+        // files + the OURS→provisional bridges (chain-continuous vs OURS). The
+        // agent's authored resolution rows are RE-KEYED below (NEVER re-inserted
+        // — invariant 10), landing ON TOP of the bridges. A plain snapshot
+        // commit passes no editOps (re-key only).
+        ...(mergeResolutionOps.length > 0
+          ? { editOps: mergeResolutionOps, validateFirstParentChain: true }
+          : {}),
       });
       for (const row of includedRows) {
         this.sql.exec(
@@ -7154,21 +7228,33 @@ export class GadWorkspaceDO extends DurableObjectBase {
       this.bumpActionRateIfRendered(`file:${fileHandlePath(logId, norm)}`);
     }
 
-    // §7.3 warm-cache serve: a `moderate` block cached under the session's
-    // current touch_version is served verbatim. `deep` always recomputes; a
-    // paging/drill request bypasses the cache (it needs the full ranked tail).
+    // §7.3 warm-cache serve: the disposable cache holds the DENSITY/recall leg
+    // ONLY — never the exception class. A `moderate` density leg cached under the
+    // session's current touch_version is served verbatim; `deep` always
+    // recomputes; a paging/drill request bypasses the cache (it needs the full
+    // ranked tail). Exceptions are spliced in LIVE below, on every path.
     const version = this.touchVersion(input.sessionLogId, input.sessionHead);
-    let ordered: ProvItem[] | null = null;
+    let density: ProvItem[] | null = null;
     if (tier === "moderate" && !drilldown) {
-      ordered = this.readProvenanceCache(input.head, norm, version);
+      density = this.readProvenanceCache(input.head, norm, version);
     }
 
-    // §7.3 standalone budget: compute against the PRE-READ touch state (§7.4),
-    // bounded by PROV_BUDGET_MS; an overrun degrades to the one-line hint and
-    // stashes the block warm for the follow-on drill.
-    if (ordered === null) {
+    // §7.5 exception class — asserted contradictions + cross-session concurrency —
+    // is recomputed LIVE against current state on every non-'none' read, cache hit
+    // or miss (§12: it "always render[s], at the top, regardless of density"). It
+    // is cheap (two indexed lookups) and is exactly the state that materializes
+    // AFTER a turn.opened warm precompute (another session's uncommitted edit, a
+    // freshly-asserted contradiction), so it must never be served from the cache.
+    const exceptions = this.fileExceptionItems(logId, norm, input.head);
+
+    // §7.3 standalone budget: compute the density leg against the PRE-READ touch
+    // state (§7.4), bounded by PROV_BUDGET_MS; an overrun stashes the density leg
+    // warm for the follow-on drill and degrades to the one-line hint — but still
+    // renders the live exceptions ahead of it (the safety lines never hide behind
+    // a budget miss).
+    if (density === null) {
       const started = Date.now();
-      ordered = this.computeFileBlock({
+      density = this.fileDensityBlock({
         logId,
         path: norm,
         head: input.head,
@@ -7179,7 +7265,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
         recallKeywords: input.recallKeywords ?? null,
       });
       if (!drilldown && Date.now() - started > PROV_BUDGET_MS) {
-        this.writeProvenanceCache(input.head, norm, version, ordered);
+        // §7.4/§7.3 ordering: write the observed touch (it does NOT bump the
+        // version), THEN stash the density leg at that same version so the
+        // follow-on moderate read serves it instead of re-degrading.
         this.bumpProvMetric("degrade", "budget");
         this.upsertTouch({
           kind: "observed",
@@ -7190,18 +7278,26 @@ export class GadWorkspaceDO extends DurableObjectBase {
           invocationId: input.invocationId ?? null,
           turnSeq: observedTurnSeq,
         });
+        this.writeProvenanceCache(input.head, norm, version, density);
         const hint = this.degradeHintItem(input.repoPath, norm);
-        return { items: [hint], shown: 1, total: 1, suppressed: false, degraded: true };
+        const items = [...exceptions, hint];
+        return {
+          items,
+          shown: items.length,
+          total: items.length,
+          suppressed: false,
+          degraded: true,
+        };
       }
     }
 
+    // Exceptions first, then the (possibly cached) density leg — never re-sorted.
+    const ordered = [...exceptions, ...density];
+
     // §7.1 re-read suppression: block signature over (path content hash, latest
-    // edit-op id, sorted exception handles), compared on the observed touch row.
-    // A drill-down (`skipSuppression`) or a page (`after`) always renders.
-    const exceptionHandles = ordered
-      .filter((item) => item.exception)
-      .map((item) => item.handle)
-      .sort();
+    // edit-op id, sorted LIVE exception handles), compared on the observed touch
+    // row. A drill-down (`skipSuppression`) or a page (`after`) always renders.
+    const exceptionHandles = exceptions.map((item) => item.handle).sort();
     const blockSig = this.blockSignature(logId, norm, input.head, exceptionHandles);
     let suppressed = false;
     if (!input.skipSuppression && !input.after) {
@@ -7375,7 +7471,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
         const logId = String(row["log_id"]);
         const head = String(row["head"]);
         const path = String(row["path"]);
-        const block = this.computeFileBlock({
+        // Warm the DENSITY leg only — exceptions are always recomputed live on the
+        // read path (§7.5), so precomputing them here would only bake in a stale
+        // snapshot that the read is required to override.
+        const block = this.fileDensityBlock({
           logId,
           path,
           head,
@@ -7392,10 +7491,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
   }
 
-  /** The compute core (§6 pipeline) shared by the read attachment, the drill
-   *  paths, and the warm precompute: exceptions first, then salience-floored
-   *  density. Never re-sorted afterward — exceptions stay above density. */
-  private computeFileBlock(input: {
+  /** §6.1 density leg for one file, salience-floored (§7.5) — the CACHEABLE half
+   *  of the block. The exception class is deliberately NOT computed here: it is
+   *  spliced in live on every read (see `provenanceForFile`), never served from
+   *  the disposable warm cache. Shared by the read attachment and the warm
+   *  precompute so both stash the identical density leg. */
+  private fileDensityBlock(input: {
     logId: string;
     path: string;
     head: string;
@@ -7405,11 +7506,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     turnSeq: number;
     recallKeywords: string[] | null;
   }): ProvItem[] {
-    const exceptions = this.fileExceptionItems(input.logId, input.path, input.head);
-    const density = this.fileDensityItems(input).filter(
-      (item) => item.score >= PROV_SALIENCE_FLOOR
-    );
-    return [...exceptions, ...density];
+    return this.fileDensityItems(input).filter((item) => item.score >= PROV_SALIENCE_FLOOR);
   }
 
   /** §7.5 exception class for one file (always render, sort first, regardless of
@@ -7999,6 +8096,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
         score: 1,
       });
     }
+    // §8.1 anchor: the commit the claim was recorded against (within era), or the
+    // denormalized ledger snapshot marked historical once its trajectory event
+    // has been dropped by a schema bump. Sorts right below the claim text.
+    const anchor = this.claimAnchorItem(claimId);
+    if (anchor) items.push(anchor);
     const relations = this.sql
       .exec(
         `SELECT relation, dst_claim_id AS other, weight FROM gad_claim_relations WHERE src_claim_id = ?
@@ -8025,6 +8127,65 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // Contradiction relations sort first (exception class).
     items.sort((a, b) => Number(b.exception) - Number(a.exception));
     return items;
+  }
+
+  /** §8.1 anchor render for a claim drill-down. Reads the denormalized snapshot
+   *  from the claim's ledger entry (`gad_claims.ledger_entry_id → anchor_json`).
+   *  Within its era (the trajectory causality event still resolves to a log
+   *  event) it surfaces only the anchoring commit — the one anchor fact the
+   *  graph does not otherwise carry. Post-era (the trajectory event was dropped
+   *  by a schema bump so the causality join is empty) it degrades to the stored
+   *  snapshot — actor / repo / commit / time — marked historical, never breaking. */
+  private claimAnchorItem(claimId: string): ProvItem | null {
+    const row = this.sql
+      .exec(
+        `SELECT ledger_entry_id, trajectory_event_id FROM gad_claims WHERE claim_id = ?`,
+        claimId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    if (!row) return null;
+    const ledgerEntryId = asString(row["ledger_entry_id"]);
+    if (!ledgerEntryId) return null; // era-scoped inline claim: no durable anchor.
+    const ledger = this.readLedgerEntry(ledgerEntryId);
+    if (!ledger) return null;
+    const anchor = ledger.anchor;
+    const commitEventId = asString(anchor["commitEventId"]);
+    const commitMessage = asString(anchor["commitMessage"]);
+    const trajectoryEventId = asString(row["trajectory_event_id"]);
+    const withinEra =
+      !!trajectoryEventId &&
+      this.sql
+        .exec(`SELECT 1 FROM log_events WHERE envelope_id = ? LIMIT 1`, trajectoryEventId)
+        .toArray().length > 0;
+    if (withinEra) {
+      if (!commitEventId) return null;
+      const msg = commitMessage ? ` "${truncateInsight(commitMessage, 60)}"` : "";
+      return {
+        line: `recorded against commit c:${commitEventId.slice(0, 8)}${msg}`,
+        handle: `commit:${commitEventId.slice(0, 8)}`,
+        kind: "commit",
+        exception: false,
+        score: PROV_KIND_WEIGHT.relation,
+      };
+    }
+    // Post-era: the trajectory event is gone; render the stored snapshot.
+    const actorLabel = asString(anchor["actorLabel"]);
+    const repoPath = asString(anchor["repoPath"]);
+    const recordedAt = asString(anchor["recordedAt"]);
+    const parts = [
+      actorLabel,
+      repoPath ? `in ${repoPath}` : null,
+      commitMessage ? `commit "${truncateInsight(commitMessage, 50)}"` : null,
+      recordedAt ? `recorded ${recordedAt}` : null,
+    ].filter((part): part is string => !!part);
+    if (parts.length === 0) return null;
+    return {
+      line: `↩ historical anchor · ${parts.join(" · ")}`,
+      handle: `claim#${claimId}`,
+      kind: "historical",
+      exception: false,
+      score: 0,
+    };
   }
 
   // ---- provenance density helpers ------------------------------------------
@@ -8924,6 +9085,88 @@ export class GadWorkspaceDO extends DurableObjectBase {
           });
         }
       }
+    }
+    return ops;
+  }
+
+  /**
+   * Provenance ops for a CONFLICTED-merge RESOLUTION commit (blame invariants
+   * 1 + 2/U2). The resolution commit's first parent is OURS (`lineageBase`);
+   * its committed tree is the PROVISIONAL (conflict-marked) merge base with the
+   * agent's resolution working rows replayed on top. Two classes of change
+   * reach this commit without a naturally chain-continuous authored op and would
+   * otherwise corrupt blame:
+   *
+   *  (A) files the agent HAND-RESOLVED via `vcs.edit` (`workingPaths`): those
+   *      working rows were composed over the PROVISIONAL base, so the first
+   *      row's `old_content_hash` = provisional (conflict-marked) content ≠ OURS
+   *      — a first-parent chain break (U2 false positive) and provisional-vs-
+   *      ours coordinate skew for regions outside the resolving hunks. A
+   *      SYNTHETIC BRIDGE op OURS→provisional is recorded FIRST (ingest ops
+   *      carry `edit_seq = NULL`, which sorts BEFORE the working rows' `edit_seq
+   *      ≥ 1`), restarting the per-path chain at the merge boundary so the
+   *      agent's rows compose OURS→provisional→resolved while KEEPING their own
+   *      authorship (invocation/turn — merge-notes invariant 4). Blame of a
+   *      resolved region still lands on the agent's hunked op; a context region
+   *      degrades to `synthetic` at the merge commit rather than silently onto
+   *      the ours op in the wrong coordinate space.
+   *
+   *  (B) files the 3-way merge CLEANLY auto-took from THEIRS (clean take-theirs,
+   *      new theirs creates, theirs deletes) carry NO working row at all. Each
+   *      is recorded as a whole-file op OURS→final via {@link mergeEditOps}
+   *      (hunkless text takes are SYNTHETIC per the U1 carve-out) so blame
+   *      attributes the incoming content to the merge commit — never silently
+   *      to the ours/base `create` (blame-1).
+   *
+   * `workingPaths` get only the bridge (their content ops are the re-keyed
+   * working rows); every other path the merged tree changed vs OURS gets a
+   * whole-file op. Together with the re-keyed working rows this makes the
+   * resolution commit a complete, chain-continuous, blame-covered merge commit.
+   */
+  private mergeResolutionEditOps(
+    oursFiles: StateFileEntry[],
+    provisionalFiles: StateFileEntry[],
+    committedFiles: Array<{ path: string; contentHash: string; mode: number }>,
+    workingPaths: Set<string>
+  ): ProvenanceEditOp[] {
+    const oursByPath = new Map(oursFiles.map((f) => [f.path, f]));
+    const provByPath = new Map(provisionalFiles.map((f) => [f.path, f]));
+    const ops: ProvenanceEditOp[] = [];
+    // (A) OURS→provisional bridge for each hand-resolved path (chain restart).
+    for (const path of [...workingPaths].sort()) {
+      const prov = provByPath.get(path);
+      // No provisional content (the agent CREATED this path during resolution):
+      // the working `create` restarts the chain itself — no bridge needed.
+      if (!prov) continue;
+      const ours = oursByPath.get(path);
+      // The merge left this path at OURS content (agent edited an untouched
+      // file): the first working row's old already == OURS — no bridge needed.
+      if (ours && ours.contentHash === prov.contentHash) continue;
+      ops.push(
+        ours
+          ? {
+              kind: "replace",
+              path,
+              oldContentHash: ours.contentHash,
+              newContentHash: prov.contentHash,
+              mode: prov.mode,
+              synthetic: true,
+            }
+          : {
+              // theirs-added file that ALSO carried a resolution edit: the
+              // working row's old = provisional; a `create` restarts the chain.
+              kind: "create",
+              path,
+              oldContentHash: null,
+              newContentHash: prov.contentHash,
+              mode: prov.mode,
+            }
+      );
+    }
+    // (B) whole-file ops for every OTHER path the merged tree changed vs OURS.
+    for (const op of this.mergeEditOps(oursFiles, committedFiles)) {
+      if (workingPaths.has(op.path)) continue;
+      ops.push(op);
     }
     return ops;
   }
@@ -11170,6 +11413,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
           fetchLimit
         )
         .toArray() as JsonRecord[];
+    }
+
+    // §8.1: recall must not surface a retracted claim. Its FTS row is dropped on
+    // retract, but guard the query leg too (a stale row can't leak a dead claim).
+    const claimRowIds = rows
+      .filter((row) => String(row["kind"]) === "claim")
+      .map((row) => asString(parseRecord(asString(row["anchor_json"]))["claimId"]));
+    const retractedClaims = this.retractedClaimIds(claimRowIds);
+    if (retractedClaims.size > 0) {
+      rows = rows.filter((row) => {
+        if (String(row["kind"]) !== "claim") return true;
+        const cid = asString(parseRecord(asString(row["anchor_json"]))["claimId"]);
+        return !cid || !retractedClaims.has(cid);
+      });
     }
 
     const pageRows = this.dedupRecallRows(rows, limit);

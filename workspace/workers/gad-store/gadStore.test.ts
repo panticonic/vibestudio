@@ -4246,6 +4246,126 @@ describe("knowledge ledger + claims (§8.1)", () => {
     ]);
   });
 
+  it("retracting a claim drops its FTS row so dedup + recall stop surfacing it (cl-1)", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const rec = await call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser handles trailing newlines" },
+    });
+    expect(rec.claimId).toBeTruthy();
+
+    // Before retract: recall surfaces it and the identical text is a dedup block.
+    const recallBefore = await call<{
+      results: Array<{ anchor: Record<string, unknown> | null }>;
+    }>("recallMemory", { query: "the parser handles trailing newlines", kinds: ["claim"] });
+    expect(recallBefore.results.some((r) => r.anchor?.["claimId"] === rec.claimId)).toBe(true);
+
+    await call("knowledgeRetractClaim", {
+      logId: "traj-1",
+      head: "main",
+      claimId: rec.claimId,
+    });
+
+    // The claim's FTS row is gone (structural leg already filtered; FTS did not).
+    const fts = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_memory_fts WHERE kind = 'claim' AND anchor_json = ?",
+      [JSON.stringify({ claimId: rec.claimId })]
+    );
+    expect(fts.rows[0]?.n).toBe(0);
+
+    // Recall no longer surfaces the retracted (dead) claim.
+    const recallAfter = await call<{
+      results: Array<{ anchor: Record<string, unknown> | null }>;
+    }>("recallMemory", { query: "the parser handles trailing newlines", kinds: ["claim"] });
+    expect(recallAfter.results.some((r) => r.anchor?.["claimId"] === rec.claimId)).toBe(false);
+
+    // Dedup-on-write no longer blocks a re-record against the dead claim: the
+    // corrected claim records instead of being pointed at the retracted one.
+    const corrected = await call<{
+      claimId?: string;
+      duplicates: Array<{ claimId: string }>;
+    }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser handles trailing newlines" },
+    });
+    expect(corrected.duplicates.some((d) => d.claimId === rec.claimId)).toBe(false);
+    expect(corrected.claimId).toBeTruthy();
+  });
+
+  it("surfaces the anchoring commit on a claim drill-down within its era (cl-2)", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    sql.exec(
+      "INSERT INTO gad_state_transitions (event_id, input_state_hash, output_state_hash, summary, created_at) VALUES (?, ?, ?, ?, ?)",
+      "commit-ev-1",
+      "state:in",
+      "state:out",
+      "Fix the parser\n\nlong body that is not the first line",
+      "2026-05-20T12:00:00.000Z"
+    );
+    const rec = await call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser now handles trailing newlines" },
+      anchor: { commitEventId: "commit-ev-1", repoPath: "packages/parser" },
+    });
+    const res = await call<{
+      items: Array<{ line: string; handle: string; kind: string }>;
+    }>("provenanceForClaim", {
+      claimId: rec.claimId,
+      sessionLogId: "traj-1",
+      sessionHead: "main",
+    });
+    const commit = res.items.find((i) => i.kind === "commit");
+    expect(commit).toBeDefined();
+    expect(commit!.line).toContain("commit c:commit-e");
+    expect(commit!.line).toContain("Fix the parser");
+    expect(commit!.handle).toBe("commit:commit-e");
+  });
+
+  it("degrades a claim drill-down to the stored ledger snapshot (marked historical) after a schema bump (cl-2)", async () => {
+    const first = await createTestDO(GadWorkspaceDO);
+    first.sql.exec(
+      "INSERT INTO gad_state_transitions (event_id, input_state_hash, output_state_hash, summary, created_at) VALUES (?, ?, ?, ?, ?)",
+      "commit-ev-1",
+      "state:in",
+      "state:out",
+      "Fix the parser\n\nbody",
+      "2026-05-20T12:00:00.000Z"
+    );
+    const rec = await first.call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "durable claim carried by a commit anchor" },
+      anchor: { commitEventId: "commit-ev-1", repoPath: "packages/parser" },
+    });
+
+    // Big-bang schema bump: the trajectory events (log_%) are dropped and the
+    // ledger re-projects gad_claims with a now-dangling trajectory_event_id.
+    first.db.run("UPDATE state SET value = '24' WHERE key = 'schema_version'");
+    const second = await createTestDO(GadWorkspaceDO, undefined, { db: first.db });
+
+    // The causality event is gone, so the trajectory join is empty (post-era).
+    const events = await second.call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM log_events",
+      []
+    );
+    expect(events.rows[0]?.n).toBe(0);
+
+    const res = await second.call<{ items: Array<{ line: string; kind: string }> }>(
+      "provenanceForClaim",
+      { claimId: rec.claimId, sessionLogId: "traj-1", sessionHead: "main" }
+    );
+    const historical = res.items.find((i) => i.kind === "historical");
+    expect(historical).toBeDefined();
+    expect(historical!.line).toContain("historical");
+    expect(historical!.line).toContain("Fix the parser");
+    expect(historical!.line).toContain("packages/parser");
+  });
+
   it("stamps a per-branch turn ordinal on turn.opened", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendTrajectoryBatch", {

@@ -38,7 +38,7 @@ Skipping it saves less than it risks.
 
 ```ts
 provenance("session")
-// → { items, shown, total, nextCursor?, suppressed }
+// → { items, shown, total, nextCursor? }
 ```
 
 Each `item`:
