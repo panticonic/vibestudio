@@ -118,6 +118,7 @@ class TestVessel extends AgentVesselBase {
         }
       ),
       send: vi.fn(async () => undefined),
+      recordTaskProvenance: vi.fn(async () => undefined),
       subscribe: vi.fn(async (participantId: string) => ({
         ok: true,
         channelConfig: {},
@@ -561,6 +562,48 @@ async function makeGateProbe(): Promise<EvalGateProbe> {
   return instance;
 }
 
+class SubagentSpawnProbe extends TestVessel {
+  rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
+  protected override async ensurePromptArtifacts(): Promise<void> {}
+  protected override get driver(): AgentLoopDriver {
+    return {
+      wake: vi.fn(async () => {}),
+      deliverEffectOutcome: vi.fn(async () => true),
+      handleIncoming: vi.fn(async () => {}),
+      dropLoop: vi.fn(),
+    } as unknown as AgentLoopDriver;
+  }
+  protected override get rpc(): DeferrableRpcClient {
+    return {
+      call: async (target: string, method: string, args: unknown[]) => {
+        this.rpcCalls.push({ target, method, args });
+        if (target === "main" && method === "runtime.createSubagentContext") {
+          return { contextId: "ctx-child" };
+        }
+        if (target === "main" && method === "runtime.createEntity") {
+          return {
+            id: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
+            targetId: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
+          };
+        }
+        return { ok: true, participantId: "participant-child" };
+      },
+    } as unknown as DeferrableRpcClient;
+  }
+  async spawnForTest(channelId: string, invocationId: string, args: unknown) {
+    return this.runDeferredSpawn(channelId, invocationId, args);
+  }
+  subagentRunForTest(runId: string) {
+    return this.subagentRuns.get(runId);
+  }
+}
+
+async function makeSubagentSpawnProbe(): Promise<SubagentSpawnProbe> {
+  const { instance } = await createTestDO(SubagentSpawnProbe, { __objectKey: "agent-key" });
+  await instance.registerSubscriptionForTest();
+  return instance;
+}
+
 describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)", () => {
   it("kicks off eval.startRun with runId===invocationId (subKey=channelId) and defers while pending", async () => {
     const probe = await makeGateProbe();
@@ -642,6 +685,43 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     );
     // The getRun poll was never reached.
     expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(false);
+  });
+});
+
+describe("AgentVesselBase.runDeferredSpawn", () => {
+  it("launches the child and returns a run handle immediately instead of parking the tool call", async () => {
+    const probe = await makeSubagentSpawnProbe();
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    expect((out as { deferred?: boolean }).deferred).toBeUndefined();
+    expect(out).toMatchObject({
+      isError: false,
+      result: {
+        details: {
+          runId: "inv-1",
+          mode: "fresh",
+          label: "background audit",
+          taskChannelId: "task-inv-1",
+          contextId: "ctx-child",
+          status: "running",
+        },
+      },
+    });
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({
+      runId: "inv-1",
+      status: "running",
+      taskChannelId: "task-inv-1",
+      childContextId: "ctx-child",
+    });
+    expect(probe.rpcCalls.some((call) => call.method === "runtime.createEntity")).toBe(true);
+    expect(probe.channelStub.published.some((p) => p.event.kind === "invocation.started")).toBe(
+      true
+    );
   });
 });
 

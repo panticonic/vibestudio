@@ -243,6 +243,38 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(prepareDurableObject).toHaveBeenCalledTimes(1);
   });
 
+  it("passes stateArgs into DO preparation so the object runtime can see STATE_ARGS", async () => {
+    const { service, prepareDurableObject } = await buildDeps();
+    await service.handler({ caller: serverCaller }, "createEntity", [
+      doCreateSpec({
+        contextId: "ctx-x",
+        stateArgs: {
+          subagent: {
+            runId: "run-1",
+            parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+            parentChannelId: "ch-parent",
+          },
+        },
+      }),
+    ]);
+
+    expect(prepareDurableObject).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "workers/example",
+        className: "MyDO",
+        key: "k1",
+        contextId: "ctx-x",
+        stateArgs: {
+          subagent: {
+            runId: "run-1",
+            parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+            parentChannelId: "ch-parent",
+          },
+        },
+      })
+    );
+  });
+
   it("reactivates a retired row and re-runs prepareDurableObject", async () => {
     const { service, instance, prepareDurableObject } = await buildDeps();
     // First create — phase 1.

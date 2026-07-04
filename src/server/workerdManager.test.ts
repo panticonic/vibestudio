@@ -382,6 +382,35 @@ describe("WorkerdManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", undefined);
     });
 
+    it("serves object-specific stateArgs in userland DO env", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "subagent-object",
+        contextId: "ctx-agent",
+        stateArgs: {
+          subagent: {
+            runId: "run-1",
+            parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+            parentChannelId: "ch-parent",
+          },
+        },
+      });
+
+      const code = await mgr.getDoCode("workers/new-do", "NewDO", "subagent-object");
+      expect(code?.env["STATE_ARGS"]).toEqual({
+        subagent: {
+          runId: "run-1",
+          parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
+          parentChannelId: "ch-parent",
+        },
+      });
+      expect(mgr.getDoVersion("workers/new-do", "NewDO", "subagent-object")).toContain(":state:");
+    });
+
     it("honors explicit context refs for runtime-managed DO object images", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);

@@ -478,16 +478,16 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
 
   /** The subagent tool surface: parent-side supervision (spawn/send/inspect/
    *  merge/pick/read/close) plus the child-side `complete` terminal trigger
-   *  (advertised only to subagents). The vessel implements the mechanics;
-   *  `spawn_subagent` PARKS via the local-tool executor (it never reaches the
-   *  `execute` below — see AgentVesselBase.runDeferredSpawn). */
+   *  (advertised only to subagents). The vessel implements the spawn mechanics
+   *  in the local-tool executor (it never reaches the `execute` below — see
+   *  AgentVesselBase.runDeferredSpawn). */
   private createSubagentTools(): AgentTool[] {
     const tools: AgentTool[] = [
       {
         name: "spawn_subagent",
         label: "spawn_subagent",
         description:
-          "Delegate separable work to a child agent in its own task channel and child context. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId, steer with send_to_subagent, read transcript with read_subagent, inspect files with inspect_subagent, then merge/pick/close. The child finishes only by calling complete.",
+          "Delegate separable work to a child agent in its own task channel and child context. Returns immediately with a runId while the child continues in the background. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId, steer with send_to_subagent, read transcript with read_subagent, inspect files with inspect_subagent, then merge/pick/close. The child finishes only by calling complete.",
         parameters: {
           type: "object",
           properties: {

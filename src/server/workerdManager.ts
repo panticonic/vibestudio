@@ -120,6 +120,27 @@ interface DOObjectBuild {
   buildKey: string;
   imageId: string;
   scopeRef?: string;
+  stateArgs?: Record<string, unknown>;
+}
+
+function recordStateArgs(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function stableHash(value: unknown): string {
+  return crypto.createHash("sha256").update(stableJson(value)).digest("hex").slice(0, 16);
 }
 
 function doServiceKey(source: string, className: string): string {
@@ -611,6 +632,7 @@ export class WorkerdManager {
     className: string;
     key: string;
     contextId: string;
+    stateArgs?: unknown;
   }): Promise<{ targetId: string; effectiveVersion: string }> {
     const targetId = canonicalEntityId({
       kind: "do",
@@ -625,6 +647,7 @@ export class WorkerdManager {
       scopeRef,
       objectKey: args.key,
       imageId: targetId,
+      stateArgs: args.stateArgs,
     });
     const serviceKey = doServiceKey(args.source, args.className);
     const svc = this.doServices.get(serviceKey);
@@ -1105,8 +1128,10 @@ export class WorkerdManager {
       const objectBuild = this.doObjectBuilds.get(doObjectBuildKey(source, className, objectKey));
       if (objectBuild) {
         const image = this.runtimeImages.get(objectBuild.imageId);
-        if (image) return String(image.generation);
-        return objectBuild.buildKey;
+        const version = image ? String(image.generation) : objectBuild.buildKey;
+        return objectBuild.stateArgs
+          ? `${version}:state:${stableHash(objectBuild.stateArgs)}`
+          : version;
       }
     }
     const svc = this.doServices.get(doServiceKey(source, className));
@@ -1133,7 +1158,7 @@ export class WorkerdManager {
     /** Extra pre-compiled wasm modules, base64 (e.g. terminal/Ink `yoga.wasm`).
      *  The UniversalDO host decodes these to ArrayBuffers for the loader. */
     wasmModules?: Record<string, string>;
-    env: Record<string, string>;
+    env: Record<string, unknown>;
   } | null> {
     const serviceKey = doServiceKey(source, className);
     const svc = this.doServices.get(serviceKey);
@@ -1177,7 +1202,7 @@ export class WorkerdManager {
     // Keep the egress attribution registered for this class identity.
     this.registerDoEgressCaller(source, className, image.effectiveVersion);
 
-    const env: Record<string, string> = {
+    const env: Record<string, unknown> = {
       RPC_AUTH_TOKEN: serviceToken,
       WORKER_SOURCE: source,
       WORKER_CLASS_NAME: className,
@@ -1192,6 +1217,9 @@ export class WorkerdManager {
     const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
     if (gatewayAliases.length > 0) {
       env["GATEWAY_URL_ALIASES"] = JSON.stringify(gatewayAliases);
+    }
+    if (objectBuild?.stateArgs && Object.keys(objectBuild.stateArgs).length > 0) {
+      env["STATE_ARGS"] = objectBuild.stateArgs;
     }
 
     return {
@@ -2342,6 +2370,7 @@ export default { fetch() { return new Response("universal-do host"); } };
       scopeRef?: string;
       objectKey?: string;
       imageId?: string;
+      stateArgs?: unknown;
     } = {}
   ): Promise<string | undefined> {
     const serviceKey = doServiceKey(source, className);
@@ -2384,12 +2413,19 @@ export default { fetch() { return new Response("universal-do host"); } };
       buildKey = image.buildKey;
     }
 
-    if (!isInternalDOSource(source) && serviceScopeRef && opts.objectKey && image) {
-      this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
-        imageId: image.id,
-        scopeRef: serviceScopeRef,
-        buildKey: image.buildKey,
-      });
+    if (!isInternalDOSource(source) && opts.objectKey) {
+      const svc = this.doServices.get(serviceKey);
+      const imageId = image?.id ?? svc?.imageId;
+      const buildKey = image?.buildKey ?? svc?.buildKey;
+      if (imageId && buildKey) {
+        const stateArgs = recordStateArgs(opts.stateArgs);
+        this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
+          imageId,
+          ...(serviceScopeRef ? { scopeRef: serviceScopeRef } : {}),
+          buildKey,
+          ...(stateArgs ? { stateArgs } : {}),
+        });
+      }
     }
 
     // Userland DO classes load dynamically into the static `universal-do` facet

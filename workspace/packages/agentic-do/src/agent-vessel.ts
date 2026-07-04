@@ -937,10 +937,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           if (tool === "eval") {
             return this.runDeferredEval(channelId, invocationId, args);
           }
-          // `spawn_subagent` PARKS: the run stays OPEN until the child calls
-          // `complete` (or is aborted / TTL-swept). The driver leases the row;
-          // `onSubagentComplete` delivers the terminal out-of-band, exactly like
-          // the deferred `eval` path above.
+          // `spawn_subagent` launches a child and returns a run handle immediately.
+          // The run itself continues on its task channel; completion publishes a
+          // subagent terminal card instead of holding this tool effect open.
           if (tool === "spawn_subagent") {
             return this.runDeferredSpawn(channelId, invocationId, args);
           }
@@ -3322,17 +3321,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /**
-   * The deferral half of `spawn_subagent` (mirrors {@link runDeferredEval}). Mints
-   * the child context (deterministic under `targetKey`) + child agent entity, wires
-   * the task channel (parent watches turn-final, child subscribes / trajectory-forks),
-   * seeds the task, records the run + the parent-trajectory invocation card, then
-   * PARKS. Guarded by depth/fan-out. Any failure settles inline as a tool error.
+   * Launch `spawn_subagent`. Mints the child context (deterministic under
+   * `targetKey`) + child agent entity, wires the task channel (parent watches
+   * turn-final, child subscribes / trajectory-forks), seeds the task, records
+   * the run + the parent-trajectory invocation card, then returns a run handle.
+   * Guarded by depth/fan-out. Any failure settles inline as a tool error.
    */
-  private async runDeferredSpawn(
+  protected async runDeferredSpawn(
     channelId: string,
     invocationId: string,
     args: unknown
-  ): Promise<{ deferred: true } | { result: unknown; isError: boolean }> {
+  ): Promise<{ result: unknown; isError: boolean }> {
     try {
       const p = (args ?? {}) as {
         mode?: unknown;
@@ -3346,8 +3345,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (mode === "fresh" && !task.trim()) {
         return { result: "spawn_subagent(mode:'fresh') requires a non-empty task", isError: true };
       }
-      // Idempotency: a re-driven spawn returns the SAME parked run.
-      if (this.subagentRuns.get(invocationId)) return { deferred: true };
+      // Idempotency: a re-driven spawn returns the SAME run handle.
+      const existingRun = this.subagentRuns.get(invocationId);
+      if (existingRun) {
+        return {
+          result: {
+            protocolContent: [
+              { type: "text", text: `subagent already running: ${existingRun.runId}` },
+            ],
+            details: this.subagentRunDetails(existingRun),
+          },
+          isError: false,
+        };
+      }
 
       const loopConfig = this.loopConfig(channelId);
       const maxDepth = loopConfig.maxSubagentDepth ?? DEFAULT_MAX_SUBAGENT_DEPTH;
@@ -3486,11 +3496,28 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // 7) Durable run record on the parent's home channel (the subagent card).
       await this.publishSubagentStarted(run);
 
-      // PARK: the terminal arrives via onSubagentComplete / abort / TTL.
-      return { deferred: true };
+      return {
+        result: {
+          protocolContent: [{ type: "text", text: `spawned subagent ${runId}` }],
+          details: this.subagentRunDetails(run),
+        },
+        isError: false,
+      };
     } catch (err) {
       return { result: err instanceof Error ? err.message : String(err), isError: true };
     }
+  }
+
+  private subagentRunDetails(run: SubagentRunRow): Record<string, unknown> {
+    return {
+      runId: run.runId,
+      mode: run.mode,
+      label: run.label,
+      taskChannelId: run.taskChannelId,
+      contextId: run.childContextId,
+      childEntityId: run.childEntityId,
+      status: run.status,
+    };
   }
 
   /** Post a message into a subagent's task channel (parent → child). */
@@ -3694,9 +3721,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     await this.settleSubagentTerminal(run, outcome, reportText, run.merge ?? undefined);
   }
 
-  /** Settle a run's PARKED spawn invocation on the parent trajectory AND publish
-   *  the terminal subagent card to the parent's home channel. `completed` is
-   *  success-only; every other outcome is an error. */
+  /** Mark the run terminal and publish the terminal subagent card to the
+   *  parent's home channel. `spawn_subagent` returns when the child is launched;
+   *  child completion is a later event, not the terminal for the original tool. */
   private async settleSubagentTerminal(
     run: SubagentRunRow,
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
@@ -3704,16 +3731,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     merge?: SubagentRunMerge
   ): Promise<void> {
     this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
-    await this.driver.deliverEffectOutcome(
-      ids.invocationEffect(run.runId),
-      {
-        kind: "tool",
-        result: text,
-        isError: outcome !== "completed",
-        ...(outcome !== "completed" ? { reason: text } : {}),
-      },
-      { channelId: run.parentChannelId }
-    );
     await this.publishSubagentTerminal(run, outcome, text, merge);
   }
 

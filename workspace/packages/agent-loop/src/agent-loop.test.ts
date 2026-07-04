@@ -174,6 +174,65 @@ describe("agent-loop core lifecycle", () => {
     expect((final.payload as { tier?: string }).tier).toBe("primary");
   });
 
+  it("keeps spawn_subagent launch results trajectory-only so the visible card stays running", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "spawn-1",
+          name: "spawn_subagent",
+          arguments: { mode: "fresh", task: "audit" },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("spawn-1"), {
+      kind: "tool",
+      result: {
+        protocolContent: [{ type: "text", text: "spawned subagent spawn-1" }],
+        details: { runId: "spawn-1", status: "running" },
+      },
+      isError: false,
+    });
+
+    const terminal = s.log.find((row) => row.envelopeId === ids.invocationTerminal("spawn-1"))!;
+    expect(terminal.payloadKind).toBe("invocation.completed");
+    expect(terminal.publish).toBe(false);
+    expect(s.state.entries.map((entry) => entry.kind)).toContain("tool-result");
+  });
+
+  it("still publishes spawn_subagent failures when no background run exists", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "spawn-1",
+          name: "spawn_subagent",
+          arguments: { mode: "fresh", task: "" },
+        },
+      ],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("spawn-1"), {
+      kind: "tool",
+      result: "spawn_subagent(mode:'fresh') requires a non-empty task",
+      isError: true,
+      reason: "spawn_subagent(mode:'fresh') requires a non-empty task",
+    });
+
+    const terminal = s.log.find((row) => row.envelopeId === ids.invocationTerminal("spawn-1"))!;
+    expect(terminal.payloadKind).toBe("invocation.failed");
+    expect(terminal.publish).toBe(true);
+  });
+
   it("stamps tier primary on a direct text-only answer", () => {
     const s = scenario();
     prompt(s);

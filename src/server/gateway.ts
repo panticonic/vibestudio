@@ -129,7 +129,7 @@ export interface WorkerHostCodeProvider {
     mainModule: string;
     modules: Record<string, string>;
     wasmModules?: Record<string, string>;
-    env: Record<string, string>;
+    env: Record<string, unknown>;
   } | null>;
 }
 

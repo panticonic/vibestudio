@@ -44,6 +44,7 @@ export interface RuntimeEntityHooks {
     className: string;
     key: string;
     contextId: string;
+    stateArgs?: unknown;
   }) => Promise<{ targetId: string; effectiveVersion: string }>;
 
   /** Prepare runtime resources for a "worker" entity. */
@@ -296,6 +297,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         className: spec.className,
         key,
         contextId,
+        stateArgs: spec.stateArgs,
       });
       effectiveVersion =
         existing?.status === "retired"
