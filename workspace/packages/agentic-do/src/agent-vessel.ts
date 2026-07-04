@@ -45,7 +45,13 @@ import {
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
-import { toSubscriptionConfig } from "@workspace/agentic-core";
+import {
+  createAgentEntity,
+  createSubagentContext,
+  initAgentFromTrajectoryFork,
+  publishAgentTaskSeed,
+  subscribeAgentToChannel,
+} from "@workspace/agentic-core";
 import { serializeByKey } from "@vibez1/shared/keyedSerializer";
 import {
   createVcsUserlandClient,
@@ -3381,7 +3387,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             : "subagent";
       const childConfig =
         p.config && typeof p.config === "object" ? (p.config as Record<string, unknown>) : undefined;
-      const childSubscriptionConfig = toSubscriptionConfig(childConfig);
       const source =
         typeof p.source === "string" && p.source ? p.source : String(this.env["WORKER_SOURCE"] ?? "");
       const className =
@@ -3396,38 +3401,31 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const ownerEntityId = this.participantId();
 
       // 1) Child context (deterministic; runtime records the lifecycle edge).
-      const { contextId } = await this.rpc.call<{ contextId: string }>(
-        "main",
-        "runtime.createSubagentContext",
-        [{ parentContextId, ownerEntityId, targetKey }]
-      );
+      const { contextId } = await createSubagentContext(this.rpc, {
+        parentContextId,
+        ownerEntityId,
+        targetKey,
+      });
 
       // 2) Child agent entity in that context. createEntity derives parentId from
       //    the verified caller (this vessel) → the entity→entity edge lands.
-      const childHandle = await this.rpc.call<{ id: string; targetId: string }>(
-        "main",
-        "runtime.createEntity",
-        [
-          {
-            kind: "do",
-            source,
-            className,
-            key: targetKey,
-            contextId,
-            stateArgs: {
-              ...(childConfig ? { agentConfig: childConfig } : {}),
-              subagent: {
-                runId,
-                mode,
-                parentRef: ownerEntityId,
-                parentChannelId: channelId,
-                parentContextId,
-                depth: childDepth,
-              },
-            },
+      const childHandle = await createAgentEntity(this.rpc, {
+        source,
+        className,
+        key: targetKey,
+        contextId,
+        config: childConfig,
+        stateArgs: {
+          subagent: {
+            runId,
+            mode,
+            parentRef: ownerEntityId,
+            parentChannelId: channelId,
+            parentContextId,
+            depth: childDepth,
           },
-        ]
-      );
+        },
+      });
 
       // 3) Record the run BEFORE any wake so replay + teardown can find it.
       const now = Date.now();
@@ -3435,7 +3433,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         runId,
         taskChannelId,
         childContextId: contextId,
-        childEntityId: childHandle.id,
+        childEntityId: childHandle.id ?? childHandle.targetId,
         parentChannelId: channelId,
         mode,
         label,
@@ -3459,27 +3457,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       let childParticipantId: string | null = null;
       if (mode === "fork") {
         const parentSeq = await this.trajectoryHeadSeq(channelId);
-        const childSubscription = await this.rpc.call<{ ok: boolean; participantId: string }>(
-          childHandle.targetId,
-          "initFromTrajectoryFork",
-          [
-            {
-              parentLogId: ids.logIdForChannel(channelId),
-              seq: parentSeq,
-              taskChannelId,
-              contextId,
-              config: childSubscriptionConfig,
-            },
-          ]
-        );
-        childParticipantId = childSubscription.participantId;
+        const childSubscription = await initAgentFromTrajectoryFork(this.rpc, childHandle, {
+          parentLogId: ids.logIdForChannel(channelId),
+          seq: parentSeq,
+          taskChannelId,
+          contextId,
+          config: childConfig,
+        });
+        childParticipantId = childSubscription.participantId ?? null;
       } else {
-        const childSubscription = await this.rpc.call<{ ok: boolean; participantId: string }>(
-          childHandle.targetId,
-          "subscribeChannel",
-          [{ channelId: taskChannelId, contextId, config: childSubscriptionConfig, replay: false }]
-        );
-        childParticipantId = childSubscription.participantId;
+        const childSubscription = await subscribeAgentToChannel(this.rpc, childHandle, {
+          channelId: taskChannelId,
+          contextId,
+          config: childConfig,
+          replay: false,
+        });
+        childParticipantId = childSubscription.participantId ?? null;
       }
 
       // 5b) Stamp task provenance on the task channel so its getProvenance
@@ -3502,32 +3495,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           parentParticipantId: participantId,
           subagentRunId: runId,
         };
-        const seedEvent: AgenticEvent<"message.completed"> = {
-          kind: "message.completed",
-          actor: {
-            kind: "user",
-            id: participantId,
-            displayName: "Subagent task",
-            metadata: senderMetadata,
-          },
-          causality: { messageId: messageId as never },
-          payload: {
-            protocol: AGENTIC_PROTOCOL_VERSION,
-            role: "user",
-            blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content: task }],
-            outcome: "completed",
-            tier: "primary",
-            ...(childParticipantId
-              ? { to: [{ kind: "participant" as const, participantId: childParticipantId }] }
-              : {}),
-          },
-          createdAt: new Date().toISOString(),
-        };
-        await this.createChannelClient(taskChannelId).publishAgenticEvent(
-          participantId,
-          seedEvent,
-          { idempotencyKey: messageId, senderMetadata }
-        );
+        await publishAgentTaskSeed(this.createChannelClient(taskChannelId), {
+          senderParticipantId: participantId,
+          task,
+          messageId,
+          childParticipantId,
+          senderMetadata,
+        });
       }
 
       // 7) Durable run record on the parent's home channel (the subagent card).

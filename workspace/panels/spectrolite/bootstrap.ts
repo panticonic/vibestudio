@@ -8,6 +8,7 @@
 
 import { rpc } from "@workspace/runtime";
 import { parseDoTargetId } from "@workspace/runtime/workerd-client";
+import { launchAgentIntoChannel } from "@workspace/agentic-core";
 
 const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
 
@@ -58,27 +59,16 @@ export async function createAndSubscribeAgent(args: CreateAndSubscribeArgs): Pro
   if (!args.channelContextId) {
     throw new Error("Cannot subscribe an agent DO without a context ID");
   }
-  const handle = await rpc.call<{ targetId: string }>(
-    "main",
-    "runtime.createEntity",
-    [{
-      kind: "do",
-      source: args.source,
-      className: args.className,
-      key: args.key,
-      contextId: args.channelContextId,
-    }],
-  );
-  return rpc.call<{ ok: boolean; participantId?: string }>(
-    handle.targetId,
-    "subscribeChannel",
-    [{
-      channelId: args.channelId,
-      contextId: args.channelContextId,
-      config: args.config,
-      replay: args.replay,
-    }],
-  );
+  const { subscription } = await launchAgentIntoChannel(rpc, {
+    source: args.source,
+    className: args.className,
+    key: args.key,
+    channelId: args.channelId,
+    contextId: args.channelContextId,
+    config: args.config,
+    replay: args.replay,
+  });
+  return subscription;
 }
 
 interface ChannelParticipant {

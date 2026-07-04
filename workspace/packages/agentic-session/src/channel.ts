@@ -8,8 +8,8 @@
  * because no panel is connected to advertise them.
  */
 
-import type { AgentSubscriptionConfig } from "@workspace/agentic-core";
-import { toSubscriptionConfig } from "@workspace/agentic-core";
+import type { AgentSubscriptionConfig, AgentLaunchRpc } from "@workspace/agentic-core";
+import { launchAgentIntoChannel, retireAgentEntity } from "@workspace/agentic-core";
 import type { ChannelConfig } from "@workspace/pubsub";
 
 /** Recommended channel config for headless sessions: full-auto approval (level 2). */
@@ -69,53 +69,33 @@ export async function subscribeHeadlessAgent(
     ...opts.extraConfig,
   };
 
-  const entity = (await opts.rpcCall("main", "runtime.createEntity", [
+  const { handle, subscription, contextId } = await launchAgentIntoChannel(
+    { call: opts.rpcCall } as AgentLaunchRpc,
     {
-      kind: "do",
       source: opts.source,
       className: opts.className,
       key: opts.objectKey,
+      channelId: opts.channelId,
       ...(opts.contextId ? { contextId: opts.contextId } : {}),
-      // Agent config is PER-AGENT, seeded from creation stateArgs — so the model
-      // AND the headless-recommended config (e.g. approvalLevel: 2 / Full Auto)
-      // ride creation, not the (now membership-only) subscription. Seed from the
-      // FULL subscriptionConfig so full-auto isn't lost. Vessel reads STATE_ARGS.agentConfig.
-      stateArgs: { agentConfig: subscriptionConfig },
+      config: subscriptionConfig,
+      retireEntityOnSubscribeFailure: true,
+      missingContextErrorMessage:
+        "runtime.createEntity did not return a contextId for headless agent subscription",
     },
-  ])) as { id: string; targetId: string; contextId?: string };
-  const contextId = opts.contextId ?? entity.contextId;
-  if (!contextId) {
-    await opts.rpcCall("main", "runtime.retireEntity", [{ id: entity.id }]).catch(() => {});
-    throw new Error("runtime.createEntity did not return a contextId for headless agent subscription");
-  }
-
-  // The subscription carries presentation (handle/name/systemPrompt) + any
-  // worker extras — the behavior settings rode the creation stateArgs above and
-  // are stripped here (the subscription type forbids them).
-  try {
-    const result = (await opts.rpcCall(
-      entity.targetId,
-      "subscribeChannel",
-      [
-        {
-          channelId: opts.channelId,
-          contextId,
-          config: toSubscriptionConfig(subscriptionConfig),
-        },
-      ],
-    )) as { ok: boolean; participantId?: string };
-    return { ...result, entityId: entity.id, targetId: entity.targetId, contextId };
-  } catch (err) {
-    await opts.rpcCall("main", "runtime.retireEntity", [{ id: entity.id }]).catch(() => {});
-    throw err;
-  }
+  );
+  return {
+    ...subscription,
+    entityId: handle.id ?? handle.targetId,
+    targetId: handle.targetId,
+    contextId,
+  };
 }
 
 export async function retireHeadlessAgent(opts: {
   rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
   entityId: string;
 }): Promise<void> {
-  await opts.rpcCall("main", "runtime.retireEntity", [{ id: opts.entityId }]);
+  await retireAgentEntity({ call: opts.rpcCall } as AgentLaunchRpc, opts.entityId);
 }
 
 export async function unsubscribeHeadlessAgent(opts: {

@@ -64,7 +64,11 @@ import "@workspace/ui/tokens.css";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { createPanelSandboxConfig, parseSignalEvent } from "@workspace/agentic-core";
+import {
+  createPanelSandboxConfig,
+  launchAgentIntoChannel,
+  parseSignalEvent,
+} from "@workspace/agentic-core";
 import { connectViaRpc } from "@workspace/pubsub";
 import { forkConversation } from "@workspace/channel-fork";
 import {
@@ -279,23 +283,15 @@ async function ensureAgentSubscribed(args: {
   channelContextId: string;
   config?: Record<string, unknown>;
 }): Promise<string> {
-  const handle = await rpc.call<{ targetId: string }>("main", "runtime.createEntity", [
-    {
-      kind: "do",
-      source: NEWS_AGENT_SOURCE,
-      className: NEWS_AGENT_CLASS,
-      key: args.agentKey,
-      contextId: args.channelContextId,
-    },
-  ]);
-  await rpc.call(handle.targetId, "subscribeChannel", [
-    {
-      channelId: args.channelId,
-      contextId: args.channelContextId,
-      config: { handle: NEWS_AGENT_HANDLE, ...(args.config ?? {}) },
-      replay: true,
-    },
-  ]);
+  const { handle } = await launchAgentIntoChannel(rpc, {
+    source: NEWS_AGENT_SOURCE,
+    className: NEWS_AGENT_CLASS,
+    key: args.agentKey,
+    channelId: args.channelId,
+    contextId: args.channelContextId,
+    config: { handle: NEWS_AGENT_HANDLE, ...(args.config ?? {}) },
+    replay: true,
+  });
   return handle.targetId;
 }
 

@@ -4,7 +4,7 @@
  * rpc (the panel-rpc harness), independent of the React/UI surface.
  */
 import { rpc } from "@workspace/runtime";
-import { toSubscriptionConfig } from "@workspace/agentic-core";
+import { launchAgentIntoChannel } from "@workspace/agentic-core";
 
 /**
  * Create the agent DO entity (or reactivate it), then subscribe it to the channel.
@@ -28,22 +28,14 @@ export async function createAndSubscribeAgent(args: {
   if (!args.channelContextId) {
     throw new Error("Cannot subscribe an agent DO without a context ID");
   }
-  const handle = await rpc.call<{ targetId: string }>("main", "runtime.createEntity", [
-    {
-      kind: "do",
-      source: args.source,
-      className: args.className,
-      key: args.key,
-      contextId: args.channelContextId,
-      stateArgs: { agentConfig: args.config },
-    },
-  ]);
-  return rpc.call<{ ok: boolean; participantId?: string }>(handle.targetId, "subscribeChannel", [
-    {
-      channelId: args.channelId,
-      contextId: args.channelContextId,
-      config: toSubscriptionConfig(args.config),
-      replay: args.replay,
-    },
-  ]);
+  const { subscription } = await launchAgentIntoChannel(rpc, {
+    source: args.source,
+    className: args.className,
+    key: args.key,
+    channelId: args.channelId,
+    contextId: args.channelContextId,
+    config: args.config,
+    replay: args.replay,
+  });
+  return subscription;
 }

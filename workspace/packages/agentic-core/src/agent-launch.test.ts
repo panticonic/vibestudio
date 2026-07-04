@@ -1,0 +1,245 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  buildAgentEntityCreateSpec,
+  buildAgentTaskSeedEvent,
+  createSubagentContext,
+  initAgentFromTrajectoryFork,
+  launchAgentIntoChannel,
+  publishAgentTaskSeed,
+  subscribeAgentToChannel,
+} from "./agent-launch.js";
+import type { AgentLaunchRpc } from "./agent-launch.js";
+
+function makeRpc(
+  impl?: (target: string, method: string, args: unknown[]) => Promise<unknown>
+): AgentLaunchRpc & { call: ReturnType<typeof vi.fn> } {
+  const rpc = {
+    call: vi.fn(async (target: string, method: string, args: unknown[]) => {
+      if (impl) return impl(target, method, args);
+      if (target === "main" && method === "runtime.createEntity") {
+        return { id: "entity-1", targetId: "target-1", contextId: "ctx-minted" };
+      }
+      return { ok: true, participantId: "participant-1" };
+    }),
+  };
+  return rpc as unknown as AgentLaunchRpc & { call: typeof rpc.call };
+}
+
+describe("agent launch primitive", () => {
+  it("builds a DO create spec with full per-agent config in stateArgs", () => {
+    expect(
+      buildAgentEntityCreateSpec({
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "agent-1",
+        contextId: "ctx-1",
+        config: {
+          model: "openai:gpt-5.3",
+          approvalLevel: 2,
+          handle: "agent",
+        },
+        stateArgs: { subagent: { runId: "run-1" } },
+      })
+    ).toEqual({
+      kind: "do",
+      source: "workers/agent-worker",
+      className: "AiChatWorker",
+      key: "agent-1",
+      contextId: "ctx-1",
+      stateArgs: {
+        subagent: { runId: "run-1" },
+        agentConfig: {
+          model: "openai:gpt-5.3",
+          approvalLevel: 2,
+          handle: "agent",
+        },
+      },
+    });
+  });
+
+  it("launches by creating before subscribing, stripping behavior settings from subscription config", async () => {
+    const rpc = makeRpc();
+
+    const out = await launchAgentIntoChannel(rpc, {
+      source: "workers/agent-worker",
+      className: "AiChatWorker",
+      key: "agent-1",
+      channelId: "ch-1",
+      contextId: "ctx-1",
+      config: {
+        model: "openai:gpt-5.3",
+        approvalLevel: 1,
+        handle: "agent",
+        systemPrompt: "be direct",
+        deterministicResponse: true,
+      },
+      replay: true,
+    });
+
+    expect(out).toMatchObject({
+      handle: { id: "entity-1", targetId: "target-1" },
+      subscription: { ok: true, participantId: "participant-1" },
+      contextId: "ctx-1",
+    });
+    expect(rpc.call).toHaveBeenNthCalledWith(
+      1,
+      "main",
+      "runtime.createEntity",
+      [
+        expect.objectContaining({
+          stateArgs: expect.objectContaining({
+            agentConfig: expect.objectContaining({
+              model: "openai:gpt-5.3",
+              approvalLevel: 1,
+            }),
+          }),
+        }),
+      ]
+    );
+    expect(rpc.call).toHaveBeenNthCalledWith(2, "target-1", "subscribeChannel", [
+      {
+        channelId: "ch-1",
+        contextId: "ctx-1",
+        config: {
+          handle: "agent",
+          systemPrompt: "be direct",
+          deterministicResponse: true,
+        },
+        replay: true,
+      },
+    ]);
+  });
+
+  it("retires an isolated entity when subscribe fails after creation", async () => {
+    const rpc = makeRpc(async (_target, method) => {
+      if (method === "runtime.createEntity") {
+        return { id: "entity-1", targetId: "target-1", contextId: "ctx-1" };
+      }
+      if (method === "subscribeChannel") throw new Error("subscribe failed");
+      return undefined;
+    });
+
+    await expect(
+      launchAgentIntoChannel(rpc, {
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "agent-1",
+        channelId: "ch-1",
+        retireEntityOnSubscribeFailure: true,
+      })
+    ).rejects.toThrow("subscribe failed");
+
+    expect(rpc.call).toHaveBeenLastCalledWith("main", "runtime.retireEntity", [
+      { id: "entity-1" },
+    ]);
+  });
+
+  it("initializes trajectory forks through the same stripped subscription config contract", async () => {
+    const rpc = makeRpc();
+
+    await initAgentFromTrajectoryFork(rpc, "target-1", {
+      parentLogId: "log-parent",
+      seq: 42,
+      taskChannelId: "task-1",
+      contextId: "ctx-child",
+      config: {
+        model: "openai:gpt-5.3",
+        handle: "child",
+        wakePolicy: "turn-final",
+      },
+    });
+
+    expect(rpc.call).toHaveBeenCalledWith("target-1", "initFromTrajectoryFork", [
+      {
+        parentLogId: "log-parent",
+        seq: 42,
+        taskChannelId: "task-1",
+        contextId: "ctx-child",
+        config: { handle: "child", wakePolicy: "turn-final" },
+      },
+    ]);
+  });
+
+  it("creates subagent contexts through runtime.createSubagentContext", async () => {
+    const rpc = makeRpc(async () => ({ contextId: "ctx-child" }));
+
+    await expect(
+      createSubagentContext(rpc, {
+        parentContextId: "ctx-parent",
+        ownerEntityId: "do:agent:parent",
+        targetKey: "subagent:run-1",
+      })
+    ).resolves.toEqual({ contextId: "ctx-child" });
+
+    expect(rpc.call).toHaveBeenCalledWith("main", "runtime.createSubagentContext", [
+      {
+        parentContextId: "ctx-parent",
+        ownerEntityId: "do:agent:parent",
+        targetKey: "subagent:run-1",
+      },
+    ]);
+  });
+
+  it("builds and publishes addressed user-style task seeds", async () => {
+    const event = buildAgentTaskSeedEvent({
+      senderParticipantId: "parent-participant",
+      childParticipantId: "child-participant",
+      messageId: "subagent-seed:run-1",
+      task: "audit this",
+      senderMetadata: { type: "headless", name: "Subagent task" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(event).toMatchObject({
+      kind: "message.completed",
+      actor: { kind: "user", id: "parent-participant", displayName: "Subagent task" },
+      payload: {
+        role: "user",
+        blocks: [{ type: "text", content: "audit this" }],
+        to: [{ kind: "participant", participantId: "child-participant" }],
+      },
+    });
+
+    const channel = {
+      publishAgenticEvent: vi.fn(async () => ({ id: 7 })),
+    };
+    await expect(
+      publishAgentTaskSeed(channel, {
+        senderParticipantId: "parent-participant",
+        childParticipantId: "child-participant",
+        messageId: "subagent-seed:run-1",
+        task: "audit this",
+        senderMetadata: { type: "headless", name: "Subagent task" },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })
+    ).resolves.toEqual({ id: 7 });
+
+    expect(channel.publishAgenticEvent).toHaveBeenCalledWith(
+      "parent-participant",
+      event,
+      {
+        idempotencyKey: "subagent-seed:run-1",
+        senderMetadata: { type: "headless", name: "Subagent task" },
+      }
+    );
+  });
+
+  it("subscribes a handle target directly", async () => {
+    const rpc = makeRpc();
+
+    await subscribeAgentToChannel(rpc, { targetId: "target-1" }, {
+      channelId: "ch-1",
+      contextId: "ctx-1",
+      config: { model: "openai:gpt-5.3", handle: "agent" },
+    });
+
+    expect(rpc.call).toHaveBeenCalledWith("target-1", "subscribeChannel", [
+      {
+        channelId: "ch-1",
+        contextId: "ctx-1",
+        config: { handle: "agent" },
+        replay: undefined,
+      },
+    ]);
+  });
+});
