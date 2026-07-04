@@ -120,7 +120,7 @@ endpoint is only used to rendezvous, not to carry workspace data. See
 ### Develop (contributors)
 
 ```bash
-pnpm install
+pnpm bootstrap        # install root deps and the split userland workspace deps
 pnpm dev             # build + start Electron with DevTools
 pnpm dev:webrtc      # build + start local server, then connect to it over WebRTC
 pnpm cli --help      # run the CLI live from TypeScript
@@ -133,6 +133,8 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 ## Scripts
 
 - `pnpm dev` - Build and start in development mode with DevTools
+- `pnpm bootstrap` - Install both root dependencies and `workspace/` userland dependencies
+- `pnpm install:userland` - Refresh only the split `workspace/` dependency install
 - `pnpm dev:webrtc` - Build, start a local workspace server as a WebRTC answerer, and launch Electron through the remote transport
 - `pnpm dev -- --auto-approve` - Start dev mode and automatically approve decision-style approval prompts
 - `pnpm build` - Production build

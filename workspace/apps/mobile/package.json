@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "//dependencies": "Keep react-native-webview pinned with apps/mobile; 13.17.0 makes JSX props resolve to never under our TS/React setup.",
   "vibez1": {
     "displayName": "Vibez1 Mobile",
     "app": {
@@ -48,6 +49,6 @@
     "react-native-svg": "^15.15.4",
     "react-native-tcp-socket": "^6.4.1",
     "react-native-url-polyfill": "^3.0.0",
-    "react-native-webview": "^13.13.5"
+    "react-native-webview": "13.16.1"
   }
 }

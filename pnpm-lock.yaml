@@ -406,7 +406,7 @@ importers:
         specifier: ^124.0.5
         version: 124.0.7(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))
       react-native-webview:
-        specifier: ^13.13.5
+        specifier: 13.16.1
         version: 13.16.1(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
       web-streams-polyfill:
         specifier: ^3.3.3
