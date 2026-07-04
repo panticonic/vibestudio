@@ -140,6 +140,49 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("anchors fork annotation rows at forkPointId instead of creation seq", () => {
+    const first: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-1") },
+      payload: textPayload("msg-1", "assistant", "first"),
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const second: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-2") },
+      payload: textPayload("msg-2", "assistant", "second"),
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const fork: AgenticEvent<"channel.forked"> = {
+      kind: "channel.forked",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        forkId: "fork-1",
+        forkedChannelId: "fork-1",
+        forkedContextId: "ctx-fork",
+        forkPointId: 10,
+        label: "Fork",
+        reason: "fork",
+        actor: agent,
+      },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [envelope(first, 10), envelope(second, 20), envelope(fork, 30)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+
+    expect(chatMessagesFromChannelView(state).map((message) => message.id)).toEqual([
+      "msg-1",
+      "fork:fork-1",
+      "msg-2",
+    ]);
+  });
+
   it("recovers docs_open name + args from a catalog-entry result when the tool name is lost", () => {
     // Model tool-calls for docs_* arrive nameless/argless in the invocation event.
     // The catalog shape of result.details lets the projection recover a useful pill

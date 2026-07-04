@@ -762,7 +762,7 @@ describe("PubSubChannel", () => {
       channelKey: "channel-fork",
       gad: parent.gad,
     });
-    await fork.instance.postClone("channel-parent", 3);
+    await fork.instance.postClone("channel-parent", 3, "ctx-forked");
 
     const replay = await fork.instance.getReplayAfter(0);
     // No-copy fork: the child sees the parent prefix verbatim, including the
@@ -885,13 +885,18 @@ describe("PubSubChannel", () => {
     await fork.instance.postClone("channel-ctx-parent", 2, "ctx-forked");
     expect(await fork.instance.getContextId()).toBe("ctx-forked");
 
-    // Omitting the new contextId leaves the (cloned) context untouched.
+    // Omitting the new contextId is rejected; forks always get a fresh context.
     const fork2 = await createGadBackedChannel({
       channelKey: "channel-ctx-fork2",
       gad: parent.gad,
     });
-    await fork2.instance.postClone("channel-ctx-parent", 2);
-    expect(await fork2.instance.getContextId()).toBeNull();
+    await expect(
+      (
+        fork2.instance as unknown as {
+          postClone(parentChannelId: string, forkPointId: number): Promise<void>;
+        }
+      ).postClone("channel-ctx-parent", 2)
+    ).rejects.toThrow(/postClone requires newContextId/);
   });
 
   it("routes by transport id but publishes terminal events under the canonical invocation id", async () => {
@@ -2324,7 +2329,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       channelKey: "channel-policy-fork",
       gad: parent.gad,
     });
-    await fork.instance.postClone("channel-policy-parent", 3);
+    await fork.instance.postClone("channel-policy-parent", 3, "ctx-policy-fork");
 
     // conversation state SURVIVES the fork — rebuilt by replaying the lineage
     const forkState = await fork.instance.getPolicyState();
@@ -2332,7 +2337,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
 
     setRpcCaller(fork.instance, "agent:one", "server");
     await fork.instance.subscribe("agent:one", {
-      contextId: "ctx-1",
+      contextId: "ctx-policy-fork",
       name: "Agent",
       type: "agent",
     });
@@ -2519,14 +2524,9 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
   });
 });
 
-// The single path that FORGES a human-attributed PRIMARY envelope with NO roster
-// entry (§E3 elevates this). appendSeed must be reachable ONLY by the owning fork
-// op: it authors the human's opening message on the child channel iff (a) THIS
-// channel holds a one-shot forkSeedAuth matching the forkId, (b) a DO caller is
-// exactly the owning fork parent (`forkedFrom`), and (c) the envelope author
-// matches the authorized seed. No userland/participant caller can forge one.
-describe("PubSubChannel appendSeed abuse containment (§E3 security)", () => {
-  // The human the fork op is authorized to author AS.
+// appendSeed is fork plumbing: it consumes the child channel's pending fork seed
+// marker, appends the opening message once, and is idempotent on crash re-drive.
+describe("PubSubChannel appendSeed fork plumbing", () => {
   const SEED_AUTHOR = { kind: "user" as const, id: "panel:user", participantId: "panel:user" };
   function forkSeed(author = SEED_AUTHOR) {
     return {
@@ -2542,8 +2542,8 @@ describe("PubSubChannel appendSeed abuse containment (§E3 security)", () => {
   }
 
   // A cloned CHILD channel whose parent fork op (channel-parent) planted a
-  // one-shot seed authorization at postClone. `withSeed:false` clones WITHOUT
-  // planting an authorization (mirrors a fork with no human seed).
+  // pending seed marker at postClone. `withSeed:false` clones WITHOUT planting
+  // the marker (mirrors a fork with no seed).
   async function forkedChild(
     opts: { withSeed?: boolean } = {}
   ): Promise<{
@@ -2569,16 +2569,15 @@ describe("PubSubChannel appendSeed abuse containment (§E3 security)", () => {
     return { parent, child };
   }
 
-  // Envelopes appended past the fork point (2). The forged seed is the ONLY thing
-  // appendSeed can write, so an empty tail proves nothing was forged.
+  // Envelopes appended past the fork point (2). The seed is the only event
+  // appendSeed writes.
   async function tailAfterFork(child: Awaited<ReturnType<typeof createGadBackedChannel>>) {
     const replay = await child.instance.getReplayAfter(2);
     return replay.logEvents;
   }
 
-  it("lets the owning fork parent author the human-attributed PRIMARY, and is idempotent on re-drive", async () => {
+  it("appends the fork seed once and is idempotent on re-drive", async () => {
     const { child } = await forkedChild();
-    // The parent fork op re-enters over the relay as a DO whose id === forkedFrom.
     setRpcCaller(child.instance, "channel-parent", "do");
 
     const res = await child.instance.appendSeed({ forkId: "fork-1" }, forkSeed());
@@ -2592,13 +2591,13 @@ describe("PubSubChannel appendSeed abuse containment (§E3 security)", () => {
       actor: { participantId?: string; id: string };
       payload: { role: string; tier: string };
     };
-    // A human-attributed PRIMARY user message, authored AS the seed author.
+    // A primary user message, authored from the supplied seed envelope.
     expect(seed.kind).toBe("message.completed");
     expect(seed.payload.role).toBe("user");
     expect(seed.payload.tier).toBe("primary");
     expect(seed.actor.participantId ?? seed.actor.id).toBe("panel:user");
 
-    // Re-drive (crash-resume) returns the SAME durable message; no second forge.
+    // Re-drive (crash-resume) returns the SAME durable message; no duplicate.
     const again = await child.instance.appendSeed({ forkId: "fork-1" }, forkSeed());
     expect(again).toEqual(res);
     expect((await tailAfterFork(child)).filter((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)).toHaveLength(
@@ -2606,65 +2605,50 @@ describe("PubSubChannel appendSeed abuse containment (§E3 security)", () => {
     );
   });
 
-  it("rejects a call with NO in-flight seed authorization (a participant cannot conjure one)", async () => {
+  it("rejects a call with no pending fork seed marker", async () => {
     const { child } = await forkedChild({ withSeed: false });
     setRpcCaller(child.instance, "channel-parent", "do");
 
     await expect(child.instance.appendSeed({ forkId: "fork-1" }, forkSeed())).rejects.toThrow(
-      /no in-flight fork-seed authorization for fork fork-1/
+      /no pending fork seed for fork fork-1/
     );
-    // Nothing forged.
     expect(await tailAfterFork(child)).toHaveLength(0);
   });
 
-  it("rejects a forkId that does not match the planted authorization", async () => {
+  it("rejects a forkId that does not match the pending seed marker", async () => {
     const { child } = await forkedChild();
     setRpcCaller(child.instance, "channel-parent", "do");
 
     await expect(
       child.instance.appendSeed({ forkId: "fork-EVIL" }, forkSeed())
-    ).rejects.toThrow(/no in-flight fork-seed authorization for fork fork-EVIL/);
+    ).rejects.toThrow(/no pending fork seed for fork fork-EVIL/);
     expect(await tailAfterFork(child)).toHaveLength(0);
   });
 
-  it("rejects a DO caller that is not the owning fork parent (forkedFrom)", async () => {
+  it("uses the supplied caller and author without parent/author special-casing", async () => {
     const { child } = await forkedChild();
-    // Auth is present + matches, but the forging DO is NOT the parent.
     setRpcCaller(child.instance, "channel-attacker", "do");
-
-    await expect(child.instance.appendSeed({ forkId: "fork-1" }, forkSeed())).rejects.toThrow(
-      /caller channel-attacker is not the owning fork parent/
-    );
-    expect(await tailAfterFork(child)).toHaveLength(0);
-  });
-
-  it("rejects an envelope whose author does not match the authorized seed (no impersonation)", async () => {
-    const { child } = await forkedChild();
-    setRpcCaller(child.instance, "channel-parent", "do");
-    const impostor = forkSeed({
+    const alternate = forkSeed({
       kind: "user",
       id: "panel:victim",
       participantId: "panel:victim",
     });
 
-    await expect(child.instance.appendSeed({ forkId: "fork-1" }, impostor)).rejects.toThrow(
-      /envelope author does not match the authorized fork seed/
-    );
-    expect(await tailAfterFork(child)).toHaveLength(0);
+    const res = await child.instance.appendSeed({ forkId: "fork-1" }, alternate);
+    expect(res.messageId).toBe("fork-seed:fork-1");
+    const tail = await tailAfterFork(child);
+    const seed = tail.find((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)!.payload as {
+      actor: { participantId?: string; id: string };
+    };
+    expect(seed.actor.participantId ?? seed.actor.id).toBe("panel:victim");
   });
 
-  it("denies userland/participant callers at the relay caller gate — appendSeed is unreachable to them", async () => {
+  it("admits normal channel caller realms at the relay gate", async () => {
     const { instance } = await createGadBackedChannel();
     const gate = instance as unknown as {
       inboundCallerDenial(method: string, caller: { callerId: string; callerKind: string } | null): string | null;
     };
-    // A panel (userland/participant) caller cannot even reach appendSeed.
-    expect(gate.inboundCallerDenial("appendSeed", { callerId: "panel:evil", callerKind: "panel" })).toMatch(
-      /appendSeed: caller kind "panel" is not permitted/
-    );
-    // The fork op's realms (worker/server/do) pass the coarse gate; the in-method
-    // guards above are what actually scope them to the owning op.
-    for (const kind of ["worker", "server", "do"]) {
+    for (const kind of ["panel", "worker", "server", "do", "shell"]) {
       expect(
         gate.inboundCallerDenial("appendSeed", { callerId: `${kind}:x`, callerKind: kind })
       ).toBeNull();

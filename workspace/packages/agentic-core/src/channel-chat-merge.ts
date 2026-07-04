@@ -106,9 +106,8 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     projectedCustomMessageToChatMessage(item, state.messageTypes[item.typeId ?? ""])
   );
   // Inline fork-annotation rows, positioned just after the message at their
-  // fork point. Forks carry only a `createdAtSeq`, so we anchor each to the
-  // sortTime of the newest message whose seq ≤ createdAtSeq (a tiny epsilon
-  // places the row immediately below that message).
+  // fork point. `createdAtSeq` is when the annotation was announced on the
+  // parent log; `forkPointId` is the transcript anchor.
   const seqTimes = Object.values(state.messages)
     .filter((message) => message.seq !== undefined)
     .map((message) => ({
@@ -116,16 +115,16 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
       time: Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0,
     }))
     .sort((a, b) => a.seq - b.seq);
-  const forkAnchorTime = (createdAtSeq: number): number => {
+  const forkAnchorTime = (forkPointId: number): number => {
     let time = 0;
     for (const entry of seqTimes) {
-      if (entry.seq > createdAtSeq) break;
+      if (entry.seq > forkPointId) break;
       time = entry.time;
     }
     return time;
   };
   const forks = (state.forks ?? []).map((fork) =>
-    projectedForkToChatMessage(fork, forkAnchorTime(fork.createdAtSeq))
+    projectedForkToChatMessage(fork, forkAnchorTime(fork.forkPointId))
   );
   const credentialRequests = Object.values(state.credentialRequests ?? {}).map(
     (request): ChatMessage & { sortTime: number } => ({

@@ -12,6 +12,7 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
 
 export type SubagentRunStatus =
+  | "starting"
   | "running"
   | "completed"
   | "failed"
@@ -25,6 +26,7 @@ export interface SubagentRunRow {
   taskChannelId: string;
   childContextId: string;
   childEntityId: string;
+  childParticipantId: string | null;
   parentChannelId: string;
   mode: "fresh" | "fork";
   label: string;
@@ -40,6 +42,7 @@ interface SubagentRunSqlRow {
   task_channel_id: string;
   child_context_id: string;
   child_entity_id: string;
+  child_participant_id: string | null;
   parent_channel_id: string;
   mode: string;
   label: string;
@@ -56,6 +59,7 @@ function toRow(row: SubagentRunSqlRow): SubagentRunRow {
     taskChannelId: row.task_channel_id,
     childContextId: row.child_context_id,
     childEntityId: row.child_entity_id,
+    childParticipantId: row.child_participant_id ?? null,
     parentChannelId: row.parent_channel_id,
     mode: row.mode === "fork" ? "fork" : "fresh",
     label: row.label,
@@ -77,6 +81,7 @@ export class SubagentRunStore {
         task_channel_id TEXT NOT NULL,
         child_context_id TEXT NOT NULL,
         child_entity_id TEXT NOT NULL,
+        child_participant_id TEXT,
         parent_channel_id TEXT NOT NULL,
         mode TEXT NOT NULL,
         label TEXT NOT NULL,
@@ -99,13 +104,14 @@ export class SubagentRunStore {
   insert(row: SubagentRunRow): void {
     this.sql.exec(
       `INSERT OR IGNORE INTO subagent_runs
-         (run_id, task_channel_id, child_context_id, child_entity_id, parent_channel_id,
+         (run_id, task_channel_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
           mode, label, depth, status, merge_status, started_at, last_activity_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.runId,
       row.taskChannelId,
       row.childContextId,
       row.childEntityId,
+      row.childParticipantId,
       row.parentChannelId,
       row.mode,
       row.label,
@@ -148,9 +154,19 @@ export class SubagentRunStore {
   /** Number of live (not-yet-terminal) runs — the fan-out gate. */
   countRunning(): number {
     const row = this.sql
-      .exec(`SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status = 'running'`)
+      .exec(
+        `SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status IN ('starting', 'running')`
+      )
       .toArray()[0];
     return Number(row?.["cnt"] ?? 0);
+  }
+
+  listLive(): SubagentRunRow[] {
+    return (
+      this.sql
+        .exec(`SELECT * FROM subagent_runs WHERE status IN ('starting', 'running')`)
+        .toArray() as unknown as SubagentRunSqlRow[]
+    ).map(toRow);
   }
 
   setStatus(runId: string, status: SubagentRunStatus): void {
@@ -159,6 +175,14 @@ export class SubagentRunStore {
 
   setMerge(runId: string, merge: SubagentRunMerge): void {
     this.sql.exec(`UPDATE subagent_runs SET merge_status = ? WHERE run_id = ?`, merge, runId);
+  }
+
+  setChildParticipantId(runId: string, participantId: string | null): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET child_participant_id = ? WHERE run_id = ?`,
+      participantId,
+      runId
+    );
   }
 
   touch(runId: string, at: number): void {

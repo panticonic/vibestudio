@@ -116,8 +116,8 @@ function doTarget(ref: DORef): string {
   return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
 }
 
-/** The human-attributed seed of an edit-/deep-dive fork. `blocks` is authored
- *  as a PRIMARY user message on the child channel by `appendSeed`. */
+/** The opening seed of an edit-/deep-dive fork. `blocks` are appended as a
+ *  PRIMARY user message on the child channel by `appendSeed`. */
 interface ForkSeed {
   author: ParticipantRef;
   blocks: MessageBlockInput[];
@@ -149,14 +149,18 @@ interface ForkResult {
 /** Provenance of a channel in the fork/task tree. */
 type ChannelProvenance =
   | { kind: "root" }
-  | { kind: "fork"; forkedFrom: string; forkPointId: number; rootChannelId: string }
+  | {
+      kind: "fork";
+      forkedFrom: string;
+      parentContextId: string;
+      forkPointId: number;
+      rootChannelId: string;
+    }
   | { kind: "task"; parentChannelId: string; parentContextId: string; runId: string };
 
-/** Authorization the parent hands the child at postClone, licensing exactly one
- *  human-attributed seed append (consumed by `appendSeed`). */
-interface ForkSeedAuthorization {
+/** Pending fork seed marker consumed by `appendSeed` for idempotent fork recovery. */
+interface ForkSeedMarker {
   forkId: string;
-  seed: ForkSeed;
 }
 
 /** Subset of `runtime.cloneContext`'s result the fork op consumes. */
@@ -1743,6 +1747,7 @@ export class PubSubChannel extends DurableObjectBase {
       return {
         kind: "fork",
         forkedFrom,
+        parentContextId: this.getStateValue("forkedFromContextId") ?? "",
         forkPointId: Number(this.getStateValue("forkPointId") ?? 0),
         rootChannelId: this.getStateValue("rootChannelId") ?? forkedFrom,
       };
@@ -1888,7 +1893,7 @@ export class PubSubChannel extends DurableObjectBase {
       const clonedParticipants: string[] = [];
 
       // 2. POSTCLONES — re-root the cloned channel's log at the fork point, hand
-      //    it its provenance + one-shot seed authorization, then re-home each
+      //    it its provenance + pending seed marker, then re-home each
       //    cloned agent. Skipped on a resume that already passed this phase.
       const parentProvenance = this.computeProvenance();
       const rootChannelId =
@@ -1936,7 +1941,7 @@ export class PubSubChannel extends DurableObjectBase {
         }
       }
 
-      // 3. SEED — forge the human-attributed opening message on the child.
+      // 3. SEED — append the fork opening message on the child.
       let seededMessageId: string | undefined;
       if (opts.seed) {
         seededMessageId = `fork-seed:${forkId}`;
@@ -2148,17 +2153,14 @@ export class PubSubChannel extends DurableObjectBase {
     return typeof oldest === "number" ? oldest + FORK_OP_RECONCILE_MS : null;
   }
 
-  // ── appendSeed — the forged, human-attributed PRIMARY (SECURITY surface) ───
+  // ── appendSeed — fork opening message ──────────────────────────────────────
 
   /**
-   * Author the fork's opening message on the CHILD channel AS the human, with
-   * NO roster entry — the first path that forges a human-attributed primary
-   * append. Hard-scoped to the owning fork op (§E3): it succeeds ONLY when THIS
-   * channel holds a one-shot seed authorization (handed to it by its parent at
-   * postClone) matching the forkId AND the exact seed, and the forging caller is
-   * that parent. A userland agent guessing a forkId finds no authorization.
+   * Append the fork's opening message on the CHILD channel. This is fork
+   * plumbing: the pending fork marker only makes the operation one-shot and
+   * crash-resumable for the matching fork id.
    */
-  @rpc({ callers: ["worker", "server", "do"] })
+  @rpc({ callers: ["panel", "worker", "server", "do", "shell"] })
   async appendSeed(
     forkOpRef: { forkId: string },
     envelope: ForkSeed
@@ -2166,24 +2168,15 @@ export class PubSubChannel extends DurableObjectBase {
     const forkId = forkOpRef.forkId;
     const messageId = `fork-seed:${forkId}`;
     // Idempotent: a re-drive after the message is durable returns it — even once
-    // the one-shot authorization has been consumed.
+    // the pending seed marker has been consumed.
     const existing = await this.channelLog.getEventByEnvelopeId(messageId);
     if (existing) return { messageId, seq: existing.id };
 
-    const auth = this.readForkSeedAuth();
-    if (!auth || auth.forkId !== forkId) {
+    const marker = this.readForkSeedMarker();
+    if (!marker || marker.forkId !== forkId) {
       throw new Error(
-        `appendSeed: no in-flight fork-seed authorization for fork ${forkId} on this channel`
+        `appendSeed: no pending fork seed for fork ${forkId} on this channel`
       );
-    }
-    const parent = this.getStateValue("forkedFrom");
-    if (this.rpcCallerKind === "do" && this.rpcCallerId !== parent) {
-      throw new Error(
-        `appendSeed: caller ${this.rpcCallerId ?? "unknown"} is not the owning fork parent`
-      );
-    }
-    if (JSON.stringify(envelope.author) !== JSON.stringify(auth.seed.author)) {
-      throw new Error(`appendSeed: envelope author does not match the authorized fork seed`);
     }
 
     const author = envelope.author;
@@ -2212,22 +2205,22 @@ export class PubSubChannel extends DurableObjectBase {
       idempotency: "idempotent-by-id",
     });
     broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, logged.senderId);
-    this.clearForkSeedAuth();
+    this.clearForkSeedMarker();
     return { messageId, seq: logged.id };
   }
 
-  private readForkSeedAuth(): ForkSeedAuthorization | null {
-    const raw = this.getStateValue("forkSeedAuth");
+  private readForkSeedMarker(): ForkSeedMarker | null {
+    const raw = this.getStateValue("forkSeedMarker");
     if (!raw) return null;
     try {
-      return JSON.parse(raw) as ForkSeedAuthorization;
+      return JSON.parse(raw) as ForkSeedMarker;
     } catch {
       return null;
     }
   }
 
-  private clearForkSeedAuth(): void {
-    this.deleteStateValue("forkSeedAuth");
+  private clearForkSeedMarker(): void {
+    this.deleteStateValue("forkSeedMarker");
   }
 
   // ── Fork support ────────────────────────────────────────────────────────
@@ -2236,8 +2229,8 @@ export class PubSubChannel extends DurableObjectBase {
    * Called after cloneDO() copies the parent's SQLite. Forks the durable
    * channel log (no-copy), clears operational state, and REBUILDS the policy
    * caches by replaying the forked lineage — conversation state survives the
-   * fork (WS2 §4.5). Also lands the clone's fork provenance + one-shot seed
-   * authorization from the owning parent fork op (`forkAuth`).
+   * fork (WS2 §4.5). Also lands the clone's fork provenance + pending seed
+   * marker from the parent fork op (`forkInit`).
    */
   @rpc({ callers: ["worker", "server", "do"] })
   async postClone(
@@ -2245,39 +2238,39 @@ export class PubSubChannel extends DurableObjectBase {
     forkPointId: number,
     // The clone's new context. A true context fork (`runtime.cloneContext`) lands
     // the clone in a fresh, isolated context; thread it so the channel's stored
-    // contextId re-homes (matching the clone's entity record). Omit for a legacy
-    // same-context clone (keeps the inherited contextId).
-    newContextId?: string,
-    // Provenance + seed authorization from the owning parent fork op. `rootChannelId`
-    // roots the lineage tree; `seed` licenses exactly one `appendSeed`;
+    // contextId re-homes (matching the clone's entity record).
+    newContextId: string,
+    // Provenance + seed marker from the parent fork op. `rootChannelId`
+    // roots the lineage tree; `seed` records that one `appendSeed` is pending;
     // `homeableTargets` are the cloned entity ids — a pending call whose target is
     // NOT among them could not follow the fork and is settled `aborted-by-fork` (C6).
-    forkAuth?: {
+    forkInit?: {
       forkId: string;
       rootChannelId: string;
       seed?: ForkSeed;
       homeableTargets?: string[];
     }
   ): Promise<void> {
+    if (!newContextId) throw new Error("postClone requires newContextId");
     // Fix identity: cloneDO copies parent's __objectKey; overwrite with our actual key
     this.sql.exec(
       `INSERT OR REPLACE INTO state (key, value) VALUES ('__objectKey', ?)`,
       this.objectKey
     );
+    const parentContextId = this.getStateValue("contextId");
+    if (parentContextId) this.setStateValue("forkedFromContextId", parentContextId);
     // Re-home the context (bypasses initChannel's mismatch guard by writing the
-    // state row directly — this IS the authorized re-home).
-    if (newContextId !== undefined) {
-      this.setStateValue("contextId", newContextId);
-    }
+    // state row directly because clone provisioning owns the new context).
+    this.setStateValue("contextId", newContextId);
     this.setStateValue("forkedFrom", parentChannelId);
     this.setStateValue("forkPointId", String(forkPointId));
-    if (forkAuth) {
-      this.setStateValue("rootChannelId", forkAuth.rootChannelId);
-      this.setStateValue("forkId", forkAuth.forkId);
-      if (forkAuth.seed) {
+    if (forkInit) {
+      this.setStateValue("rootChannelId", forkInit.rootChannelId);
+      this.setStateValue("forkId", forkInit.forkId);
+      if (forkInit.seed) {
         this.setStateValue(
-          "forkSeedAuth",
-          JSON.stringify({ forkId: forkAuth.forkId, seed: forkAuth.seed })
+          "forkSeedMarker",
+          JSON.stringify({ forkId: forkInit.forkId })
         );
       }
     }
@@ -2297,8 +2290,8 @@ export class PubSubChannel extends DurableObjectBase {
     await this.calls.reconcilePendingCalls(true);
     // Settle calls that could not follow the fork (target not cloned) —
     // aborted-by-fork rather than left hanging until deadline (C6).
-    if (forkAuth?.homeableTargets) {
-      await this.settleUnhomeablePendingCalls(new Set(forkAuth.homeableTargets));
+    if (forkInit?.homeableTargets) {
+      await this.settleUnhomeablePendingCalls(new Set(forkInit.homeableTargets));
     }
   }
 

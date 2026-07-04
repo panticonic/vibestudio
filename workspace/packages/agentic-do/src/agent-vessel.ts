@@ -3350,9 +3350,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const existingRun = this.subagentRuns.get(invocationId);
       if (existingRun) {
         if (existingRun.status === "starting") {
+          console.warn(`[AgentVessel] resetting stale starting subagent run ${existingRun.runId}`);
           await this.teardownRun(existingRun);
         } else {
           if (existingRun.status === "running" && task.trim()) {
+            console.info(
+              `[AgentVessel] retrying subagent seed for existing run ${existingRun.runId}`
+            );
             await this.publishSubagentSeed(existingRun, task);
           }
           return {

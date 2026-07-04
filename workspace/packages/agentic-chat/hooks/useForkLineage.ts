@@ -56,6 +56,9 @@ export interface UseForkLineageOptions {
   /** Current transcript — the `contentType: "fork"` rows are this channel's
    *  direct-child forks (from `ChannelViewState.forks`). */
   messages: ChatMessage[];
+  /** True once initial replay has settled, so `messages` reliably includes
+   *  historical fork rows for the open-baseline. */
+  replaySettled: boolean;
   /** Live PubSub client — the source of the ephemeral `fork.head_changed`
    *  lineage-badge signals (best-effort; badges degrade without it). */
   client?: PubSubClient<ChatParticipantMetadata> | null;
@@ -134,7 +137,17 @@ function labelForProvenance(prov: ChannelProvenance | undefined): string {
 }
 
 export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
-  const { rpc, channelId, contextId, selfId, selfMetadata, messages, client, nav } = options;
+  const {
+    rpc,
+    channelId,
+    contextId,
+    selfId,
+    selfMetadata,
+    messages,
+    replaySettled,
+    client,
+    nav,
+  } = options;
 
   const [provenance, setProvenance] = useState<ChannelProvenance | undefined>(undefined);
   const [siblings, setSiblings] = useState<ForkEntry[]>([]);
@@ -169,8 +182,10 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
     liveHeadsRef.current = liveHeads;
   }, [liveHeads]);
   // Open-baseline: the highest fork `createdAtSeq` seen at mount. Forks created
-  // afterward (createdAtSeq > baseline) count as unread.
+  // afterward (createdAtSeq > baseline) count as unread. Initialize to 0 even
+  // when there are no forks yet, so the first fork created after open badges.
   const baselineSeqRef = useRef<number | null>(null);
+  const baselineChannelRef = useRef<string | null>(null);
   const isUnread = useCallback(
     (entry: { channelId: string; createdAtSeq: number }): boolean => {
       if (liveHeads[entry.channelId] !== undefined) return true;
@@ -182,10 +197,15 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
 
   const baseChildren = useMemo(() => childForksFromMessages(messages), [messages]);
   useEffect(() => {
-    if (baselineSeqRef.current === null && baseChildren.length > 0) {
+    if (baselineChannelRef.current !== channelId) {
+      baselineChannelRef.current = channelId;
+      baselineSeqRef.current = null;
+    }
+    if (!replaySettled) return;
+    if (baselineSeqRef.current === null) {
       baselineSeqRef.current = baseChildren.reduce((max, c) => Math.max(max, c.createdAtSeq), 0);
     }
-  }, [baseChildren]);
+  }, [baseChildren, channelId, replaySettled]);
   const children = useMemo(
     () => baseChildren.map((c) => ({ ...c, unread: isUnread(c) })),
     [baseChildren, isUnread]
@@ -265,14 +285,19 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
     };
   }, [rpc, channelId, loadSiblings]);
 
+  const lineageSubscriptionChannelId = useMemo(() => {
+    if (!channelId || !provenance) return null;
+    return provenance.kind === "fork" ? provenance.rootChannelId : channelId;
+  }, [channelId, provenance]);
+
   // Signal-only lineage subscription for live badges. Registers this participant
-  // on the channel DO's lineage roster; the root fans `fork.head_changed` down.
+  // on the lineage root's roster; the root fans `fork.head_changed` down.
   useEffect(() => {
-    if (!channelId || !selfId) return;
+    if (!lineageSubscriptionChannelId || !selfId) return;
     let cancelled = false;
     void (async () => {
       try {
-        const target = await resolveChannelTarget(rpc, channelId);
+        const target = await resolveChannelTarget(rpc, lineageSubscriptionChannelId);
         if (cancelled) return;
         await rpc.call(target, "subscribeLineage", [selfId, {}]);
       } catch (err) {
@@ -283,10 +308,12 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
     return () => {
       cancelled = true;
     };
-  }, [rpc, channelId, selfId]);
+  }, [rpc, lineageSubscriptionChannelId, selfId]);
 
   const parent = useMemo(() => {
-    if (provenance?.kind === "fork") return { channelId: provenance.forkedFrom };
+    if (provenance?.kind === "fork") {
+      return { channelId: provenance.forkedFrom, contextId: provenance.parentContextId };
+    }
     if (provenance?.kind === "task") {
       return { channelId: provenance.parentChannelId, contextId: provenance.parentContextId };
     }
@@ -329,7 +356,7 @@ export function useForkLineage(options: UseForkLineageOptions): ForkUiState {
       chain.push({ channelId: cursor, contextId: cursorContext, prov });
       if (prov.kind === "fork") {
         cursor = prov.forkedFrom;
-        cursorContext = undefined;
+        cursorContext = prov.parentContextId;
       } else if (prov.kind === "task") {
         cursor = prov.parentChannelId;
         cursorContext = prov.parentContextId;

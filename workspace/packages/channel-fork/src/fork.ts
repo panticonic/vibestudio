@@ -17,8 +17,8 @@ export interface DORef {
   objectKey: string;
 }
 
-/** The human-attributed seed of an edit-/deep-dive fork — authored as a PRIMARY
- *  user message on the child channel by the DO's `appendSeed`. */
+/** The opening user message for an edit-/deep-dive fork, appended on the child
+ *  channel by the DO's `appendSeed`. */
 export interface ForkSeed {
   author: ParticipantRef;
   blocks: MessageBlockInput[];
@@ -46,7 +46,7 @@ export interface ForkResult {
   /** DO refs of the freshly-cloned agents, so the caller can address them
    *  (e.g. to seed a per-fork turn) without re-resolving the new roster. */
   clonedAgents: Array<{ participantId: string } & DORef>;
-  /** The forged seed message's id, when a seed was supplied. */
+  /** The seed message's id, when a seed was supplied. */
   seededMessageId?: string;
 }
 

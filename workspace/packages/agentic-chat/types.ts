@@ -228,7 +228,13 @@ export interface DeferredAgentState {
 /** Client-side mirror of the channel DO's `getProvenance()` result. */
 export type ChannelProvenance =
   | { kind: "root" }
-  | { kind: "fork"; forkedFrom: string; forkPointId: number; rootChannelId: string }
+  | {
+      kind: "fork";
+      forkedFrom: string;
+      parentContextId: string;
+      forkPointId: number;
+      rootChannelId: string;
+    }
   | { kind: "task"; parentChannelId: string; parentContextId: string; runId: string };
 
 /** A fork surfaced in the switcher / tree (a child of the current channel or a

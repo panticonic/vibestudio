@@ -267,6 +267,7 @@ export function useAgenticChat({
     selfId: core.selfId,
     selfMetadata: { type: metadata.type, name: metadata.name, handle: metadata.handle },
     messages: core.messages,
+    replaySettled: core.replaySettled,
     client: core.client,
     nav: forkNav,
   });

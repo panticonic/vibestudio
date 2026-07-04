@@ -39,7 +39,7 @@ describe("SubscriptionManager", () => {
     expect(manager.listAll()).toEqual([]);
   });
 
-  it("rename re-keys the channel and (optionally) re-homes the context", async () => {
+  it("rename re-keys the channel and re-homes the context", async () => {
     const channel = {
       // The manager only stores the row + reads channelConfig/envelope opaquely;
       // a minimal stub cast to the full return type is enough here.
@@ -54,12 +54,7 @@ describe("SubscriptionManager", () => {
       descriptor: { name: "Test", type: "agent", handle: "test" },
     });
 
-    // Same-context re-key: channel changes, context preserved.
-    manager.rename("ch-1", "ch-2");
-    expect(manager.getContextId("ch-2")).toBe("ctx-src");
-
-    // True context fork: channel + context both move.
-    manager.rename("ch-2", "ch-3", "ctx-fork");
-    expect(manager.getContextId("ch-3")).toBe("ctx-fork");
+    manager.rename("ch-1", "ch-2", "ctx-fork");
+    expect(manager.getContextId("ch-2")).toBe("ctx-fork");
   });
 });

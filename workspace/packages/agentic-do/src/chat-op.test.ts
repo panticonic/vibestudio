@@ -836,6 +836,33 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     ).toBe(false);
   });
 
+  it("tears down a running setup-failure row once the retry terminal publishes", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.channelPublishFailures.add("subagent-seed:inv-1");
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      task: "this seed publish will fail",
+    });
+
+    expect(out).toMatchObject({
+      isError: true,
+      result: "publish failed: subagent-seed:inv-1",
+    });
+    expect(probe.subagentRunForTest("inv-1")).toBeNull();
+    expect(
+      probe.rpcCalls.some(
+        (call) =>
+          call.target === "main" &&
+          call.method === "runtime.destroyContext" &&
+          JSON.stringify(call.args).includes("ctx-child")
+      )
+    ).toBe(true);
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-terminal:inv-1")
+    ).toBe(true);
+  });
+
   it("retries the idempotent task seed for an existing running run", async () => {
     const probe = await makeSubagentSpawnProbe();
     probe.insertSubagentRunForTest({ runId: "inv-1", status: "running" });
