@@ -35,6 +35,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   hydrateStoredValueRefs,
   isRespondPolicy,
+  participantRefFromActor,
   resolveShouldRespond,
   sha256Hex,
   stableSha256Hex,
@@ -1500,7 +1501,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         source: { envelopeId: event.messageId },
         ...(sourceMessageId ? { sourceMessageId } : {}),
         content: this.turnContent(channelId, event),
-        senderRef: (agentic as AgenticEvent).actor,
+        senderRef: participantRefFromActor((agentic as AgenticEvent).actor),
         agentHops: event.annotations?.["agentHops"] as number | undefined,
         ...(metadata ? { metadata } : {}),
       },
@@ -1542,7 +1543,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (kind !== "message.edited" && kind !== "message.retracted") return false;
     if (event.senderId === this.participantId()) return true; // our own; nothing to do
     const sourceMessageId = (agentic as AgenticEvent).causality?.messageId as string | undefined;
-    const by = (agentic as AgenticEvent).actor;
+    const by = participantRefFromActor((agentic as AgenticEvent).actor);
     if (!sourceMessageId || !by) return true;
     if (kind === "message.edited") {
       const payload = (agentic as AgenticEvent<"message.edited">).payload;
@@ -3855,7 +3856,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if ((agentic as { kind?: string } | null)?.kind !== "message.completed") continue;
       const text = this.extractMessageText(agentic);
       if (text) parts.push(text);
-      senderRef = (agentic as AgenticEvent).actor;
+      senderRef = participantRefFromActor((agentic as AgenticEvent).actor);
       lastMessageId =
         ((agentic as AgenticEvent).causality?.messageId as string | undefined) ?? event.messageId;
     }

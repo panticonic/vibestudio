@@ -8,6 +8,7 @@ import {
   agenticSlice,
   agenticEventEnvelopeSchema,
   agenticEventSchema,
+  actorRefSchema,
   brandId,
   checkTrajectoryIntegrity,
   computeEventHash,
@@ -21,6 +22,8 @@ import {
   storedAgenticEventSchema,
   isStoredValueRef,
   messageDisplayText,
+  participantRefSchema,
+  principalRefSchema,
   trajectoryEventSchema,
   userVisibleTrajectoryProjection,
   type AgenticEvent,
@@ -108,6 +111,13 @@ function envelope(payload: AgenticEvent, seq = 1): ChannelEnvelope<AgenticEvent>
 }
 
 describe("@workspace/agentic-protocol schemas", () => {
+  it("separates participant refs from runtime principal actor refs", () => {
+    expect(actorRefSchema.parse({ kind: "do", id: "do:agent" }).kind).toBe("do");
+    expect(principalRefSchema.parse({ kind: "do", id: "do:agent" }).kind).toBe("do");
+    expect(participantRefSchema.safeParse({ kind: "do", id: "do:agent" }).success).toBe(false);
+    expect(participantRefSchema.parse({ kind: "panel", id: "panel:user" }).kind).toBe("panel");
+  });
+
   it("accepts human vocabulary events without turnId", () => {
     expect(agenticEventSchema.parse(messageEvent()).turnId).toBeUndefined();
   });
@@ -175,6 +185,21 @@ describe("@workspace/agentic-protocol schemas", () => {
         createdAt: "2026-05-20T12:00:00.000Z",
       }).kind
     ).toBe("message.failed");
+  });
+
+  it("accepts durable object actors on stored worktree state events", () => {
+    expect(
+      storedAgenticEventSchema.parse({
+        kind: "state.merge_applied",
+        actor: { kind: "do", id: "do:workers/gad-store:GadWorkspaceDO:workspace-gad" },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          inputStateHash: "sha256:old",
+          outputStateHash: "sha256:new",
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      }).actor.kind
+    ).toBe("do");
   });
 
   it("accepts reset metadata on message.failed", () => {

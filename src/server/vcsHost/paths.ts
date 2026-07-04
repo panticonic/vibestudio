@@ -226,7 +226,18 @@ export async function isWritableVcsPath(p: string): Promise<boolean> {
 export type VcsActor = { id: string; kind: string };
 type VcsLogActor = {
   id: string;
-  kind: "user" | "agent" | "system" | "panel" | "external";
+  kind:
+    | "user"
+    | "agent"
+    | "system"
+    | "external"
+    | "panel"
+    | "app"
+    | "worker"
+    | "do"
+    | "shell"
+    | "server"
+    | "extension";
   metadata?: Record<string, unknown>;
 };
 
@@ -235,18 +246,16 @@ export function vcsLogActor(actor: VcsActor): VcsLogActor {
     actor.kind === "user" ||
     actor.kind === "agent" ||
     actor.kind === "system" ||
+    actor.kind === "external" ||
     actor.kind === "panel" ||
-    actor.kind === "external"
+    actor.kind === "app" ||
+    actor.kind === "worker" ||
+    actor.kind === "do" ||
+    actor.kind === "shell" ||
+    actor.kind === "server" ||
+    actor.kind === "extension"
   ) {
     return { id: actor.id, kind: actor.kind };
   }
-  const kind =
-    actor.kind === "do" || actor.kind === "worker"
-      ? "agent"
-      : actor.kind === "server"
-        ? "system"
-        : actor.kind === "shell"
-          ? "user"
-          : "external";
-  return { id: actor.id, kind, metadata: { type: actor.kind } };
+  return { id: actor.id, kind: "external", metadata: { type: actor.kind } };
 }

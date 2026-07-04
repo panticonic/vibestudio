@@ -1,5 +1,4 @@
 import type {
-  ActorKind,
   ActorRef,
   AgenticEvent,
   ApprovalPayload,
@@ -9,9 +8,11 @@ import type {
   ExternalParticipantObservedPayload,
   InvocationPayload,
   MessageTypeRegisteredPayload,
+  ParticipantKind,
   ParticipantRef,
   ParticipantSelector,
 } from "./events.js";
+import { PARTICIPANT_KINDS } from "./events.js";
 
 const PUBLIC_METADATA_KEYS = [
   "kind",
@@ -58,7 +59,7 @@ export function participantRefFromMetadata(
 ): ParticipantRef {
   const publicMetadata = publicParticipantMetadata(metadata);
   const declaredKind = publicMetadata?.["kind"] ?? publicMetadata?.["type"];
-  const kind = actorKindFromMetadata(participantId, declaredKind);
+  const kind = participantKindFromMetadata(participantId, declaredKind);
   const displayName = typeof publicMetadata?.["name"] === "string"
     ? publicMetadata["name"]
     : typeof publicMetadata?.["displayName"] === "string"
@@ -84,6 +85,32 @@ export function publicActorRef<T extends ActorRef>(actor: T): T {
 
 export function publicParticipantRef(participant: ParticipantRef): ParticipantRef {
   return publicActorRef(participant);
+}
+
+export function isParticipantKind(kind: unknown): kind is ParticipantKind {
+  return PARTICIPANT_KINDS.includes(kind as ParticipantKind);
+}
+
+export function isParticipantRef(value: unknown): value is ParticipantRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return isParticipantKind(record["kind"]) && typeof record["id"] === "string";
+}
+
+export function participantRefFromActor(actor: ActorRef): ParticipantRef {
+  if (isParticipantKind(actor.kind)) {
+    return actor as ParticipantRef;
+  }
+  return {
+    kind: "external",
+    id: actor.id,
+    ...(actor.displayName ? { displayName: actor.displayName } : {}),
+    metadata: {
+      ...(actor.metadata ?? {}),
+      principalKind: actor.kind,
+    },
+    ...(actor.participantId ? { participantId: actor.participantId } : {}),
+  };
 }
 
 export function sanitizeAgenticEventParticipantRefs<T extends AgenticEvent>(event: T): T {
@@ -197,11 +224,10 @@ function sanitizeExternalParticipantObservedPayload(
   };
 }
 
-function isParticipantRef(value: ParticipantRef | ParticipantSelector | undefined): value is ParticipantRef {
-  return !!value && typeof value === "object" && "id" in value;
-}
-
-function actorKindFromMetadata(participantId: string, declaredKind: unknown): ActorKind {
+function participantKindFromMetadata(
+  participantId: string,
+  declaredKind: unknown
+): ParticipantKind {
   if (
     declaredKind === "user" ||
     declaredKind === "agent" ||

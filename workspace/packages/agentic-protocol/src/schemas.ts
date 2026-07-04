@@ -9,24 +9,40 @@ import {
   TURN_SCOPED_OWNER_KINDS,
   validateInvocationTerminalOutcomeForKind,
 } from "./constants.js";
+import { ACTOR_KINDS, PARTICIPANT_KINDS, PRINCIPAL_KINDS } from "./events.js";
 
 const protocolSchema = z.literal(AGENTIC_PROTOCOL_VERSION);
 
 const idSchema = z.string().min(1);
 const isoDateSchema = z.string().datetime({ offset: true });
 
+export const actorKindSchema = z.enum(ACTOR_KINDS);
+export const participantKindSchema = z.enum(PARTICIPANT_KINDS);
+export const principalKindSchema = z.enum(PRINCIPAL_KINDS);
+
 export const actorRefSchema = z
   .object({
-    kind: z.enum(["user", "agent", "system", "panel", "external"]),
+    kind: actorKindSchema,
     id: z.string().min(1),
     displayName: z.string().optional(),
     metadata: z.record(z.unknown()).optional(),
+    participantId: z.string().min(1).optional(),
   })
   .passthrough();
 
-export const participantRefSchema = actorRefSchema.extend({
-  participantId: z.string().min(1).optional(),
+export const principalRefSchema = actorRefSchema.extend({
+  kind: principalKindSchema,
 });
+
+export const participantRefSchema = z
+  .object({
+    kind: participantKindSchema,
+    id: z.string().min(1),
+    displayName: z.string().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    participantId: z.string().min(1).optional(),
+  })
+  .passthrough();
 
 export const participantSelectorSchema = z
   .object({
@@ -862,7 +878,7 @@ export const storedAgenticEventSchema = z
         payload,
         ctx,
         "by",
-        (value) => actorRefSchema.safeParse(value).success,
+        (value) => participantRefSchema.safeParse(value).success,
         "message.edited requires payload.by"
       );
     } else if (event.kind === "message.retracted") {
@@ -870,7 +886,7 @@ export const storedAgenticEventSchema = z
         payload,
         ctx,
         "by",
-        (value) => actorRefSchema.safeParse(value).success,
+        (value) => participantRefSchema.safeParse(value).success,
         "message.retracted requires payload.by"
       );
     } else if (event.kind === "invocation.started") {
@@ -1031,7 +1047,7 @@ export const channelEnvelopeSchema = z
     envelopeId: idSchema,
     channelId: idSchema,
     seq: z.number().int().nonnegative(),
-    from: participantRefSchema,
+    from: actorRefSchema,
     to: z.union([z.array(participantRefSchema), participantSelectorSchema]).optional(),
     payload: z.unknown(),
     payloadKind: z.string().optional(),

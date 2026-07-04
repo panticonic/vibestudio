@@ -2,8 +2,13 @@ import { z } from "zod";
 import { GENESIS_EVENT_HASH } from "./constants.js";
 import { canonicalJson, sha256Hex } from "./hash.js";
 import type { EnvelopeId } from "./ids.js";
-import type { EventCausality, ParticipantRef, ParticipantSelector } from "./events.js";
-import { causalitySchema, participantRefSchema, participantSelectorSchema } from "./schemas.js";
+import type { ActorRef, EventCausality, ParticipantRef, ParticipantSelector } from "./events.js";
+import {
+  actorRefSchema,
+  causalitySchema,
+  participantRefSchema,
+  participantSelectorSchema,
+} from "./schemas.js";
 
 export type LogKind = "trajectory" | "channel" | "vcs" | "builds" | "generic";
 
@@ -21,7 +26,7 @@ export interface LogEnvelope<Payload = unknown> {
   head: string;
   seq: number; // starts at 1 for new logs; child fork appends start at forkSeq + 1
   envelopeId: EnvelopeId;
-  actor: ParticipantRef;
+  actor: ActorRef;
   to?: ParticipantRef[] | ParticipantSelector;
   payloadKind: string; // for trajectory logs: the agentic EventKind; for channels: e.g. "agentic.trajectory.v1/event", "presence", ...
   payload: Payload;
@@ -173,7 +178,7 @@ export const logEnvelopeSchema = z
     head: z.string().min(1),
     seq: z.number().int().nonnegative(),
     envelopeId: z.string().min(1),
-    actor: participantRefSchema,
+    actor: actorRefSchema,
     to: z.union([z.array(participantRefSchema), participantSelectorSchema]).optional(),
     payloadKind: z.string().min(1),
     payload: z.unknown(),

@@ -19,16 +19,57 @@ import type {
   TurnId,
 } from "./ids.js";
 
-export type ActorKind = "user" | "agent" | "system" | "panel" | "external";
+export const SEMANTIC_PARTICIPANT_KINDS = ["user", "agent", "system", "external"] as const;
+export const PRINCIPAL_KINDS = [
+  "panel",
+  "app",
+  "worker",
+  "do",
+  "shell",
+  "server",
+  "extension",
+] as const;
+export const PARTICIPANT_KINDS = [
+  ...SEMANTIC_PARTICIPANT_KINDS,
+  // Runtime-backed UI participants remain valid channel participants for
+  // existing transcript history. Use PrincipalKind for execution attribution.
+  "panel",
+] as const;
+export const ACTOR_KINDS = [
+  ...SEMANTIC_PARTICIPANT_KINDS,
+  ...PRINCIPAL_KINDS,
+] as const;
+
+/** Semantic role of a participant in a conversation. */
+export type SemanticParticipantKind = (typeof SEMANTIC_PARTICIPANT_KINDS)[number];
+
+/** Runtime principal kind used for execution/provenance attribution. */
+export type PrincipalKind = (typeof PRINCIPAL_KINDS)[number];
+
+/** Channel participant presentation kind. */
+export type ParticipantKind = (typeof PARTICIPANT_KINDS)[number];
+
+/** Persisted event/log attribution kind: either a participant role or a principal. */
+export type ActorKind = (typeof ACTOR_KINDS)[number];
 
 export interface ActorRef {
   kind: ActorKind;
   id: string;
   displayName?: string;
   metadata?: Record<string, unknown>;
+  /** Present when this actor is also a channel roster participant. */
+  participantId?: string;
 }
 
-export interface ParticipantRef extends ActorRef {
+export interface PrincipalRef extends ActorRef {
+  kind: PrincipalKind;
+}
+
+export interface ParticipantRef {
+  kind: ParticipantKind;
+  id: string;
+  displayName?: string;
+  metadata?: Record<string, unknown>;
   participantId?: string;
 }
 

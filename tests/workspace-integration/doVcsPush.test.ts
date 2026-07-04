@@ -24,6 +24,7 @@ import { createRefService } from "../../src/server/services/refService.js";
 import type { RepoBuildReport } from "../../src/server/buildV2/index.js";
 
 const USER = { id: "user", kind: "user" };
+const DO_ACTOR = { id: "do:agent", kind: "do" };
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
 function report(
@@ -183,6 +184,29 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       .exec("SELECT * FROM gad_publish_intents")
       .toArray();
     expect(pending).toHaveLength(0);
+  });
+
+  it("accepts do actors while completing push provenance", async () => {
+    const stateHash = await seedCommit("c1", "packages/a", "a.txt", "hello\n");
+    const result = await push({
+      repoPaths: ["packages/a"],
+      sourceHead: vcsContextHead("c1"),
+      actor: DO_ACTOR,
+    });
+    expect(result.status).toBe("pushed");
+    expect(readMain("packages/a")).toBe(stateHash);
+
+    const log = (
+      gad.instance as unknown as {
+        vcsLog: (
+          repoPath: string,
+          limit: number,
+          head: string
+        ) => Array<{ actor: unknown; outputStateHash: string | null }>;
+      }
+    ).vcsLog("packages/a", 50, "main");
+    const entry = log.find((e) => e.outputStateHash === stateHash);
+    expect(entry?.actor).toEqual(DO_ACTOR);
   });
 
   it("group-pushes multiple repos atomically (one updateMains batch)", async () => {
@@ -833,6 +857,28 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
       });
       expect(result.status).toBe("pushed");
       expect(readMain("packages/a")).toBe(stateHash);
+    });
+
+    it("derives a do actor from an RPC envelope when actor is omitted", async () => {
+      const stateHash = await seedCommit("c1", "packages/a", "a.txt", "A\n");
+      const result = await pushViaEnvelope({ callerId: "do:agent", callerKind: "do" }, "c1", {
+        repoPaths: ["packages/a"],
+        sourceHead: vcsContextHead("c1"),
+      });
+      expect(result.status).toBe("pushed");
+      expect(readMain("packages/a")).toBe(stateHash);
+
+      const log = (
+        gad.instance as unknown as {
+          vcsLog: (
+            repoPath: string,
+            limit: number,
+            head: string
+          ) => Array<{ actor: unknown; outputStateHash: string | null }>;
+        }
+      ).vcsLog("packages/a", 50, "main");
+      const entry = log.find((e) => e.outputStateHash === stateHash);
+      expect(entry?.actor).toEqual({ id: "do:agent", kind: "do" });
     });
 
     it("leaves privileged (server/chrome) callers UNRESTRICTED — any source head", async () => {

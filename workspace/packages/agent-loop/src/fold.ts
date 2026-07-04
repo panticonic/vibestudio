@@ -5,8 +5,8 @@
  * lastSeq/lastHash advance.
  */
 
-import type { LogEnvelope, ParticipantRef } from "@workspace/agentic-protocol";
-import { participantKey } from "@workspace/agentic-protocol";
+import type { ActorRef, LogEnvelope, ParticipantRef } from "@workspace/agentic-protocol";
+import { participantKey, participantRefFromActor } from "@workspace/agentic-protocol";
 import type {
   AgentState,
   AgentTurnMetadata,
@@ -42,12 +42,12 @@ function sourceMessageIdFromPayload(payload: Record<string, unknown>): string | 
  *  for the edit/retract author guard. */
 function senderRefFromPayload(
   payload: Record<string, unknown>,
-  fallback: ParticipantRef
+  fallback: ActorRef
 ): ParticipantRef {
   const value = payload["senderRef"];
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as ParticipantRef)
-    : fallback;
+    ? participantRefFromActor(value as ActorRef)
+    : participantRefFromActor(fallback);
 }
 
 /** Is the message still un-consumed (un-read) — present in a live queue? Once a
@@ -163,7 +163,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           kind: "assistant",
           seq: envelope.seq,
           messageId,
-          senderRef: envelope.actor,
+          senderRef: participantRefFromActor(envelope.actor),
           blocks: Array.isArray(payload["blocks"]) ? (payload["blocks"] as unknown[]) : [],
           outcome:
             typeof payload["outcome"] === "string" ? (payload["outcome"] as string) : undefined,

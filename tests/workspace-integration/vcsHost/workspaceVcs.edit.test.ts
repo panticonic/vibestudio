@@ -184,10 +184,10 @@ describe("WorkspaceVcs working edits (edit → commit → push)", () => {
     });
     expect(committed.status).toBe("committed");
 
-    // The committed snapshot is in the vcs log with the normalized do actor.
+    // The committed snapshot is in the vcs log with the do actor preserved.
     const log = await gad.instance.vcsLog(REPO, 50, CTX_HEAD);
     const entry = log.find((e) => e.outputStateHash === committed.stateHash);
-    expect(entry?.actor).toEqual({ id: "do:agent", kind: "agent", metadata: { type: "do" } });
+    expect(entry?.actor).toEqual({ id: "do:agent", kind: "do" });
   });
 
   it("applies exact-range replace hunks", async () => {

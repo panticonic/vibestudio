@@ -1,11 +1,11 @@
 import type { ChannelId, EnvelopeId } from "./ids.js";
-import type { ParticipantRef, ParticipantSelector, StoredAgenticEvent } from "./events.js";
+import type { ActorRef, ParticipantRef, ParticipantSelector, StoredAgenticEvent } from "./events.js";
 
 export interface ChannelEnvelope<Payload = unknown> {
   envelopeId: EnvelopeId;
   channelId: ChannelId;
   seq: number;
-  from: ParticipantRef;
+  from: ActorRef;
   to?: ParticipantRef[] | ParticipantSelector;
   payload: Payload;
   payloadKind?: string;

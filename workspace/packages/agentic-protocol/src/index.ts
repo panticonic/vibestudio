@@ -92,10 +92,14 @@ export type {
   MessageRole,
   MessageTypeClearedPayload,
   MessageTypeRegisteredPayload,
+  ParticipantKind,
   ParticipantRef,
   ParticipantSelector,
   PayloadFor,
+  PrincipalKind,
+  PrincipalRef,
   SandboxSourcePayload,
+  SemanticParticipantKind,
   StatePayload,
   StoredAgenticEvent,
   SystemPayload,
@@ -106,6 +110,10 @@ export type {
   UsagePayload,
 } from "./events.js";
 export {
+  ACTOR_KINDS,
+  PARTICIPANT_KINDS,
+  PRINCIPAL_KINDS,
+  SEMANTIC_PARTICIPANT_KINDS,
   agenticSlice,
   invocationAbandonedPayload,
   invocationCancelledPayload,
@@ -123,10 +131,13 @@ export type {
 } from "./stored-values.js";
 export {
   participantRefFromMetadata,
+  participantRefFromActor,
   publicActorRef,
   publicParticipantMetadata,
   publicParticipantRef,
   sanitizeAgenticEventParticipantRefs,
+  isParticipantKind,
+  isParticipantRef,
 } from "./participant-ref.js";
 export type {
   PrivateParticipantMetadata,
@@ -159,6 +170,7 @@ export type {
 } from "./envelopes.js";
 
 export {
+  actorKindSchema,
   actorRefSchema,
   agenticEventEnvelopeSchema,
   agenticEventSchema,
@@ -166,8 +178,11 @@ export {
   channelEnvelopeSchema,
   ephemeralSignalSchema,
   eventKindSchemas,
+  participantKindSchema,
   participantRefSchema,
   participantSelectorSchema,
+  principalKindSchema,
+  principalRefSchema,
   storedAgenticEventSchema,
   trajectoryEventSchema,
 } from "./schemas.js";
