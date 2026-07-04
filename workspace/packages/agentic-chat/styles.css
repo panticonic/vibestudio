@@ -284,7 +284,6 @@
   border-radius: 999px;
 }
 
-
 .chat-action-bar {
   flex: 0 0 auto;
   display: flex;
@@ -463,13 +462,15 @@
 }
 
 .message-card-subagent {
-  --card-padding: 6px 8px;
-  background-color: var(--gray-2);
-  border-color: var(--gray-a5);
+  --card-padding: 5px 7px;
+  background-color: color-mix(in srgb, var(--gray-2) 88%, var(--accent-2));
+  border-color: var(--gray-a6);
+  border-radius: 7px;
+  box-shadow: none;
 }
 
 .message-card-subagent::before {
-  background: linear-gradient(90deg, var(--gray-a3), var(--accent-a2));
+  background: var(--accent-a5);
 }
 
 .subagent-card-header,
@@ -480,21 +481,30 @@
 
 .subagent-card-header {
   inline-size: 100%;
+  min-block-size: 22px;
 }
 
 .subagent-title-block {
   flex: 1 1 auto;
+  gap: 6px;
 }
 
 .subagent-card-actions {
   flex: 0 0 auto;
   margin-inline-start: auto;
+  opacity: 0.72;
+  transition: opacity 120ms ease;
+}
+
+.message-card-subagent:hover .subagent-card-actions,
+.message-card-subagent:focus-within .subagent-card-actions {
+  opacity: 1;
 }
 
 .subagent-status-dot {
   flex: 0 0 auto;
-  inline-size: 7px;
-  block-size: 7px;
+  inline-size: 6px;
+  block-size: 6px;
   border-radius: 999px;
   background: var(--gray-8);
 }
@@ -502,6 +512,12 @@
 .subagent-status-dot-pending {
   background: var(--blue-9);
   box-shadow: 0 0 0 3px var(--blue-a3);
+}
+
+.subagent-status-dot-running {
+  background: var(--blue-9);
+  box-shadow: 0 0 0 3px var(--blue-a3);
+  animation: subagent-pulse 1.4s ease-in-out infinite;
 }
 
 .subagent-status-dot-complete {
@@ -517,23 +533,45 @@
   background: var(--amber-9);
 }
 
-.subagent-glyph {
-  color: var(--gray-10);
+@keyframes subagent-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.28);
+  }
 }
 
 .subagent-title {
   min-inline-size: 0;
 }
 
+.subagent-mode-badge,
+.subagent-status-badge,
+.subagent-merge-badge {
+  border-radius: 4px;
+  text-transform: none;
+}
+
 .subagent-update-preview {
   inline-size: 100%;
-  padding-inline-start: 15px;
+  padding-inline-start: 14px;
   color: var(--gray-10);
+  block-size: 18px;
 }
 
 .subagent-update-preview svg {
   flex: 0 0 auto;
   color: var(--gray-9);
+  inline-size: 12px;
+  block-size: 12px;
+}
+
+.subagent-activity-text {
+  min-inline-size: 0;
 }
 
 .subagent-details-toggle {
@@ -543,8 +581,32 @@
 .subagent-details {
   margin-block-start: 4px;
   padding-block-start: 6px;
-  padding-inline-start: 15px;
+  padding-inline-start: 14px;
   border-block-start: 1px solid var(--gray-a4);
+}
+
+.subagent-detail-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 8px;
+  margin-block-end: 6px;
+}
+
+.subagent-detail-row {
+  display: contents;
+}
+
+.subagent-detail-name {
+  color: var(--gray-a10);
+}
+
+.subagent-detail-value {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--code-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--gray-12);
 }
 
 .subagent-description {
@@ -552,6 +614,11 @@
   margin-block-end: 6px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.subagent-empty-feed {
+  display: block;
+  margin-block-start: 4px;
 }
 
 .subagent-say-feed {

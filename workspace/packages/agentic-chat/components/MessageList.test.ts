@@ -48,53 +48,63 @@ function makeMessage(overrides: Record<string, unknown>) {
 }
 
 function makeParticipant(id: string, metadata: Record<string, unknown>) {
-  return { [id]: { id, metadata: { name: "AI Chat", type: "agent", handle: "agent", ...metadata } } };
+  return {
+    [id]: { id, metadata: { name: "AI Chat", type: "agent", handle: "agent", ...metadata } },
+  };
 }
 
 describe("MessageList typing indicators (roster-based)", () => {
   it("shows typing indicator when participant metadata has typing=true", () => {
-    render(React.createElement(MessageList, {
-      messages: [],
-      participants: makeParticipant("agent-1", { typing: true }),
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [],
+        participants: makeParticipant("agent-1", { typing: true }),
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(screen.getByText("AI Chat typing")).toBeTruthy();
   });
 
   it("does not show typing for participants with typing=false", () => {
-    render(React.createElement(MessageList, {
-      messages: [],
-      participants: makeParticipant("agent-1", { typing: false }),
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [],
+        participants: makeParticipant("agent-1", { typing: false }),
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(screen.queryByText("AI Chat typing")).toBeNull();
   });
 
   it("does not show own typing indicator", () => {
-    render(React.createElement(MessageList, {
-      messages: [],
-      participants: makeParticipant("user-1", { typing: true, name: "User", type: "panel" }),
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [],
+        participants: makeParticipant("user-1", { typing: true, name: "User", type: "panel" }),
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(screen.queryByText("User typing")).toBeNull();
   });
 
   it("gives tier-2 messages the slight styling hook and leaves tier-1 alone", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({ content: "intermediate step", complete: true, tier: "secondary" }),
-        makeMessage({ content: "final answer", complete: true, tier: "primary" }),
-      ],
-      participants: {},
-      selfId: null,
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({ content: "intermediate step", complete: true, tier: "secondary" }),
+          makeMessage({ content: "final answer", complete: true, tier: "primary" }),
+        ],
+        participants: {},
+        selfId: null,
+        allParticipants: {},
+      } as never)
+    );
 
     const secondary = document.body.querySelector('[data-message-tier="secondary"]');
     expect(secondary).toBeTruthy();
@@ -107,56 +117,60 @@ describe("MessageList typing indicators (roster-based)", () => {
   });
 
   it("renders invocation beads in inline groups", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-1",
-          contentType: "invocation",
-          content: "",
-          invocation: {
-            id: "tool-1",
-            name: "Read",
-            arguments: { file_path: "src/app.ts" },
-            execution: { status: "complete", description: "Read src/app.ts" },
-          },
-          complete: true,
-        }),
-        makeMessage({
-          id: "action-2",
-          contentType: "invocation",
-          content: "",
-          invocation: {
-            id: "tool-2",
-            name: "Edit",
-            arguments: { file_path: "src/config.ts" },
-            execution: { status: "complete", description: "Edit src/config.ts" },
-          },
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-1",
+            contentType: "invocation",
+            content: "",
+            invocation: {
+              id: "tool-1",
+              name: "Read",
+              arguments: { file_path: "src/app.ts" },
+              execution: { status: "complete", description: "Read src/app.ts" },
+            },
+            complete: true,
+          }),
+          makeMessage({
+            id: "action-2",
+            contentType: "invocation",
+            content: "",
+            invocation: {
+              id: "tool-2",
+              name: "Edit",
+              arguments: { file_path: "src/config.ts" },
+              execution: { status: "complete", description: "Edit src/config.ts" },
+            },
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(screen.getByText("Read src/app.ts")).toBeTruthy();
     expect(screen.getByText("Edit src/config.ts")).toBeTruthy();
   });
 
   it("renders expanded thinking details as markdown", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "thinking-1",
-          contentType: "thinking",
-          content: "**Check:**\n\n- read files\n- run tests",
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "thinking-1",
+            contentType: "thinking",
+            content: "**Check:**\n\n- read files\n- run tests",
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     fireEvent.click(screen.getByLabelText("Thinking: **Check:** - read files - run tests"));
 
@@ -165,82 +179,92 @@ describe("MessageList typing indicators (roster-based)", () => {
   });
 
   it("renders compact thinking previews as markdown", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "thinking-1",
-          contentType: "thinking",
-          content: "Check **repo** state",
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "thinking-1",
+            contentType: "thinking",
+            content: "Check **repo** state",
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(document.body.querySelector(".rt-r-weight-bold")?.textContent).toBe("repo");
   });
 
   it("renders lifecycle recovery notices as compact system status", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "recovery-1",
-          senderId: "agent-1",
-          contentType: "lifecycle",
-          kind: "system",
-          content: "The partial response was discarded because replay is not enabled for this agent.",
-          complete: true,
-          lifecycle: {
-            status: "interrupted",
-            title: "Restart interrupted the response",
-            detail: "The partial response was discarded because replay is not enabled for this agent.",
-          },
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "recovery-1",
+            senderId: "agent-1",
+            contentType: "lifecycle",
+            kind: "system",
+            content:
+              "The partial response was discarded because replay is not enabled for this agent.",
+            complete: true,
+            lifecycle: {
+              status: "interrupted",
+              title: "Restart interrupted the response",
+              detail:
+                "The partial response was discarded because replay is not enabled for this agent.",
+            },
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+      } as never)
+    );
 
     expect(screen.getByText("Interrupted")).toBeTruthy();
     expect(screen.getByText("Restart interrupted the response")).toBeTruthy();
     expect(
-      screen.getByText("The partial response was discarded because replay is not enabled for this agent.")
+      screen.getByText(
+        "The partial response was discarded because replay is not enabled for this agent."
+      )
     ).toBeTruthy();
     expect(document.body.querySelector(".message-card-lifecycle")).toBeTruthy();
   });
 
   it("offers scheduling for reset-aware model failures", async () => {
     const callMethod = vi.fn().mockResolvedValue({ scheduled: true });
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "diagnostic:msg-usage-limit",
-          senderId: "agent-1",
-          contentType: "diagnostic",
-          kind: "system",
-          content:
-            "The usage limit has been reached for GPT-5.3-Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",
-          complete: true,
-          diagnostic: {
-            messageId: "msg-usage-limit",
-            code: "message_failed",
-            failureCode: "usage_limit_terminal",
-            severity: "error",
-            title: "Model usage limit reached",
-            detail:
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "diagnostic:msg-usage-limit",
+            senderId: "agent-1",
+            contentType: "diagnostic",
+            kind: "system",
+            content:
               "The usage limit has been reached for GPT-5.3-Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",
-            resetAt: "2026-06-15T18:35:01.000Z",
-          },
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
-      chat: { callMethod },
-    } as never));
+            complete: true,
+            diagnostic: {
+              messageId: "msg-usage-limit",
+              code: "message_failed",
+              failureCode: "usage_limit_terminal",
+              severity: "error",
+              title: "Model usage limit reached",
+              detail:
+                "The usage limit has been reached for GPT-5.3-Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",
+              resetAt: "2026-06-15T18:35:01.000Z",
+            },
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+        chat: { callMethod },
+      } as never)
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /resume at reset/i }));
 
@@ -262,22 +286,24 @@ describe("MessageList typing indicators (roster-based)", () => {
       arguments: { title: "x" },
       execution: { status: "pending", description: "" },
     };
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-1",
-          senderId: "agent-1",
-          contentType: "invocation",
-          content: "",
-          invocation,
-          complete: false,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
-      onCancelInvocation,
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-1",
+            senderId: "agent-1",
+            contentType: "invocation",
+            content: "",
+            invocation,
+            complete: false,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+        onCancelInvocation,
+      } as never)
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel pending tool call" }));
 
@@ -295,22 +321,24 @@ describe("MessageList typing indicators (roster-based)", () => {
       arguments: { code: "await work()" },
       execution: { status: "pending", description: "" },
     };
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-2",
-          senderId: "agent-1",
-          contentType: "invocation",
-          content: "",
-          invocation,
-          complete: false,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
-      onCancelInvocation,
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-2",
+            senderId: "agent-1",
+            contentType: "invocation",
+            content: "",
+            invocation,
+            complete: false,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+        onCancelInvocation,
+      } as never)
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel pending tool call" }));
 
@@ -318,26 +346,28 @@ describe("MessageList typing indicators (roster-based)", () => {
   });
 
   it("uses the invocation description as the collapsed pill preview", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-1",
-          senderId: "agent-1",
-          contentType: "invocation",
-          content: "",
-          invocation: {
-            id: "tool-1",
-            name: "mcp__workspace__ListDirectory",
-            arguments: { path: "workspace/packages/agentic-chat", recursive: true },
-            execution: { status: "complete", description: "Listed agentic-chat package files" },
-          },
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-1",
+            senderId: "agent-1",
+            contentType: "invocation",
+            content: "",
+            invocation: {
+              id: "tool-1",
+              name: "mcp__workspace__ListDirectory",
+              arguments: { path: "workspace/packages/agentic-chat", recursive: true },
+              execution: { status: "complete", description: "Listed agentic-chat package files" },
+            },
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     const pill = screen.getByTestId("invocation-pill");
 
@@ -356,26 +386,28 @@ describe("MessageList typing indicators (roster-based)", () => {
       originalBytes: 2048,
     };
     const rpcCall = vi.fn();
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-1",
-          contentType: "invocation",
-          content: "",
-          invocation: {
-            id: "tool-1",
-            name: "eval",
-            arguments: { code: longCode },
-            execution: { status: "complete", result: storedResult },
-          },
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-      chat: { rpc: { call: rpcCall } },
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-1",
+            contentType: "invocation",
+            content: "",
+            invocation: {
+              id: "tool-1",
+              name: "eval",
+              arguments: { code: longCode },
+              execution: { status: "complete", result: storedResult },
+            },
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+        chat: { rpc: { call: rpcCall } },
+      } as never)
+    );
 
     fireEvent.click(screen.getByTestId("invocation-pill"));
 
@@ -392,45 +424,45 @@ describe("MessageList typing indicators (roster-based)", () => {
       value: { writeText },
     });
 
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-err",
-          contentType: "invocation",
-          content: "",
-          invocation: {
-            id: "tool-err",
-            name: "grep",
-            arguments: {
-              path: "packages workers panels",
-              pattern: "console",
-              glob: "*diagnostic*",
-            },
-            execution: {
-              status: "error",
-              description:
-                "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
-              isError: true,
-              result: {
-                text:
-                  "Path not found: /packages workers panels. The `path` argument accepts one directory or file, not a space-separated list.",
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      "Path not found: /packages workers panels. The `path` argument accepts one directory or file, not a space-separated list.",
-                  },
-                ],
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-err",
+            contentType: "invocation",
+            content: "",
+            invocation: {
+              id: "tool-err",
+              name: "grep",
+              arguments: {
+                path: "packages workers panels",
+                pattern: "console",
+                glob: "*diagnostic*",
+              },
+              execution: {
+                status: "error",
+                description:
+                  "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
+                isError: true,
+                result: {
+                  text: "Path not found: /packages workers panels. The `path` argument accepts one directory or file, not a space-separated list.",
+                  content: [
+                    {
+                      type: "text",
+                      text: "Path not found: /packages workers panels. The `path` argument accepts one directory or file, not a space-separated list.",
+                    },
+                  ],
+                },
               },
             },
-          },
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     fireEvent.click(screen.getByTestId("invocation-pill"));
 
@@ -440,42 +472,47 @@ describe("MessageList typing indicators (roster-based)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy invocation details" }));
     await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(expect.stringContaining("\"path\": \"packages workers panels\""));
+      expect(writeText).toHaveBeenCalledWith(
+        expect.stringContaining('"path": "packages workers panels"')
+      );
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining("not a space-separated list"));
     });
   });
 
   it("renders durable typing indicators in their own inline row", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-1",
-          contentType: "invocation",
-          content: "",
-          invocation: {
-            id: "tool-1",
-            name: "Read",
-            arguments: { file_path: "src/app.ts" },
-            execution: { status: "pending", description: "Read src/app.ts" },
-          },
-          complete: false,
-        }),
-        makeMessage({
-          id: "typing-1",
-          contentType: "typing",
-          senderMetadata: { name: "Agent One", type: "agent", handle: "agent-1" },
-          complete: false,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-      renderInlineGroup: (items: InlineItem[]) => React.createElement(
-        "div",
-        { "data-testid": "inline-group" },
-        items.map((item) => item.type).join(","),
-      ),
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-1",
+            contentType: "invocation",
+            content: "",
+            invocation: {
+              id: "tool-1",
+              name: "Read",
+              arguments: { file_path: "src/app.ts" },
+              execution: { status: "pending", description: "Read src/app.ts" },
+            },
+            complete: false,
+          }),
+          makeMessage({
+            id: "typing-1",
+            contentType: "typing",
+            senderMetadata: { name: "Agent One", type: "agent", handle: "agent-1" },
+            complete: false,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+        renderInlineGroup: (items: InlineItem[]) =>
+          React.createElement(
+            "div",
+            { "data-testid": "inline-group" },
+            items.map((item) => item.type).join(",")
+          ),
+      } as never)
+    );
 
     expect(screen.getAllByTestId("inline-group").map((node) => node.textContent)).toEqual([
       "invocation",
@@ -484,19 +521,21 @@ describe("MessageList typing indicators (roster-based)", () => {
   });
 
   it("does not synthesize generic invocation UI for malformed invocation messages", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "action-without-payload",
-          contentType: "invocation",
-          content: "",
-          complete: false,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "action-without-payload",
+            contentType: "invocation",
+            content: "",
+            complete: false,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(screen.queryByText("Invocation")).toBeNull();
     expect(screen.queryByText("Tool")).toBeNull();
@@ -504,25 +543,27 @@ describe("MessageList typing indicators (roster-based)", () => {
   });
 
   it("renders durable approval cards", () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "approval-1",
-          contentType: "approval",
-          content: "",
-          approval: {
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
             id: "approval-1",
-            invocationId: "call-1",
-            question: "Allow tool call?",
-            status: "requested",
-          },
-          complete: false,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+            contentType: "approval",
+            content: "",
+            approval: {
+              id: "approval-1",
+              invocationId: "call-1",
+              question: "Allow tool call?",
+              status: "requested",
+            },
+            complete: false,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(screen.getByText("Approval requested")).toBeTruthy();
     expect(screen.getByText("Allow tool call?")).toBeTruthy();
@@ -531,19 +572,21 @@ describe("MessageList typing indicators (roster-based)", () => {
 
   it("wires MDX ActionButton to publish a follow-up message", async () => {
     const publishMessage = vi.fn();
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "mdx-1",
-          content: '<ActionButton message="Refresh the data">Refresh</ActionButton>',
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-      mdxActions: { publishMessage },
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "mdx-1",
+            content: '<ActionButton message="Refresh the data">Refresh</ActionButton>',
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+        mdxActions: { publishMessage },
+      } as never)
+    );
 
     const button = await waitFor(() => screen.getByRole("button", { name: "Refresh" }));
     fireEvent.click(button);
@@ -552,35 +595,39 @@ describe("MessageList typing indicators (roster-based)", () => {
   });
 
   it("renders feedback-form title MDX from transcript messages", async () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "feedback-title-1",
-          content: "<FeedbackFormTitle>System test feedback</FeedbackFormTitle>",
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "feedback-title-1",
+            content: "<FeedbackFormTitle>System test feedback</FeedbackFormTitle>",
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     expect(await screen.findByRole("heading", { name: "System test feedback" })).toBeTruthy();
   });
 
   it("renders the documented OpenInNewWindow MDX icon", async () => {
-    render(React.createElement(MessageList, {
-      messages: [
-        makeMessage({
-          id: "open-icon-1",
-          content: '<Icons.OpenInNewWindowIcon data-testid="open-icon" />',
-          complete: true,
-        }),
-      ],
-      participants: {},
-      selfId: "user-1",
-      allParticipants: {},
-    } as never));
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "open-icon-1",
+            content: '<Icons.OpenInNewWindowIcon data-testid="open-icon" />',
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never)
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("open-icon")).toBeTruthy();
@@ -592,21 +639,25 @@ describe("MessageList typing indicators (roster-based)", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
-      render(React.createElement(MessageList, {
-        messages: [
-          makeMessage({
-            id: "missing-mdx-1",
-            content: "<MissingTranscriptWidget>Fallback copy</MissingTranscriptWidget>",
-            complete: true,
-          }),
-        ],
-        participants: {},
-        selfId: "user-1",
-        allParticipants: {},
-      } as never));
+      render(
+        React.createElement(MessageList, {
+          messages: [
+            makeMessage({
+              id: "missing-mdx-1",
+              content: "<MissingTranscriptWidget>Fallback copy</MissingTranscriptWidget>",
+              complete: true,
+            }),
+          ],
+          participants: {},
+          selfId: "user-1",
+          allParticipants: {},
+        } as never)
+      );
 
       await waitFor(() => {
-        expect(debugSpy.mock.calls.some(([message]) => String(message).includes("MDX render failed"))).toBe(true);
+        expect(
+          debugSpy.mock.calls.some(([message]) => String(message).includes("MDX render failed"))
+        ).toBe(true);
       });
 
       expect(document.body.textContent).toContain(
@@ -621,46 +672,95 @@ describe("MessageList typing indicators (roster-based)", () => {
 
 describe("SubagentRunCard", () => {
   it("is compact by default and expands the full progress feed on demand", () => {
-    render(React.createElement(SubagentRunCard, {
-      msg: makeMessage({
-        id: "subagent-run-1",
-        contentType: "invocation",
-        invocation: {
-          id: "run-1",
-          name: "spawn_subagent",
-          arguments: {},
-          execution: {
-            status: "pending",
-            description: "Pilot-process one Google Drive PDF into a normalized poetry archive repo.",
-            consoleOutput: [
-              "Downloaded Judith Pickard poems.pdf",
-              "Extracted text from 12 pages",
-              "Writing normalized catalog",
-            ].join("\n"),
+    render(
+      React.createElement(SubagentRunCard, {
+        msg: makeMessage({
+          id: "subagent-run-1",
+          contentType: "invocation",
+          invocation: {
+            id: "run-1",
+            name: "spawn_subagent",
+            arguments: {},
+            execution: {
+              status: "pending",
+              description:
+                "Pilot-process one Google Drive PDF into a normalized poetry archive repo.",
+              consoleOutput: [
+                "Downloaded Judith Pickard poems.pdf",
+                "Extracted text from 12 pages",
+                "Writing normalized catalog",
+              ].join("\n"),
+            },
+            subagent: {
+              runId: "run-1",
+              mode: "fresh",
+              taskChannelId: "task-run-1",
+              contextId: "ctx-run-1",
+              childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-1",
+              label: "PDF poem extraction pilot",
+            },
           },
-          subagent: {
-            runId: "run-1",
-            mode: "fresh",
-            taskChannelId: "task-run-1",
-            contextId: "ctx-run-1",
-            label: "PDF poem extraction pilot",
-          },
-        },
-        complete: true,
-      }),
-    } as never));
+          complete: true,
+        }),
+      } as never)
+    );
 
     expect(screen.getByTestId("subagent-run-card")).toBeTruthy();
     expect(screen.getByText("PDF poem extraction pilot")).toBeTruthy();
     expect(screen.getByText("Writing normalized catalog")).toBeTruthy();
     expect(screen.queryByText("Downloaded Judith Pickard poems.pdf")).toBeNull();
     expect(screen.queryByText("Extracted text from 12 pages")).toBeNull();
-    expect(screen.queryByText("Pilot-process one Google Drive PDF into a normalized poetry archive repo.")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Pilot-process one Google Drive PDF into a normalized poetry archive repo."
+      )
+    ).toBeNull();
 
     fireEvent.click(screen.getByLabelText("Show details"));
 
     expect(screen.getByText("Downloaded Judith Pickard poems.pdf")).toBeTruthy();
     expect(screen.getByText("Extracted text from 12 pages")).toBeTruthy();
-    expect(screen.getByText("Pilot-process one Google Drive PDF into a normalized poetry archive repo.")).toBeTruthy();
+    expect(
+      screen.getByText("Pilot-process one Google Drive PDF into a normalized poetry archive repo.")
+    ).toBeTruthy();
+    expect(screen.getByText("task-run-1")).toBeTruthy();
+    expect(screen.getByText("ctx-run-1")).toBeTruthy();
+  });
+
+  it("shows useful expanded details before the child has published progress", () => {
+    render(
+      React.createElement(SubagentRunCard, {
+        msg: makeMessage({
+          id: "subagent-run-2",
+          contentType: "invocation",
+          invocation: {
+            id: "run-2",
+            name: "spawn_subagent",
+            arguments: {},
+            execution: {
+              status: "pending",
+              description: "",
+            },
+            subagent: {
+              runId: "run-2",
+              mode: "fresh",
+              taskChannelId: "task-run-2",
+              contextId: "ctx-run-2",
+              childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-2",
+              label: "Drive helper fix",
+            },
+          },
+          complete: false,
+        }),
+      } as never)
+    );
+
+    expect(screen.getByText("Waiting for the child agent to start")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Show details"));
+
+    expect(screen.getByText("run-2")).toBeTruthy();
+    expect(screen.getByText("task-run-2")).toBeTruthy();
+    expect(screen.getByText("ctx-run-2")).toBeTruthy();
+    expect(screen.getByText(/The child has not published progress yet/)).toBeTruthy();
   });
 });

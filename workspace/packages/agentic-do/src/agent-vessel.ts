@@ -3456,21 +3456,30 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       });
 
       // 5) Bring the child online on the task channel.
+      let childParticipantId: string | null = null;
       if (mode === "fork") {
         const parentSeq = await this.trajectoryHeadSeq(channelId);
-        await this.rpc.call(childHandle.targetId, "initFromTrajectoryFork", [
-          {
-            parentLogId: ids.logIdForChannel(channelId),
-            seq: parentSeq,
-            taskChannelId,
-            contextId,
-            config: childSubscriptionConfig,
-          },
-        ]);
+        const childSubscription = await this.rpc.call<{ ok: boolean; participantId: string }>(
+          childHandle.targetId,
+          "initFromTrajectoryFork",
+          [
+            {
+              parentLogId: ids.logIdForChannel(channelId),
+              seq: parentSeq,
+              taskChannelId,
+              contextId,
+              config: childSubscriptionConfig,
+            },
+          ]
+        );
+        childParticipantId = childSubscription.participantId;
       } else {
-        await this.rpc.call(childHandle.targetId, "subscribeChannel", [
-          { channelId: taskChannelId, contextId, config: childSubscriptionConfig, replay: false },
-        ]);
+        const childSubscription = await this.rpc.call<{ ok: boolean; participantId: string }>(
+          childHandle.targetId,
+          "subscribeChannel",
+          [{ channelId: taskChannelId, contextId, config: childSubscriptionConfig, replay: false }]
+        );
+        childParticipantId = childSubscription.participantId;
       }
 
       // 5b) Stamp task provenance on the task channel so its getProvenance
@@ -3485,12 +3494,58 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (task.trim()) {
         const participantId =
           this.subscriptions.getParticipantId(taskChannelId) ?? this.participantId();
-        await this.createChannelClient(taskChannelId).send(
+        const messageId = `subagent-seed:${runId}`;
+        const senderMetadata = {
+          type: "headless",
+          name: "Subagent task",
+          handle: "subagent-task",
+          parentParticipantId: participantId,
+          subagentRunId: runId,
+        };
+        const seedEvent: AgenticEvent<"message.completed"> = {
+          kind: "message.completed",
+          actor: {
+            kind: "user",
+            id: participantId,
+            displayName: "Subagent task",
+            metadata: senderMetadata,
+          },
+          causality: { messageId: messageId as never },
+          payload: {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            role: "user",
+            blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content: task }],
+            outcome: "completed",
+            tier: "primary",
+            ...(childParticipantId
+              ? { to: [{ kind: "participant" as const, participantId: childParticipantId }] }
+              : {}),
+          },
+          createdAt: new Date().toISOString(),
+        };
+        const published = await this.createChannelClient(taskChannelId).publishAgenticEvent(
           participantId,
-          `subagent-seed:${runId}`,
-          task,
-          { senderMetadata: { type: "agent", name: participantId } }
+          seedEvent,
+          { idempotencyKey: messageId, senderMetadata }
         );
+        if (childParticipantId) {
+          await this.rpc.call(childHandle.targetId, "onChannelEnvelope", [
+            taskChannelId,
+            {
+              kind: "log",
+              phase: "live",
+              event: {
+                id: typeof published.id === "number" ? published.id : 0,
+                messageId,
+                type: AGENTIC_EVENT_PAYLOAD_KIND,
+                payload: seedEvent,
+                senderId: participantId,
+                senderMetadata,
+                ts: Date.now(),
+              },
+            } satisfies RpcChannelMessage,
+          ]);
+        }
       }
 
       // 7) Durable run record on the parent's home channel (the subagent card).
@@ -3769,6 +3824,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           mode: run.mode,
           taskChannelId: run.taskChannelId,
           contextId: run.childContextId,
+          childEntityId: run.childEntityId,
           label: run.label,
         },
       },
@@ -3901,6 +3957,78 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       .join("\n");
   }
 
+  private trimSubagentProgress(text: string): string {
+    const compact = text.replace(/\s+/g, " ").trim();
+    return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
+  }
+
+  private subagentProgressLine(agentic: AgenticEvent | null): string | null {
+    const kind = (agentic as { kind?: string } | null)?.kind ?? "";
+    const payload = ((agentic as { payload?: Record<string, unknown> } | null)?.payload ??
+      {}) as Record<string, unknown>;
+    if (kind === "turn.opened") return "Started working";
+    if (kind === "turn.closed") return "Turn finished";
+    if (kind === "invocation.started") {
+      const name = typeof payload["name"] === "string" ? payload["name"] : "tool";
+      return `Started ${name}`;
+    }
+    if (kind === "invocation.progress") {
+      return typeof payload["message"] === "string" ? payload["message"] : "Progress update";
+    }
+    if (kind === "invocation.completed") return "Tool completed";
+    if (kind === "invocation.failed") {
+      return typeof payload["reason"] === "string"
+        ? `Tool failed: ${payload["reason"]}`
+        : "Tool failed";
+    }
+    if (kind === "invocation.cancelled") return "Tool cancelled";
+    if (kind === "invocation.abandoned") return "Tool abandoned";
+    if (kind === "message.completed") {
+      const text = this.extractMessageText(agentic);
+      if (!text) return null;
+      return `Said: ${this.trimSubagentProgress(text)}`;
+    }
+    return null;
+  }
+
+  private async publishSubagentProgress(
+    channelId: string,
+    event: ChannelEvent,
+    agentic: AgenticEvent | null
+  ): Promise<void> {
+    const run = this.subagentRuns.getByTaskChannel(channelId);
+    if (!run || event.senderId === this.participantId()) return;
+    const line = this.subagentProgressLine(agentic);
+    if (!line) return;
+    const participantId =
+      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
+    const actor = this.cardActor(run.parentChannelId, participantId);
+    const messageSeq = Number.isFinite(event.id) ? (event.id as number) : 0;
+    const progressEvent: AgenticEvent<"invocation.output"> = {
+      kind: "invocation.output",
+      actor,
+      causality: { invocationId: run.runId as never },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        output: line,
+        channel: "stdout",
+        subagent: {
+          kind: "turn-report",
+          messageSeq,
+        },
+      },
+      createdAt: new Date().toISOString(),
+    };
+    await this.createChannelClient(run.parentChannelId)
+      .publishAgenticEvent(participantId, progressEvent, {
+        idempotencyKey: `subagent-progress:${run.runId}:${messageSeq}:${(agentic as { kind?: string } | null)?.kind ?? "event"}`,
+        senderMetadata: actor.metadata,
+      })
+      .catch((err) => {
+        console.error(`[AgentVessel] subagent progress emit failed for ${run.runId}:`, err);
+      });
+  }
+
   private eventAddressesSelf(
     channelId: string,
     payload: {
@@ -3940,6 +4068,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (event.senderId === this.participantId()) return true; // our own traffic never wakes us
     const agentic = event.payload as AgenticEvent | null;
     const kind = (agentic as { kind?: string } | null)?.kind ?? "";
+    await this.publishSubagentProgress(channelId, event, agentic);
     if (kind === "message.completed") {
       const payload =
         ((agentic as AgenticEvent).payload as {

@@ -21,13 +21,17 @@ import { ExpandableChevron } from "./shared/Chevron";
 
 const STATUS_COLOR: Record<string, "gray" | "green" | "red" | "amber" | "blue"> = {
   pending: "blue",
+  running: "blue",
   complete: "green",
   error: "red",
   cancelled: "amber",
   abandoned: "gray",
 };
 
-const MERGE_LABEL: Record<NonNullable<SubagentRunState["merge"]>, { label: string; color: "green" | "amber" | "gray" }> = {
+const MERGE_LABEL: Record<
+  NonNullable<SubagentRunState["merge"]>,
+  { label: string; color: "green" | "amber" | "gray" }
+> = {
   merged: { label: "Merged", color: "green" },
   conflicted: { label: "Conflicted", color: "amber" },
   discarded: { label: "Discarded", color: "gray" },
@@ -42,6 +46,12 @@ function updateLines(output: string | undefined): string[] {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
+}
+
+function compactId(value: string | undefined): string | null {
+  if (!value) return null;
+  if (value.length <= 36) return value;
+  return `${value.slice(0, 18)}...${value.slice(-12)}`;
 }
 
 export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
@@ -62,10 +72,18 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const canReview = Boolean(forkState && subagent.contextId);
   // Live say / turn-report entries relayed onto the run, folded into
   // `consoleOutput` (newline-joined) by the chat projection.
-  const latestUpdate = sayFeed.length > 0
-    ? sayFeed[sayFeed.length - 1]
-    : invocation.execution.description.trim();
+  const latestUpdate =
+    sayFeed.length > 0
+      ? sayFeed[sayFeed.length - 1]
+      : invocation.execution.description.trim() ||
+        (status === "pending" ? "Waiting for the child agent to start" : "No child updates yet");
   const detailsLabel = detailsOpen ? "Hide details" : "Show details";
+  const detailRows = [
+    ["Run", subagent.runId],
+    ["Task", subagent.taskChannelId],
+    ["Context", subagent.contextId],
+    ["Child", subagent.childEntityId],
+  ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
 
   const handleOpen = () => {
     if (subagent.taskChannelId && subagent.contextId) {
@@ -83,16 +101,16 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
       <Card className="message-card message-card-subagent" data-testid="subagent-run-card">
         <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
           <Flex align="center" gap="2" className="subagent-card-header">
-            <span className={`subagent-status-dot subagent-status-dot-${status}`} aria-hidden="true" />
+            <span
+              className={`subagent-status-dot subagent-status-dot-${status}`}
+              aria-hidden="true"
+            />
             <Flex align="center" gap="2" className="subagent-title-block">
-              <Text className="subagent-glyph" size="1" aria-hidden="true">
-                ⑂
-              </Text>
               <Text className="subagent-title" size="2" weight="medium" truncate>
                 {label}
               </Text>
               {subagent.mode && (
-                <Badge size="1" variant="soft" color="gray">
+                <Badge className="subagent-mode-badge" size="1" variant="soft" color="gray">
                   {subagent.mode}
                 </Badge>
               )}
@@ -103,7 +121,12 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
               )}
             </Flex>
             <Flex align="center" gap="1" className="subagent-card-actions">
-              <Badge size="1" variant="soft" color={STATUS_COLOR[status] ?? "gray"}>
+              <Badge
+                className="subagent-status-badge"
+                size="1"
+                variant="soft"
+                color={STATUS_COLOR[status] ?? "gray"}
+              >
                 {statusLabel(status)}
               </Badge>
               <Button
@@ -144,7 +167,7 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
           {latestUpdate && (
             <Flex align="center" gap="2" className="subagent-update-preview">
               <UpdateIcon aria-hidden="true" />
-              <Text size="1" color="gray" truncate>
+              <Text size="1" color="gray" truncate className="subagent-activity-text">
                 {latestUpdate}
               </Text>
               {sayFeed.length > 1 && (
@@ -156,6 +179,20 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
           )}
           {detailsOpen && (
             <Box className="subagent-details">
+              {detailRows.length > 0 && (
+                <Box className="subagent-detail-grid">
+                  {detailRows.map(([name, value]) => (
+                    <div className="subagent-detail-row" key={name}>
+                      <Text size="1" color="gray" className="subagent-detail-name">
+                        {name}
+                      </Text>
+                      <Text size="1" className="subagent-detail-value" title={value}>
+                        {compactId(value)}
+                      </Text>
+                    </div>
+                  ))}
+                </Box>
+              )}
               {invocation.execution.description && (
                 <Text size="1" color="gray" className="subagent-description">
                   {invocation.execution.description}
@@ -171,6 +208,12 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                     ))}
                   </Flex>
                 </Box>
+              )}
+              {sayFeed.length === 0 && (
+                <Text size="1" color="gray" className="subagent-empty-feed">
+                  The child has not published progress yet. Open the task chat to inspect the live
+                  transcript.
+                </Text>
               )}
             </Box>
           )}

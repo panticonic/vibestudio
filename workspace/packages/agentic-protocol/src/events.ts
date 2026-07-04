@@ -395,6 +395,7 @@ export type InvocationPayload =
         mode: "fresh" | "fork";
         taskChannelId: string;
         contextId: string;
+        childEntityId?: string;
         label: string;
       };
     }

@@ -249,7 +249,9 @@ describe("AgentVesselBase.chatOp", () => {
   it("configureAgent validates its patch (rejects an empty model)", async () => {
     const vessel = await makeVessel();
     vessel.callerIdForTest = await expectedEvalCaller();
-    await expect(vessel.chatOp(CHANNEL, "configureAgent", [{ model: "" }])).rejects.toThrow(/model/);
+    await expect(vessel.chatOp(CHANNEL, "configureAgent", [{ model: "" }])).rejects.toThrow(
+      /model/
+    );
   });
 
   it("registerMessageType publishes messageType.registered AS the agent", async () => {
@@ -544,9 +546,10 @@ class EvalGateProbe extends TestVessel {
   /** Replace the lazily-built driver with a spy so `pause` doesn't boot the real
    *  driver (which needs a live gateway/GAD). `inFlight` models whether a model
    *  call was running when the flush hit (drives the conditional-abort path). */
-  stubDriverForPause(
-    opts: { inFlight?: boolean } = {}
-  ): { abortChannel: ReturnType<typeof vi.fn>; handleIncoming: ReturnType<typeof vi.fn> } {
+  stubDriverForPause(opts: { inFlight?: boolean } = {}): {
+    abortChannel: ReturnType<typeof vi.fn>;
+    handleIncoming: ReturnType<typeof vi.fn>;
+  } {
     const abortChannel = vi.fn();
     const handleIncoming = vi.fn(async () => {});
     const loop = vi.fn(async () => ({
@@ -722,6 +725,66 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     expect(probe.channelStub.published.some((p) => p.event.kind === "invocation.started")).toBe(
       true
     );
+    const seed = probe.channelStub.published.find(
+      (p) => p.idempotencyKey === "subagent-seed:inv-1"
+    );
+    expect(seed?.event).toMatchObject({
+      kind: "message.completed",
+      actor: { kind: "user", displayName: "Subagent task" },
+      payload: {
+        role: "user",
+        to: [{ kind: "participant", participantId: "participant-child" }],
+      },
+    });
+    const directDelivery = probe.rpcCalls.find((call) => call.method === "onChannelEnvelope");
+    expect(directDelivery).toMatchObject({
+      target: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
+      args: [
+        "task-inv-1",
+        {
+          kind: "log",
+          event: {
+            messageId: "subagent-seed:inv-1",
+            senderId: AGENT_ID,
+          },
+        },
+      ],
+    });
+  });
+
+  it("relays child task-channel activity onto the parent subagent card", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    await probe.processChannelEvent("task-inv-1", {
+      id: 42,
+      messageId: "turn-opened-child",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: "turn.opened",
+        actor: { kind: "agent", id: "participant-child", displayName: "Child" },
+        causality: { turnId: "turn-child-1" },
+        payload: { protocol: "agentic.trajectory.v1" },
+        createdAt: new Date().toISOString(),
+      } as unknown as AgenticEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    });
+
+    const progress = probe.channelStub.published.find(
+      (p) => p.event.kind === "invocation.output" && p.event.causality?.invocationId === "inv-1"
+    );
+    expect(progress?.event).toMatchObject({
+      kind: "invocation.output",
+      payload: {
+        output: "Started working",
+        subagent: { kind: "turn-report", messageSeq: 42 },
+      },
+    });
   });
 });
 
@@ -798,7 +861,9 @@ describe("AgentVesselBase.onEvalProgress (live eval console streaming)", () => {
 
     await vessel.onEvalProgress({ runId: "inv-5", channelId: CHANNEL, output: "hello\nworld" });
 
-    const published = vessel.channelStub.published.find((p) => p.event.kind === "invocation.output");
+    const published = vessel.channelStub.published.find(
+      (p) => p.event.kind === "invocation.output"
+    );
     expect(published?.event).toMatchObject({
       kind: "invocation.output",
       causality: { invocationId: "inv-5" },
