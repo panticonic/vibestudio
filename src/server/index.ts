@@ -740,6 +740,12 @@ async function main() {
     isPnpmDevMode && workspaceIsEphemeral && hasDevTemplate && templateDiffersFromActive
       ? templateDir
       : null;
+  const buildDependencyWorkspaceRoot =
+    fs.existsSync(path.join(templateDir, "package.json")) ||
+    fs.existsSync(path.join(templateDir, "pnpm-lock.yaml")) ||
+    fs.existsSync(path.join(templateDir, "pnpm-workspace.yaml"))
+      ? templateDir
+      : workspacePath;
   if (process.env["VIBEZ1_DOGFOOD"] === "1") {
     console.warn(
       "[Dogfood] VIBEZ1_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
@@ -1059,7 +1065,8 @@ async function main() {
       return await initBuildSystemV2(
         workspacePath,
         workspaceVcs,
-        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")]
+        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
+        { appRoot, dependencyWorkspaceRoot: buildDependencyWorkspaceRoot }
       );
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {

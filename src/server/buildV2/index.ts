@@ -259,6 +259,21 @@ export interface BuildUnitResolution {
   stateHash: string;
 }
 
+export interface BuildSystemRootOptions {
+  /**
+   * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
+   * Defaults to VIBEZ1_APP_ROOT, then dirname(workspaceRoot), for older tests.
+   */
+  appRoot?: string;
+  /**
+   * Workspace dependency root containing the userland package/lock/workspace
+   * files that influence build cache identity. This can differ from the active
+   * managed workspace root in dev, where the app runs from a copied workspace
+   * under user data but dependencies are installed from <appRoot>/workspace.
+   */
+  dependencyWorkspaceRoot?: string;
+}
+
 export interface BuildSystemV2 extends RepoPushValidator {
   /**
    * Get build result for a panel/worker/extension/library.
@@ -433,14 +448,19 @@ export interface BuildSystemV2 extends RepoPushValidator {
 export async function initBuildSystemV2(
   workspaceRoot: string,
   source: WorkspaceStateSource & BuildSourceProvider,
-  appNodeModules: string | string[]
+  appNodeModules: string | string[],
+  rootOptions: BuildSystemRootOptions = {}
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
 
-  // Root-dependency fingerprint inputs (package.json/pnpm-lock.yaml/…) resolve
-  // against the app root, not whatever cwd the server happened to start in.
-  setBuildRootConfig({ appRoot: path.dirname(workspaceRoot), workspaceRoot });
+  // Build cache identity depends on dependency manifests, not on where the
+  // active managed workspace copy happens to live. Server startup passes these
+  // roots explicitly; defaults preserve direct test construction.
+  setBuildRootConfig({
+    appRoot: rootOptions.appRoot ?? process.env["VIBEZ1_APP_ROOT"] ?? path.dirname(workspaceRoot),
+    workspaceRoot: rootOptions.dependencyWorkspaceRoot ?? workspaceRoot,
+  });
 
   // Declare where @vibez1/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots);

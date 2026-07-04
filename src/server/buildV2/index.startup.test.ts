@@ -100,4 +100,32 @@ describe("BuildSystemV2 startup", () => {
     releaseBuild?.();
     releaseBuild = null;
   });
+
+  it("uses the explicit dependency workspace root for root-dependency fingerprints", async () => {
+    const appRoot = path.join(root, "app");
+    const dependencyWorkspaceRoot = path.join(appRoot, "workspace");
+    fs.mkdirSync(dependencyWorkspaceRoot, { recursive: true });
+    fs.writeFileSync(path.join(appRoot, "package.json"), '{"name":"host"}');
+    fs.writeFileSync(path.join(appRoot, "pnpm-lock.yaml"), "host-lock\n");
+    fs.writeFileSync(path.join(appRoot, "pnpm-workspace.yaml"), "packages: []\n");
+    fs.writeFileSync(path.join(dependencyWorkspaceRoot, "package.json"), '{"name":"userland"}');
+    fs.writeFileSync(path.join(dependencyWorkspaceRoot, "pnpm-lock.yaml"), "userland-lock\n");
+    fs.writeFileSync(path.join(dependencyWorkspaceRoot, "pnpm-workspace.yaml"), "packages: []\n");
+    fs.writeFileSync(path.join(dependencyWorkspaceRoot, "tsconfig.json"), "{}\n");
+    fs.writeFileSync(path.join(dependencyWorkspaceRoot, "tsconfig.integration.json"), "{}\n");
+
+    const { initBuildSystemV2 } = await import("./index.js");
+    const { getRootDependencyFingerprintInfo } = await import("./effectiveVersion.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+      appRoot,
+      dependencyWorkspaceRoot,
+    });
+
+    const info = getRootDependencyFingerprintInfo();
+    const workspacePackage = info.files.find((file) => file.file === "workspace/package.json");
+    expect(info.root).toBe(appRoot);
+    expect(info.rootSource).toBe("injected");
+    expect(workspacePackage?.present).toBe(true);
+    expect(workspacePackage?.path).toBe(path.join(dependencyWorkspaceRoot, "package.json"));
+  });
 });
