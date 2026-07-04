@@ -1,7 +1,7 @@
 /**
- * GAD-native workspace version control client. The RPC methods are derived
- * from the shared `vcsMethods` schema; this module only adds the event helper
- * for head subscriptions.
+ * GAD-native workspace version control client. Host RPC methods are derived
+ * from the shared `vcsMethods` schema; history reads and push are routed to the
+ * userland `vcs` service.
  */
 
 import {
@@ -10,16 +10,15 @@ import {
   type VcsEditOpRow,
   type VcsHeadAdvance,
   type VcsLogEntry,
+  type VcsPushInput,
+  type VcsPushResult,
   type VcsWorkingAdvance,
 } from "@vibez1/shared/serviceSchemas/vcs";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibez1/shared/typedServiceClient";
-import {
-  createVcsUserlandClient,
-  type RpcCallerLike,
-} from "@vibez1/shared/userlandServiceRpc";
+import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
 
 export type {
   VcsApplyEditsInput,
@@ -89,21 +88,37 @@ export interface VcsHistoryClient {
 
 export type VcsClient = VcsRpcClient &
   VcsHistoryClient & {
-  /**
-   * Subscribe to head advances (commits by any actor on `head`). Fires on each
-   * advance with the previous/new state, producing event, actor, file-level
-   * delta, and authored edit intent when available. Returns an unsubscribe.
-   */
-  subscribeHead(head: string, onAdvance: (advance: VcsHeadAdvance) => void): () => void;
-  /**
-   * Subscribe to UNCOMMITTED working-content advances (`vcs.edit`, incl.
-   * `vcs.revert`) on `head`. Distinct from {@link subscribeHead}: working edits
-   * are not commits (no log entry, no build). Reactive editors consume this to
-   * reflect uncommitted edits and to apply a revert (now a working edit) into
-   * the view. Returns an unsubscribe.
-   */
-  subscribeWorking(head: string, onAdvance: (advance: VcsWorkingAdvance) => void): () => void;
-};
+    /**
+     * Publish one or more repos from this runtime's context head to main. This is
+     * userland-dispatched to the gad-store DO's `vcsPush`, not host `vcs.push`.
+     */
+    push(input: VcsPushInput): Promise<VcsPushResult>;
+    forkRepo(
+      fromPath: string,
+      toPath: string
+    ): Promise<{
+      repoPath: string;
+      head: string;
+      inherited: number;
+      stateHash: string;
+    }>;
+    deleteRepo(input: { repoPath: string; force?: boolean }): Promise<unknown>;
+    restoreRepo(input: { repoPath: string }): Promise<unknown>;
+    /**
+     * Subscribe to head advances (commits by any actor on `head`). Fires on each
+     * advance with the previous/new state, producing event, actor, file-level
+     * delta, and authored edit intent when available. Returns an unsubscribe.
+     */
+    subscribeHead(head: string, onAdvance: (advance: VcsHeadAdvance) => void): () => void;
+    /**
+     * Subscribe to UNCOMMITTED working-content advances (`vcs.edit`, incl.
+     * `vcs.revert`) on `head`. Distinct from {@link subscribeHead}: working edits
+     * are not commits (no log entry, no build). Reactive editors consume this to
+     * reflect uncommitted edits and to apply a revert (now a working edit) into
+     * the view. Returns an unsubscribe.
+     */
+    subscribeWorking(head: string, onAdvance: (advance: VcsWorkingAdvance) => void): () => void;
+  };
 
 export function createVcsClient(
   callMain: <T>(method: string, ...args: unknown[]) => Promise<T>,
@@ -161,6 +176,21 @@ export function createVcsClient(
         sourceHead: input.sourceHead ?? defaults?.pushSourceHead,
         ...(input.message !== undefined ? { message: input.message } : {}),
       });
+    },
+    // Lifecycle sagas are USERLAND-dispatched (narrow-host boundary refactor
+    // Phase 4): fork/delete/restore run in the gad-store DO (`vcsForkRepo` /
+    // `vcsDeleteRepo` / `vcsRestoreRepo`), NOT the host `vcs.*` service. Direct
+    // DO dispatch is mandatory so the relay mints the on-behalf-of token that
+    // attributes the severe deletion/restore approval prompt to the ORIGINATING
+    // caller (a host forward would erase it, D3).
+    forkRepo(fromPath: string, toPath: string) {
+      return userlandCall("vcsForkRepo", { fromPath, toPath });
+    },
+    deleteRepo(input: { repoPath: string; force?: boolean }) {
+      return userlandCall("vcsDeleteRepo", input);
+    },
+    restoreRepo(input: { repoPath: string }) {
+      return userlandCall("vcsRestoreRepo", input);
     },
     subscribeHead(head, onAdvance) {
       if (!events?.on) throw new Error("vcs.subscribeHead requires an event-capable rpc");

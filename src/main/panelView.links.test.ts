@@ -39,7 +39,13 @@ function makeWebContents() {
   };
 }
 
-function createHarness(options: { viewType?: "panel" | "app" } = {}) {
+function createHarness(
+  options: {
+    viewType?: "panel" | "app";
+    externalHost?: string;
+    gatewayServerUrl?: string;
+  } = {}
+) {
   const panelId = options.viewType === "app" ? "@workspace-apps/shell" : "panel:tree/current";
   const panel = makePanel(panelId);
   const wc = makeWebContents();
@@ -78,7 +84,11 @@ function createHarness(options: { viewType?: "panel" | "app" } = {}) {
   const panelView = new PanelView({
     viewManager,
     panelRegistry,
-    serverInfo: { gatewayPort: 1234, externalHost: "127.0.0.1" },
+    serverInfo: {
+      gatewayConfig: { serverUrl: options.gatewayServerUrl ?? "http://127.0.0.1:1234" },
+      gatewayPort: 1234,
+      externalHost: options.externalHost ?? "127.0.0.1",
+    },
     cdpHost: {
       registerTarget: vi.fn(),
       unregisterTarget: vi.fn(),
@@ -111,6 +121,45 @@ describe("PanelView plain panel links", () => {
     });
     expect(event.preventDefault).toHaveBeenCalled();
     expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
+  });
+
+  it("treats the gateway server URL host as managed when it differs from externalHost", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
+      externalHost: "localhost",
+      gatewayServerUrl: "http://127.0.0.1:1234",
+    });
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    const event = { preventDefault: vi.fn() };
+    webContents.emit(
+      "will-navigate",
+      event,
+      "http://127.0.0.1:1234/panels/chat/?stateArgs=%7B%22initialPrompt%22%3A%22hi%22%7D"
+    );
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.navigatePanel).toHaveBeenCalledWith(panelId, "panels/chat", {
+        stateArgs: { initialPrompt: "hi" },
+      });
+    });
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for initial managed navigations served through a gateway URL alias", async () => {
+    const { panelId, panelView, webContents, sendPanelEvent } = createHarness({
+      externalHost: "localhost",
+      gatewayServerUrl: "http://127.0.0.1:1234",
+    });
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    webContents.emit("did-navigate", {}, "http://127.0.0.1:1234/about/new/");
+
+    expect(sendPanelEvent).not.toHaveBeenCalledWith(
+      panelId,
+      "runtime:child-creation-error",
+      expect.anything()
+    );
   });
 
   it("creates child panels for managed window-open links", async () => {

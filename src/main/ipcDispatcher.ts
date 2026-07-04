@@ -10,6 +10,7 @@ import {
   ELECTRON_LOCAL_SERVICE_NAMES,
   createBridgeStreamRelay,
   responseEnvelopeFor,
+  stampEnvelopeCaller,
   type BridgeBodyChunk,
   type BridgeStreamOpen,
   type BridgeStreamRelay,
@@ -34,6 +35,17 @@ import { assertPresent } from "../lintHelpers";
 const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
+
+type PanelRuntimeConnection = { runtimeEntityId: string; connectionId: string };
+
+type PanelSessionEntry = {
+  session: PanelSession;
+  leaseKey: string;
+};
+
+function panelRuntimeConnectionKey(conn: PanelRuntimeConnection): string {
+  return `${conn.runtimeEntityId}\u0000${conn.connectionId}`;
+}
 
 function envelopeFor(target: string, from: string, message: RpcMessage): RpcEnvelope {
   const caller = {
@@ -96,9 +108,7 @@ export interface IpcDispatcherDeps {
    * Runtime entity id + lease connectionId for a panel, used to open its
    * per-panel relay session. Undefined until the panel's runtime lease exists.
    */
-  getPanelRuntimeConnection?: (
-    panelId: string
-  ) => { runtimeEntityId: string; connectionId: string } | undefined;
+  getPanelRuntimeConnection?: (panelId: string) => PanelRuntimeConnection | undefined;
   authorizeAppServerCall?: (
     callerId: string,
     service: string,
@@ -172,7 +182,7 @@ export class IpcDispatcher {
   private readonly appMessageBridges = new Map<string, () => void>();
   private readonly appEventSubscribers = new Map<string, IpcSubscriber>();
   /** One relay session per panel principal (callerId = panel view id). */
-  private readonly panelSessions = new Map<string, Promise<PanelSession>>();
+  private readonly panelSessions = new Map<string, Promise<PanelSessionEntry>>();
   /** webContents ids with a destroy teardown attached (so we attach it once). */
   private readonly panelDestroyHooked = new Set<number>();
   /** §1.6 upload relays, one per panel principal (see @vibez1/rpc bridgeStream.ts). */
@@ -274,13 +284,18 @@ export class IpcDispatcher {
       chunkFormat: "binary",
       openStream: async (envelope, signal, body) => {
         const session = await this.ensurePanelSession(sender, callerId);
+        const conn = this.requirePanelRuntimeConnection(callerId);
         if (typeof session.streamReadable !== "function") {
           throw new Error(
             "Streaming request bodies (uploads) require the WebRTC transport; " +
               "this panel's host session cannot stream a request body"
           );
         }
-        return session.streamReadable(envelope, signal, body);
+        return session.streamReadable(
+          stampEnvelopeCaller(envelope, { callerId: conn.runtimeEntityId, callerKind: "panel" }),
+          signal,
+          body
+        );
       },
       sendToPanel: (msg) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
@@ -435,7 +450,12 @@ export class IpcDispatcher {
    */
   private relayPanelEnvelope(sender: WebContents, callerId: string, envelope: RpcEnvelope): void {
     void this.ensurePanelSession(sender, callerId)
-      .then((session) => session.send(envelope))
+      .then((session) => {
+        const conn = this.requirePanelRuntimeConnection(callerId);
+        return session.send(
+          stampEnvelopeCaller(envelope, { callerId: conn.runtimeEntityId, callerKind: "panel" })
+        );
+      })
       .catch((err: unknown) => {
         const message = envelope.message;
         if (message?.type === "request") {
@@ -452,6 +472,12 @@ export class IpcDispatcher {
       });
   }
 
+  private requirePanelRuntimeConnection(callerId: string): PanelRuntimeConnection {
+    const conn = this.deps.getPanelRuntimeConnection?.(callerId);
+    if (!conn) throw new Error(`No runtime lease for panel ${callerId}`);
+    return conn;
+  }
+
   /**
    * Open (or reuse) the relay session for a panel principal, redeeming its runtime
    * lease. Only a TERMINALLY closed session (lease revoke / session teardown) is
@@ -460,24 +486,32 @@ export class IpcDispatcher {
    * panel webview is destroyed.
    */
   private ensurePanelSession(sender: WebContents, callerId: string): Promise<PanelSession> {
+    let conn: PanelRuntimeConnection;
+    try {
+      conn = this.requirePanelRuntimeConnection(callerId);
+    } catch (err) {
+      const pending = this.panelSessions.get(callerId);
+      this.panelSessions.delete(callerId);
+      if (pending) void pending.then((entry) => entry.session.close()).catch(() => undefined);
+      return Promise.reject(err);
+    }
+    const expectedLeaseKey = panelRuntimeConnectionKey(conn);
     const existing = this.panelSessions.get(callerId);
     if (existing) {
-      return existing.then((session) => {
+      return existing.then((entry) => {
         // Liveness = NOT terminally closed — deliberately NOT the transport
         // status (§3.3): a routine pipe reconnect reads "connecting" while the
         // transport auto-reopens its logical sessions, and recycling on that
         // transient state would terminally close a healthy session and re-mint
         // a grant on every blip. Only a terminal close (lease revoke, session
         // teardown) recycles.
-        if (!(session.isClosed?.() ?? false)) return session;
-        this.panelSessions.delete(callerId);
-        session.close();
+        if (entry.leaseKey === expectedLeaseKey && !(entry.session.isClosed?.() ?? false)) {
+          return entry.session;
+        }
+        if (this.panelSessions.get(callerId) === existing) this.panelSessions.delete(callerId);
+        entry.session.close();
         return this.ensurePanelSession(sender, callerId);
       });
-    }
-    const conn = this.deps.getPanelRuntimeConnection?.(callerId);
-    if (!conn) {
-      return Promise.reject(new Error(`No runtime lease for panel ${callerId}`));
     }
     // Tear down the relay when the panel webview is destroyed — attached once per
     // webContents (not per session re-open), closing whichever session is current.
@@ -487,10 +521,10 @@ export class IpcDispatcher {
         this.panelDestroyHooked.delete(sender.id);
         const pending = this.panelSessions.get(callerId);
         this.panelSessions.delete(callerId);
-        if (pending) void pending.then((s) => s.close()).catch(() => undefined);
+        if (pending) void pending.then((entry) => entry.session.close()).catch(() => undefined);
       });
     }
-    const opening = this.deps.serverClient
+    const opening: Promise<PanelSessionEntry> = this.deps.serverClient
       .openPanelSession(conn.runtimeEntityId, conn.connectionId)
       .then((session) => {
         // Deliver server→panel messages (responses, events, stream frames) to the
@@ -499,14 +533,14 @@ export class IpcDispatcher {
           const wc = this.deps.getWebContentsForCaller(callerId);
           if (wc && !wc.isDestroyed()) wc.send("vibez1:rpc:message", env);
         });
-        return session;
+        return { session, leaseKey: expectedLeaseKey };
       })
       .catch((err: unknown) => {
         this.panelSessions.delete(callerId);
         throw err;
       });
     this.panelSessions.set(callerId, opening);
-    return opening;
+    return opening.then((entry) => entry.session);
   }
 
   private ensureAppMessageBridge(callerId: string): void {

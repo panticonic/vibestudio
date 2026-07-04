@@ -481,9 +481,13 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       modelContextForPolicy(state, request.contextThroughSeq, request.turnMetadata?.contextPolicy),
       { getText: (digest) => deps.blobstore.getText(digest) }
     )) as ModelMessage[];
+    const immediatePrompt = request.immediatePrompt?.trim();
+    const messages = immediatePrompt
+      ? [...hydratedMessages, { role: "user" as const, content: immediatePrompt }]
+      : hydratedMessages;
     const context: Context = {
       ...(systemPrompt ? { systemPrompt } : {}),
-      messages: toPiMessages(hydratedMessages),
+      messages: toPiMessages(messages),
       ...(tools ? { tools } : {}),
     };
     trace("context.built", {

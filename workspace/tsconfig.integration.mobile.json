@@ -22,6 +22,6 @@
     "isolatedModules": true,
     "types": []
   },
-  "include": ["integration-tests/mobile-appUpdatePrompt.test.ts"],
+  "include": ["../tests/workspace-integration/mobile-appUpdatePrompt.test.ts"],
   "exclude": ["node_modules", "../node_modules", "**/dist", "**/node_modules"]
 }

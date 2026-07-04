@@ -137,17 +137,64 @@ export const ClonedEntitySchema = z
   })
   .strict();
 
-/** Wire shape of a `cloneContext` result: the new context + the source→clone map. */
+/** Kind of a context-relationship edge (registry). */
+export const ContextEdgeKindSchema = z
+  .enum(["lifecycle", "lineage"])
+  .describe(
+    "'lifecycle' = subagent context (cascaded on destroy, cloned on recursive clone); 'lineage' = fork provenance (access-only, never cascaded/cloned-followed)."
+  );
+
+/** One cloned context mapping produced by a recursive `cloneContext`. */
+export const ClonedContextSchema = z
+  .object({
+    sourceContextId: z.string().describe("Source context that was cloned."),
+    newContextId: z.string().describe("Freshly-minted clone of that context."),
+    ownerNewContextId: z
+      .string()
+      .nullable()
+      .describe("Cloned owner of this context in the clone tree (null for the root fork context)."),
+  })
+  .strict();
+
+/** One source→clone entity rewiring, for the caller to re-home channels/pending calls. */
+export const RewiredEntitySchema = z
+  .object({
+    sourceEntityId: z.string().describe("Canonical id of the source entity."),
+    newEntityId: z.string().describe("Canonical id of its clone."),
+    sourceChannelId: z
+      .string()
+      .optional()
+      .describe("Channel the source entity was bound to (filled by the caller, not runtime)."),
+    newChannelId: z
+      .string()
+      .optional()
+      .describe("Channel the clone should bind to (filled by the caller, not runtime)."),
+  })
+  .strict();
+
+/** Wire shape of a `cloneContext` result: the new context + the source→clone maps. */
 export const CloneContextResultSchema = z
   .object({
     contextId: z.string().describe("The freshly-minted, isolated context holding the clones."),
     entities: z
       .array(ClonedEntitySchema)
       .describe("Source→clone mapping for every cloned worker/DO, in clone order."),
+    contexts: z
+      .array(ClonedContextSchema)
+      .describe(
+        "Source→clone mapping for every cloned context (root + recursive lifecycle subtree)."
+      ),
+    rewired: z
+      .array(RewiredEntitySchema)
+      .describe(
+        "Entity id rewiring across all cloned contexts. Channel fields are left for the caller (runtime is channel-agnostic)."
+      ),
   })
   .strict();
 
 export type ClonedEntity = z.infer<typeof ClonedEntitySchema>;
+export type ClonedContext = z.infer<typeof ClonedContextSchema>;
+export type RewiredEntity = z.infer<typeof RewiredEntitySchema>;
 export type CloneContextResult = z.infer<typeof CloneContextResultSchema>;
 
 export const runtimeMethods = defineServiceMethods({
@@ -273,7 +320,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   cloneContext: {
     description:
-      "Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity map. The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them.",
+      "Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity/context maps. With `recursive`, the whole LIFECYCLE subtree is cloned (never following lineage edges); with `targetKey`, the clone is idempotent (a retry returns the same child). The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point, re-homing pending calls) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them.",
     args: z.tuple([
       z.object({
         sourceContextId: z.string().describe("Context whose durable state is cloned."),
@@ -281,7 +328,19 @@ export const runtimeMethods = defineServiceMethods({
           .array(z.string())
           .optional()
           .describe(
-            "Canonical ids of the worker/DO entities to clone; omit to clone every durable entity in the source context. (The file/VCS snapshot is always the whole context.)"
+            "Canonical ids of the worker/DO entities to clone; applies to the ROOT context only (recursive descendants always clone in full). Omit to clone every durable entity. (The file/VCS snapshot is always the whole context.)"
+          ),
+        recursive: z
+          .boolean()
+          .optional()
+          .describe(
+            "Clone the LIFECYCLE subtree of the source context (subagent worlds), re-parented to the cloned owner. Lineage (fork) edges are never followed. Cloning a context that HAS lifecycle children without this flag is an error."
+          ),
+        targetKey: z
+          .string()
+          .optional()
+          .describe(
+            "Idempotency key (e.g. `fork:{forkId}`). Derives the child contextId + entity keys deterministically and makes storage clone upsert-safe, so a crash-retry returns the SAME child, never a duplicate."
           ),
       }),
     ]),
@@ -305,10 +364,16 @@ export const runtimeMethods = defineServiceMethods({
   },
   destroyContext: {
     description:
-      "Retire every entity in a context and delete its folder + VCS state. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context.",
+      "Retire every entity in a context and delete its folder + VCS state. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context.",
     args: z.tuple([
       z.object({
         contextId: z.string().describe("Context to destroy (all its entities are retired)."),
+        recursive: z
+          .boolean()
+          .optional()
+          .describe(
+            "Post-order teardown of the LIFECYCLE subtree (subagent worlds). Defaults to true so lifecycle children cascade; lineage (fork) edges are never followed. Pass false to destroy only this context."
+          ),
       }),
     ]),
     returns: z.void(),
@@ -327,5 +392,85 @@ export const runtimeMethods = defineServiceMethods({
       ],
     },
     examples: [{ args: [{ contextId: "ctx-abc" }] }],
+  },
+  listOwnedContexts: {
+    description:
+      "List the contexts owned by a context via the relationship registry. `kind` scopes to 'lifecycle' (subagent children) or 'lineage' (fork provenance); omit to list both. Returns { contexts: [...] }.",
+    args: z.tuple([
+      z.object({
+        contextId: z.string().describe("Owner context whose edges are listed."),
+        kind: ContextEdgeKindSchema.optional().describe(
+          "Scope to a single edge kind; omit to list both lifecycle and lineage."
+        ),
+      }),
+    ]),
+    returns: z
+      .object({
+        contexts: z.array(
+          z
+            .object({
+              contextId: z.string().describe("Owned/child/descendant context id."),
+              kind: ContextEdgeKindSchema,
+              ownerEntityId: z
+                .string()
+                .nullable()
+                .describe("Spawning entity in the owner context (lifecycle), or null."),
+            })
+            .strict()
+        ),
+      })
+      .strict(),
+    access: READ_ACCESS,
+    examples: [{ args: [{ contextId: "ctx-abc", kind: "lifecycle" }] }],
+  },
+  recordContextEdge: {
+    description:
+      "Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead.",
+    args: z.tuple([
+      z.object({
+        contextId: z.string().describe("Child/dependent/descendant context."),
+        ownerContextId: z.string().describe("Parent/owner context."),
+        kind: ContextEdgeKindSchema,
+        ownerEntityId: z
+          .string()
+          .optional()
+          .describe("Spawning entity in the owner context (lifecycle subagent owner)."),
+      }),
+    ]),
+    returns: z.void(),
+    access: { sensitivity: "write" },
+    policy: { allowed: ["shell", "server"] },
+    examples: [
+      {
+        args: [{ contextId: "ctx-child", ownerContextId: "ctx-parent", kind: "lifecycle" }],
+      },
+    ],
+  },
+  createSubagentContext: {
+    description:
+      "Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; the vessel must NOT hand-roll this.",
+    args: z.tuple([
+      z.object({
+        parentContextId: z.string().describe("Parent context the subagent forks from."),
+        ownerEntityId: z.string().describe("The spawning agent entity (recorded on the edge)."),
+        targetKey: z
+          .string()
+          .describe("Idempotency key deriving the deterministic child contextId."),
+      }),
+    ]),
+    returns: z.object({ contextId: z.string() }).strict(),
+    access: { sensitivity: "write" },
+    policy: { allowed: ["shell", "server", "panel", "worker", "do"] },
+    examples: [
+      {
+        args: [
+          {
+            parentContextId: "ctx-parent",
+            ownerEntityId: "do:workers/agent:AgentDO:a1",
+            targetKey: "run:r1",
+          },
+        ],
+      },
+    ],
   },
 });

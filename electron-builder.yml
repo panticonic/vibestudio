@@ -45,6 +45,22 @@ extraResources:
       - "pnpm-workspace.yaml"
       - "tsconfig.json"
       - "tsconfig.integration.json"
+      - "tsconfig.integration.mobile.json"
+      - "!**/node_modules/**"
+      - "!**/.git/**"
+  # Sibling support directories referenced by workspace-template metadata:
+  # workspace/pnpm-workspace.yaml includes ../packages/* and workspace/package.json
+  # references ../patches/*.
+  - from: "packages"
+    to: "packages"
+    filter:
+      - "**/*"
+      - "!**/node_modules/**"
+      - "!**/.git/**"
+  - from: "patches"
+    to: "patches"
+    filter:
+      - "**/*"
       - "!**/node_modules/**"
       - "!**/.git/**"
   # Pre-built shipped panels

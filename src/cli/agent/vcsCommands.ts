@@ -3,12 +3,10 @@ import type {
   RepoBuildReport,
   VcsApplyEditsInput,
   VcsCommitResult,
-  VcsDeleteRepoResult,
   VcsEditResult,
   VcsPushResult,
   VcsPushStatus,
   VcsRepoDivergence,
-  VcsRestoreRepoResult,
   VcsStatusResult,
 } from "@vibez1/shared/serviceSchemas/vcs";
 import {
@@ -21,6 +19,23 @@ import { CliError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } f
 import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
 import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
 import type { RpcClient } from "../rpcClient.js";
+
+interface VcsDeleteRepoResult {
+  repoPath: string;
+  archived: boolean;
+  archiveHead: string | null;
+  removedPaths: string[];
+  dependents: string[];
+  stateHash: string;
+}
+
+interface VcsRestoreRepoResult {
+  repoPath: string;
+  restored: boolean;
+  fromArchiveHead: string | null;
+  restoredPaths: string[];
+  stateHash: string;
+}
 
 /** Adapt the CLI RpcClient to the target-capable {@link RpcCallerLike} the
  *  userland `vcs` service client needs (P3: push is userland-dispatched). */
@@ -40,11 +55,12 @@ function userlandRpcFor(client: RpcClient): RpcCallerLike {
  * `projects/vault`, the flat `meta` repo) is a first-class versioned unit with
  * its own log (`vcs:repo:<repoPath>`), `main` head, and `ctx:*` context heads.
  * These commands operate on the attached agent session's per-repo context heads
- * and advance `main` only through the **build-gated** `vcs.push`.
+ * and advance `main` only through the **build-gated** CLI/userland push path.
  *
  * The model is **edit → commit → push**. `vcs edit` records uncommitted working
  * changes (no build); `vcs commit -m` folds them into a messaged snapshot per
- * repo; `vcs push --repo <p>` build-gates that snapshot into `main`. A push that
+ * repo; `vibez1 vcs push --repo <p>` resolves the userland `vcs` service and
+ * build-gates that snapshot into `main` through the DO's `vcsPush`. A push that
  * comes back `build-failed` did NOT advance `main` (read the structured
  * diagnostics, fix the cited `file:line:col`, re-push); a push that comes back
  * `diverged` means `main` moved past your base — `vcs merge` to reconcile, then
@@ -433,12 +449,18 @@ async function forkRepo(inv: ParsedInvocation): Promise<number> {
       );
     }
     const { client } = resolveSessionScope(inv);
-    const result = await client.call<{
+    // Phase 4: fork is userland-dispatched to the gad-store DO's `vcsForkRepo`
+    // (like `vcsPush`), not the host `vcs.forkRepo` service — direct DO dispatch
+    // keeps the on-behalf-of attribution intact.
+    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<{
       repoPath: string;
       head: string;
       inherited: number;
       stateHash: string;
-    }>("vcs.forkRepo", [normalizeRepoPath(from), normalizeRepoPath(to)]);
+    }>("vcsForkRepo", {
+      fromPath: normalizeRepoPath(from),
+      toPath: normalizeRepoPath(to),
+    });
     printResult(result, {
       json,
       human: () => {
@@ -462,9 +484,10 @@ async function deleteRepo(inv: ParsedInvocation): Promise<number> {
     // SEVERE: the server gates this behind explicit, per-repo user approval; the
     // call blocks until the user grants or denies (a denial surfaces as an error).
     // Without --force it ERRORS if other repos depend on this one.
-    const result = await client.call<VcsDeleteRepoResult>("vcs.deleteRepo", [
-      { repoPath: repo, ...(force ? { force: true } : {}) },
-    ]);
+    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsDeleteRepoResult>(
+      "vcsDeleteRepo",
+      { repoPath: repo, ...(force ? { force: true } : {}) }
+    );
     printResult(result, {
       json,
       human: () => {
@@ -493,7 +516,10 @@ async function restoreRepo(inv: ParsedInvocation): Promise<number> {
     const repo = requireRepo(inv);
     const { client } = resolveSessionScope(inv);
     // Blocks on user approval; fails if a different repo now occupies the path.
-    const result = await client.call<VcsRestoreRepoResult>("vcs.restoreRepo", [{ repoPath: repo }]);
+    const result = await createVcsUserlandClient(userlandRpcFor(client)).call<VcsRestoreRepoResult>(
+      "vcsRestoreRepo",
+      { repoPath: repo }
+    );
     printResult(result, {
       json,
       human: () => {
@@ -672,14 +698,21 @@ async function commit(inv: ParsedInvocation): Promise<number> {
     const result = await client.call<VcsCommitResult[]>("vcs.commit", [
       { message, head, ...(repoPaths.length > 0 ? { repoPaths } : {}) },
     ]);
+    const committed = result.filter((r) => r.status === "committed");
+    const unchanged = result.filter((r) => r.status === "unchanged");
+    if (committed.length === 0 || unchanged.length > 0) {
+      throw new CliError(
+        committed.length === 0
+          ? "commit produced no snapshots: no uncommitted VCS working edits were found. " +
+              "Only edit/write/vcs.edit changes under workspace repo paths can be committed; " +
+              "scratch/direct fs writes under .tmp, .vibez1, node_modules, dist, etc. are outside VCS."
+          : `commit returned unchanged repo(s) (${unchanged.map((r) => r.repoPath).join(", ")}). ` +
+              "This is treated as an error because commit should seal real working edits, not silently no-op."
+      );
+    }
     printResult(result, {
       json,
       human: () => {
-        const committed = result.filter((r) => r.status === "committed");
-        if (committed.length === 0) {
-          console.log("nothing to commit — no uncommitted working edits.");
-          return;
-        }
         for (const r of committed) {
           console.log(`committed ${r.repoPath} — ${r.editCount} edit(s)`);
           for (const p of r.changedPaths) console.log(`  ${p}`);
@@ -705,29 +738,34 @@ async function merge(inv: ParsedInvocation): Promise<number> {
     const repo = requireRepo(inv);
     const { client, contextId } = resolveSessionScope(inv);
     const head = headForContext(contextId);
-    const result = await client.call<{
-      status: string;
-      mergeable: "clean" | "conflict";
-      upstreamCommits: Array<{ stateHash: string; message: string }>;
-      conflictPaths?: string[];
-    }>("vcs.merge", [repo, head]);
-    printResult(result, {
+    const results = await client.call<
+      Array<{
+        repoPath: string;
+        status: string;
+        mergeable: "clean" | "conflict";
+        upstreamCommits: Array<{ stateHash: string; message: string }>;
+        conflictPaths?: string[];
+      }>
+    >("vcs.merge", [{ source: "main", repoPaths: [repo], head }]);
+    printResult(results, {
       json,
       human: () => {
-        const n = result.upstreamCommits.length;
-        console.log(
-          `merged ${repo}: pulled ${n} upstream commit(s) from main (${result.mergeable})`
-        );
-        for (const c of result.upstreamCommits) console.log(`  ${c.stateHash}  ${c.message}`);
-        if (result.mergeable === "conflict") {
+        for (const result of results) {
+          const n = result.upstreamCommits.length;
           console.log(
-            `\nconflict markers written to: ${(result.conflictPaths ?? []).join(", ") || "(see status)"}`
+            `merged ${result.repoPath}: pulled ${n} upstream commit(s) from main (${result.mergeable})`
           );
-          console.log(
-            "resolve them with `vcs edit`, then `vcs commit` to seal the merge, then push."
-          );
-        } else {
-          console.log("\nclean merge committed — push now fast-forwards.");
+          for (const c of result.upstreamCommits) console.log(`  ${c.stateHash}  ${c.message}`);
+          if (result.mergeable === "conflict") {
+            console.log(
+              `\nconflict markers written to: ${(result.conflictPaths ?? []).join(", ") || "(see status)"}`
+            );
+            console.log(
+              "resolve them with `vcs edit`, then `vcs commit` to seal the merge, then push."
+            );
+          } else {
+            console.log("\nclean merge committed — push now fast-forwards.");
+          }
         }
       },
     });

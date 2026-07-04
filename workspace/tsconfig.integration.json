@@ -1,16 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "include": [
-    "integration-tests/credentialService.test.ts",
-    "integration-tests/doVcsPush.test.ts",
-    "integration-tests/userlandVcsDispatch.test.ts",
-    "integration-tests/vcsHost/**/*.test.ts"
+    "../tests/workspace-integration/credentialService.test.ts",
+    "../tests/workspace-integration/doImport.test.ts",
+    "../tests/workspace-integration/doVcsPush.test.ts",
+    "../tests/workspace-integration/gatewayAttribution.test.ts",
+    "../tests/workspace-integration/userlandVcsDispatch.test.ts",
+    "../tests/workspace-integration/vcsHost/**/*.test.ts"
   ],
-  "exclude": [
-    "apps/mobile/**/*",
-    "node_modules",
-    "../node_modules",
-    "**/dist",
-    "**/node_modules"
-  ]
+  "exclude": ["apps/mobile/**/*", "node_modules", "../node_modules", "**/dist", "**/node_modules"]
 }

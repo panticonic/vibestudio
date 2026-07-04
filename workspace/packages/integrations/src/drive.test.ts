@@ -65,8 +65,8 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 describe("createDriveClient", () => {
   it("memoizes the Drive credential handle across method calls", async () => {
     const { credentials, stats } = makeMockEnv((url) => {
-      if (url.endsWith("/about?fields=kind,user,storageQuota,rootFolderId")) {
-        return jsonResponse({ kind: "drive#about", rootFolderId: "root" });
+      if (url.endsWith("/about?fields=kind,user,storageQuota")) {
+        return jsonResponse({ kind: "drive#about" });
       }
       if (url.includes("/files?")) {
         return jsonResponse({ files: [] });
@@ -81,6 +81,21 @@ describe("createDriveClient", () => {
 
     expect(stats.resolveCalls).toBe(1);
     expect(stats.fetchCalls.map((call) => call.method)).toEqual(["GET", "GET", "GET"]);
+  });
+
+  it("requests only supported fields from Drive about", async () => {
+    const { credentials, stats } = makeMockEnv(() =>
+      jsonResponse({
+        kind: "drive#about",
+        user: { emailAddress: "user@example.com" },
+        storageQuota: { usage: "1" },
+      }),
+    );
+    const drive = createDriveClient(credentials);
+
+    await drive.about();
+
+    expect(stats.fetchCalls[0]?.url).toBe("https://www.googleapis.com/drive/v3/about?fields=kind,user,storageQuota");
   });
 
   it("lists files and builds Drive query parameters", async () => {
@@ -109,6 +124,65 @@ describe("createDriveClient", () => {
     expect(stats.fetchCalls[0]?.url).toContain("corpora=allDrives");
     expect(stats.fetchCalls[0]?.url).toContain("driveId=drive-1");
     expect(stats.fetchCalls[0]?.url).toContain("orderBy=modifiedTime+desc%2Cname");
+  });
+
+  it("downloads file bytes with response metadata", async () => {
+    const { credentials, stats } = makeMockEnv(() =>
+      new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
+        status: 200,
+        headers: {
+          "content-type": "application/pdf",
+          "content-disposition": 'attachment; filename="poem.pdf"',
+        },
+      }),
+    );
+    const drive = createDriveClient(credentials);
+
+    const result = await drive.downloadFileBytes("file-1");
+
+    expect([...result.bytes]).toEqual([0x25, 0x50, 0x44, 0x46]);
+    expect(result.size).toBe(4);
+    expect(result.mimeType).toBe("application/pdf");
+    expect(result.filename).toBe("poem.pdf");
+    expect(result.responseUrl).toBe("https://www.googleapis.com/drive/v3/files/file-1?supportsAllDrives=true&alt=media");
+    expect(stats.fetchCalls[0]?.url).toBe("https://www.googleapis.com/drive/v3/files/file-1?supportsAllDrives=true&alt=media");
+  });
+
+  it("exports file bytes with decoded filename metadata", async () => {
+    const { credentials, stats } = makeMockEnv(() =>
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: {
+          "content-type": "application/pdf",
+          "content-disposition": "attachment; filename*=UTF-8''poem%20export.pdf",
+        },
+      }),
+    );
+    const drive = createDriveClient(credentials);
+
+    const result = await drive.exportFileBytes("doc-1", "application/pdf");
+
+    expect([...result.bytes]).toEqual([1, 2, 3]);
+    expect(result.mimeType).toBe("application/pdf");
+    expect(result.filename).toBe("poem export.pdf");
+    expect(stats.fetchCalls[0]?.url).toBe("https://www.googleapis.com/drive/v3/files/doc-1/export?mimeType=application%2Fpdf&supportsAllDrives=true");
+  });
+
+  it("wraps byte helper response body failures with Drive context", async () => {
+    const { credentials } = makeMockEnv(() => {
+      const response = new Response("not readable");
+      Object.defineProperty(response, "arrayBuffer", {
+        value: async () => {
+          throw new RangeError("Maximum call stack size exceeded");
+        },
+      });
+      return response;
+    });
+    const drive = createDriveClient(credentials);
+
+    await expect(drive.downloadFileBytes("file-1")).rejects.toThrow(
+      "Google Drive download response body read failed: Maximum call stack size exceeded",
+    );
   });
 
   it("uploads files with multipart/related content when media is provided", async () => {

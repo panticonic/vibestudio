@@ -16,8 +16,24 @@ export interface ParsedPanelUrl {
 
 interface ParsedUrlLike {
   hostname: string;
+  port: string;
   pathname: string;
   queryParams: Map<string, string>;
+}
+
+interface ParsedAuthority {
+  hostname: string;
+  port: string;
+}
+
+function parseAuthority(authority: string): ParsedAuthority | null {
+  const trimmed = authority.trim().toLowerCase();
+  if (!trimmed) return null;
+  const ipv6 = trimmed.match(/^(\[[^\]]+\])(?::(\d+))?$/);
+  if (ipv6) return { hostname: ipv6[1]!, port: ipv6[2] ?? "" };
+  const match = trimmed.match(/^([^:]+)(?::(\d+))?$/);
+  if (!match) return null;
+  return { hostname: match[1]!, port: match[2] ?? "" };
 }
 
 function parseUrlLike(url: string): ParsedUrlLike | null {
@@ -25,8 +41,8 @@ function parseUrlLike(url: string): ParsedUrlLike | null {
   if (!match) return null;
 
   const host = match[2] ?? "";
-  const hostname = host.replace(/:\d+$/, "").toLowerCase();
-  if (!hostname) return null;
+  const authority = parseAuthority(host);
+  if (!authority) return null;
 
   const pathname = match[3] && match[3].length > 0 ? match[3] : "/";
   const rawQuery = match[4] ?? "";
@@ -47,7 +63,8 @@ function parseUrlLike(url: string): ParsedUrlLike | null {
   }
 
   return {
-    hostname,
+    hostname: authority.hostname,
+    port: authority.port,
     pathname,
     queryParams,
   };
@@ -62,7 +79,10 @@ function parseUrlLike(url: string): ParsedUrlLike | null {
 export function isManagedHost(url: string, externalHost: string): boolean {
   const parsed = parseUrlLike(url);
   if (!parsed) return false;
-  return parsed.hostname === externalHost.toLowerCase();
+  const expected = parseAuthority(externalHost);
+  if (!expected) return false;
+  if (parsed.hostname !== expected.hostname) return false;
+  return !expected.port || parsed.port === expected.port;
 }
 
 /**
@@ -75,13 +95,17 @@ export function isManagedHost(url: string, externalHost: string): boolean {
 export function parsePanelUrl(url: string, externalHost: string): ParsedPanelUrl | null {
   const parsed = parseUrlLike(url);
   if (!parsed) return null;
-  if (parsed.hostname !== externalHost.toLowerCase()) return null;
+  if (!isManagedHost(url, externalHost)) return null;
 
   const match = parsed.pathname.match(/^\/([^/]+\/[^/]+)(\/.*)?$/);
   if (!match) return null;
   const source = match[1]!;
   if ((match[2] || "/") !== "/") return null;
-  if (parsed.queryParams.has("_bk") || parsed.queryParams.has("pid") || parsed.queryParams.has("_fresh")) {
+  if (
+    parsed.queryParams.has("_bk") ||
+    parsed.queryParams.has("pid") ||
+    parsed.queryParams.has("_fresh")
+  ) {
     return null;
   }
 
@@ -101,14 +125,15 @@ export function parsePanelUrl(url: string, externalHost: string): ParsedPanelUrl
       name: name ?? undefined,
       focus: focus === "true" || undefined,
     },
-    stateArgs: rawStateArgs != null
-      ? (() => {
-          try {
-            return JSON.parse(rawStateArgs) as Record<string, unknown>;
-          } catch {
-            return undefined;
-          }
-        })()
-      : undefined,
+    stateArgs:
+      rawStateArgs != null
+        ? (() => {
+            try {
+              return JSON.parse(rawStateArgs) as Record<string, unknown>;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined,
   };
 }

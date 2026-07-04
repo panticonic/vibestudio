@@ -69,8 +69,18 @@ jest.mock(
       getString: jest.fn(async () => ""),
     },
   }),
-  { virtual: true },
+  { virtual: true }
 );
+
+jest.mock("react-native-safe-area-context", () => ({
+  SafeAreaProvider: ({ children }: { children: unknown }) => children,
+  SafeAreaView: "SafeAreaView",
+  initialWindowMetrics: {
+    frame: { x: 0, y: 0, width: 0, height: 0 },
+    insets: { top: 0, right: 0, bottom: 0, left: 0 },
+  },
+  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+}));
 
 const { NativeModules } = jest.requireActual("react-native");
 NativeModules.Vibez1MobileHost = {

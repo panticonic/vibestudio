@@ -23,6 +23,6 @@ export default defineConfig({
       "apps/**/*.test.ts",
       "apps/**/*.test.tsx",
     ],
-    exclude: [...(base.test?.exclude ?? []), "workspace/**"],
+    exclude: [...(base.test?.exclude ?? []), "workspace/**", "tests/workspace-integration/**"],
   },
 });

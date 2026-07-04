@@ -12,8 +12,14 @@
  *
  * Entry points:
  *  - {@link project}: materialize a (repoPath, head) at a state (the follower
- *    step after edit/commit/merge/push/restore advances).
- *  - {@link removeRepo}: drop a repo's main-worktree projection (deleteRepo).
+ *    step after edit/commit/merge/push/restore advances). Only `ctx:*` heads
+ *    have a checkout — under `{contextsRoot}/{contextId}`.
+ *  - {@link exportMainToSource}: the write-only dev extraction bridge — project a
+ *    repo's new `main` state OUT to the source dir (`workspaceRoot/{repoPath}`)
+ *    on a main advance. NOT a checkout: `main` stays a pure ref for all context
+ *    logic; this is a one-way export gated on a configured dev source dir.
+ *  - {@link removeRepo}: drop a repo's subtree from the source dir (deleteRepo,
+ *    the extraction counterpart of {@link exportMainToSource}).
  *  - {@link writeConflictSummary}: sync the worktree-visible merge-conflict
  *    summary file from pending-merge DATA passed in by the caller.
  */
@@ -23,7 +29,6 @@ import * as path from "node:path";
 
 import {
   MERGE_CONFLICTS_FILE,
-  VCS_MAIN_HEAD,
   contextIdFromVcsHead,
   normalizeRepoPathForLog,
   validateVcsContextId,
@@ -32,7 +37,9 @@ import type { WorktreeStore } from "./worktreeStore.js";
 
 interface DiskProjectorDeps {
   worktrees: WorktreeStore;
-  /** The user's live workspace directory (main head working tree). */
+  /** The persistent source dir — the one-way dev extraction target
+   *  ({@link exportMainToSource}). `main` has no checkout; it is projected here
+   *  write-only on an advance, never scanned back (except the boot seed). */
   workspaceRoot: string;
   /** Root for context-folder working trees (`{contextsRoot}/{contextId}`). */
   contextsRoot: string;
@@ -89,18 +96,42 @@ export class DiskProjector {
     return dir;
   }
 
-  /** Working-tree dir for a (repoPath, head): a repo's subtree under the
-   *  workspace root (main) or under its context folder (`ctx:*`). */
+  /**
+   * Working-tree dir for a (repoPath, head). ONLY `ctx:*` heads have a checkout —
+   * under `{contextsRoot}/{contextId}`. `main` is a pure ref with no working tree
+   * (D1) — asking for its dir is a programming error (the write-only source
+   * export goes through {@link exportMainToSource}, not this path).
+   */
   dirForRepoHead(repoPath: string | undefined, head: string): string {
-    const base =
-      head === VCS_MAIN_HEAD
-        ? this.deps.workspaceRoot
-        : head.startsWith("ctx:")
-          ? this.contextDir(contextIdFromVcsHead(head))
-          : (() => {
-              throw new Error(`No working tree for head: ${head}`);
-            })();
+    const base = head.startsWith("ctx:")
+      ? this.contextDir(contextIdFromVcsHead(head))
+      : (() => {
+          throw new Error(
+            `No working tree for head: ${head} (main is a pure ref; only ctx:* heads have checkouts)`
+          );
+        })();
     return repoPath ? path.join(base, ...normalizeRepoPathForLog(repoPath).split("/")) : base;
+  }
+
+  /** The source-dir location for a repo's subtree — `workspaceRoot/{repoPath}`.
+   *  The {@link exportMainToSource}/{@link removeRepo} target; NOT a context
+   *  checkout (`main` is never given a `dirForRepoHead`). */
+  private sourceDirForRepo(repoPath: string): string {
+    return path.join(this.deps.workspaceRoot, ...normalizeRepoPathForLog(repoPath).split("/"));
+  }
+
+  /**
+   * Write-only dev extraction: materialize a repo's `main` `stateHash` OUT to the
+   * source dir (`workspaceRoot/{repoPath}`) so a push to `main` flows back into
+   * the real monorepo checkout. Uses the same content-store→disk projection
+   * primitive as {@link project} but resolves the destination directly (main has
+   * no checkout mapping). `clean` removes untracked files so the export mirrors
+   * the state exactly.
+   */
+  async exportMainToSource(repoPath: string, stateHash: string): Promise<void> {
+    await this.deps.worktrees.materializeState(stateHash, this.sourceDirForRepo(repoPath), {
+      clean: true,
+    });
   }
 
   /**
@@ -130,9 +161,14 @@ export class DiskProjector {
     await run;
   }
 
-  /** Remove a repo's projection under the workspace root (repo deletion). */
+  /** Remove a repo's subtree from the source dir — the extraction counterpart
+   *  of {@link exportMainToSource} (repo deletion drops the subtree from the
+   *  real monorepo checkout on a `main` removal). */
   async removeRepo(repoPath: string): Promise<void> {
-    await fsp.rm(this.dirForRepoHead(repoPath, VCS_MAIN_HEAD), { recursive: true, force: true });
+    await fsp.rm(this.sourceDirForRepo(repoPath), {
+      recursive: true,
+      force: true,
+    });
   }
 
   /**

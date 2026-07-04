@@ -64,9 +64,13 @@ import "@workspace/ui/tokens.css";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { createPanelSandboxConfig, parseSignalEvent } from "@workspace/agentic-core";
+import {
+  createPanelSandboxConfig,
+  launchAgentIntoChannel,
+  parseSignalEvent,
+} from "@workspace/agentic-core";
 import { connectViaRpc } from "@workspace/pubsub";
-import { fork } from "@workspace/channel-fork";
+import { forkConversation } from "@workspace/channel-fork";
 import {
   DEFAULT_AGENT_MODEL_REF,
   MODEL_SETTINGS_SERVICE_PROTOCOL,
@@ -279,23 +283,15 @@ async function ensureAgentSubscribed(args: {
   channelContextId: string;
   config?: Record<string, unknown>;
 }): Promise<string> {
-  const handle = await rpc.call<{ targetId: string }>("main", "runtime.createEntity", [
-    {
-      kind: "do",
-      source: NEWS_AGENT_SOURCE,
-      className: NEWS_AGENT_CLASS,
-      key: args.agentKey,
-      contextId: args.channelContextId,
-    },
-  ]);
-  await rpc.call(handle.targetId, "subscribeChannel", [
-    {
-      channelId: args.channelId,
-      contextId: args.channelContextId,
-      config: { handle: NEWS_AGENT_HANDLE, ...(args.config ?? {}) },
-      replay: true,
-    },
-  ]);
+  const { handle } = await launchAgentIntoChannel(rpc, {
+    source: NEWS_AGENT_SOURCE,
+    className: NEWS_AGENT_CLASS,
+    key: args.agentKey,
+    channelId: args.channelId,
+    contextId: args.channelContextId,
+    config: { handle: NEWS_AGENT_HANDLE, ...(args.config ?? {}) },
+    replay: true,
+  });
   return handle.targetId;
 }
 
@@ -710,16 +706,11 @@ export default function NewsPanel() {
       setBusy(true);
       setError(null);
       try {
-        const result = await fork(
-          {
-            rpc: {
-              call: <T,>(target: string, method: string, args: unknown[]) =>
-                rpc.call<T>(target, method, args),
-            } as never,
-            callMain: <T,>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args),
-          },
-          { channelId: channelName, forkPointPubsubId: lastSeenEventId.current }
-        );
+        const result = await forkConversation(rpc, {
+          channelId: channelName,
+          forkPointPubsubId: lastSeenEventId.current,
+          reason: "deep-dive",
+        });
         const agent =
           result.clonedAgents.find((entry) => entry.className === NEWS_AGENT_CLASS) ??
           result.clonedAgents[0];

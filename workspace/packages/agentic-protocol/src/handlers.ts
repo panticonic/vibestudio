@@ -37,6 +37,14 @@ export interface ProjectedMessage {
   outcome?: MessageOutcome;
   /** Salience tier declared by the sender; absent ⇒ treated as "primary". */
   tier?: MessageTier;
+  /** Envelope seq at which this message first appeared (message.started, or
+   *  message.completed for user messages). The fork-point locus: a fork rooted
+   *  here uses `seq` (or `seq−1` for an edit-fork). */
+  seq?: number;
+  /** Marks an explicit supervisor `say`. */
+  saliency?: "say";
+  /** Edit-fork provenance: the parent message this supersedes. */
+  replaces?: { messageId: string; seq: number };
   startedAt?: string;
   completedAt?: string;
   failedAt?: string;
@@ -85,6 +93,17 @@ export interface ProjectedInvocation {
   terminalReason?: string;
   terminalOutcome?: InvocationOutcome;
   terminalReasonCode?: string;
+  /** Present when this invocation is a subagent run. The spawn fields are folded
+   *  from `invocation.started`; `merge` from the terminal envelope. */
+  subagent?: {
+    runId?: string;
+    mode?: "fresh" | "fork";
+    taskChannelId?: string;
+    contextId?: string;
+    childEntityId?: string;
+    label?: string;
+    merge?: "merged" | "conflicted" | "discarded";
+  };
 }
 
 export interface ProjectedApproval {
@@ -319,6 +338,8 @@ export function applyMessageEvent(
     const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
     const tier = "tier" in payload ? payload.tier : existing.tier;
     const to = "to" in payload ? payload.to : existing.to;
+    const saliency = "saliency" in payload ? payload.saliency : existing.saliency;
+    const replaces = "replaces" in payload ? payload.replaces : existing.replaces;
     return {
       ...messages,
       [messageId]: {
@@ -331,9 +352,12 @@ export function applyMessageEvent(
         replyTo,
         tier,
         ...(to !== undefined ? { to } : {}),
+        ...(saliency !== undefined ? { saliency } : {}),
+        ...(replaces !== undefined ? { replaces } : {}),
         status: "started",
         startedAt: event.createdAt,
         updatedAt: event.createdAt,
+        seq: existing.seq ?? seq,
         ...(seq !== undefined ? { lastContentSeq: seq } : {}),
       },
     };
@@ -385,6 +409,8 @@ export function applyMessageEvent(
     const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
     const tier = "tier" in payload ? payload.tier : existing.tier;
     const to = "to" in payload ? payload.to : existing.to;
+    const saliency = "saliency" in payload ? payload.saliency : existing.saliency;
+    const replaces = "replaces" in payload ? payload.replaces : existing.replaces;
     return {
       ...messages,
       [messageId]: {
@@ -397,11 +423,14 @@ export function applyMessageEvent(
         replyTo,
         tier,
         ...(to !== undefined ? { to } : {}),
+        ...(saliency !== undefined ? { saliency } : {}),
+        ...(replaces !== undefined ? { replaces } : {}),
         status: "completed",
         outcome,
         completedAt: event.createdAt,
         updatedAt: event.createdAt,
         usage: "usage" in payload ? payload.usage : existing.usage,
+        seq: existing.seq ?? seq,
         ...(seq !== undefined ? { lastContentSeq: seq } : {}),
       },
     };
@@ -486,6 +515,9 @@ export function applyInvocationEvent(
         status: "started",
         startedAt: existing.startedAt ?? event.createdAt,
         updatedAt: event.createdAt,
+        ...("subagent" in payload && payload.subagent
+          ? { subagent: { ...existing.subagent, ...payload.subagent } }
+          : {}),
       },
     };
   }
@@ -557,6 +589,9 @@ export function applyInvocationEvent(
             : existing.terminalReasonCode,
         completedAt: event.createdAt,
         updatedAt: event.createdAt,
+        ...("subagent" in payload && payload.subagent
+          ? { subagent: { ...existing.subagent, ...payload.subagent } }
+          : {}),
       },
     };
   }
@@ -583,6 +618,9 @@ export function applyInvocationEvent(
         "terminalOutcome" in payload ? payload.terminalOutcome : existing.terminalOutcome,
       terminalReasonCode:
         "terminalReasonCode" in payload ? payload.terminalReasonCode : existing.terminalReasonCode,
+      ...("subagent" in payload && payload.subagent
+        ? { subagent: { ...existing.subagent, ...payload.subagent } }
+        : {}),
     },
   };
 }

@@ -12,6 +12,9 @@
   },
   "scripts": {
     "build": "NODE_ENV=production node build.mjs",
+    "bootstrap": "pnpm install && pnpm --dir workspace install",
+    "bootstrap:frozen": "pnpm install --frozen-lockfile && pnpm --dir workspace install --frozen-lockfile",
+    "install:userland": "pnpm --dir workspace install",
     "dev": "export NODE_ENV=development && node build.mjs && (pnpm type-check &) && node scripts/run-electron.mjs",
     "dev:webrtc": "NODE_ENV=development node scripts/dev-webrtc-remote.mjs",
     "cli": "VIBEZ1_SERVER_ENTRY=live tsx src/cli/client.ts",
@@ -43,12 +46,12 @@
     "quality:check": "pnpm type-check && pnpm lint && pnpm format:check && pnpm check:host-boundary",
     "type-check": "pnpm type-check:host && pnpm type-check:userland && pnpm type-check:mobile",
     "type-check:host": "tsc --noEmit",
-    "type-check:userland": "pnpm --dir workspace type-check",
+    "type-check:userland": "node scripts/require-userland-install.mjs && pnpm --dir workspace type-check",
     "type-check:mobile": "pnpm --dir apps/mobile type-check",
     "type-check:watch": "tsc --noEmit --watch --preserveWatchOutput",
-    "test": "pnpm run check:runtime-docs && pnpm run check:agent-docs && pnpm run test:host && pnpm run test:userland && pnpm run test:mobile",
+    "test": "pnpm run check:runtime-docs && pnpm run check:agent-docs && pnpm run test:host && pnpm run test:browser && pnpm run test:userland && pnpm run test:mobile",
     "test:host": "vitest run --config vitest.host.config.ts",
-    "test:userland": "pnpm --dir workspace test",
+    "test:userland": "node scripts/require-userland-install.mjs && pnpm --dir workspace test",
     "test:mobile": "pnpm --dir apps/mobile test --runInBand",
     "test:extension-smoke": "NODE_ENV=development node build.mjs && VIBEZ1_RUN_SERVER_INTEGRATION=1 vitest run tests/extension-image-service.integration.test.ts",
     "test:headless-panel-integration": "NODE_ENV=development node build.mjs && VIBEZ1_RUN_HEADLESS_PANEL_INTEGRATION=1 vitest run tests/headless-panel.integration.test.ts",
@@ -70,6 +73,9 @@
   "author": "Gabriel Pickard",
   "license": "MIT",
   "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "pnpm": {
     "allowedBuilds": [
       "electron",

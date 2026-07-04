@@ -42,6 +42,10 @@ export interface AgentLoopConfig {
   approvalLevel: 0 | 1 | 2;
   respondPolicy: RespondPolicy;
   systemPromptHash: string;
+  /** Per-call instruction appended to the model message context, not the
+   *  provider system prompt. Use for run-specific guidance that should not
+   *  churn the system prompt/cache key. */
+  immediatePrompt?: string;
   skillIndexHash?: string;
   toolSchemasHash?: string;
   activeToolNames: string[];
@@ -51,6 +55,19 @@ export interface AgentLoopConfig {
   maxModelCallsPerTurn?: number | null;
   /** Idle watchdog for model streams. `null` intentionally disables it. */
   modelStreamIdleTimeoutMs?: number | null;
+  /** Channel publication discipline (gated by `publishPolicyPolicy`, appended
+   *  last in `defaultPolicies`). "all" = today's behavior (every model outcome
+   *  publishes). "turn-final" = only the end-of-turn (tier "primary") message
+   *  publishes; intermediate tool-step text stays trajectory-only (streamed as
+   *  ephemeral deltas). "say-only" = NO model message publishes; the agent speaks
+   *  only through its explicit `say` tool + turn boundaries. Absent ⇒ "all". */
+  publishPolicy?: "all" | "turn-final" | "say-only";
+  /** Max subagent nesting depth (enforced at spawn by the vessel). Absent ⇒
+   *  the vessel's implementation default. */
+  maxSubagentDepth?: number;
+  /** Max concurrent live subagents (enforced at spawn by the vessel). Absent ⇒
+   *  the vessel's implementation default. */
+  maxConcurrentSubagents?: number;
 }
 
 export interface AgentTurnContextPolicy {
@@ -107,6 +124,8 @@ export interface ModelRequestDescriptor {
   modelBaseUrl?: string;
   thinkingLevel: ThinkingLevel;
   systemPromptHash: string;
+  /** Per-call instruction appended after the hydrated transcript. */
+  immediatePrompt?: string;
   skillIndexHash?: string;
   toolSchemasHash?: string;
   activeToolNames: string[];

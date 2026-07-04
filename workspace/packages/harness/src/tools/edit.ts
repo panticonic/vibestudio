@@ -10,7 +10,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
-import { toVcsPath, type ToolVcs, type ToolVcsEditOp } from "./tool-vcs.js";
+import { toVcsPath, withInvocationId, type ToolVcs, type ToolVcsEditOp } from "./tool-vcs.js";
 import {
   detectLineEnding,
   fuzzyFindText,
@@ -127,8 +127,9 @@ export function createEditTool(
 
       // Tie this edit to the authoring tool-call (the edge into the agentic
       // trajectory: file → edit → invocation → turn → session, queryable + kept
-      // through commit).
-      await vcs.edit({ baseStateHash: base.stateHash, edits, invocationId: toolCallId });
+      // through commit). The invocationId is stamped by the shared adapter seam
+      // (T2) — the tool no longer hand-passes it per vcs call.
+      await withInvocationId(vcs, toolCallId).edit({ baseStateHash: base.stateHash, edits });
       if (signal?.aborted) throw new Error("Operation aborted");
 
       const diffResult = generateDiffString(baseContent, newContent);

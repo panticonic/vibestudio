@@ -101,6 +101,8 @@ export interface CreatePairedConnectionOptions {
 
   /** Upper bound (ms) on the initial connect before it rejects. */
   connectTimeoutMs?: number;
+  /** Optional cap on the max data-channel message size this side advertises. */
+  chunkSize?: number;
   /** Main session identity/telemetry. */
   connectionId?: string;
   sid?: string;
@@ -184,6 +186,7 @@ function buildTransport(options: CreatePairedConnectionOptions): WebRtcTransport
     ...(options.platform ? { platform: options.platform } : {}),
     ...(options.logPrefix ? { logPrefix: options.logPrefix } : {}),
     ...(options.connectTimeoutMs ? { connectTimeoutMs: options.connectTimeoutMs } : {}),
+    ...(options.chunkSize ? { chunkSize: options.chunkSize } : {}),
     ...(options.onCandidateType ? { onCandidateType: options.onCandidateType } : {}),
   });
 }

@@ -1,2 +1,2 @@
-export { fork } from "./fork.js";
-export type { DORef, ForkOpts, ForkResult, ForkRuntime } from "./fork.js";
+export { forkConversation } from "./fork.js";
+export type { DORef, ForkSeed, ForkConversationOpts, ForkResult } from "./fork.js";

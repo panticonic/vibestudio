@@ -3,12 +3,13 @@ name: Build Mobile APK
 on:
   push:
     branches: [main]
-    tags: ['mobile-v*']
+    tags: ["mobile-v*"]
   pull_request:
     paths:
-      - 'apps/mobile/**'
-      - 'packages/rpc/**'
-      - 'packages/shared/**'
+      - "apps/mobile/**"
+      - "workspace/apps/mobile/**"
+      - "packages/rpc/**"
+      - "packages/shared/**"
   workflow_dispatch:
 
 jobs:

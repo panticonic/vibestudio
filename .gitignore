@@ -60,6 +60,7 @@ release
 *.tmp
 .cache
 .parcel-cache
+.natstack/
 
 # Workspace template — only source dirs are tracked; ignore any runtime state
 workspace/state/

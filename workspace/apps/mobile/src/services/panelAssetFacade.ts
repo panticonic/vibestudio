@@ -37,6 +37,7 @@ import {
   STRIP_RESPONSE_HEADERS,
   GZIP_MARKER_HEADER,
 } from "@vibez1/shared/panel/assetHeaders";
+import { checkPanelGatewayPath } from "@vibez1/shared/panel/assetPathPolicy";
 import type { MobileRpcClient } from "./mobileTransport";
 
 declare const require: (moduleName: string) => unknown;
@@ -57,6 +58,13 @@ const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
 const CONTENT_DIGEST_HEADER = "x-vibez1-content-digest";
 const PERSISTED_PORT_KEY = "vibez1:panel-asset-facade:port";
 const MAX_CACHE_BYTES = 256 * 1024 * 1024; // 256 MiB in-memory LRU
+
+class MobileCachePopulationTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super(`cacheable asset exceeded mobile cache byte budget (${maxBytes} bytes)`);
+    this.name = "MobileCachePopulationTooLargeError";
+  }
+}
 
 export interface PanelAssetFacade {
   port: number;
@@ -176,7 +184,22 @@ export class MobileAssetMemoryCache {
         settle(null);
         return { kind: "passthrough", response };
       }
-      const body = await streamToUint8Array(response.body);
+      const [cacheBody, passthroughBody] = response.body.tee();
+      let body: Uint8Array;
+      try {
+        body = await streamToUint8Array(cacheBody, this.maxBytes);
+      } catch (err) {
+        if (err instanceof MobileCachePopulationTooLargeError) {
+          settle(null);
+          return {
+            kind: "passthrough",
+            response: { ...response, cacheable: false, body: passthroughBody },
+          };
+        }
+        void passthroughBody.cancel(err).catch(() => {});
+        throw err;
+      }
+      void passthroughBody.cancel().catch(() => {});
       const asset: MobileCachedAsset = {
         status: response.status,
         statusText: response.statusText,
@@ -197,11 +220,6 @@ export class MobileAssetMemoryCache {
   }
 
   private store(urlPath: string, asset: MobileCachedAsset): void {
-    // An asset larger than the whole budget can never coexist with it: caching it
-    // would evict every other entry and still leave itself resident over budget
-    // (the `entries.size > 1` eviction guard below stops before dropping it). Skip
-    // caching entirely — it will just be re-fetched.
-    if (asset.body.byteLength > this.maxBytes) return;
     const prev = this.entries.get(urlPath);
     if (prev) this.bytes -= prev.body.byteLength;
     this.entries.set(urlPath, asset);
@@ -430,6 +448,26 @@ async function handleRequest(
   const [method = "GET", target = "/"] = (lines[0] ?? "").split(" ");
   const forwardHeaders = collectForwardHeaders(lines.slice(1));
   let headSent = false;
+  const decision = checkPanelGatewayPath(target);
+  if (!decision.allowed) {
+    const status = decision.denied === "policy" ? 403 : 400;
+    await writeToSocket(
+      socket,
+      buildHead(
+        status,
+        status === 403 ? "Forbidden" : "Bad Request",
+        "text/plain",
+        false,
+        {},
+        {
+          contentLength: 0,
+        }
+      )
+    );
+    socket.end();
+    return;
+  }
+  const gatewayPath = decision.target;
 
   const fetcher = async (): Promise<MobileFetchedResponse> => {
     // Target the server "main" with the fully-qualified method (the bootstrap's
@@ -440,7 +478,7 @@ async function handleRequest(
     const result = await transport.streamReadable(
       "main",
       "gateway.fetch",
-      [{ path: target, method, headers: forwardHeaders, gzip: true }],
+      [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
       requestBody && requestBody.byteLength > 0 ? { body: bytesToStream(requestBody) } : undefined
     );
     return normalizeResult(result);
@@ -449,7 +487,7 @@ async function handleRequest(
   try {
     // Only GET assets are cacheable; everything else streams straight through.
     if (method === "GET") {
-      const outcome = await cache.serve(panelAssetCacheKey(target, forwardHeaders), fetcher);
+      const outcome = await cache.serve(panelAssetCacheKey(gatewayPath, forwardHeaders), fetcher);
       if (outcome.kind === "asset") {
         await writeBufferedAsset(socket, outcome.asset, () => {
           headSent = true;
@@ -625,7 +663,10 @@ function bytesToStream(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-async function streamToUint8Array(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+async function streamToUint8Array(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number
+): Promise<Uint8Array> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -634,6 +675,11 @@ async function streamToUint8Array(stream: ReadableStream<Uint8Array>): Promise<U
       const { done, value } = await reader.read();
       if (done) break;
       if (value && value.byteLength > 0) {
+        if (total + value.byteLength > maxBytes) {
+          const err = new MobileCachePopulationTooLargeError(maxBytes);
+          void reader.cancel(err).catch(() => {});
+          throw err;
+        }
         chunks.push(value);
         total += value.byteLength;
       }

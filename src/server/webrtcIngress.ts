@@ -225,7 +225,7 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
     })().catch((error) => {
       // Provider/bootstrap failure (e.g. node-datachannel missing). Fail loud
       // and drop the entry so status() doesn't advertise a ghost room.
-      rooms.delete(room);
+      if (rooms.get(room) === entry) rooms.delete(room);
       log(`failed to arm room ${room}: ${error instanceof Error ? error.message : String(error)}`);
     });
   };

@@ -109,4 +109,31 @@ describe("useChannelSignals", () => {
       })
     );
   });
+
+  it("does not surface fork head-change signals as transient signal pills", async () => {
+    let latest: ReadonlyArray<ChannelSignal> = [];
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const client = createClient([
+      {
+        delivery: "signal",
+        type: "signal",
+        contentType: "fork.head_changed",
+        content: JSON.stringify({ channelId: "chat-1", headSeq: 13 }),
+        ts: 1,
+      },
+    ]);
+
+    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+
+    await waitFor(() => {
+      expect(client.events).toHaveBeenCalledWith({ includeSignals: true });
+    });
+    expect(latest).toEqual([]);
+    expect(debug).toHaveBeenCalledWith(
+      "[useChannelSignals] suppressed transient signal",
+      expect.objectContaining({
+        contentType: "fork.head_changed",
+      })
+    );
+  });
 });

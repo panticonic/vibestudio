@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { FLAT_SECTIONS } from "../runtime/entitySpec.js";
+import { normalizeWorkspaceRepoPath as normalizeWorkspaceRepoPathByTaxonomy } from "../runtime/entitySpec.js";
 import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
@@ -12,7 +12,6 @@ import type {
 const execFileAsync = promisify(execFile);
 
 const SAFE_REMOTE_NAME = /^[A-Za-z0-9._-]+$/;
-const SAFE_REPO_SEGMENT = /^[A-Za-z0-9._@-]+$/;
 
 export interface ResolvedWorkspaceGitRemote {
   repoPath: string;
@@ -31,28 +30,7 @@ export interface SyncDeclaredRemoteResult {
 }
 
 export function normalizeWorkspaceRepoPath(repoPath: string): string {
-  const normalized = repoPath.replace(/\\/g, "/");
-  if (!normalized) {
-    throw new Error(`Invalid workspace repo path: ${repoPath}`);
-  }
-  const segments = normalized.split("/");
-  // `.` and `..` are complete segments the regex would otherwise admit (`.` is in
-  // the char class); reject them alongside empty segments (leading/trailing slash
-  // or interior `//`) so this agrees with refService.validateRepoPath — one
-  // canonical string, no on-disk-colliding aliases.
-  if (
-    segments.some(
-      (segment) => segment === "." || segment === ".." || !SAFE_REPO_SEGMENT.test(segment)
-    )
-  ) {
-    throw new Error(`Invalid workspace repo path: ${repoPath}`);
-  }
-  // Single-segment paths are only valid for the designated flat-section repos
-  // (today only `meta`, which holds `vibez1.yml`/`AGENTS.md` directly).
-  if (segments.length < 2 && !FLAT_SECTIONS.has(normalized)) {
-    throw new Error(`Invalid workspace repo path: ${repoPath}`);
-  }
-  return normalized;
+  return normalizeWorkspaceRepoPathByTaxonomy(repoPath);
 }
 
 export function isDeclaredRemoteRepoPath(repoPath: string): boolean {
@@ -145,9 +123,10 @@ function validateWorkspaceGitRemoteEntry(
   };
 }
 
-function normalizeRemoteDeclaration(
-  declaration: WorkspaceGitRemoteDeclaration
-): { url: string; branch?: string } {
+function normalizeRemoteDeclaration(declaration: WorkspaceGitRemoteDeclaration): {
+  url: string;
+  branch?: string;
+} {
   if (typeof declaration === "string") {
     return { url: normalizeRemoteUrl(declaration) };
   }
@@ -156,9 +135,7 @@ function normalizeRemoteDeclaration(
   }
   const url = normalizeRemoteUrl(declaration.url);
   const branch =
-    declaration.branch == null
-      ? undefined
-      : validateWorkspaceGitRemoteBranch(declaration.branch);
+    declaration.branch == null ? undefined : validateWorkspaceGitRemoteBranch(declaration.branch);
   return branch === undefined ? { url } : { url, branch };
 }
 

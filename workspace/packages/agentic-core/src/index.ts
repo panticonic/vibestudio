@@ -42,6 +42,30 @@ export type {
   ChannelSubscriptionConfig,
 } from "./agent-subscription-config.js";
 export { AGENT_SETTING_KEYS, toSubscriptionConfig } from "./agent-subscription-config.js";
+export {
+  buildAgentEntityCreateSpec,
+  buildAgentTaskSeedEvent,
+  createAgentEntity,
+  createSubagentContext,
+  initAgentFromTrajectoryFork,
+  launchAgentIntoChannel,
+  publishAgentTaskSeed,
+  retireAgentEntity,
+  subscribeAgentToChannel,
+} from "./agent-launch.js";
+export type {
+  AgentChannelSubscriptionInput,
+  AgentEntityCreateInput,
+  AgentEntityHandle,
+  AgentLaunchRpc,
+  AgentSubscriptionResult,
+  AgentTaskSeedChannel,
+  AgentTaskSeedInput,
+  AgentTrajectoryForkInput,
+  CreateSubagentContextInput,
+  LaunchAgentIntoChannelInput,
+  LaunchAgentIntoChannelResult,
+} from "./agent-launch.js";
 
 // Re-exported from @workspace/pubsub for convenience — canonical role-based
 // predicates for distinguishing agent participants from client participants.
@@ -74,6 +98,7 @@ export type {
   InlineUiCardPayload,
   ActionBarPayload,
   ApprovalCardPayload,
+  ForkRowPayload,
   CustomMessageCardPayload,
   CustomMessageDisplayMode,
   CustomMessageUpdatePayload,
@@ -106,7 +131,7 @@ export type {
 } from "./custom-message-types.js";
 
 // --- Invocation card payload (derived UI shape for invocation events) ---
-export type { InvocationCardPayload, ToolExecutionState } from "./invocation-card-payload.js";
+export type { InvocationCardPayload, ToolExecutionState, SubagentRunState } from "./invocation-card-payload.js";
 export { parseInvocationCardPayload } from "./invocation-card-payload.js";
 
 // --- Shared wire-event → ChatMessage merge helpers ---

@@ -1,14 +1,21 @@
 import type {
   ToolVcs,
   ToolVcsCommitResult,
+  ToolVcsDiffResult,
   ToolVcsEditOp,
   ToolVcsEditResult,
   ToolVcsMergeResult,
+  ToolVcsPick,
   ToolVcsPushResult,
+  ToolVcsSource,
 } from "../tool-vcs.js";
 
 export interface StubVcsInit {
   files?: Record<string, string>;
+  /** Per-repo commit result overrides (editCount / changedPaths / status),
+   *  applied to every repo the commit returns — lets tests drive the T4 nudge
+   *  (≥3 files or the edit-op proxy) and the claim-anchor path. */
+  commitResult?: Partial<Pick<ToolVcsCommitResult, "editCount" | "changedPaths" | "status">>;
 }
 
 function normalize(path: string): string {
@@ -32,12 +39,22 @@ export class StubVcs implements ToolVcs {
    *  threading (e.g. that the edit/write tools pass their toolCallId as
    *  `invocationId`, the edge into the agentic trajectory). */
   lastEditInput?: { edits: ToolVcsEditOp[]; repoPath?: string; invocationId?: string };
+  /** The most recent `commit` call's input — lets tests assert the commit tool
+   *  stamps its toolCallId as `invocationId` (T1/T2) through the shared seam. */
+  lastCommitInput?: {
+    message: string;
+    repoPaths?: string[];
+    exclude?: string[];
+    invocationId?: string;
+  };
+  private readonly commitOverrides: StubVcsInit["commitResult"];
   private version = 0;
 
   constructor(init?: StubVcsInit) {
     for (const [path, text] of Object.entries(init?.files ?? {})) {
       this.files.set(normalize(path), text);
     }
+    this.commitOverrides = init?.commitResult;
   }
 
   read(path: string): string | undefined {
@@ -93,18 +110,24 @@ export class StubVcs implements ToolVcs {
     return editResult(input.edits, `state-${this.version}`, this.version);
   }
 
-  async commit(input: { message: string; repoPaths?: string[] }): Promise<ToolVcsCommitResult[]> {
+  async commit(input: {
+    message: string;
+    repoPaths?: string[];
+    exclude?: string[];
+    invocationId?: string;
+  }): Promise<ToolVcsCommitResult[]> {
+    this.lastCommitInput = input;
     this.version++;
     const repoPaths = input.repoPaths ?? ["meta"];
-    return repoPaths.map((repoPath) => ({
+    return repoPaths.map((repoPath, i) => ({
       repoPath,
       head: "ctx:test",
       stateHash: `state-${this.version}`,
-      eventId: `event-${this.version}`,
+      eventId: repoPaths.length === 1 ? `event-${this.version}` : `event-${this.version}-${i + 1}`,
       headHash: `head-${this.version}`,
-      editCount: 0,
-      status: "committed" as const,
-      changedPaths: [],
+      editCount: this.commitOverrides?.editCount ?? 0,
+      status: this.commitOverrides?.status ?? ("committed" as const),
+      changedPaths: this.commitOverrides?.changedPaths ?? [],
     }));
   }
 
@@ -112,14 +135,29 @@ export class StubVcs implements ToolVcs {
     return { status: "pushed", repoPaths: input.repoPaths, reports: [] };
   }
 
-  async merge(_repoPath: string): Promise<ToolVcsMergeResult> {
-    return {
+  async merge(input: {
+    source: ToolVcsSource;
+    repoPaths?: string[];
+  }): Promise<ToolVcsMergeResult[]> {
+    return (input.repoPaths ?? ["stub-repo"]).map((repoPath) => ({
+      repoPath,
       status: "up-to-date",
       stateHash: `state-${this.version}`,
       conflicts: [],
       mergeable: "clean",
       upstreamCommits: [],
-    };
+    }));
+  }
+
+  async pick(input: { source: ToolVcsSource; picks: ToolVcsPick[] }): Promise<ToolVcsEditResult[]> {
+    return input.picks.map((_pick, i) => editResult([], `state-${this.version}`, i));
+  }
+
+  async contextDiff(_input: {
+    contextId: string;
+    against?: "fork-base" | "main";
+  }): Promise<ToolVcsDiffResult> {
+    return { added: [], removed: [], changed: [] };
   }
 
   async discardEdits(_repoPath: string): Promise<{ discarded: number; stateHash: string }> {

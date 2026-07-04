@@ -334,6 +334,64 @@ describe("modelCallExecutor", () => {
     });
   });
 
+  it("appends immediate prompts after transcript messages without changing the system prompt", async () => {
+    mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
+    const inputDescriptor = descriptor();
+    inputDescriptor.request.contextThroughSeq = 1;
+    inputDescriptor.request.immediatePrompt =
+      "## Subagent Operating Contract\nOnly `complete` ends this subagent run.";
+    const inputDeps = deps();
+    inputDeps.blobstore.getText = async (digest) => (digest === "sys" ? "BASE SYSTEM" : "");
+    let streamedContext: unknown;
+    mocks.stream.mockImplementation((_model, context) => {
+      streamedContext = context;
+      return {
+        async *[Symbol.asyncIterator]() {},
+        result: async () => ({
+          content: [{ type: "text", text: "ok" }],
+          stopReason: "stop",
+          usage: { input: 1, output: 1 },
+        }),
+      };
+    });
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: inputDescriptor,
+        state: {
+          ...initialAgentState({ channelId: "channel-1", config }),
+          entries: [
+            {
+              kind: "user",
+              seq: 1,
+              envelopeId: "env-1",
+              content: "Original request",
+            },
+          ],
+        },
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({ kind: "model", stopReason: "completed" });
+
+    expect(streamedContext).toMatchObject({
+      systemPrompt: "BASE SYSTEM",
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Original request" }] },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "## Subagent Operating Contract\nOnly `complete` ends this subagent run.",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("returns a deterministic OpenAI Codex response in VIBEZ1_TEST_MODE without credential lookup", async () => {
     const previous = process.env["VIBEZ1_TEST_MODE"];
     delete process.env["VIBEZ1_TEST_MODE"];

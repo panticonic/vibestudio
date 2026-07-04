@@ -456,9 +456,7 @@ describe("GmailAgentWorker", () => {
     expect(worker.model()).toBe("anthropic:claude-sonnet-4-6");
     worker.configureAgent({ model: "openai-codex:gpt-5.5" });
     const driver = worker.driverForTest();
-    const deliverEffectOutcome = vi
-      .spyOn(driver, "deliverEffectOutcome")
-      .mockResolvedValue(true);
+    const deliverEffectOutcome = vi.spyOn(driver, "deliverEffectOutcome").mockResolvedValue(true);
     const wake = vi.spyOn(driver, "wake").mockResolvedValue(undefined);
 
     await expect(
@@ -509,7 +507,7 @@ describe("GmailAgentWorker", () => {
 
     expect(worker.runnerTools()).not.toContain("gmail_upsertAttentionRule");
     expect(worker.runnerTools()).toEqual([
-      "close_turn_without_response",
+      "suspend_turn",
       "ask_user",
       "gmail_search",
       "gmail_read",
@@ -586,7 +584,7 @@ describe("GmailAgentWorker", () => {
     const worker = instance as TestGmailAgentWorker;
     worker.seedSubscription("old-channel", "agent-gmail");
 
-    await worker.postClone("parent-agent", "new-channel", "old-channel", 12);
+    await worker.postClone("parent-agent", "new-channel", "old-channel", 12, "ctx-forked");
 
     const rawSql = worker.gadCalls.find((call) => call.method === "rawSql");
     expect(rawSql?.args).toEqual([

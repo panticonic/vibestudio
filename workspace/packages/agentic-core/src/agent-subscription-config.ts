@@ -7,6 +7,15 @@ export type AgentRespondPolicy =
   | "mentioned-or-followup"
   | "from-participants";
 export type AgentSystemPromptMode = "append" | "replace" | "replace-vibez1";
+/**
+ * When the agent WAKES to run a turn on a channel. "every-envelope" (default,
+ * current behavior) = every inbound envelope wakes it. "turn-final" = buffer and
+ * wake only on turn closure / `saliency:"say"` messages / invocation.* addressed
+ * to us / mentions (supervisor discipline). "manual" = never auto-wake; the agent
+ * pulls channel envelopes on its own (e.g. via `read_subagent`). RESOLVED in the
+ * vessel (addressing) — declared here as the pinned literal union only.
+ */
+export type AgentWakePolicy = "every-envelope" | "turn-final" | "manual";
 
 /**
  * The per-agent BEHAVIOR settings. These are PER-AGENT: seeded into the agent's
@@ -59,6 +68,10 @@ export interface AgentSubscriptionConfig extends AgentConfig {
   /** Participant handle + display name (channel presentation). */
   handle?: string;
   name?: string;
+  /** Per-channel wake discipline (channel presentation, NOT a behavior setting —
+   *  intentionally excluded from AGENT_SETTING_KEYS so it rides the subscription).
+   *  Resolved in the vessel. Absent ⇒ "every-envelope". */
+  wakePolicy?: AgentWakePolicy;
   /** Worker-specific extras (e.g. the test-agent's deterministic-mode keys). */
   [key: string]: unknown;
 }

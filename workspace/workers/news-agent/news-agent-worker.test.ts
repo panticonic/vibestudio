@@ -215,7 +215,7 @@ describe("NewsAgentWorker", () => {
     const worker = await makeWorker();
     expect(worker.loopTools()).toEqual(
       expect.arrayContaining([
-        "close_turn_without_response",
+        "suspend_turn",
         "ask_user",
         "web_search",
         "web_fetch",
@@ -447,7 +447,11 @@ describe("NewsAgentWorker", () => {
           blurb: "A concrete, substantive summary of what happened.",
         },
         // Search-engine result page — must be rejected by the guard.
-        { url: "https://www.google.com/search?q=ai+news", title: "Search results", source: "Google" },
+        {
+          url: "https://www.google.com/search?q=ai+news",
+          title: "Search results",
+          source: "Google",
+        },
         // On-site search endpoint — also rejected.
         { url: "https://acme.example/search?query=ai", title: "Site search", source: "ACME" },
       ],
@@ -510,7 +514,11 @@ describe("NewsAgentWorker", () => {
     expect(less).toMatchObject({ recorded: "less" });
     // "less" marks the story read so ranking skips it.
     expect(
-      Number(worker.rowsForTest(`SELECT read FROM news_articles WHERE article_id = ?`, cryptoId)[0]!["read"])
+      Number(
+        worker.rowsForTest(`SELECT read FROM news_articles WHERE article_id = ?`, cryptoId)[0]![
+          "read"
+        ]
+      )
     ).toBe(1);
 
     const mute = (await worker.reactToStory("ch-1", {
@@ -628,7 +636,8 @@ describe("NewsAgentWorker", () => {
     // Nothing is triaged yet → the reader (triagedOnly) shows nothing, but the
     // un-triaged backlog is peekable (for the "Categorizing…" drill-down).
     expect(
-      ((await worker.listArticles("ch-1", { triagedOnly: true })) as { articles: unknown[] }).articles
+      ((await worker.listArticles("ch-1", { triagedOnly: true })) as { articles: unknown[] })
+        .articles
     ).toHaveLength(0);
     expect(
       ((await worker.listArticles("ch-1", { untriagedOnly: true })) as { articles: unknown[] })
@@ -645,8 +654,18 @@ describe("NewsAgentWorker", () => {
     const spamId = await articleId("https://spam.example/x");
     await worker.triageStories("ch-1", {
       items: [
-        { articleId: quakeId.slice(0, 8), category: "World", clusterKey: "quake-2026", blurb: "A quake hit." },
-        { articleId: quake2Id.slice(0, 8), category: "World", clusterKey: "quake-2026", blurb: "Quake aftermath." },
+        {
+          articleId: quakeId.slice(0, 8),
+          category: "World",
+          clusterKey: "quake-2026",
+          blurb: "A quake hit.",
+        },
+        {
+          articleId: quake2Id.slice(0, 8),
+          category: "World",
+          clusterKey: "quake-2026",
+          blurb: "Quake aftermath.",
+        },
         { articleId: spamId.slice(0, 8), keep: false },
       ],
     });
@@ -697,8 +716,12 @@ describe("NewsAgentWorker", () => {
     const goodA = "https://example.com/a.xml";
     const goodB = "https://example.com/b.xml";
     const bad = "https://bad.example/feed.xml";
-    worker.feedResponses.set(goodA, [{ status: 200, body: rss([{ title: "A1", link: "https://example.com/a1" }]) }]);
-    worker.feedResponses.set(goodB, [{ status: 200, body: rss([{ title: "B1", link: "https://example.com/b1" }]) }]);
+    worker.feedResponses.set(goodA, [
+      { status: 200, body: rss([{ title: "A1", link: "https://example.com/a1" }]) },
+    ]);
+    worker.feedResponses.set(goodB, [
+      { status: 200, body: rss([{ title: "B1", link: "https://example.com/b1" }]) },
+    ]);
     worker.feedResponses.set(bad, [{ status: 500 }]);
 
     const opml = `<opml><body>
@@ -707,10 +730,9 @@ describe("NewsAgentWorker", () => {
     </body></opml>`;
     const result = (await worker.importOpml("ch-1", { opml })) as Record<string, unknown>;
     expect(result).toMatchObject({ imported: 2, failed: 1, total: 3 });
-    expect(worker.rowsForTest(`SELECT url FROM news_feeds ORDER BY url`).map((r) => r["url"])).toEqual([
-      goodA,
-      goodB,
-    ]);
+    expect(
+      worker.rowsForTest(`SELECT url FROM news_feeds ORDER BY url`).map((r) => r["url"])
+    ).toEqual([goodA, goodB]);
 
     expect(await worker.importOpml("ch-1", { opml: "<opml><body></body></opml>" })).toMatchObject({
       error: expect.stringContaining("no feed subscriptions"),
@@ -790,9 +812,13 @@ describe("NewsAgentWorker", () => {
     expect(result).toMatchObject({ ok: true });
 
     expect(
-      worker.rowsForTest(`SELECT mode FROM news_channel_state WHERE channel_id = 'fork-1'`)[0]!["mode"]
+      worker.rowsForTest(`SELECT mode FROM news_channel_state WHERE channel_id = 'fork-1'`)[0]![
+        "mode"
+      ]
     ).toBe("analyst");
-    expect(worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'fork-1'`)).toHaveLength(0);
+    expect(
+      worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'fork-1'`)
+    ).toHaveLength(0);
 
     const turn = worker.agentInitiatedTurns[worker.agentInitiatedTurns.length - 1]!;
     expect(turn.channelId).toBe("fork-1");
@@ -819,7 +845,9 @@ describe("NewsAgentWorker", () => {
     const kinds = worker.published.map((entry) => entry.event.kind);
     expect(kinds).toContain("messageType.registered"); // UI still installed
     expect(kinds).not.toContain("custom.started"); // but no setup card
-    expect(worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'an-1'`)).toHaveLength(0);
+    expect(
+      worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'an-1'`)
+    ).toHaveLength(0);
     expect(worker.agentInitiatedTurns).toHaveLength(0); // no onboarding
   });
 
@@ -835,7 +863,9 @@ describe("NewsAgentWorker", () => {
 
     await worker.alarmAt(worker.clock + 1);
 
-    expect(worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'ghost'`)).toHaveLength(0);
+    expect(
+      worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'ghost'`)
+    ).toHaveLength(0);
     expect(
       worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'ch-1'`).length
     ).toBeGreaterThan(0);
@@ -919,24 +949,30 @@ describe("NewsAgentWorker deep-dive fork (postClone integration)", () => {
     expect(
       worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'ch-1'`).length
     ).toBeGreaterThan(0);
-    expect(worker.rowsForTest(`SELECT feed_id FROM news_feeds WHERE channel_id = 'ch-1'`)).toHaveLength(1);
+    expect(
+      worker.rowsForTest(`SELECT feed_id FROM news_feeds WHERE channel_id = 'ch-1'`)
+    ).toHaveLength(1);
 
     // Simulate the clone running postClone: parent ch-1 → forked deep-dive channel.
     const publishedBefore = worker.published.length;
-    await worker.postClone("parent-key", "fork:ch-1:xyz", "ch-1", 7);
+    await worker.postClone("parent-key", "fork:ch-1:xyz", "ch-1", 7, "ctx-forked");
 
     // Parent channel's copied state is purged from the clone.
-    expect(worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'ch-1'`)).toHaveLength(0);
-    expect(worker.rowsForTest(`SELECT feed_id FROM news_feeds WHERE channel_id = 'ch-1'`)).toHaveLength(0);
+    expect(
+      worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'ch-1'`)
+    ).toHaveLength(0);
+    expect(
+      worker.rowsForTest(`SELECT feed_id FROM news_feeds WHERE channel_id = 'ch-1'`)
+    ).toHaveLength(0);
     expect(
       worker.rowsForTest(`SELECT channel_id FROM news_channel_state WHERE channel_id = 'ch-1'`)
     ).toHaveLength(0);
 
     // The fork is an analyst thread: marked analyst, no curator jobs, no setup card.
     expect(
-      worker.rowsForTest(`SELECT mode FROM news_channel_state WHERE channel_id = 'fork:ch-1:xyz'`)[0]![
-        "mode"
-      ]
+      worker.rowsForTest(
+        `SELECT mode FROM news_channel_state WHERE channel_id = 'fork:ch-1:xyz'`
+      )[0]!["mode"]
     ).toBe("analyst");
     expect(
       worker.rowsForTest(`SELECT job_id FROM recurring_jobs WHERE channel_id = 'fork:ch-1:xyz'`)
@@ -982,9 +1018,11 @@ describe("NewsAgentWorker loop tool execution (integration)", () => {
     expect(
       worker.rowsForTest(`SELECT status, tldr FROM news_briefings WHERE briefing_id = 'b-1'`)[0]
     ).toMatchObject({ status: "ready", tldr: "**Story A** shipped." });
-    expect(worker.rowsForTest(`SELECT briefed_in FROM news_articles WHERE article_id = ?`, aid)[0]![
-      "briefed_in"
-    ]).toBe("b-1");
+    expect(
+      worker.rowsForTest(`SELECT briefed_in FROM news_articles WHERE article_id = ?`, aid)[0]![
+        "briefed_in"
+      ]
+    ).toBe("b-1");
     // The tool hands the model structured details + protocol text.
     expect(result.details?.published).toBe("b-1");
   });

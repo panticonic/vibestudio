@@ -28,6 +28,7 @@ import {
   type SandboxSourcePayload,
 } from "@workspace/agentic-protocol";
 import { useChatCore } from "./core/useChatCore";
+import { useForkLineage } from "./useForkLineage";
 import { useDeferredAgent } from "./useDeferredAgent";
 import { useChatFeedback } from "./features/useChatFeedback";
 import { useChatTools } from "./features/useChatTools";
@@ -46,6 +47,7 @@ import type {
   ChatInputContextValue,
   ActionBarData,
   BrowserHandoffCallerKind,
+  ForkNavHandlers,
 } from "../types";
 import { channelParticipantId, runtimeCallerId } from "../types";
 import type { MessageTypeComponentEntry } from "../types";
@@ -196,6 +198,9 @@ export interface UseAgenticChatOptions {
   initialPrompt?: string;
   /** Send initialPrompt even if the channel already has history (idempotent). */
   forceInitialPrompt?: boolean;
+  /** Panel-supplied fork navigation + review overlay handlers (enables the fork
+   *  switcher, inline fork rows, and subagent review). Absent ⇒ no fork UI. */
+  forkNav?: ForkNavHandlers;
   /** Sandbox config — provides RPC and import loading (keeps agentic-chat runtime-agnostic) */
   sandbox: SandboxConfig;
   /** Context-relative TSX file to load into the panel-local action bar on mount */
@@ -225,6 +230,7 @@ export function useAgenticChat({
   installedAgentInfos,
   initialPrompt,
   forceInitialPrompt,
+  forkNav,
   sandbox,
   initialActionBarFile,
   initialActionBarProps,
@@ -251,6 +257,19 @@ export function useAgenticChat({
     theme,
     initialPrompt: actions?.onAddAgent ? undefined : initialPrompt,
     forceInitialPrompt: actions?.onAddAgent ? undefined : forceInitialPrompt,
+  });
+  // Fork lineage state + actions (switcher, tree, inline rows, subagent review).
+  // Only enabled when the panel supplies navigation handlers.
+  const forkState = useForkLineage({
+    rpc: config.rpc,
+    channelId: channelName,
+    contextId,
+    selfId: core.selfId,
+    selfMetadata: { type: metadata.type, name: metadata.name, handle: metadata.handle },
+    messages: core.messages,
+    replaySettled: core.replaySettled,
+    client: core.client,
+    nav: forkNav,
   });
   const scopeBlobBackend = useMemo<ScopeBlobBackend>(
     () => ({
@@ -1422,6 +1441,8 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onReloadPanel,
       onNewConversation,
       toolApproval: chatTools.toolApprovalValue,
+      // Fork UI is enabled only when the panel wired navigation handlers.
+      forkState: forkNav ? forkState : undefined,
     }),
     [
       core.connected,
@@ -1492,6 +1513,8 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onReloadPanel,
       onNewConversation,
       chatTools.toolApprovalValue,
+      forkNav,
+      forkState,
     ]
   );
   return { contextValue, inputContextValue };

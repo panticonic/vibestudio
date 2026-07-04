@@ -44,6 +44,7 @@ import { z } from "zod";
 import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
 import { ServiceError } from "@vibez1/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibez1/shared/panel/assetPathPolicy";
+import { GZIP_MARKER_HEADER, hasRangeRequestHeader } from "@vibez1/shared/panel/assetHeaders";
 
 /** Loopback fetch request shape sent by the panel-asset façade. The request
  * body (if any) rides the bulk channel as a stream (`ctx.body`), never in here. */
@@ -152,12 +153,16 @@ export function createGatewayFetchService(deps: {
           : {}),
       } as RequestInit);
 
-      if (descriptor.gzip && response.ok && response.body) {
+      const hasRangeSemantics =
+        hasRangeRequestHeader(descriptor.headers) ||
+        response.status === 206 ||
+        response.headers.has("content-range");
+      if (descriptor.gzip && response.ok && response.body && !hasRangeSemantics) {
         // Compress on the wire (see schema). The body is re-streamed through a gzip
         // transform; the caller decompresses. Drop content-length — the recompressed
         // length differs and the stream carries no length anyway.
         const headers = new Headers(response.headers);
-        headers.set("x-vibez1-content-gzip", "1");
+        headers.set(GZIP_MARKER_HEADER, "1");
         headers.delete("content-length");
         return new Response(response.body.pipeThrough(new CompressionStream("gzip")), {
           status: response.status,

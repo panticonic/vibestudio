@@ -33,10 +33,7 @@ export type {
   TurnReasonCode,
 } from "./constants.js";
 
-export {
-  messageDisplayText,
-  summarizeMessageBlocks,
-} from "./message-content.js";
+export { messageDisplayText, summarizeMessageBlocks } from "./message-content.js";
 export type { MessageContentSummary } from "./message-content.js";
 
 export type {
@@ -62,6 +59,9 @@ export type {
   ApprovalPayload,
   BranchPayload,
   BuildCompletedPayload,
+  ChannelForkArchivedPayload,
+  ChannelForkRenamedPayload,
+  ChannelForkedPayload,
   MemoryRecalledPayload,
   CompactionPayload,
   CustomMessageDisplayMode,
@@ -83,17 +83,23 @@ export type {
   InvocationTransport,
   DiagnosticBlockMetadata,
   DiagnosticSeverity,
+  ClaimRelationKind,
   KnowledgePayload,
+  KnowledgeRelation,
   MessageBlockInput,
   MessageBlockType,
   MessagePayload,
   MessageRole,
   MessageTypeClearedPayload,
   MessageTypeRegisteredPayload,
+  ParticipantKind,
   ParticipantRef,
   ParticipantSelector,
   PayloadFor,
+  PrincipalKind,
+  PrincipalRef,
   SandboxSourcePayload,
+  SemanticParticipantKind,
   StatePayload,
   StoredAgenticEvent,
   SystemPayload,
@@ -104,6 +110,10 @@ export type {
   UsagePayload,
 } from "./events.js";
 export {
+  ACTOR_KINDS,
+  PARTICIPANT_KINDS,
+  PRINCIPAL_KINDS,
+  SEMANTIC_PARTICIPANT_KINDS,
   agenticSlice,
   invocationAbandonedPayload,
   invocationCancelledPayload,
@@ -121,10 +131,13 @@ export type {
 } from "./stored-values.js";
 export {
   participantRefFromMetadata,
+  participantRefFromActor,
   publicActorRef,
   publicParticipantMetadata,
   publicParticipantRef,
   sanitizeAgenticEventParticipantRefs,
+  isParticipantKind,
+  isParticipantRef,
 } from "./participant-ref.js";
 export type {
   PrivateParticipantMetadata,
@@ -157,6 +170,7 @@ export type {
 } from "./envelopes.js";
 
 export {
+  actorKindSchema,
   actorRefSchema,
   agenticEventEnvelopeSchema,
   agenticEventSchema,
@@ -164,8 +178,11 @@ export {
   channelEnvelopeSchema,
   ephemeralSignalSchema,
   eventKindSchemas,
+  participantKindSchema,
   participantRefSchema,
   participantSelectorSchema,
+  principalKindSchema,
+  principalRefSchema,
   storedAgenticEventSchema,
   trajectoryEventSchema,
 } from "./schemas.js";
@@ -200,6 +217,7 @@ export {
 export type {
   ChannelTimelineEntry,
   ChannelViewState,
+  ForkProjection,
   ProjectedCredentialRequest,
   ProjectedCustomMessage,
   ProjectedCustomMessageUpdate,

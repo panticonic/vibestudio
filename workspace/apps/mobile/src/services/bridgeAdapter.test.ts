@@ -1,5 +1,5 @@
 import { createBridgeAdapter } from "./bridgeAdapter";
-import type { RpcConnectionStatus } from "@vibez1/rpc";
+import type { RpcConnectionStatus, RpcEnvelope } from "@vibez1/rpc";
 import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
 import type { PanelEntityId } from "@vibez1/shared/panel/ids";
 
@@ -25,6 +25,34 @@ function makePanelSession(overrides: Partial<WebRtcSession> = {}): WebRtcSession
     status: jest.fn(() => "connected" as RpcConnectionStatus),
     ...overrides,
   } as unknown as WebRtcSession;
+}
+
+function panelRequestEnvelope(requestId: string): RpcEnvelope {
+  const caller = { callerId: "panel:forged", callerKind: "panel" as const };
+  return {
+    from: caller.callerId,
+    target: "main",
+    delivery: { caller },
+    provenance: [caller],
+    message: {
+      type: "request",
+      requestId,
+      fromId: caller.callerId,
+      method: "workspace.getInfo",
+      args: [],
+    },
+  };
+}
+
+function stampedPanelEnvelope(requestId: string) {
+  return expect.objectContaining({
+    from: "panel:runtime-a",
+    delivery: expect.objectContaining({
+      caller: { callerId: "panel:runtime-a", callerKind: "panel" },
+    }),
+    provenance: [{ callerId: "panel:runtime-a", callerKind: "panel" }],
+    message: expect.objectContaining({ requestId, fromId: "panel:runtime-a" }),
+  });
 }
 
 describe("bridgeAdapter panel init", () => {
@@ -75,6 +103,35 @@ describe("bridgeAdapter CDP routing", () => {
 });
 
 describe("bridgeAdapter panel session relay", () => {
+  it("reuses a session whose transport is reconnecting but not closed", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = makePanelSession({
+      status: jest.fn(() => "connecting" as RpcConnectionStatus),
+      isClosed: jest.fn(() => false),
+    });
+    const openPanelSession = jest.fn().mockResolvedValue(session);
+    const adapter = createAdapter({
+      panelManager: {} as never,
+      transport: { openPanelSession } as never,
+      callbacks: { navigateToPanel: jest.fn() },
+      deliverToPanel: jest.fn(),
+      getPanelLease: jest.fn(() => ({
+        runtimeEntityId: "panel:runtime-a" as PanelEntityId,
+        connectionId: "conn-a",
+      })),
+    });
+
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-1")]);
+    await waitFor(() => expect(session.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-1")));
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-2")]);
+    await waitFor(() => expect(session.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-2")));
+
+    expect(openPanelSession).toHaveBeenCalledTimes(1);
+    expect(session.close).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it("reopens the panel session when the cached session is closed", async () => {
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
     let firstClosed = false;
@@ -100,12 +157,16 @@ describe("bridgeAdapter panel session relay", () => {
       })),
     });
 
-    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-1" }]);
-    await waitFor(() => expect(firstSession.send).toHaveBeenCalledWith({ id: "msg-1" }));
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-1")]);
+    await waitFor(() =>
+      expect(firstSession.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-1"))
+    );
 
     firstClosed = true;
-    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-2" }]);
-    await waitFor(() => expect(secondSession.send).toHaveBeenCalledWith({ id: "msg-2" }));
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-2")]);
+    await waitFor(() =>
+      expect(secondSession.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-2"))
+    );
 
     expect(openPanelSession).toHaveBeenCalledTimes(2);
     expect(openPanelSession).toHaveBeenNthCalledWith(1, "panel:runtime-a", "conn-a");
@@ -138,15 +199,19 @@ describe("bridgeAdapter panel session relay", () => {
       getPanelLease: jest.fn(() => lease),
     });
 
-    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-1" }]);
-    await waitFor(() => expect(firstSession.send).toHaveBeenCalledWith({ id: "msg-1" }));
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-1")]);
+    await waitFor(() =>
+      expect(firstSession.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-1"))
+    );
 
     lease = {
       runtimeEntityId: "panel:runtime-a" as PanelEntityId,
       connectionId: "conn-b",
     };
-    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-2" }]);
-    await waitFor(() => expect(secondSession.send).toHaveBeenCalledWith({ id: "msg-2" }));
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-2")]);
+    await waitFor(() =>
+      expect(secondSession.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-2"))
+    );
 
     expect(openPanelSession).toHaveBeenCalledTimes(2);
     expect(openPanelSession).toHaveBeenNthCalledWith(1, "panel:runtime-a", "conn-a");
@@ -175,11 +240,11 @@ describe("bridgeAdapter panel session relay", () => {
       ),
     });
 
-    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-1" }]);
-    await waitFor(() => expect(session.send).toHaveBeenCalledWith({ id: "msg-1" }));
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-1")]);
+    await waitFor(() => expect(session.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-1")));
 
     hasLease = false;
-    await adapter.handle("panel:tree/panel-a", "postEnvelope", [{ id: "msg-2" }]);
+    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-2")]);
     await waitFor(() => expect(session.close).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(warnSpy).toHaveBeenCalledWith(
@@ -198,17 +263,17 @@ describe("bridgeAdapter panel session relay", () => {
 describe("bridgeAdapter upload streams", () => {
   const PANEL = "panel:tree/panel-a";
 
-  function streamRequestEnvelope() {
-    const caller = { callerId: "panel:runtime-a", callerKind: "panel" as const };
+  function streamRequestEnvelope(): RpcEnvelope {
+    const caller = { callerId: "panel:forged", callerKind: "panel" as const };
     return {
-      from: "panel:runtime-a",
+      from: caller.callerId,
       target: "main",
       delivery: { caller },
       provenance: [caller],
       message: {
         type: "stream-request",
         requestId: "sreq-1",
-        fromId: "panel:runtime-a",
+        fromId: caller.callerId,
         method: "gateway.fetch",
         args: [{ path: "/upload" }],
       },
@@ -234,27 +299,32 @@ describe("bridgeAdapter upload streams", () => {
     streamReadable?: jest.Mock;
     session?: Partial<WebRtcSession>;
   }) {
-    const seen: { body?: Uint8Array; envelope?: unknown } = {};
+    const seen: { body?: Uint8Array; envelope?: RpcEnvelope } = {};
     const streamReadable =
       overrides?.streamReadable ??
-      jest.fn(async (envelope: unknown, _signal: AbortSignal, body: ReadableStream<Uint8Array>) => {
-        seen.envelope = envelope;
-        seen.body = await drainStream(body);
-        return {
-          status: 201,
-          statusText: "Created",
-          headers: [["content-type", "application/json"]],
-          finalUrl: "http://gw/upload",
-          body: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new Uint8Array([9, 9]));
-              controller.close();
-            },
-          }),
-        };
-      });
+      jest.fn(
+        async (envelope: RpcEnvelope, _signal: AbortSignal, body: ReadableStream<Uint8Array>) => {
+          seen.envelope = envelope;
+          seen.body = await drainStream(body);
+          return {
+            status: 201,
+            statusText: "Created",
+            headers: [["content-type", "application/json"]],
+            finalUrl: "http://gw/upload",
+            body: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new Uint8Array([9, 9]));
+                controller.close();
+              },
+            }),
+          };
+        }
+      );
     const session = makePanelSession({ streamReadable, ...overrides?.session } as never);
-    const delivered: Array<{ __vibez1BridgeStream: boolean; msg: { kind: string; opId?: string; seq?: number } }> = [];
+    const delivered: Array<{
+      __vibez1BridgeStream: boolean;
+      msg: { kind: string; opId?: string; seq?: number };
+    }> = [];
     // Auto-ack response chunks like the injected panel bootstrap does.
     const adapterBox: { current?: ReturnType<typeof createAdapter> } = {};
     const deliverToPanel = jest.fn((_panelId: string, payload: unknown) => {
@@ -292,6 +362,16 @@ describe("bridgeAdapter upload streams", () => {
     await waitFor(() => expect(delivered.at(-1)?.msg.kind).toBe("end"));
     expect(streamReadable).toHaveBeenCalledTimes(1);
     expect(seen.body).toEqual(new Uint8Array([1, 2, 3]));
+    expect(seen.envelope).toEqual(
+      expect.objectContaining({
+        from: "panel:runtime-a",
+        delivery: expect.objectContaining({
+          caller: { callerId: "panel:runtime-a", callerKind: "panel" },
+        }),
+        provenance: [{ callerId: "panel:runtime-a", callerKind: "panel" }],
+        message: expect.objectContaining({ requestId: "sreq-1", fromId: "panel:runtime-a" }),
+      })
+    );
     expect(delivered[0]).toMatchObject({
       __vibez1BridgeStream: true,
       msg: { kind: "head", opId: "op-1", status: 201 },
@@ -307,7 +387,9 @@ describe("bridgeAdapter upload streams", () => {
   it("rejects body chunks with no open upload stream (fail-loud ack)", async () => {
     const { adapter } = makeUploadFixture();
     await expect(
-      adapter.handle(PANEL, "streamBodyChunk", [{ bodyId: "nope", seq: 1, chunk: base64Of(new Uint8Array([1])) }])
+      adapter.handle(PANEL, "streamBodyChunk", [
+        { bodyId: "nope", seq: 1, chunk: base64Of(new Uint8Array([1])) },
+      ])
     ).rejects.toThrow(/No open bridge upload stream/);
   });
 
@@ -330,7 +412,9 @@ describe("bridgeAdapter upload streams", () => {
 
     await waitFor(() => expect(seenSignal?.aborted).toBe(true));
     await expect(
-      adapter.handle(PANEL, "streamBodyChunk", [{ bodyId: "b-1", seq: 1, chunk: base64Of(new Uint8Array([1])) }])
+      adapter.handle(PANEL, "streamBodyChunk", [
+        { bodyId: "b-1", seq: 1, chunk: base64Of(new Uint8Array([1])) },
+      ])
     ).rejects.toThrow(/unknown bodyId/);
   });
 
@@ -366,7 +450,9 @@ describe("bridgeAdapter upload streams", () => {
     adapter.closePanelSession(PANEL);
 
     await expect(
-      adapter.handle(PANEL, "streamBodyChunk", [{ bodyId: "b-1", seq: 1, chunk: base64Of(new Uint8Array([1])) }])
+      adapter.handle(PANEL, "streamBodyChunk", [
+        { bodyId: "b-1", seq: 1, chunk: base64Of(new Uint8Array([1])) },
+      ])
     ).rejects.toThrow(/No open bridge upload stream/);
   });
 });

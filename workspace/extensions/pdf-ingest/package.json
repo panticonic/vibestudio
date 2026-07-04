@@ -1,0 +1,23 @@
+{
+  "name": "@workspace-extensions/pdf-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibez1": {
+    "displayName": "PDF Ingest",
+    "entry": "index.ts",
+    "sourcemap": true,
+    "extension": {
+      "activationEvents": [
+        "*"
+      ],
+      "dependencyMode": "external"
+    }
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^1.0.2",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "pdfjs-dist": "^6.1.200",
+    "tesseract.js": "^7.0.0"
+  }
+}

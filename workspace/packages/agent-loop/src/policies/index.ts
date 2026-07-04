@@ -4,10 +4,7 @@
  * (consumer extras) → compaction.
  */
 
-import {
-  AGENTIC_PROTOCOL_VERSION,
-  type ParticipantRef,
-} from "@workspace/agentic-protocol";
+import { AGENTIC_PROTOCOL_VERSION, type ParticipantRef } from "@workspace/agentic-protocol";
 import { ids } from "../ids.js";
 import type { AppendItem, ChannelCallEffect, EffectDescriptor } from "../effects.js";
 import type { StepOutput, StepPolicy } from "../step.js";
@@ -20,7 +17,7 @@ export const DEFAULT_SAFE_TOOL_NAMES = new Set([
   "ls",
   "ask_user",
   "set_title",
-  "close_turn_without_response",
+  "suspend_turn",
 ]);
 
 function invocationStartedItems(output: StepOutput): Array<{
@@ -340,29 +337,75 @@ export function forkPolicy(): StepPolicy {
   };
 }
 
-/** silent: suppress publication of everything except turn open/close; the
- *  agent speaks only through its explicit `say` tool. */
-export function silentPolicy(): StepPolicy {
-  const filter = (items: AppendItem[]): AppendItem[] =>
+/** publish-policy: config-driven channel publication discipline. Reads
+ *  `state.config.publishPolicy` and gates the `publish` flag across every
+ *  publication surface — step-produced appends (`intercept`), driver-produced
+ *  effect-outcome appends (`transformAppend`, load-bearing: the model's
+ *  `message.completed` is driver-produced), and executor-side streaming signals
+ *  (`filterEphemeral`). Replay-pure: reads only `state.config` + item shape (no
+ *  wall clock) and flips ONLY the `publish` flag — it never drops or mutates an
+ *  item's identity/payload, so the durable trajectory stays policy-agnostic.
+ *
+ *  "all" (or absent): identity — every outcome publishes (today's behavior).
+ *  "turn-final": only the end-of-turn (tier "primary") model message publishes;
+ *    the intermediate model surfaces (every `message.started` streaming
+ *    placeholder + any secondary-tier `message.completed`/`message.failed`) stay
+ *    trajectory-only (live viewers still see them via the KEPT ephemeral deltas).
+ *    Turn boundaries + invocation/approval/system outcomes still publish.
+ *  "say-only": nothing publishes but turn open/close; the agent speaks only via
+ *    its explicit `say` tool (published out-of-band, bypassing this filter) and
+ *    all ephemeral signals are dropped. (Exactly the old silentPolicy behavior.) */
+export function publishPolicyPolicy(): StepPolicy {
+  const sayOnly = (items: AppendItem[]): AppendItem[] =>
     items.map((item) =>
       item.payloadKind === "turn.opened" || item.payloadKind === "turn.closed"
         ? item
         : { ...item, publish: false }
     );
+  const turnFinal = (items: AppendItem[]): AppendItem[] =>
+    items.map((item) => {
+      if (item.payloadKind === "message.started") return { ...item, publish: false };
+      if (
+        (item.payloadKind === "message.completed" || item.payloadKind === "message.failed") &&
+        (item.payload as { tier?: string }).tier === "secondary"
+      )
+        return { ...item, publish: false };
+      return item;
+    });
+  const filterFor = (state: AgentState): ((items: AppendItem[]) => AppendItem[]) | null => {
+    switch (state.config.publishPolicy) {
+      case "say-only":
+        return sayOnly;
+      case "turn-final":
+        return turnFinal;
+      default:
+        return null; // "all" or absent ⇒ identity
+    }
+  };
   return {
-    name: "silent",
-    intercept({ output }) {
+    name: "publish-policy",
+    intercept({ state, output }) {
+      const filter = filterFor(state);
+      if (!filter) return output;
       return { append: filter(output.append), effects: output.effects };
     },
-    transformAppend({ items }) {
-      return filter(items);
+    transformAppend({ state, items }) {
+      const filter = filterFor(state);
+      return filter ? filter(items) : items;
     },
-    filterEphemeral() {
-      return null;
+    filterEphemeral({ state, emit }) {
+      // say-only suppresses all streaming signals; turn-final + all keep them.
+      return state.config.publishPolicy === "say-only" ? null : emit;
     },
   };
 }
 
 export function defaultPolicies(): StepPolicy[] {
-  return [channelToolsPolicy(), approvalGatePolicy(), askUserPolicy(), forkPolicy()];
+  return [
+    channelToolsPolicy(),
+    approvalGatePolicy(),
+    askUserPolicy(),
+    forkPolicy(),
+    publishPolicyPolicy(),
+  ];
 }

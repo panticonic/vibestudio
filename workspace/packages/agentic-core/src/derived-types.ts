@@ -109,6 +109,24 @@ export interface ApprovalCardPayload {
 }
 
 // ===========================================================================
+// Fork row (inline "conversation forked" annotation)
+// ===========================================================================
+
+/** Inline system-row payload projected from a channel's direct-child forks
+ *  (`ChannelViewState.forks`). Rendered as "⑂ <actor> forked from message N". */
+export interface ForkRowPayload {
+  forkId: string;
+  forkedChannelId: string;
+  forkedContextId: string;
+  forkPointId: number;
+  label: string;
+  reason: string;
+  actor: { kind: string; id: string; displayName?: string };
+  createdAtSeq: number;
+  archived: boolean;
+}
+
+// ===========================================================================
 // Pending agents (UI state for spawn-in-progress)
 // ===========================================================================
 
@@ -184,6 +202,21 @@ export interface ChatMessage {
   senderId: string;
   content: string;
   contentType?: string;
+  /**
+   * Durable envelope seq at which this message first appeared (from
+   * `ProjectedMessage.seq`). The fork-point locus: "Fork from here" roots at
+   * `seq`; "Edit & fork" roots at `seq − 1`. Absent for locally-optimistic
+   * rows not yet round-tripped through the log.
+   */
+  seq?: number;
+  /** Explicit supervisor `say` (from `ProjectedMessage.saliency`) — used to
+   *  filter the SubagentRunCard's live say feed. */
+  saliency?: "say";
+  /** Edit-fork provenance: the parent message this seed supersedes in the
+   *  child channel. Rendered as a "substituted this turn" annotation. */
+  replaces?: { messageId: string; seq: number };
+  /** Present on inline fork-annotation rows (`contentType === "fork"`). */
+  fork?: ForkRowPayload;
   kind?: "message" | "method" | "system";
   complete?: boolean;
   replyTo?: string;

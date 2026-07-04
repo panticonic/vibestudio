@@ -95,6 +95,56 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function removeDownloadArchives(opts: {
+  cacheDir: string;
+  browser: Browser;
+  buildId: string;
+}): number {
+  const browserDir = path.join(opts.cacheDir, opts.browser);
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(browserDir);
+  } catch {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.startsWith(`${opts.buildId}-`) || !entry.endsWith(".zip")) continue;
+    try {
+      fs.rmSync(path.join(browserDir, entry), { force: true });
+      removed += 1;
+    } catch (error) {
+      log.warn(`Unable to remove failed Chromium download ${entry}: ${String(error)}`);
+    }
+  }
+  return removed;
+}
+
+function removeInstallDirs(opts: { cacheDir: string; browser: Browser; buildId: string }): number {
+  const browserDir = path.join(opts.cacheDir, opts.browser);
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(browserDir);
+  } catch {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.includes(opts.buildId)) continue;
+    const fullPath = path.join(browserDir, entry);
+    try {
+      if (!fs.statSync(fullPath).isDirectory()) continue;
+      fs.rmSync(fullPath, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      log.warn(`Unable to remove failed Chromium install ${entry}: ${String(error)}`);
+    }
+  }
+  return removed;
+}
+
 export async function resolveChromium(opts: {
   chromiumPath?: string;
   cacheDir: string;
@@ -167,6 +217,22 @@ export async function resolveChromium(opts: {
         `Failed to download ${browser} ${buildId}; using cached ${cached.buildId}: ${cached.executablePath}. ${errorMessage(error)}`
       );
       return { executablePath: cached.executablePath, source: "downloaded" };
+    }
+    const removedArchives = removeDownloadArchives({ cacheDir, browser, buildId });
+    const removedInstallDirs = removeInstallDirs({ cacheDir, browser, buildId });
+    const removedArtifacts = removedArchives + removedInstallDirs;
+    if (removedArtifacts > 0) {
+      log.warn(
+        `Failed to install ${browser} ${buildId}; removed ${removedArtifacts} stale download artifact(s) and retrying. ${errorMessage(error)}`
+      );
+      const installed = await install({
+        browser,
+        buildId,
+        cacheDir,
+        downloadProgressCallback: opts.onDownloadProgress,
+      });
+      log.info(`Downloaded ${browser} ${buildId}`);
+      return { executablePath: installed.executablePath, source: "downloaded" };
     }
     throw error;
   }

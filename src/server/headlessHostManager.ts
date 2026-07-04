@@ -23,6 +23,26 @@ const log = createDevLogger("HeadlessHostManager");
 
 const HEADLESS_HOST_CALLER_ID = "headless-host";
 
+interface HeadlessHostChildMessage {
+  type?: unknown;
+  clientSessionId?: unknown;
+  diagnostic?: unknown;
+}
+
+interface HeadlessHostBridgeDiagnostic {
+  state?: string;
+  attempt?: number;
+  url?: string;
+  opened?: boolean;
+  authSent?: boolean;
+  authenticated?: boolean;
+  lastError?: string;
+  lastCloseCode?: number;
+  lastCloseReason?: string;
+  lastMessageType?: string;
+  nextRetryMs?: number;
+}
+
 export interface HeadlessHostManagerConfig {
   enabled: boolean;
   /** Entry of the built headless host; resolved from the repo by default. */
@@ -86,6 +106,42 @@ function defaultEntryPath(): string {
     if (fs.existsSync(candidate)) return candidate;
   }
   return path.resolve(process.cwd(), "dist", "headless-host", "main.js");
+}
+
+function parseBridgeDiagnostic(value: unknown): HeadlessHostBridgeDiagnostic | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const diagnostic: HeadlessHostBridgeDiagnostic = {};
+  if (typeof record["state"] === "string") diagnostic.state = record["state"];
+  if (typeof record["attempt"] === "number") diagnostic.attempt = record["attempt"];
+  if (typeof record["url"] === "string") diagnostic.url = record["url"];
+  if (typeof record["opened"] === "boolean") diagnostic.opened = record["opened"];
+  if (typeof record["authSent"] === "boolean") diagnostic.authSent = record["authSent"];
+  if (typeof record["authenticated"] === "boolean")
+    diagnostic.authenticated = record["authenticated"];
+  if (typeof record["lastError"] === "string") diagnostic.lastError = record["lastError"];
+  if (typeof record["lastCloseCode"] === "number")
+    diagnostic.lastCloseCode = record["lastCloseCode"];
+  if (typeof record["lastCloseReason"] === "string")
+    diagnostic.lastCloseReason = record["lastCloseReason"];
+  if (typeof record["lastMessageType"] === "string")
+    diagnostic.lastMessageType = record["lastMessageType"];
+  if (typeof record["nextRetryMs"] === "number") diagnostic.nextRetryMs = record["nextRetryMs"];
+  return diagnostic;
+}
+
+function formatBridgeDiagnostic(diagnostic: HeadlessHostBridgeDiagnostic): string {
+  const parts = [`state=${diagnostic.state ?? "unknown"}`, `attempt=${diagnostic.attempt ?? 0}`];
+  if (diagnostic.url) parts.push(`url=${diagnostic.url}`);
+  parts.push(`opened=${diagnostic.opened === true ? "yes" : "no"}`);
+  parts.push(`authSent=${diagnostic.authSent === true ? "yes" : "no"}`);
+  parts.push(`authenticated=${diagnostic.authenticated === true ? "yes" : "no"}`);
+  if (diagnostic.lastMessageType) parts.push(`lastMessage=${diagnostic.lastMessageType}`);
+  if (diagnostic.lastCloseCode !== undefined) parts.push(`closeCode=${diagnostic.lastCloseCode}`);
+  if (diagnostic.lastCloseReason) parts.push(`closeReason=${diagnostic.lastCloseReason}`);
+  if (diagnostic.lastError) parts.push(`error=${diagnostic.lastError}`);
+  if (diagnostic.nextRetryMs !== undefined) parts.push(`nextRetryMs=${diagnostic.nextRetryMs}`);
+  return parts.join(" ");
 }
 
 export class HeadlessHostManager {
@@ -185,7 +241,7 @@ export class HeadlessHostManager {
       this.recordFailure();
       return null;
     }
-    const timeout = timeoutMs ?? this.config.spawnTimeoutMs ?? 45_000;
+    const registrationTimeout = timeoutMs ?? this.config.spawnTimeoutMs ?? 45_000;
     log.info(`spawning headless host (${entryPath})`);
 
     let child: ChildProcess;
@@ -199,6 +255,10 @@ export class HeadlessHostManager {
       return null;
     }
     this.child = child;
+    let childReportedRegistered = false;
+    let childReportedReady = false;
+    let reportedClientSessionId: string | null = null;
+    let lastBridgeDiagnostic: HeadlessHostBridgeDiagnostic | null = null;
     child.stdout?.on("data", (chunk: Buffer) => {
       log.info(`[host] ${String(chunk).trimEnd()}`);
     });
@@ -215,6 +275,35 @@ export class HeadlessHostManager {
       // (unless the manager is stopping). Backoff-respecting via scheduleEnsure.
       if (this.keepAlive && !this.stopped) this.scheduleEnsure(250);
     });
+    child.on("message", (message: HeadlessHostChildMessage) => {
+      if (message?.type !== "registered" && message?.type !== "ready" && message?.type !== "bridge")
+        return;
+      if (typeof message.clientSessionId === "string") {
+        reportedClientSessionId = message.clientSessionId;
+      }
+      if (message.type === "bridge") {
+        const diagnostic = parseBridgeDiagnostic(message.diagnostic);
+        if (!diagnostic) return;
+        lastBridgeDiagnostic = diagnostic;
+        log.info(`headless host bridge ${formatBridgeDiagnostic(diagnostic)}`);
+        return;
+      }
+      childReportedRegistered = true;
+      if (message.type === "registered") {
+        log.info(
+          `headless host registered with server${
+            reportedClientSessionId ? ` as ${reportedClientSessionId}` : ""
+          }; waiting for CDP bridge`
+        );
+      } else if (message.type === "ready") {
+        childReportedReady = true;
+        log.info(
+          `headless host reported ready${
+            reportedClientSessionId ? ` as ${reportedClientSessionId}` : ""
+          }`
+        );
+      }
+    });
 
     // Token over the IPC channel — not visible in /proc/*/environ or ps.
     const token = this.deps.tokenManager.ensureToken(HEADLESS_HOST_CALLER_ID, "shell");
@@ -225,8 +314,8 @@ export class HeadlessHostManager {
       label: "Headless (server)",
     });
 
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
+    const registrationDeadline = Date.now() + registrationTimeout;
+    while (child.exitCode === null) {
       const host = this.availableDefaultHost();
       if (host) {
         this.consecutiveFailures = 0;
@@ -235,11 +324,31 @@ export class HeadlessHostManager {
         log.info(`headless host registered as ${host.clientSessionId}`);
         return host;
       }
-      if (child.exitCode !== null) break;
+      if (!childReportedRegistered && Date.now() >= registrationDeadline) {
+        log.warn("headless host did not register with the server in time");
+        this.terminateChild("registration timeout");
+        this.recordFailure();
+        return null;
+      }
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    log.warn("headless host did not register in time");
-    this.terminateChild("registration timeout");
+    if (childReportedReady) {
+      log.warn(
+        `headless host reported ready${
+          reportedClientSessionId ? ` as ${reportedClientSessionId}` : ""
+        } but exited before the server observed CDP availability`
+      );
+    } else if (childReportedRegistered) {
+      log.warn(
+        `headless host registered${
+          reportedClientSessionId ? ` as ${reportedClientSessionId}` : ""
+        } but exited before CDP became ready${
+          lastBridgeDiagnostic ? ` (${formatBridgeDiagnostic(lastBridgeDiagnostic)})` : ""
+        }`
+      );
+    } else {
+      log.warn("headless host exited before registering with the server");
+    }
     this.recordFailure();
     return null;
   }

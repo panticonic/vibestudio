@@ -18,7 +18,12 @@ import type { ServiceContext } from "./serviceDispatcher.js";
 import type { ContextFolderManager } from "./contextFolderManager.js";
 import { createDevLogger } from "@vibez1/dev-log";
 import { EntityCache } from "./runtime/entityCache.js";
-import { splitRepoPath, taxonomyRepoForPath, type RepoPath } from "./runtime/entitySpec.js";
+import {
+  CONTAINER_SECTIONS,
+  splitRepoPath,
+  taxonomyRepoForPath,
+  type RepoPath,
+} from "./runtime/entitySpec.js";
 
 const log = createDevLogger("FsService");
 
@@ -60,12 +65,14 @@ function codedError(code: string, message: string): NodeJS.ErrnoException {
  * VCS layer expands it to the repos under it); ONLY the workspace root → `"all"`.
  * We deliberately avoid `"all"` for anything narrower than a true root operation.
  */
-function scopeForPath(wsRel: string): RepoPath[] | "all" {
+function scopeForPath(wsRel: string): RepoPath[] | "all" | null {
   const norm = wsRel.replace(/^\/+/, "").replace(/\/+$/, "");
   if (norm === "" || norm === ".") return "all";
   const repo = taxonomyRepoForPath(norm);
   if (repo) return [repo];
-  return [norm]; // section prefix (e.g. "panels") — expanded to repos-under-it
+  // Section prefix (e.g. "panels") — expanded to repos-under-it by the VCS layer.
+  if (CONTAINER_SECTIONS.has(norm)) return [norm];
+  return null;
 }
 
 /** The path a disk-reading fs method scopes to (its search/target path), or null
@@ -909,11 +916,21 @@ export class FsService {
         const rel = await relOf(args[0] as string);
         if (!(await tracked(rel))) return { handled: false };
         const recursive = !!(args[1] as { recursive?: boolean } | undefined)?.recursive;
-        await commit(
-          recursive
-            ? await this.subtreeDeleteEdits(bridge, contextId, rel)
-            : [{ kind: "delete", path: rel }]
-        );
+        const force = !!(args[1] as { force?: boolean } | undefined)?.force;
+        if (recursive) {
+          const edits = await this.subtreeDeleteEdits(bridge, contextId, rel);
+          if (force && edits.length === 0) return { handled: true };
+          await commit(edits);
+          return { handled: true };
+        }
+        if (force && !(await readWsFile(rel))) {
+          const prefix = `${rel}/`;
+          const hasSubtree = (await bridge.listFiles(contextId)).some((p) =>
+            p.startsWith(prefix)
+          );
+          if (!hasSubtree) return { handled: true };
+        }
+        await commit([{ kind: "delete", path: rel }]);
         return { handled: true };
       }
       case "copyFile": {
@@ -1111,7 +1128,12 @@ export class FsService {
     const p = readScopePath(method, args);
     if (p === null) return;
     const wsRel = p.replace(/^\/+/, "");
-    await this.vcsBridge.ensureMaterialized(scope.contextId, scopeForPath(wsRel));
+    const repos = scopeForPath(wsRel);
+    if (repos === null) return;
+    if (repos !== "all" && !(await this.vcsBridge.isTracked(wsRel.replace(/\/+$/, "")))) {
+      return;
+    }
+    await this.vcsBridge.ensureMaterialized(scope.contextId, repos);
     const repo = taxonomyRepoForPath(wsRel.replace(/\/+$/, ""));
     if (repo && !(await this.vcsBridge.isMaterialized(scope.contextId, repo))) {
       console.warn(
@@ -1147,9 +1169,11 @@ export class FsService {
           let any = false;
           for (const p of paths) {
             const s = scopeForPath(p.replace(/^\/+/, ""));
+            if (s === null) continue;
             if (s === "all") any = true;
             else for (const r of s) set.add(r);
           }
+          if (!any && set.size === 0) return undefined;
           repos = any ? "all" : [...set];
         }
         await this.vcsBridge.ensureMaterialized(scope.contextId, repos);

@@ -280,8 +280,7 @@ services:
   # vcsResolveContextView/vcsContextStatus/vcsRebaseContext/vcsDropContext/
   # vcsContextRepoStates) run in the gad-store DO against its own storage plus
   # the host blobstore.*/refs.* primitives. Host `vcs.*` keeps only the
-  # operations that genuinely need host resources (push build gate +
-  # protected-ref group CAS, main-target mergeGroup, fork/delete/restore disk
+  # operations that genuinely need host resources (fork/delete/restore disk
   # + ref lifecycle, disk projection, scan triggers, content-store reads).
   # This declaration is ALSO how the host locates the store DO (attach,
   # provenance follower, bootstrap main-binding) — there is no separate
@@ -350,6 +349,7 @@ routes: []
 extensions:
   - source: extensions/git-bridge
   - source: extensions/image-service
+  - source: extensions/pdf-ingest
   - source: extensions/file-tools
   - source: extensions/typecheck-service
   - source: extensions/test-runner

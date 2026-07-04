@@ -49,6 +49,7 @@ import {
   ServiceDispatcher,
   type CallerKind,
   type ServiceContext,
+  type VerifiedCodeIdentity,
   type WsClientInfo,
   type VerifiedCaller,
 } from "@vibez1/shared/serviceDispatcher";
@@ -152,6 +153,37 @@ type RelayCallMeta = {
   idempotencyKey?: string;
   readOnly?: boolean;
 };
+
+type RelayCallerScope = {
+  /** Host-resolved parent caller to record in a VCS invocation token. */
+  invocationCaller: VerifiedCaller;
+  /** Caller id whose context registration should scope a routed VCS dispatch. */
+  contextCallerId: string;
+  /** Already-resolved context id, when the parent invocation carried one. */
+  callerContextId?: string;
+};
+
+type ResolvedExtensionParentCaller = {
+  caller: VerifiedCaller;
+  code: VerifiedCodeIdentity;
+  contextId?: string;
+};
+
+export interface RpcServerUploadPreopenLimits {
+  maxPendingStreams?: number;
+  maxBufferedBytes?: number;
+}
+
+const DEFAULT_UPLOAD_PREOPEN_STREAM_CAP = 65_536;
+const DEFAULT_UPLOAD_PREOPEN_TOTAL_CAP_BYTES = 1024 * 1024 * 1024;
+
+function resolvePositiveLimit(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive safe integer`);
+  }
+  return value;
+}
 
 function relayCallOptions(
   meta?: RelayCallMeta
@@ -450,6 +482,7 @@ export class RpcServer {
   private sessions: SessionRegistry;
 
   private readonly bootId = randomUUID();
+  private readonly uploadPreopenLimits: Required<RpcServerUploadPreopenLimits>;
 
   private static readonly DISCONNECT_GRACE_MS = 3000;
 
@@ -523,9 +556,22 @@ export class RpcServer {
         callerKind: CallerKind;
         deviceCredential?: { deviceId: string; refreshToken: string };
       } | null;
+      uploadPreopenLimits?: RpcServerUploadPreopenLimits;
     }
   ) {
     this.dispatcher = deps.dispatcher;
+    this.uploadPreopenLimits = {
+      maxPendingStreams: resolvePositiveLimit(
+        deps.uploadPreopenLimits?.maxPendingStreams,
+        DEFAULT_UPLOAD_PREOPEN_STREAM_CAP,
+        "uploadPreopenLimits.maxPendingStreams"
+      ),
+      maxBufferedBytes: resolvePositiveLimit(
+        deps.uploadPreopenLimits?.maxBufferedBytes,
+        DEFAULT_UPLOAD_PREOPEN_TOTAL_CAP_BYTES,
+        "uploadPreopenLimits.maxBufferedBytes"
+      ),
+    };
     deps.runtimeCoordinator?.setCloseConnection((panelId, connectionId, code, reason) => {
       this.connections.closeConnection(panelId, connectionId, code, reason);
     });
@@ -567,33 +613,70 @@ export class RpcServer {
       wsClient: client,
       ...extras,
     };
+    const parent = this.resolveExtensionParentCaller(client, message);
+    if (parent) ctx.chainCaller = parent.code;
+    return ctx;
+  }
+
+  private resolveExtensionParentCaller(
+    client: WsClientState,
+    message: Pick<RpcRequest | import("@vibez1/rpc").RpcStreamRequest, "parentInvocationToken">
+  ): ResolvedExtensionParentCaller | null {
     if (client.caller.runtime.kind !== "extension" || !message.parentInvocationToken) {
-      return ctx;
+      return null;
     }
     const invocation = this.deps.resolveExtensionInvocation?.(
       client.caller.runtime.id,
       message.parentInvocationToken
     );
     if (invocation?.chainCaller) {
-      ctx.chainCaller = invocation.chainCaller;
-    } else {
-      const caller = invocation?.caller;
-      if (
-        caller?.callerKind !== "panel" &&
-        caller?.callerKind !== "app" &&
-        caller?.callerKind !== "worker" &&
-        caller?.callerKind !== "do"
-      ) {
-        return ctx;
-      }
-      ctx.chainCaller = {
-        callerId: caller.callerId,
-        callerKind: caller.callerKind,
-        repoPath: "",
-        effectiveVersion: "",
+      const code: VerifiedCodeIdentity = {
+        callerId: invocation.chainCaller.callerId,
+        callerKind: invocation.chainCaller.callerKind,
+        repoPath: invocation.chainCaller.repoPath,
+        effectiveVersion: invocation.chainCaller.effectiveVersion,
+      };
+      return {
+        caller: createVerifiedCaller(code.callerId, code.callerKind, code),
+        code,
+        ...(invocation.chainCaller.contextId
+          ? { contextId: invocation.chainCaller.contextId }
+          : {}),
       };
     }
-    return ctx;
+    const caller = invocation?.caller;
+    if (
+      caller?.callerKind !== "panel" &&
+      caller?.callerKind !== "app" &&
+      caller?.callerKind !== "worker" &&
+      caller?.callerKind !== "do"
+    ) {
+      return null;
+    }
+    const code: VerifiedCodeIdentity = {
+      callerId: caller.callerId,
+      callerKind: caller.callerKind,
+      repoPath: "",
+      effectiveVersion: "",
+    };
+    return {
+      caller: createVerifiedCaller(code.callerId, code.callerKind, code),
+      code,
+      ...(caller.contextId ? { contextId: caller.contextId } : {}),
+    };
+  }
+
+  private relayCallerScopeForRpcMessage(
+    client: WsClientState,
+    message: Pick<RpcRequest, "parentInvocationToken">
+  ): RelayCallerScope | undefined {
+    const parent = this.resolveExtensionParentCaller(client, message);
+    if (!parent) return undefined;
+    return {
+      invocationCaller: parent.caller,
+      contextCallerId: parent.code.callerId,
+      ...(parent.contextId ? { callerContextId: parent.contextId } : {}),
+    };
   }
 
   private connectionKey(callerId: string, connectionId: string): string {
@@ -1209,6 +1292,7 @@ export class RpcServer {
       // and shell targets fail fast when unreachable.
       if (message.type === "request") {
         const { requestId, method: reqMethod, args: reqArgs } = message;
+        const relayCallerScope = this.relayCallerScopeForRpcMessage(client, message);
         this.recordRoutedRequestOrigin(requestId, client);
         void this.relayCall(
           client.caller.runtime.id,
@@ -1217,7 +1301,8 @@ export class RpcServer {
           reqMethod,
           reqArgs ?? [],
           targetConnectionId,
-          relayMetaFromEnvelope(routeEnvelope)
+          relayMetaFromEnvelope(routeEnvelope),
+          relayCallerScope
         ).then(
           (result) => {
             void this.sendRoutedResponseToOrigin(
@@ -2646,7 +2731,8 @@ export class RpcServer {
     method: string,
     args: unknown[],
     targetConnectionId?: string,
-    meta?: RelayCallMeta
+    meta?: RelayCallMeta,
+    relayCallerScope?: RelayCallerScope
   ): Promise<unknown> {
     const isPanelOrShellTarget = !targetId.startsWith("do:") && !targetId.startsWith("worker:");
     if (isPanelOrShellTarget) {
@@ -2696,7 +2782,15 @@ export class RpcServer {
     }
 
     if (targetId.startsWith("do:")) {
-      return await this.relayToDO(callerId, callerKind, targetId, method, args, meta);
+      return await this.relayToDO(
+        callerId,
+        callerKind,
+        targetId,
+        method,
+        args,
+        meta,
+        relayCallerScope
+      );
     }
 
     if (targetId.startsWith("worker:")) {
@@ -2729,7 +2823,8 @@ export class RpcServer {
     targetId: string,
     method: string,
     args: unknown[],
-    meta?: RelayCallMeta
+    meta?: RelayCallMeta,
+    relayCallerScope?: RelayCallerScope
   ): Promise<unknown> {
     const ref = parseDOTarget(targetId);
     // Assertion-only: the concrete DO entity must exist before dispatch.
@@ -2753,14 +2848,16 @@ export class RpcServer {
     // retries) within this dispatch's lifetime; the record is cleared when the
     // relayed call settles, so later replay fails closed.
     const vcsWriterIdentity = this.deps.getVcsWriterIdentity?.() ?? null;
-    const vcsInvocations =
-      vcsWriterIdentity !== null && targetId === vcsWriterIdentity
-        ? this.deps.vcsInvocations
-        : undefined;
-    const targetsVcsWriter = vcsInvocations !== undefined;
+    const targetsVcsWriter = vcsWriterIdentity !== null && targetId === vcsWriterIdentity;
+    // The token is a method-agnostic host-resolved principal handle (the host no
+    // longer classifies a VCS operation from the method — that semantics moved to
+    // the DO). Mint it for every dispatch routed to the writer DO; the `method`
+    // rides along for attribution/prompt copy only and grants no authority.
+    const vcsInvocations = targetsVcsWriter ? this.deps.vcsInvocations : undefined;
     const invocation = vcsInvocations
       ? vcsInvocations.mint({
-          caller: this.verifiedCallerFor(callerId, callerKind),
+          caller:
+            relayCallerScope?.invocationCaller ?? this.verifiedCallerFor(callerId, callerKind),
           via: targetId,
           method,
           ...(meta?.requestId ? { requestId: meta.requestId } : {}),
@@ -2772,7 +2869,11 @@ export class RpcServer {
     // client-asserted — resolved here at the same chokepoint that mints the
     // token. Absent when the caller has no context (chrome/server) or the target
     // is not the writer DO.
-    const callerContextId = targetsVcsWriter ? (cache?.resolveContext(callerId) ?? null) : null;
+    const callerContextId = targetsVcsWriter
+      ? (relayCallerScope?.callerContextId ??
+        cache?.resolveContext(relayCallerScope?.contextCallerId ?? callerId) ??
+        null)
+      : null;
 
     const dispatch = async () => {
       if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {
@@ -3218,6 +3319,11 @@ export class RpcServer {
       // arrive on it) — free the frames and cancel their TTL timers.
       for (const pending of pendingBodies.values()) clearTimeout(pending.timer);
       pendingBodies.clear();
+      pendingBodyBytes = 0;
+      // Body stream ids are monotonic only within one client transport. A fresh
+      // reconnect starts at 1 again, so retired ids from the old pipe generation
+      // must not cause valid early DATA on the new generation to be dropped.
+      retiredBodyIds.clear();
     });
 
     // Upload seam (plan §1.6): request bodies arrive as inbound bulk DATA
@@ -3239,16 +3345,19 @@ export class RpcServer {
     }
     const inboundBodies = new Map<number, InboundBodyEntry>();
     // Pre-open frames awaiting their stream-open, keyed by bodyStreamId.
-    // Bounded two ways: total buffered bytes per stream (UPLOAD_RECEIVE_CAP_BYTES,
-    // the same cap a registered body enforces) and a TTL (UPLOAD_PREOPEN_TTL_MS).
-    // Breaching either CONDEMNS the id: buffered frames are freed, and an open
-    // arriving later fails the body loudly — never a silently truncated upload.
+    // Bounded four ways: total buffered bytes per stream (UPLOAD_RECEIVE_CAP_BYTES,
+    // the same cap a registered body enforces), catastrophic total buffered bytes
+    // across the pipe, catastrophic total pending ids, and a TTL
+    // (UPLOAD_PREOPEN_TTL_MS). Breaching any fuse CONDEMNS the id: buffered frames
+    // are freed, and an open arriving later fails the body loudly — never a
+    // silently truncated upload.
     interface PendingBodyBuffer {
       frames: Array<{ type: StreamFrameType; payload: Uint8Array }>;
       bytes: number;
       timer: ReturnType<typeof setTimeout>;
     }
     const pendingBodies = new Map<number, PendingBodyBuffer>();
+    let pendingBodyBytes = 0;
     // Terminal per-id outcomes, FIFO-bounded (bodyStreamIds are monotonic per
     // client, so old entries only shield against ever-later stragglers):
     //   null  — the body existed and settled: late frames drop silently.
@@ -3269,6 +3378,7 @@ export class RpcServer {
       if (pending) {
         clearTimeout(pending.timer);
         pendingBodies.delete(bodyStreamId);
+        pendingBodyBytes -= pending.bytes;
       }
       retireBodyId(bodyStreamId, error);
     };
@@ -3280,6 +3390,15 @@ export class RpcServer {
       if (retiredBodyIds.has(streamId)) return; // settled/condemned — drop
       let pending = pendingBodies.get(streamId);
       if (!pending) {
+        if (pendingBodies.size >= this.uploadPreopenLimits.maxPendingStreams) {
+          const error = new Error(
+            `upload pre-open buffer has too many pending streams ` +
+              `(cap ${this.uploadPreopenLimits.maxPendingStreams})`
+          );
+          log.warn(`WebRTC pipe: ${error.message}; condemning upload stream ${streamId}`);
+          retireBodyId(streamId, error);
+          return;
+        }
         const timer = setTimeout(
           () =>
             // Never opened within the TTL — the legitimate drop case (client
@@ -3299,7 +3418,24 @@ export class RpcServer {
         pendingBodies.set(streamId, pending);
       }
       if (type === FRAME_DATA && payload.byteLength === 0) return;
+      if (
+        payload.byteLength > 0 &&
+        pendingBodyBytes + payload.byteLength > this.uploadPreopenLimits.maxBufferedBytes
+      ) {
+        const error = new Error(
+          `upload pre-open buffers exceeded the ` +
+            `${this.uploadPreopenLimits.maxBufferedBytes}-byte aggregate cap`
+        );
+        log.warn(
+          `WebRTC pipe: upload stream ${streamId} would take pre-open buffers to ` +
+            `${pendingBodyBytes + payload.byteLength} bytes ` +
+            `(cap ${this.uploadPreopenLimits.maxBufferedBytes}) — condemning the stream`
+        );
+        condemnPending(streamId, error);
+        return;
+      }
       pending.bytes += payload.byteLength;
+      pendingBodyBytes += payload.byteLength;
       if (pending.bytes > RpcServer.UPLOAD_RECEIVE_CAP_BYTES) {
         log.warn(
           `WebRTC pipe: upload stream ${streamId} buffered ${pending.bytes} bytes ` +
@@ -3363,13 +3499,14 @@ export class RpcServer {
           }
         },
       };
-      // A condemned id (pre-open buffer breached its cap or TTL before this
-      // open arrived): fail the body loudly — the leading frames are gone, so
-      // completing the upload would silently truncate it.
-      const condemned = retiredBodyIds.get(bodyStreamId);
-      if (condemned) {
-        // Not registered, so no retire bookkeeping — just error the fresh body.
-        controller.error(condemned);
+      // A retired id must never be re-registered. Condemned ids fail loudly
+      // because leading frames were dropped; normally retired ids close
+      // immediately so a duplicate stream-open cannot resurrect the route.
+      if (retiredBodyIds.has(bodyStreamId)) {
+        const condemned = retiredBodyIds.get(bodyStreamId);
+        // Not registered, so no retire bookkeeping — just settle the fresh body.
+        if (condemned) controller.error(condemned);
+        else controller.close();
         return body;
       }
       inboundBodies.set(bodyStreamId, entry);
@@ -3380,6 +3517,7 @@ export class RpcServer {
       if (pending) {
         clearTimeout(pending.timer);
         pendingBodies.delete(bodyStreamId);
+        pendingBodyBytes -= pending.bytes;
         for (const frame of pending.frames) {
           if (!inboundBodies.has(bodyStreamId)) break;
           deliverBodyFrame(bodyStreamId, frame.type, frame.payload);

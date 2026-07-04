@@ -333,7 +333,6 @@ async function main() {
     "--ready-file",
     READY_FILE,
     "--print-credentials",
-    "--no-vpn-detect",
   ]);
   const child = spawn(serverInvocation.command, serverInvocation.args, {
     cwd: repoRoot,

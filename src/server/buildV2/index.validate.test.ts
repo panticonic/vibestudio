@@ -361,4 +361,34 @@ describe("BuildSystemV2 P2 — validate / statusAt", () => {
     const app = status.unitStatuses?.find((u) => u.unit === "@workspace-panels/app");
     expect(app?.status).toBe("failed");
   });
+
+  it("statusAt lets recorded error diagnostics win over cached artifacts", async () => {
+    env = await loadWithMocks();
+    const { buildSystem, diagnosticsStore } = env;
+
+    await buildSystem.validate({
+      viewHash: CANDIDATE_VIEW,
+      repoPaths: ["packages/lib"],
+      baseViewHash: BASE_VIEW,
+    });
+    const appBuild = buildCalls.find((call) => call.name === "@workspace-panels/app");
+    expect(appBuild).toBeDefined();
+
+    diagnosticsStore.recordDiagnostics("@workspace-panels/app", appBuild!.key, [
+      {
+        source: "tsc",
+        severity: "error",
+        file: "panels/app/index.ts",
+        line: 1,
+        column: 1,
+        message: "recorded diagnostic should dominate artifact presence",
+      },
+    ]);
+
+    const status = await buildSystem.statusAt(CANDIDATE_VIEW);
+    expect(status.validated).toBe(true);
+    expect(status.failed).toBe(true);
+    const app = status.unitStatuses?.find((u) => u.unit === "@workspace-panels/app");
+    expect(app?.status).toBe("failed");
+  });
 });

@@ -129,7 +129,12 @@ export interface StateChangedUnit {
 }
 
 export interface WorkspaceStateSource {
-  /** Scan-on-demand: commit any out-of-band edits, return the main head's current state. */
+  /**
+   * The current `main` view — the composed union of every repo's `main`, from
+   * refs + CAS (no disk scan, no commit). This is what a default (`main`/no-ref)
+   * `bindRuntimeImage`/`getBuild` builds; per-entity builds serve
+   * `resolveContextView(ctx:{id})` instead.
+   */
   ensureFresh(): Promise<{ stateHash: string }>;
   /** Batch manifest subtree hashes for unit-relative paths at a state. */
   unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>>;

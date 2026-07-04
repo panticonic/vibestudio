@@ -54,27 +54,35 @@ describe("refsService", () => {
   }
 
   const oneAdvance = (
-    repoPath = "docs/notes",
+    repoPath = "packages/notes",
     expectedOld: string | null = null,
     next: string | null = STATE_A
   ) => [{ repoPath, expectedOld, next }];
 
   describe("reads", () => {
-    it("readMain / listMains / readMainLog surface the store's records", async () => {
+    it("readMain / listMains surface the store's records", async () => {
       const { service, refs } = makeService();
-      await refs.seedMain({ repoPath: "docs/notes", value: STATE_A });
+      await refs.seedMain({ repoPath: "packages/notes", value: STATE_A });
       const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") } as never;
 
-      expect(await service.handler(ctx, "readMain", ["docs/notes"])).toMatchObject({
+      expect(await service.handler(ctx, "readMain", ["packages/notes"])).toMatchObject({
         stateHash: STATE_A,
-        seq: 1,
       });
-      expect(await service.handler(ctx, "readMain", ["docs/other"])).toBeNull();
+      expect(await service.handler(ctx, "readMain", ["packages/other"])).toBeNull();
       expect(await service.handler(ctx, "listMains", [])).toHaveLength(1);
-      const log = (await service.handler(ctx, "readMainLog", [
-        { repoPath: "docs/notes" },
-      ])) as unknown[];
-      expect(log).toHaveLength(1);
+    });
+
+    it("listMainRefLog surfaces the movement log over the RPC surface", async () => {
+      const { service } = makeService();
+      const ctx = { caller: createVerifiedCaller("shell:dev_cli", "shell") } as never;
+      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        { entries: oneAdvance(), operation: "push" },
+      ]);
+      const rows = (await service.handler(ctx, "listMainRefLog", [
+        { repoPath: "packages/notes" },
+      ])) as Array<{ operation: string; new: string | null }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ operation: "push", new: STATE_A });
     });
   });
 
@@ -82,11 +90,11 @@ describe("refsService", () => {
     it("admits the VCS-DO writer (matched by target identity) and gates the advance", async () => {
       const { service, refs, gateBatches } = makeService();
       const result = (await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-        { entries: oneAdvance(), operation: "push", reason: "first push" },
-      ])) as { updated: Array<{ stateHash: string | null; seq: number }> };
+        { entries: oneAdvance(), operation: "push" },
+      ])) as { updated: Array<{ stateHash: string | null }> };
 
-      expect(result.updated[0]).toMatchObject({ stateHash: STATE_A, seq: 1 });
-      expect(refs.readMain("docs/notes")?.stateHash).toBe(STATE_A);
+      expect(result.updated[0]).toMatchObject({ stateHash: STATE_A });
+      expect(refs.readMain("packages/notes")?.stateHash).toBe(STATE_A);
       // Gated through the ref gate with a caller-kind context.
       expect(gateBatches).toHaveLength(1);
       const ctx = gateBatches[0]!.gateContext as RefAdvanceGateContext;
@@ -106,7 +114,7 @@ describe("refsService", () => {
           { entries: oneAdvance(), operation: "push" },
         ])
       ).rejects.toMatchObject({ code: "EACCES" });
-      expect(refs.readMain("docs/notes")).toBeNull();
+      expect(refs.readMain("packages/notes")).toBeNull();
     });
 
     it("rejects a DIFFERENT (non-writer) DO — identity, not runtime.kind", async () => {
@@ -132,12 +140,12 @@ describe("refsService", () => {
 
   describe("on-behalf-of invocation tokens", () => {
     it("resolves a token to the originating principal (writer=DO, onBehalfOf=panel, via=DO)", async () => {
-      const { service, refs, invocations, gateBatches } = makeService();
+      const { service, invocations, gateBatches } = makeService();
       const upstream = panelCaller();
-      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcs.push" });
+      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
 
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-        { entries: oneAdvance(), operation: "push", invocationToken: token },
+        { entries: oneAdvance(), invocationToken: token, operation: "push" },
       ]);
 
       // Gate attribution is the RESOLVED upstream caller, not the DO.
@@ -145,54 +153,48 @@ describe("refsService", () => {
       if (ctx.kind !== "caller") throw new Error("unreachable");
       expect(ctx.caller).toBe(upstream);
       expect(ctx.via).toBe(WRITER_ID);
-      // The ref log records both writer (DO) and on-behalf-of (panel).
-      const log = refs.readMainLog({ repoPath: "docs/notes" });
-      expect(log[0]).toMatchObject({ writer: `do:${WRITER_ID}`, onBehalfOf: "panel:chat-1" });
     });
 
     it("chains an extension import's identity into the attribution (onBehalfOf=extension)", async () => {
       // §10 attribution: a git-bridge import publishes via the DO under an
       // extension-originated invocation token; the resolved principal is the
-      // EXTENSION (its identity, not the DO's), threaded into the gate context
-      // and recorded in the ref log as on-behalf-of.
-      const { service, refs, invocations, gateBatches } = makeService();
+      // EXTENSION (its identity, not the DO's), threaded into the gate context.
+      const { service, invocations, gateBatches } = makeService();
       const extension = createVerifiedCaller("git-bridge", "extension");
       const { token } = invocations.mint({
         caller: extension,
         via: WRITER_ID,
-        method: "vcs.import",
+        method: "vcsImportPublish",
       });
 
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-        { entries: oneAdvance(), operation: "import", invocationToken: token },
+        { entries: oneAdvance(), invocationToken: token, operation: "push" },
       ]);
 
       const ctx = gateBatches[0]!.gateContext as RefAdvanceGateContext;
       if (ctx.kind !== "caller") throw new Error("unreachable");
       expect(ctx.caller).toBe(extension);
       expect(ctx.via).toBe(WRITER_ID);
-      const log = refs.readMainLog({ repoPath: "docs/notes" });
-      expect(log[0]).toMatchObject({ operation: "import", onBehalfOf: "extension:git-bridge" });
     });
 
     it("may be presented on MULTIPLE attempts within the dispatch window (CAS retry)", async () => {
       const { service, invocations, gateBatches } = makeService();
       const upstream = panelCaller();
-      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcs.push" });
+      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
 
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
         {
-          entries: oneAdvance("docs/notes", null, STATE_A),
-          operation: "push",
+          entries: oneAdvance("packages/notes", null, STATE_A),
           invocationToken: token,
+          operation: "push",
         },
       ]);
       // Second attempt re-uses the SAME token (still in flight); succeeds.
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
         {
-          entries: oneAdvance("docs/notes", STATE_A, STATE_B),
-          operation: "push",
+          entries: oneAdvance("packages/notes", STATE_A, STATE_B),
           invocationToken: token,
+          operation: "push",
         },
       ]);
 
@@ -204,17 +206,32 @@ describe("refsService", () => {
       }
     });
 
+    it("rejects a token minted for a different VCS writer identity", async () => {
+      const { service, invocations } = makeService();
+      const { token } = invocations.mint({
+        caller: panelCaller(),
+        via: "do:workers/gad-store:GadStore:other",
+        method: "vcsPush",
+      });
+
+      await expect(
+        service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+          { entries: oneAdvance(), invocationToken: token, operation: "push" },
+        ])
+      ).rejects.toThrow(/different VCS writer/);
+    });
+
     it("rejects a token replayed AFTER the dispatch completes (release clears it)", async () => {
       const { service, invocations } = makeService();
       const { token, release } = invocations.mint({
         caller: panelCaller(),
         via: WRITER_ID,
-        method: "vcs.push",
+        method: "vcsPush",
       });
       release();
       await expect(
         service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-          { entries: oneAdvance(), operation: "push", invocationToken: token },
+          { entries: oneAdvance(), invocationToken: token, operation: "push" },
         ])
       ).rejects.toThrow(/invalid or expired invocation token/);
     });
@@ -223,14 +240,14 @@ describe("refsService", () => {
       const { service, refs } = makeService();
       await expect(
         service.handler({ caller: writerDoCaller() } as never, "updateMains", [
-          { entries: oneAdvance(), operation: "push", invocationToken: "forged-token" },
+          { entries: oneAdvance(), invocationToken: "forged-token", operation: "push" },
         ])
       ).rejects.toThrow(/invalid or expired invocation token/);
-      expect(refs.readMain("docs/notes")).toBeNull();
+      expect(refs.readMain("packages/notes")).toBeNull();
     });
 
     it("attributes to the DO itself when no token is presented (no inherited grants)", async () => {
-      const { service, refs, gateBatches } = makeService();
+      const { service, gateBatches } = makeService();
       await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
         { entries: oneAdvance(), operation: "push" },
       ]);
@@ -238,7 +255,37 @@ describe("refsService", () => {
       if (ctx.kind !== "caller") throw new Error("unreachable");
       expect(ctx.caller.runtime.id).toBe(WRITER_ID);
       expect(ctx.via).toBeUndefined();
-      expect(refs.readMainLog({ repoPath: "docs/notes" })[0]!.onBehalfOf).toBeNull();
+    });
+
+    it("captures the resolved attribution into the main-ref log (writer=DO, onBehalfOf=panel)", async () => {
+      const { service, refs, invocations } = makeService();
+      const upstream = panelCaller();
+      const { token } = invocations.mint({ caller: upstream, via: WRITER_ID, method: "vcsPush" });
+
+      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        { entries: oneAdvance(), invocationToken: token, operation: "push", reason: "landed" },
+      ]);
+
+      const rows = refs.listMainRefLog("packages/notes");
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        operation: "push",
+        reason: "landed",
+        writer: WRITER_ID,
+        old: null,
+        new: STATE_A,
+      });
+      expect((rows[0]!.onBehalfOf as { runtime: { id: string } }).runtime.id).toBe("chat-1");
+    });
+
+    it("logs a no-token advance attributed to the DO itself (writer === onBehalfOf)", async () => {
+      const { service, refs } = makeService();
+      await service.handler({ caller: writerDoCaller() } as never, "updateMains", [
+        { entries: oneAdvance(), operation: "push" },
+      ]);
+      const row = refs.listMainRefLog("packages/notes")[0]!;
+      expect(row.writer).toBe(WRITER_ID);
+      expect((row.onBehalfOf as { runtime: { id: string } }).runtime.id).toBe(WRITER_ID);
     });
   });
 
@@ -248,13 +295,13 @@ describe("refsService", () => {
     await service.handler(ctx, "updateMains", [{ entries: oneAdvance(), operation: "push" }]);
     await expect(
       service.handler(ctx, "updateMains", [
-        { entries: oneAdvance("docs/notes", null, STATE_C), operation: "push" },
+        { entries: oneAdvance("packages/notes", null, STATE_C), operation: "push" },
       ])
     ).rejects.toMatchObject({ code: "REF_CONFLICT" });
     await expect(
       service.handler(ctx, "updateMains", [
         {
-          entries: [{ repoPath: "docs/notes", expectedOld: null, next: "not-a-tree-ref" }],
+          entries: [{ repoPath: "packages/notes", expectedOld: null, next: "not-a-tree-ref" }],
           operation: "push",
         },
       ])

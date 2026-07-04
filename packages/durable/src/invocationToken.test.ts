@@ -85,6 +85,28 @@ function postRpc(
   );
 }
 
+/** POST a legacy method-path call carrying the host instance-token body shape. */
+function postMethodPath(
+  instance: unknown,
+  method: string,
+  args: unknown[],
+  invocationToken?: string
+): Promise<Response> {
+  const fetchable = instance as { fetch(request: Request): Promise<Response> };
+  return fetchable.fetch(
+    new Request(`http://test/test-key/${method}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        __instanceToken: "instance-token",
+        args,
+        __caller: { callerId: "do:gad-store", callerKind: "do" },
+        ...(invocationToken !== undefined ? { __invocationToken: invocationToken } : {}),
+      }),
+    })
+  );
+}
+
 async function resultOf<T = unknown>(res: Response): Promise<T> {
   const body = (await res.json()) as { message?: { result?: unknown; error?: string } };
   if (body.message && "error" in body.message && body.message.error) {
@@ -104,6 +126,13 @@ describe("DurableObjectBase.invocationToken", () => {
     const res = await postRpc(instance, "readToken", [], "tok-abc123");
     expect(res.status).toBe(200);
     await expect(resultOf(res)).resolves.toBe("tok-abc123");
+  });
+
+  it("surfaces the token from method-path dispatch bodies", async () => {
+    const { instance } = await createTestDO(TokenProbeDO);
+    const res = await postMethodPath(instance, "readToken", [], "tok-method-path");
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toBe("tok-method-path");
   });
 
   it("is undefined (surfaced as null here) when the dispatch carried no token", async () => {

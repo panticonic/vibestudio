@@ -74,7 +74,7 @@ type NewsTool = AgentTool;
 
 const DAY_MS = 24 * 3_600_000;
 const NEWS_BASE_LOOP_TOOL_NAMES = new Set([
-  "close_turn_without_response",
+  "suspend_turn",
   "ask_user",
   "web_search",
   "web_fetch",
@@ -1104,8 +1104,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       // The agent's blurb is a real summary; fall back to a cleaned snippet of
       // the feed item's own description so every row carries some substance.
       blurb:
-        (row["blurb"] as string | null) ??
-        plainTextSnippet(row["summary"] as string | null, 400),
+        (row["blurb"] as string | null) ?? plainTextSnippet(row["summary"] as string | null, 400),
       publishedAt:
         row["published_at"] === null
           ? undefined
@@ -1435,9 +1434,12 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   private notifyBriefingReady(stories: NewsStoryRef[], sourcesRead?: number): void {
     if (stories.length === 0) return;
     const headlines = stories.slice(0, 3).map((story) => story.title);
-    const more = stories.length > headlines.length ? ` +${stories.length - headlines.length} more` : "";
+    const more =
+      stories.length > headlines.length ? ` +${stories.length - headlines.length} more` : "";
     const readNote =
-      sourcesRead && sourcesRead > 0 ? ` · ${sourcesRead} source${sourcesRead > 1 ? "s" : ""} read` : "";
+      sourcesRead && sourcesRead > 0
+        ? ` · ${sourcesRead} source${sourcesRead > 1 ? "s" : ""} read`
+        : "";
     this.notifications
       .show({
         type: "info",

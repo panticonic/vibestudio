@@ -31,15 +31,22 @@ function getStatusKey(payload: InvocationCardPayload): StatusKey {
 }
 
 function getStatusColor(sk: StatusKey): "red" | "amber" | "green" {
-  return sk === "error" ? "red" : sk === "pending" || sk === "cancelled" || sk === "abandoned" ? "amber" : "green";
+  return sk === "error"
+    ? "red"
+    : sk === "pending" || sk === "cancelled" || sk === "abandoned"
+      ? "amber"
+      : "green";
 }
 
 function StatusDot({ statusKey }: { statusKey: StatusKey }) {
   return (
     <Box
       style={{
-        width: 6, height: 6, borderRadius: "50%",
-        backgroundColor: STATUS_DOT_COLOR[statusKey], flexShrink: 0,
+        width: 6,
+        height: 6,
+        borderRadius: "50%",
+        backgroundColor: STATUS_DOT_COLOR[statusKey],
+        flexShrink: 0,
       }}
     />
   );
@@ -49,6 +56,200 @@ function formatDisplayName(toolName: string): string {
   return prettifyToolName(toolName)
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+}
+
+function valueRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function compactText(value: unknown, max = 96): string {
+  const text = typeof value === "string" ? value : value == null ? "" : String(value);
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1))}...` : normalized;
+}
+
+function resultDetails(payload: InvocationCardPayload): Record<string, unknown> | null {
+  return valueRecord(valueRecord(payload.execution.result)?.["details"]);
+}
+
+function protocolText(payload: InvocationCardPayload): string {
+  const content = valueRecord(payload.execution.result)?.["protocolContent"];
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((block) => {
+      const record = valueRecord(block);
+      if (!record) return "";
+      return record["type"] === "text" && typeof record["text"] === "string" ? record["text"] : "";
+    })
+    .filter(Boolean)
+    .join(" ");
+}
+
+function readableReason(value: unknown): string {
+  if (typeof value !== "string" || !value) return "";
+  return value.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function messageCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "message" : "messages"}`;
+}
+
+function toolPresentation(payload: InvocationCardPayload): {
+  displayName: string;
+  preview: string;
+  color?: "red" | "amber" | "green";
+} {
+  const args = payload.arguments;
+  const details = resultDetails(payload);
+  const runId = compactText(args["runId"] ?? details?.["runId"], 24);
+  if (payload.name === "suspend_turn") {
+    const reason = readableReason(args["reason"] ?? details?.["reason"]) || "Suspend";
+    return {
+      displayName: "Suspend Turn",
+      preview: reason,
+      color: "amber",
+    };
+  }
+  if (payload.name === "spawn_subagent") {
+    const label = compactText(args["label"], 48);
+    const mode = compactText(args["mode"], 12);
+    return {
+      displayName: "Spawn Subagent",
+      preview: `${label || "Background task"}${mode ? ` (${mode})` : ""}`,
+    };
+  }
+  if (payload.name === "read_subagent") {
+    const detailMessages = details?.["messages"];
+    const messages = Array.isArray(detailMessages) ? detailMessages.length : undefined;
+    if (
+      details?.["tokenWaste"] === "polling_without_new_subagent_messages" ||
+      details?.["empty"] === true
+    ) {
+      return {
+        displayName: "Read Subagent",
+        preview: "Polling waste: no new messages. Suspend instead.",
+        color: "red",
+      };
+    }
+    if (typeof messages === "number") {
+      return {
+        displayName: "Read Subagent",
+        preview: `${messageCountLabel(messages)}${runId ? ` from ${runId}` : ""}`,
+      };
+    }
+    return {
+      displayName: "Read Subagent",
+      preview: runId ? `Transcript catch-up for ${runId}` : "Transcript catch-up",
+    };
+  }
+  if (payload.name === "send_to_subagent") {
+    return {
+      displayName: "Send To Subagent",
+      preview: compactText(args["message"], 110) || (runId ? `Steer ${runId}` : "Steering message"),
+    };
+  }
+  if (payload.name === "inspect_subagent") {
+    return {
+      displayName: "Inspect Subagent",
+      preview: `${compactText(args["query"] ?? details?.["query"] ?? "status", 44)}${runId ? ` for ${runId}` : ""}`,
+    };
+  }
+  if (payload.name === "merge_subagent") {
+    return {
+      displayName: "Merge Subagent",
+      preview: runId ? `Take all changes from ${runId}` : "Take all changes",
+    };
+  }
+  if (payload.name === "pick_from_subagent") {
+    return {
+      displayName: "Pick From Subagent",
+      preview: runId ? `Select changes from ${runId}` : "Select child changes",
+    };
+  }
+  if (payload.name === "close_subagent") {
+    return {
+      displayName: "Close Subagent",
+      preview: `${args["discard"] ? "Discard" : "Close"}${runId ? ` ${runId}` : ""}`,
+      color: args["discard"] ? "amber" : undefined,
+    };
+  }
+  const preview = formatInvocationPreview(payload.arguments, payload.execution.description, 120);
+  return { displayName: formatDisplayName(payload.name), preview };
+}
+
+function SupervisionActionSummary({ payload }: { payload: InvocationCardPayload }) {
+  const details = resultDetails(payload);
+  const args = payload.arguments;
+  const rows: Array<[string, string]> = [];
+  const runId = compactText(args["runId"] ?? details?.["runId"], 80);
+  if (runId) rows.push(["Run", runId]);
+  if (payload.name === "suspend_turn") {
+    rows.push([
+      "Reason",
+      readableReason(args["reason"] ?? details?.["reason"]) || "No foreground work",
+    ]);
+    const note = compactText(args["noteToSelf"] ?? details?.["noteToSelf"], 160);
+    if (note) rows.push(["Note", note]);
+  }
+  if (payload.name === "send_to_subagent") {
+    rows.push(["Message", compactText(args["message"], 220)]);
+  }
+  if (payload.name === "read_subagent") {
+    rows.push(["Cursor", compactText(args["afterSeq"] ?? 0, 24)]);
+    if (details?.["nextSeq"] !== undefined)
+      rows.push(["Next cursor", compactText(details["nextSeq"], 24)]);
+    const detailMessages = details?.["messages"];
+    if (Array.isArray(detailMessages)) {
+      rows.push(["Messages", messageCountLabel(detailMessages.length)]);
+    }
+  }
+  if (payload.name === "inspect_subagent") {
+    rows.push(["Query", compactText(args["query"] ?? details?.["query"] ?? "status", 160)]);
+  }
+  if (payload.name === "spawn_subagent") {
+    rows.push(["Mode", compactText(args["mode"], 32)]);
+    const label = compactText(args["label"], 96);
+    if (label) rows.push(["Label", label]);
+    const task = compactText(args["task"], 260);
+    if (task) rows.push(["Task", task]);
+  }
+  const warning =
+    details?.["tokenWaste"] === "polling_without_new_subagent_messages" ||
+    details?.["empty"] === true
+      ? "This read found no new messages. Repeating it burns tokens; use suspend_turn to wait for pushed progress."
+      : "";
+  const textResult = compactText(protocolText(payload), 220);
+  if (!rows.length && !warning && !textResult) return null;
+  return (
+    <Box className={`supervision-action-summary${warning ? " supervision-action-warning" : ""}`}>
+      {warning && (
+        <Text size="1" weight="medium" color="red" className="supervision-warning-text">
+          {warning}
+        </Text>
+      )}
+      {rows.length > 0 && (
+        <Box className="supervision-action-grid">
+          {rows.map(([name, value]) => (
+            <React.Fragment key={name}>
+              <Text size="1" color="gray" className="supervision-action-key">
+                {name}
+              </Text>
+              <Text size="1" className="supervision-action-value">
+                {value || "unknown"}
+              </Text>
+            </React.Fragment>
+          ))}
+        </Box>
+      )}
+      {textResult && (
+        <Text size="1" color={warning ? "red" : "gray"} className="supervision-action-result">
+          {textResult}
+        </Text>
+      )}
+    </Box>
+  );
 }
 
 type ConsoleLine = {
@@ -69,7 +270,13 @@ function parseConsoleLine(line: string): ConsoleLine {
 }
 
 function isConsoleLevel(value: string): value is ConsoleLine["level"] {
-  return value === "log" || value === "info" || value === "debug" || value === "warn" || value === "error";
+  return (
+    value === "log" ||
+    value === "info" ||
+    value === "debug" ||
+    value === "warn" ||
+    value === "error"
+  );
 }
 
 function consoleLineTone(level: ConsoleLine["level"]): {
@@ -90,10 +297,7 @@ function consoleLineTone(level: ConsoleLine["level"]): {
 }
 
 function ConsoleOutputView({ output }: { output: string }) {
-  const lines = useMemo(
-    () => output.split(/\r?\n/).map(parseConsoleLine),
-    [output]
-  );
+  const lines = useMemo(() => output.split(/\r?\n/).map(parseConsoleLine), [output]);
   return (
     <Box
       style={{
@@ -164,13 +368,11 @@ export const ActionPill = React.memo(function ActionPill({
 }) {
   const statusKey = getStatusKey(payload);
   const isPending = statusKey === "pending";
-  const color = getStatusColor(statusKey);
+  const presentation = useMemo(() => toolPresentation(payload), [payload]);
+  const color = presentation.color ?? getStatusColor(statusKey);
 
-  const preview = useMemo(
-    () => formatInvocationPreview(payload.arguments, payload.execution.description, 120),
-    [payload.arguments, payload.execution.description],
-  );
-  const displayName = useMemo(() => formatDisplayName(payload.name), [payload.name]);
+  const preview = presentation.preview;
+  const displayName = presentation.displayName;
   const title = preview ? `${displayName}: ${preview}` : displayName;
 
   return (
@@ -239,20 +441,24 @@ export const ExpandedAction = React.memo(function ExpandedAction({
   const statusKey = getStatusKey(payload);
   const isPending = statusKey === "pending";
   const isError = statusKey === "error";
-  const color = getStatusColor(statusKey);
+  const presentation = useMemo(() => toolPresentation(payload), [payload]);
+  const color = presentation.color ?? getStatusColor(statusKey);
   const [copiedDetails, setCopiedDetails] = useState(false);
 
-  const displayName = useMemo(() => formatDisplayName(payload.name), [payload.name]);
+  const displayName = presentation.displayName;
 
   const exec = payload.execution;
   const hasArgs = Object.keys(payload.arguments).length > 0;
   const detailsJson = useMemo(() => JSON.stringify(payload, null, 2), [payload]);
-  const copyDetails = useCallback(async (event: React.MouseEvent) => {
-    event.stopPropagation();
-    await navigator.clipboard.writeText(detailsJson);
-    setCopiedDetails(true);
-    window.setTimeout(() => setCopiedDetails(false), 1200);
-  }, [detailsJson]);
+  const copyDetails = useCallback(
+    async (event: React.MouseEvent) => {
+      event.stopPropagation();
+      await navigator.clipboard.writeText(detailsJson);
+      setCopiedDetails(true);
+      window.setTimeout(() => setCopiedDetails(false), 1200);
+    },
+    [detailsJson]
+  );
 
   return (
     <Box
@@ -310,6 +516,8 @@ export const ExpandedAction = React.memo(function ExpandedAction({
       </Flex>
 
       <Flex direction="column" gap="2" mt="2" ml="4">
+        <SupervisionActionSummary payload={payload} />
+
         {exec.description && (
           <Text size="1" color="gray" style={{ fontStyle: "italic" }}>
             {exec.description}
@@ -351,8 +559,10 @@ export const ExpandedAction = React.memo(function ExpandedAction({
                   src={`data:${img.mimeType};base64,${img.data}`}
                   alt=""
                   style={{
-                    maxWidth: "240px", maxHeight: "240px",
-                    borderRadius: "4px", border: "1px solid var(--gray-a4)",
+                    maxWidth: "240px",
+                    maxHeight: "240px",
+                    borderRadius: "4px",
+                    border: "1px solid var(--gray-a4)",
                   }}
                 />
               ))}

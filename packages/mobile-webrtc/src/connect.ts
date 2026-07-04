@@ -23,6 +23,7 @@ import { createRpcClient } from "@vibez1/rpc";
 import type { RpcClient } from "@vibez1/rpc";
 import type { WebRtcTransport, WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
 import { createPairedConnection } from "@vibez1/rpc/transports/pairedConnection";
+import { DEFAULT_CHUNK_SIZE } from "@vibez1/rpc/transports/webrtcPeer";
 import { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 
 /** Legacy AsyncStorage key (plaintext) — kept only to migrate off it on load. */
@@ -272,6 +273,7 @@ export async function establishWebRtcConnection(
     clientLabel: "Mobile device",
     clientPlatform: "mobile",
     platform: "mobile",
+    chunkSize: DEFAULT_CHUNK_SIZE,
     logPrefix: "[mobile-rtc]",
     ...(handlers.onPaired ? { onPaired: handlers.onPaired } : {}),
     ...(handlers.onPersistError ? { onPersistError: handlers.onPersistError } : {}),
@@ -288,8 +290,9 @@ export async function establishWebRtcConnection(
     const callerId = session.callerId() || "shell:pending";
     if (handlers.onServerEvent) {
       session.onMessage((envelope) => {
-        const message = (envelope as { message?: { type?: string; event?: string; payload?: unknown } })
-          ?.message;
+        const message = (
+          envelope as { message?: { type?: string; event?: string; payload?: unknown } }
+        )?.message;
         if (message && message.type === "event") {
           handlers.onServerEvent?.(message.event ?? "", message.payload);
         }

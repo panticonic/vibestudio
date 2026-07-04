@@ -12,6 +12,21 @@ export interface InvocationCardPayload {
   name: string;
   arguments: Record<string, unknown>;
   execution: ToolExecutionState;
+  /** Present when this invocation is a subagent run — drives the standalone
+   *  SubagentRunCard render instead of the inline tool pill. Folded from the
+   *  trajectory `invocation.subagent` payload (spawn fields + terminal merge). */
+  subagent?: SubagentRunState;
+}
+
+/** Subagent-run facet of an invocation card. Mirrors ProjectedInvocation.subagent. */
+export interface SubagentRunState {
+  runId?: string;
+  mode?: "fresh" | "fork";
+  taskChannelId?: string;
+  contextId?: string;
+  childEntityId?: string;
+  label?: string;
+  merge?: "merged" | "conflicted" | "discarded";
 }
 
 export interface ToolExecutionState {

@@ -62,6 +62,9 @@ export interface EditOpRowDraft {
   newContentHash: string | null;
   hunks?: unknown;
   mode?: number | null;
+  /** True when the written/created content is binary (no line structure) — lets
+   *  blame distinguish "no hunks because binary" from missing data (U1). */
+  binary?: boolean;
 }
 
 export interface EditEngineDeps {
@@ -129,23 +132,28 @@ export function hasConflictMarkers(text: string): boolean {
 export class EditEngine {
   constructor(private readonly deps: EditEngineDeps) {}
 
-  /** Resolve an EditContent to (bytes-in-store, digest, size). */
+  /** Resolve an EditContent to (bytes-in-store, digest, size, decoded text). The
+   *  `text` is the UTF-8 decoding when the content is text, else null (binary). */
   private async putContent(
     content: EditContent,
     label: string
-  ): Promise<{ digest: string; size: number }> {
+  ): Promise<{ digest: string; size: number; text: string | null }> {
     if (content.kind === "text") {
-      return this.deps.writeBlob(UTF8_ENCODER.encode(content.text));
+      const bytes = UTF8_ENCODER.encode(content.text);
+      const { digest, size } = await this.deps.writeBlob(bytes);
+      return { digest, size, text: decodeUtf8Text(bytes) };
     }
     if (content.kind === "bytes") {
-      return this.deps.writeBlob(base64ToBytes(content.base64));
+      const bytes = base64ToBytes(content.base64);
+      const { digest, size } = await this.deps.writeBlob(bytes);
+      return { digest, size, text: decodeUtf8Text(bytes) };
     }
     if (content.kind === "blob") {
       const bytes = await this.deps.readBlob(content.contentHash);
       if (!bytes) {
         throw new Error(`${label}: referenced blob missing from store: ${content.contentHash}`);
       }
-      return { digest: content.contentHash, size: bytes.length };
+      return { digest: content.contentHash, size: bytes.length, text: decodeUtf8Text(bytes) };
     }
     throw new Error("unknown file content kind");
   }
@@ -175,7 +183,13 @@ export class EditEngine {
       const oldHash = before?.contentHash ?? null;
       if (op.kind === "delete") {
         if (!files.delete(op.path)) throw new Error(`delete: no such path ${op.path}`);
-        rows.push({ kind: "delete", path: op.path, oldContentHash: oldHash, newContentHash: null });
+        rows.push({
+          kind: "delete",
+          path: op.path,
+          oldContentHash: oldHash,
+          newContentHash: null,
+          binary: false,
+        });
         continue;
       }
       if (op.kind === "chmod") {
@@ -187,6 +201,7 @@ export class EditEngine {
           oldContentHash: oldHash,
           newContentHash: oldHash,
           mode: op.mode,
+          binary: false,
         });
         continue;
       }
@@ -194,16 +209,18 @@ export class EditEngine {
         if (op.kind === "create" && before) {
           throw new Error(`create: path already exists ${op.path}`);
         }
-        const { digest, size } = await this.putContent(op.content, op.kind);
+        const { digest, size, text: newText } = await this.putContent(op.content, op.kind);
+        const binary = newText === null;
         const mode = op.mode ?? before?.mode ?? 33188;
         files.set(op.path, { path: op.path, contentHash: digest, mode, size });
         // Whole-file write over an existing TEXT file → hunk-level provenance
         // (pure provenance: replay uses the post-content hash, never the hunks).
+        // Skipped for binary new content (no line structure) — binary is marked
+        // on the row instead so blame distinguishes it from missing hunks.
         let hunks: unknown | undefined;
-        if (op.kind === "write" && before && digest !== before.contentHash) {
+        if (op.kind === "write" && before && digest !== before.contentHash && newText !== null) {
           const oldText = await this.blobText(before.contentHash);
-          const newText = oldText !== null ? await this.blobText(digest) : null;
-          if (oldText !== null && newText !== null) {
+          if (oldText !== null) {
             const h = computeReplaceHunks(oldText, newText);
             if (h.length > 0) hunks = h;
           }
@@ -215,10 +232,11 @@ export class EditEngine {
           newContentHash: digest,
           ...(hunks !== undefined ? { hunks } : {}),
           mode,
+          binary,
         });
         continue;
       }
-      // replace — exact hunks into the current content.
+      // replace — exact hunks into the current content (always text; binary throws).
       if (!before) throw new Error(`replace: no such path ${op.path}`);
       const baseBytes = await this.deps.readBlob(before.contentHash);
       if (!baseBytes) throw new Error(`replace: base blob missing for ${op.path}`);
@@ -235,6 +253,7 @@ export class EditEngine {
         oldContentHash: oldHash,
         newContentHash: digest,
         hunks: op.hunks,
+        binary: false,
       });
     }
     return { files, rows };

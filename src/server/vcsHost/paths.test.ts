@@ -4,7 +4,7 @@ import { assertSafeVcsPath, normalizeRepoPathForLog } from "./paths.js";
 
 describe("normalizeRepoPathForLog", () => {
   it("accepts canonical repo paths", () => {
-    for (const ok of ["panels/chat", "packages/foo", "projects/vault/sub", "meta"]) {
+    for (const ok of ["panels/chat", "packages/foo", "projects/vault", "meta"]) {
       expect(normalizeRepoPathForLog(ok), ok).toBe(ok);
     }
   });
@@ -18,8 +18,14 @@ describe("normalizeRepoPathForLog", () => {
       "./panels/chat",
       "panels/chat/",
       "/panels/chat",
+      "panels\\chat",
       "..",
       "a/../b",
+      "packages",
+      "panels",
+      "agents/scribe",
+      "src",
+      "projects/vault/sub",
       "",
     ]) {
       expect(() => normalizeRepoPathForLog(bad), bad).toThrow(/Invalid workspace repo path/);

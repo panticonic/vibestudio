@@ -105,4 +105,47 @@ describe("resolveChromium", () => {
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.resolveBuildId).not.toHaveBeenCalled();
   });
+
+  it("removes a stale failed download archive and retries once", async () => {
+    const { resolveChromium } = await import("./browser/acquire.js");
+    mocks.getInstalledBrowsers.mockResolvedValue([]);
+    const archive = path.join(tempDir, "chrome", "150.0.7871.24-chrome-linux64.zip");
+    fs.mkdirSync(path.dirname(archive), { recursive: true });
+    fs.writeFileSync(archive, "partial zip");
+    mocks.install
+      .mockRejectedValueOnce(new Error("end of central directory record signature not found"))
+      .mockResolvedValueOnce({ executablePath: "/downloaded/chrome" });
+
+    await expect(resolveChromium({ cacheDir: tempDir })).resolves.toEqual({
+      executablePath: "/downloaded/chrome",
+      source: "downloaded",
+    });
+    expect(fs.existsSync(archive)).toBe(false);
+    expect(mocks.install).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes an incomplete managed browser folder and retries once", async () => {
+    const { resolveChromium } = await import("./browser/acquire.js");
+    mocks.getInstalledBrowsers.mockResolvedValue([]);
+    const installDir = path.join(tempDir, "chrome", "linux-150.0.7871.24");
+    fs.mkdirSync(path.join(installDir, "chrome-linux64"), { recursive: true });
+    mocks.install
+      .mockRejectedValueOnce(
+        new Error(
+          `The browser folder (${installDir}) exists but the executable (${path.join(
+            installDir,
+            "chrome-linux64",
+            "chrome"
+          )}) is missing`
+        )
+      )
+      .mockResolvedValueOnce({ executablePath: "/downloaded/chrome" });
+
+    await expect(resolveChromium({ cacheDir: tempDir })).resolves.toEqual({
+      executablePath: "/downloaded/chrome",
+      source: "downloaded",
+    });
+    expect(fs.existsSync(installDir)).toBe(false);
+    expect(mocks.install).toHaveBeenCalledTimes(2);
+  });
 });

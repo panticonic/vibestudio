@@ -8,6 +8,7 @@ import {
   agenticSlice,
   agenticEventEnvelopeSchema,
   agenticEventSchema,
+  actorRefSchema,
   brandId,
   checkTrajectoryIntegrity,
   computeEventHash,
@@ -21,6 +22,8 @@ import {
   storedAgenticEventSchema,
   isStoredValueRef,
   messageDisplayText,
+  participantRefSchema,
+  principalRefSchema,
   trajectoryEventSchema,
   userVisibleTrajectoryProjection,
   type AgenticEvent,
@@ -108,6 +111,13 @@ function envelope(payload: AgenticEvent, seq = 1): ChannelEnvelope<AgenticEvent>
 }
 
 describe("@workspace/agentic-protocol schemas", () => {
+  it("separates participant refs from runtime principal actor refs", () => {
+    expect(actorRefSchema.parse({ kind: "do", id: "do:agent" }).kind).toBe("do");
+    expect(principalRefSchema.parse({ kind: "do", id: "do:agent" }).kind).toBe("do");
+    expect(participantRefSchema.safeParse({ kind: "do", id: "do:agent" }).success).toBe(false);
+    expect(participantRefSchema.parse({ kind: "panel", id: "panel:user" }).kind).toBe("panel");
+  });
+
   it("accepts human vocabulary events without turnId", () => {
     expect(agenticEventSchema.parse(messageEvent()).turnId).toBeUndefined();
   });
@@ -175,6 +185,21 @@ describe("@workspace/agentic-protocol schemas", () => {
         createdAt: "2026-05-20T12:00:00.000Z",
       }).kind
     ).toBe("message.failed");
+  });
+
+  it("accepts durable object actors on stored worktree state events", () => {
+    expect(
+      storedAgenticEventSchema.parse({
+        kind: "state.merge_applied",
+        actor: { kind: "do", id: "do:workers/gad-store:GadWorkspaceDO:workspace-gad" },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          inputStateHash: "sha256:old",
+          outputStateHash: "sha256:new",
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      }).actor.kind
+    ).toBe("do");
   });
 
   it("accepts reset metadata on message.failed", () => {
@@ -250,6 +275,112 @@ describe("@workspace/agentic-protocol schemas", () => {
 
     expect(result.success).toBe(false);
     expect(result.success ? "" : result.error.issues[0]?.message).toContain("terminalOutcome");
+  });
+
+  it("accepts knowledge.claim_recorded with text, kind, and ledgerEntryId", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claim_recorded",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-1") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        claimId: "claim-1",
+        ledgerEntryId: "led-1",
+        text: "the DO is the sole publisher of main refs",
+        kind: "statement",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(true);
+    expect(result.success ? result.data.payload : undefined).toMatchObject({
+      claimId: "claim-1",
+      ledgerEntryId: "led-1",
+      text: "the DO is the sole publisher of main refs",
+      kind: "statement",
+    });
+  });
+
+  it("accepts knowledge.claims_related with a relations array", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claims_related",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-2") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        ledgerEntryId: "led-rel-1",
+        relations: [
+          { src: "claim-1", relation: "supports", dst: "claim-2" },
+          { src: "claim-3", relation: "contradicts", dst: "claim-4", weight: 0.5 },
+        ],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(true);
+    const relations =
+      result.success && result.data.kind === "knowledge.claims_related"
+        ? result.data.payload.relations
+        : undefined;
+    expect(relations).toEqual([
+      { src: "claim-1", relation: "supports", dst: "claim-2" },
+      { src: "claim-3", relation: "contradicts", dst: "claim-4", weight: 0.5 },
+    ]);
+  });
+
+  it("accepts every declared claim relation kind", () => {
+    for (const relation of ["supports", "contradicts", "about", "refines", "depends_on"] as const) {
+      const result = agenticEventSchema.safeParse({
+        kind: "knowledge.claims_related",
+        actor: agent,
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          relations: [{ src: "a", relation, dst: "b" }],
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it("rejects an unknown claim relation kind", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claims_related",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        relations: [{ src: "a", relation: "reticulates", dst: "b" }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects unknown fields on knowledge payloads (strict)", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "knowledge.claim_recorded",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        claimId: "claim-1",
+        // schema rejection fixture: unknown field on a strict payload
+        confidence: 0.9,
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts knowledge.claims_related on the stored event path", () => {
+    const result = storedAgenticEventSchema.safeParse({
+      kind: "knowledge.claims_related",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-3") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        relations: [{ src: "claim-1", relation: "refines", dst: "claim-2" }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects mismatched terminalOutcome on stored invocation terminal events", () => {

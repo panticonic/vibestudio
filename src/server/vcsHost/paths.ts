@@ -10,6 +10,7 @@
  */
 
 import * as path from "node:path";
+import { normalizeWorkspaceRepoPath } from "@vibez1/shared/runtime/entitySpec";
 
 export const VCS_MAIN_HEAD = "main";
 
@@ -18,9 +19,6 @@ export const VCS_MAIN_HEAD = "main";
  *  `main` is gone but its lineage is parked here (recoverable). Used to refuse
  *  silent resurrection of a deleted repo by a stale-context push. */
 export const VCS_ARCHIVE_HEAD_PREFIX = "archived:";
-
-/** Log-id prefix for per-repo VCS logs (`vcs:repo:<path>`). */
-export const VCS_REPO_LOG_PREFIX = "vcs:repo:";
 
 /**
  * Per-repo VCS log id. Each workspace repo (`packages/foo`, `panels/chat`,
@@ -33,12 +31,6 @@ export function logIdForRepo(repoPath: string): string {
   return `vcs:repo:${normalizeRepoPathForLog(repoPath)}`;
 }
 
-/** Inverse of {@link logIdForRepo}: the repo path for a `vcs:repo:<path>` log id,
- *  or null for a non-repo log id. */
-export function repoPathFromLogId(logId: string): string | null {
-  return logId.startsWith(VCS_REPO_LOG_PREFIX) ? logId.slice(VCS_REPO_LOG_PREFIX.length) : null;
-}
-
 /**
  * Normalize a workspace-relative repo path for use as a log id. Most repos are
  * `section/key` (2 segments); flat sections that hold files directly rather than
@@ -46,21 +38,11 @@ export function repoPathFromLogId(logId: string): string | null {
  */
 export function normalizeRepoPathForLog(repoPath: string): string {
   // Canonical repo identity — one string backs the log id (`vcs:repo:<norm>`),
-  // the materializedFor cache, and the projection dir. Reject every non-canonical
-  // alias `refService.validateRepoPath` rejects (`.`/`..`/empty segments, so no
-  // interior `//`, and no leading/trailing slash) rather than silently rewriting,
-  // so aliases like `panels/./chat`, `panels//chat`, and `panels/chat/` can never
-  // split into a second identity that collides on disk with `panels/chat`.
-  const normalized = repoPath.replace(/\\/g, "/");
-  if (!normalized) {
-    throw new Error(`Invalid workspace repo path: ${repoPath}`);
-  }
-  for (const segment of normalized.split("/")) {
-    if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`Invalid workspace repo path: ${repoPath}`);
-    }
-  }
-  return normalized;
+  // the materializedFor cache, and the projection dir. Reject aliases and
+  // workspace paths that are not repo ids (for example `packages` or
+  // `packages/foo/bar`) rather than silently rewriting them into disk-colliding
+  // identities.
+  return normalizeWorkspaceRepoPath(repoPath);
 }
 
 export function vcsContextHead(contextId: string): string {
@@ -244,7 +226,18 @@ export async function isWritableVcsPath(p: string): Promise<boolean> {
 export type VcsActor = { id: string; kind: string };
 type VcsLogActor = {
   id: string;
-  kind: "user" | "agent" | "system" | "panel" | "external";
+  kind:
+    | "user"
+    | "agent"
+    | "system"
+    | "external"
+    | "panel"
+    | "app"
+    | "worker"
+    | "do"
+    | "shell"
+    | "server"
+    | "extension";
   metadata?: Record<string, unknown>;
 };
 
@@ -253,18 +246,16 @@ export function vcsLogActor(actor: VcsActor): VcsLogActor {
     actor.kind === "user" ||
     actor.kind === "agent" ||
     actor.kind === "system" ||
+    actor.kind === "external" ||
     actor.kind === "panel" ||
-    actor.kind === "external"
+    actor.kind === "app" ||
+    actor.kind === "worker" ||
+    actor.kind === "do" ||
+    actor.kind === "shell" ||
+    actor.kind === "server" ||
+    actor.kind === "extension"
   ) {
     return { id: actor.id, kind: actor.kind };
   }
-  const kind =
-    actor.kind === "do" || actor.kind === "worker"
-      ? "agent"
-      : actor.kind === "server"
-        ? "system"
-        : actor.kind === "shell"
-          ? "user"
-          : "external";
-  return { id: actor.id, kind, metadata: { type: actor.kind } };
+  return { id: actor.id, kind: "external", metadata: { type: actor.kind } };
 }

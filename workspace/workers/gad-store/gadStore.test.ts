@@ -116,7 +116,7 @@ async function countRows(
   return Number(result.rows[0]?.cnt ?? 0);
 }
 
-describe("GadWorkspaceDO unified log (schema v15)", () => {
+describe("GadWorkspaceDO unified log (schema v19)", () => {
   // §3.1 — schema shape
   it("creates only the canonical unified-log tables and drops the v14 ledger tables", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
@@ -146,6 +146,12 @@ describe("GadWorkspaceDO unified log (schema v15)", () => {
         "gad_manifest_entries",
         "gad_state_transitions",
         "gad_claims",
+        "gad_claim_relations",
+        "gad_knowledge_ledger",
+        "gad_touches",
+        "gad_provenance_cache",
+        "gad_prov_metrics",
+        "gad_prov_render_log",
       ])
     );
     for (const dropped of [
@@ -1331,9 +1337,9 @@ describe("channel adapters (§3.4)", () => {
     const second = await call<any>("appendChannelEnvelope", input);
 
     expect(second).toEqual(first);
-    expect(await countRows(call, "log_id = ? AND envelope_id = ?", ["channel-1", "env-idempotent"])).toBe(
-      1
-    );
+    expect(
+      await countRows(call, "log_id = ? AND envelope_id = ?", ["channel-1", "env-idempotent"])
+    ).toBe(1);
     await expect(
       call("appendChannelEnvelope", {
         ...input,
@@ -1373,7 +1379,9 @@ describe("channel adapters (§3.4)", () => {
       payload: { typeId: "custom" },
       registryMutation: { kind: "clearMessageType", typeId: "custom" },
     });
-    expect(await call<any>("getMessageType", { channelId: "channel-1", typeId: "custom" })).toBeNull();
+    expect(
+      await call<any>("getMessageType", { channelId: "channel-1", typeId: "custom" })
+    ).toBeNull();
     expect(await call<any[]>("listMessageTypes", { channelId: "channel-1" })).toEqual([]);
 
     // a later upsert at a higher seq wins over the earlier clear
@@ -1668,7 +1676,11 @@ describe("forkLog no-copy (§3.5)", () => {
       payload: { value: 4 },
     });
     expect(
-      await call<any[]>("listChannelEnvelopesAfter", { channelId: "channel-fork", seq: 3, limit: 10 })
+      await call<any[]>("listChannelEnvelopesAfter", {
+        channelId: "channel-fork",
+        seq: 3,
+        limit: 10,
+      })
     ).toEqual([expect.objectContaining({ envelopeId: "env-fork-new", seq: 4 })]);
   });
 });
@@ -2023,9 +2035,7 @@ describe("recursive manifests (§3.8)", () => {
       trajectoryId: "traj-manifest",
       branchId: "a",
     });
-    expect(
-      branchFiles.map((row: any) => [row.path, row.content_hash]).sort()
-    ).toEqual([
+    expect(branchFiles.map((row: any) => [row.path, row.content_hash]).sort()).toEqual([
       ["docs/readme.md", "blob:r1"],
       ["src/a.ts", "blob:a1"],
       ["src/lib/util.ts", "blob:u1"],
@@ -2131,165 +2141,6 @@ describe("ingestWorktreeState (§3.9)", () => {
       [result.stateHash]
     );
     expect(states.rows[0]?.cnt).toBe(1);
-  });
-});
-
-describe("file mutation projection (§3.10)", () => {
-  it("projects file intent/apply events into content-addressed state provenance", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const appendResult = await call<Record<string, unknown>>("appendTrajectoryBatch", {
-      trajectoryId: "traj-1",
-      branchId: "main",
-      owner,
-      events: [
-        {
-          eventId: "intent-1",
-          event: event("state.file_mutation_intended", {
-            causality: { invocationId: "inv-write" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-1",
-              path: "src/index.ts",
-              operation: "write",
-              rationale: "write planned",
-            } as never,
-          }),
-        },
-        {
-          eventId: "apply-1",
-          event: event("state.file_mutation_applied", {
-            causality: { invocationId: "inv-write" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-1",
-              path: "src/index.ts",
-              operation: "write",
-              afterHash: "blob:v1",
-              hunks: [
-                {
-                  oldStartLine: 4,
-                  oldLineCount: 2,
-                  newStartLine: 4,
-                  newLineCount: 3,
-                  oldTextHash: "blob:old-lines",
-                  newTextHash: "blob:new-lines",
-                },
-              ],
-            } as never,
-          }),
-        },
-      ],
-    });
-
-    const mutation = await call<{ rows: Array<Record<string, unknown>> }>(
-      "query",
-      "SELECT input_state_hash, output_state_hash FROM gad_file_mutations WHERE mutation_id = ?",
-      ["mut-1"]
-    );
-    const inputStateHash = String(mutation.rows[0]?.["input_state_hash"]);
-    const outputStateHash = String(mutation.rows[0]?.["output_state_hash"]);
-    expect(outputStateHash).toMatch(/^state:/);
-    expect(appendResult["headStateHash"]).toBe(outputStateHash);
-
-    // structured worktree head tracks the mutation output
-    const head = await call<any>("resolveWorktreeHead", { logId: "traj-1", head: "main" });
-    expect(head.stateHash).toBe(outputStateHash);
-
-    const producer = await call<Record<string, unknown> | null>("getGadStateProducer", {
-      stateHash: outputStateHash,
-    });
-    expect(producer).toMatchObject({
-      event_id: "apply-1",
-      invocation_id: "inv-write",
-      produced_by_mutation_id: "mut-1",
-    });
-
-    const file = await call<Record<string, unknown> | null>("readGadFileAtState", {
-      stateHash: outputStateHash,
-      path: "src/index.ts",
-    });
-    expect(file).toMatchObject({ path: "src/index.ts", content_hash: "blob:v1" });
-
-    const diff = await call<{
-      added: Array<Record<string, unknown>>;
-      removed: unknown[];
-      changed: unknown[];
-    }>("diffGadStates", {
-      leftStateHash: inputStateHash,
-      rightStateHash: outputStateHash,
-    });
-    expect(diff.added).toEqual([expect.objectContaining({ path: "src/index.ts" })]);
-
-    const blame = await call<Array<Record<string, unknown>>>("blameGadFileSnippet", {
-      stateHash: outputStateHash,
-      path: "src/index.ts",
-    });
-    expect(blame[0]).toMatchObject({
-      mutation_id: "mut-1",
-      old_start_line: 4,
-      old_line_count: 2,
-      new_start_line: 4,
-      new_line_count: 3,
-      old_text_hash: "blob:old-lines",
-      new_text_hash: "blob:new-lines",
-    });
-  });
-
-  it("applies nested-path mutations as O(depth) path copies that preserve sibling subtrees", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const base = await call<any>("ingestWorktreeState", {
-      files: [
-        { path: "src/a.ts", contentHash: "blob:a1" },
-        { path: "src/lib/util.ts", contentHash: "blob:u1" },
-        { path: "docs/readme.md", contentHash: "blob:r1" },
-      ],
-      logId: "traj-deep",
-      head: "main",
-      actor: owner,
-      eventId: "ingest-base",
-    });
-
-    await call("appendTrajectoryBatch", {
-      trajectoryId: "traj-deep",
-      branchId: "main",
-      owner,
-      events: [
-        {
-          eventId: "apply-deep",
-          event: event("state.file_mutation_applied", {
-            causality: { invocationId: "inv-deep" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-deep",
-              path: "src/lib/util.ts",
-              operation: "write",
-              afterHash: "blob:u2",
-            } as never,
-          }),
-        },
-      ],
-    });
-
-    const head = await call<any>("resolveWorktreeHead", { logId: "traj-deep", head: "main" });
-    const outputStateHash = head.stateHash as string;
-    expect(outputStateHash).not.toBe(base.stateHash);
-
-    // mutated leaf updated; siblings untouched
-    expect(
-      await call<any>("readGadFileAtState", { stateHash: outputStateHash, path: "src/lib/util.ts" })
-    ).toMatchObject({ content_hash: "blob:u2" });
-    expect(
-      await call<any>("readGadFileAtState", { stateHash: outputStateHash, path: "src/a.ts" })
-    ).toMatchObject({ content_hash: "blob:a1" });
-
-    // the docs subtree manifest is shared verbatim between input and output states
-    const docsBefore = await subtreeHashAt(call, base.stateHash, "docs");
-    const docsAfter = await subtreeHashAt(call, outputStateHash, "docs");
-    expect(docsAfter).toBe(docsBefore);
-    // the mutated ancestor chain re-hashed
-    const srcBefore = await subtreeHashAt(call, base.stateHash, "src");
-    const srcAfter = await subtreeHashAt(call, outputStateHash, "src");
-    expect(srcAfter).not.toBe(srcBefore);
   });
 });
 
@@ -2445,110 +2296,23 @@ describe("projection replay (§3.12)", () => {
     ]);
   });
 
-  it("deterministically rebuilds state-transition chains for mutations without explicit state hashes", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    // The real producer (pi-runner) emits file_mutation_applied with only
-    // beforeHash/afterHash and no inputStateHash/outputStateHash, so the store
-    // derives input state from the worktree head. Replay must reset the head to
-    // the empty state so the rebuilt chain matches the original append.
-    const appendResult = await call<Record<string, unknown>>("appendTrajectoryBatch", {
-      trajectoryId: "traj-1",
-      branchId: "main",
-      owner,
-      events: [
-        {
-          eventId: "apply-a",
-          event: event("state.file_mutation_applied", {
-            causality: { invocationId: "inv-a" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-a",
-              path: "a.ts",
-              operation: "write",
-              afterHash: "blob:a1",
-            } as never,
-          }),
-        },
-        {
-          eventId: "apply-b",
-          event: event("state.file_mutation_applied", {
-            causality: { invocationId: "inv-b" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-b",
-              path: "b.ts",
-              operation: "write",
-              afterHash: "blob:b1",
-            } as never,
-          }),
-        },
-      ],
-    });
-
-    const transitionsQuery =
-      "SELECT produced_by_mutation_id, input_state_hash, output_state_hash FROM gad_state_transitions ORDER BY event_id";
-    const before = await call<{ rows: Array<Record<string, unknown>> }>(
-      "query",
-      transitionsQuery,
-      []
-    );
-    expect(before.rows).toHaveLength(2);
-    // Chain is contiguous, and the first mutation's input is NOT the final head
-    // (it is the empty state). This is what a non-reset replay would corrupt.
-    expect(before.rows[1]?.["input_state_hash"]).toBe(before.rows[0]?.["output_state_hash"]);
-    expect(before.rows[0]?.["input_state_hash"]).not.toBe(appendResult["headStateHash"]);
-
-    const statesBefore = await call<{ rows: Array<{ cnt: number }> }>(
-      "query",
-      "SELECT COUNT(*) AS cnt FROM gad_worktree_states",
-      []
-    );
-
-    const replay = await call<{ replayed: number }>("rebuildTrajectoryProjections", {});
-    expect(replay.replayed).toBe(2);
-
-    const after = await call<{ rows: Array<Record<string, unknown>> }>(
-      "query",
-      transitionsQuery,
-      []
-    );
-    expect(after.rows).toEqual(before.rows);
-
-    // values (worktree states) survive replay — only projections are rebuilt
-    const statesAfter = await call<{ rows: Array<{ cnt: number }> }>(
-      "query",
-      "SELECT COUNT(*) AS cnt FROM gad_worktree_states",
-      []
-    );
-    expect(statesAfter.rows).toEqual(statesBefore.rows);
-
-    const head = await call<any>("resolveWorktreeHead", { logId: "traj-1", head: "main" });
-    expect(head.stateHash).toBe(appendResult["headStateHash"]);
-  });
-
   it("rebuilds worktree heads for every head when replaying a forked trajectory", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    // Parent branch: a file mutation, a fork-point marker, then a second
-    // mutation that stays parent-only. Mutations omit inputStateHash so each
-    // head's input state is derived from its own worktree head during replay.
-    const parent = await call<Record<string, unknown>>("appendTrajectoryBatch", {
+    // Parent branch: a snapshot ingest, a fork-point marker, then a second
+    // ingest that stays parent-only. Replay must re-derive each head's chain
+    // from its own lineage view.
+    const stateA = await call<any>("ingestWorktreeState", {
+      files: [{ path: "a.ts", contentHash: "blob:a1" }],
+      logId: "traj-parent",
+      head: "branch-parent",
+      actor: owner,
+      eventId: "apply-a",
+    });
+    await call("appendTrajectoryBatch", {
       trajectoryId: "traj-parent",
       branchId: "branch-parent",
       owner,
       events: [
-        {
-          eventId: "apply-a",
-          event: event("state.file_mutation_applied", {
-            causality: { invocationId: "inv-a" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-a",
-              path: "a.ts",
-              operation: "write",
-              afterHash: "blob:a1",
-            } as never,
-          }),
-        },
         {
           eventId: "fork-point",
           event: event("message.completed", {
@@ -2557,20 +2321,17 @@ describe("projection replay (§3.12)", () => {
             payload: textMessagePayload("msg-fork", "assistant", "fork here"),
           }),
         },
-        {
-          eventId: "apply-b",
-          event: event("state.file_mutation_applied", {
-            causality: { invocationId: "inv-b" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-b",
-              path: "b.ts",
-              operation: "write",
-              afterHash: "blob:b1",
-            } as never,
-          }),
-        },
       ],
+    });
+    const stateB = await call<any>("ingestWorktreeState", {
+      files: [
+        { path: "a.ts", contentHash: "blob:a1" },
+        { path: "b.ts", contentHash: "blob:b1" },
+      ],
+      logId: "traj-parent",
+      head: "branch-parent",
+      actor: owner,
+      eventId: "apply-b",
     });
 
     const forkPointHash = String(
@@ -2596,10 +2357,10 @@ describe("projection replay (§3.12)", () => {
     expect((fork as any)["lineage"]).toEqual([]);
     expect(await countRows(call, "log_id = ?", ["traj-fork"])).toBe(0);
 
-    // The two heads diverge: parent reflects both mutations, the fork only one.
-    expect(String(parent["headStateHash"])).toMatch(/^state:/);
-    expect(String(fork["headStateHash"])).toMatch(/^state:/);
-    expect(parent["headStateHash"]).not.toBe(fork["headStateHash"]);
+    // The two heads diverge: parent reflects both ingests, the fork only one.
+    expect(stateA.stateHash).toMatch(/^state:/);
+    expect(stateB.stateHash).toMatch(/^state:/);
+    expect(stateA.stateHash).not.toBe(stateB.stateHash);
 
     const readHeads = async () => ({
       parent: await call<any>("resolveWorktreeHead", {
@@ -2613,8 +2374,8 @@ describe("projection replay (§3.12)", () => {
     });
     const headsBefore = await readHeads();
     expect(headsBefore).toMatchObject({
-      parent: { stateHash: parent["headStateHash"] },
-      fork: { stateHash: fork["headStateHash"] },
+      parent: { stateHash: stateB.stateHash },
+      fork: { stateHash: stateA.stateHash },
     });
     const stableHeads = (heads: Awaited<ReturnType<typeof readHeads>>) => ({
       parent: {
@@ -2632,7 +2393,7 @@ describe("projection replay (§3.12)", () => {
     // No-copy fork ⇒ apply-a exists once as a log event; its transition is keyed
     // by event_id, so the table holds one row per distinct event.
     const transitionsQuery =
-      "SELECT event_id, input_state_hash, output_state_hash, produced_by_mutation_id FROM gad_state_transitions ORDER BY event_id";
+      "SELECT event_id, input_state_hash, output_state_hash FROM gad_state_transitions ORDER BY event_id";
     const transitionsBefore = await call<{ rows: Array<Record<string, unknown>> }>(
       "query",
       transitionsQuery,
@@ -2893,7 +2654,13 @@ describe("stored-value refs (§3.14)", () => {
     });
 
     const refs = await call<{
-      rows: Array<{ log_id: string; head: string; envelope_id: string; field_path: string; digest: string }>;
+      rows: Array<{
+        log_id: string;
+        head: string;
+        envelope_id: string;
+        field_path: string;
+        digest: string;
+      }>;
     }>(
       "query",
       "SELECT log_id, head, envelope_id, field_path, digest FROM log_blob_refs ORDER BY envelope_id, field_path",
@@ -3188,9 +2955,9 @@ describe("lineage queries over causality edges (§3.15)", () => {
 
     const publishedEnvelopeId = sideEnvelopes[0].publication.envelopeId;
     const publicChannel = await call<any[]>("listChannelEnvelopes", { channelId: "main-channel" });
-    expect(
-      publicChannel.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)
-    ).toEqual(["Side task summary for the main session"]);
+    expect(publicChannel.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)).toEqual([
+      "Side task summary for the main session",
+    ]);
     expect(JSON.stringify(publicChannel)).not.toContain("keep this out of PubSub");
 
     const privateLineage = await call<any>("getPrivateLineageForPublishedEnvelope", {
@@ -3373,7 +3140,16 @@ describe("cache amnesia (§3.17)", () => {
   it("rebuilds identical derived state after deleting all projections and worktree heads", async () => {
     const { call, sql } = await createTestDO(GadWorkspaceDO);
 
-    // Scenario: turn + message (published) + invocation round trip + file mutation.
+    // Scenario: turn + message (published) + invocation round trip + a
+    // worktree snapshot ingest (live worktree-provenance path).
+    await call("ensureBlob", "blob:out1", 8, "text/plain");
+    await call("ingestWorktreeState", {
+      files: [{ path: "src/out.ts", contentHash: "blob:out1" }],
+      logId: "traj-amnesia",
+      head: "main",
+      actor: owner,
+      eventId: "ingest-out",
+    });
     await call("appendTrajectoryBatch", {
       trajectoryId: "traj-amnesia",
       branchId: "main",
@@ -3403,20 +3179,6 @@ describe("cache amnesia (§3.17)", () => {
             createdAt: "2026-05-20T12:00:02.000Z",
             causality: { invocationId: "inv-1" as never },
             payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "write_file" },
-          }),
-        },
-        {
-          eventId: "apply-1",
-          event: event("state.file_mutation_applied", {
-            createdAt: "2026-05-20T12:00:03.000Z",
-            causality: { invocationId: "inv-1" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              mutationId: "mut-1",
-              path: "src/out.ts",
-              operation: "write",
-              afterHash: "blob:out1",
-            } as never,
           }),
         },
         {
@@ -3486,9 +3248,6 @@ describe("cache amnesia (§3.17)", () => {
       "channel_roster",
       "gad_state_transitions",
       "gad_transition_parents",
-      "gad_file_observations",
-      "gad_file_mutations",
-      "gad_file_change_hunks",
       "gad_claims",
     ]) {
       sql.exec(`DELETE FROM ${table}`);
@@ -3531,57 +3290,6 @@ describe("GC reachability protections (§3.18)", () => {
   // A timestamp far past the GC creation grace window so survival in these
   // tests is attributable to reachability rules, not the grace period.
   const PAST_GRACE = "2026-01-01T00:00:00.000Z";
-
-  it("keeps blobs referenced only by file observations out of GC candidates", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
-    await call("ensureBlob", "blob:observed", 12, "text/plain");
-    await call("appendTrajectoryBatch", {
-      trajectoryId: "traj-gc-obs",
-      branchId: "main",
-      owner,
-      events: [
-        {
-          eventId: "obs-1",
-          event: event("state.file_observed", {
-            causality: { invocationId: "inv-obs" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              observationId: "obs-1",
-              path: "notes.txt",
-              contentHash: "blob:observed",
-            } as never,
-          }),
-        },
-      ],
-    });
-    sql.exec(`UPDATE gad_blobs SET created_at = ?`, PAST_GRACE);
-    sql.exec(`UPDATE gad_worktree_states SET created_at = ?`, PAST_GRACE);
-
-    await call("runGadGcMark");
-
-    const candidates = await call<{ rows: Array<{ digest: string }> }>(
-      "query",
-      "SELECT digest FROM gad_gc_candidates",
-      []
-    );
-    expect(candidates.rows.map((row) => row.digest)).not.toContain("blob:observed");
-
-    // The observation's file version and blob survive the mark phase.
-    const versions = await call<{ rows: Array<{ content_hash: string }> }>(
-      "query",
-      "SELECT content_hash FROM gad_file_versions WHERE content_hash = ?",
-      ["blob:observed"]
-    );
-    expect(versions.rows).toHaveLength(1);
-    const swept = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
-    expect(swept.digests).not.toContain("blob:observed");
-    const blobs = await call<{ rows: Array<{ hash: string }> }>(
-      "query",
-      "SELECT hash FROM gad_blobs WHERE hash = ?",
-      ["blob:observed"]
-    );
-    expect(blobs.rows).toHaveLength(1);
-  });
 
   it("keeps uncommitted working-edit content live and sweeps it once committed", async () => {
     const { call, sql } = await createTestDO(GadWorkspaceDO);
@@ -3637,9 +3345,7 @@ describe("GC reachability protections (§3.18)", () => {
     expect(mark2.liveBlobDigests).not.toContain("blob:edit-new");
     expect(mark2.liveBlobDigests).not.toContain("blob:edit-old");
     const swept2 = await call<{ digests: string[] }>("runGadGcSweep", { minAgeMs: 0 });
-    expect(swept2.digests).toEqual(
-      expect.arrayContaining(["blob:edit-new", "blob:edit-old"])
-    );
+    expect(swept2.digests).toEqual(expect.arrayContaining(["blob:edit-new", "blob:edit-old"]));
   });
 
   it("does not sweep a candidate that gained an uncommitted edit-op reference after mark", async () => {
@@ -3703,27 +3409,16 @@ describe("GC reachability protections (§3.18)", () => {
     const { call, sql } = await createTestDO(GadWorkspaceDO);
     // A committed edit op alone does not protect its content; the canonical
     // protection is the file-version row the commit produced. Simulate a
-    // committed edit whose result blob IS backed by a file version referenced
-    // by a file observation (so the mark's orphan-sweep keeps the version).
+    // committed edit whose result blob IS backed by a file-version row kept
+    // by a live manifest (so the mark's orphan-sweep keeps the version).
     await call("ensureBlob", "blob:committed", 6, "text/plain");
-    await call("appendTrajectoryBatch", {
-      trajectoryId: "traj-gc-committed",
-      branchId: "main",
-      owner,
-      events: [
-        {
-          eventId: "obs-committed",
-          event: event("state.file_observed", {
-            causality: { invocationId: "inv-committed" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              observationId: "obs-committed",
-              path: "committed.txt",
-              contentHash: "blob:committed",
-            } as never,
-          }),
-        },
-      ],
+    await call("ingestWorktreeState", {
+      files: [{ path: "committed.txt", contentHash: "blob:committed" }],
+      logId: "vcs:repo:demo",
+      head: "main",
+      actor: owner,
+      summary: "committed content",
+      eventId: "commit-c1",
     });
     sql.exec(
       `INSERT INTO gad_worktree_edit_ops (
@@ -3772,7 +3467,12 @@ describe("GC reachability protections (§3.18)", () => {
     });
     // Backdate every value past the creation grace window: staged metadata
     // alone is not a permanent root.
-    for (const table of ["gad_worktree_states", "gad_blobs", "gad_manifest_nodes", "gad_file_versions"]) {
+    for (const table of [
+      "gad_worktree_states",
+      "gad_blobs",
+      "gad_manifest_nodes",
+      "gad_file_versions",
+    ]) {
       sql.exec(`UPDATE ${table} SET created_at = ?`, PAST_GRACE);
     }
 
@@ -4115,7 +3815,10 @@ describe("computeMerge (P5b — userland merge semantics)", () => {
       gad.call,
       "vcs:repo:panels/a",
       [{ path: "f.txt", contentHash: baseHash }],
-      [{ path: "f.txt", contentHash: baseHash }, { path: "ours.txt", contentHash: cas.putText("o\n") }],
+      [
+        { path: "f.txt", contentHash: baseHash },
+        { path: "ours.txt", contentHash: cas.putText("o\n") },
+      ],
       "ours"
     );
     // `theirs` is a server-minted state: unknown to the DO, mirrored in the
@@ -4148,5 +3851,570 @@ describe("computeMerge (P5b — userland merge semantics)", () => {
         labels: { ours: "a", theirs: "b" },
       })
     ).rejects.toThrow(/unknown worktree state/);
+  });
+});
+
+describe("knowledge ledger + claims (§8.1)", () => {
+  it("records a claim through the durable ledger and projects gad_claims + FTS", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const res = await call<{
+      claimId?: string;
+      ledgerEntryId?: string;
+      duplicates: Array<{ claimId: string; text: string; score: number }>;
+    }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      invocationId: "inv-1",
+      claim: {
+        text: "The gad store owns all VCS semantics",
+        subject: "gad-store",
+        predicate: "owns",
+        object: "vcs semantics",
+      },
+    });
+    expect(res.claimId).toBeTruthy();
+    expect(res.ledgerEntryId).toBeTruthy();
+    expect(res.duplicates).toEqual([]);
+
+    const ledger = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT entry_id, kind, seq FROM gad_knowledge_ledger",
+      []
+    );
+    expect(ledger.rows.length).toBe(1);
+    expect(ledger.rows[0]).toEqual(
+      expect.objectContaining({ entry_id: res.ledgerEntryId, kind: "claim_recorded", seq: 1 })
+    );
+
+    const claims = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT claim_id, text, subject, predicate, object, status, ledger_entry_id, trajectory_event_id, invocation_id FROM gad_claims",
+      []
+    );
+    expect(claims.rows.length).toBe(1);
+    expect(claims.rows[0]).toEqual(
+      expect.objectContaining({
+        claim_id: res.claimId,
+        text: "The gad store owns all VCS semantics",
+        subject: "gad-store",
+        predicate: "owns",
+        object: "vcs semantics",
+        status: "active",
+        ledger_entry_id: res.ledgerEntryId,
+        invocation_id: "inv-1",
+      })
+    );
+    // trajectory_event_id is the (pre-minted) knowledge event's envelope id.
+    expect(claims.rows[0]?.["trajectory_event_id"]).toBeTruthy();
+
+    const recall = await call<{ results: Array<{ anchor: Record<string, unknown> | null }> }>(
+      "recallMemory",
+      { query: "vcs semantics", kinds: ["claim"] }
+    );
+    expect(recall.results.some((r) => r.anchor?.["claimId"] === res.claimId)).toBe(true);
+
+    const metrics = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT metric, bucket, count FROM gad_prov_metrics",
+      []
+    );
+    expect(metrics.rows).toContainEqual(
+      expect.objectContaining({ metric: "claims_recorded", bucket: "standalone", count: 1 })
+    );
+  });
+
+  it("survives a schema bump: the ledger is exempt from the drop and re-projects claims + relations", async () => {
+    const first = await createTestDO(GadWorkspaceDO);
+    const c1 = await first.call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "durable claim one that outlives the era" },
+    });
+    const c2 = await first.call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "durable claim two, unrelated words entirely" },
+    });
+    await first.call("knowledgeRelateClaims", {
+      logId: "traj-1",
+      head: "main",
+      relations: [{ src: c1.claimId, relation: "contradicts", dst: c2.claimId }],
+    });
+
+    // Stamp an older schema version so reopening the same storage migrates
+    // (drop projections + recreate) — the big-bang "last wipe".
+    first.db.run("UPDATE state SET value = '24' WHERE key = 'schema_version'");
+    const second = await createTestDO(GadWorkspaceDO, undefined, { db: first.db });
+
+    const version = await second.call<{ rows: Array<{ value: string }> }>(
+      "query",
+      "SELECT value FROM state WHERE key = 'schema_version'",
+      []
+    );
+    expect(version.rows[0]?.value).toBe("26");
+
+    // The ledger survived the gad_% drop sweep.
+    const ledger = await second.call<{ rows: Array<{ kind: string }> }>(
+      "query",
+      "SELECT kind FROM gad_knowledge_ledger ORDER BY seq",
+      []
+    );
+    expect(ledger.rows.map((r) => r.kind)).toEqual([
+      "claim_recorded",
+      "claim_recorded",
+      "claims_related",
+    ]);
+
+    // gad_claims was dropped and rebuilt purely by replaying the ledger.
+    const claims = await second.call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT claim_id, text FROM gad_claims ORDER BY text",
+      []
+    );
+    expect(claims.rows.map((r) => r["claim_id"])).toEqual([c1.claimId, c2.claimId]);
+
+    // And so was the relation.
+    const relations = await second.call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT src_claim_id, relation, dst_claim_id FROM gad_claim_relations",
+      []
+    );
+    expect(relations.rows).toEqual([
+      expect.objectContaining({
+        src_claim_id: c1.claimId,
+        relation: "contradicts",
+        dst_claim_id: c2.claimId,
+      }),
+    ]);
+
+    // A later full rebuild must NOT lose the ledger-only claims: post-bump the
+    // trajectory events are gone, so the replay leans on the ledger for claims.
+    await second.call("rebuildTrajectoryProjections", {});
+    const afterReplay = await second.call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(afterReplay.rows[0]?.n).toBe(2);
+    const relAfterReplay = await second.call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claim_relations",
+      []
+    );
+    expect(relAfterReplay.rows[0]?.n).toBe(1);
+  });
+
+  it("dedups on write: near-duplicates return candidates without recording unless forced", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const first = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "system uses log events for provenance" },
+    });
+    expect(first.claimId).toBeTruthy();
+
+    const dup = await call<{
+      claimId?: string;
+      duplicates: Array<{ claimId: string; score: number }>;
+    }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "system uses log events for provenance" },
+    });
+    expect(dup.claimId).toBeUndefined();
+    expect(dup.duplicates.length).toBeGreaterThan(0);
+    expect(dup.duplicates[0]?.claimId).toBe(first.claimId);
+    expect(dup.duplicates[0]?.score).toBeGreaterThanOrEqual(0.6);
+
+    const afterSkip = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(afterSkip.rows[0]?.n).toBe(1);
+
+    const forced = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "system uses log events for provenance" },
+      force: true,
+    });
+    expect(forced.claimId).toBeTruthy();
+    const afterForce = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(afterForce.rows[0]?.n).toBe(2);
+  });
+
+  it("projects claims_related and dedups it across replay + a fork fold", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const c1 = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "claim one about apples and orchards" },
+    });
+    const c2 = await call<{ claimId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "claim two about oranges and groves" },
+    });
+    const rel = await call<{ ledgerEntryId: string; related: number }>("knowledgeRelateClaims", {
+      logId: "traj-1",
+      head: "main",
+      invocationId: "inv-rel",
+      relations: [{ src: c1.claimId, relation: "contradicts", dst: c2.claimId, weight: 3 }],
+    });
+    expect(rel.related).toBe(1);
+
+    let rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT event_id, src_claim_id, relation, dst_claim_id, weight FROM gad_claim_relations",
+      []
+    );
+    expect(rows.rows.length).toBe(1);
+    expect(rows.rows[0]).toEqual(
+      expect.objectContaining({
+        src_claim_id: c1.claimId,
+        relation: "contradicts",
+        dst_claim_id: c2.claimId,
+        weight: 3,
+      })
+    );
+
+    // Fork the whole trajectory at its tip so the fork inherits the relate event.
+    const tip = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT MAX(seq) AS n FROM log_events WHERE log_id = ? AND head = ?",
+      ["traj-1", "main"]
+    );
+    await call("forkLog", {
+      fromLogId: "traj-1",
+      fromHead: "main",
+      toLogId: "traj-1",
+      toHead: "ctx:fork",
+      atSeq: tip.rows[0]?.n,
+      owner,
+    });
+
+    // Replay projects the SAME relate event under both heads; the unique
+    // identity + INSERT OR IGNORE keeps exactly one relation row.
+    await call("rebuildTrajectoryProjections", {});
+    rows = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claim_relations",
+      []
+    );
+    expect(rows.rows[0]?.["n"]).toBe(1);
+    // Claims dedup by claim_id across the fold too.
+    const claims = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_claims",
+      []
+    );
+    expect(claims.rows[0]?.n).toBe(2);
+  });
+
+  it("projects a directly-appended knowledge.claims_related event (registration + inline fallback)", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-x",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "rel-ev-1",
+          event: event("knowledge.claims_related", {
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              relations: [{ src: "claim-a", relation: "supports", dst: "claim-b", weight: 2 }],
+            },
+          }),
+        },
+      ],
+    });
+    const rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT event_id, src_claim_id, relation, dst_claim_id, weight FROM gad_claim_relations",
+      []
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({
+        event_id: "rel-ev-1",
+        src_claim_id: "claim-a",
+        relation: "supports",
+        dst_claim_id: "claim-b",
+        weight: 2,
+      }),
+    ]);
+  });
+
+  it("snapshots the anchor (repo, commit message, actor, time) and buckets commit-borne claims", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    // Seed a commit transition so the anchor resolves the message's first line.
+    sql.exec(
+      "INSERT INTO gad_state_transitions (event_id, input_state_hash, output_state_hash, summary, created_at) VALUES (?, ?, ?, ?, ?)",
+      "commit-ev-1",
+      "state:in",
+      "state:out",
+      "Fix the parser\n\nlong body text that is not the first line",
+      "2026-05-20T12:00:00.000Z"
+    );
+    const rec = await call<{ ledgerEntryId?: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser now handles trailing newlines" },
+      anchor: { commitEventId: "commit-ev-1", repoPath: "packages/parser" },
+    });
+    const ledger = await call<{ rows: Array<{ anchor_json: string }> }>(
+      "query",
+      "SELECT anchor_json FROM gad_knowledge_ledger WHERE entry_id = ?",
+      [rec.ledgerEntryId]
+    );
+    const anchor = JSON.parse(ledger.rows[0]!.anchor_json) as Record<string, unknown>;
+    expect(anchor["repoPath"]).toBe("packages/parser");
+    expect(anchor["commitEventId"]).toBe("commit-ev-1");
+    expect(anchor["commitMessage"]).toBe("Fix the parser");
+    expect(typeof anchor["actorLabel"]).toBe("string");
+    expect(typeof anchor["recordedAt"]).toBe("string");
+
+    const metrics = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT metric, bucket, count FROM gad_prov_metrics",
+      []
+    );
+    expect(metrics.rows).toContainEqual(
+      expect.objectContaining({ metric: "claims_recorded", bucket: "commit", count: 1 })
+    );
+  });
+
+  it("revises and retracts a claim through the ledger", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const rec = await call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { subject: "parser", predicate: "handles", object: "newlines" },
+    });
+    const revised = await call<{ ledgerEntryId: string }>("knowledgeReviseClaim", {
+      logId: "traj-1",
+      head: "main",
+      claimId: rec.claimId,
+      patch: { object: "trailing newlines", kind: "statement" },
+    });
+    let claims = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT subject, predicate, object, claim_kind, status, ledger_entry_id FROM gad_claims WHERE claim_id = ?",
+      [rec.claimId]
+    );
+    expect(claims.rows[0]).toEqual(
+      expect.objectContaining({
+        subject: "parser",
+        predicate: "handles",
+        object: "trailing newlines",
+        claim_kind: "statement",
+        status: "active",
+        ledger_entry_id: revised.ledgerEntryId,
+      })
+    );
+
+    const retracted = await call<{ ledgerEntryId: string }>("knowledgeRetractClaim", {
+      logId: "traj-1",
+      head: "main",
+      claimId: rec.claimId,
+    });
+    claims = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT status, ledger_entry_id FROM gad_claims WHERE claim_id = ?",
+      [rec.claimId]
+    );
+    expect(claims.rows[0]?.["status"]).toBe("retracted");
+    // Retract is status-only: the content pointer stays on the revise entry,
+    // never the retract entry.
+    expect(claims.rows[0]?.["ledger_entry_id"]).toBe(revised.ledgerEntryId);
+    expect(claims.rows[0]?.["ledger_entry_id"]).not.toBe(retracted.ledgerEntryId);
+
+    const ledger = await call<{ rows: Array<{ kind: string }> }>(
+      "query",
+      "SELECT kind FROM gad_knowledge_ledger ORDER BY seq",
+      []
+    );
+    expect(ledger.rows.map((r) => r.kind)).toEqual([
+      "claim_recorded",
+      "claim_revised",
+      "claim_retracted",
+    ]);
+  });
+
+  it("retracting a claim drops its FTS row so dedup + recall stop surfacing it (cl-1)", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const rec = await call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser handles trailing newlines" },
+    });
+    expect(rec.claimId).toBeTruthy();
+
+    // Before retract: recall surfaces it and the identical text is a dedup block.
+    const recallBefore = await call<{
+      results: Array<{ anchor: Record<string, unknown> | null }>;
+    }>("recallMemory", { query: "the parser handles trailing newlines", kinds: ["claim"] });
+    expect(recallBefore.results.some((r) => r.anchor?.["claimId"] === rec.claimId)).toBe(true);
+
+    await call("knowledgeRetractClaim", {
+      logId: "traj-1",
+      head: "main",
+      claimId: rec.claimId,
+    });
+
+    // The claim's FTS row is gone (structural leg already filtered; FTS did not).
+    const fts = await call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM gad_memory_fts WHERE kind = 'claim' AND anchor_json = ?",
+      [JSON.stringify({ claimId: rec.claimId })]
+    );
+    expect(fts.rows[0]?.n).toBe(0);
+
+    // Recall no longer surfaces the retracted (dead) claim.
+    const recallAfter = await call<{
+      results: Array<{ anchor: Record<string, unknown> | null }>;
+    }>("recallMemory", { query: "the parser handles trailing newlines", kinds: ["claim"] });
+    expect(recallAfter.results.some((r) => r.anchor?.["claimId"] === rec.claimId)).toBe(false);
+
+    // Dedup-on-write no longer blocks a re-record against the dead claim: the
+    // corrected claim records instead of being pointed at the retracted one.
+    const corrected = await call<{
+      claimId?: string;
+      duplicates: Array<{ claimId: string }>;
+    }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser handles trailing newlines" },
+    });
+    expect(corrected.duplicates.some((d) => d.claimId === rec.claimId)).toBe(false);
+    expect(corrected.claimId).toBeTruthy();
+  });
+
+  it("surfaces the anchoring commit on a claim drill-down within its era (cl-2)", async () => {
+    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    sql.exec(
+      "INSERT INTO gad_state_transitions (event_id, input_state_hash, output_state_hash, summary, created_at) VALUES (?, ?, ?, ?, ?)",
+      "commit-ev-1",
+      "state:in",
+      "state:out",
+      "Fix the parser\n\nlong body that is not the first line",
+      "2026-05-20T12:00:00.000Z"
+    );
+    const rec = await call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "the parser now handles trailing newlines" },
+      anchor: { commitEventId: "commit-ev-1", repoPath: "packages/parser" },
+    });
+    const res = await call<{
+      items: Array<{ line: string; handle: string; kind: string }>;
+    }>("provenanceForClaim", {
+      claimId: rec.claimId,
+      sessionLogId: "traj-1",
+      sessionHead: "main",
+    });
+    const commit = res.items.find((i) => i.kind === "commit");
+    expect(commit).toBeDefined();
+    expect(commit!.line).toContain("commit c:commit-e");
+    expect(commit!.line).toContain("Fix the parser");
+    expect(commit!.handle).toBe("commit:commit-e");
+  });
+
+  it("degrades a claim drill-down to the stored ledger snapshot (marked historical) after a schema bump (cl-2)", async () => {
+    const first = await createTestDO(GadWorkspaceDO);
+    first.sql.exec(
+      "INSERT INTO gad_state_transitions (event_id, input_state_hash, output_state_hash, summary, created_at) VALUES (?, ?, ?, ?, ?)",
+      "commit-ev-1",
+      "state:in",
+      "state:out",
+      "Fix the parser\n\nbody",
+      "2026-05-20T12:00:00.000Z"
+    );
+    const rec = await first.call<{ claimId: string }>("knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "durable claim carried by a commit anchor" },
+      anchor: { commitEventId: "commit-ev-1", repoPath: "packages/parser" },
+    });
+
+    // Big-bang schema bump: the trajectory events (log_%) are dropped and the
+    // ledger re-projects gad_claims with a now-dangling trajectory_event_id.
+    first.db.run("UPDATE state SET value = '24' WHERE key = 'schema_version'");
+    const second = await createTestDO(GadWorkspaceDO, undefined, { db: first.db });
+
+    // The causality event is gone, so the trajectory join is empty (post-era).
+    const events = await second.call<{ rows: Array<{ n: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS n FROM log_events",
+      []
+    );
+    expect(events.rows[0]?.n).toBe(0);
+
+    const res = await second.call<{ items: Array<{ line: string; kind: string }> }>(
+      "provenanceForClaim",
+      { claimId: rec.claimId, sessionLogId: "traj-1", sessionHead: "main" }
+    );
+    const historical = res.items.find((i) => i.kind === "historical");
+    expect(historical).toBeDefined();
+    expect(historical!.line).toContain("historical");
+    expect(historical!.line).toContain("Fix the parser");
+    expect(historical!.line).toContain("packages/parser");
+  });
+
+  it("stamps a per-branch turn ordinal on turn.opened", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "t1",
+          event: event("turn.opened", {
+            turnId: "turn-1" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "a" },
+          }),
+        },
+        {
+          eventId: "t2",
+          event: event("turn.opened", {
+            turnId: "turn-2" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "b" },
+          }),
+        },
+      ],
+    });
+    const rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT turn_id, ordinal FROM trajectory_turns ORDER BY ordinal",
+      []
+    );
+    expect(rows.rows).toEqual([
+      expect.objectContaining({ turn_id: "turn-1", ordinal: 0 }),
+      expect.objectContaining({ turn_id: "turn-2", ordinal: 1 }),
+    ]);
+  });
+
+  it("gates the knowledge RPCs to do/server/shell/worker callers", async () => {
+    const { callAs } = await createTestDO(GadWorkspaceDO);
+    const ok = await callAs<{ claimId?: string }>("shell", "knowledgeRecordClaim", {
+      logId: "traj-1",
+      head: "main",
+      claim: { text: "shell may record claims" },
+    });
+    expect(ok.claimId).toBeTruthy();
+
+    await expect(
+      callAs("panel", "knowledgeRecordClaim", {
+        logId: "traj-1",
+        head: "main",
+        claim: { text: "panel may not record claims" },
+      })
+    ).rejects.toThrow();
   });
 });

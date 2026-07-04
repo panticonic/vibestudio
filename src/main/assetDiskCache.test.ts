@@ -15,6 +15,17 @@ function streamOf(bytes: Uint8Array | string): ReadableStream<Uint8Array> {
   });
 }
 
+async function readStream(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+}
+
 function immutableResponse(body: string, over: Partial<FetchedResponse> = {}): FetchedResponse {
   return {
     status: 200,
@@ -96,6 +107,69 @@ describe("AssetDiskCache", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it("derives blob filenames from bytes, not advisory upstream digests", async () => {
+    const cache = await newCache();
+    const siblingSidecar = `${dir}.json`;
+    try {
+      await cache.serve(
+        "/assets/unsafe.js",
+        vi.fn(async () => immutableResponse("safe bytes", { digest: ".." }))
+      );
+
+      const digest = cache.digestFor("/assets/unsafe.js");
+      expect(digest).toMatch(/^[a-f0-9]{64}$/);
+      expect(fs.existsSync(siblingSidecar)).toBe(false);
+      expect(fs.existsSync(path.join(dir, "blobs", digest!))).toBe(true);
+      expect(await fsp.readFile(path.join(dir, "blobs", digest!), "utf8")).toBe("safe bytes");
+    } finally {
+      await fsp.rm(siblingSidecar, { force: true });
+    }
+  });
+
+  it("keeps response metadata per cache key when bodies share a digest", async () => {
+    const cache = await newCache();
+    await cache.serve(
+      "/assets/shared-a.js",
+      vi.fn(async () =>
+        immutableResponse("same bytes", {
+          contentType: "text/javascript; charset=utf-8",
+          gzip: false,
+          replayHeaders: { "x-asset": "a" },
+        })
+      )
+    );
+    await cache.serve(
+      "/assets/shared-b.css",
+      vi.fn(async () =>
+        immutableResponse("same bytes", {
+          contentType: "text/css; charset=utf-8",
+          gzip: true,
+          replayHeaders: { "x-asset": "b" },
+        })
+      )
+    );
+
+    expect(cache.digestFor("/assets/shared-a.js")).toBe(cache.digestFor("/assets/shared-b.css"));
+
+    const fetchA = vi.fn(async () => immutableResponse("refetch-a"));
+    const fetchB = vi.fn(async () => immutableResponse("refetch-b"));
+    const hitA = await cache.serve("/assets/shared-a.js", fetchA);
+    const hitB = await cache.serve("/assets/shared-b.css", fetchB);
+
+    expect(fetchA).not.toHaveBeenCalled();
+    expect(fetchB).not.toHaveBeenCalled();
+    expect(hitA.kind).toBe("asset");
+    expect(hitB.kind).toBe("asset");
+    if (hitA.kind === "asset" && hitB.kind === "asset") {
+      expect(hitA.asset.contentType).toBe("text/javascript; charset=utf-8");
+      expect(hitA.asset.gzip).toBe(false);
+      expect(hitA.asset.replayHeaders).toEqual({ "x-asset": "a" });
+      expect(hitB.asset.contentType).toBe("text/css; charset=utf-8");
+      expect(hitB.asset.gzip).toBe(true);
+      expect(hitB.asset.replayHeaders).toEqual({ "x-asset": "b" });
+    }
+  });
+
   it("single-flights concurrent misses for the same path into one fetch", async () => {
     const cache = await newCache();
     let release!: () => void;
@@ -116,6 +190,41 @@ describe("AssetDiskCache", () => {
     if (ra.kind === "asset" && rb.kind === "asset") {
       expect(ra.asset.body.toString()).toBe("shared");
       expect(rb.asset.body.toString()).toBe("shared");
+    }
+  });
+
+  it("handles concurrent same-digest writes for different cache keys", async () => {
+    const cache = await newCache();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const fetchA = vi.fn(async () => {
+      await gate;
+      return immutableResponse("shared-concurrent", { contentType: "text/plain; a" });
+    });
+    const fetchB = vi.fn(async () => {
+      await gate;
+      return immutableResponse("shared-concurrent", { contentType: "text/plain; b" });
+    });
+
+    const a = cache.serve("/assets/concurrent-a.txt", fetchA);
+    const b = cache.serve("/assets/concurrent-b.txt", fetchB);
+    release();
+    const [ra, rb] = await Promise.all([a, b]);
+
+    expect(fetchA).toHaveBeenCalledTimes(1);
+    expect(fetchB).toHaveBeenCalledTimes(1);
+    expect(ra.kind).toBe("asset");
+    expect(rb.kind).toBe("asset");
+    expect(cache.digestFor("/assets/concurrent-a.txt")).toBe(
+      cache.digestFor("/assets/concurrent-b.txt")
+    );
+    const blobNames = (await fsp.readdir(path.join(dir, "blobs"))).filter((name) =>
+      /^[a-f0-9]{64}$/.test(name)
+    );
+    expect(blobNames).toHaveLength(1);
+    if (ra.kind === "asset" && rb.kind === "asset") {
+      expect(ra.asset.contentType).toBe("text/plain; a");
+      expect(rb.asset.contentType).toBe("text/plain; b");
     }
   });
 
@@ -145,6 +254,22 @@ describe("AssetDiskCache", () => {
     // Old digest blob is gone; new one exists.
     expect(fs.existsSync(path.join(dir, "blobs", digest1!))).toBe(false);
     expect(fs.existsSync(path.join(dir, "blobs", digest2!))).toBe(true);
+  });
+
+  it("passes through oversized immutable responses without caching them", async () => {
+    const cache = await newCache(100);
+    const fetcher = vi.fn(async () => immutableResponse("x".repeat(500)));
+
+    const first = await cache.serve("/assets/big-abc.js", fetcher);
+    expect(first.kind).toBe("passthrough");
+    if (first.kind === "passthrough") {
+      expect((await readStream(first.response.body!)).toString()).toBe("x".repeat(500));
+    }
+    expect(cache.digestFor("/assets/big-abc.js")).toBeUndefined();
+
+    const second = await cache.serve("/assets/big-abc.js", fetcher);
+    expect(second.kind).toBe("passthrough");
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it("prunes oldest-by-mtime blobs when over the size cap", async () => {

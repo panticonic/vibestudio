@@ -229,6 +229,37 @@ describe("vibez1 vcs commands", () => {
     expect(logs).not.toContain("clean (in sync with main)");
   });
 
+  it("commit treats unchanged/no-op responses as errors", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    stubServer((body) => {
+      if (body.method === "vcs.commit") {
+        return [
+          {
+            repoPath: "panels/notes",
+            head: "ctx:ctx_1",
+            stateHash: "state:same",
+            eventId: null,
+            headHash: null,
+            editCount: 0,
+            status: "unchanged",
+            changedPaths: [],
+          },
+        ];
+      }
+      return null;
+    });
+
+    const { main } = await import("../client.js");
+    await expect(
+      main(["vcs", "commit", "-m", "noop", "--repo", "panels/notes", "--json"])
+    ).resolves.toBe(1);
+
+    const errors = vi.mocked(console.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain("commit produced no snapshots");
+    expect(errors.join("\n")).toContain("scratch/direct fs writes");
+  });
+
   it("push --repo (single) dispatches USERLAND: resolves the vcs service, then calls the DO's vcsPush", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
@@ -411,20 +442,26 @@ describe("vibez1 vcs commands", () => {
   it("merge human output distinguishes clean and conflicting resolution steps", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ({
-      status: "merged",
-      mergeable: "clean",
-      upstreamCommits: [
-        { eventId: "evt-1", message: "main moved", stateHash: "state:main", createdAt: null },
-      ],
-    }));
+    const { rpcBodies } = stubServer(() => [
+      {
+        repoPath: "panels/notes",
+        status: "merged",
+        mergeable: "clean",
+        upstreamCommits: [
+          { eventId: "evt-1", message: "main moved", stateHash: "state:main", createdAt: null },
+        ],
+      },
+    ]);
 
     const { main } = await import("../client.js");
     await withTtyStdout(async () => {
       await expect(main(["vcs", "merge", "--repo", "panels/notes"])).resolves.toBe(0);
     });
 
-    expect(rpcBodies[0]).toEqual({ method: "vcs.merge", args: ["panels/notes", "ctx:ctx_1"] });
+    expect(rpcBodies[0]).toEqual({
+      method: "vcs.merge",
+      args: [{ source: "main", repoPaths: ["panels/notes"], head: "ctx:ctx_1" }],
+    });
     const logs = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
     expect(
       logs.some((line) => line.includes("clean merge committed — push now fast-forwards."))
@@ -515,60 +552,93 @@ describe("vibez1 vcs commands", () => {
     });
   });
 
-  it("fork-repo forks to a new path (history-preserving)", async () => {
+  it("fork-repo dispatches USERLAND: resolves the vcs service, then calls the DO's vcsForkRepo", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ({
-      repoPath: "panels/mychat",
-      head: "main",
-      inherited: 3,
-      stateHash: "state:fork",
-    }));
+    const { rpcBodies } = stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : {
+            repoPath: "panels/mychat",
+            head: "main",
+            inherited: 3,
+            stateHash: "state:fork",
+          }
+    );
 
     const { main } = await import("../client.js");
     await expect(
       main(["vcs", "fork-repo", "panels/chat", "panels/mychat", "--json"])
     ).resolves.toBe(0);
+    // Hop 1: resolve the vcs manifest service (userland dispatch, Phase 4 flip).
     expect(rpcBodies[0]).toEqual({
-      method: "vcs.forkRepo",
-      args: ["panels/chat", "panels/mychat"],
+      method: "workers.resolveService",
+      args: ["vibez1.vcs.v1", null],
+    });
+    // Hop 2: the history-preserving fork against the resolved DO target.
+    expect(rpcBodies[1]).toEqual({
+      type: "call",
+      targetId: VCS_DO_TARGET,
+      method: "vcsForkRepo",
+      args: [{ fromPath: "panels/chat", toPath: "panels/mychat" }],
     });
   });
 
-  it("delete-repo calls vcs.deleteRepo with the repo path", async () => {
+  it("delete-repo dispatches USERLAND: resolves the vcs service, then calls the DO's vcsDeleteRepo", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ({
-      repoPath: "panels/old",
-      archived: true,
-      archiveHead: "archived:state:doomed",
-      removedPaths: ["panels/old/index.tsx"],
-      stateHash: "state:after",
-    }));
+    const { rpcBodies } = stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : {
+            repoPath: "panels/old",
+            archived: true,
+            archiveHead: "archived:state:doomed",
+            removedPaths: ["panels/old/index.tsx"],
+            dependents: [],
+            stateHash: "state:after",
+          }
+    );
 
     const { main } = await import("../client.js");
     await expect(main(["vcs", "delete-repo", "--repo", "panels/old", "--json"])).resolves.toBe(0);
     expect(rpcBodies[0]).toEqual({
-      method: "vcs.deleteRepo",
+      method: "workers.resolveService",
+      args: ["vibez1.vcs.v1", null],
+    });
+    expect(rpcBodies[1]).toEqual({
+      type: "call",
+      targetId: VCS_DO_TARGET,
+      method: "vcsDeleteRepo",
       args: [{ repoPath: "panels/old" }],
     });
   });
 
-  it("restore-repo calls vcs.restoreRepo with the repo path", async () => {
+  it("restore-repo dispatches USERLAND: resolves the vcs service, then calls the DO's vcsRestoreRepo", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ({
-      repoPath: "panels/old",
-      restored: true,
-      fromArchiveHead: "archived:state:doomed",
-      restoredPaths: ["panels/old/index.tsx"],
-      stateHash: "state:after",
-    }));
+    const { rpcBodies } = stubServer((body) =>
+      (body as { method?: string }).method === "workers.resolveService"
+        ? VCS_SERVICE_RESOLUTION
+        : {
+            repoPath: "panels/old",
+            restored: true,
+            fromArchiveHead: "archived:state:doomed",
+            restoredPaths: ["panels/old/index.tsx"],
+            stateHash: "state:after",
+          }
+    );
 
     const { main } = await import("../client.js");
     await expect(main(["vcs", "restore-repo", "--repo", "panels/old", "--json"])).resolves.toBe(0);
     expect(rpcBodies[0]).toEqual({
-      method: "vcs.restoreRepo",
+      method: "workers.resolveService",
+      args: ["vibez1.vcs.v1", null],
+    });
+    expect(rpcBodies[1]).toEqual({
+      type: "call",
+      targetId: VCS_DO_TARGET,
+      method: "vcsRestoreRepo",
       args: [{ repoPath: "panels/old" }],
     });
   });

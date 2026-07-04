@@ -2,6 +2,10 @@ import type { RpcCaller } from "@vibez1/rpc";
 import { createGadServiceClient } from "@vibez1/shared/userlandServiceRpc";
 import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
 import { blobstoreMethods } from "@vibez1/shared/serviceSchemas/blobstore";
+import type {
+  VcsProvenanceForFileResult,
+  VcsProvenanceForSessionResult,
+} from "@vibez1/shared/serviceSchemas/vcs";
 import {
   hydrateStoredValueRefs,
   type AgenticEvent,
@@ -297,15 +301,39 @@ export interface GadClient {
   }): Promise<{ added: GadJsonRecord[]; removed: GadJsonRecord[]; changed: GadJsonRecord[] }>;
   readGadFileAtState(input: { stateHash: string; path: string }): Promise<GadJsonRecord | null>;
   getGadStateProducer(input: { stateHash: string }): Promise<GadJsonRecord | null>;
-  blameGadFileSnippet(input: {
-    stateHash?: string | null;
-    fileVersionId?: number | null;
-    path: string;
-  }): Promise<GadJsonRecord[]>;
   validateGadHashes(input?: object): Promise<{ ok: boolean; errors: string[] }>;
   clearDirtyAfterValidation(input?: object): Promise<{ ok: boolean; errors: string[] }>;
   checkGadIntegrity(input?: object): Promise<{ ok: boolean; errors: GadJsonRecord[] }>;
   rebuildTrajectoryProjections(input?: object): Promise<{ replayed: number }>;
+  /** §6/§7 read-time attachment for one file (provenance ∪ recall, density-ranked;
+   *  exceptions first, salience-floored). Eval-reachable per design §7.1/§9. */
+  provenanceForFile(input: {
+    repoPath: string;
+    path: string;
+    head: string;
+    tier: "none" | "moderate" | "deep";
+    sessionLogId: string;
+    sessionHead: string;
+    invocationId?: string | null;
+    recallKeywords?: string[] | null;
+    after?: string | null;
+    skipSuppression?: boolean | null;
+  }): Promise<VcsProvenanceForFileResult>;
+  /** §7.6 session orientation over the session touch-set (exceptions-first). */
+  provenanceForSession(input: {
+    sessionLogId: string;
+    sessionHead: string;
+    after?: string | null;
+  }): Promise<VcsProvenanceForSessionResult>;
+  /** §7.1 claim drill-down — writes a `cited` touch and returns the claim's
+   *  relations / anchoring commit / touching sessions. */
+  provenanceForClaim(input: {
+    claimId: string;
+    sessionLogId: string;
+    sessionHead: string;
+    invocationId?: string | null;
+    after?: string | null;
+  }): Promise<VcsProvenanceForFileResult>;
 }
 export function createGadClient(rpc: RpcCaller): GadClient {
   const service = createGadServiceClient(rpc);
@@ -446,10 +474,12 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     diffGadStates: (input) => call("diffGadStates", input),
     readGadFileAtState: (input) => call("readGadFileAtState", input),
     getGadStateProducer: (input) => call("getGadStateProducer", input),
-    blameGadFileSnippet: (input) => call("blameGadFileSnippet", input),
     validateGadHashes: (input) => call("validateGadHashes", input),
     clearDirtyAfterValidation: (input) => call("clearDirtyAfterValidation", input),
     checkGadIntegrity: (input) => call("checkGadIntegrity", input),
+    provenanceForFile: (input) => call("provenanceForFile", input),
+    provenanceForSession: (input) => call("provenanceForSession", input),
+    provenanceForClaim: (input) => call("provenanceForClaim", input),
     rebuildTrajectoryProjections: (input) => call("rebuildTrajectoryProjections", input),
   };
 }

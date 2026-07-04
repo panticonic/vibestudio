@@ -54,6 +54,7 @@ const WEATHER_TYPE = {
 class TestVessel extends AgentVesselBase {
   callerIdForTest: string | null = null;
   callerKindForTest: string | null = null;
+  readonly channelPublishFailures = new Set<string>();
   readonly channelStub = {
     published: [] as Array<{ event: AgenticEvent; idempotencyKey?: string }>,
     messageTypes: new Map<string, Record<string, unknown>>(),
@@ -96,9 +97,13 @@ class TestVessel extends AgentVesselBase {
 
   private makeChannelStub() {
     const stub = this.channelStub;
+    const failures = this.channelPublishFailures;
     return {
       publishAgenticEvent: vi.fn(
         async (_pid: string, event: AgenticEvent, opts?: { idempotencyKey?: string }) => {
+          if (opts?.idempotencyKey && failures.has(opts.idempotencyKey)) {
+            throw new Error(`publish failed: ${opts.idempotencyKey}`);
+          }
           stub.published.push({ event, idempotencyKey: opts?.idempotencyKey });
           return { id: stub.published.length };
         }
@@ -118,6 +123,7 @@ class TestVessel extends AgentVesselBase {
         }
       ),
       send: vi.fn(async () => undefined),
+      recordTaskProvenance: vi.fn(async () => undefined),
       subscribe: vi.fn(async (participantId: string) => ({
         ok: true,
         channelConfig: {},
@@ -248,7 +254,9 @@ describe("AgentVesselBase.chatOp", () => {
   it("configureAgent validates its patch (rejects an empty model)", async () => {
     const vessel = await makeVessel();
     vessel.callerIdForTest = await expectedEvalCaller();
-    await expect(vessel.chatOp(CHANNEL, "configureAgent", [{ model: "" }])).rejects.toThrow(/model/);
+    await expect(vessel.chatOp(CHANNEL, "configureAgent", [{ model: "" }])).rejects.toThrow(
+      /model/
+    );
   });
 
   it("registerMessageType publishes messageType.registered AS the agent", async () => {
@@ -543,9 +551,10 @@ class EvalGateProbe extends TestVessel {
   /** Replace the lazily-built driver with a spy so `pause` doesn't boot the real
    *  driver (which needs a live gateway/GAD). `inFlight` models whether a model
    *  call was running when the flush hit (drives the conditional-abort path). */
-  stubDriverForPause(
-    opts: { inFlight?: boolean } = {}
-  ): { abortChannel: ReturnType<typeof vi.fn>; handleIncoming: ReturnType<typeof vi.fn> } {
+  stubDriverForPause(opts: { inFlight?: boolean } = {}): {
+    abortChannel: ReturnType<typeof vi.fn>;
+    handleIncoming: ReturnType<typeof vi.fn>;
+  } {
     const abortChannel = vi.fn();
     const handleIncoming = vi.fn(async () => {});
     const loop = vi.fn(async () => ({
@@ -558,6 +567,82 @@ class EvalGateProbe extends TestVessel {
 
 async function makeGateProbe(): Promise<EvalGateProbe> {
   const { instance } = await createTestDO(EvalGateProbe, { __objectKey: "agent-key" });
+  return instance;
+}
+
+class SubagentSpawnProbe extends TestVessel {
+  rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
+  readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {});
+  protected override async ensurePromptArtifacts(): Promise<void> {}
+  protected override get driver(): AgentLoopDriver {
+    return {
+      wake: vi.fn(async () => {}),
+      deliverEffectOutcome: vi.fn(async () => true),
+      handleIncoming: this.handleIncomingSpy,
+      dropLoop: vi.fn(),
+    } as unknown as AgentLoopDriver;
+  }
+  protected override get rpc(): DeferrableRpcClient {
+    return {
+      call: async (target: string, method: string, args: unknown[]) => {
+        this.rpcCalls.push({ target, method, args });
+        if (target === "main" && method === "runtime.createSubagentContext") {
+          return { contextId: "ctx-child" };
+        }
+        if (target === "main" && method === "runtime.createEntity") {
+          return {
+            id: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
+            targetId: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
+          };
+        }
+        return { ok: true, participantId: "participant-child" };
+      },
+    } as unknown as DeferrableRpcClient;
+  }
+  async spawnForTest(channelId: string, invocationId: string, args: unknown) {
+    return this.runDeferredSpawn(channelId, invocationId, args);
+  }
+  subagentRunForTest(runId: string) {
+    return this.subagentRuns.get(runId);
+  }
+  insertSubagentRunForTest(row: {
+    runId: string;
+    status: "starting" | "running";
+    lastActivityAt?: number;
+  }) {
+    const now = Date.now();
+    this.subagentRuns.insert({
+      runId: row.runId,
+      taskChannelId: `task-${row.runId}`,
+      childContextId: `ctx-${row.runId}-stale`,
+      childEntityId: `do:workers/agent-worker:AiChatWorker:subagent-${row.runId}`,
+      childParticipantId: "participant-child",
+      parentChannelId: CHANNEL,
+      mode: "fresh",
+      label: "stale subagent",
+      depth: 1,
+      status: row.status,
+      merge: null,
+      startedAt: now,
+      lastActivityAt: row.lastActivityAt ?? now,
+    });
+  }
+  async sweepAbandonedForTest(now: number) {
+    await (
+      this as unknown as { sweepAbandonedSubagents(now: number): Promise<void> }
+    ).sweepAbandonedSubagents(now);
+  }
+  async completeSubagentForTest(runId: string, report: string, outcome: "success" | "failed") {
+    const run = this.subagentRuns.get(runId);
+    if (!run) throw new Error(`missing run ${runId}`);
+    this.callerIdForTest = run.childEntityId;
+    await this.onSubagentComplete({ runId, report, outcome });
+  }
+}
+
+async function makeSubagentSpawnProbe(): Promise<SubagentSpawnProbe> {
+  const { instance } = await createTestDO(SubagentSpawnProbe, { __objectKey: "agent-key" });
+  await instance.registerSubscriptionForTest();
   return instance;
 }
 
@@ -645,6 +730,299 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
   });
 });
 
+describe("AgentVesselBase.runDeferredSpawn", () => {
+  it("launches the child and returns a run handle immediately instead of parking the tool call", async () => {
+    const probe = await makeSubagentSpawnProbe();
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    expect((out as { deferred?: boolean }).deferred).toBeUndefined();
+    expect(out).toMatchObject({
+      isError: false,
+      result: {
+        details: {
+          runId: "inv-1",
+          mode: "fresh",
+          label: "background audit",
+          taskChannelId: "task-inv-1",
+          contextId: "ctx-child",
+          status: "running",
+        },
+      },
+    });
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({
+      runId: "inv-1",
+      status: "running",
+      taskChannelId: "task-inv-1",
+      childContextId: "ctx-child",
+    });
+    expect(probe.rpcCalls.some((call) => call.method === "runtime.createEntity")).toBe(true);
+    expect(probe.channelStub.published.some((p) => p.event.kind === "invocation.started")).toBe(
+      true
+    );
+    const startedIndex = probe.channelStub.published.findIndex(
+      (p) => p.idempotencyKey === "subagent-started:inv-1"
+    );
+    const seedIndex = probe.channelStub.published.findIndex(
+      (p) => p.idempotencyKey === "subagent-seed:inv-1"
+    );
+    expect(startedIndex).toBeGreaterThanOrEqual(0);
+    expect(seedIndex).toBeGreaterThan(startedIndex);
+    const seed = probe.channelStub.published.find(
+      (p) => p.idempotencyKey === "subagent-seed:inv-1"
+    );
+    expect(seed?.event).toMatchObject({
+      kind: "message.completed",
+      actor: { kind: "user", displayName: "Subagent task" },
+      payload: {
+        role: "user",
+        to: [{ kind: "participant", participantId: "participant-child" }],
+      },
+    });
+    expect(probe.rpcCalls.some((call) => call.method === "onChannelEnvelope")).toBe(false);
+  });
+
+  it("tears down a stale starting row and retries spawn setup on re-drive", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.insertSubagentRunForTest({ runId: "inv-1", status: "starting" });
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      task: "retry the child setup",
+    });
+
+    expect(out).toMatchObject({ isError: false });
+    expect(probe.rpcCalls).toContainEqual({
+      target: "main",
+      method: "runtime.destroyContext",
+      args: [{ contextId: "ctx-inv-1-stale", recursive: true }],
+    });
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({
+      runId: "inv-1",
+      status: "running",
+      childContextId: "ctx-child",
+    });
+  });
+
+  it("keeps a running setup-failure row retryable when terminal publish fails", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.channelPublishFailures.add("subagent-seed:inv-1");
+    probe.channelPublishFailures.add("subagent-terminal:inv-1");
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      task: "this seed publish will fail",
+    });
+
+    expect(out).toMatchObject({
+      isError: true,
+      result: "publish failed: subagent-seed:inv-1",
+    });
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({
+      runId: "inv-1",
+      status: "running",
+    });
+    expect(
+      probe.rpcCalls.some(
+        (call) =>
+          call.target === "main" &&
+          call.method === "runtime.destroyContext" &&
+          JSON.stringify(call.args).includes("ctx-child")
+      )
+    ).toBe(false);
+  });
+
+  it("tears down setup when the started-card publish fails", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.channelPublishFailures.add("subagent-started:inv-1");
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      task: "this started publish will fail",
+    });
+
+    expect(out).toMatchObject({
+      isError: true,
+      result: "publish failed: subagent-started:inv-1",
+    });
+    expect(probe.subagentRunForTest("inv-1")).toBeNull();
+    expect(
+      probe.rpcCalls.some(
+        (call) =>
+          call.target === "main" &&
+          call.method === "runtime.destroyContext" &&
+          JSON.stringify(call.args).includes("ctx-child")
+      )
+    ).toBe(true);
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-seed:inv-1")
+    ).toBe(false);
+  });
+
+  it("tears down a running setup-failure row once the retry terminal publishes", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.channelPublishFailures.add("subagent-seed:inv-1");
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      task: "this seed publish will fail",
+    });
+
+    expect(out).toMatchObject({
+      isError: true,
+      result: "publish failed: subagent-seed:inv-1",
+    });
+    expect(probe.subagentRunForTest("inv-1")).toBeNull();
+    expect(
+      probe.rpcCalls.some(
+        (call) =>
+          call.target === "main" &&
+          call.method === "runtime.destroyContext" &&
+          JSON.stringify(call.args).includes("ctx-child")
+      )
+    ).toBe(true);
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-terminal:inv-1")
+    ).toBe(true);
+  });
+
+  it("retries the idempotent task seed for an existing running run", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.insertSubagentRunForTest({ runId: "inv-1", status: "running" });
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      task: "seed retry",
+    });
+
+    expect(out).toMatchObject({
+      isError: false,
+      result: { details: { runId: "inv-1", status: "running" } },
+    });
+    const seed = probe.channelStub.published.find(
+      (p) => p.idempotencyKey === "subagent-seed:inv-1"
+    );
+    expect(seed?.event).toMatchObject({
+      kind: "message.completed",
+      payload: {
+        role: "user",
+        to: [{ kind: "participant", participantId: "participant-child" }],
+      },
+    });
+  });
+
+  it("keeps abandoned runs live when the TTL terminal publish fails", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    const old = Date.now() - 60 * 60 * 1000;
+    probe.insertSubagentRunForTest({ runId: "inv-ttl", status: "running", lastActivityAt: old });
+    probe.channelPublishFailures.add("subagent-terminal:inv-ttl");
+
+    await probe.sweepAbandonedForTest(Date.now());
+
+    expect(probe.subagentRunForTest("inv-ttl")).toMatchObject({
+      runId: "inv-ttl",
+      status: "running",
+    });
+    expect(
+      probe.rpcCalls.some(
+        (call) => call.target === "main" && call.method === "runtime.destroyContext"
+      )
+    ).toBe(false);
+  });
+
+  it("relays child task-channel activity onto the parent subagent card", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    await probe.processChannelEvent("task-inv-1", {
+      id: 42,
+      messageId: "turn-opened-child",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: "turn.opened",
+        actor: { kind: "agent", id: "participant-child", displayName: "Child" },
+        causality: { turnId: "turn-child-1" },
+        payload: { protocol: "agentic.trajectory.v1" },
+        createdAt: new Date().toISOString(),
+      } as unknown as AgenticEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    });
+
+    const progress = probe.channelStub.published.find(
+      (p) => p.event.kind === "invocation.output" && p.event.causality?.invocationId === "inv-1"
+    );
+    expect(progress?.event).toMatchObject({
+      kind: "invocation.output",
+      payload: {
+        output: "Started working",
+        subagent: { kind: "turn-report", messageSeq: 42 },
+      },
+    });
+  });
+
+  it("wakes the parent channel when the child completes while the parent is suspended", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+
+    await probe.completeSubagentForTest("inv-1", "All checks passed.", "success");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-terminal:inv-1")
+    ).toBe(true);
+    expect(probe.handleIncomingSpy).toHaveBeenCalledWith(
+      CHANNEL,
+      expect.objectContaining({
+        type: "command",
+        command: expect.objectContaining({
+          kind: "prompt",
+          channelId: CHANNEL,
+          source: { envelopeId: "subagent-terminal:inv-1:completed" },
+          sourceMessageId: "subagent-terminal:inv-1",
+          content: expect.stringContaining("All checks passed."),
+        }),
+      })
+    );
+  });
+
+  it("keeps child completion retryable when waking the parent fails", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+    probe.handleIncomingSpy.mockRejectedValueOnce(new Error("wake failed"));
+
+    await expect(
+      probe.completeSubagentForTest("inv-1", "All checks passed.", "success")
+    ).rejects.toThrow("wake failed");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "running" });
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-terminal:inv-1")
+    ).toBe(true);
+
+    await probe.completeSubagentForTest("inv-1", "All checks passed.", "success");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
+    expect(probe.handleIncomingSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("AgentVesselBase.cancelEval (pill cancel → server-side eval run)", () => {
   it("routes to eval.cancel for ITSELF (subKey=channelId) with the run id", async () => {
     const probe = await makeGateProbe();
@@ -718,7 +1096,9 @@ describe("AgentVesselBase.onEvalProgress (live eval console streaming)", () => {
 
     await vessel.onEvalProgress({ runId: "inv-5", channelId: CHANNEL, output: "hello\nworld" });
 
-    const published = vessel.channelStub.published.find((p) => p.event.kind === "invocation.output");
+    const published = vessel.channelStub.published.find(
+      (p) => p.event.kind === "invocation.output"
+    );
     expect(published?.event).toMatchObject({
       kind: "invocation.output",
       causality: { invocationId: "inv-5" },

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { RpcClient } from "@vibez1/rpc";
-import type { CdpHostBridgeSocket } from "./hostBridge.js";
+import type { CdpHostBridgeDiagnostic, CdpHostBridgeSocket } from "./hostBridge.js";
 
 export interface DeviceCredentialAuth {
   kind: "device";
@@ -49,6 +49,11 @@ export interface HeadlessHostConfig {
   connectionFactory?: () => Promise<HeadlessHostServerConnection>;
   /** Override the CDP host-provider bridge transport, e.g. RPC stream over WebRTC. */
   bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
+  lifecycle?: {
+    onRegistered?: () => void;
+    onBridgeDiagnostic?: (diagnostic: CdpHostBridgeDiagnostic) => void;
+    onReady?: () => void;
+  };
 }
 
 export interface ConfigOverrides {
@@ -66,6 +71,7 @@ export interface ConfigOverrides {
   leanBrowser?: boolean;
   connectionFactory?: () => Promise<HeadlessHostServerConnection>;
   bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
+  lifecycle?: HeadlessHostConfig["lifecycle"];
 }
 
 // Parse an optional non-negative integer env var, honoring an explicit 0 (so `|| undefined`
@@ -114,5 +120,6 @@ export function resolveConfig(
     leanBrowser: overrides.leanBrowser ?? false,
     connectionFactory: overrides.connectionFactory,
     bridgeSocketFactory: overrides.bridgeSocketFactory,
+    lifecycle: overrides.lifecycle,
   };
 }

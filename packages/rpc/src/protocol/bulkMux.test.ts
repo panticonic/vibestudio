@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   BULK_MUX_ACCUMULATION_CAP_BYTES,
   BULK_MUX_HEADER_BYTES,
+  BULK_MUX_PARTIAL_STREAM_CAP,
   BulkProtocolViolation,
   MUX_FLAG_MORE,
   createBulkDemux,
   decodeBulkMessage,
   encodeBulkMessage,
+  type BulkDemuxLimits,
   type StreamFrameType,
 } from "./bulkMux.js";
 import { FRAME_DATA, FRAME_END, FRAME_ERROR, FRAME_HEAD } from "./streamCodec.js";
@@ -55,7 +57,7 @@ describe("bulk mux codec", () => {
   describe("violations fail loud", () => {
     it("rejects a message shorter than the header", () => {
       expect(() => decodeBulkMessage(new Uint8Array(BULK_MUX_HEADER_BYTES - 1))).toThrow(
-        BulkProtocolViolation,
+        BulkProtocolViolation
       );
       expect(() => decodeBulkMessage(new Uint8Array(0))).toThrow(/shorter than/);
     });
@@ -101,10 +103,11 @@ describe("bulk mux codec", () => {
 });
 
 describe("bulk demux", () => {
-  const collect = () => {
+  const collect = (limits?: BulkDemuxLimits) => {
     const frames: Array<{ streamId: number; type: StreamFrameType; payload: Uint8Array }> = [];
-    const demux = createBulkDemux((streamId, type, payload) =>
-      frames.push({ streamId, type, payload: payload.slice() }),
+    const demux = createBulkDemux(
+      (streamId, type, payload) => frames.push({ streamId, type, payload: payload.slice() }),
+      limits
     );
     return { frames, demux };
   };
@@ -166,17 +169,27 @@ describe("bulk demux", () => {
     const { demux } = collect();
     demux.push(encodeBulkMessage(5, FRAME_HEAD, bytes(1), true));
     expect(() => demux.push(encodeBulkMessage(5, FRAME_DATA, bytes(2)))).toThrow(
-      /interleaved inside a continued/,
+      /interleaved inside a continued/
     );
   });
 
-  it("caps accumulation at 4 MiB per stream", () => {
-    const { demux } = collect();
-    const chunk = new Uint8Array(1024 * 1024); // 1 MiB per continuation message
-    for (let i = 0; i < 4; i++) demux.push(encodeBulkMessage(6, FRAME_HEAD, chunk, true));
-    expect(() => demux.push(encodeBulkMessage(6, FRAME_HEAD, chunk, true))).toThrow(
-      new RegExp(`exceeds ${BULK_MUX_ACCUMULATION_CAP_BYTES} bytes`),
+  it("caps accumulation at the configured per-stream catastrophe fuse", () => {
+    const { demux } = collect({ maxAccumulationBytes: 3 });
+    demux.push(encodeBulkMessage(6, FRAME_HEAD, bytes(1, 2), true));
+    expect(() => demux.push(encodeBulkMessage(6, FRAME_HEAD, bytes(3, 4), true))).toThrow(
+      /exceeds 3 bytes/
     );
+    expect(BULK_MUX_ACCUMULATION_CAP_BYTES).toBeGreaterThanOrEqual(64 * 1024 * 1024);
+  });
+
+  it("caps the number of simultaneous partial streams", () => {
+    const { demux } = collect({ maxPartialStreams: 2 });
+    demux.push(encodeBulkMessage(1, FRAME_HEAD, bytes(1), true));
+    demux.push(encodeBulkMessage(2, FRAME_HEAD, bytes(1), true));
+    expect(() =>
+      demux.push(encodeBulkMessage(3, FRAME_HEAD, bytes(1), true))
+    ).toThrow(/partial stream count exceeds 2/);
+    expect(BULK_MUX_PARTIAL_STREAM_CAP).toBeGreaterThanOrEqual(65_536);
   });
 
   it("propagates decode violations to the caller (transport turns it into pipe-down)", () => {

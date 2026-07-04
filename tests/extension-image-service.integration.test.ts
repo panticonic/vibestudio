@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { envelopeFromMessage } from "@vibez1/rpc";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -13,7 +15,8 @@ interface ReadyPayload {
 
 const RUN_SERVER_INTEGRATION = process.env["VIBEZ1_RUN_SERVER_INTEGRATION"] === "1";
 const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
-const maybeDescribe = RUN_SERVER_INTEGRATION && fs.existsSync(serverPath) ? describe : describe.skip;
+const maybeDescribe =
+  RUN_SERVER_INTEGRATION && fs.existsSync(serverPath) ? describe : describe.skip;
 
 let proc: ChildProcessWithoutNullStreams | null = null;
 let tempRoot: string | null = null;
@@ -42,15 +45,7 @@ maybeDescribe("image-service extension server smoke", () => {
     const readyFile = path.join(tempRoot, "ready.json");
     proc = spawn(
       process.execPath,
-      [
-        serverPath,
-        "--ephemeral",
-        "--init",
-        "--serve-panels",
-        "--no-vpn-detect",
-        "--ready-file",
-        readyFile,
-      ],
+      [serverPath, "--ephemeral", "--init", "--serve-panels", "--ready-file", readyFile],
       {
         cwd: process.cwd(),
         env: {
@@ -59,7 +54,7 @@ maybeDescribe("image-service extension server smoke", () => {
           VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
         },
         stdio: ["ignore", "pipe", "pipe"],
-      },
+      }
     );
 
     let serverOutput = "";
@@ -82,25 +77,24 @@ maybeDescribe("image-service extension server smoke", () => {
     await rpc(ready, shellToken, "shellApproval.resolve", [approvalId, "once"]);
     await waitForExtensionRunning(ready, shellToken, "@workspace-extensions/image-service");
 
-    await expect(rpc(ready, shellToken, "extensions.invoke", [
-      "@workspace-extensions/image-service",
-      "detectMimeType",
-      [[137, 80, 78, 71, 13, 10, 26, 10]],
-    ])).resolves.toBe("image/png");
+    await expect(
+      rpc(ready, shellToken, "extensions.invoke", [
+        "@workspace-extensions/image-service",
+        "detectMimeType",
+        [[137, 80, 78, 71, 13, 10, 26, 10]],
+      ])
+    ).resolves.toBe("image/png");
   }, 120_000);
 });
 
-async function waitForUnitBatchApproval(
-  ready: ReadyPayload,
-  shellToken: string,
-): Promise<string> {
+async function waitForUnitBatchApproval(ready: ReadyPayload, shellToken: string): Promise<string> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     const pending = await rpc<Array<{ approvalId: string; kind: string }>>(
       ready,
       shellToken,
       "shellApproval.listPending",
-      [],
+      []
     );
     const batch = pending.find((p) => p.kind === "unit-batch");
     if (batch) return batch.approvalId;
@@ -112,7 +106,7 @@ async function waitForUnitBatchApproval(
 async function waitForExtensionRunning(
   ready: ReadyPayload,
   shellToken: string,
-  name: string,
+  name: string
 ): Promise<void> {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -120,7 +114,7 @@ async function waitForExtensionRunning(
       ready,
       shellToken,
       "extensions.list",
-      [],
+      []
     );
     const entry = extensions.find((e) => e.name === name);
     if (entry?.status === "running") return;
@@ -133,7 +127,7 @@ async function waitForExtensionRunning(
 async function waitForReadyFile(
   readyFile: string,
   child: ChildProcessWithoutNullStreams,
-  getStderr: () => string,
+  getStderr: () => string
 ): Promise<ReadyPayload> {
   const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
@@ -157,7 +151,7 @@ async function issueShellToken(ready: ReadyPayload): Promise<string> {
     },
     body: JSON.stringify({ label: "Vitest extension smoke", platform: "test" }),
   });
-  const body = await response.json() as { shellToken?: unknown; error?: unknown };
+  const body = (await response.json()) as { shellToken?: unknown; error?: unknown };
   if (!response.ok || typeof body.shellToken !== "string") {
     throw new Error(`failed to issue shell token (${response.status}): ${JSON.stringify(body)}`);
   }
@@ -168,7 +162,7 @@ async function rpc<T = unknown>(
   ready: ReadyPayload,
   shellToken: string,
   method: string,
-  args: unknown[],
+  args: unknown[]
 ): Promise<T> {
   const response = await fetch(`${ready.gatewayUrl}/rpc`, {
     method: "POST",
@@ -176,11 +170,29 @@ async function rpc<T = unknown>(
       "Content-Type": "application/json",
       Authorization: `Bearer ${shellToken}`,
     },
-    body: JSON.stringify({ method, args }),
+    body: JSON.stringify(
+      envelopeFromMessage({
+        from: "extension-image-service-integration",
+        target: "main",
+        callerKind: "shell",
+        message: {
+          type: "request",
+          requestId: randomUUID(),
+          fromId: "extension-image-service-integration",
+          method,
+          args,
+        },
+      })
+    ),
   });
-  const body = await response.json() as { result?: T; error?: string };
-  if (!response.ok || body.error) {
-    throw new Error(body.error ?? `RPC ${method} failed with status ${response.status}`);
+  const json = (await response.json()) as
+    | { error?: string }
+    | { message?: { result?: T; error?: string } }
+    | { envelope?: { message?: { result?: T; error?: string } } };
+  const body =
+    "envelope" in json ? json.envelope?.message : "message" in json ? json.message : json;
+  if (!response.ok || body?.error) {
+    throw new Error(body?.error ?? `RPC ${method} failed with status ${response.status}`);
   }
-  return body.result as T;
+  return body?.result as T;
 }

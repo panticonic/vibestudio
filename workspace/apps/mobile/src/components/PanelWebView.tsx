@@ -370,6 +370,11 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
   `;
 }
 
+function hostAuthorityOf(url: string): string | null {
+  const match = url.match(/^https?:\/\/([^/?#]+)/i);
+  return match?.[1]?.toLowerCase() ?? null;
+}
+
 export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(function PanelWebView(
   {
     panelId,
@@ -403,6 +408,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
   const loadStartedAtRef = useRef<number>(Date.now());
   const lastLoadProgressAtRef = useRef<number>(Date.now());
   const lastLoadProgressRef = useRef(0);
+  const managedHostAuthority = useMemo(() => hostAuthorityOf(url) ?? LOOPBACK_PANEL_HOST, [url]);
 
   const logDiagnostic = useCallback(
     (message: string, extra?: unknown) => {
@@ -510,10 +516,10 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
 
   const emitManagedNavigation = useCallback(
     (requestUrl: string): boolean => {
-      // Panels are served from the loopback façade, so the managed origin is
-      // loopback — there is no remote managed host to compare against.
-      if (!isManagedHost(requestUrl, LOOPBACK_PANEL_HOST)) return false;
-      const parsed = parsePanelUrl(requestUrl, LOOPBACK_PANEL_HOST, managedBasePath);
+      // Panels are served from this WebView's loopback façade origin. Match the
+      // exact host:port so another local listener cannot use the bridge.
+      if (!isManagedHost(requestUrl, managedHostAuthority)) return false;
+      const parsed = parsePanelUrl(requestUrl, managedHostAuthority, managedBasePath);
       if (!parsed) return false;
       onPanelNavigate?.({
         type: "panel-switch",
@@ -525,7 +531,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
       });
       return true;
     },
-    [managedBasePath, onPanelNavigate, panelId]
+    [managedBasePath, managedHostAuthority, onPanelNavigate, panelId]
   );
 
   const handleShouldStartLoad = useCallback(
@@ -577,7 +583,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
       // origin reported by react-native-webview); fall back to the last
       // known top-level navigation URL.
       const sourceUrl = (event.nativeEvent as { url?: string }).url ?? currentUrlRef.current;
-      if (!sourceUrl || !isManagedHost(sourceUrl, LOOPBACK_PANEL_HOST)) {
+      if (!sourceUrl || !isManagedHost(sourceUrl, managedHostAuthority)) {
         console.warn(
           `[PanelWebView] Rejecting bridge message from non-loopback origin: ${sourceUrl ?? "<unknown>"} (panel=${panelId})`
         );
@@ -640,7 +646,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
         // Ignore non-bridge messages.
       }
     },
-    [diagnosticsEnabled, managed, onBridgeCall, onTitleChange, panelId]
+    [diagnosticsEnabled, managed, managedHostAuthority, onBridgeCall, onTitleChange, panelId]
   );
 
   const handleError = useCallback(

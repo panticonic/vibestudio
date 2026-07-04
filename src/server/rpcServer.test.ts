@@ -767,6 +767,90 @@ describe("RpcServer relay behavior", () => {
     expect(vcsInvocations.resolve(tokenSeen!)).toBeNull();
   });
 
+  it("attributes routed extension VCS writer dispatches to the parent invocation caller", async () => {
+    const { VcsInvocationTable } = await import("./services/vcsInvocationTable.js");
+    const vcsInvocations = new VcsInvocationTable();
+    const targetId = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
+    const parentCaller = {
+      callerId: "@workspace-apps/shell",
+      callerKind: "app" as const,
+      repoPath: "apps/shell",
+      effectiveVersion: "ev-parent",
+      contextId: "ctx-parent",
+    };
+    const resolveExtensionInvocation = vi.fn(() => ({
+      caller: {
+        callerId: "@workspace-extensions/git-bridge",
+        callerKind: "extension" as const,
+      },
+      chainCaller: parentCaller,
+    }));
+    const { server, entityCache } = createServer({
+      vcsInvocations,
+      getVcsWriterIdentity: () => targetId,
+      resolveExtensionInvocation,
+    });
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    entityCache._onActivate(
+      makeRecord(parentCaller.callerId, "app", {
+        contextId: parentCaller.contextId,
+        repoPath: parentCaller.repoPath,
+        effectiveVersion: parentCaller.effectiveVersion,
+      })
+    );
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+
+    let tokenSeen: string | undefined;
+    let contextSeen: string | undefined;
+    let resolvedCallerId: string | undefined;
+    let resolvedRepoPath: string | undefined;
+    const fetchMock = vi.fn(async (_url: string, init: { body: string }) => {
+      const envelope = JSON.parse(init.body) as {
+        message?: { invocationToken?: string; callerContextId?: string };
+      };
+      tokenSeen = envelope.message?.invocationToken;
+      contextSeen = envelope.message?.callerContextId;
+      const record = tokenSeen ? vcsInvocations.resolve(tokenSeen) : null;
+      resolvedCallerId = record?.caller.runtime.id;
+      resolvedRepoPath = record?.caller.code?.repoPath;
+      return new Response(
+        JSON.stringify({
+          from: "do",
+          target: "main",
+          delivery: { caller: { callerId: "do", callerKind: "do" } },
+          provenance: [],
+          message: { type: "response", requestId: "req-ext-vcs", result: { status: "pushed" } },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const extensionClient = createClient("@workspace-extensions/git-bridge");
+    extensionClient.caller = createVerifiedCaller("@workspace-extensions/git-bridge", "extension");
+
+    handleRoute(server, extensionClient, targetId, {
+      type: "request",
+      requestId: "req-ext-vcs",
+      fromId: extensionClient.caller.runtime.id,
+      method: "vcsPush",
+      args: [{ repoPaths: ["packages/a"], sourceHead: "ctx:ctx-parent" }],
+      parentInvocationToken: "parent-token",
+    });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(resolveExtensionInvocation).toHaveBeenCalledWith(
+      "@workspace-extensions/git-bridge",
+      "parent-token"
+    );
+    expect(tokenSeen).toBeTruthy();
+    expect(resolvedCallerId).toBe(parentCaller.callerId);
+    expect(resolvedRepoPath).toBe(parentCaller.repoPath);
+    expect(contextSeen).toBe(parentCaller.contextId);
+    await vi.waitFor(() => expect(vcsInvocations.size()).toBe(0));
+  });
+
   it("threads the caller's HOST-RESOLVED context id to the writer DO (row 11)", async () => {
     // Source-head confinement: the relay resolves the ORIGINATING caller's
     // context registration (`entityCache.resolveContext`) at the same chokepoint
@@ -1923,6 +2007,53 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
     await expect(readAll(body)).resolves.toBe("early bird");
   });
 
+  it("does not resurrect a successfully retired bodyStreamId on a duplicate stream-open", async () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    p.emitBulk(8, FRAME_DATA, utf8("done"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 4 })));
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const firstBody = shim!.takeInboundBody("up-1")!;
+    await expect(readAll(firstBody)).resolves.toBe("done");
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 8,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-2",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const duplicateBody = shim!.takeInboundBody("up-2")!;
+    p.emitBulk(8, FRAME_DATA, utf8("late"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 4 })));
+    await expect(readAll(duplicateBody)).resolves.toBe("");
+  });
+
   it("flushes pre-open frames ahead of post-open frames, preserving order", async () => {
     const { server } = createServer();
     let shim: SessionWebSocketShim | undefined;
@@ -2040,6 +2171,73 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
     await expect(readAll(body)).rejects.toThrow(/pre-open buffer/);
   });
 
+  it("caps the total bytes buffered across pre-open upload streams", async () => {
+    const { server } = createServer({
+      uploadPreopenLimits: { maxBufferedBytes: 3 },
+    });
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    p.emitBulk(1, FRAME_DATA, new Uint8Array([1, 2]));
+    p.emitBulk(2, FRAME_DATA, new Uint8Array([3, 4]));
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 2,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "aggregate-cap",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const body = shim!.takeInboundBody("aggregate-cap")!;
+    await expect(readAll(body)).rejects.toThrow(/aggregate cap/);
+    p.emitDown("test complete");
+  });
+
+  it("caps the number of pending pre-open upload stream ids", async () => {
+    const { server } = createServer({
+      uploadPreopenLimits: { maxPendingStreams: 2 },
+    });
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+
+    p.emitBulk(1, FRAME_DATA, utf8("x"));
+    p.emitBulk(2, FRAME_DATA, utf8("x"));
+    p.emitBulk(3, FRAME_DATA, utf8("x"));
+
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 3,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "stream-cap",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const body = shim!.takeInboundBody("stream-cap")!;
+    await expect(readAll(body)).rejects.toThrow(/too many pending streams/);
+    p.emitDown("test complete");
+  });
+
   it("frames pumped after the body settles drop (retired id) instead of buffering as pre-open", async () => {
     const { shim, p } = setupUpload();
     const body = shim.takeInboundBody("up-1")!;
@@ -2050,6 +2248,59 @@ describe("RpcServer attachWebRtcPipe — inbound request bodies (§1.6)", () => 
     // no throw.
     p.emitBulk(8, FRAME_DATA, utf8("late"));
     p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 4 })));
+  });
+
+  it("does not carry retired body ids across pipe down and session reopen", async () => {
+    const { server } = createServer();
+    let shim: SessionWebSocketShim | undefined;
+    testServer(server).handleConnection = vi.fn((ws: unknown) => {
+      shim = ws as SessionWebSocketShim;
+    });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c1" });
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 7,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-1",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+    const firstBody = shim!.takeInboundBody("up-1")!;
+    p.emitBulk(8, FRAME_DATA, utf8("old"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 3 })));
+    await expect(readAll(firstBody)).resolves.toBe("old");
+
+    p.emitDown("ICE failed");
+    p.sendControl({ t: "open", sid: "s1", token: "grant", connectionId: "c2" });
+
+    // A fresh client transport starts body stream ids from 1 again. If the old
+    // retired-id map survived pipe-down, these early frames would be dropped
+    // before the new stream-open arrives.
+    p.emitBulk(8, FRAME_DATA, utf8("new"));
+    p.emitBulk(8, FRAME_END, utf8(JSON.stringify({ bytesIn: 3 })));
+    p.sendControl({
+      t: "stream-open",
+      sid: "s1",
+      streamId: 9,
+      bodyStreamId: 8,
+      envelope: makeEnvelope("panel:c1", "main", "panel", {
+        type: "stream-request",
+        requestId: "up-2",
+        fromId: "panel:c1",
+        method: "gateway.fetch",
+        args: [{ path: "/x", method: "POST" }],
+      }),
+    });
+
+    const secondBody = shim!.takeInboundBody("up-2")!;
+    await expect(readAll(secondBody)).resolves.toBe("new");
   });
 });
 

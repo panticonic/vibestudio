@@ -834,7 +834,19 @@ describe("ExtensionHost activation", () => {
 
     await expect(
       host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"])
-    ).rejects.toMatchObject({ code: "ENOEXT" });
+    ).rejects.toMatchObject({
+      code: "ENOEXT",
+      message: expect.stringContaining(
+        `Workspace extension source exists at ${extensionNode.relativePath}`
+      ),
+    });
+
+    await expect(
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"])
+    ).rejects.toThrow(`- source: ${extensionNode.relativePath}`);
+    await expect(
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"])
+    ).rejects.toThrow("commit/push the meta repo");
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(buildSystem.getBuild).not.toHaveBeenCalled();

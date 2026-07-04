@@ -228,7 +228,10 @@ export interface MergeHunk {
   end: number;
   newText: string;
   origin: "theirs" | "resolved";
-  /** Best-effort line span in THEIRS the incoming content aligns to. */
+  /** Char offsets into THEIRS the incoming block aligns to — set on `theirs`
+   *  hunks so blame can route a hit here into the other parent's own chain
+   *  (§5.2 step 3). `theirsText.slice(theirsStart, theirsEnd) === newText` for a
+   *  clean take-theirs block; a `theirs` deletion carries a zero-width anchor. */
   theirsStart?: number;
   theirsEnd?: number;
 }
@@ -239,17 +242,21 @@ export interface MergeHunk {
  * commits can record per-file ops. Operates on the already-computed merged text
  * for a CLEAN merge (no conflict markers); each divergence of the merged text
  * from OURS is one hunk, labelled "resolved" when OURS also changed that region
- * relative to BASE (both sides contributed) else "theirs".
+ * relative to BASE (both sides contributed) else "theirs". A "theirs" hunk also
+ * carries its source char span in THEIRS ({@link MergeHunk.theirsStart}) so
+ * blame can route into the other parent's chain (§5.2).
  */
 export function mergeHunksVsOurs(
   baseText: string,
   oursText: string,
+  theirsText: string,
   mergedText: string
 ): MergeHunk[] {
   if (oursText === mergedText) return [];
   const oursLines = oursText.split("\n");
   const mergedLines = mergedText.split("\n");
   const baseLines = baseText.split("\n");
+  const theirsLines = theirsText.split("\n");
   // Regions of OURS that differ from BASE (ours' own edits), keyed by ours-line
   // index — used to distinguish "resolved" (ours touched it too) from "theirs".
   const oursChangedLines = new Set<number>();
@@ -271,21 +278,23 @@ export function mergeHunksVsOurs(
       bi = c.baseEnd;
     }
   }
-  // Char offset of each ours-line start (sentinel one past the last line).
-  const lineOffset: number[] = [];
-  let off = 0;
-  for (const l of oursLines) {
-    lineOffset.push(off);
-    off += l.length + 1;
-  }
-  lineOffset.push(oursText.length);
+  const oursOffset = lineStartOffsets(oursLines, oursText.length);
+  const theirsOffset = lineStartOffsets(theirsLines, theirsText.length);
+  // Built lazily on the first "theirs" hunk: each merged-line index → the
+  // THEIRS-line it copies, so an incoming block resolves to its source range.
+  let mergedToTheirs: Array<number | null> | null = null;
   const hunks: MergeHunk[] = [];
-  // ours → merged chunk alignment (ours-coordinate spans in c.baseStart/baseEnd).
+  // ours → merged chunk alignment (ours-coordinate spans in c.baseStart/baseEnd),
+  // tracking the merged-line cursor in lockstep for the theirs alignment.
+  let oursCursor = 0;
+  let mergedCursor = 0;
   for (const c of diffChunks(oursLines, mergedLines)) {
-    const start = Math.min(lineOffset[c.baseStart] ?? oursText.length, oursText.length);
+    mergedCursor += c.baseStart - oursCursor;
+    const mergedStart = mergedCursor;
+    const start = Math.min(oursOffset[c.baseStart] ?? oursText.length, oursText.length);
     const end =
       c.baseEnd > c.baseStart
-        ? Math.min(lineOffset[c.baseEnd] ?? oursText.length, oursText.length)
+        ? Math.min(oursOffset[c.baseEnd] ?? oursText.length, oursText.length)
         : start;
     const replacement = c.lines.length > 0 ? c.lines.join("\n") : "";
     let oursTouched = false;
@@ -295,14 +304,64 @@ export function mergeHunksVsOurs(
         break;
       }
     }
-    hunks.push({
+    const hunk: MergeHunk = {
       start,
       end,
       newText: c.lines.length > 0 && end < oursText.length ? `${replacement}\n` : replacement,
       origin: oursTouched ? "resolved" : "theirs",
-    });
+    };
+    if (hunk.origin === "theirs") {
+      mergedToTheirs ??= mergedToTheirsLineMap(theirsLines, mergedLines);
+      const theirsStartLine =
+        mergedStart < mergedToTheirs.length ? mergedToTheirs[mergedStart] : null;
+      // newText is always a prefix of the aligned THEIRS block (it may drop the
+      // block's trailing "\n" at ours' last line), so `start + newText.length`
+      // slices back to exactly newText and keeps `start + offsetWithin` routing
+      // exact — see MergeHunk.theirsStart.
+      const theirsStart =
+        theirsStartLine != null
+          ? Math.min(theirsOffset[theirsStartLine] ?? theirsText.length, theirsText.length)
+          : theirsText.length; // deletion at/past MERGED's end → zero-width anchor
+      hunk.theirsStart = theirsStart;
+      hunk.theirsEnd = theirsStart + hunk.newText.length;
+    }
+    hunks.push(hunk);
+    mergedCursor = mergedStart + c.lines.length;
+    oursCursor = c.baseEnd;
   }
   return hunks;
+}
+
+/** Char offset of each line's start (sentinel one past the last line). */
+function lineStartOffsets(lines: string[], textLength: number): number[] {
+  const offsets: number[] = [];
+  let off = 0;
+  for (const line of lines) {
+    offsets.push(off);
+    off += line.length + 1; // + "\n"
+  }
+  offsets.push(textLength);
+  return offsets;
+}
+
+/**
+ * For each merged-line index, the THEIRS-line index it copies verbatim, or
+ * `null` where the merged line has no direct counterpart in THEIRS (it came
+ * from OURS or a resolution). Derived from the same LCS alignment the merge
+ * uses, so a clean "theirs" block maps to a contiguous THEIRS line range.
+ */
+function mergedToTheirsLineMap(theirsLines: string[], mergedLines: string[]): Array<number | null> {
+  const map: Array<number | null> = new Array<number | null>(mergedLines.length).fill(null);
+  let ti = 0; // theirs line
+  let mi = 0; // merged line
+  for (const c of diffChunks(theirsLines, mergedLines)) {
+    const common = c.baseStart - ti;
+    for (let k = 0; k < common; k++) map[mi + k] = ti + k;
+    mi += common + c.lines.length;
+    ti = c.baseEnd;
+  }
+  for (let k = mi; k < mergedLines.length; k++) map[k] = ti + (k - mi);
+  return map;
 }
 
 function splitLines(text: string): string[] {

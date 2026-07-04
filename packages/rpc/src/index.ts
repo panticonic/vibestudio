@@ -73,6 +73,7 @@ export {
   originOfEnvelope,
   responseEnvelopeFor,
   retargetEnvelope,
+  stampEnvelopeCaller,
 } from "./envelope.js";
 export { createHandlerRegistry } from "./transport-helpers.js";
 export type { DecodedFramedStream } from "./types.js";

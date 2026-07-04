@@ -237,6 +237,7 @@ async function handleRequest(
     res.end("Blocked: not a panel-reachable gateway path");
     return;
   }
+  const gatewayPath = decision.target;
 
   const forwardHeaders = collectForwardHeaders(req);
 
@@ -252,7 +253,7 @@ async function handleRequest(
     const response = await serverClient.stream(
       "gateway",
       "fetch",
-      [{ path: reqPath, method, headers: forwardHeaders, gzip: true }],
+      [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
       requestBody ? { body: requestBody } : undefined
     );
     return normalizeResponse(response);
@@ -262,7 +263,7 @@ async function handleRequest(
     // Only GET assets are cacheable. Non-GET (and body-bearing) requests bypass
     // the cache and stream straight through.
     if (cache && method === "GET") {
-      const outcome = await cache.serve(assetCacheKey(reqPath, forwardHeaders), fetcher);
+      const outcome = await cache.serve(assetCacheKey(gatewayPath, forwardHeaders), fetcher);
       if (outcome.kind === "asset") {
         const { asset } = outcome;
         res.writeHead(

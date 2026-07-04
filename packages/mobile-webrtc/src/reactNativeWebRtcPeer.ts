@@ -53,15 +53,14 @@ import type {
   RtcPeerConnectionLike,
   RtcSessionDescription,
 } from "@vibez1/rpc/transports/webrtcPeer";
-import { parseSdpFingerprint } from "@vibez1/rpc/transports/webrtcPeer";
+import { DEFAULT_CHUNK_SIZE, parseSdpFingerprint } from "@vibez1/rpc/transports/webrtcPeer";
 
 /**
- * SCTP max message size honored by the bulk channel. react-native-webrtc (like
- * libdatachannel) does not surface a `maxMessageSize` accessor, so we report the
- * standard 256 KB SCTP cap; the transport chunks at `min(chunkSize, this)`, so a
- * value at-or-above its conservative chunk size keeps writes within one message.
+ * React Native's data-channel stack has corrupted frames above the conservative
+ * transport chunk. Report the safe cap as the channel max so both hello
+ * negotiation and `sendChunked` stay below it even when callers omit chunkSize.
  */
-const SCTP_MAX_MESSAGE_SIZE = 262144;
+const SCTP_MAX_MESSAGE_SIZE = DEFAULT_CHUNK_SIZE;
 
 // ===========================================================================
 // Minimal native surface — only what this adapter touches, typed locally so the
@@ -95,7 +94,10 @@ interface NativeRtcDataChannel {
   bufferedAmountLowThreshold: number;
   send(data: string | ArrayBuffer | ArrayBufferView): void;
   close(): void;
-  addEventListener(type: "open" | "close" | "closing" | "error" | "bufferedamountlow", listener: () => void): void;
+  addEventListener(
+    type: "open" | "close" | "closing" | "error" | "bufferedamountlow",
+    listener: () => void
+  ): void;
   addEventListener(type: "message", listener: (event: NativeMessageEvent) => void): void;
 }
 
@@ -106,7 +108,7 @@ interface NativeRtcPeerConnection {
   readonly remoteDescription: NativeSessionDescription | null;
   createDataChannel(
     label: string,
-    init?: { ordered?: boolean; negotiated?: boolean; id?: number },
+    init?: { ordered?: boolean; negotiated?: boolean; id?: number }
   ): NativeRtcDataChannel;
   createOffer(): Promise<{ type?: string; sdp?: string }>;
   createAnswer(): Promise<{ type?: string; sdp?: string }>;
@@ -114,7 +116,10 @@ interface NativeRtcPeerConnection {
   setRemoteDescription(desc: NativeSessionDescription): Promise<void>;
   addIceCandidate(candidate: unknown): Promise<void>;
   close(): void;
-  addEventListener(type: "connectionstatechange" | "iceconnectionstatechange", listener: () => void): void;
+  addEventListener(
+    type: "connectionstatechange" | "iceconnectionstatechange",
+    listener: () => void
+  ): void;
   addEventListener(type: "icecandidate", listener: (event: NativeIceCandidateEvent) => void): void;
 }
 
@@ -129,7 +134,7 @@ export interface ReactNativeWebRtcProviderOptions {
  * needs `localFingerprint` — the optional provider method is omitted.
  */
 export function createReactNativeWebRtcProvider(
-  options: ReactNativeWebRtcProviderOptions = {},
+  options: ReactNativeWebRtcProviderOptions = {}
 ): PeerConnectionProvider {
   const log = options.logPrefix ?? "[rn-webrtc]";
   return {
@@ -232,7 +237,7 @@ class WrappedDataChannel implements RtcDataChannelLike {
 
   constructor(
     private readonly dc: NativeRtcDataChannel,
-    log: string,
+    log: string
   ) {
     this.label = dc.label;
     this.openFanout = new Fanout(log);
@@ -246,7 +251,7 @@ class WrappedDataChannel implements RtcDataChannelLike {
     this.dc.addEventListener("open", () => this.openFanout.emit());
     this.dc.addEventListener("close", () => this.closeFanout.emit());
     this.dc.addEventListener("error", () =>
-      this.errorFanout.emit(new Error(`data channel '${this.label}' error`)),
+      this.errorFanout.emit(new Error(`data channel '${this.label}' error`))
     );
     this.dc.addEventListener("message", (event) => {
       const data = event.data;
@@ -323,7 +328,7 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
 
   constructor(
     private readonly pc: NativeRtcPeerConnection,
-    private readonly log: string,
+    private readonly log: string
   ) {
     this.stateFanout = new Fanout(log);
     this.localDescFanout = new Fanout(log);
@@ -398,7 +403,7 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
         candidate: candidate.candidate,
         sdpMid: candidate.sdpMid ?? null,
         sdpMLineIndex: candidate.sdpMLineIndex ?? null,
-      }),
+      })
     );
   }
 

@@ -65,6 +65,17 @@ function cacheableResponse(byteLength: number): MobileFetchedResponse {
   };
 }
 
+async function readBodyLength(stream: ReadableStream<Uint8Array>): Promise<number> {
+  const reader = stream.getReader();
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value?.byteLength ?? 0;
+  }
+  return total;
+}
+
 describe("MobileAssetMemoryCache oversized-asset handling", () => {
   it("does not cache an asset larger than the byte budget (re-fetches next time)", async () => {
     const cache = new MobileAssetMemoryCache(100);
@@ -75,12 +86,13 @@ describe("MobileAssetMemoryCache oversized-asset handling", () => {
     };
 
     const first = await cache.serve("/big-abc.js", fetcher);
-    expect(first.kind).toBe("asset"); // still served this time
+    expect(first.kind).toBe("passthrough"); // still served this time, but not buffered
+    if (first.kind === "passthrough") expect(await readBodyLength(first.response.body!)).toBe(500);
     expect(fetches).toBe(1);
 
     // A second request must re-fetch — the oversized asset was never cached.
     const second = await cache.serve("/big-abc.js", fetcher);
-    expect(second.kind).toBe("asset");
+    expect(second.kind).toBe("passthrough");
     expect(fetches).toBe(2);
   });
 
@@ -96,7 +108,9 @@ describe("MobileAssetMemoryCache oversized-asset handling", () => {
     await cache.serve("/small-abc.js", smallFetcher); // cached
     expect(smallFetches).toBe(1);
 
-    await cache.serve("/big-abc.js", bigFetcher); // must NOT evict /small
+    const big = await cache.serve("/big-abc.js", bigFetcher); // must NOT evict /small
+    expect(big.kind).toBe("passthrough");
+    if (big.kind === "passthrough") expect(await readBodyLength(big.response.body!)).toBe(5000);
 
     // /small is still resident: served from cache, no second fetch.
     const hit = await cache.serve("/small-abc.js", smallFetcher);

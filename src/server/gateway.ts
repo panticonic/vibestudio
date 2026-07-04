@@ -29,6 +29,7 @@ import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { assertPresent } from "../lintHelpers";
 import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
+import { bridgeDuplexSockets } from "./socketBridge.js";
 
 const log = createDevLogger("Gateway");
 
@@ -129,7 +130,7 @@ export interface WorkerHostCodeProvider {
     mainModule: string;
     modules: Record<string, string>;
     wasmModules?: Record<string, string>;
-    env: Record<string, string>;
+    env: Record<string, unknown>;
   } | null>;
 }
 
@@ -761,6 +762,12 @@ function proxyRequest(
     }
     res.end(`Gateway proxy error: ${err.message}`);
   });
+  req.on("error", (err) => {
+    proxyReq.destroy(err);
+  });
+  res.on("error", () => {
+    proxyReq.destroy();
+  });
 
   req.pipe(proxyReq);
 }
@@ -778,7 +785,22 @@ function proxyUpgrade(
   const safeHeaders = stripUpstreamHeaders(req.headers);
   safeHeaders["authorization"] = `Bearer ${upstreamToken}`;
   Object.assign(safeHeaders, extraHeaders);
-  const targetSocket = connectNet(targetPort, "127.0.0.1", () => {
+  let targetSocket: ReturnType<typeof connectNet> | null = null;
+  const onClientConnectError = () => {
+    targetSocket?.destroy();
+  };
+  const onClientConnectClose = () => {
+    targetSocket?.destroy();
+  };
+  const onTargetConnectError = (err: Error) => {
+    log.warn(`Gateway WS proxy error: ${err.message}`);
+    socket.destroy();
+  };
+  targetSocket = connectNet(targetPort, "127.0.0.1", () => {
+    if (!targetSocket) return;
+    targetSocket.off("error", onTargetConnectError);
+    socket.off("error", onClientConnectError);
+    socket.off("close", onClientConnectClose);
     const headers = Object.entries(safeHeaders)
       .filter(([, v]) => v !== undefined)
       .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : v}`)
@@ -788,18 +810,17 @@ function proxyUpgrade(
     targetSocket.write(upgradeReq);
     if (head.length > 0) targetSocket.write(head);
 
-    socket.pipe(targetSocket);
-    targetSocket.pipe(socket);
+    bridgeDuplexSockets(socket, targetSocket, {
+      onError: ({ side, error }) => {
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn(`Gateway WS proxy ${side} socket error: ${message}`);
+      },
+    });
   });
 
-  targetSocket.on("error", (err) => {
-    log.warn(`Gateway WS proxy error: ${err.message}`);
-    socket.destroy();
-  });
-
-  socket.on("error", () => {
-    targetSocket.destroy();
-  });
+  targetSocket.on("error", onTargetConnectError);
+  socket.on("error", onClientConnectError);
+  socket.on("close", onClientConnectClose);
 }
 
 // ===========================================================================

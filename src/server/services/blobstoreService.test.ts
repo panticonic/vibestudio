@@ -771,6 +771,20 @@ describe("blobstoreService", () => {
       );
     });
 
+    it("materializeTree replaces same-size files whose content hash differs", async () => {
+      const digest = await seed("right");
+      const { treeHash } = await putTree(blobsDir, [file("same-size.txt", digest)]);
+      const outDir = path.join(rootDir, "same-size-checkout");
+      await fsp.mkdir(outDir, { recursive: true });
+      await fsp.writeFile(path.join(outDir, "same-size.txt"), "wrong");
+
+      await expect(materializeTree(blobsDir, treeHash, outDir)).resolves.toEqual({
+        written: 1,
+        unchanged: 0,
+      });
+      await expect(fsp.readFile(path.join(outDir, "same-size.txt"), "utf8")).resolves.toBe("right");
+    });
+
     it("materializeTree with link:false copies non-executables too", async () => {
       const digest = await seed("copy me");
       const { treeHash } = await putTree(blobsDir, [file("copy.txt", digest)]);
@@ -796,6 +810,17 @@ describe("blobstoreService", () => {
 
       await expect(materializeTree(blobsDir, rootTree, outDir)).rejects.toThrow(/symlink/);
       // No writes leaked through the symlink into the outside target.
+      await expect(fsp.readdir(outside)).resolves.toEqual([]);
+    });
+
+    it("materializeTree refuses an exact symlink output directory", async () => {
+      const { rootTree } = await seedFixtureTree();
+      const outside = path.join(rootDir, "outside-exact-target");
+      const outDir = path.join(rootDir, "symlink-exact-out");
+      await fsp.mkdir(outside, { recursive: true });
+      await fsp.symlink(outside, outDir);
+
+      await expect(materializeTree(blobsDir, rootTree, outDir)).rejects.toThrow(/symlink output/);
       await expect(fsp.readdir(outside)).resolves.toEqual([]);
     });
 

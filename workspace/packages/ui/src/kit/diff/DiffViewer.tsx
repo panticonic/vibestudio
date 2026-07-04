@@ -45,6 +45,13 @@ export interface DiffViewerProps {
    * carry no extra action (the shell may leave this unimplemented for now).
    */
   onOpenInGadBrowser?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
+  /**
+   * Paths to expand on first render (inline files only — degraded rows can't
+   * expand). Lets a host deep-link straight into an open diff, e.g. gad-browser
+   * pre-expanding the file the reviewer was sent to. Changes are additive: a
+   * later value merges in without collapsing what the reviewer has open.
+   */
+  initialExpanded?: readonly string[];
 }
 
 const KIND_BADGE: Record<
@@ -61,11 +68,31 @@ export function DiffViewer({
   fetchContent,
   appearance = "light",
   onOpenInGadBrowser,
+  initialExpanded,
 }: DiffViewerProps) {
   const files = entry.changedFiles;
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(initialExpanded));
 
   const inlineFiles = useMemo(() => files.filter((f) => !f.binary && !f.tooLarge), [files]);
+
+  // Merge in any later `initialExpanded` request (e.g. a deep link switching to
+  // a different focused file on the same mounted panel) without collapsing what
+  // the reviewer already opened. Degraded rows are ignored — they can't expand.
+  const inlinePaths = useMemo(() => new Set(inlineFiles.map((f) => f.path)), [inlineFiles]);
+  useEffect(() => {
+    if (!initialExpanded || initialExpanded.length === 0) return;
+    setExpanded((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const path of initialExpanded) {
+        if (inlinePaths.has(path) && !next.has(path)) {
+          next.add(path);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [initialExpanded, inlinePaths]);
   const allInlineExpanded =
     inlineFiles.length > 0 && inlineFiles.every((f) => expanded.has(f.path));
 

@@ -336,7 +336,7 @@ Allowed callers: `shell`, `app`, `server`
 
 ## `refs`
 
-Protected host main refs (repoPath → main): read, log, and the single-writer group compare-and-swap
+Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.
 
 Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 
@@ -344,8 +344,7 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 |--------|-------------|
 | `refs.readMain` | Current record of one repo's protected `main` (repoPath → state), or null when absent. |
 | `refs.listMains` | Every repo's protected `main`, sorted by repoPath. |
-| `refs.readMainLog` | Chronological (oldest→newest) movement log for one repo's `main`; `limit` keeps the newest N entries. `new` is null for a delete entry (`old` is null for a re-creation). |
-| `refs.updateMains` | Atomic group compare-and-swap over protected `main` refs. Every entry validates (`expectedOld` matches current, null = must-not-exist) under one critical section; the batch persists in ONE atomic file replace. `next: null` deletes a main. Any per-entry conflict fails the whole batch with structured per-entry data. Approval-gated and restricted to the single VCS-DO writer (§3): every other caller gets a structured policy rejection. |
+| `refs.listMainRefLog` | The host main-ref movement log for a repo (§2): every `main` advance with its operation, host-verified writer/on-behalf-of attribution, reason, and old→new values, oldest first. `sinceId` pages movements after a known id (omit for the full log). The render paths read main-advance provenance from here; the DO's stale-intent discard consults it (§6). |
 
 ## `runtime`
 
@@ -360,8 +359,11 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`
 | `runtime.listEntities` | List live entities (id, kind, source, contextId, title, createdAt). |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.createContext` | Create a full logical workspace context branch. Every context presents the whole workspace tree; per-repo ctx heads are created lazily as edits are made. Use vcs.contextStatus to inspect uncommitted changes, ahead/behind repos, and deleted refs. |
-| `runtime.cloneContext` | Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity map. The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them. |
-| `runtime.destroyContext` | Retire every entity in a context and delete its folder + VCS state. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context. |
+| `runtime.cloneContext` | Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity/context maps. With `recursive`, the whole LIFECYCLE subtree is cloned (never following lineage edges); with `targetKey`, the clone is idempotent (a retry returns the same child). The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point, re-homing pending calls) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them. |
+| `runtime.destroyContext` | Retire every entity in a context and delete its folder + VCS state. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context. |
+| `runtime.listOwnedContexts` | List the contexts owned by a context via the relationship registry. `kind` scopes to 'lifecycle' (subagent children) or 'lineage' (fork provenance); omit to list both. Returns { contexts: [...] }. |
+| `runtime.recordContextEdge` | Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead. |
+| `runtime.createSubagentContext` | Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; the vessel must NOT hand-roll this. |
 
 ## `shellApproval`
 
@@ -405,7 +407,7 @@ Allowed callers: `server`, `shell`
 
 ## `vcs`
 
-Workspace version control (GAD-native): commit, status, log, diff
+Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibez1 vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.
 
 Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
@@ -422,16 +424,13 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `vcs.diff` | Diff two GAD states by their `state:…` hashes, returning the added/removed/changed files between them. |
 | `vcs.resolveHead` | Resolve a ref to its head name and current `state:…` hash on a repo's log. Omit the ref for the caller's current context head; pass "main"/"ctx:…" for an explicit ref, and repoPath to scope to a repo. |
 | `vcs.workspaceViewWithRepoAt` | Compose a workspace-rooted state view with one repo replaced by a repo-rooted state hash (or removed when null). Use this to convert a repo state from vcs.log/vcs.commit/vcs.resolveHead into the immutable state ref that build.getBuild expects. |
-| `vcs.merge` | Reconcile divergence: pull `main` into the caller's context head on a repo, producing a MERGE COMMIT. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Returns the upstream commits + clean/conflict + conflictPaths. After merging, the context head descends from main so push fast-forwards. |
-| `vcs.mergeGroup` | Coordinated multi-repo pull: merge each repo's source head into its target (default main). Best-effort per-repo (not the atomic group-push path). |
+| `vcs.merge` | Reconcile divergence: pull a SOURCE (`main`, or a context you own/forked) INTO the caller's context head, producing a MERGE COMMIT per repo. Clean (no overlaps) commits with no file resolution; in-file conflicts materialize markers into the context filesystem — resolve via vcs.edit, then vcs.commit seals the merge. Commit-gated on BOTH sides: uncommitted edits on the source (or target) are rejected before any merge. Omit repoPaths to reconcile every repo your context branch touches. Returns one result per repo. After merging main, the context head descends from main so push fast-forwards. |
+| `vcs.pick` | Cherry-pick selected changes from a SOURCE (`main`, or a context you own/forked) onto the caller's context head as UNCOMMITTED working edits (never a head advance): a `commit` pick 3-way-applies a whole commit's patch; a `paths` pick injects the source context's working content at specific paths (source must be `{ contextId }`). Review the result, then vcs.commit to seal it. Returns one working-edit result per repo touched. |
+| `vcs.contextDiff` | Diff a context you own or forked against a baseline — its `fork-base` (the state it inherited when forked; the default) or the current workspace `main` — returning the added/removed/changed files its branch introduced. The read is authorized against the runtime ownership/lineage registry; an unowned context throws. |
 | `vcs.abortMerge` | Abort a pending (conflicted) merge on a repo's head, restoring its pre-merge tree; this is itself a head write. repoPath is required; omit head for the caller's own context head. |
 | `vcs.pendingMerge` | Inspect a repo head's in-progress merge, if any: the source head being merged and its unresolved conflicts; null when no merge is pending. repoPath is required; omit head for the caller's own context head. |
-| `vcs.push` | Publish one or more repos from the caller's context head to their main heads — the ONLY way main advances (a gated compare-and-swap on the server's protected `main` ref per repo). FAST-FORWARD-ONLY, atomic across repos (all advance or none), build-gated. REJECTS (throws) if the source has uncommitted edits (vcs.commit or vcs.discardEdits first). Returns `pushed`/`up-to-date` with build reports; `diverged` with per-repo structured divergences (upstream commits + clean/conflict + conflictPaths) when main advanced past your base — reconcile with vcs.merge then re-push; or `build-failed` with diagnostics (no head advanced — fix and re-push). A concurrent advance that cannot be classified as a divergence throws a RETRYABLE error with code `REF_CONFLICT` — re-read main and re-push. The main advance is approval-gated. sourceHead is the caller-supplied head to publish (the DO trusts it): the runtime vcs client pins each context caller to its OWN ctx head, while shell/server callers may pass any sourceHead explicitly. |
 | `vcs.pushStatus` | How far each repo's head is ahead of that repo's main: the unpushed change count and per-file changes a push would carry. |
-| `vcs.forkRepo` | Fork a repo to a new path, preserving history: the new repo's log descends from the source's lineage (its `log` shows the inherited commits), so you can edit on top of the forked history. The package.json `name` leaf is rewritten to the new path so the fork is build-valid; deeper renames (component/class names) are yours to make, then push. |
-| `vcs.deleteRepo` | SEVERE, global-state action: permanently remove a whole repo from the workspace. Distinct from edits — it archives the repo's history (moved to a recoverable archive head) and drops the repo from workspace main, deleting its working tree. Requires explicit user approval every time (a dedicated per-repo deletion grant that the ordinary write grant never covers). REFUSES if other repos depend on this one unless `force` is set (their builds will break). Rejects the `meta` repo and any path with no committed main. |
-| `vcs.restoreRepo` | Recover a previously deleted repo by re-pointing its main at its archived history. FAILS if a different repo now occupies that path (re-created since the deletion) rather than clobbering it, and if there is nothing archived to restore. Requires user approval (re-adds the repo to workspace main). |
-| `vcs.contextStatus` | Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace (vcs.deleteRepo) while your branch still references it — a push will be refused, so drop/rebase your context or restore the repo. Only repos with changes or drift are returned. |
+| `vcs.contextStatus` | Summarize the repos where your full workspace context branch differs from main or needs attention. `forked` = your branch has a committed ctx head for this repo; `uncommitted` = it carries uncommitted WORKING edits (vcs.commit them, or vcs.discardEdits); `ahead` = the committed head has commits not yet in main (push them); `behind` = main advanced past your pinned base (rebase/merge to pick it up); `deleted` = the repo was removed from the workspace while your branch still references it — a push will be refused, so drop/rebase your context. Only repos with changes or drift are returned. Pass a context you own/forked to summarize ITS branch instead of your own. |
 | `vcs.rebaseContext` | Pull the latest main into your context: 3-way merges main into each repo you've edited, then re-pins your context's base to the current workspace so unedited repos also advance to latest. Use when contextStatus shows repos `behind`. Returns each edited repo's merge status. |
 | `vcs.recall` | Semantic recall over the workspace's VCS memory (log summaries, file snippets) matching a query; pass repoPaths to scope to selected repos. Returns ranked snippets with their head/event/path anchors. |
 
@@ -557,3 +556,15 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 | `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |
 | `workspace-state.panel.incrementAccess` | Bump the access counter for a panel entity. |
 | `workspace-state.panel.rebuildIndex` | Rebuild the panel-search index from active panel entities. |
+
+## `worktree`
+
+Host disk primitives: scan a working tree into the CAS (worktree.scan), project a state onto disk (worktree.project), and read build-graph dependents (worktree.dependentRepos).
+
+Allowed callers: `do`, `shell`, `server`
+
+| Method | Description |
+|--------|-------------|
+| `worktree.scan` | Scan a working tree into the content store and return its content-addressed state. Resolves the (repoPath, head) directory, hashes+mirrors every file into the CAS (refreshing the .gad sidecar), and returns { stateHash, files }. A pure disk→CAS primitive: no commit, no ref advance, no history — the caller (the gad-store DO) owns all VCS semantics. |
+| `worktree.project` | Materialize a content-addressed `stateHash` onto the (repoPath, head) working tree (the disk-projection primitive, sibling of `scan`). Semantics-free: hardlinks the CAS tree onto disk and refreshes the sidecar — no commit, no ref advance, no history. The gad-store DO drives it to re-materialize a restored/forked repo into the ACTIVE context checkout (`ctx:workspace`); `main` is never projected (D1). |
+| `worktree.dependentRepos` | Workspace-relative paths of repos whose build unit directly imports `repoPath`'s unit, at the live workspace view. A content-derived build-graph read (dumb primitive, same class as `scan`): it holds no delete semantics — the gad-store DO consumes it to decide whether a deletion is refused without `force`. Empty when `repoPath` is content-only or has no dependents. |

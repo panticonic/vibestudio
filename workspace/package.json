@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "build": "pnpm --filter \"@workspace/*\" --filter \"@workspace-about/*\" --filter \"@workspace-apps/*\" --filter \"@workspace-extensions/*\" --filter \"@workspace-panels/*\" --filter \"@workspace-skills/*\" --filter \"@workspace-workers/*\" build",
-    "type-check": "../node_modules/.bin/tsc --project tsconfig.json && ../node_modules/.bin/tsc --project tsconfig.integration.json && ../node_modules/.bin/tsc --project tsconfig.integration.mobile.json",
-    "test": "../node_modules/.bin/vitest run --root .. --config vitest.userland.config.ts"
+    "type-check": "tsc --project tsconfig.json && tsc --project tsconfig.integration.json && tsc --project tsconfig.integration.mobile.json",
+    "test": "vitest run --root .. --config vitest.userland.config.ts"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

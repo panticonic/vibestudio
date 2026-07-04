@@ -375,7 +375,7 @@ describe("SignalingRoom", () => {
     expect(staleOfferer.sent).not.toContain(offer);
   });
 
-  it("an eviction with buffered frames pending still flushes them to a genuine second joiner", async () => {
+  it("drops stale buffered frames from an evicted same-role socket", async () => {
     const { room } = makeRoom();
 
     // Offerer A joins alone and buffers an offer + candidate (no counterpart).
@@ -384,18 +384,35 @@ describe("SignalingRoom", () => {
     await deliver(room, peerA!, offer);
     await deliver(room, peerA!, candidate);
 
-    // A same-role offerer A' evicts A — the pre-join buffer must NOT be dropped
-    // (the eviction is a reconnect of the same party, not the room emptying).
+    // A same-role offerer A' evicts A. A's buffered SDP/ICE belongs to the old
+    // socket incarnation and must not be replayed to the answerer.
     await room.fetch(upgradeRequest("offerer"));
     const peerAPrime = createdServers[1]!;
     expect(peerA!.closed).toBe(true);
     expect(peerAPrime.closed).toBe(false);
 
-    // The genuine second joiner (the answerer) still receives the buffered
-    // frames, in order, on join.
     await room.fetch(upgradeRequest("answerer"));
     const peerB = createdServers[2]!;
-    expect(peerB.sent).toEqual([offer, candidate]);
+    expect(peerB.sent).toEqual([]);
+  });
+
+  it("preserves opposite-role buffered frames for a reconnecting socket", async () => {
+    const { room } = makeRoom();
+
+    await room.fetch(upgradeRequest("offerer"));
+    await room.fetch(upgradeRequest("answerer"));
+    const [offerer, answerer] = createdServers;
+
+    // The offerer disappears from the runtime roster before the close callback
+    // arrives. The answerer's frame has no deliverable counterpart, so it is
+    // buffered with answerer provenance.
+    offerer!.close(1006, "network drop");
+    await deliver(room, answerer!, answer);
+
+    // A fresh offerer socket should receive the still-useful answerer frame.
+    await room.fetch(upgradeRequest("offerer"));
+    const offererPrime = createdServers[2]!;
+    expect(offererPrime.sent).toEqual([answer]);
   });
 
   it("arms the ping auto-response on construction so dead sockets reap without waking the DO", () => {

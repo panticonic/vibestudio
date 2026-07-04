@@ -36,8 +36,9 @@ describe("vcsService", () => {
   describe("status / write authorization", () => {
     it("rejects explicit foreign heads for context-bound callers", async () => {
       // The head-write gate is shared by every write method; exercise it
-      // through `merge`. In the new model merge(repoPath, head?) pulls main INTO
-      // the named ctx head, so the `head` arg is the head being written.
+      // through `merge`. merge({ source, head? }) pulls the source INTO the
+      // named ctx head, so `head` is the head being written — a foreign one is
+      // rejected before the source is even resolved.
       const mergeHeads = vi.fn();
       const service = createVcsService({
         workspaceVcs: { mergeHeads } as never,
@@ -45,7 +46,7 @@ describe("vcsService", () => {
       });
 
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source", "ctx:ctx-2"])
+        service.handler({ caller: panelCaller() }, "merge", [{ source: "main", head: "ctx:ctx-2" }])
       ).rejects.toThrow("Callers may only write their own context head (ctx:ctx-1)");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -124,7 +125,42 @@ describe("vcsService", () => {
       expect(result).toEqual({ head: "main", stateHash: "state:mainhead" });
     });
 
-    it("allows context callers to inspect an explicit (foreign) head", async () => {
+    it("allows resolveHead for a foreign context the caller owns/forked", async () => {
+      const resolveHead = vi.fn(async () => "state:foreign");
+      const service = createVcsService({
+        workspaceVcs: { resolveHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [{ contextId: "ctx-2" }] }),
+      });
+
+      const result = await service.handler({ caller: panelCaller() }, "resolveHead", [
+        "ctx:ctx-2",
+        "panels/source",
+      ]);
+
+      expect(resolveHead).toHaveBeenCalledWith("ctx:ctx-2", "panels/source");
+      expect(result).toEqual({ head: "ctx:ctx-2", stateHash: "state:foreign" });
+    });
+
+    it("denies resolveHead for an unowned foreign context", async () => {
+      const resolveHead = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { resolveHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [] }),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "resolveHead", ["ctx:ctx-2", "panels/source"])
+      ).rejects.toThrow("is not owned or forked");
+      expect(resolveHead).not.toHaveBeenCalled();
+    });
+
+    it("allows context callers to inspect a foreign head they own/forked", async () => {
+      // WS-2 tightened cross-context reads to DENY-not-prompt: a context caller
+      // may inspect a FOREIGN ctx head ONLY when the runtime ownership/lineage
+      // registry authorizes it (a child it owns or a fork off it). Here ctx-1
+      // owns/forked ctx-2, so the explicit-head read is allowed.
       const statusHead = vi.fn(async () => ({
         stateHash: "state:foreign",
         dirty: false,
@@ -135,6 +171,7 @@ describe("vcsService", () => {
       const service = createVcsService({
         workspaceVcs: { statusHead } as never,
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [{ contextId: "ctx-2" }] }),
       });
 
       const result = await service.handler({ caller: panelCaller() }, "status", [
@@ -144,6 +181,24 @@ describe("vcsService", () => {
 
       expect(statusHead).toHaveBeenCalledWith("ctx:ctx-2", "panels/source");
       expect(result).toMatchObject({ stateHash: "state:foreign", dirty: false });
+    });
+
+    it("denies context callers inspecting an unowned foreign head", async () => {
+      // The dual of the test above: without an ownership/lineage grant, a
+      // foreign ctx head read is DENIED (thrown, never prompted). This is the
+      // intended tighter WS-2 rule — the old permissive "any explicit head is
+      // inspectable" allowance is gone.
+      const statusHead = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { statusHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+        listOwnedContexts: async () => ({ contexts: [] }),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "status", ["panels/source", "ctx:ctx-2"])
+      ).rejects.toThrow("is not owned or forked");
+      expect(statusHead).not.toHaveBeenCalled();
     });
 
     it("rejects an invalid repo path arg to status", async () => {
@@ -223,9 +278,10 @@ describe("vcsService", () => {
   });
 
   describe("merge authorization", () => {
-    // New model: `merge(repoPath, head?)` RECONCILES — it pulls `main` INTO the
-    // named ctx head (a merge commit), it never merges INTO main. So the `head`
-    // arg is the head being written; main as a target is rejected outright.
+    // New model: `merge({ source, repoPaths?, head? })` RECONCILES — it pulls a
+    // SOURCE (`main` or a context you own/forked) INTO the target ctx head (a
+    // merge commit per repo), never INTO main. `head` is the head being
+    // written; main as a target is rejected outright.
     function mergeService(opts: { entityCache?: EntityCache } = {}) {
       const mergeHeads = vi.fn(async () => ({
         status: "merged" as const,
@@ -246,10 +302,10 @@ describe("vcsService", () => {
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
-      // A privileged-looking explicit `main` target: the write-head gate first
+      // A panel naming an explicit `main` target: the write-head gate first
       // confines the panel to its own ctx head, so it never reaches main.
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source", "main"])
+        service.handler({ caller: panelCaller() }, "merge", [{ source: "main", head: "main" }])
       ).rejects.toThrow("Callers may only write their own context head (ctx:ctx-1)");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -258,7 +314,7 @@ describe("vcsService", () => {
       const { service, mergeHeads } = mergeService({ entityCache: new EntityCache() });
 
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source"])
+        service.handler({ caller: panelCaller() }, "merge", [{ source: "main" }])
       ).rejects.toThrow("vcs head writes require a context");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -269,7 +325,9 @@ describe("vcsService", () => {
       });
 
       await expect(
-        service.handler({ caller: panelCaller() }, "merge", ["panels/source", "ctx:ctx-other"])
+        service.handler({ caller: panelCaller() }, "merge", [
+          { source: "main", head: "ctx:ctx-other" },
+        ])
       ).rejects.toThrow("Callers may only write their own context head (ctx:ctx-1)");
       expect(mergeHeads).not.toHaveBeenCalled();
     });
@@ -279,12 +337,11 @@ describe("vcsService", () => {
         entityCache: entityCacheWithContext("panel-source", "ctx-1"),
       });
 
-      // repoPath only → the head defaults to the caller's own ctx head.
+      // Omit head → defaults to the caller's own ctx head; source is main.
+      // merge returns one result per repo.
       const result = (await service.handler({ caller: panelCaller() }, "merge", [
-        "panels/source",
-      ])) as {
-        status: string;
-      };
+        { source: "main", repoPaths: ["panels/source"] },
+      ])) as Array<{ repoPath: string; status: string }>;
 
       // mergeHeads(targetCtxHead, "main", { actor, repoPath }) — main pulled INTO ctx.
       expect(mergeHeads).toHaveBeenCalledWith(
@@ -295,7 +352,7 @@ describe("vcsService", () => {
           repoPath: "panels/source",
         })
       );
-      expect(result.status).toBe("merged");
+      expect(result[0]!.status).toBe("merged");
     });
 
     it("does NOT pass a main-advance context into merge (a ctx reconcile never advances main)", async () => {
@@ -313,11 +370,12 @@ describe("vcsService", () => {
         mainAdvanceGate: {
           approve,
           approveRepoDeletion: vi.fn(async () => {}),
-          approveRepoRestore: vi.fn(async () => {}),
         },
       });
 
-      await service.handler({ caller: panelCaller() }, "merge", ["panels/source"]);
+      await service.handler({ caller: panelCaller() }, "merge", [
+        { source: "main", repoPaths: ["panels/source"] },
+      ]);
 
       const [, , mergeOpts] = mergeHeads.mock.calls[0] as unknown as [
         string,
@@ -329,44 +387,20 @@ describe("vcsService", () => {
       expect(approve).not.toHaveBeenCalled();
     });
 
-    it("passes the caller advance context into mergeGroup (main targets hit the ref gate)", async () => {
-      const mergeGroup = vi.fn(async () => []);
-      const service = createVcsService({
-        workspaceVcs: { mergeGroup } as never,
-      });
-      const shell = createVerifiedCaller("shell:dev_cli", "shell");
-
-      await service.handler({ caller: shell }, "mergeGroup", [
-        [{ repoPath: "panels/source", sourceHead: "ctx:ctx-1", targetHead: "main" }],
-      ]);
-
-      expect(mergeGroup).toHaveBeenCalledWith(
-        [{ repoPath: "panels/source", sourceHead: "ctx:ctx-1", targetHead: "main" }],
-        expect.objectContaining({
-          mainAdvance: expect.objectContaining({
-            kind: "caller",
-            operation: "merge",
-            caller: shell,
-          }),
-        })
-      );
-    });
-
     it("lets a privileged shell caller reconcile an explicit ctx head", async () => {
       const { service, mergeHeads } = mergeService();
       const caller = createVerifiedCaller("shell:dev_cli", "shell");
 
       const result = (await service.handler({ caller }, "merge", [
-        "panels/source",
-        "ctx:ctx-1",
-      ])) as { status: string };
+        { source: "main", head: "ctx:ctx-1", repoPaths: ["panels/source"] },
+      ])) as Array<{ repoPath: string; status: string }>;
 
       expect(mergeHeads).toHaveBeenCalledWith(
         "ctx:ctx-1",
         "main",
         expect.objectContaining({ repoPath: "panels/source" })
       );
-      expect(result.status).toBe("merged");
+      expect(result[0]!.status).toBe("merged");
     });
   });
 
@@ -396,7 +430,6 @@ describe("vcsService", () => {
         mainAdvanceGate: {
           approve,
           approveRepoDeletion: vi.fn(async () => {}),
-          approveRepoRestore: vi.fn(async () => {}),
         },
       });
       const shell = createVerifiedCaller("shell:dev_cli", "shell");
@@ -571,6 +604,44 @@ describe("vcsService", () => {
       expect(recordEdit).not.toHaveBeenCalled();
     });
 
+    it("rejects empty edit batches before calling WorkspaceVcs", async () => {
+      const recordEdit = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+      const caller = createVerifiedCaller("do:agent", "do");
+
+      await expect(
+        service.handler({ caller }, "edit", [{ repoPath: "panels/source", edits: [] }])
+      ).rejects.toThrow(/vcs\.edit requires at least one edit op.*no-op/s);
+      expect(recordEdit).not.toHaveBeenCalled();
+    });
+
+    it("rejects scratch paths with an actionable tracking hint", async () => {
+      const recordEdit = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+      const caller = createVerifiedCaller("do:agent", "do");
+
+      await expect(
+        service.handler({ caller }, "edit", [
+          {
+            edits: [
+              {
+                kind: "write",
+                path: ".tmp/round-trip.txt",
+                content: { kind: "text", text: "scratch\n" },
+              },
+            ],
+          },
+        ])
+      ).rejects.toThrow(/scratch\/platform state.*outside VCS.*projects\/<name>/s);
+      expect(recordEdit).not.toHaveBeenCalled();
+    });
+
     it("rejects baseStateHash when one edit call routes to multiple repos", async () => {
       const recordEdit = vi.fn();
       const service = createVcsService({
@@ -696,6 +767,155 @@ describe("vcsService", () => {
       ).rejects.toThrow(/main advances only via push/);
       expect(commit).not.toHaveBeenCalled();
     });
+
+    it("rejects auto-commit when the context has no uncommitted VCS edits", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => []);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [{ message: "nothing" }])
+      ).rejects.toThrow(
+        /refused to no-op: no uncommitted VCS working edits.*fs\.mktemp.*outside VCS/s
+      );
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects explicit repo commits when any target repo has no uncommitted edits", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: false,
+          ahead: true,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          { message: "seal", repoPaths: ["panels/source"] },
+        ])
+      ).rejects.toThrow(/no uncommitted VCS working edits in panels\/source/);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate commit repoPaths before committing", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => []);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          { message: "seal", repoPaths: ["panels/source", "panels/source"] },
+        ])
+      ).rejects.toThrow(/duplicate repo path\(s\): panels\/source/);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects scratch commit excludes instead of silently ignoring them", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          { message: "seal", exclude: [".vibez1/tmp/not-tracked.txt"] },
+        ])
+      ).rejects.toThrow(/vcs\.commit exclude.*scratch\/platform state.*outside VCS/s);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects commit excludes that belong to repos outside the target set", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+        {
+          repoPath: "packages/other",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          {
+            message: "seal",
+            repoPaths: ["panels/source"],
+            exclude: ["packages/other/index.ts"],
+          },
+        ])
+      ).rejects.toThrow(/exclude path .* belongs to packages\/other.*targets panels\/source/s);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects lower-layer unchanged commit results instead of reporting success", async () => {
+      const commit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:same",
+        eventId: null,
+        headHash: null,
+        editCount: 0,
+        status: "unchanged" as const,
+        changedPaths: [],
+      }));
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [{ message: "seal" }])
+      ).rejects.toThrow(/refused to report a no-op success.*panels\/source/s);
+    });
   });
 
   describe("revert (lands as a working edit)", () => {
@@ -746,33 +966,7 @@ describe("vcsService", () => {
     });
   });
 
-  describe("push authorization (per-repo, build-gated)", () => {
-    // `push` is USERLAND-dispatched since the P3 flip: the build-gated main
-    // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
-    // manifest service), NOT this host service. `push` stays in the advertised
-    // `vcsMethods` schema for typed clients, but its host case throws a DIRECTED
-    // error (not the generic "Unknown vcs method" fallthrough) that points the
-    // caller at the DO / runtime-client route — the client routes to the DO
-    // directly (the relay mints the on-behalf-of token with the originating
-    // caller).
-    it("throws a directed userland-dispatch error on the host service (moved to the DO)", async () => {
-      const push = vi.fn();
-      const service = createVcsService({
-        workspaceVcs: { push } as never,
-        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
-      });
-
-      await expect(
-        service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }])
-      ).rejects.toThrow(/userland-dispatched.*vcsPush|no host handler/);
-      // Directed at the runtime client's push override / manifest service — not
-      // the generic "Unknown vcs method" fallthrough.
-      await expect(
-        service.handler({ caller: panelCaller() }, "push", [{ repoPaths: ["panels/source"] }])
-      ).rejects.toThrow(/vcsClient\.ts|manifest service/);
-      expect(push).not.toHaveBeenCalled();
-    });
-
+  describe("push status", () => {
     it("reports push status for the requested repos", async () => {
       const pushStatus = vi.fn(async () => ({
         repoPath: "panels/source",

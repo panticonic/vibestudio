@@ -5,6 +5,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   invocationAbandonedPayload,
   invocationCompletedPayload,
+  type BlockId,
 } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "../gad-store/index.js";
 import { PubSubChannel } from "./channel-do.js";
@@ -761,7 +762,7 @@ describe("PubSubChannel", () => {
       channelKey: "channel-fork",
       gad: parent.gad,
     });
-    await fork.instance.postClone("channel-parent", 3);
+    await fork.instance.postClone("channel-parent", 3, "ctx-forked");
 
     const replay = await fork.instance.getReplayAfter(0);
     // No-copy fork: the child sees the parent prefix verbatim, including the
@@ -788,6 +789,83 @@ describe("PubSubChannel", () => {
     expect(afterForkAppend.logEvents.map((event) => event.id)).toEqual([4]);
   });
 
+  it("listForks folds this channel's own log into its direct-child fork projection", async () => {
+    const selfTarget = "do:workers/pubsub-channel:PubSubChannel:channel-lf-parent";
+    const parent = await createGadBackedChannel({
+      channelKey: "channel-lf-parent",
+      rpcCall: (target, method, args) => {
+        // Sibling-channel resolve (fork parent): hand back THIS channel's own ref.
+        if (target === "main" && method === "workers.resolveService" && args[0] === "vibez1.channel.v1") {
+          return {
+            source: "workers/pubsub-channel",
+            className: "PubSubChannel",
+            objectKey: args[1] as string,
+          };
+        }
+        // Clone the (only) channel entity into a fresh context.
+        if (target === "main" && method === "runtime.cloneContext") {
+          return {
+            contextId: "ctx-lf-fork",
+            entities: [
+              {
+                sourceId: selfTarget,
+                newId: "do:workers/pubsub-channel:PubSubChannel:channel-lf-child",
+                kind: "do",
+                source: "workers/pubsub-channel",
+                className: "PubSubChannel",
+                sourceKey: "channel-lf-parent",
+                newKey: "channel-lf-child",
+                targetId: "do:workers/pubsub-channel:PubSubChannel:channel-lf-child",
+              },
+            ],
+          };
+        }
+        // The cloned child's postClone is driven over RPC; ack it.
+        if (method === "postClone") return null;
+        return undefined;
+      },
+    });
+    setRpcCaller(parent.instance, "panel:user", "panel");
+    await parent.instance.subscribe("panel:user", {
+      contextId: "ctx-lf",
+      name: "User",
+      type: "panel",
+    });
+
+    expect(await parent.instance.listForks()).toEqual({ forks: [] });
+
+    const result = await parent.instance.fork({
+      forkPointPubsubId: 1,
+      reason: "deep dive",
+      label: "My fork",
+    });
+    expect(result.forkedChannelId).toBe("channel-lf-child");
+
+    const { forks } = await parent.instance.listForks();
+    expect(forks).toHaveLength(1);
+    expect(forks[0]).toMatchObject({
+      forkId: result.forkId,
+      forkedChannelId: "channel-lf-child",
+      forkedContextId: "ctx-lf-fork",
+      forkPointId: 1,
+      label: "My fork",
+      reason: "deep dive",
+      archived: false,
+    });
+
+    // Rename + archive fold through the SAME projection; archived rows stay
+    // (the UI filters), and rename wins.
+    await parent.instance.renameFork(result.forkId, "Renamed fork");
+    await parent.instance.archiveFork(result.forkId);
+    const after = await parent.instance.listForks();
+    expect(after.forks).toHaveLength(1);
+    expect(after.forks[0]).toMatchObject({
+      forkId: result.forkId,
+      label: "Renamed fork",
+      archived: true,
+    });
+  });
+
   it("re-homes the channel's context when postClone threads a new contextId", async () => {
     const parent = await createGadBackedChannel({ channelKey: "channel-ctx-parent" });
     setRpcCaller(parent.instance, "panel:user", "panel");
@@ -807,13 +885,18 @@ describe("PubSubChannel", () => {
     await fork.instance.postClone("channel-ctx-parent", 2, "ctx-forked");
     expect(await fork.instance.getContextId()).toBe("ctx-forked");
 
-    // Omitting the new contextId leaves the (cloned) context untouched.
+    // Omitting the new contextId is rejected; forks always get a fresh context.
     const fork2 = await createGadBackedChannel({
       channelKey: "channel-ctx-fork2",
       gad: parent.gad,
     });
-    await fork2.instance.postClone("channel-ctx-parent", 2);
-    expect(await fork2.instance.getContextId()).toBeNull();
+    await expect(
+      (
+        fork2.instance as unknown as {
+          postClone(parentChannelId: string, forkPointId: number): Promise<void>;
+        }
+      ).postClone("channel-ctx-parent", 2)
+    ).rejects.toThrow(/postClone requires newContextId/);
   });
 
   it("routes by transport id but publishes terminal events under the canonical invocation id", async () => {
@@ -2246,7 +2329,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       channelKey: "channel-policy-fork",
       gad: parent.gad,
     });
-    await fork.instance.postClone("channel-policy-parent", 3);
+    await fork.instance.postClone("channel-policy-parent", 3, "ctx-policy-fork");
 
     // conversation state SURVIVES the fork — rebuilt by replaying the lineage
     const forkState = await fork.instance.getPolicyState();
@@ -2254,7 +2337,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
 
     setRpcCaller(fork.instance, "agent:one", "server");
     await fork.instance.subscribe("agent:one", {
-      contextId: "ctx-1",
+      contextId: "ctx-policy-fork",
       name: "Agent",
       type: "agent",
     });
@@ -2438,5 +2521,137 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
     const second = internal.nextPendingRedeliveryAt(now);
     expect(second).toBe(now + 15_000);
     expect(second!).toBeGreaterThan(now);
+  });
+});
+
+// appendSeed is fork plumbing: it consumes the child channel's pending fork seed
+// marker, appends the opening message once, and is idempotent on crash re-drive.
+describe("PubSubChannel appendSeed fork plumbing", () => {
+  const SEED_AUTHOR = { kind: "user" as const, id: "panel:user", participantId: "panel:user" };
+  function forkSeed(author = SEED_AUTHOR) {
+    return {
+      author,
+      blocks: [
+        {
+          blockId: "fork-seed:fork-1:block:0" as BlockId,
+          type: "text" as const,
+          content: "explore this branch",
+        },
+      ],
+    };
+  }
+
+  // A cloned CHILD channel whose parent fork op (channel-parent) planted a
+  // pending seed marker at postClone. `withSeed:false` clones WITHOUT planting
+  // the marker (mirrors a fork with no seed).
+  async function forkedChild(
+    opts: { withSeed?: boolean } = {}
+  ): Promise<{
+    parent: Awaited<ReturnType<typeof createGadBackedChannel>>;
+    child: Awaited<ReturnType<typeof createGadBackedChannel>>;
+  }> {
+    const withSeed = opts.withSeed ?? true;
+    const parent = await createGadBackedChannel({ channelKey: "channel-parent" });
+    setRpcCaller(parent.instance, "panel:user", "panel");
+    // seq 1 = presence, seq 2 = message → fork point is 2.
+    await parent.instance.subscribe("panel:user", {
+      contextId: "ctx-1",
+      name: "User",
+      type: "panel",
+    });
+    await parent.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+    const child = await createGadBackedChannel({ channelKey: "channel-child", gad: parent.gad });
+    await child.instance.postClone("channel-parent", 2, "ctx-forked", {
+      forkId: "fork-1",
+      rootChannelId: "channel-parent",
+      ...(withSeed ? { seed: forkSeed() } : {}),
+    });
+    return { parent, child };
+  }
+
+  // Envelopes appended past the fork point (2). The seed is the only event
+  // appendSeed writes.
+  async function tailAfterFork(child: Awaited<ReturnType<typeof createGadBackedChannel>>) {
+    const replay = await child.instance.getReplayAfter(2);
+    return replay.logEvents;
+  }
+
+  it("appends the fork seed once and is idempotent on re-drive", async () => {
+    const { child } = await forkedChild();
+    setRpcCaller(child.instance, "channel-parent", "do");
+
+    const res = await child.instance.appendSeed({ forkId: "fork-1" }, forkSeed());
+    expect(res.messageId).toBe("fork-seed:fork-1");
+
+    const tail = await tailAfterFork(child);
+    const seeds = tail.filter((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND);
+    expect(seeds).toHaveLength(1);
+    const seed = seeds[0]!.payload as {
+      kind: string;
+      actor: { participantId?: string; id: string };
+      payload: { role: string; tier: string };
+    };
+    // A primary user message, authored from the supplied seed envelope.
+    expect(seed.kind).toBe("message.completed");
+    expect(seed.payload.role).toBe("user");
+    expect(seed.payload.tier).toBe("primary");
+    expect(seed.actor.participantId ?? seed.actor.id).toBe("panel:user");
+
+    // Re-drive (crash-resume) returns the SAME durable message; no duplicate.
+    const again = await child.instance.appendSeed({ forkId: "fork-1" }, forkSeed());
+    expect(again).toEqual(res);
+    expect((await tailAfterFork(child)).filter((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)).toHaveLength(
+      1
+    );
+  });
+
+  it("rejects a call with no pending fork seed marker", async () => {
+    const { child } = await forkedChild({ withSeed: false });
+    setRpcCaller(child.instance, "channel-parent", "do");
+
+    await expect(child.instance.appendSeed({ forkId: "fork-1" }, forkSeed())).rejects.toThrow(
+      /no pending fork seed for fork fork-1/
+    );
+    expect(await tailAfterFork(child)).toHaveLength(0);
+  });
+
+  it("rejects a forkId that does not match the pending seed marker", async () => {
+    const { child } = await forkedChild();
+    setRpcCaller(child.instance, "channel-parent", "do");
+
+    await expect(
+      child.instance.appendSeed({ forkId: "fork-EVIL" }, forkSeed())
+    ).rejects.toThrow(/no pending fork seed for fork fork-EVIL/);
+    expect(await tailAfterFork(child)).toHaveLength(0);
+  });
+
+  it("uses the supplied caller and author without parent/author special-casing", async () => {
+    const { child } = await forkedChild();
+    setRpcCaller(child.instance, "channel-attacker", "do");
+    const alternate = forkSeed({
+      kind: "user",
+      id: "panel:victim",
+      participantId: "panel:victim",
+    });
+
+    const res = await child.instance.appendSeed({ forkId: "fork-1" }, alternate);
+    expect(res.messageId).toBe("fork-seed:fork-1");
+    const tail = await tailAfterFork(child);
+    const seed = tail.find((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)!.payload as {
+      actor: { participantId?: string; id: string };
+    };
+    expect(seed.actor.participantId ?? seed.actor.id).toBe("panel:victim");
+  });
+
+  it("admits normal channel caller realms at the relay gate", async () => {
+    const { instance } = await createGadBackedChannel();
+    const gate = instance as unknown as {
+      inboundCallerDenial(method: string, caller: { callerId: string; callerKind: string } | null): string | null;
+    };
+    for (const kind of ["panel", "worker", "server", "do", "shell"]) {
+      expect(
+        gate.inboundCallerDenial("appendSeed", { callerId: `${kind}:x`, callerKind: kind })
+      ).toBeNull();
+    }
   });
 });

@@ -179,25 +179,15 @@ export class SubscriptionManager {
   }
 
   /**
-   * Fork bookkeeping: re-key a cloned subscription onto the new channel. When the
-   * clone lands in a NEW context (a true context fork — `runtime.cloneContext`),
-   * pass `newContextId` to re-home the subscription's `context_id` too; omit it for
-   * a same-context re-key.
+   * Fork bookkeeping: re-key a cloned subscription onto the new channel and
+   * re-home it to the fork context.
    */
-  rename(oldChannelId: string, newChannelId: string, newContextId?: string): void {
-    if (newContextId !== undefined) {
-      this.sql.exec(
-        `UPDATE subscriptions SET channel_id = ?, context_id = ?, participant_id = ? WHERE channel_id = ?`,
-        newChannelId,
-        newContextId,
-        this.buildParticipantId(),
-        oldChannelId
-      );
-      return;
-    }
+  rename(oldChannelId: string, newChannelId: string, newContextId: string): void {
+    if (!newContextId) throw new Error("SubscriptionManager.rename requires newContextId");
     this.sql.exec(
-      `UPDATE subscriptions SET channel_id = ?, participant_id = ? WHERE channel_id = ?`,
+      `UPDATE subscriptions SET channel_id = ?, context_id = ?, participant_id = ? WHERE channel_id = ?`,
       newChannelId,
+      newContextId,
       this.buildParticipantId(),
       oldChannelId
     );

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import { GZIP_MARKER_HEADER } from "@vibez1/shared/panel/assetHeaders";
 import { createGatewayFetchService } from "./gatewayFetchService.js";
 
 interface CapturedRequest {
@@ -21,18 +22,25 @@ afterEach(async () => {
 });
 
 /** Loopback stand-in for the gateway that records what it receives. */
-async function startFakeGateway(): Promise<{ port: number; requests: CapturedRequest[] }> {
+async function startFakeGateway(
+  respond?: (req: http.IncomingMessage, res: http.ServerResponse, body: Buffer) => void
+): Promise<{ port: number; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
   server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
+      const body = Buffer.concat(chunks);
       requests.push({
         method: req.method ?? "",
         url: req.url ?? "",
         contentType: req.headers["content-type"],
-        body: Buffer.concat(chunks).toString("utf-8"),
+        body: body.toString("utf-8"),
       });
+      if (respond) {
+        respond(req, res, body);
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
@@ -97,6 +105,43 @@ describe("gatewayFetchService — §1.6 upload path", () => {
     expect(schema.safeParse([{ path: "/x" }]).success).toBe(true);
     expect(schema.safeParse([{ path: "/x", bodyBase64: "aGk=" }]).success).toBe(false);
     expect(schema.safeParse([{ path: "/x", body: "hi" }]).success).toBe(false);
+  });
+
+  it("gzips ordinary responses when requested", async () => {
+    const gateway = await startFakeGateway();
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    const response = (await service.handler(ctxWithBody(), "fetch", [
+      { path: "/apps/shell/bundle.js", gzip: true },
+    ])) as Response;
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get(GZIP_MARKER_HEADER)).toBe("1");
+    expect(response.headers.get("content-length")).toBeNull();
+  });
+
+  it("does not gzip range requests or partial-content responses", async () => {
+    const gateway = await startFakeGateway((_req, res) => {
+      res.writeHead(206, {
+        "content-type": "text/plain",
+        "content-range": "bytes 0-3/10",
+      });
+      res.end("0123");
+    });
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    const response = (await service.handler(ctxWithBody(), "fetch", [
+      {
+        path: "/apps/shell/bundle.js",
+        headers: { Range: "bytes=0-3" },
+        gzip: true,
+      },
+    ])) as Response;
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get(GZIP_MARKER_HEADER)).toBeNull();
+    expect(response.headers.get("content-range")).toBe("bytes 0-3/10");
+    expect(await response.text()).toBe("0123");
   });
 });
 

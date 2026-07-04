@@ -19,6 +19,7 @@ interface StoredChannelSignal extends ChannelSignal {
 
 function normalizeSignalContent(contentType: string | undefined, content: string): string | null {
   if (contentType === "inline_ui") return null;
+  if (contentType === "fork.head_changed") return null;
   // Agentic transcript events (streaming deltas) ride the signal channel but
   // belong to the transcript reducer; thinking pills arrive separately as
   // `vibez1-ext-working` signals from the agent vessel.

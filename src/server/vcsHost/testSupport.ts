@@ -38,7 +38,7 @@ export function pushToMain(
   return instance.vcsPush(input);
 }
 
-type RefsLike = Pick<RefService, "readMain" | "listMains" | "updateMains" | "readMainLog">;
+type RefsLike = Pick<RefService, "readMain" | "listMains" | "updateMains" | "listMainRefLog">;
 
 /** A stub build validator for the DO push gate — returns per-repo reports.
  *  Defaults to "no required failures" so the gate passes. */
@@ -64,8 +64,22 @@ export function attachLocalHostBridges(
      *  `{ kind: "caller", … }` context; in-process tests bypass that layer, so
      *  a suite exercising the approval gate supplies the context here. Omit to
      *  leave it unset (the RefService fixture's own gate — usually a no-op —
-     *  stands in for approval). */
-    gateContext?: (input: { operation: string }) => unknown;
+     *  stands in for approval). The host CAS is now semantics-free (Phase 5), so
+     *  the context no longer carries an operation. */
+    gateContext?: () => unknown;
+    /** Disk-projection + build-graph primitives the DO's delete/restore/fork
+     *  sagas drive (`worktree.project` / `worktree.dependentRepos`). In
+     *  production these are host RPCs; in-process tests wire them to the real
+     *  `WorkspaceVcs.projectWorktree` / `deleteDependents`. Defaults are inert
+     *  (projection no-op, no dependents) for suites that never delete/restore. */
+    worktree?: {
+      project?: (
+        repoPath: string,
+        head: string,
+        stateHash: string
+      ) => Promise<{ stateHash: string }>;
+      dependentRepos?: (repoPath: string) => Promise<string[]>;
+    };
   }
 ): void {
   const { blobsDir } = opts;
@@ -119,39 +133,69 @@ export function attachLocalHostBridges(
         stateHash: record.stateHash,
       }));
     },
-    // P3: the single-writer group CAS. In-process tests bypass the RPC-layer
-    // token resolution — the RefService's own gate (a no-op in fixtures)
-    // stands in for approval; on-behalf-of is not exercised here.
+    // P3/P5: the single-writer group CAS. In-process tests bypass the RPC-layer
+    // token resolution — the RefService's own gate (a no-op in fixtures) stands
+    // in for approval, and on-behalf-of is not resolved here (no `writer`/
+    // `onBehalfOf`). The DO still passes `operation`/`reason`; forward them so
+    // the RefService records a faithful main-ref log row (§2). Returns
+    // `{repoPath, stateHash, seq}` per entry.
     async updateMains(input: {
       entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
+      operation: "push" | "import" | "delete" | "restore" | "seed";
       reason?: string;
-      operation: "push" | "merge" | "import" | "delete" | "restore";
       invocationToken?: string;
     }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }> {
       const refs = currentRefs();
       if (!refs) throw new Error("attachLocalHostBridges: no RefService for updateMains");
-      const gateContext = opts.gateContext?.({ operation: input.operation });
+      const gateContext = opts.gateContext?.();
       return refs.updateMains({
         entries: input.entries,
-        operation: input.operation,
-        reason: input.reason ?? `updateMains (${input.operation})`,
-        writer: "do:test-vcs",
-        onBehalfOf: input.invocationToken ? `token:${input.invocationToken}` : null,
         ...(gateContext !== undefined ? { gateContext } : {}),
+        operation: input.operation,
+        ...(input.reason !== undefined ? { reason: input.reason } : {}),
       });
     },
-    async readMainLog(
+    async listMainRefLog(
       repoPath: string,
-      limit?: number
-    ): Promise<Array<{ seq: number; old: string | null; new: string | null; operation: string }>> {
-      const refs = currentRefs();
-      if (!refs?.readMainLog) return [];
-      return refs
-        .readMainLog({ repoPath, ...(limit !== undefined ? { limit } : {}) })
-        .map((e) => ({ seq: e.seq, old: e.old, new: e.new, operation: e.operation }));
+      sinceId?: number
+    ): Promise<
+      Array<{
+        id: number;
+        operation: string;
+        old: string | null;
+        new: string | null;
+        writer: string | null;
+        onBehalfOf: unknown;
+        reason: string | null;
+        createdAt: number;
+      }>
+    > {
+      return (currentRefs()?.listMainRefLog(repoPath, sinceId) ?? []).map((row) => ({
+        id: row.id,
+        operation: row.operation,
+        old: row.old,
+        new: row.new,
+        writer: row.writer,
+        onBehalfOf: row.onBehalfOf,
+        reason: row.reason,
+        createdAt: row.createdAt,
+      }));
     },
   };
   Object.defineProperty(instance, "refsStore", { value: () => refsStore, configurable: true });
+  const worktreeStore = {
+    scan: () => {
+      throw new Error("attachLocalHostBridges: worktree.scan is not wired for this test");
+    },
+    project: (repoPath: string, head: string, stateHash: string) =>
+      opts.worktree?.project?.(repoPath, head, stateHash) ?? Promise.resolve({ stateHash }),
+    dependentRepos: (repoPath: string) =>
+      opts.worktree?.dependentRepos?.(repoPath) ?? Promise.resolve([]),
+  };
+  Object.defineProperty(instance, "worktreeStore", {
+    value: () => worktreeStore,
+    configurable: true,
+  });
   const buildStore = {
     validate: (input: { viewHash: string; repoPaths: string[]; baseViewHash?: string }) =>
       opts.buildValidate ? opts.buildValidate(input) : Promise.resolve([] as RepoBuildReport[]),

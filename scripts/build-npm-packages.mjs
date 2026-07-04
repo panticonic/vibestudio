@@ -9,7 +9,9 @@
 // not on npm, so they are vendored: the server bundle already inlines all of
 // them except @vibez1/extension-host, which is vendored via a self-contained
 // publish build (so it resolves on any Node >=20 with no workspace:* / .ts at
-// runtime); the app vendors the whole workspace graph.
+// runtime); the app vendors the whole workspace graph. Userland dependencies
+// include packages that require Node >=22.13, so the generated packages declare
+// the same floor.
 //
 // Run AFTER `pnpm build`:  node scripts/build-npm-packages.mjs
 import { execFileSync } from "node:child_process";
@@ -63,6 +65,7 @@ export const WORKSPACE_TEMPLATE_ROOT_FILES = [
   "pnpm-workspace.yaml",
   "tsconfig.json",
   "tsconfig.integration.json",
+  "tsconfig.integration.mobile.json",
 ];
 
 export const WORKSPACE_TEMPLATE_SUPPORT_DIRS = ["packages", "patches"];
@@ -153,7 +156,7 @@ function stageServer() {
       "vibez1-server": "scripts/vibez1-server-shim.mjs",
       vibez1: "scripts/vibez1-launcher.mjs",
     },
-    engines: { node: ">=20" },
+    engines: { node: ">=22.13.0" },
     files: ["dist", "vendor", "workspace-template", "packages", "patches", "scripts"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
@@ -208,7 +211,7 @@ function stageApp() {
       vibez1: "scripts/vibez1-launcher.mjs",
       "vibez1-server": "scripts/vibez1-server-shim.mjs",
     },
-    engines: { node: ">=20" },
+    engines: { node: ">=22.13.0" },
     files: ["dist", "vendor", "workspace", "packages", "patches", "scripts", "build-resources"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     dependencies: computeHostDependencies({ electron: true }),

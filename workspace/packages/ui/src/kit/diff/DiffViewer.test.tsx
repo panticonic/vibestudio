@@ -6,7 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 import { DiffViewer, type DiffViewerProps } from "./DiffViewer";
 import type { DiffContentFetcher, DiffReviewEntry } from "./types";
 
-function renderViewer(entry: DiffReviewEntry, fetchContent: DiffContentFetcher, extra?: Partial<DiffViewerProps>) {
+function renderViewer(
+  entry: DiffReviewEntry,
+  fetchContent: DiffContentFetcher,
+  extra?: Partial<DiffViewerProps>
+) {
   return render(
     <Theme>
       <DiffViewer entry={entry} fetchContent={fetchContent} {...extra} />
@@ -122,9 +126,10 @@ describe("DiffViewer", () => {
   it("keeps rendering (never throws) while a fetch is still pending", async () => {
     const resolvers: ((v: string) => void)[] = [];
     const fetchContent = vi.fn<DiffContentFetcher>(
-      () => new Promise<string>((resolve) => {
-        resolvers.push(resolve);
-      })
+      () =>
+        new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        })
     );
     renderViewer(CHANGED_ENTRY, fetchContent);
     fireEvent.click(screen.getByRole("button", { name: /src\/util\.txt/ }));
@@ -139,6 +144,37 @@ describe("DiffViewer", () => {
       await Promise.resolve();
     });
     expect(await screen.findByText("done")).toBeTruthy();
+  });
+
+  it("pre-expands the files named in initialExpanded (deep-link into a diff)", async () => {
+    const fetchContent = vi.fn<DiffContentFetcher>(async (hash) =>
+      hash === "old-hash" ? "a\nb\nc\n" : "a\nB\nc\n"
+    );
+    renderViewer(CHANGED_ENTRY, fetchContent, { initialExpanded: ["src/util.txt"] });
+
+    // Expanded on first render → the diff fetches without any click.
+    await waitFor(() => {
+      const requested = fetchContent.mock.calls.map((c) => c[0]).sort();
+      expect(requested).toEqual(["new-hash", "old-hash"]);
+    });
+    expect(await screen.findByText("B")).toBeTruthy();
+  });
+
+  it("ignores initialExpanded for degraded (unexpandable) files", () => {
+    const fetchContent = vi.fn<DiffContentFetcher>(async () => "");
+    const entry: DiffReviewEntry = {
+      repoPath: "packages/demo",
+      oldState: "state:a",
+      newState: "state:b",
+      diffStat: { filesChanged: 1, insertions: 0, deletions: 0 },
+      changedFiles: [
+        { path: "logo.png", kind: "changed", oldHash: "o", newHash: "n", binary: true },
+      ],
+    };
+    renderViewer(entry, fetchContent, { initialExpanded: ["logo.png"] });
+    // A binary file can't expand, so no content is fetched.
+    expect(fetchContent).not.toHaveBeenCalled();
+    expect(screen.getByText(/Binary file/)).toBeTruthy();
   });
 
   it("expand-all opens every inline file at once", async () => {

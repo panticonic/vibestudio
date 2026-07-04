@@ -222,6 +222,100 @@ export interface DeferredAgentState {
 }
 
 // ===========================================================================
+// Fork lineage UI (switcher, tree, inline rows, subagent review)
+// ===========================================================================
+
+/** Client-side mirror of the channel DO's `getProvenance()` result. */
+export type ChannelProvenance =
+  | { kind: "root" }
+  | {
+      kind: "fork";
+      forkedFrom: string;
+      parentContextId: string;
+      forkPointId: number;
+      rootChannelId: string;
+    }
+  | { kind: "task"; parentChannelId: string; parentContextId: string; runId: string };
+
+/** A fork surfaced in the switcher / tree (a child of the current channel or a
+ *  sibling read from the parent's `forks` projection). */
+export interface ForkEntry {
+  forkId: string;
+  channelId: string;
+  contextId: string;
+  label: string;
+  reason: string;
+  actorName: string;
+  forkPointId: number;
+  createdAtSeq: number;
+  archived: boolean;
+  /** Live "has unread since our cursor" badge, reconciled on open (§H). */
+  unread?: boolean;
+}
+
+/** One node of the lazily-walked lineage tree ("Show tree" overlay). */
+export interface ForkTreeNode {
+  channelId: string;
+  contextId?: string;
+  label: string;
+  provenanceKind: "root" | "fork" | "task";
+  children: ForkTreeNode[];
+  isCurrent: boolean;
+  unread?: boolean;
+}
+
+/** What "Review & pick" opens the diff overlay against. */
+export type ReviewTarget =
+  | { kind: "fork"; contextId: string; label: string }
+  | { kind: "subagent"; contextId: string; label: string };
+
+/** Panel-supplied navigation + overlay handlers (the panel owns the runtime
+ *  `rpc`, `panel.stateArgs.set`, `openPanel`, and the review overlay host). */
+export interface ForkNavHandlers {
+  /** In-place switch: rebind the panel's channel + context and reconnect. */
+  switchTo: (channelId: string, contextId: string) => void;
+  /** Side-by-side: open the fork in a NEW chat panel. */
+  openInNewPanel: (channelId: string, contextId: string) => void;
+  /** Open the Review & pick diff overlay for a fork/subagent context. */
+  reviewContext: (target: ReviewTarget) => void;
+  /** A fork the local user did NOT initiate just landed while the panel was
+   *  unfocused — the panel raises a shell toast (with a Switch action). */
+  onExternalFork?: (fork: {
+    forkedChannelId: string;
+    forkedContextId: string;
+    actorName: string;
+    forkPointId: number;
+  }) => void;
+}
+
+/** Fork lineage state + actions threaded onto ChatContextValue and read by the
+ *  ForkSwitcher, ForkTreeView, inline fork rows, and SubagentRunCard. */
+export interface ForkUiState {
+  provenance?: ChannelProvenance;
+  currentLabel: string;
+  /** Direct-child forks of the current channel (from `ChannelViewState.forks`). */
+  children: ForkEntry[];
+  /** Sibling forks (the parent's other children); loaded lazily by `refresh`. */
+  siblings: ForkEntry[];
+  /** Parent channel breadcrumb, when this channel is itself a fork. */
+  parent?: { channelId: string; contextId?: string };
+  /** True while a fork op is mid-flight (disables the affordances). */
+  forking: boolean;
+  /** Reconcile siblings + badges from durable heads (call on switcher/tree open). */
+  refresh: () => void;
+  /** Walk provenance up + forks down into the full lineage tree (lazy). */
+  loadTree: () => Promise<ForkTreeNode[]>;
+  actions: {
+    /** Fork at a message's seq (inclusive), no seed. */
+    forkFromMessage: (msg: ChatMessage) => Promise<void>;
+    /** Fork at seq−1 seeding an edited/authored turn (replaces for agent msgs). */
+    editAndForkMessage: (msg: ChatMessage, newText: string) => Promise<void>;
+    /** Channel-level fork at the current head, no seed. */
+    newFork: () => Promise<void>;
+  } & ForkNavHandlers;
+}
+
+// ===========================================================================
 // ChatContext Value
 // ===========================================================================
 
@@ -369,6 +463,10 @@ export interface ChatContextValue {
 
   // Tool approval (optional)
   toolApproval?: ToolApprovalProps;
+
+  /** Fork lineage state + actions (switcher, tree, inline rows, subagent
+   *  review). Absent on hosts that don't wire fork navigation. */
+  forkState?: ForkUiState;
 }
 
 /** Which await a loading message type is currently parked on. */

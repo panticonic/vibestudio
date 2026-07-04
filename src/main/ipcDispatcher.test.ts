@@ -282,7 +282,16 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() => {
       expect(openPanelSession).toHaveBeenCalledWith("entity-1", "conn-1");
-      expect(panelSend).toHaveBeenCalledWith(envelope);
+      expect(panelSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          from: "entity-1",
+          delivery: expect.objectContaining({
+            caller: { callerId: "entity-1", callerKind: "panel" },
+          }),
+          provenance: [{ callerId: "entity-1", callerKind: "panel" }],
+          message: expect.objectContaining({ requestId: "req-1", fromId: "entity-1" }),
+        })
+      );
     });
     // The panel's full surface rides its own session — it never reaches the
     // shell/app server path (call / callAs).
@@ -651,6 +660,54 @@ describe("IpcDispatcher", () => {
       expect(firstClose).toHaveBeenCalled();
       expect(firstSend).toHaveBeenCalledTimes(1);
     });
+
+    it("reopens the panel session when the runtime lease connection changes", async () => {
+      const panelWc = makeWebContents(32);
+      let connectionId = "conn-1";
+      const firstSend = vi.fn();
+      const firstClose = vi.fn();
+      const secondSend = vi.fn();
+      const openPanelSession = vi
+        .fn()
+        .mockResolvedValueOnce({
+          send: firstSend,
+          onMessage: vi.fn(() => vi.fn()),
+          status: () => "connected" as const,
+          isClosed: () => false,
+          close: firstClose,
+        })
+        .mockResolvedValueOnce({
+          send: secondSend,
+          onMessage: vi.fn(() => vi.fn()),
+          status: () => "connected" as const,
+          isClosed: () => false,
+          close: vi.fn(),
+        });
+      makeDispatcher({
+        resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+        getWebContentsForCaller: () => panelWc,
+        getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId }),
+        openPanelSession,
+      });
+
+      ipcHandlers.get("vibez1:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("r1") as never
+      );
+      await vi.waitFor(() => expect(firstSend).toHaveBeenCalledTimes(1));
+
+      connectionId = "conn-2";
+      ipcHandlers.get("vibez1:rpc:send")?.(
+        { sender: panelWc } as never,
+        panelEnvelope("r2") as never
+      );
+      await vi.waitFor(() => expect(secondSend).toHaveBeenCalledTimes(1));
+
+      expect(openPanelSession).toHaveBeenCalledTimes(2);
+      expect(openPanelSession).toHaveBeenNthCalledWith(1, "entity-1", "conn-1");
+      expect(openPanelSession).toHaveBeenNthCalledWith(2, "entity-1", "conn-2");
+      expect(firstClose).toHaveBeenCalledTimes(1);
+    });
   });
 
   // §1.6 upload hop: panel request bodies cross the bridge as chunk messages,
@@ -762,7 +819,11 @@ describe("IpcDispatcher", () => {
         );
       });
       expect(seen.body).toEqual(new Uint8Array([1, 2, 3]));
+      expect(seen.envelope?.from).toBe("entity-1");
       expect(seen.envelope?.message.type).toBe("stream-request");
+      expect(
+        seen.envelope?.message.type === "stream-request" ? seen.envelope.message.fromId : null
+      ).toBe("entity-1");
       expect(panelWc.send).toHaveBeenCalledWith(
         "vibez1:rpc:stream-message",
         expect.objectContaining({ kind: "head", opId: "op-1", status: 201 })

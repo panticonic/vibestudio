@@ -6,6 +6,7 @@ import { useScrollAnchor, type ScrollAnchorItem } from "../hooks/useScrollAnchor
 import { InlineGroup, type InlineItem } from "./InlineGroup";
 import { NewContentIndicator } from "./NewContentIndicator";
 import { MessageCard } from "./MessageCard";
+import { SubagentRunCard } from "./SubagentRunCard";
 import type { InvocationCardPayload } from "@workspace/agentic-core";
 import type {
   BrowserHandoffCaller,
@@ -28,6 +29,9 @@ type InlineItemType = "thinking" | "invocation" | "typing" | "custom";
 
 function getInlineItemType(msg: ChatMessage): InlineItemType | null {
   if (msg.contentType === "thinking") return "thinking";
+  // Subagent runs render as a standalone SubagentRunCard, NOT an inline pill —
+  // exclude them here so grouping doesn't swallow them into a pill row.
+  if (msg.contentType === "invocation" && msg.invocation?.subagent) return null;
   if (msg.contentType === "invocation") return "invocation";
   if (msg.contentType === "typing") return "typing";
   if (msg.contentType === "custom" && msg.custom?.displayMode === "inline") return "custom";
@@ -547,6 +551,15 @@ export const MessageList = React.memo(function MessageList({
 
     if (customRenderMessage) {
       return <Flex className="message-item" direction="column">{customRenderMessage(msg, sender as SenderInfo)}</Flex>;
+    }
+
+    // Subagent runs bypass the grouping/MessageCard path for a richer card.
+    if (msg.invocation?.subagent) {
+      return (
+        <Flex className="message-item" direction="column">
+          <SubagentRunCard msg={msg} />
+        </Flex>
+      );
     }
 
     // User messages are published as `message.completed` (so `complete` is

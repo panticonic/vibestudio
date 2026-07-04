@@ -19,6 +19,7 @@ import {
 import { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } from "./services/deviceAuthStore.js";
 import { shellCallerId } from "./services/auth/model.js";
 import { authError } from "./services/auth/errors.js";
+import { bridgeDuplexSockets } from "./socketBridge.js";
 
 declare const __filename: string;
 
@@ -640,12 +641,21 @@ async function proxyHttpRequest(
     },
     (upstreamRes) => {
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+      upstreamRes.on("error", (error) => {
+        if (!res.destroyed) res.destroy(error);
+      });
       upstreamRes.pipe(res);
     }
   );
   upstream.on("error", (error) => {
     if (!res.headersSent) sendText(res, 502, `Workspace proxy error: ${error.message}`);
     else res.destroy(error);
+  });
+  req.on("error", (error) => {
+    upstream.destroy(error);
+  });
+  res.on("error", () => {
+    upstream.destroy();
   });
   if (body) upstream.end(body);
   else req.pipe(upstream);
@@ -672,7 +682,22 @@ async function proxyUpgrade(
       path: parsed.upstreamPath,
       headers: { ...req.headers, host: `127.0.0.1:${runtime.port}` },
     });
+    const onClientConnectError = () => {
+      upstream.destroy();
+    };
+    const onClientConnectClose = () => {
+      upstream.destroy();
+    };
+    const onUpstreamRequestError = () => {
+      if (!socket.destroyed) {
+        socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
+      }
+      socket.destroy();
+    };
     upstream.on("upgrade", (upstreamRes, upstreamSocket, upstreamHead) => {
+      upstream.off("error", onUpstreamRequestError);
+      socket.off("error", onClientConnectError);
+      socket.off("close", onClientConnectClose);
       socket.write(
         `HTTP/${upstreamRes.httpVersion} ${upstreamRes.statusCode} ${upstreamRes.statusMessage}\r\n`
       );
@@ -686,12 +711,11 @@ async function proxyUpgrade(
       socket.write("\r\n");
       if (upstreamHead.length > 0) socket.write(upstreamHead);
       if (head.length > 0) upstreamSocket.write(head);
-      upstreamSocket.pipe(socket).pipe(upstreamSocket);
+      bridgeDuplexSockets(socket, upstreamSocket);
     });
-    upstream.on("error", () => {
-      socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-    });
+    upstream.on("error", onUpstreamRequestError);
+    socket.on("error", onClientConnectError);
+    socket.on("close", onClientConnectClose);
     upstream.end();
   } catch {
     socket.write("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");

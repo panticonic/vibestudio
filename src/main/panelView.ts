@@ -95,7 +95,7 @@ export class PanelView implements PanelViewLike {
   private readonly serverInfo: ServerInfoLike;
   private readonly cdpHost: CdpHostLike;
   private readonly panelOrchestrator: PanelOrchestratorLike;
-  private readonly externalHost: string;
+  private readonly managedHosts: readonly string[];
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
   private autofillManager?: AutofillManagerLike;
   private autofillPreloadPath?: string;
@@ -143,7 +143,7 @@ export class PanelView implements PanelViewLike {
     this.serverInfo = deps.serverInfo;
     this.cdpHost = deps.cdpHost;
     this.panelOrchestrator = deps.panelOrchestrator;
-    this.externalHost = deps.serverInfo.externalHost;
+    this.managedHosts = this.buildManagedHosts(deps.serverInfo);
     this.sendPanelEvent = deps.sendPanelEvent;
     this.autofillManager = deps.autofillManager;
     this.autofillPreloadPath = deps.autofillPreloadPath;
@@ -151,6 +151,42 @@ export class PanelView implements PanelViewLike {
     this.appPreloadPath = deps.appPreloadPath;
     this.browserPreloadPath = deps.browserPreloadPath;
     this.browserHistoryRecorder = deps.browserHistoryRecorder;
+  }
+
+  private buildManagedHosts(serverInfo: ServerInfoLike): string[] {
+    const hosts = new Set<string>();
+    const addHost = (host: string | undefined) => {
+      if (!host) return;
+      const normalized = host.trim().toLowerCase();
+      if (normalized) hosts.add(normalized);
+    };
+    const addUrlHost = (value: string | undefined) => {
+      if (!value) return;
+      try {
+        addHost(new URL(value).hostname);
+      } catch {
+        addHost(value.replace(/:\d+$/, ""));
+      }
+    };
+
+    addHost(serverInfo.externalHost);
+    addUrlHost(serverInfo.gatewayConfig?.serverUrl);
+    for (const alias of serverInfo.gatewayConfig?.aliases ?? []) {
+      addUrlHost(alias);
+    }
+    return [...hosts];
+  }
+
+  private isManagedUrl(url: string): boolean {
+    return this.managedHosts.some((host) => isManagedHost(url, host));
+  }
+
+  private parseManagedPanelUrl(url: string): ParsedPanelUrl | null {
+    for (const host of this.managedHosts) {
+      const parsed = parsePanelUrl(url, host);
+      if (parsed) return parsed;
+    }
+    return null;
   }
 
   // ==== PanelViewLike implementation ========================================
@@ -384,7 +420,7 @@ export class PanelView implements PanelViewLike {
           return;
         }
 
-        if (/^https?:\/\//i.test(url) && !isManagedHost(url, this.externalHost)) {
+        if (/^https?:\/\//i.test(url) && !this.isManagedUrl(url)) {
           this.handlePanelLinkError(
             panelId,
             new Error("Unexpected raw external main-frame navigation"),
@@ -393,7 +429,7 @@ export class PanelView implements PanelViewLike {
           return;
         }
 
-        const parsed = parsePanelUrl(url, this.externalHost);
+        const parsed = this.parseManagedPanelUrl(url);
         if (parsed && parsed.source !== currentSource) {
           this.handlePanelLinkError(
             panelId,
@@ -551,7 +587,7 @@ export class PanelView implements PanelViewLike {
   private setupLinkInterception(panelId: string, contents: Electron.WebContents): void {
     contents.setWindowOpenHandler((details) => {
       const url = details.url;
-      const parsed = parsePanelUrl(url, this.externalHost);
+      const parsed = this.parseManagedPanelUrl(url);
       if (parsed) {
         void this.openManagedLink(panelId, parsed, url).catch((err: unknown) =>
           this.handlePanelLinkError(panelId, err, url)
@@ -568,7 +604,7 @@ export class PanelView implements PanelViewLike {
     });
 
     const willNavigateHandler = (event: Electron.Event, url: string) => {
-      if (!isManagedHost(url, this.externalHost)) {
+      if (!this.isManagedUrl(url)) {
         if (/^https?:\/\//i.test(url)) {
           event.preventDefault();
           void this.openBrowserLink(panelId, url).catch((err: unknown) =>
@@ -578,7 +614,7 @@ export class PanelView implements PanelViewLike {
         return;
       }
 
-      const parsed = parsePanelUrl(url, this.externalHost);
+      const parsed = this.parseManagedPanelUrl(url);
       if (!parsed) return;
 
       const viewInfo = this.getHostedViewInfo(panelId);

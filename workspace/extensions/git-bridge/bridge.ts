@@ -166,6 +166,12 @@ interface ExportMarker {
 /** Tracked file map of a checkout: what the bridge last materialized. */
 type CheckoutMap = Record<string, { contentHash: string; mode: number }>;
 
+interface MaterializeResult {
+  tracked: CheckoutMap;
+  stagePaths: string[];
+  removePaths: string[];
+}
+
 interface ScannedFile {
   path: string;
   absPath: string;
@@ -243,6 +249,11 @@ export class GitBridge {
     });
   }
 
+  private trace(message: string, details: Record<string, unknown>): void {
+    if (process.env["VIBEZ1_DEBUG_GIT_BRIDGE"] !== "1") return;
+    console.info(`[GitBridge] ${message}`, details);
+  }
+
   private locked<T>(key: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.locks.get(key) ?? Promise.resolve();
     const next = prev.then(fn, fn);
@@ -306,7 +317,15 @@ export class GitBridge {
     opts: { authorName?: string; authorEmail?: string } = {}
   ): Promise<ExportResult> {
     const repo = normalizeWorkspaceRepoPath(repoPath);
-    return this.locked(repo, () => this.exportLocked(repo, opts));
+    return this.locked(repo, async () => {
+      const result = await this.exportLocked(repo, opts);
+      this.trace("export complete", {
+        repo,
+        exported: result.exported,
+        headCommit: result.headCommit,
+      });
+      return result;
+    });
   }
 
   private async exportLocked(
@@ -351,9 +370,13 @@ export class GitBridge {
       // store (tracked files only; `.git` and untracked paths are untouched
       // because deletions apply only to bridge-tracked files). The tracked map
       // persists across exports so cross-transition deletions are detected.
-      tracked = await this.materializeStateToCheckout(entry.outputStateHash, gitDir, tracked);
-      await this.setCheckoutMap(repo, tracked);
-      await this.git.addAll(gitDir);
+      const materialized = await this.materializeStateToCheckout(
+        entry.outputStateHash,
+        gitDir,
+        tracked
+      );
+      tracked = materialized.tracked;
+      await this.stageMaterializedChanges(gitDir, materialized);
       const actorId =
         entry.actor && typeof entry.actor === "object" && "id" in entry.actor
           ? String((entry.actor as { id: unknown }).id)
@@ -374,6 +397,7 @@ export class GitBridge {
       });
       lastSha = sha;
       exported += 1;
+      await this.setCheckoutMap(repo, tracked);
       await this.setMarker(repo, { stateHash: entry.outputStateHash, commitSha: sha });
     }
     return { exported, headCommit: lastSha };
@@ -408,36 +432,35 @@ export class GitBridge {
 
   /**
    * Project `stateHash` onto the checkout. Deletions run FIRST (only paths the
-   * bridge itself previously materialized), then changed/new files are written
-   * from content-store blobs. Returns the new tracked map.
+   * bridge itself previously materialized), then files are written from
+   * content-store blobs. Unchanged tracked paths are still refreshed from the
+   * store so local checkout edits cannot leak into an export commit. Returns
+   * the new tracked map plus the exact paths to stage.
    */
   private async materializeStateToCheckout(
     stateHash: string,
     gitDir: string,
     tracked: CheckoutMap
-  ): Promise<CheckoutMap> {
-    const files = await this.listStateFiles(stateHash);
+  ): Promise<MaterializeResult> {
+    const files = (await this.listStateFiles(stateHash)).sort((a, b) =>
+      a.path < b.path ? -1 : a.path > b.path ? 1 : 0
+    );
     const targetPaths = new Set(files.map((file) => file.path));
+    const removePaths: string[] = [];
 
     for (const relPath of Object.keys(tracked)) {
       if (!targetPaths.has(relPath)) {
         await this.rmTolerant(safeCheckoutJoin(gitDir, relPath));
+        removePaths.push(relPath);
       }
     }
+    await this.pruneEmptyDirs(gitDir);
 
     const next: CheckoutMap = {};
+    const stagePaths: string[] = [];
     for (const file of files) {
       const absPath = safeCheckoutJoin(gitDir, file.path);
-      const prev = tracked[file.path];
       next[file.path] = { contentHash: file.contentHash, mode: file.mode };
-      if (prev && prev.contentHash === file.contentHash && prev.mode === file.mode) {
-        try {
-          await fsp.access(absPath);
-          continue; // trust an unchanged tracked file that is still on disk
-        } catch {
-          // fall through and re-write
-        }
-      }
       const base64 = await this.host.blobstore.getBase64(file.contentHash);
       if (base64 === null) {
         throw new Error(
@@ -451,10 +474,23 @@ export class GitBridge {
       });
       // An overwrite of an existing file keeps its old mode bits — enforce.
       await fsp.chmod(absPath, file.mode === 33261 ? 0o755 : 0o644);
+      stagePaths.push(file.path);
     }
 
     await this.pruneEmptyDirs(gitDir);
-    return next;
+    return { tracked: next, stagePaths, removePaths };
+  }
+
+  private async stageMaterializedChanges(
+    gitDir: string,
+    materialized: MaterializeResult
+  ): Promise<void> {
+    const seen = new Set<string>();
+    for (const relPath of [...materialized.removePaths, ...materialized.stagePaths]) {
+      if (seen.has(relPath)) continue;
+      seen.add(relPath);
+      await this.git.add(gitDir, relPath);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -488,6 +524,7 @@ export class GitBridge {
     // No-op check against the PROTECTED ref — the single main-head authority.
     const refValue = (await this.host.refs.readMain(repo))?.stateHash ?? null;
     if (refValue && refValue === manifest.stateHash) {
+      this.trace("import no-op", { repo, stateHash: refValue, commitSha });
       return { stateHash: refValue, changed: false };
     }
 
@@ -536,6 +573,12 @@ export class GitBridge {
     if (commitSha) {
       await this.setMarker(repo, { stateHash: result.stateHash, commitSha });
     }
+    this.trace("import published", {
+      repo,
+      stateHash: published.stateHash,
+      commitSha,
+      files: files.length,
+    });
     return { stateHash: published.stateHash, changed: true };
   }
 

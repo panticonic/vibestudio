@@ -88,32 +88,32 @@ export interface AgentState {
   logId: string;
   head: string;
   channelId: string;
-  lastSeq: number;          // seq of last folded envelope
-  lastHash: string;         // hash of last folded envelope (== expectedHeadHash for next append)
+  lastSeq: number; // seq of last folded envelope
+  lastHash: string; // hash of last folded envelope (== expectedHeadHash for next append)
 
-  config: AgentLoopConfig;  // see below
-  entries: SessionEntry[];  // pi-core session path (replaces materializeSessionTree output)
+  config: AgentLoopConfig; // see below
+  entries: SessionEntry[]; // pi-core session path (replaces materializeSessionTree output)
 
   openTurn: OpenTurn | null;
-  inFlightModelCall: InFlightModelCall | null;   // message.started w/o terminal
+  inFlightModelCall: InFlightModelCall | null; // message.started w/o terminal
   pendingInvocations: Record<string /*invocationId*/, PendingInvocation>;
   pendingApprovals: Record<string /*approvalId*/, PendingApproval>;
   pendingCredentialWaits: Record<string /*credKey*/, PendingCredentialWait>;
-  steeringQueue: SteeringEntry[];   // user message.completed appended during an open turn,
-                                    // with seq > inFlightModelCall.contextThroughSeq
+  steeringQueue: SteeringEntry[]; // user message.completed appended during an open turn,
+  // with seq > inFlightModelCall.contextThroughSeq
   pendingPrompt: PendingPrompt | null; // user input awaiting a turn (no open turn yet)
 }
 
 export interface AgentLoopConfig {
-  model: string;                  // e.g. "openai-codex:gpt-5.5"
-  thinkingLevel: "minimal"|"low"|"medium"|"high";
-  approvalLevel: 0 | 1 | 2;       // 0=ask-all, 1=safe-tools auto, 2=full-auto (today's semantics)
+  model: string; // e.g. "openai-codex:gpt-5.5"
+  thinkingLevel: "minimal" | "low" | "medium" | "high";
+  approvalLevel: 0 | 1 | 2; // 0=ask-all, 1=safe-tools auto, 2=full-auto (today's semantics)
   respondPolicy: RespondPolicy;
-  systemPromptHash: string;       // blob digest of composed system prompt
+  systemPromptHash: string; // blob digest of composed system prompt
   skillIndexHash?: string;
-  toolSchemasHash?: string;       // digest of active tool JSON schemas
+  toolSchemasHash?: string; // digest of active tool JSON schemas
   activeToolNames: string[];
-  roster: RosterSnapshot;         // channel participants + their methods (from system.event roster snapshots, §1.5)
+  roster: RosterSnapshot; // channel participants + their methods (from system.event roster snapshots, §1.5)
   agentHopLimit?: number;
 }
 
@@ -121,13 +121,13 @@ export interface OpenTurn {
   turnId: string;
   openedAtSeq: number;
   reason?: string;
-  modelCallCount: number;         // count of message.started in this turn (drives messageId derivation)
+  modelCallCount: number; // count of message.started in this turn (drives messageId derivation)
 }
 
 export interface InFlightModelCall {
   messageId: string;
   attemptId: string;
-  contextThroughSeq: number;      // log seq the prompt snapshot covered
+  contextThroughSeq: number; // log seq the prompt snapshot covered
   request: ModelRequestDescriptor; // verbatim from message.started payload.request (§1.4.1)
 }
 
@@ -135,12 +135,12 @@ export interface PendingInvocation {
   invocationId: string;
   turnId: string;
   startedAtSeq: number;
-  attemptId: string;              // originating model attempt (causality.attemptId)
+  attemptId: string; // originating model attempt (causality.attemptId)
   name: string;
   transport: InvocationTransport; // local | channel | http  (events.ts:210)
-  request: unknown;               // args (possibly StoredValueRef)
+  request: unknown; // args (possibly StoredValueRef)
   requiresApproval: boolean;
-  approvalId?: string;            // set when gated; dispatchable iff approval resolved granted
+  approvalId?: string; // set when gated; dispatchable iff approval resolved granted
   approvalState: "none" | "pending" | "granted";
 }
 
@@ -150,17 +150,17 @@ export interface PendingApproval {
   turnId: string;
   question: string;
   details: { toolName: string; input: unknown };
-  formCallDispatched: boolean;    // derived: form channel_call is pending iff no approval.resolved
+  formCallDispatched: boolean; // derived: form channel_call is pending iff no approval.resolved
 }
 
 export interface PendingCredentialWait {
-  credKey: string;                // `cred:{channelId}:{providerId}` — same natural key as old suspension-store
+  credKey: string; // `cred:{channelId}:{providerId}` — same natural key as old suspension-store
   providerId: string;
   turnId: string;
   startedAtSeq: number;
   connectSpec: Record<string, unknown>; // toAgentCredentialSetup() output, snapshotted into the event
   modelBaseUrl?: string;
-  expiresAt: string;              // ISO; from the logged event, not wall clock
+  expiresAt: string; // ISO; from the logged event, not wall clock
 }
 ```
 
@@ -176,41 +176,41 @@ One pure reducer, exact event-kind → state-transition table. "self" means
 appended for projection/UX only and fold to `state` unchanged (plus
 `lastSeq/lastHash` advance, which EVERY event does).
 
-| # | payloadKind (EventKind) | Guard / precondition | State delta |
-|---|---|---|---|
-| 1 | `turn.opened` | `openTurn == null` (duplicate-guard upheld by gad-store) | `openTurn = {turnId: causality.turnId, openedAtSeq: seq, reason: payload.reason, modelCallCount: 0}`; `pendingPrompt = null` (its content is now in entries) |
-| 2 | `turn.closed` | `openTurn?.turnId == turnId` | `openTurn = null`; `inFlightModelCall = null`; `steeringQueue` retained (becomes `pendingPrompt` material for the next step, see C-followup in §1.3) |
-| 3 | `message.completed`, role `user` (actor ≠ self) | — | append user entry to `entries`. If `openTurn && inFlightModelCall` → push `steeringQueue`. If `openTurn && !inFlightModelCall` → push `steeringQueue` (consumed by next model call). If `!openTurn` → `pendingPrompt = {…}` |
-| 4 | `message.started`, role `assistant` (self) | `openTurn != null`, `inFlightModelCall == null` | `inFlightModelCall = {messageId, attemptId: payload.request.attemptId, contextThroughSeq: payload.request.contextThroughSeq, request: payload.request}`; `openTurn.modelCallCount += 1`; drain `steeringQueue` entries with seq ≤ contextThroughSeq |
-| 5 | `message.completed`, role `assistant` (self) | `inFlightModelCall?.messageId == causality.messageId` | `inFlightModelCall = null`; append assistant entry (payload.blocks authoritative) to `entries` |
-| 6 | `message.failed` | same messageId | `inFlightModelCall = null` (recoverability is in payload; re-emission is step's job, never the fold's) |
-| 7 | `invocation.started` | — | `pendingInvocations[invocationId] = {…from payload: name, transport, request, requiresApproval, attemptId: causality.attemptId}` |
-| 8 | `invocation.completed` | invocation pending | delete from `pendingInvocations`; append tool-result entry (payload.result) to `entries` |
-| 9 | `invocation.failed` / `invocation.cancelled` | invocation pending | delete; append error tool-result entry (`isError: true`, payload.reason/error) |
-| 10 | `invocation.abandoned` | invocation pending | delete; append synthetic tool-result entry "abandoned: {payload.reason}" (so the model context stays well-formed) |
-| 11 | `approval.requested` | — | `pendingApprovals[approvalId] = {…}`; mark `pendingInvocations[invocationId].approvalState = "pending"`, `.approvalId = approvalId` |
-| 12 | `approval.resolved` | approval pending | delete from `pendingApprovals`; if `payload.granted` → invocation `approvalState = "granted"` (now dispatchable); if denied → invocation stays pending until step appends its `invocation.failed` (D-deny in §1.3) |
-| 13 | `turn.waiting` | open turn | no structural change (informational; kept for UX parity on credential waits) |
-| 14 | `system.event` `details.kind == "credential.wait_started"` | — | `pendingCredentialWaits[credKey] = {…from details}` |
-| 15 | `system.event` `details.kind == "credential.wait_resolved"` (or `_expired`) | wait pending | delete from `pendingCredentialWaits` |
-| 16 | `system.event` `details.kind == "roster.snapshot"` | — | `config.roster = details.roster` |
-| 17 | `system.event` `details.kind == "interrupt"` | — | no fold change (step reacts; terminals follow as separate events) |
-| 18 | `system.compaction_recorded` | — | replace `entries` with `payload.replacement` entries (pi-core compaction output, same semantics as today's exact-session-entry path in materialize-session-tree.ts) |
-| 19 | `system.event` `details.kind == "config.changed"` | — | apply `details.patch` to `config` (model / thinkingLevel / approvalLevel / respondPolicy changes are events, P4) |
-| 20 | `message.delta` | — | **never folded — deltas are not in the log** (§2.4.1). The fold throwing on `message.delta` is correct behavior. |
+| #   | payloadKind (EventKind)                                                     | Guard / precondition                                     | State delta                                                                                                                                                                                                                                         |
+| --- | --------------------------------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `turn.opened`                                                               | `openTurn == null` (duplicate-guard upheld by gad-store) | `openTurn = {turnId: causality.turnId, openedAtSeq: seq, reason: payload.reason, modelCallCount: 0}`; `pendingPrompt = null` (its content is now in entries)                                                                                        |
+| 2   | `turn.closed`                                                               | `openTurn?.turnId == turnId`                             | `openTurn = null`; `inFlightModelCall = null`; `steeringQueue` retained (becomes `pendingPrompt` material for the next step, see C-followup in §1.3)                                                                                                |
+| 3   | `message.completed`, role `user` (actor ≠ self)                             | —                                                        | append user entry to `entries`. If `openTurn && inFlightModelCall` → push `steeringQueue`. If `openTurn && !inFlightModelCall` → push `steeringQueue` (consumed by next model call). If `!openTurn` → `pendingPrompt = {…}`                         |
+| 4   | `message.started`, role `assistant` (self)                                  | `openTurn != null`, `inFlightModelCall == null`          | `inFlightModelCall = {messageId, attemptId: payload.request.attemptId, contextThroughSeq: payload.request.contextThroughSeq, request: payload.request}`; `openTurn.modelCallCount += 1`; drain `steeringQueue` entries with seq ≤ contextThroughSeq |
+| 5   | `message.completed`, role `assistant` (self)                                | `inFlightModelCall?.messageId == causality.messageId`    | `inFlightModelCall = null`; append assistant entry (payload.blocks authoritative) to `entries`                                                                                                                                                      |
+| 6   | `message.failed`                                                            | same messageId                                           | `inFlightModelCall = null` (recoverability is in payload; re-emission is step's job, never the fold's)                                                                                                                                              |
+| 7   | `invocation.started`                                                        | —                                                        | `pendingInvocations[invocationId] = {…from payload: name, transport, request, requiresApproval, attemptId: causality.attemptId}`                                                                                                                    |
+| 8   | `invocation.completed`                                                      | invocation pending                                       | delete from `pendingInvocations`; append tool-result entry (payload.result) to `entries`                                                                                                                                                            |
+| 9   | `invocation.failed` / `invocation.cancelled`                                | invocation pending                                       | delete; append error tool-result entry (`isError: true`, payload.reason/error)                                                                                                                                                                      |
+| 10  | `invocation.abandoned`                                                      | invocation pending                                       | delete; append synthetic tool-result entry "abandoned: {payload.reason}" (so the model context stays well-formed)                                                                                                                                   |
+| 11  | `approval.requested`                                                        | —                                                        | `pendingApprovals[approvalId] = {…}`; mark `pendingInvocations[invocationId].approvalState = "pending"`, `.approvalId = approvalId`                                                                                                                 |
+| 12  | `approval.resolved`                                                         | approval pending                                         | delete from `pendingApprovals`; if `payload.granted` → invocation `approvalState = "granted"` (now dispatchable); if denied → invocation stays pending until step appends its `invocation.failed` (D-deny in §1.3)                                  |
+| 13  | `turn.waiting`                                                              | open turn                                                | no structural change (informational; kept for UX parity on credential waits)                                                                                                                                                                        |
+| 14  | `system.event` `details.kind == "credential.wait_started"`                  | —                                                        | `pendingCredentialWaits[credKey] = {…from details}`                                                                                                                                                                                                 |
+| 15  | `system.event` `details.kind == "credential.wait_resolved"` (or `_expired`) | wait pending                                             | delete from `pendingCredentialWaits`                                                                                                                                                                                                                |
+| 16  | `system.event` `details.kind == "roster.snapshot"`                          | —                                                        | `config.roster = details.roster`                                                                                                                                                                                                                    |
+| 17  | `system.event` `details.kind == "interrupt"`                                | —                                                        | no fold change (step reacts; terminals follow as separate events)                                                                                                                                                                                   |
+| 18  | `system.compaction_recorded`                                                | —                                                        | replace `entries` with `payload.replacement` entries (pi-core compaction output, same semantics as today's exact-session-entry path in materialize-session-tree.ts)                                                                                 |
+| 19  | `system.event` `details.kind == "config.changed"`                           | —                                                        | apply `details.patch` to `config` (model / thinkingLevel / approvalLevel / respondPolicy changes are events, P4)                                                                                                                                    |
+| 20  | `message.delta`                                                             | —                                                        | **never folded — deltas are not in the log** (§2.4.1). The fold throwing on `message.delta` is correct behavior.                                                                                                                                    |
 
 Derived predicates (no stored FSM — the old 8-state `agent_turn_runs` machine
 maps onto these):
 
-| old `agent_turn_runs.status` | derived as |
-|---|---|
-| `starting` | `openTurn && modelCallCount == 0 && !inFlightModelCall` |
-| `running_model` | `inFlightModelCall != null` |
-| `waiting_external` | `openTurn && (pendingInvocations w/ non-local transport ∨ pendingApprovals ∨ pendingCredentialWaits) && !inFlightModelCall` |
-| `continuing` | `openTurn && !inFlightModelCall && all invocations terminal && (steeringQueue ∨ fresh tool results since last model call)` |
-| `closing`/`closed` | `turn.closed` appended / `openTurn == null` |
-| `failed` | `turn.closed {reason: "work_failed"|…}` |
-| `interrupted` | `turn.closed {reason: "user_interrupted"}` |
+| old `agent_turn_runs.status` | derived as                                                                                                                  |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --- |
+| `starting`                   | `openTurn && modelCallCount == 0 && !inFlightModelCall`                                                                     |
+| `running_model`              | `inFlightModelCall != null`                                                                                                 |
+| `waiting_external`           | `openTurn && (pendingInvocations w/ non-local transport ∨ pendingApprovals ∨ pendingCredentialWaits) && !inFlightModelCall` |
+| `continuing`                 | `openTurn && !inFlightModelCall && all invocations terminal && (steeringQueue ∨ fresh tool results since last model call)`  |
+| `closing`/`closed`           | `turn.closed` appended / `openTurn == null`                                                                                 |
+| `failed`                     | `turn.closed {reason: "work_failed"                                                                                         | …}` |
+| `interrupted`                | `turn.closed {reason: "user_interrupted"}`                                                                                  |
 
 The old 11-state delivery machine (`agent_method_suspensions.delivery_status`)
 collapses to: pending ⟺ `invocation.started` (transport `channel`) without a
@@ -224,36 +224,49 @@ invocation.
 ```ts
 export type Incoming =
   | { type: "command"; command: Command }
-  | { type: "event-appended"; envelope: LogEnvelope }   // fed by driver after every fold advance
-  | { type: "effect-failed"; effectId: string; kind: EffectKind; error: SerializedError; attempts: number };
+  | { type: "event-appended"; envelope: LogEnvelope } // fed by driver after every fold advance
+  | {
+      type: "effect-failed";
+      effectId: string;
+      kind: EffectKind;
+      error: SerializedError;
+      attempts: number;
+    };
 
 export type Command =
-  | { kind: "prompt"; channelId: string; source: { envelopeId: string };   // triggering channel envelope
-      content: UserContent; senderRef: ParticipantRef; agentHops?: number }
-  | { kind: "steer";  /* same fields as prompt */ }
-  | { kind: "interrupt" }                                // user pause — suppress auto-continue
+  | {
+      kind: "prompt";
+      channelId: string;
+      source: { envelopeId: string }; // triggering channel envelope
+      content: UserContent;
+      senderRef: ParticipantRef;
+      agentHops?: number;
+    }
+  | { kind: "steer" /* same fields as prompt */ }
+  | { kind: "interrupt" } // user pause — suppress auto-continue
   | { kind: "abort"; reason?: TurnReasonCode }
   | { kind: "setConfig"; patch: Partial<AgentLoopConfig> } // setModel/setThinkingLevel/setApprovalLevel/setRespondPolicy
   | { kind: "compact" }
-  | { kind: "wake" };                                    // driver-synthesized on every DO wake / after reconcile
+  | { kind: "wake" }; // driver-synthesized on every DO wake / after reconcile
 
-export interface StepContext {                            // injected determinism (P4)
-  now: string;            // ISO timestamp chosen by driver, logged via appendedAt
-  random: () => string;   // seeded/recorded; only used where ids.ts cannot derive deterministically (turnId salt)
+export interface StepContext {
+  // injected determinism (P4)
+  now: string; // ISO timestamp chosen by driver, logged via appendedAt
+  random: () => string; // seeded/recorded; only used where ids.ts cannot derive deterministically (turnId salt)
   selfRef: ParticipantRef;
 }
 
 export interface StepOutput {
-  append: AppendItem[];     // ordered; driver appends with expectedHeadHash = state.lastHash
+  append: AppendItem[]; // ordered; driver appends with expectedHeadHash = state.lastHash
   effects: EffectDescriptor[]; // NEW intentions only — must each be re-derivable from an item in `append`
 }
 
 export interface AppendItem {
-  envelopeId: string;       // deterministic, from ids.ts — REQUIRED, never random
+  envelopeId: string; // deterministic, from ids.ts — REQUIRED, never random
   payloadKind: EventKind;
   payload: unknown;
   causality?: LogEventCausality;
-  publish?: boolean;        // → publish.channels = [{channelId}] on the durable append
+  publish?: boolean; // → publish.channels = [{channelId}] on the durable append
 }
 ```
 
@@ -284,8 +297,8 @@ Core transitions (before policy interception, §1.6):
   `message.completed {outcome:"interrupted"}` with whatever partials exist;
   step then (E-after-interrupt) appends `invocation.cancelled` for every
   pending invocation (terminal id), `approval.resolved {granted:false,
-  reason:"interrupted"}` for pending approvals, and `turn.closed
-  {reason:"user_interrupted"}`. An interrupt flag is not stored in state: the
+reason:"interrupted"}` for pending approvals, and `turn.closed
+{reason:"user_interrupted"}`. An interrupt flag is not stored in state: the
   `system.event {interrupt}` between turn open and close is the gate; step
   must not emit new `model_call`s for that turn afterwards (replaces
   RunController.gateInterrupt / mayResume).
@@ -315,7 +328,7 @@ Core transitions (before policy interception, §1.6):
 - **C-wake**: recovery rule, the heart of crash convergence:
   1. orphan `message.started` (in-flight but driver knows no executor is
      running — wake implies none): append `message.failed {reason:"interrupted
-     by restart", recoverable:true}` (id `msg:{messageId}:terminal`).
+by restart", recoverable:true}` (id `msg:{messageId}:terminal`).
   2. **Guard (plan WS1.4):** never emit a new `model_call` while any
      invocation whose `attemptId` belongs to a failed attempt is non-terminal.
      Pending invocations from the failed attempt keep their effects (they were
@@ -325,7 +338,7 @@ Core transitions (before policy interception, §1.6):
   4. no open turn + `pendingPrompt` → C-prompt path.
 - **F-effect-failed** (`effect-failed`, attempts exhausted): map by kind —
   `model_call` → `message.failed {recoverable:false}` + `turn.closed
-  {reason:"work_failed"}` + a published diagnostic `message.completed`
+{reason:"work_failed"}` + a published diagnostic `message.completed`
   (replaces `agent_turn_outbox` `emit_diagnostic`); `local_tool`/`channel_call`
   /`http_call` → `invocation.failed {terminalOutcome:"infrastructure_error"}`;
   `credential_wait` expiry → `system.event {credential.wait_expired}` +
@@ -334,14 +347,19 @@ Core transitions (before policy interception, §1.6):
 ### 1.4 Effect taxonomy and descriptor payload requirements
 
 ```ts
-export type EffectKind = "model_call" | "local_tool" | "channel_call"
-                       | "http_call" | "credential_wait" | "publish_envelope";
+export type EffectKind =
+  | "model_call"
+  | "local_tool"
+  | "channel_call"
+  | "http_call"
+  | "credential_wait"
+  | "publish_envelope";
 
 export interface EffectDescriptorBase {
-  effectId: string;        // deterministic (§1.5); == outbox PK
+  effectId: string; // deterministic (§1.5); == outbox PK
   kind: EffectKind;
   channelId: string;
-  idempotencyKey: string;  // == invocationId for invocation effects; messageId+attemptId for model calls
+  idempotencyKey: string; // == invocationId for invocation effects; messageId+attemptId for model calls
 }
 ```
 
@@ -357,15 +375,16 @@ is a denormalized copy only.
 
 ```ts
 export interface ModelRequestDescriptor {
-  provider: string; model: string;            // resolved, e.g. "anthropic", "claude-sonnet-4-6"
+  provider: string;
+  model: string; // resolved, e.g. "anthropic", "claude-sonnet-4-6"
   modelBaseUrl?: string;
   thinkingLevel: ThinkingLevel;
-  systemPromptHash: string;                   // blob-spilled composed prompt (composeSystemPrompt output)
+  systemPromptHash: string; // blob-spilled composed prompt (composeSystemPrompt output)
   skillIndexHash?: string;
-  toolSchemasHash: string;                    // blob-spilled JSON of active AgentTool schemas
+  toolSchemasHash: string; // blob-spilled JSON of active AgentTool schemas
   activeToolNames: string[];
-  contextThroughSeq: number;                  // entries snapshot boundary; executor rebuilds context = buildModelContext(fold-through-seq)
-  attemptId: string;                          // `att:{messageId}`
+  contextThroughSeq: number; // entries snapshot boundary; executor rebuilds context = buildModelContext(fold-through-seq)
+  attemptId: string; // `att:{messageId}`
   streamOptions?: { deltaBatchMs?: number };
 }
 ```
@@ -381,7 +400,7 @@ executor re-derives the full prompt purely from the log (entries through
 awaiterId: invocationId}`, `requiresApproval`, `userVisible`. Effect
 `{effectId: "inv:"+invocationId, idempotencyKey: invocationId, tool: name,
 args: request, cwd from config}`. Local tools: read/edit/write/grep/find/ls/
-set_title/close_turn_without_response + subclass extras.
+set_title/suspend_turn + subclass extras.
 
 **Retry rule replacing `HARNESS_MODEL_REPLAY_TOOL_SAFETY`:** the model is
 never re-asked (replay is a pure fold), so the safety map dies. Local-tool
@@ -489,8 +508,10 @@ export interface StepPolicy {
   name: string;
   // runs after core step; may rewrite/extend output. MUST stay pure.
   intercept(args: {
-    state: AgentState; incoming: Incoming; ctx: StepContext;
-    output: StepOutput;            // accumulated so far
+    state: AgentState;
+    incoming: Incoming;
+    ctx: StepContext;
+    output: StepOutput; // accumulated so far
   }): StepOutput;
 }
 export function composeStep(policies: StepPolicy[]): StepFn;
@@ -503,14 +524,14 @@ Fixed order: `channel-tools` → `approval-gate` → `ask-user` → `fork` →
   E-model-terminal proposes an `invocation.started` whose `name` matches a
   `config.roster` participant method (and is not a builtin), set
   `transport = {kind:"channel", channelId, target: rosterEntry.ref,
-  transportCallId}`. Roster is in state (event 16) — no I/O.
+transportCallId}`. Roster is in state (event 16) — no I/O.
 - **`approval-gate`** (replaces createApprovalGateExtension): pure rule per
   today's `toolNeedsApproval` (pi-runner.ts:1670): approvalLevel 2 → never;
   level 1 + name ∈ DEFAULT_SAFE_TOOL_NAMES → no; else gate. Gating rewrites
   the output: keep `invocation.started {requiresApproval:true}`, add
   `approval.requested` (payload `{question:"Allow tool call?", requestedBy:
-  selfRef, details:{toolName, input}}`, causality `{approvalId, invocationId,
-  modelToolCallId}` — exact shapes from pi-runner.ts:1677–1701) and a
+selfRef, details:{toolName, input}}`, causality `{approvalId, invocationId,
+modelToolCallId}` — exact shapes from pi-runner.ts:1677–1701) and a
   `channel_call` form effect; REMOVE the tool's dispatch effect (it becomes
   derivable only once `approval.resolved {granted:true}` lands).
 - **`ask-user`**: declares the `ask_user` tool schema; rewrites its
@@ -537,11 +558,11 @@ export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
   if (state.inFlightModelCall) out.push(modelCallEffect(state, state.inFlightModelCall));
   for (const inv of values(state.pendingInvocations)) {
     if (inv.requiresApproval && inv.approvalState !== "granted") continue; // gated
-    out.push(invocationEffect(state, inv));   // by transport.kind → local_tool|channel_call|http_call
+    out.push(invocationEffect(state, inv)); // by transport.kind → local_tool|channel_call|http_call
   }
   for (const ap of values(state.pendingApprovals)) out.push(approvalFormEffect(state, ap));
   for (const cw of values(state.pendingCredentialWaits)) out.push(credentialWaitEffect(state, cw));
-  return out;       // NOTE: no publish_envelope here — best-effort kind is exempt
+  return out; // NOTE: no publish_envelope here — best-effort kind is exempt
 }
 ```
 
@@ -551,15 +572,15 @@ Executors return raw outcomes; this pure function maps them to terminal
 events so the append is deterministic and testable:
 
 - `model_call` → `message.completed {role:"assistant", blocks, outcome,
-  usage}` (outcome classification per today's rules: aborted→`interrupted`,
+usage}` (outcome classification per today's rules: aborted→`interrupted`,
   no content→`empty`, only tool calls→`tool_calls_only`, else `completed`),
   id `msg:{messageId}:terminal`. Suspension outcome (credential) → no
   terminal; instead the §1.4.5 events.
 - `local_tool` / `channel_call` / `http_call` → `invocation.completed
-  {result, summary, terminalOutcome:"success"}` or `invocation.failed
-  {reason, error, terminalOutcome:"tool_error"}`, id `inv:{id}:terminal`.
+{result, summary, terminalOutcome:"success"}` or `invocation.failed
+{reason, error, terminalOutcome:"tool_error"}`, id `inv:{id}:terminal`.
   Approval-form `channel_call` outcome → `approval.resolved {granted,
-  resolvedBy, reason}`, id `appr:{approvalId}:resolved`.
+resolvedBy, reason}`, id `appr:{approvalId}:resolved`.
 - `credential_wait` → `system.event {credential.wait_resolved}`.
 
 The driver appends `outcomeEvents(...)`, deletes the outbox row (in that
@@ -729,11 +750,11 @@ export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
   kind: EffectKind;
   execute(args: {
     descriptor: D;
-    state: AgentState;                 // read-only; for context building
-    signal: AbortSignal;               // interrupt/abort wiring
-    deps: ExecutorDeps;                // gad, blobstore, ChannelClient factory, rpc, fetcher, credentials
-    onEphemeral(e: EphemeralEmit): void;  // stream deltas / typing — never journaled
-  }): Promise<EffectOutcome>;          // fed to outcomeEvents (§1.8)
+    state: AgentState; // read-only; for context building
+    signal: AbortSignal; // interrupt/abort wiring
+    deps: ExecutorDeps; // gad, blobstore, ChannelClient factory, rpc, fetcher, credentials
+    onEphemeral(e: EphemeralEmit): void; // stream deltas / typing — never journaled
+  }): Promise<EffectOutcome>; // fed to outcomeEvents (§1.8)
 }
 ```
 
@@ -753,7 +774,7 @@ export interface EffectExecutor<D extends EffectDescriptor = EffectDescriptor> {
   shape as today (payload `{protocol, blockId, type, text, replace?}`,
   causality `{messageId}`) and hand to `onEphemeral` — the driver batches
   ~100ms and broadcasts via `ChannelClient.sendSignalEvent(participantId,
-  AGENTIC_EVENT_PAYLOAD_KIND, event)` (the channel DO's ephemeral `signal`
+AGENTIC_EVENT_PAYLOAD_KIND, event)` (the channel DO's ephemeral `signal`
   mode). Deltas are NEVER appended to any log and never durable envelopes
   (change from today, where pi-runner published them durably; the protocol
   already declares deltas advisory and the chat reducers apply them
@@ -806,13 +827,13 @@ reconcile invariant.
 ### 2.5 Multi-channel, TurnDispatcher reduction, DO surface
 
 - One DO; `Map<channelId, LoopInstance>` where `LoopInstance = {logId, state,
-  stepFn (composed with consumer policies), executors}`. Shared
+stepFn (composed with consumer policies), executors}`. Shared
   `effect_outbox` (rows carry `channel_id`) and ONE alarm: the driver's
   `alarm()` = for each loop: wake-validate fold → reconcile; then reschedule
   to the earliest due row.
 - **`turn-dispatcher.ts` shrinks to addressing only** (file renamed in place;
   queue half deleted): `resolveShouldRespond({envelope, respondPolicy,
-  selfHandle, mentions, replyTo, agentHops})` where `agentHops` is read from
+selfHandle, mentions, replyTo, agentHops})` where `agentHops` is read from
   **envelope `annotations`** (WS2 channel policy stamps it) — the old payload
   reads at trajectory-vessel-base.ts:4680/4719 die in the same cut. Output:
   `{respond: boolean, mode: "prompt"|"steer"}`. The pending/pendingSteered
@@ -880,22 +901,22 @@ re-bases on it keeping its public override surface (§3.2).
 
 ### 3.1 Behavior → new mechanism (every row is a Stage-B cutover checklist item)
 
-| Today's behavior | Old mechanism | New mechanism |
-|---|---|---|
-| Streaming assistant text/thinking | `message.delta` events published as durable envelopes via appendTrajectoryBatch (pi-runner.ts:2518–2559) | model executor → `onEphemeral` → batched (~100ms) channel `signal` broadcast of the identical AgenticEvent shape; `message.completed` carries authoritative blocks (§2.4.1) |
-| Approvals card | approval-gate extension + uiPrompt method suspension (`agent_method_suspensions` kind `uiPrompt`/`approval`) | `approval-gate` policy: `approval.requested` event + `channel_call` form effect; `approval.resolved` resumes (§1.6); payload shapes unchanged (pi-runner.ts:1677–1729) so the chat panel's approval card renders identically |
-| `ask_user` | createAskUserExtension + askUser suspension kind | `ask-user` policy → `channel_call` (method `ask`); result → `invocation.completed` |
-| Custom cards / CardManager (gmail) | `this.cards` CardManager (custom_cards table, `custom:{messageId}:{seq}` idempotency) publishing `custom.started/updated` | **kept as-is**: CardManager survives unchanged on the new vessel (its table is consumer state, not harness state); card emissions go through ChannelClient publish; incoming card method calls arrive as channel method calls → if mid-turn tool-driven, they are `channel_call` effects; if externally initiated (user clicks), they are plain `onMethodCall` handler invocations (no suspension machinery needed) |
-| `ui.feedback` loop | FeedbackIngest dedupe + prepend-next-turn | kept; the queued note is included in the next `message.started` context (entries injection in `buildModelContext`) |
-| Credential connect (panel-scoped, connect presets) | `getModelCredentialConnectSpec` + suspension-store + deferred RPC `credentials.connect` + backstop alarm | `credential_wait` effect (§1.4.5/§2.4.5); `providerConnect.toAgentCredentialSetup()` output is snapshotted INTO the `credential.wait_started` event; `model-catalog/providerConnect.ts` keeps its exports and re-targets `AgentVesselBase.getModelCredentialSetupProps` (same name, same Record shape — providerConnect has no agentic-do import today, so only the doc-comment reference changes) |
-| Interrupt (pause button) | RunController.gateInterrupt + dispatcher.interrupt + abort chain | `interrupt` command → `system.event {interrupt}` + executor signal abort + terminal appends (C-interrupt, §1.3) |
-| Steering mid-turn | `agent_pending_steering` + steerQueue + steerIntoActiveTurn | `steer` command appends the user `message.completed`; consumed by the next `message.started` snapshot (§1.3) |
-| Typing indicator | dispatcher.notifyTyping | driver typing rule from outbox occupancy (§2.5) |
-| Respond policy / addressing / hop cap | TurnDispatcher + payload agentHops reads (vessel:4680/4719) | reduced `turn-dispatcher.ts` reading hops from envelope annotations (§2.5) |
-| Recovery diagnostics ("turn failed…") | `agent_turn_outbox` `emit_diagnostic` | F-rule appends a published diagnostic `message.completed` directly (P2 — the append IS the delivery intent; publish is same-txn) |
-| Set title | `set_title` builtin tool | unchanged local_tool |
-| Fork mid-turn | postClone + cursor surgery + forkSessionId | §2.6 |
-| Hibernation wake | 4 recovery functions + resume attempts | wake protocol (§2.3) + reconcile (§2.2) + C-wake (§1.3) |
+| Today's behavior                                   | Old mechanism                                                                                                             | New mechanism                                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Streaming assistant text/thinking                  | `message.delta` events published as durable envelopes via appendTrajectoryBatch (pi-runner.ts:2518–2559)                  | model executor → `onEphemeral` → batched (~100ms) channel `signal` broadcast of the identical AgenticEvent shape; `message.completed` carries authoritative blocks (§2.4.1)                                                                                                                                                                                                                                         |
+| Approvals card                                     | approval-gate extension + uiPrompt method suspension (`agent_method_suspensions` kind `uiPrompt`/`approval`)              | `approval-gate` policy: `approval.requested` event + `channel_call` form effect; `approval.resolved` resumes (§1.6); payload shapes unchanged (pi-runner.ts:1677–1729) so the chat panel's approval card renders identically                                                                                                                                                                                        |
+| `ask_user`                                         | createAskUserExtension + askUser suspension kind                                                                          | `ask-user` policy → `channel_call` (method `ask`); result → `invocation.completed`                                                                                                                                                                                                                                                                                                                                  |
+| Custom cards / CardManager (gmail)                 | `this.cards` CardManager (custom_cards table, `custom:{messageId}:{seq}` idempotency) publishing `custom.started/updated` | **kept as-is**: CardManager survives unchanged on the new vessel (its table is consumer state, not harness state); card emissions go through ChannelClient publish; incoming card method calls arrive as channel method calls → if mid-turn tool-driven, they are `channel_call` effects; if externally initiated (user clicks), they are plain `onMethodCall` handler invocations (no suspension machinery needed) |
+| `ui.feedback` loop                                 | FeedbackIngest dedupe + prepend-next-turn                                                                                 | kept; the queued note is included in the next `message.started` context (entries injection in `buildModelContext`)                                                                                                                                                                                                                                                                                                  |
+| Credential connect (panel-scoped, connect presets) | `getModelCredentialConnectSpec` + suspension-store + deferred RPC `credentials.connect` + backstop alarm                  | `credential_wait` effect (§1.4.5/§2.4.5); `providerConnect.toAgentCredentialSetup()` output is snapshotted INTO the `credential.wait_started` event; `model-catalog/providerConnect.ts` keeps its exports and re-targets `AgentVesselBase.getModelCredentialSetupProps` (same name, same Record shape — providerConnect has no agentic-do import today, so only the doc-comment reference changes)                  |
+| Interrupt (pause button)                           | RunController.gateInterrupt + dispatcher.interrupt + abort chain                                                          | `interrupt` command → `system.event {interrupt}` + executor signal abort + terminal appends (C-interrupt, §1.3)                                                                                                                                                                                                                                                                                                     |
+| Steering mid-turn                                  | `agent_pending_steering` + steerQueue + steerIntoActiveTurn                                                               | `steer` command appends the user `message.completed`; consumed by the next `message.started` snapshot (§1.3)                                                                                                                                                                                                                                                                                                        |
+| Typing indicator                                   | dispatcher.notifyTyping                                                                                                   | driver typing rule from outbox occupancy (§2.5)                                                                                                                                                                                                                                                                                                                                                                     |
+| Respond policy / addressing / hop cap              | TurnDispatcher + payload agentHops reads (vessel:4680/4719)                                                               | reduced `turn-dispatcher.ts` reading hops from envelope annotations (§2.5)                                                                                                                                                                                                                                                                                                                                          |
+| Recovery diagnostics ("turn failed…")              | `agent_turn_outbox` `emit_diagnostic`                                                                                     | F-rule appends a published diagnostic `message.completed` directly (P2 — the append IS the delivery intent; publish is same-txn)                                                                                                                                                                                                                                                                                    |
+| Set title                                          | `set_title` builtin tool                                                                                                  | unchanged local_tool                                                                                                                                                                                                                                                                                                                                                                                                |
+| Fork mid-turn                                      | postClone + cursor surgery + forkSessionId                                                                                | §2.6                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Hibernation wake                                   | 4 recovery functions + resume attempts                                                                                    | wake protocol (§2.3) + reconcile (§2.2) + C-wake (§1.3)                                                                                                                                                                                                                                                                                                                                                             |
 
 ### 3.2 Consumer migration checklist (plan WS1.7b)
 
@@ -983,7 +1004,7 @@ these behavior categories from pi-runner.test.ts (3,636 lines):
 turn lifecycle (turn.opened/closed durability, agent-start/end matching);
 steering (queued before next model call; iteration-boundary aborts); approval
 request/resolve event shapes incl. deny → invocation.failed; ask_user gating;
-close_turn_without_response; channel method invocations; per-block delta
+suspend_turn; channel method invocations; per-block delta
 emission (now: ephemeral emits, assert NOT in append); thinking-block
 variants; tool-call name/args parsing; user message provenance (recv: id, no
 republish); duplicate terminal invocation filtering (now: deterministic-id
@@ -1044,6 +1065,7 @@ interrupt, hibernation wake mid-tool.
 ## 5. Deletion list (Stage-B cut)
 
 Files deleted outright:
+
 - `workspace/packages/agentic-do/src/trajectory-vessel-base.ts` (8,662)
 - `workspace/packages/agentic-do/src/run-controller.ts` (288) + `run-controller.test.ts`
 - `workspace/packages/agentic-do/src/suspension-store.ts` (310) + `suspension-store.test.ts`
@@ -1053,6 +1075,7 @@ Files deleted outright:
 - `workspace/packages/harness/src/pi-runner.test.ts` (3,636 — superseded by scenario suite; port before delete)
 
 Surgical deletions:
+
 - `workspace/packages/agentic-do/src/turn-dispatcher.ts` — queue half
   (pending/pendingSteered/drainLoop/keepAlive/interrupted); addressing
   survives (§2.5). Its keepalive test dies with it.
@@ -1091,18 +1114,18 @@ infra dependencies and can run in parallel with Stage-0 once the
    runtime/hook bus. Gate: typecheck + existing prompt-compose tests pass
    against the vendored copy.
 2. **Pure `agent-loop` package.** Everything in §1 (`state/fold/step/effects/
-   ids/commands/context/policies/scenario`) + scenario suite (§4.1) + property
+ids/commands/context/policies/scenario`) + scenario suite (§4.1) + property
    tests (§4.2). No infra. Gate: scenario suite green → **EventKind vocabulary
    freezes** (§1.9 additions land in agentic-protocol `events.ts`/`schemas.ts`).
 3. **Executors.** `agentic-do/src/effect-executors/{model-call,local-tool,
-   channel-call,http-call,credential-wait,publish}.ts` (§2.4) + the http-call
+channel-call,http-call,credential-wait,publish}.ts` (§2.4) + the http-call
    server-side callback surface in `src/server/harnessApi.ts`
    (idempotency-keyed accept + postToDO result delivery). Gate: executor unit
    tests with mocked deps; model-call against pi-ai fake provider.
 4. **Driver.** `agentic-do/src/{agent-loop-driver,effect-outbox,fold-cache}.ts`
-   + reduced `turn-dispatcher.ts` + crash-injection (§4.3) and cache-amnesia
-   (§4.4) suites. Gate: both suites green against simulated gad-store
-   (`createTestDO(GadWorkspaceDO)` from Stage 0).
+   - reduced `turn-dispatcher.ts` + crash-injection (§4.3) and cache-amnesia
+     (§4.4) suites. Gate: both suites green against simulated gad-store
+     (`createTestDO(GadWorkspaceDO)` from Stage 0).
 5. **Thin vessel + consumer migration + deletion.**
    `agentic-do/src/agent-vessel.ts`, re-based `agent-worker-base.ts`, the four
    workers + providerConnect verification (§3.2), workerd E2E (§4.5), then

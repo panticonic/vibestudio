@@ -32,7 +32,7 @@ export const GMAIL_SYSTEM_PROMPT = [
   "",
   "Rules:",
   "- Do not start work unless invoked by an action bar, a Gmail custom message, an explicit @gmail mention, a direct user follow-up after one of your messages, or an attention wake digest.",
-  "- In multi-agent channels, if no Gmail intervention is useful, call close_turn_without_response instead of sending a visible reply.",
+  "- In multi-agent channels, if no Gmail intervention is useful, call suspend_turn instead of sending a visible reply.",
   "- Other agents may read mail state and request review-state drafts, but they can never send mail.",
   "- Do not persist full email bodies into chat messages or card state. Fetch bodies transiently with gmail_read when needed.",
   "- A draft without a recipient is fine: gmail_draft parks it on a compose card in drafting state with address autocomplete.",

@@ -70,9 +70,9 @@ class FakeBridgeSocket extends EventEmitter implements CdpHostBridgeSocket {
     this.sent.push(JSON.parse(data) as Record<string, unknown>);
   }
 
-  close(): void {
+  close(code?: number, reason?: string): void {
     this.readyState = 3;
-    this.emit("close");
+    this.emit("close", code, reason);
   }
 
   open(): void {
@@ -181,6 +181,56 @@ describe("CdpHostBridgeClient", () => {
         { type: "vibez1:cdp-auth", token: "good-token" },
         { type: "cdp:register", targetId: "panel-1", tabId: 7 },
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("emits structured diagnostics while connecting, authenticating, and retrying", async () => {
+    vi.useFakeTimers();
+    try {
+      const sockets: FakeBridgeSocket[] = [];
+      const diagnostics: Array<ReturnType<CdpHostBridgeClient["getDiagnostic"]>> = [];
+      client = new CdpHostBridgeClient({
+        serverUrl: "https://server.example/_workspace/dev",
+        hostConnectionId: "headless-rpc",
+        getToken: () => "good-token",
+        handlers: handlers(),
+        socketFactory: () => {
+          const socket = new FakeBridgeSocket();
+          sockets.push(socket);
+          return socket;
+        },
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      client.start();
+      expect(diagnostics.at(-1)).toMatchObject({
+        state: "connecting",
+        attempt: 1,
+        url: "wss://server.example/_workspace/dev/api/cdp-host?hostConnectionId=headless-rpc",
+      });
+
+      sockets[0]?.open();
+      await Promise.resolve();
+      expect(diagnostics.map((d) => d.state)).toContain("authenticating");
+      expect(diagnostics.at(-1)).toMatchObject({ state: "authenticating", authSent: true });
+
+      sockets[0]?.receive({ type: "vibez1:cdp-auth-ok" });
+      expect(diagnostics.at(-1)).toMatchObject({
+        state: "authenticated",
+        authenticated: true,
+        lastMessageType: "vibez1:cdp-auth-ok",
+      });
+
+      sockets[0]?.close(4401, "Invalid CDP token");
+      expect(diagnostics.at(-1)).toMatchObject({
+        state: "retrying",
+        authenticated: false,
+        lastCloseCode: 4401,
+        lastCloseReason: "Invalid CDP token",
+        nextRetryMs: 1_000,
+      });
     } finally {
       vi.useRealTimers();
     }

@@ -94,6 +94,14 @@ export async function statBlob(blobsDir: string, digest: string): Promise<BlobSt
   }
 }
 
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
 async function putBlob(
   blobsDir: string,
   req: IncomingMessage
@@ -397,6 +405,17 @@ function isTreeObjectBytes(bytes: Buffer): boolean {
   }
 }
 
+/**
+ * Sweep unreferenced tree-object blobs from the shared CAS.
+ *
+ * A5 (owner-derived roots only): `referenced` MUST be the OWNER-DERIVED live
+ * set — mains reachability ∪ the DO's `runGadGcMark().liveBlobDigests`, as
+ * `WorkspaceVcs.runGc` (the sole caller) supplies it. It is deliberately an
+ * internal pure-function seam, NOT an RPC: a caller-supplied `referenced` list
+ * is never authority, so there is no `blobstore.prune*` method to reach it from
+ * userland (the old `pruneUnreferencedBlobs` RPC was deleted). Do not re-expose
+ * one, and never feed this an untrusted list.
+ */
 export async function pruneUnreferencedTreeObjects(
   blobsDir: string,
   opts: { referenced: string[]; dryRun?: boolean; olderThanMs?: number; limit?: number }
@@ -915,7 +934,25 @@ export async function diffTrees(blobsDir: string, refA: string, refB: string): P
  * canonical existing root plus the tail segments still to be created.
  */
 async function resolveMaterializeRoot(outDir: string): Promise<{ root: string; tail: string[] }> {
-  let cur = path.resolve(outDir);
+  const resolvedOutDir = path.resolve(outDir);
+  try {
+    const st = await fsp.lstat(resolvedOutDir);
+    if (st.isSymbolicLink()) {
+      throw new Error(
+        `materializeTree: refusing to use symlink output directory ${JSON.stringify(outDir)}`
+      );
+    }
+    if (!st.isDirectory()) {
+      throw new Error(
+        `materializeTree: refusing to use output path ${JSON.stringify(outDir)} because it is not a directory`
+      );
+    }
+    return { root: await fsp.realpath(resolvedOutDir), tail: [] };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+
+  let cur = resolvedOutDir;
   const tail: string[] = [];
   for (;;) {
     try {
@@ -962,9 +999,9 @@ async function mkdirNoFollow(dir: string): Promise<void> {
  * hardlink from the CAS by default (`link: false` copies); executables are
  * always COPIED then chmod'd so the shared CAS inode's mode is never touched
  * (a chmod on a hardlink would flip every build-source checkout sharing the
- * blob). The outDir is treated as immutable-per-tree: an existing file whose
- * size matches the source blob is trusted and skipped. Writes are tmp+rename
- * so a crash never leaves a half-written file at a final path. Entry names
+ * blob). The outDir is treated as immutable-per-tree: an existing file is
+ * skipped only when its byte size and content hash match the source blob.
+ * Writes are tmp+rename so a crash never leaves a half-written file at a final path. Entry names
  * come from strictly-decoded nodes (no separators/`..`), so the tree cannot
  * write outside `outDir`. Directory descent is additionally no-follow: `outDir`
  * is realpath-resolved once up front and every directory component created or
@@ -1016,8 +1053,11 @@ export async function materializeTree(
         // real file below (rm removes the link itself, no-follow).
         const [sourceStat, targetStat] = await Promise.all([fsp.stat(source), fsp.lstat(target)]);
         if (targetStat.isFile() && targetStat.size === sourceStat.size) {
-          unchanged += 1;
-          continue;
+          const targetDigest = await sha256File(target);
+          if (targetDigest === entry.contentHash) {
+            unchanged += 1;
+            continue;
+          }
         }
       } catch {
         // Missing target — fall through to write.

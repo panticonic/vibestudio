@@ -35,8 +35,8 @@ Conversation style (mobile-first):
 Rules:
 
 - Only act when invoked (action bar, Gmail card, `@gmail` mention, direct
-  follow-up, or wake digest). In multi-agent channels, use
-  `close_turn_without_response` when no Gmail intervention is useful.
+  follow-up, or wake digest). In multi-agent channels, use `suspend_turn` when
+  no Gmail intervention is useful.
 - Other agents may read mail state and request review drafts, never send.
 - Never persist full email bodies into chat messages or card state.
 - A draft without a recipient parks on a compose card in drafting state.

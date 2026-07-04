@@ -232,19 +232,18 @@ export class MergeEngine {
       }
       const baseTextDecoded = UTF8_DECODER.decode(baseBytes);
       const oursTextDecoded = UTF8_DECODER.decode(oursBytes);
-      const result = diff3Merge(
-        baseTextDecoded,
-        oursTextDecoded,
-        UTF8_DECODER.decode(theirsBytes),
-        { oursLabel: labels.ours, theirsLabel: labels.theirs }
-      );
+      const theirsTextDecoded = UTF8_DECODER.decode(theirsBytes);
+      const result = diff3Merge(baseTextDecoded, oursTextDecoded, theirsTextDecoded, {
+        oursLabel: labels.ours,
+        theirsLabel: labels.theirs,
+      });
       const bytes = UTF8_ENCODER.encode(result.text);
       const { digest, size } = await this.deps.writeBlob(bytes);
       const m = resolveMode(b, o, t);
       // U3: record origin-annotated hunks (vs OURS) only for a CLEANLY merged
       // text file — a conflicted result carries markers, not real provenance.
       const hunks = result.ok
-        ? mergeHunksVsOurs(baseTextDecoded, oursTextDecoded, result.text)
+        ? mergeHunksVsOurs(baseTextDecoded, oursTextDecoded, theirsTextDecoded, result.text)
         : undefined;
       merged.push({
         path,

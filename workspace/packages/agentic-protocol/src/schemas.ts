@@ -9,24 +9,40 @@ import {
   TURN_SCOPED_OWNER_KINDS,
   validateInvocationTerminalOutcomeForKind,
 } from "./constants.js";
+import { ACTOR_KINDS, PARTICIPANT_KINDS, PRINCIPAL_KINDS } from "./events.js";
 
 const protocolSchema = z.literal(AGENTIC_PROTOCOL_VERSION);
 
 const idSchema = z.string().min(1);
 const isoDateSchema = z.string().datetime({ offset: true });
 
+export const actorKindSchema = z.enum(ACTOR_KINDS);
+export const participantKindSchema = z.enum(PARTICIPANT_KINDS);
+export const principalKindSchema = z.enum(PRINCIPAL_KINDS);
+
 export const actorRefSchema = z
   .object({
-    kind: z.enum(["user", "agent", "system", "panel", "external"]),
+    kind: actorKindSchema,
     id: z.string().min(1),
     displayName: z.string().optional(),
     metadata: z.record(z.unknown()).optional(),
+    participantId: z.string().min(1).optional(),
   })
   .passthrough();
 
-export const participantRefSchema = actorRefSchema.extend({
-  participantId: z.string().min(1).optional(),
+export const principalRefSchema = actorRefSchema.extend({
+  kind: principalKindSchema,
 });
+
+export const participantRefSchema = z
+  .object({
+    kind: participantKindSchema,
+    id: z.string().min(1),
+    displayName: z.string().optional(),
+    metadata: z.record(z.unknown()).optional(),
+    participantId: z.string().min(1).optional(),
+  })
+  .passthrough();
 
 export const participantSelectorSchema = z
   .object({
@@ -79,12 +95,23 @@ const messageBlockInputSchema = z.discriminatedUnion("type", [
   z.object({ ...blockBaseShape, type: z.literal("text"), content: z.string() }).strict(),
   z.object({ ...blockBaseShape, type: z.literal("thinking"), content: z.string() }).strict(),
   z
-    .object({ ...blockBaseShape, type: z.literal("invocation"), invocationId: idSchema, content: z.string().optional() })
+    .object({
+      ...blockBaseShape,
+      type: z.literal("invocation"),
+      invocationId: idSchema,
+      content: z.string().optional(),
+    })
     .strict(),
-  z.object({ ...blockBaseShape, type: z.literal("attachment"), content: z.string().optional() }).strict(),
+  z
+    .object({ ...blockBaseShape, type: z.literal("attachment"), content: z.string().optional() })
+    .strict(),
   z.object({ ...blockBaseShape, type: z.literal("data"), content: z.string().optional() }).strict(),
   z.object({ ...blockBaseShape, type: z.literal("diagnostic"), content: z.string() }).strict(),
 ]);
+
+const messageReplacesSchema = z
+  .object({ messageId: idSchema, seq: z.number().int().nonnegative() })
+  .strict();
 
 const messageStartedPayloadSchema = z
   .object({
@@ -95,6 +122,8 @@ const messageStartedPayloadSchema = z
     replyTo: idSchema.optional(),
     to: z.array(participantSelectorSchema).optional(),
     tier: z.enum(MESSAGE_TIERS).optional(),
+    saliency: z.literal("say").optional(),
+    replaces: messageReplacesSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();
@@ -120,6 +149,8 @@ const messageCompletedPayloadSchema = z
     replyTo: idSchema.optional(),
     to: z.array(participantSelectorSchema).optional(),
     tier: z.enum(MESSAGE_TIERS).optional(),
+    saliency: z.literal("say").optional(),
+    replaces: messageReplacesSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();
@@ -161,10 +192,15 @@ const failurePayloadSchema = z
 
 const invocationOutcomeSchema = z.enum(INVOCATION_OUTCOMES);
 
+const subagentTerminalSchema = z
+  .object({ merge: z.enum(["merged", "conflicted", "discarded"]).optional() })
+  .strict();
+
 const invocationFailurePayloadSchema = failurePayloadSchema
   .extend({
     terminalOutcome: invocationOutcomeSchema.exclude(["success"]),
     terminalReasonCode: z.string().optional(),
+    subagent: subagentTerminalSchema.optional(),
   })
   .strict();
 
@@ -198,6 +234,17 @@ const invocationStartedPayloadSchema = z
     requiresApproval: z.boolean().optional(),
     userVisible: z.boolean().optional(),
     summary: z.string().optional(),
+    subagent: z
+      .object({
+        runId: idSchema,
+        mode: z.enum(["fresh", "fork"]),
+        taskChannelId: idSchema,
+        contextId: idSchema,
+        childEntityId: z.string().min(1).optional(),
+        label: z.string(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -215,6 +262,13 @@ const invocationOutputPayloadSchema = z
     protocol: protocolSchema,
     output: z.unknown(),
     channel: z.enum(["stdout", "stderr", "data"]).optional(),
+    subagent: z
+      .object({
+        kind: z.enum(["say", "turn-report"]),
+        messageSeq: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -226,6 +280,7 @@ const invocationCompletedPayloadSchema = z
     summary: z.string().optional(),
     terminalOutcome: z.literal("success"),
     terminalReasonCode: z.string().optional(),
+    subagent: subagentTerminalSchema.optional(),
   })
   .strict();
 
@@ -410,38 +465,10 @@ const externalParticipantObservedPayloadSchema = z
 const statePayloadSchema = z
   .object({
     protocol: protocolSchema,
-    mutationId: z.string().optional(),
-    observationId: z.string().optional(),
-    path: z.string().optional(),
-    paths: z.array(z.string()).optional(),
-    operation: z.string().optional(),
-    diff: z.string().optional(),
     inputStateHash: idSchema.optional(),
     outputStateHash: idSchema.optional(),
     parentStateHashes: z.array(z.string()).optional(),
-    files: z
-      .array(
-        z
-          .object({
-            path: z.string(),
-            contentHash: z.string(),
-            size: z.number().optional(),
-            mode: z.number().optional(),
-          })
-          .strict()
-      )
-      .optional(),
-    stateHash: idSchema.optional(),
-    invocationId: idSchema.optional(),
-    contentHash: z.string().optional(),
-    beforeHash: z.string().optional(),
-    afterHash: z.string().optional(),
-    hunks: z.array(z.unknown()).optional(),
-    size: z.number().optional(),
-    mimeType: z.string().optional(),
     summary: z.string().optional(),
-    error: z.string().optional(),
-    rationale: z.string().optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();
@@ -455,6 +482,35 @@ const branchPayloadSchema = z
     headStateHash: idSchema.optional(),
     forkEventId: idSchema.optional(),
     name: z.string().optional(),
+  })
+  .strict();
+
+const channelForkedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    forkId: idSchema,
+    forkedChannelId: idSchema,
+    forkedContextId: idSchema,
+    forkPointId: z.number().int().nonnegative(),
+    label: z.string(),
+    reason: z.string(),
+    actor: participantRefSchema,
+    seededMessageId: idSchema.optional(),
+  })
+  .strict();
+
+const channelForkRenamedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    forkId: idSchema,
+    label: z.string(),
+  })
+  .strict();
+
+const channelForkArchivedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    forkId: idSchema,
   })
   .strict();
 
@@ -507,6 +563,23 @@ const buildCompletedPayloadSchema = z
   })
   .strict();
 
+const claimRelationKindSchema = z.enum([
+  "supports",
+  "contradicts",
+  "about",
+  "refines",
+  "depends_on",
+]);
+
+const knowledgeRelationSchema = z
+  .object({
+    src: z.string(),
+    relation: claimRelationKindSchema,
+    dst: z.string(),
+    weight: z.number().optional(),
+  })
+  .strict();
+
 const knowledgePayloadSchema = z
   .object({
     protocol: protocolSchema,
@@ -515,9 +588,11 @@ const knowledgePayloadSchema = z
     predicate: z.string().optional(),
     object: z.string().optional(),
     claimId: z.string().optional(),
-    theoryId: z.string().optional(),
-    contradictionId: z.string().optional(),
+    ledgerEntryId: z.string().optional(),
+    text: z.string().optional(),
+    kind: z.string().optional(),
     status: z.string().optional(),
+    relations: z.array(knowledgeRelationSchema).optional(),
     body: z.unknown().optional(),
     metadata: z.record(z.unknown()).optional(),
   })
@@ -564,9 +639,6 @@ export const eventKindSchemas = {
   "messageType.cleared": eventSchema("messageType.cleared", messageTypeClearedPayloadSchema),
   "custom.started": eventSchema("custom.started", customStartedPayloadSchema),
   "custom.updated": eventSchema("custom.updated", customUpdatedPayloadSchema),
-  "state.file_observed": eventSchema("state.file_observed", statePayloadSchema),
-  "state.file_mutation_intended": eventSchema("state.file_mutation_intended", statePayloadSchema),
-  "state.file_mutation_applied": eventSchema("state.file_mutation_applied", statePayloadSchema),
   "state.transition_recorded": eventSchema("state.transition_recorded", statePayloadSchema),
   "state.snapshot_ingested": eventSchema("state.snapshot_ingested", statePayloadSchema),
   "state.merge_applied": eventSchema("state.merge_applied", statePayloadSchema),
@@ -587,6 +659,9 @@ export const eventKindSchemas = {
   "branch.created": eventSchema("branch.created", branchPayloadSchema),
   "branch.forked": eventSchema("branch.forked", branchPayloadSchema),
   "branch.head_changed": eventSchema("branch.head_changed", branchPayloadSchema),
+  "channel.forked": eventSchema("channel.forked", channelForkedPayloadSchema),
+  "channel.fork_renamed": eventSchema("channel.fork_renamed", channelForkRenamedPayloadSchema),
+  "channel.fork_archived": eventSchema("channel.fork_archived", channelForkArchivedPayloadSchema),
   "turn.opened": eventSchema("turn.opened", turnPayloadSchema),
   "turn.waiting": eventSchema("turn.waiting", turnPayloadSchema),
   "turn.closed": eventSchema("turn.closed", turnPayloadSchema),
@@ -595,22 +670,7 @@ export const eventKindSchemas = {
   "knowledge.claim_recorded": eventSchema("knowledge.claim_recorded", knowledgePayloadSchema),
   "knowledge.claim_updated": eventSchema("knowledge.claim_updated", knowledgePayloadSchema),
   "knowledge.claim_retracted": eventSchema("knowledge.claim_retracted", knowledgePayloadSchema),
-  "knowledge.theory_proposed": eventSchema("knowledge.theory_proposed", knowledgePayloadSchema),
-  "knowledge.theory_versioned": eventSchema("knowledge.theory_versioned", knowledgePayloadSchema),
-  "knowledge.theory_superseded": eventSchema("knowledge.theory_superseded", knowledgePayloadSchema),
-  "knowledge.claim_edge_added": eventSchema("knowledge.claim_edge_added", knowledgePayloadSchema),
-  "knowledge.claim_edge_removed": eventSchema(
-    "knowledge.claim_edge_removed",
-    knowledgePayloadSchema
-  ),
-  "knowledge.contradiction_recorded": eventSchema(
-    "knowledge.contradiction_recorded",
-    knowledgePayloadSchema
-  ),
-  "knowledge.contradiction_resolved": eventSchema(
-    "knowledge.contradiction_resolved",
-    knowledgePayloadSchema
-  ),
+  "knowledge.claims_related": eventSchema("knowledge.claims_related", knowledgePayloadSchema),
 } as const;
 
 export const agenticEventSchema = z
@@ -819,7 +879,7 @@ export const storedAgenticEventSchema = z
         payload,
         ctx,
         "by",
-        (value) => actorRefSchema.safeParse(value).success,
+        (value) => participantRefSchema.safeParse(value).success,
         "message.edited requires payload.by"
       );
     } else if (event.kind === "message.retracted") {
@@ -827,7 +887,7 @@ export const storedAgenticEventSchema = z
         payload,
         ctx,
         "by",
-        (value) => actorRefSchema.safeParse(value).success,
+        (value) => participantRefSchema.safeParse(value).success,
         "message.retracted requires payload.by"
       );
     } else if (event.kind === "invocation.started") {
@@ -988,7 +1048,7 @@ export const channelEnvelopeSchema = z
     envelopeId: idSchema,
     channelId: idSchema,
     seq: z.number().int().nonnegative(),
-    from: participantRefSchema,
+    from: actorRefSchema,
     to: z.union([z.array(participantRefSchema), participantSelectorSchema]).optional(),
     payload: z.unknown(),
     payloadKind: z.string().optional(),

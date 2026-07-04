@@ -224,7 +224,7 @@ function listConfiguredWorkspaceRemotes(config: WorkspaceConfig): Array<{
   const entries: Array<{ path: string; remote: WorkspaceGitRemoteConfig }> = [];
   for (const [section, units] of Object.entries(config.git?.remotes ?? {})) {
     for (const unitKey of Object.keys(units ?? {})) {
-      const unitPath = normalizeWorkspaceRepoPath(`${section}/${unitKey}`);
+      const unitPath = normalizeWorkspaceRepoPath(unitKey ? `${section}/${unitKey}` : section);
       const remotes = getDeclaredRemotesForRepo(config, unitPath).sort((a, b) => {
         if (a.name === "origin") return -1;
         if (b.name === "origin") return 1;

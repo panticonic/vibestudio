@@ -64,4 +64,71 @@ describe("RemoteCdpHostBridgeSocket", () => {
       "provider-session",
     ]);
   });
+
+  it("fails when the remote CDP stream sends an oversized chunk", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const streamResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        start(nextController) {
+          controller = nextController;
+        },
+      })
+    );
+    const rpc = {
+      stream: vi.fn(async () => streamResponse),
+      call: vi.fn(async () => undefined),
+    } as unknown as Pick<RpcClient, "call" | "stream"> & {
+      stream: ReturnType<typeof vi.fn>;
+      call: ReturnType<typeof vi.fn>;
+    };
+    const socket = new RemoteCdpHostBridgeSocket({
+      rpc,
+      hostConnectionId: "headless-host",
+      sessionId: "provider-session",
+      ndjsonLimits: { maxChunkBytes: 4 },
+    });
+
+    await once<unknown>(socket, "open");
+    const errorPromise = once<Error>(socket, "error");
+    controller.enqueue(new Uint8Array(5));
+
+    await expect(errorPromise).resolves.toMatchObject({
+      message: expect.stringMatching(/frame exceeded/),
+    });
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+  });
+
+  it("fails when a remote CDP NDJSON line exceeds the limit across chunks", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const streamResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        start(nextController) {
+          controller = nextController;
+        },
+      })
+    );
+    const rpc = {
+      stream: vi.fn(async () => streamResponse),
+      call: vi.fn(async () => undefined),
+    } as unknown as Pick<RpcClient, "call" | "stream"> & {
+      stream: ReturnType<typeof vi.fn>;
+      call: ReturnType<typeof vi.fn>;
+    };
+    const socket = new RemoteCdpHostBridgeSocket({
+      rpc,
+      hostConnectionId: "headless-host",
+      sessionId: "provider-session",
+      ndjsonLimits: { maxLineBytes: 8 },
+    });
+
+    await once<unknown>(socket, "open");
+    const errorPromise = once<Error>(socket, "error");
+    controller.enqueue(new Uint8Array(4));
+    controller.enqueue(new Uint8Array(5));
+
+    await expect(errorPromise).resolves.toMatchObject({
+      message: expect.stringMatching(/NDJSON line exceeded/),
+    });
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+  });
 });

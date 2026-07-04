@@ -251,10 +251,10 @@
   "refs": {
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
+      "listMainRefLog": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "listMains": ["app", "do", "extension", "panel", "server", "shell", "worker"],
       "readMain": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-      "readMainLog": ["app", "do", "extension", "panel", "server", "shell", "worker"],
-      "updateMains": ["app", "do", "extension", "panel", "server", "shell", "worker"]
+      "updateMains": ["do"]
     }
   },
   "runtime": {
@@ -263,8 +263,11 @@
       "cloneContext": null,
       "createContext": ["app", "do", "panel", "server", "shell", "worker"],
       "createEntity": null,
+      "createSubagentContext": ["do", "panel", "server", "shell", "worker"],
       "destroyContext": null,
       "listEntities": null,
+      "listOwnedContexts": null,
+      "recordContextEdge": ["server", "shell"],
       "resolveContext": null,
       "retireEntity": null,
       "setTitle": ["app", "do", "panel", "worker"]
@@ -314,24 +317,21 @@
     "methods": {
       "abortMerge": null,
       "commit": null,
+      "contextDiff": null,
       "contextStatus": null,
-      "deleteRepo": null,
       "diff": null,
       "discardEdits": null,
       "edit": null,
-      "forkRepo": null,
       "listFiles": null,
       "merge": null,
-      "mergeGroup": null,
       "pendingMerge": null,
+      "pick": null,
       "previewBuild": null,
-      "push": null,
       "pushStatus": null,
       "readFile": null,
       "rebaseContext": null,
       "recall": null,
       "resolveHead": null,
-      "restoreRepo": null,
       "revert": null,
       "status": null,
       "workspaceViewWithRepoAt": null
@@ -440,6 +440,14 @@
       "slot.setParent": ["app", "server", "shell"],
       "slot.setPosition": ["app", "server", "shell"],
       "slot.updateCurrentStateArgs": ["app", "server", "shell"]
+    }
+  },
+  "worktree": {
+    "service": ["do", "server", "shell"],
+    "methods": {
+      "dependentRepos": ["do", "server", "shell"],
+      "project": ["do", "server", "shell"],
+      "scan": ["do", "server", "shell"]
     }
   }
 }

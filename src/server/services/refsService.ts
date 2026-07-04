@@ -1,7 +1,7 @@
 /**
  * refs service — the RPC surface over the host-owned protected MAIN-ref table
- * ({@link RefService}). Reads (`readMain`/`listMains`/`readMainLog`) are broadly
- * available to anyone who can hold source. The single write — `updateMains` —
+ * ({@link RefService}). Reads (`readMain`/`listMains`) are broadly available to
+ * anyone who can hold source. The single write — `updateMains` —
  * is restricted to ONE writer: the gad-store DO backing the workspace `vcs`
  * service declaration, matched by TARGET IDENTITY (`do:{source}:{className}:
  * {objectKey}` from `resolveVcsStoreBinding`), not by caller kind (§3). Every
@@ -19,8 +19,8 @@ import { ServiceAccessError } from "@vibez1/shared/serviceDispatcher";
 import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 import { refsMethods, updateMainsInputSchema } from "@vibez1/shared/serviceSchemas/refs";
 import type { RefService } from "./refService.js";
-import type { MainAdvanceOperation, RefAdvanceGateContext } from "./mainAdvanceApproval.js";
-import type { VcsInvocationTable } from "./vcsInvocationTable.js";
+import type { RefAdvanceGateContext } from "./mainAdvanceApproval.js";
+import type { VcsInvocationRecord, VcsInvocationTable } from "./vcsInvocationTable.js";
 
 export interface RefsServiceDeps {
   refs: RefService;
@@ -36,17 +36,32 @@ export interface RefsServiceDeps {
   invocations: VcsInvocationTable;
 }
 
-/** The RPC `operation` frames the approval prompt; the gate's advance path only
- *  distinguishes push vs merge (delete/restore are derived from entry shape). */
-function advanceOperationLabel(operation: string): MainAdvanceOperation {
-  return operation === "merge" ? "merge" : "push";
+/**
+ * The invocation token is a host-side correlation record, NOT a credential. It
+ * authorizes nothing on its own: the real gate on a main advance is the host's
+ * own content diff + user consent (D3). We only assert its IDENTITY binding —
+ * that it is a refs-writer record minted at the relay for THIS single VCS
+ * writer DO — so a foreign or repurposed token can never masquerade as the
+ * writer's on-behalf-of principal. It carries no VCS-operation scope.
+ */
+function assertInvocationRecordScoped(input: {
+  record: VcsInvocationRecord;
+  writerIdentity: string;
+  actualWriterId: string;
+}): void {
+  if (input.record.type !== "refs.updateMains") {
+    throw new Error("refs.updateMains: invocation token has the wrong purpose");
+  }
+  if (input.record.via !== input.writerIdentity || input.record.via !== input.actualWriterId) {
+    throw new Error("refs.updateMains: invocation token was minted for a different VCS writer");
+  }
 }
 
 export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
   return {
     name: "refs",
     description:
-      "Protected host main refs (repoPath → main): read, log, and the single-writer group compare-and-swap",
+      "Protected host main refs (repoPath → main): broad read/log access; the updateMains group compare-and-swap is DO-only and invocation-token checked.",
     policy: { allowed: ["panel", "app", "worker", "do", "shell", "server", "extension"] },
     methods: refsMethods,
     handler: async (ctx, method, args) => {
@@ -58,12 +73,9 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
         case "listMains": {
           return deps.refs.listMains();
         }
-        case "readMainLog": {
-          const [query] = args as [{ repoPath: string; limit?: number }];
-          return deps.refs.readMainLog({
-            repoPath: query.repoPath,
-            ...(query.limit !== undefined ? { limit: query.limit } : {}),
-          });
+        case "listMainRefLog": {
+          const [input] = args as [{ repoPath: string; sinceId?: number }];
+          return deps.refs.listMainRefLog(input.repoPath, input.sinceId);
         }
         case "updateMains": {
           const input = updateMainsInputSchema.parse(args[0]);
@@ -73,11 +85,11 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
           // A panel/app/worker/extension, a non-writer DO, or a re-declared fake
           // `vcs` service (whose identity differs) all fail here.
           const writerIdentity = deps.getVcsWriterIdentity();
-          const callerIsWriter =
-            ctx.caller.runtime.kind === "do" &&
-            writerIdentity !== null &&
-            ctx.caller.runtime.id === writerIdentity;
-          if (!callerIsWriter) {
+          if (
+            ctx.caller.runtime.kind !== "do" ||
+            writerIdentity === null ||
+            ctx.caller.runtime.id !== writerIdentity
+          ) {
             throw new ServiceAccessError(
               "refs",
               "updateMains",
@@ -89,7 +101,6 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
           // On-behalf-of resolution (§4). The token is a correlation nonce, NOT
           // a credential: identity comes ONLY from the host invocation table.
           let gateCaller: VerifiedCaller = ctx.caller;
-          let onBehalfOf: string | null = null;
           let via: string | undefined;
           if (input.invocationToken !== undefined) {
             const record = deps.invocations.resolve(input.invocationToken);
@@ -98,26 +109,32 @@ export function createRefsService(deps: RefsServiceDeps): ServiceDefinition {
               // attribute to the DO).
               throw new Error("refs.updateMains: invalid or expired invocation token");
             }
+            assertInvocationRecordScoped({
+              record,
+              writerIdentity,
+              actualWriterId: ctx.caller.runtime.id,
+            });
             gateCaller = record.caller;
-            onBehalfOf = `${record.caller.runtime.kind}:${record.caller.runtime.id}`;
             via = ctx.caller.runtime.id;
           }
 
           const gateContext: RefAdvanceGateContext = {
             kind: "caller",
             caller: gateCaller,
-            operation: advanceOperationLabel(input.operation),
             ...(via ? { via } : {}),
           };
 
+          // Capture the token-resolved attribution into the main-ref log BEFORE
+          // it is discarded (§2/§4.1): `writer` is the single VCS writer DO
+          // (this call's runtime identity), `onBehalfOf` is the originating
+          // principal (`gateCaller` — the DO itself when no token was resolved).
           return await deps.refs.updateMains({
             entries: input.entries,
-            operation: input.operation,
-            reason:
-              input.reason ?? `refs.updateMains (${input.operation}) by ${ctx.caller.runtime.id}`,
-            writer: `${ctx.caller.runtime.kind}:${ctx.caller.runtime.id}`,
-            onBehalfOf,
             gateContext,
+            operation: input.operation,
+            ...(input.reason !== undefined ? { reason: input.reason } : {}),
+            writer: ctx.caller.runtime.id,
+            onBehalfOf: gateCaller,
           });
         }
         default:

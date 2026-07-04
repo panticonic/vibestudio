@@ -1,6 +1,7 @@
 import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
+  AGENTIC_PROTOCOL_VERSION,
   GENESIS_EVENT_HASH,
   assertAgenticEventStoredValuesEncoded,
   brandId,
@@ -10,10 +11,12 @@ import {
   publicParticipantRef,
   sanitizeAgenticEventParticipantRefs,
   storedAgenticEventSchema,
+  type ActorRef,
   type AgenticEvent,
   type ChannelEnvelope,
   type ChannelId,
   type EnvelopeId,
+  type InvocationId,
   type LogEnvelope,
   type LogEventCausality,
   type LogKind,
@@ -38,9 +41,14 @@ import {
 import {
   EditEngine,
   MergeEngine,
+  blameChain,
   decodeUtf8Text,
   discoverRepoPaths,
   hasConflictMarkers,
+  normalizeWorkspaceRepoPath,
+  VCS_CONTAINER_SECTIONS,
+  type BlameOpRow,
+  type BlameResolution,
   type EditOp as VcsEditOp,
   type MergeComputation,
   type MergeHunk,
@@ -75,17 +83,59 @@ interface PublishIntentEntry {
   parentStateHash: string | null;
   files: Array<{ path: string; contentHash: string; mode: number }>;
   editOps: ProvenanceEditOp[];
-  /** Provenance ops are synthetic (crash-heal catch-up) — skip chain checks. */
+  /** Provenance ops are synthetic (for example import snapshots) — skip chain checks. */
   synthetic?: boolean;
 }
 
 interface PublishIntent {
   intentId: string;
-  operation: "push" | "merge" | "import";
+  operation: "push" | "import";
   entries: PublishIntentEntry[];
   message?: string | null;
-  actor?: ParticipantRef | null;
+  actor?: ActorRef | null;
   sourceHead?: string | null;
+}
+
+/** Op-specific reconcile detail for a repo-lifecycle intent (§6). Carries
+ *  everything heal / the live catch needs to roll a half-applied lifecycle op
+ *  FORWARD (keep the DO consistent with a landed ref) or COMPENSATE it (undo the
+ *  DO-side mutation when the ref CAS provably never landed). */
+interface LifecycleIntentDetail {
+  /** Archive head the delete moved `main` onto / the restore/fork lineage. Used
+   *  to re-key `main` ↔ `archive:*` when compensating or forward-completing. */
+  archiveHead?: string | null;
+  /** fork: source repo path + its log id (attribution / audit only). */
+  fromPath?: string | null;
+  fromLogId?: string | null;
+  /** fork: destination log id — the lineage forkLog created. On definite denial
+   *  this is re-keyed AWAY (archived) so no phantom repo remains. */
+  toLogId?: string | null;
+  /** fork: inherited event count (echoed into the success result on roll-forward). */
+  forkInherited?: number | null;
+  /** Highest host main-ref-log id observed for `repoPath` BEFORE the CAS. A
+   *  landed-but-lost delete (next===null) is otherwise indistinguishable from a
+   *  denial when the repo has PRIOR delete→null transitions in its log; paging
+   *  the log after this cursor isolates THIS op's transition. */
+  logCursor?: number | null;
+}
+
+/** A durable write-ahead record for a repo-lifecycle op (fork / delete /
+ *  restore) that crosses the two durable authorities — DO-internal VCS state
+ *  and the host protected `main` refs. Recorded BEFORE the first cross-authority
+ *  mutation so a crash / lost-response between the DO re-key and the host CAS is
+ *  reconcilable (§6): refs are the authority; the DO follows its OWN successful
+ *  writes. `expectedOld`/`next` mirror the single `updateMains` entry the op
+ *  drives (delete: next=null; fork/restore: expectedOld=null). */
+interface LifecycleIntent {
+  intentId: string;
+  operation: "fork" | "delete" | "restore";
+  /** The repo whose protected `main` ref the op mutates (fork: the destination). */
+  repoPath: string;
+  logId: string;
+  expectedOld: string | null;
+  next: string | null;
+  detail: LifecycleIntentDetail;
+  actor?: ActorRef | null;
 }
 
 /** The DO-side push result — mirrors the host push contract (and the shared
@@ -118,7 +168,7 @@ type VcsImportPublishResultDo = {
   stateHash: string;
 };
 
-const SYSTEM_PARTICIPANT = { kind: "system", id: "system" } as unknown as ParticipantRef;
+const SYSTEM_ACTOR = { kind: "system", id: "system" } as const satisfies ActorRef;
 
 type JsonPrimitive = null | string | number | boolean;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -133,6 +183,142 @@ interface GadGcRootsInput {
 
 const CHANNEL_LOG_HEAD = "main";
 
+/** Valid log/event actor kinds. Actor provenance can be semantic participants
+ *  (`agent`, `user`) or runtime principals (`do`, `worker`, `server`, etc.). */
+const ACTOR_KINDS = new Set([
+  "user",
+  "agent",
+  "system",
+  "external",
+  "panel",
+  "app",
+  "worker",
+  "do",
+  "shell",
+  "server",
+  "extension",
+]);
+
+/** Independent schema version for the durable knowledge ledger (§8.1). Bumped
+ *  only when the ledger's own shape changes — decoupled from the DO's
+ *  schemaVersion so the ledger migrates for real instead of being wiped. */
+const KNOWLEDGE_LEDGER_VERSION = 1;
+
+/** Claim dedup-on-write (§8.1 record_claim): FTS finds candidates, then a
+ *  token-overlap ratio decides "near-duplicate" (corpus-magnitude-independent,
+ *  so it is deterministic and test-stable). */
+const CLAIM_DEDUP_TOP_K = 5;
+const CLAIM_DEDUP_MIN_OVERLAP = 0.6;
+
+/** Blame (design §5.2): cap the first-parent commit walk per chain, and the
+ *  cross-parent `theirs` routing depth, so a query is O(reachable-for-path). */
+const BLAME_MAX_COMMITS = 5000;
+const BLAME_MAX_ROUTE_DEPTH = 8;
+/** U2 standing chain check (checkGadIntegrity): most-recent committed ops
+ *  examined per repo before the walk is capped. */
+const CHAIN_CHECK_CAP = 5000;
+
+/**
+ * §6/§7/§12 provenance density + attachment tunables — the ONE authoritative
+ * named-consts block the `provenance-tuning` skill (§12.1) points at. Every knob
+ * is documented with its §12 name; tuning is proposal-then-human-approval, never
+ * silent. Keep them here so the skill's pointer stays true.
+ */
+// §6.1 leg weights: rank(C) = w_sim·sim(C) + w_prov·idf(C)·Σ …
+const PROV_W_SIM = 1.0; // §12 w_sim — recall (similarity) leg
+const PROV_W_PROV = 1.0; // §12 w_prov — structural (provenance/density) leg
+// §6.2 flat per-kind edge weights; magnitude is NEVER an input.
+const PROV_KIND_WEIGHT = {
+  edited: 1.0, // native invocation→file (gad_worktree_edit_ops)
+  asserted: 1.0, // native invocation→claim (gad_claims)
+  relation: 0.8, // native claim↔claim (gad_claim_relations)
+  cited: 0.7, // soft session→claim (gad_touches kind='cited')
+  observed: 0.5, // soft session→file (gad_touches kind='observed')
+} as const;
+// §6.3 decay basis: logical, two clocks (never the wall clock, never global seq).
+const PROV_DECAY_SESSION_TURNS = 8; // session-recency leg: exp(-turnsAgo / 8)
+const PROV_DECAY_HISTORICAL = 16; // historical leg: exp(-laterEdits / 16)
+// §4.2/§12: soft-edge `hits` accumulate sublinearly (default sqrt).
+const PROV_HITS_CURVE = (hits: number): number => Math.sqrt(Math.max(hits, 1));
+// §6.5 caps that double as quality controls.
+const PROV_SEED_CAP_K = 32; // K — last-K touch(S) seeds
+const PROV_FANOUT_CAP_M = 12; // M — per-node fan-out (top by recency)
+const PROV_CANDIDATE_CAP_N = 64; // N — candidate cap
+// §7.5 salience floor: non-exception items render only above this; NO filler.
+const PROV_SALIENCE_FLOOR = 0.15;
+// §7.1 per-tier item budgets (items, not tokens; the tail is withheld+advertised).
+const PROV_ITEM_BUDGET_MODERATE = 5;
+const PROV_ITEM_BUDGET_DEEP = 10;
+// §7.3 standalone compute ceiling; overrun degrades to the one-line hint.
+const PROV_BUDGET_MS = 150;
+// §7.3 warm precompute: moderate blocks for ≤ this many likely-next files.
+const PROV_WARM_MAX_FILES = 8;
+
+/** One rendered attachment line (§7.5): a bounded `insight + handle`. `kind`
+ *  names the item class; `exception` sorts it first, above density; `score` is
+ *  the §6.1 rank (0 for exceptions — they render regardless). */
+export interface ProvItem {
+  line: string;
+  handle: string;
+  kind: string;
+  exception: boolean;
+  score: number;
+}
+
+/** The §7.1 read-attachment / drill-down page. `total` is the full ranked list
+ *  (exceptions + floored density); `shown` this page. `suppressed` = the block
+ *  signature was unchanged (§7.1); `degraded` = the compute overran the budget
+ *  and returned the one-line hint (§7.3). */
+export interface ProvenanceForFileResult {
+  items: ProvItem[];
+  shown: number;
+  total: number;
+  nextCursor?: string;
+  suppressed: boolean;
+  degraded?: boolean;
+}
+
+export interface ProvenanceForSessionResult {
+  items: ProvItem[];
+  shown: number;
+  total: number;
+  nextCursor?: string;
+}
+
+/** A spreading-activation node (a graph node reached during §6 density): a claim
+ *  or a file, with an accumulating structural `prov` leg and a recall `sim` leg. */
+interface ProvCand {
+  kind: "claim" | "file" | "commit";
+  id: string;
+  sim: number;
+  prov: number;
+  recallRank: number;
+  commitMessage?: string | null;
+  turnsAgo?: number | null;
+  coeditCount?: number;
+}
+
+/** A seed / frontier node in the bounded 2-hop walk: an activation carried from
+ *  touch(S) outward along native + soft edges. */
+interface ProvSeed {
+  kind: "claim" | "file";
+  id: string;
+  activation: number;
+}
+
+interface ProvenanceCacheKey {
+  logId: string;
+  head: string;
+  path: string;
+  sessionLogId: string;
+  sessionHead: string;
+  recallKey: string;
+  turnSeq: number;
+  touchVersion: number;
+  knowledgeVersion: number;
+  contentStamp: string;
+}
+
 /** Tables that must exist before a schema version is recorded as ready
  *  (validated by DurableObjectBase after every createTables()). Lazily
  *  created tables (memory index) are deliberately absent. */
@@ -142,6 +328,7 @@ const GAD_REQUIRED_TABLES = [
   "log_blob_refs",
   "gad_worktree_heads",
   "vcs_context_bases",
+  "vcs_context_provenance",
   "refs",
   "ref_log",
   "trajectory_turns",
@@ -161,11 +348,14 @@ const GAD_REQUIRED_TABLES = [
   "gad_manifest_entries",
   "gad_state_transitions",
   "gad_transition_parents",
-  "gad_file_observations",
-  "gad_file_mutations",
-  "gad_file_change_hunks",
   "gad_worktree_edit_ops",
   "gad_claims",
+  "gad_claim_relations",
+  "gad_knowledge_ledger",
+  "gad_touches",
+  "gad_provenance_cache",
+  "gad_prov_metrics",
+  "gad_prov_render_log",
   "gad_gc_candidates",
   "gad_publish_intents",
 ] as const;
@@ -183,7 +373,6 @@ const TERMINAL_INVOCATION_KINDS = new Set([
 ]);
 
 const STATE_TRANSITION_KINDS = new Set([
-  "state.file_mutation_applied",
   "state.transition_recorded",
   "state.snapshot_ingested",
   "state.merge_applied",
@@ -196,9 +385,25 @@ const STATE_TRANSITION_KINDS = new Set([
  */
 const GC_CREATION_GRACE_MS = 15 * 60 * 1000;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Soft-state prune floors (§4.2, C6): the periodic server-driven pass ages out
+ * behavioral touches and disposable render artifacts. All three are re-derivable
+ * on demand, so the floors are relevance thresholds, not durability guarantees.
+ */
+// A single-hit touch older than this never accumulated repeat signal — background hum.
+const TOUCH_PRUNE_AGE_MS = 45 * DAY_MS;
+// The warm cache is pure disposable derived data (re-computed on a miss); age it
+// out well before touches so a stale block never outlives its relevance.
+const PROV_CACHE_PRUNE_AGE_MS = 7 * DAY_MS;
+// The render-log is instrumentation-only (feeds the attachment-action counter),
+// never a ranking input — a short retention is enough for the rate numerator.
+const PROV_RENDER_LOG_PRUNE_AGE_MS = 14 * DAY_MS;
+
 export interface LogAppendEventInput {
   envelopeId?: string | null;
-  actor: ParticipantRef;
+  actor: ActorRef;
   to?: ParticipantRef[] | ParticipantSelector | null;
   payloadKind: string;
   payload: unknown;
@@ -296,7 +501,7 @@ export interface IngestWorktreeStateInput {
   head: string;
   logKind?: LogKind | string | null;
   expectedRefStateHash?: string | null;
-  actor: ParticipantRef;
+  actor: ActorRef;
   summary?: string | null;
   eventId?: string | null;
   metadata?: Record<string, unknown> | null;
@@ -313,10 +518,13 @@ export interface IngestWorktreeStateInput {
     newContentHash?: string | null;
     hunks?: unknown;
     mode?: number | null;
-    /** P3/A2: a synthetic op (crash-heal catch-up ingest) carries no true
+    /** P3/A2: a synthetic op (for example an import snapshot) carries no true
      *  first-parent hunks — blame treats it as a chain RESTART and the
      *  chain-continuity check skips it. */
     synthetic?: boolean | null;
+    /** U1: the op's NEW content is binary (no line structure) — hunks are
+     *  legitimately absent and blame chain-restarts. */
+    binary?: boolean | null;
   }> | null;
   /** P3/A2 (blame invariant U2): when true, validate that each non-synthetic
    *  editOp's `oldContentHash` matches the file's content in the FIRST-PARENT
@@ -622,24 +830,194 @@ function normalizePath(path: string): string {
   return normalized;
 }
 
+/**
+ * U1 (design §5.1) — the hunk-completeness invariant, enforced at INSERT time on
+ * BOTH edit-op seams (the working {@link GadWorkspaceDO.insertWorkingEditRows}
+ * and the ingest editOps path), not left to caller goodwill. An op that MUTATES
+ * existing TEXT content must carry `hunks_json` so blame's offset composition
+ * (§5.2) is exact. Hunks may be legitimately absent for `create`/`delete`/
+ * `chmod`, binary content (marked on the row), explicitly-synthetic snapshot ops
+ * (import/push/whole-file takes), and no-op writes (content hash unchanged). A
+ * violating insert is a latent silent mis-blame — reject it loudly.
+ */
+function assertHunkCompleteness(
+  op: {
+    kind: string;
+    oldContentHash?: string | null;
+    newContentHash?: string | null;
+    hunks?: unknown;
+    binary?: boolean | null;
+    synthetic?: boolean | null;
+  },
+  where: string
+): void {
+  if (op.kind !== "replace" && op.kind !== "write") return;
+  const oldHash = op.oldContentHash ?? null;
+  const newHash = op.newContentHash ?? null;
+  // No prior content (a first write is a create) or an unchanged write (mode-only
+  // / identical bytes) carries no line delta to record.
+  if (oldHash === null || oldHash === newHash) return;
+  if (op.binary || op.synthetic) return;
+  if (op.hunks != null) return;
+  throw new Error(
+    `hunk-completeness violation (U1) at ${where}: ${op.kind} over existing text ` +
+      `(${oldHash} → ${newHash ?? "∅"}) carries no hunks and is not binary/synthetic`
+  );
+}
+
+/** Char span of each 1-based line, excluding the terminating newline. A trailing
+ *  newline does not open an empty final line. */
+function computeLineSpans(text: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "\n") {
+      spans.push({ start, end: i });
+      start = i + 1;
+    }
+  }
+  if (start < text.length) spans.push({ start, end: text.length });
+  return spans;
+}
+
+/** Two adjacent lines share a blame resolution iff every attribution field
+ *  matches — the coalescing key for contiguous ranges. */
+function blameSameResolution(
+  a: Omit<VcsBlameLineWire, "startLine" | "endLine">,
+  b: Omit<VcsBlameLineWire, "startLine" | "endLine">
+): boolean {
+  return (
+    a.opId === b.opId &&
+    a.commitEventId === b.commitEventId &&
+    a.kind === b.kind &&
+    a.invocationId === b.invocationId &&
+    a.turnId === b.turnId &&
+    a.actorId === b.actorId &&
+    a.degraded === b.degraded
+  );
+}
+
+/** Coalesce per-line resolutions (line `fromLine + i`) into contiguous ranges. */
+function coalesceBlameLines(
+  fromLine: number,
+  perLine: Array<Omit<VcsBlameLineWire, "startLine" | "endLine">>
+): VcsBlameLineWire[] {
+  const out: VcsBlameLineWire[] = [];
+  perLine.forEach((r, i) => {
+    const lineNo = fromLine + i;
+    const prev = out[out.length - 1];
+    if (prev && blameSameResolution(prev, r)) {
+      prev.endLine = lineNo;
+    } else {
+      out.push({ startLine: lineNo, endLine: lineNo, ...r });
+    }
+  });
+  return out;
+}
+
+function blameLinePriority(r: Omit<VcsBlameLineWire, "startLine" | "endLine">): number {
+  const attribution = r.degraded === null ? 2 : r.opId !== null ? 1 : 0;
+  return attribution * 1_000_000_000 + (r.opId ?? -1);
+}
+
+/** Pick the newest concrete attribution observed anywhere on the line. */
+function representativeLineBlame(
+  resolutions: Array<Omit<VcsBlameLineWire, "startLine" | "endLine">>
+): Omit<VcsBlameLineWire, "startLine" | "endLine"> {
+  let best = resolutions[0]!;
+  for (const r of resolutions.slice(1)) {
+    if (blameLinePriority(r) > blameLinePriority(best)) best = r;
+  }
+  return best;
+}
+
 /** Normalize a workspace-relative repo path (the `vcs:repo:<path>` key) —
  *  kept semantically identical to the host's normalizeRepoPathForLog. */
 function normalizeRepoPathArg(repoPath: string): string {
-  const normalized = repoPath.replace(/\\/gu, "/");
-  if (!normalized) {
-    throw new Error(`Invalid workspace repo path: ${repoPath}`);
-  }
-  for (const segment of normalized.split("/")) {
-    if (segment === "" || segment === "." || segment === "..") {
-      throw new Error(`Invalid workspace repo path: ${repoPath}`);
+  return normalizeWorkspaceRepoPath(repoPath);
+}
+
+function normalizeRepoPathOrSectionPrefixArg(input: string): string {
+  try {
+    return normalizeRepoPathArg(input);
+  } catch (repoError) {
+    const section = input.replace(/\/+$/u, "");
+    if (
+      section === input &&
+      VCS_CONTAINER_SECTIONS.has(section) &&
+      !section.includes("\\") &&
+      !section.includes("\0")
+    ) {
+      return section;
     }
+    throw repoError instanceof Error ? repoError : new Error(String(repoError));
   }
-  return normalized;
 }
 
 /** Per-repo VCS log id for a workspace repo path. */
+const VCS_REPO_LOG_PREFIX = "vcs:repo:";
 function logIdForRepoPath(repoPath: string): string {
-  return `vcs:repo:${normalizeRepoPathArg(repoPath)}`;
+  return `${VCS_REPO_LOG_PREFIX}${normalizeRepoPathArg(repoPath)}`;
+}
+
+function repoPathFromLogId(logId: string): string {
+  return logId.startsWith(VCS_REPO_LOG_PREFIX) ? logId.slice(VCS_REPO_LOG_PREFIX.length) : logId;
+}
+
+/** §4.2/§9 file-node id: the (vcs log, repo-relative path) pair a `file` touch
+ *  and the native `edited`/`committed_in` edges share — encoded exactly as the
+ *  `edge_graph` view builds it (`log_id || char(1) || path`) so a file has ONE
+ *  identity across native + soft edges. The separator is U+0001 (never U+0000 —
+ *  SQLite truncates a TEXT value at its first NUL byte) and cannot occur in a
+ *  log id or path. */
+const FILE_NODE_SEP = "\u0001";
+function fileNodeId(logId: string, path: string): string {
+  return `${logId}${FILE_NODE_SEP}${path}`;
+}
+function parseFileNodeId(id: string): { logId: string; path: string } | null {
+  const i = id.indexOf(FILE_NODE_SEP);
+  if (i < 0) return null;
+  return { logId: id.slice(0, i), path: id.slice(i + 1) };
+}
+/** The workspace-relative handle path for a file node (what the read tool and
+ *  `provenance("<path>")` follow-on use). */
+function fileHandlePath(logId: string, path: string): string {
+  return `${repoPathFromLogId(logId)}/${path}`;
+}
+
+/** Protected `main` head + the active-context checkout head (`ctx:workspace`,
+ *  D1/D2) + the archived-lineage prefix — the head names the delete/restore/fork
+ *  DO sagas drive against the host primitives. */
+const VCS_MAIN = "main";
+const VCS_ACTIVE_CONTEXT_HEAD = "ctx:workspace";
+const VCS_ARCHIVE_HEAD_PREFIX = "archived:";
+
+/** Re-root a repo-relative path under its workspace repo prefix (kept identical
+ *  to the host's `joinRepoPrefix`). */
+function joinRepoPrefixPath(repoPath: string, relPath: string): string {
+  const norm = normalizeRepoPathArg(repoPath);
+  return relPath ? `${norm}/${relPath}` : norm;
+}
+
+/**
+ * Rewrite a `package.json` `name` leaf to the fork's destination path, preserving
+ * the existing scope (e.g. `"@workspace-panels/chat"` + `"panels/mychat"` →
+ * `"@workspace-panels/mychat"`). Returns the new JSON text, or `null` if it can't
+ * parse or has no string `name`. Ported from the host so the fork rename is a
+ * DO-owned bootstrap commit (narrow-host boundary refactor Phase 4).
+ */
+function renameWorkspacePackage(jsonText: string, toPath: string): string | null {
+  let pkg: { name?: unknown } & Record<string, unknown>;
+  try {
+    pkg = JSON.parse(jsonText) as { name?: unknown } & Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (typeof pkg.name !== "string") return null;
+  const leaf = toPath.split("/").pop() ?? toPath;
+  const slash = pkg.name.lastIndexOf("/");
+  pkg.name = slash >= 0 ? `${pkg.name.slice(0, slash + 1)}${leaf}` : leaf;
+  return `${JSON.stringify(pkg, null, 2)}\n`;
 }
 
 function utf8Bytes(value: string): number {
@@ -697,15 +1075,29 @@ interface HostRefsStore {
   updateMains(input: {
     entries: Array<{ repoPath: string; expectedOld: string | null; next: string | null }>;
     reason?: string;
-    operation: "push" | "merge" | "import" | "delete" | "restore";
+    operation: "push" | "import" | "delete" | "restore";
     invocationToken?: string;
   }): Promise<{ updated: Array<{ repoPath: string; stateHash: string | null; seq: number }> }>;
-  /** The host ref log for a repo (audit trail of main movement) — the
-   *  stale-intent discard consults this, not just current values (§6). */
-  readMainLog(
+  /** The host main-ref movement log for a repo (§2 audit trail: operation,
+   *  host-verified writer + token-resolved on-behalf-of principal, reason,
+   *  old→new). Render paths read main-advance attribution from here; the
+   *  stale-intent discard consults it, not just current values (§6). `sinceId`
+   *  pages movements after a known id (omit for the full log). */
+  listMainRefLog(
     repoPath: string,
-    limit?: number
-  ): Promise<Array<{ seq: number; old: string | null; new: string | null; operation: string }>>;
+    sinceId?: number
+  ): Promise<
+    Array<{
+      id: number;
+      operation: string;
+      old: string | null;
+      new: string | null;
+      writer: string | null;
+      onBehalfOf: unknown;
+      reason: string | null;
+      createdAt: number;
+    }>
+  >;
 }
 
 /** The slice of the host `build.*` RPC surface the push gate needs (§2.2):
@@ -716,6 +1108,28 @@ interface HostBuildStore {
     repoPaths: string[];
     baseViewHash?: string;
   }): Promise<Array<{ required?: boolean; status: string; [k: string]: unknown }>>;
+}
+
+/** The slice of the host `worktree.*` RPC surface: the pure disk-scan
+ *  primitive. `scan` reads a (repoPath, head) working tree into the CAS and
+ *  returns its content-addressed `{ stateHash, files }` — no commit, no ref
+ *  advance, no history. The DO composes it with the content/refs primitives to
+ *  own the scan-adopt semantics itself. */
+interface HostWorktreeStore {
+  scan(
+    repoPath: string,
+    head: string
+  ): Promise<{
+    stateHash: string;
+    files: Array<{ path: string; contentHash: string; size: number; mode: number }>;
+  }>;
+  /** CAS→disk projection primitive — materialize `stateHash` onto the
+   *  (repoPath, head) working tree (restore/fork re-materialize into
+   *  `ctx:workspace`). Semantics-free; `main` is never projected (D1). */
+  project(repoPath: string, head: string, stateHash: string): Promise<{ stateHash: string }>;
+  /** Build-graph dependents of `repoPath` (host-computed, content-derived) —
+   *  the DO consumes this to gate a deletion without `force`. Dumb data. */
+  dependentRepos(repoPath: string): Promise<string[]>;
 }
 
 /** listTree caps results; a silently truncated listing would compose/merge as
@@ -749,6 +1163,38 @@ function sanitizeFtsQuery(query: string): string {
     .join(" ");
 }
 
+/** Split raw text into whitespace-separated word tokens (≤ `cap`), quotes and
+ *  blanks stripped. Shared by the FTS and plain-mode recall query builders so
+ *  steering keywords are tokenized exactly like the base query. */
+function recallTokens(values: readonly string[] | null | undefined, cap = 8): string[] {
+  if (!values || values.length === 0) return [];
+  return values
+    .flatMap((value) => value.split(/\s+/u))
+    .map((term) => term.replace(/"/gu, "").trim())
+    .filter(Boolean)
+    .slice(0, cap);
+}
+
+/** Lowercased word tokens, used for claim dedup overlap (§8.1). */
+function claimTokenSet(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter(Boolean)
+  );
+}
+
+/** Jaccard overlap of two token sets — corpus-independent, so the dedup
+ *  threshold is deterministic rather than bm25-magnitude sensitive. */
+function jaccardOverlap(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const token of a) if (b.has(token)) intersection += 1;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
 /** Short context window around the first query-term hit. */
 function snippetAround(text: string, query: string, radius = 160): string {
   const firstTerm = query.split(/\s+/u).find((term) => term.length > 0) ?? "";
@@ -757,6 +1203,14 @@ function snippetAround(text: string, query: string, radius = 160): string {
   const start = Math.max(0, index - radius);
   const end = Math.min(text.length, index + firstTerm.length + radius);
   return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+}
+
+/** One bounded insight fragment for a §7.5 attachment line (whitespace
+ *  collapsed, hard-capped, ellipsized) — semantics are recalled verbatim, never
+ *  synthesized, so this only trims. */
+function truncateInsight(text: string, max: number): string {
+  const collapsed = text.replace(/\s+/gu, " ").trim();
+  return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed;
 }
 
 function summarizeJsonForInspection(value: unknown, depth = 0): unknown {
@@ -786,11 +1240,7 @@ function summarizeJsonForInspection(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
-function isActorRefLike(value: unknown): value is {
-  kind: "user" | "agent" | "system" | "panel" | "external";
-  id: string;
-  metadata?: Record<string, unknown>;
-} {
+function isActorRefLike(value: unknown): value is ActorRef {
   const kind =
     !!value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)["kind"]
@@ -799,11 +1249,7 @@ function isActorRefLike(value: unknown): value is {
     !!value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
-    (kind === "user" ||
-      kind === "agent" ||
-      kind === "system" ||
-      kind === "panel" ||
-      kind === "external") &&
+    ACTOR_KINDS.has(String(kind)) &&
     typeof (value as Record<string, unknown>)["id"] === "string"
   );
 }
@@ -968,7 +1414,7 @@ interface PreparedLogEvent {
   /** Whether the caller supplied appendedAt (idempotent replays of implicit-
    *  timestamp appends compare against the stored timestamp instead). */
   appendedAtExplicit: boolean;
-  actor: ParticipantRef;
+  actor: ActorRef;
   to?: ParticipantRef[] | ParticipantSelector;
   payloadKind: string;
   payload: unknown;
@@ -996,6 +1442,34 @@ interface VcsEditOpRowWire {
   invocationId: string | null;
   turnId: string | null;
   createdAt: string | null;
+  /** Raw `hunks_json` (parsed by blame consumers); null for create/delete/chmod,
+   *  binary, and synthetic snapshot ops (U1). */
+  hunksJson: string | null;
+  /** Snapshot-style provenance (import/push/whole-file take) — blame chain-restart. */
+  synthetic: boolean;
+  /** The op's NEW content is binary (no line structure). */
+  binary: boolean;
+}
+
+/** One contiguous line range blamed to a single op (design §5.2). Consecutive
+ *  lines that resolve identically are coalesced into one range. */
+interface VcsBlameLineWire {
+  startLine: number;
+  endLine: number;
+  /** The `gad_worktree_edit_ops.id` the lines resolved to (null when the walk
+   *  ran off the log with no producing op). */
+  opId: number | null;
+  kind: string | null;
+  commitEventId: string | null;
+  /** First line of the commit message (`gad_state_transitions.summary`). */
+  commitMessage: string | null;
+  invocationId: string | null;
+  turnId: string | null;
+  actorId: string | null;
+  /** A degraded/semantic-stop reason when blame could not attribute a producing
+   *  edit: `create` (line born here), `binary`, `synthetic` (snapshot take), or
+   *  `older-than-log`. Absent when a real op authored the lines. */
+  degraded: "create" | "binary" | "synthetic" | "older-than-log" | null;
 }
 
 interface LineageSegment {
@@ -1015,7 +1489,36 @@ interface ProjectionKey {
   head: string;
 }
 
+/** Fail-closed uncovered-main drift (§6): a protected ref moved with NO
+ *  covering intent, so heal cannot reconstruct the authored transition. Typed
+ *  so callers that only need the authoritative STATE (the merge-source read)
+ *  can tolerate exactly this case — every other heal failure must propagate. */
+class UncoveredMainDriftError extends Error {}
+
 export class GadWorkspaceDO extends DurableObjectBase {
+  // v24: merge of the local v23 schema cut and origin/fabling's v23 lineage
+  // schema. Both physical layouts used version 23, so the unified schema needs
+  // a fresh version to force the big-bang rebuild below.
+  // v23 (origin/fabling): lineage-true context fork + cherry-pick provenance:
+  // vcs_context_provenance (fork breadcrumb {parent, forkPoint}) and a
+  // `picked_from_json` column on gad_worktree_edit_ops (which commit / paths a
+  // working row was cherry-picked from; UX-only provenance).
+  // v23 (local gad-system-review): merge of the two v22 lines below; both cuts,
+  // one schema.
+  // v26: provenance cache key hardening — cache rows are now scoped by repo log,
+  // session, recall-key, turn ordinal, content stamp, and knowledge graph version.
+  // v25 (gad-provenance-fibers big bang): the provenance graph substrate —
+  // gad_touches (soft behavioral signal), gad_claim_relations + gad_knowledge_ledger
+  // (durable, dropPersistenceTables-exempt claim system of record; own version key
+  // knowledge_ledger_version) + gad_claims content columns (claim_kind, text,
+  // ledger_entry_id), gad_worktree_edit_ops.binary, trajectory_turns.ordinal,
+  // gad_provenance_cache / gad_prov_metrics / gad_prov_render_log. Knowledge
+  // claims/relations re-project from the ledger on a schema bump.
+  // v22 (fabling): P3 narrow-host push/merge orchestration moves into the DO:
+  // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
+  // `synthetic` column on gad_worktree_edit_ops (import snapshot chain restarts).
+  // v22 (gad-system-review): removes the dead file-mutation/observation
+  // projections and their state.file_* event kinds.
   // v21: worktree heads carry explicit commit_event_id, so commit ancestry is
   // keyed by event identity instead of reverse-looking-up a producer by state
   // hash.
@@ -1032,10 +1535,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   // identical content states don't conflate).
   // v18: schema cut removes unimplemented knowledge sidecar projection tables.
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
-  // v22: P3 narrow-host push/merge orchestration moves into the DO —
-  // gad_publish_intents (write-ahead publish intents for crash self-heal) and a
-  // `synthetic` column on gad_worktree_edit_ops (crash-heal chain restarts).
-  static override schemaVersion = 22;
+  static override schemaVersion = 26;
 
   /**
    * IntentIds of publish intents this live instance is actively driving — added
@@ -1051,20 +1551,43 @@ export class GadWorkspaceDO extends DurableObjectBase {
    */
   private readonly inFlightPublishIntents = new Set<string>();
 
+  /** Same guard, for repo-lifecycle intents (fork/delete/restore): an intent a
+   *  live op is actively driving across its human-gated `refs.updateMains`
+   *  window must not be reconciled/reaped by a concurrent heal — the op's own
+   *  catch owns that reconcile. Cleared in the op's `finally`; in-memory so a
+   *  crashed op's leftover is reconciled by a fresh instance's startup heal. */
+  private readonly inFlightLifecycleIntents = new Set<string>();
+
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
     this.ensureReady();
     void this.setOwnTitle("GAD store");
   }
 
+  /** Set by migrate() when crossing a schema era so createTables() knows to
+   *  re-project claims from the durable ledger after the fresh schema lands. */
+  private pendingLedgerRebuild = false;
+
   protected createTables(): void {
     this.createFreshSchema();
+    if (this.pendingLedgerRebuild) {
+      this.pendingLedgerRebuild = false;
+      // §8.1: the knowledge ledger outlives schema eras. The projection tables
+      // were just dropped + recreated empty; replay the surviving ledger to
+      // rebuild gad_claims + gad_claim_relations + claim FTS rows.
+      this.transaction(() => this.rebuildClaimsFromLedger());
+    }
   }
 
   protected override migrate(fromVersion: number, _toVersion: number): void {
     // Big-bang schema: no data migration across versions — drop and let
-    // createTables() (called after migrate by the base) recreate fresh.
-    if (fromVersion > 0) this.dropPersistenceTables();
+    // createTables() (called after migrate by the base) recreate fresh. The
+    // gad_knowledge_ledger table (and its `state` version key) survive the drop
+    // and re-seed the claim projections (§8.1).
+    if (fromVersion > 0) {
+      this.dropPersistenceTables();
+      this.pendingLedgerRebuild = true;
+    }
   }
 
   protected override requiredTables(): readonly string[] {
@@ -1079,9 +1602,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
            AND (
              name LIKE 'trajectory_%' OR name LIKE 'channel_%' OR name LIKE 'gad_%'
              OR name LIKE 'log_%'
-             OR name IN ('vcs_context_bases', 'refs', 'ref_log', 'branches', 'sessions', 'conversation_turns',
-                         'tool_calls', 'file_versions', 'tracked_files', 'blobs')
-           )`
+             OR name IN ('vcs_context_bases', 'vcs_context_provenance', 'refs', 'ref_log', 'branches', 'sessions', 'conversation_turns',
+                         'tool_calls', 'file_versions', 'tracked_files', 'blobs', 'provenance_for_file', 'edge_graph', 'claim_graph')
+           )
+           -- §8.1: the durable knowledge ledger is the claim system of record and
+           -- must OUTLIVE schema eras — its gad_ prefix would otherwise sweep it.
+           AND name NOT IN ('gad_knowledge_ledger')`
       )
       .toArray() as Array<{ type: string; name: string; sql: string | null }>;
     const isVirtual = (row: { sql: string | null }) =>
@@ -1194,6 +1720,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
         updated_at TEXT NOT NULL
       )
     `);
+    // v24: a child context's fork breadcrumb — which context it forked from and
+    // the shared base view (forkPoint) at the fork. Metadata only (UX lineage);
+    // the true merge-base connection is the shared committed state node in the
+    // transition DAG, not this row. NOT replay-rebuildable — dropped on a schema
+    // bump like every other projection (acceptable: UX-only, big-bang pre-release).
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS vcs_context_provenance (
+        context_id TEXT PRIMARY KEY,
+        parent_context_id TEXT NOT NULL,
+        fork_point_json TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS refs (
         ref_name TEXT PRIMARY KEY,
@@ -1220,6 +1759,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
         opened_at TEXT,
         closed_at TEXT,
         summary TEXT,
+        -- §6.3 turn-decay basis: the turn's per-branch ordinal (count of prior
+        -- turns on this (log_id, head) at turn.opened). Wall-clock is display-only.
+        ordinal INTEGER,
         PRIMARY KEY (log_id, head, turn_id)
       )
     `);
@@ -1402,7 +1944,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
         invocation_id TEXT,
         input_state_hash TEXT NOT NULL,
         output_state_hash TEXT NOT NULL,
-        produced_by_mutation_id TEXT,
         summary TEXT,
         metadata_json TEXT,
         created_at TEXT NOT NULL
@@ -1431,65 +1972,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
       `CREATE INDEX IF NOT EXISTS idx_gad_transition_parents_parent_event ON gad_transition_parents(parent_event_id)`
     );
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_file_observations (
-        observation_id TEXT PRIMARY KEY,
-        event_id TEXT NOT NULL,
-        invocation_id TEXT,
-        path TEXT NOT NULL,
-        observed_state_hash TEXT NOT NULL,
-        file_version_id INTEGER,
-        content_hash TEXT,
-        size INTEGER,
-        mime_type TEXT,
-        range_start_line INTEGER,
-        range_end_line INTEGER,
-        summary TEXT,
-        error_message TEXT,
-        created_at TEXT NOT NULL
-      )
-    `);
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_gad_observations_path ON gad_file_observations(path, created_at)`
-    );
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_file_mutations (
-        mutation_id TEXT PRIMARY KEY,
-        intended_event_id TEXT,
-        applied_event_id TEXT,
-        invocation_id TEXT,
-        path TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        status TEXT NOT NULL,
-        planned_params_json TEXT,
-        before_hash TEXT,
-        after_hash TEXT,
-        input_state_hash TEXT,
-        output_state_hash TEXT,
-        state_transition_event_id TEXT,
-        error_message TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )
-    `);
-    this.sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_gad_mutations_invocation ON gad_file_mutations(invocation_id)`
-    );
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_file_change_hunks (
-        id INTEGER PRIMARY KEY,
-        mutation_id TEXT NOT NULL,
-        path TEXT NOT NULL,
-        before_file_version_id INTEGER,
-        after_file_version_id INTEGER,
-        old_start_line INTEGER,
-        old_line_count INTEGER,
-        new_start_line INTEGER,
-        new_line_count INTEGER,
-        old_text_hash TEXT,
-        new_text_hash TEXT
-      )
-    `);
-    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS gad_worktree_edit_ops (
         id INTEGER PRIMARY KEY,
         event_id TEXT NOT NULL,
@@ -1511,11 +1993,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
         invocation_id TEXT,
         turn_id TEXT,
         created_at TEXT,
-        -- P3/A2: a synthetic op carries no true first-parent hunks (the
-        -- crash-heal catch-up ingest of a ref's tree). Blame treats synthetic
+        -- P3/A2: a synthetic op carries no true first-parent hunks (for
+        -- example an import snapshot). Blame treats synthetic
         -- rows as chain RESTARTS (like create), never mis-blaming or tripping
         -- the first-parent chain-continuity check.
-        synthetic INTEGER
+        synthetic INTEGER,
+        -- v25/U1: the op's NEW content is binary (reuses the engine's binary
+        -- detection). Binary write/create rows carry no hunks and are chain
+        -- restarts for blame; a replace over binary is rejected upstream.
+        binary INTEGER NOT NULL DEFAULT 0,
+        -- v24: cherry-pick provenance — the source a working row was picked
+        -- from (JSON {kind:"commit",logId,eventId} or {kind:"paths",
+        -- sourceContextId}). UX breadcrumb only, never load-bearing for replay.
+        picked_from_json TEXT
       )
     `);
     // Two sequencing orders: edit_seq is per edit CALL on a (log_id, head) and
@@ -1552,9 +2042,127 @@ export class GadWorkspaceDO extends DurableObjectBase {
         subject TEXT,
         predicate TEXT,
         object TEXT,
+        -- §8: a claim can stand as an entity, a predicate, or a full statement.
+        claim_kind TEXT,
+        text TEXT,
+        -- §8.1: pointer to the durable ledger entry that owns this claim's
+        -- content (the causality/trajectory_event_id is the era-scoped edge).
+        ledger_entry_id TEXT,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      )
+    `);
+    // §8: agent-asserted claim↔claim relations. Global + event-keyed like
+    // gad_state_transitions: replay/fork folds one event under multiple heads
+    // and dedups by the unique identity (INSERT OR IGNORE) — never
+    // check-before-insert, never copied per-head in copyProjectionKey.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gad_claim_relations (
+        id INTEGER PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        src_claim_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        dst_claim_id TEXT NOT NULL,
+        weight REAL NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_claim_rel_src ON gad_claim_relations(src_claim_id)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_claim_rel_dst ON gad_claim_relations(dst_claim_id)`
+    );
+    this.sql.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_claim_rel_ident ON gad_claim_relations(event_id, src_claim_id, relation, dst_claim_id)`
+    );
+    // §8.1: the durable knowledge ledger — append-only, EXEMPT from
+    // dropPersistenceTables, its own version under state key
+    // knowledge_ledger_version. The system of record for claim content; the
+    // trajectory knowledge.* event carries only causality + a pointer here.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gad_knowledge_ledger (
+        entry_id TEXT PRIMARY KEY,
+        seq INTEGER,
+        kind TEXT NOT NULL,          -- claim_recorded | claim_revised | claim_retracted | claims_related
+        payload_json TEXT NOT NULL,  -- claim/relation content + rebuild causality
+        anchor_json TEXT NOT NULL,   -- write-time snapshot (repo, commit msg, actor, iso time)
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_knowledge_ledger_seq ON gad_knowledge_ledger(seq)`
+    );
+    if (this.getStateValue("knowledge_ledger_version") == null) {
+      this.setStateValue("knowledge_ledger_version", String(KNOWLEDGE_LEDGER_VERSION));
+    }
+    // §4.2: the one physical soft-signal table (behavioral touches). One
+    // counted row per (kind, session, target); repeats bump hits/turn_seq.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gad_touches (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL,              -- observed | cited
+        session_log_id TEXT NOT NULL,
+        session_head TEXT NOT NULL,
+        dst_kind TEXT NOT NULL,          -- file | claim
+        dst_id TEXT NOT NULL,
+        last_invocation_id TEXT,
+        turn_seq INTEGER,
+        hits INTEGER NOT NULL DEFAULT 1,
+        last_block_sig TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_touches_dst ON gad_touches(dst_kind, dst_id, id)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_touches_session ON gad_touches(session_log_id, session_head, id)`
+    );
+    this.sql.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_touches_coalesce ON gad_touches(kind, session_log_id, session_head, dst_kind, dst_id)`
+    );
+    // §7.3 warm cache: disposable density blocks. Keyed by every input that can
+    // change the cached density leg; live exceptions stay outside the cache.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gad_provenance_cache (
+        log_id TEXT NOT NULL,
+        head TEXT NOT NULL,
+        path TEXT NOT NULL,
+        session_log_id TEXT NOT NULL,
+        session_head TEXT NOT NULL,
+        recall_key TEXT NOT NULL,
+        turn_seq INTEGER NOT NULL,
+        touch_version INTEGER NOT NULL,
+        knowledge_version INTEGER NOT NULL,
+        content_stamp TEXT NOT NULL,
+        rendered_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (log_id, head, path, session_log_id, session_head, recall_key, turn_seq)
+      )
+    `);
+    // §12 instrumentation: counted upserts for the four behavioral counters.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gad_prov_metrics (
+        metric TEXT NOT NULL,
+        bucket TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (metric, bucket)
+      )
+    `);
+    // §4.1 no-`included` rule: an instrumentation-only trace of pushed items
+    // (feeds counter #4). NEVER a ranking input; prunable with touches.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gad_prov_render_log (
+        id INTEGER PRIMARY KEY,
+        session_log_id TEXT,
+        session_head TEXT,
+        path TEXT,
+        item_handles_json TEXT,
+        created_at TEXT NOT NULL
       )
     `);
     this.sql.exec(`
@@ -1574,7 +2182,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       -- (see runGadGcMark) so a crash cannot sweep an un-recorded candidate.
       CREATE TABLE IF NOT EXISTS gad_publish_intents (
         intent_id TEXT PRIMARY KEY,
-        operation TEXT NOT NULL,          -- "push" | "merge"
+        operation TEXT NOT NULL,          -- "push" | "import"
         -- entries: [{ repoPath, logId, expectedOld, next, parentEventId,
         --            parentStateHash, files:[{path,contentHash,mode}], editOps }]
         entries_json TEXT NOT NULL,
@@ -1583,6 +2191,107 @@ export class GadWorkspaceDO extends DurableObjectBase {
         source_head TEXT,
         created_at TEXT NOT NULL
       )
+    `);
+    this.sql.exec(`
+      -- §6: write-ahead intents for repo-LIFECYCLE ops (fork / delete /
+      -- restore). Sibling to gad_publish_intents (which re-ingests provenance);
+      -- these instead re-key main ↔ archive lineage, so they carry archive-head
+      -- / fork-lineage reconcile detail rather than file/editOp entries. Recorded
+      -- durably BEFORE the host refs.updateMains so a crash / lost-response
+      -- between the DO re-key and the host CAS is reconcilable: on heal the ref
+      -- is authoritative — a landed CAS rolls the DO FORWARD, a provably-denied
+      -- CAS compensates the DO-side re-key, an indeterminate one stays parked.
+      -- Deleted once the op completes (success, roll-forward, or compensation).
+      -- The 'next' state is a GC root while pending (see runGadGcMark).
+      CREATE TABLE IF NOT EXISTS gad_lifecycle_intents (
+        intent_id TEXT PRIMARY KEY,
+        operation TEXT NOT NULL,          -- "fork" | "delete" | "restore"
+        repo_path TEXT NOT NULL,          -- the repo whose main ref the op mutates
+        log_id TEXT NOT NULL,
+        expected_old TEXT,                -- CAS expectedOld (null for fork/restore create)
+        next_state TEXT,                  -- CAS next (null for delete)
+        detail_json TEXT NOT NULL,        -- op-specific reconcile detail (archiveHead, fork lineage, logCursor)
+        actor_json TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
+    // §9 SQL-first surface: edit ops ⋈ trajectory invocations ⋈ commit
+    // transition (message via gad_state_transitions.summary) for a path. A pure
+    // projection — dropped-and-recreated on every schema era (dropPersistenceTables
+    // drops views first), never a system of record.
+    this.sql.exec(`
+      CREATE VIEW IF NOT EXISTS provenance_for_file AS
+      SELECT
+        eo.log_id             AS log_id,
+        eo.path               AS path,
+        eo.id                 AS op_id,
+        eo.kind               AS kind,
+        eo.committed_event_id AS commit_event_id,
+        eo.committed_seq      AS committed_seq,
+        eo.edit_seq           AS edit_seq,
+        eo.ordinal            AS ordinal,
+        eo.old_content_hash   AS old_content_hash,
+        eo.new_content_hash   AS new_content_hash,
+        eo.synthetic          AS synthetic,
+        eo.binary             AS binary,
+        eo.actor_id           AS actor_id,
+        eo.invocation_id      AS invocation_id,
+        COALESCE(eo.turn_id, ti.turn_id) AS turn_id,
+        ti.transport_call_id  AS transport_call_id,
+        st.summary            AS commit_message,
+        st.created_at         AS committed_at,
+        eo.created_at         AS created_at
+      FROM gad_worktree_edit_ops eo
+      LEFT JOIN trajectory_invocations ti
+        ON ti.invocation_id = eo.invocation_id
+      LEFT JOIN gad_state_transitions st
+        ON st.event_id = eo.committed_event_id
+    `);
+    // §9 edge_graph: the UNION view over native edges + gad_touches in ONE
+    // (kind, src_kind, src_id, dst_kind, dst_id, weight_basis) shape for ad-hoc
+    // traversal. Raw + UNRANKED (§9: SQL chases a handle, never re-derives the
+    // ranked block). Pure projection — dropped-and-recreated each schema era.
+    //  - edited:      invocation → file  (an uncommitted/committed edit op)
+    //  - committed_in file → commit       (the op's owning commit event)
+    //  - asserted:    invocation → claim  (the claim's causal invocation)
+    //  - observed/cited: session → file/claim (the soft behavioral touches)
+    this.sql.exec(`
+      CREATE VIEW IF NOT EXISTS edge_graph AS
+        SELECT 'edited' AS kind, 'invocation' AS src_kind, eo.invocation_id AS src_id,
+               'file' AS dst_kind, (eo.log_id || char(1) || eo.path) AS dst_id,
+               1.0 AS weight_basis
+          FROM gad_worktree_edit_ops eo
+         WHERE eo.invocation_id IS NOT NULL
+        UNION ALL
+        SELECT 'committed_in', 'file', (eo.log_id || char(1) || eo.path),
+               'commit', eo.committed_event_id, 1.0
+          FROM gad_worktree_edit_ops eo
+         WHERE eo.committed_event_id IS NOT NULL
+        UNION ALL
+        SELECT 'asserted', 'invocation', c.invocation_id,
+               'claim', c.claim_id, 1.0
+          FROM gad_claims c
+         WHERE c.invocation_id IS NOT NULL
+        UNION ALL
+        SELECT r.relation, 'claim', r.src_claim_id, 'claim', r.dst_claim_id, r.weight
+          FROM gad_claim_relations r
+        UNION ALL
+        SELECT t.kind, 'session', (t.session_log_id || char(1) || t.session_head),
+               t.dst_kind, t.dst_id, CAST(t.hits AS REAL)
+          FROM gad_touches t
+    `);
+    // §9 claim_graph: claims joined to their relations + the touching
+    // invocation/session, for chasing a specific claim handle. Unranked.
+    this.sql.exec(`
+      CREATE VIEW IF NOT EXISTS claim_graph AS
+        SELECT c.claim_id AS claim_id, c.status AS status, c.claim_kind AS claim_kind,
+               c.text AS text, c.subject AS subject, c.predicate AS predicate,
+               c.object AS object, c.invocation_id AS invocation_id,
+               c.trajectory_event_id AS trajectory_event_id,
+               r.relation AS relation, r.dst_claim_id AS related_claim_id,
+               r.weight AS relation_weight, c.updated_at AS updated_at
+          FROM gad_claims c
+          LEFT JOIN gad_claim_relations r ON r.src_claim_id = c.claim_id
     `);
     this.ensureEmptyState();
   }
@@ -2103,6 +2812,29 @@ export class GadWorkspaceDO extends DurableObjectBase {
     };
   }
 
+  /**
+   * The fork lineage recorded on a `log_heads` row: its parent log and the
+   * `(seq, hash)` it forked at (all null for a root / un-forked head). A pure
+   * read of the `parent_log_id`/`fork_seq`/`fork_hash` columns {@link forkLog}
+   * populates — the LOG lineage surface (trajectory-fork provenance), distinct
+   * from the state-DAG merge base a context fork shares. `head` defaults to the
+   * log's primary head.
+   */
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  getLogLineage(input: { logId: string; head?: string }): {
+    parentLogId: string | null;
+    forkSeq: number | null;
+    forkHash: string | null;
+  } {
+    this.ensureReady();
+    const row = this.logHeadRow(input.logId, input.head ?? CHANNEL_LOG_HEAD);
+    return {
+      parentLogId: row ? asString(row["parent_log_id"]) : null,
+      forkSeq: row && row["fork_seq"] != null ? asNumber(row["fork_seq"]) : null,
+      forkHash: row ? asString(row["fork_hash"]) : null,
+    };
+  }
+
   private logHeadRow(logId: string, head: string): JsonRecord | null {
     return (
       (this.sql
@@ -2215,7 +2947,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       head: String(row["head"]),
       seq: asNumber(row["seq"]),
       envelopeId: brandId<EnvelopeId>(String(row["envelope_id"])),
-      actor: parseRecord(asString(row["actor_json"])) as unknown as ParticipantRef,
+      actor: parseRecord(asString(row["actor_json"])) as unknown as ActorRef,
       ...(row["to_json"] ? { to: parseJson(asString(row["to_json"])) as LogEnvelope["to"] } : {}),
       payloadKind: String(row["payload_kind"]),
       payload: parseJson(asString(row["payload_ref_json"])),
@@ -2636,7 +3368,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const envelopeId = input.envelopeId ?? crypto.randomUUID();
     const appendedAtExplicit = input.appendedAt != null;
     const appendedAt = input.appendedAt ?? nowIso();
-    const actor = publicParticipantRef(input.actor) as ParticipantRef;
+    const actor = publicActorRef(input.actor) as ActorRef;
     const to = sanitizeAudience(input.to ?? undefined);
     let payload = input.payload;
     const causality = input.causality ?? undefined;
@@ -2693,9 +3425,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** Snapshot/merge events reference pre-created VALUES; reject appends whose
-   *  output state does not exist (file mutations compute theirs in-projector). */
+   *  output state does not exist. */
   private assertStateTransitionPayloadValid(payloadKind: string, payload: unknown): void {
-    if (payloadKind === "state.file_mutation_applied") return;
     const record =
       payload && typeof payload === "object" && !Array.isArray(payload)
         ? (payload as Record<string, unknown>)
@@ -2973,14 +3704,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
       this.projectApproval(envelope);
       return;
     }
-    if (kind === "state.file_observed") {
-      this.projectFileObserved(envelope);
-      return;
-    }
-    if (kind === "state.file_mutation_intended") {
-      this.projectFileMutationIntended(envelope);
-      return;
-    }
     if (STATE_TRANSITION_KINDS.has(kind)) {
       this.projectStateTransition(envelope);
       return;
@@ -2995,15 +3718,31 @@ export class GadWorkspaceDO extends DurableObjectBase {
     if (!turnId) return;
     const payload = envelope.payload as JsonRecord;
     if (envelope.payloadKind === "turn.opened") {
+      // §6.3 turn-decay basis: stamp the per-branch ordinal = count of prior
+      // turns on this (log_id, head). Fork-fold seeds inherited turns first (via
+      // copyProjectionKey), so ordinals stay monotone along the branch chain.
+      const priorTurns = asNumber(
+        this.sql
+          .exec(
+            `SELECT COUNT(*) AS n FROM trajectory_turns WHERE log_id = ? AND head = ?`,
+            envelope.logId,
+            envelope.head
+          )
+          .one()["n"]
+      );
       this.sql.exec(
-        `INSERT OR IGNORE INTO trajectory_turns (log_id, head, turn_id, opened_at, summary)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT OR IGNORE INTO trajectory_turns (log_id, head, turn_id, opened_at, summary, ordinal)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         envelope.logId,
         envelope.head,
         turnId,
         envelope.appendedAt,
-        asString(payload["summary"])
+        asString(payload["summary"]),
+        priorTurns
       );
+      // §7.3 speculative warm: precompute moderate blocks for the session's
+      // likely-next files into the disposable cache. Best-effort, never authority.
+      this.warmProvenanceForTurn(envelope.logId, envelope.head);
       return;
     }
     this.sql.exec(
@@ -3249,74 +3988,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     );
   }
 
-  private projectFileObserved(envelope: LogEnvelope): void {
-    const payload = envelope.payload as JsonRecord;
-    const pathValue = asString(payload["path"]);
-    if (!pathValue) return;
-    const path = normalizePath(pathValue);
-    const stateHash =
-      asString(payload["stateHash"]) ?? this.latestStateHash(envelope.logId, envelope.head);
-    const contentHash = asString(payload["contentHash"]);
-    const versionId = contentHash ? this.ensureFileVersion(path, contentHash, 33188) : null;
-    this.sql.exec(
-      `INSERT OR REPLACE INTO gad_file_observations (
-         observation_id, event_id, invocation_id, path, observed_state_hash, file_version_id,
-         content_hash, size, mime_type, summary, error_message, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      asString(payload["observationId"]) ?? String(envelope.envelopeId),
-      String(envelope.envelopeId),
-      envelope.causality?.invocationId ?? asString(payload["invocationId"]),
-      path,
-      stateHash,
-      versionId,
-      contentHash,
-      typeof payload["size"] === "number" ? payload["size"] : null,
-      asString(payload["mimeType"]),
-      asString(payload["summary"]),
-      asString(payload["error"]),
-      envelope.appendedAt
-    );
-  }
-
-  private projectFileMutationIntended(envelope: LogEnvelope): void {
-    const payload = envelope.payload as JsonRecord;
-    const pathValue =
-      asString(payload["path"]) ??
-      (Array.isArray(payload["paths"]) ? asString(payload["paths"][0]) : null);
-    if (!pathValue) return;
-    const mutationId = asString(payload["mutationId"]) ?? String(envelope.envelopeId);
-    const now = nowIso();
-    this.sql.exec(
-      `INSERT INTO gad_file_mutations (
-         mutation_id, intended_event_id, invocation_id, path, operation, status,
-         planned_params_json, input_state_hash, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(mutation_id) DO UPDATE SET
-         intended_event_id = excluded.intended_event_id,
-         planned_params_json = excluded.planned_params_json,
-         updated_at = excluded.updated_at`,
-      mutationId,
-      String(envelope.envelopeId),
-      envelope.causality?.invocationId ?? asString(payload["invocationId"]),
-      normalizePath(pathValue),
-      asString(payload["operation"]) ?? "write",
-      "intended",
-      JSON.stringify(payload),
-      asString(payload["inputStateHash"]) ?? this.latestStateHash(envelope.logId, envelope.head),
-      now,
-      now
-    );
-  }
-
-  /** Generic state-transition projector (P5 applied to worktree events): file
-   *  mutation, snapshot ingest, and merge transitions are handled uniformly —
-   *  parent rows, ref advance, and mutation/hunk bookkeeping included. */
+  /** Generic state-transition projector (P5 applied to worktree events):
+   *  snapshot ingest and merge transitions are handled uniformly — parent rows
+   *  and ref advance included. */
   private projectStateTransition(envelope: LogEnvelope): void {
     const payload = envelope.payload as JsonRecord;
     const kind = envelope.payloadKind;
     const eventId = String(envelope.envelopeId);
-    const invocationId =
-      envelope.causality?.invocationId ?? asString(payload["invocationId"]) ?? null;
+    const invocationId = envelope.causality?.invocationId ?? null;
     const inputStateHash =
       asString(payload["inputStateHash"]) ?? this.latestStateHash(envelope.logId, envelope.head);
     const extraParents = Array.isArray(payload["parentStateHashes"])
@@ -3327,58 +4006,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
       : [];
     const previousHead = this.resolveWorktreeHeadInternal(envelope.logId, envelope.head);
 
-    let outputStateHash: string;
-    let beforeContentHash: string | null = null;
-    let beforeFileVersionId: number | null = null;
-    let afterFileVersionId: number | null = null;
-    let mutationPath: string | null = null;
-
-    if (kind === "state.file_mutation_applied") {
-      const pathValue =
-        asString(payload["path"]) ??
-        (Array.isArray(payload["paths"]) ? asString(payload["paths"][0]) : null);
-      if (!pathValue) return;
-      mutationPath = normalizePath(pathValue);
-      const afterHash = asString(payload["afterHash"]) ?? asString(payload["contentHash"]);
-      if (!afterHash) {
-        throw new Error("state.file_mutation_applied requires payload.afterHash or contentHash");
-      }
-      const beforeFile = this.readGadFileAtState({
-        stateHash: inputStateHash,
-        path: mutationPath,
-      });
-      beforeContentHash = asString(beforeFile?.["content_hash"]);
-      beforeFileVersionId =
-        typeof beforeFile?.["file_version_id"] === "number"
-          ? (beforeFile["file_version_id"] as number)
-          : null;
-      afterFileVersionId = this.ensureFileVersion(mutationPath, afterHash, 33188);
-      outputStateHash =
-        asString(payload["outputStateHash"]) ??
-        this.applyFileWrite(inputStateHash, mutationPath, afterFileVersionId, afterHash, 33188, {
-          eventId,
-          invocationId,
-        });
-    } else {
-      const declared = asString(payload["outputStateHash"]);
-      if (!declared) throw new Error(`${kind} requires payload.outputStateHash`);
-      if (!this.stateExists(declared)) {
-        throw new Error(`${kind} output state value does not exist: ${declared}`);
-      }
-      outputStateHash = declared;
+    const declared = asString(payload["outputStateHash"]);
+    if (!declared) throw new Error(`${kind} requires payload.outputStateHash`);
+    if (!this.stateExists(declared)) {
+      throw new Error(`${kind} output state value does not exist: ${declared}`);
     }
+    const outputStateHash = declared;
 
     this.sql.exec(
       `INSERT OR IGNORE INTO gad_state_transitions (
          event_id, invocation_id, input_state_hash, output_state_hash,
-         produced_by_mutation_id, summary, metadata_json, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         summary, metadata_json, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       eventId,
       invocationId,
       inputStateHash,
       outputStateHash,
-      asString(payload["mutationId"]) ?? (kind === "state.file_mutation_applied" ? eventId : null),
-      asString(payload["summary"]) ?? asString(payload["rationale"]),
+      asString(payload["summary"]),
       JSON.stringify(payload),
       envelope.appendedAt
     );
@@ -3406,138 +4050,878 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
     });
 
-    if (mutationPath) {
-      const mutationId = asString(payload["mutationId"]) ?? eventId;
-      const now = nowIso();
-      const afterHash = asString(payload["afterHash"]) ?? asString(payload["contentHash"]);
-      this.sql.exec(
-        `INSERT INTO gad_file_mutations (
-           mutation_id, applied_event_id, invocation_id, path, operation, status,
-           before_hash, after_hash, input_state_hash, output_state_hash,
-           state_transition_event_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(mutation_id) DO UPDATE SET
-           applied_event_id = excluded.applied_event_id,
-           invocation_id = COALESCE(excluded.invocation_id, gad_file_mutations.invocation_id),
-           status = excluded.status,
-           before_hash = excluded.before_hash,
-           after_hash = excluded.after_hash,
-           input_state_hash = excluded.input_state_hash,
-           output_state_hash = excluded.output_state_hash,
-           state_transition_event_id = excluded.state_transition_event_id,
-           updated_at = excluded.updated_at`,
-        mutationId,
-        eventId,
-        invocationId,
-        mutationPath,
-        asString(payload["operation"]) ?? "write",
-        asString(payload["status"]) ?? "applied",
-        beforeContentHash,
-        afterHash,
-        inputStateHash,
-        outputStateHash,
-        eventId,
-        now,
-        now
-      );
-      const hunks = Array.isArray(payload["hunks"]) ? payload["hunks"] : [];
-      for (const hunk of hunks) {
-        if (!hunk || typeof hunk !== "object" || Array.isArray(hunk)) continue;
-        const record = hunk as JsonRecord;
-        const values: SqlBinding[] = [
-          mutationId,
-          mutationPath,
-          beforeFileVersionId,
-          afterFileVersionId,
-          typeof record["oldStartLine"] === "number" ? record["oldStartLine"] : null,
-          typeof record["oldLineCount"] === "number" ? record["oldLineCount"] : null,
-          typeof record["newStartLine"] === "number" ? record["newStartLine"] : null,
-          typeof record["newLineCount"] === "number" ? record["newLineCount"] : null,
-          asString(record["oldTextHash"]),
-          asString(record["newTextHash"]),
-        ];
-        // Folding the same event under multiple heads (forks, replay) must not
-        // duplicate hunks: insert only when the identical row is absent.
-        this.sql.exec(
-          `INSERT INTO gad_file_change_hunks (
-             mutation_id, path, before_file_version_id, after_file_version_id,
-             old_start_line, old_line_count, new_start_line, new_line_count,
-             old_text_hash, new_text_hash
-           )
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-           WHERE NOT EXISTS (
-             SELECT 1 FROM gad_file_change_hunks
-             WHERE mutation_id = ?1 AND path = ?2
-               AND COALESCE(old_start_line, -1) = COALESCE(?5, -1)
-               AND COALESCE(new_start_line, -1) = COALESCE(?7, -1)
-               AND COALESCE(old_text_hash, '') = COALESCE(?9, '')
-               AND COALESCE(new_text_hash, '') = COALESCE(?10, '')
-           )`,
-          ...values
-        );
-      }
-    }
-
     this.setWorktreeHead(envelope.logId, envelope.head, outputStateHash, eventId);
+
+    // T3 (§10): the mandatory commit message is the cheapest high-quality
+    // semantic signal in the system, so index it into the recall leg. Every
+    // message-carrying commit kind qualifies — transition_recorded/merge_applied
+    // always carry one, snapshot_ingested only when present — so gate on a
+    // non-empty summary. The row is event-id-keyed, so replay is idempotent
+    // (indexMemoryRow deletes the prior copy before re-inserting).
+    const summary = asString(payload["summary"]);
+    if (summary && summary.trim()) {
+      this.indexMemoryRow({
+        text: summary,
+        kind: "commit",
+        logId: envelope.logId,
+        head: envelope.head,
+        eventId,
+        anchor: { commitEventId: eventId, outputStateHash },
+      });
+    }
   }
 
+  /**
+   * §8.1: knowledge.* projector. Claim CONTENT is the durable ledger's system
+   * of record; the trajectory event carries only causality + a `ledgerEntryId`
+   * pointer (plus minimal denorm). Content is resolved through the ledger entry
+   * when present, falling back to the event payload for producer-inline claims
+   * that never wrote a ledger row (those are era-scoped, not resurrected on a
+   * schema bump). All rows are global (keyed by claim_id / event_id, never
+   * head), so fork-fold replay under a rewritten head stays correct.
+   */
   private projectKnowledge(envelope: LogEnvelope): void {
-    const payload = envelope.payload as JsonRecord;
+    if (envelope.payloadKind === "knowledge.claims_related") {
+      this.projectClaimRelations(envelope);
+      return;
+    }
     if (!envelope.payloadKind.startsWith("knowledge.claim_")) return;
+    const payload = envelope.payload as JsonRecord;
+    const ledgerEntryId = asString(payload["ledgerEntryId"]);
+    const ledger = ledgerEntryId ? this.readLedgerEntry(ledgerEntryId) : null;
+    // Ledger payload is the system of record; the event payload is the denorm
+    // fallback when a claim was appended without a ledger entry.
+    const content = (ledger?.payload ?? payload) as JsonRecord;
     const claimId =
-      asString(payload["claimId"]) ?? asString(payload["id"]) ?? String(envelope.envelopeId);
-    if (envelope.payloadKind === "knowledge.claim_retracted") {
+      asString(payload["claimId"]) ??
+      asString(content["claimId"]) ??
+      asString(payload["id"]) ??
+      String(envelope.envelopeId);
+    this.applyClaimContent({
+      claimId,
+      eventKind: envelope.payloadKind,
+      content,
+      trajectoryEventId: String(envelope.envelopeId),
+      invocationId: envelope.causality?.invocationId ?? null,
+      ledgerEntryId,
+      logId: envelope.logId,
+      head: envelope.head,
+      at: envelope.appendedAt,
+    });
+  }
+
+  /** Materialize one claim's content into gad_claims + the claim FTS row.
+   *  Shared by projectKnowledge (within an era) and the ledger rebuild (across
+   *  a schema bump) — the only difference is where `content`/causality come
+   *  from (trajectory event vs. ledger payload). */
+  private applyClaimContent(input: {
+    claimId: string;
+    eventKind: string; // knowledge.claim_recorded | _updated | _retracted
+    content: JsonRecord;
+    trajectoryEventId: string;
+    invocationId: string | null;
+    ledgerEntryId: string | null;
+    logId: string | null;
+    head: string | null;
+    at: string;
+  }): void {
+    if (input.eventKind === "knowledge.claim_retracted") {
+      // Status change only — keep the content pointer (ledger_entry_id) pointing
+      // at the claim's record/revise entry, not this retract entry.
       this.sql.exec(
-        `UPDATE gad_claims SET status = 'retracted', trajectory_event_id = ?, updated_at = ? WHERE claim_id = ?`,
-        String(envelope.envelopeId),
-        envelope.appendedAt,
-        claimId
+        `UPDATE gad_claims
+            SET status = 'retracted', trajectory_event_id = ?, updated_at = ?
+          WHERE claim_id = ?`,
+        input.trajectoryEventId,
+        input.at,
+        input.claimId
+      );
+      // §8.1: a retracted claim must stop surfacing — drop its FTS row so the
+      // dedup-on-write probe and recall never resurrect it (the structural legs
+      // already filter status!='retracted'; the FTS leg has no status column).
+      this.ensureMemoryIndex();
+      this.sql.exec(
+        `DELETE FROM gad_memory_fts WHERE kind = 'claim' AND anchor_json = ?`,
+        JSON.stringify({ claimId: input.claimId })
       );
       return;
     }
     if (
-      envelope.payloadKind !== "knowledge.claim_recorded" &&
-      envelope.payloadKind !== "knowledge.claim_updated"
+      input.eventKind !== "knowledge.claim_recorded" &&
+      input.eventKind !== "knowledge.claim_updated"
     ) {
       return;
     }
+    const content = input.content;
+    const subject = asString(content["subject"]);
+    const predicate = asString(content["predicate"]);
+    const object = asString(content["object"]);
+    const text = asString(content["text"]);
+    const claimKind = asString(content["claimKind"]) ?? asString(content["kind"]);
+    const status = asString(content["status"]) ?? "active";
     this.sql.exec(
       `INSERT INTO gad_claims (
          claim_id, trajectory_event_id, invocation_id, subject, predicate, object,
-         status, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         claim_kind, text, ledger_entry_id, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(claim_id) DO UPDATE SET
          trajectory_event_id = excluded.trajectory_event_id,
+         invocation_id = COALESCE(excluded.invocation_id, gad_claims.invocation_id),
          subject = COALESCE(excluded.subject, gad_claims.subject),
          predicate = COALESCE(excluded.predicate, gad_claims.predicate),
          object = COALESCE(excluded.object, gad_claims.object),
+         claim_kind = COALESCE(excluded.claim_kind, gad_claims.claim_kind),
+         text = COALESCE(excluded.text, gad_claims.text),
+         ledger_entry_id = COALESCE(excluded.ledger_entry_id, gad_claims.ledger_entry_id),
          status = excluded.status,
          updated_at = excluded.updated_at`,
-      claimId,
-      String(envelope.envelopeId),
-      envelope.causality?.invocationId ?? null,
-      asString(payload["subject"]),
-      asString(payload["predicate"]),
-      asString(payload["object"]),
-      asString(payload["status"]) ?? "active",
-      envelope.appendedAt,
-      envelope.appendedAt
+      input.claimId,
+      input.trajectoryEventId,
+      input.invocationId,
+      subject,
+      predicate,
+      object,
+      claimKind,
+      text,
+      input.ledgerEntryId,
+      status,
+      input.at,
+      input.at
     );
-    // Memory index (WS4): claims are the semantic sidecar's retrieval surface.
-    const claimText = [payload["subject"], payload["predicate"], payload["object"]]
-      .map((value) => asString(value))
-      .filter(Boolean)
-      .join(" ");
+    // Memory index (WS4): claims are the semantic sidecar's retrieval surface,
+    // and the dedup-on-write signal. One FTS row per claim (deduped by claimId).
+    // Index the MERGED row (not just this event's fields) so a partial revise
+    // never truncates the searchable text to the patched slice.
+    const merged = this.sql
+      .exec(
+        `SELECT subject, predicate, object, text FROM gad_claims WHERE claim_id = ?`,
+        input.claimId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    const claimText = merged
+      ? this.claimSearchText({
+          text: asString(merged["text"]),
+          subject: asString(merged["subject"]),
+          predicate: asString(merged["predicate"]),
+          object: asString(merged["object"]),
+        })
+      : this.claimSearchText({ text, subject, predicate, object });
     if (claimText) {
       this.indexMemoryRow({
         text: claimText,
         kind: "claim",
-        logId: envelope.logId,
-        head: envelope.head,
-        eventId: String(envelope.envelopeId),
-        anchor: { claimId },
+        logId: input.logId,
+        head: input.head,
+        eventId: input.trajectoryEventId,
+        anchor: { claimId: input.claimId },
       });
     }
+  }
+
+  /** §8: project a knowledge.claims_related event into gad_claim_relations.
+   *  Event-keyed + INSERT OR IGNORE, so replay/fork-fold folds the same event
+   *  under multiple heads without duplicating edges. */
+  private projectClaimRelations(envelope: LogEnvelope): void {
+    const payload = envelope.payload as JsonRecord;
+    const ledgerEntryId = asString(payload["ledgerEntryId"]);
+    const ledger = ledgerEntryId ? this.readLedgerEntry(ledgerEntryId) : null;
+    const source = (ledger?.payload ?? payload) as JsonRecord;
+    const relations = Array.isArray(source["relations"]) ? (source["relations"] as unknown[]) : [];
+    // Key by the durable ledger entry id (not the trajectory envelope id) when
+    // one exists, so this projection and the schema-bump ledger rebuild agree on
+    // the unique identity — combining them never duplicates an edge. Inline
+    // (ledger-less) relations fall back to the era-scoped envelope id.
+    this.writeClaimRelations(
+      ledgerEntryId ?? String(envelope.envelopeId),
+      relations,
+      envelope.appendedAt
+    );
+  }
+
+  private writeClaimRelations(eventKey: string, relations: unknown[], at: string): void {
+    for (const raw of relations) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+      const rel = raw as JsonRecord;
+      const src = asString(rel["src"]);
+      const relation = asString(rel["relation"]);
+      const dst = asString(rel["dst"]);
+      if (!src || !relation || !dst) continue;
+      const weight = typeof rel["weight"] === "number" ? rel["weight"] : 1;
+      this.sql.exec(
+        `INSERT OR IGNORE INTO gad_claim_relations
+           (event_id, src_claim_id, relation, dst_claim_id, weight, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        eventKey,
+        src,
+        relation,
+        dst,
+        weight,
+        at
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Knowledge ledger (§8.1) — the durable, schema-era-outliving claim system
+  // of record. Ledger writes + a trajectory `knowledge.*` causality event are
+  // one txn; projectKnowledge folds the event, resolving content through here.
+  // -------------------------------------------------------------------------
+
+  private readLedgerEntry(
+    entryId: string
+  ): { kind: string; payload: JsonRecord; anchor: JsonRecord } | null {
+    const row = this.sql
+      .exec(
+        `SELECT kind, payload_json, anchor_json FROM gad_knowledge_ledger WHERE entry_id = ?`,
+        entryId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    if (!row) return null;
+    return {
+      kind: String(row["kind"]),
+      payload: parseRecord(asString(row["payload_json"])),
+      anchor: parseRecord(asString(row["anchor_json"])),
+    };
+  }
+
+  private appendLedgerEntry(input: {
+    entryId: string;
+    kind: "claim_recorded" | "claim_revised" | "claim_retracted" | "claims_related";
+    payload: Record<string, unknown>;
+    anchor: Record<string, unknown>;
+    createdAt: string;
+  }): void {
+    const next = asNumber(
+      this.sql.exec(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM gad_knowledge_ledger`).one()[
+        "next"
+      ]
+    );
+    this.sql.exec(
+      `INSERT INTO gad_knowledge_ledger (entry_id, seq, kind, payload_json, anchor_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      input.entryId,
+      next,
+      input.kind,
+      JSON.stringify(input.payload),
+      JSON.stringify(input.anchor),
+      input.createdAt
+    );
+  }
+
+  /** §8.1 rebuild: after a schema bump the trajectory events are gone but the
+   *  ledger survived — replay it in seq order to re-project gad_claims,
+   *  gad_claim_relations, and the claim FTS rows. Dangling era causality
+   *  (logId/head/trajectoryEventId) is preserved from the ledger snapshot. */
+  private rebuildClaimsFromLedger(): void {
+    this.ensureMemoryIndex();
+    const rows = this.sql
+      .exec(
+        `SELECT entry_id, kind, payload_json, created_at
+           FROM gad_knowledge_ledger ORDER BY seq ASC, entry_id ASC`
+      )
+      .toArray() as JsonRecord[];
+    for (const row of rows) {
+      const kind = String(row["kind"]);
+      const payload = parseRecord(asString(row["payload_json"]));
+      const at = asString(row["created_at"]) ?? nowIso();
+      const entryId = String(row["entry_id"]);
+      if (kind === "claims_related") {
+        const relations = Array.isArray(payload["relations"])
+          ? (payload["relations"] as unknown[])
+          : [];
+        this.writeClaimRelations(entryId, relations, at);
+        continue;
+      }
+      const eventKind =
+        kind === "claim_retracted"
+          ? "knowledge.claim_retracted"
+          : kind === "claim_revised"
+            ? "knowledge.claim_updated"
+            : "knowledge.claim_recorded";
+      this.applyClaimContent({
+        claimId: asString(payload["claimId"]) ?? entryId,
+        eventKind,
+        content: payload,
+        trajectoryEventId: asString(payload["trajectoryEventId"]) ?? entryId,
+        invocationId: asString(payload["invocationId"]),
+        ledgerEntryId: entryId,
+        logId: asString(payload["logId"]),
+        head: asString(payload["head"]),
+        at,
+      });
+    }
+  }
+
+  private claimSearchText(claim: {
+    text?: string | null;
+    subject?: string | null;
+    predicate?: string | null;
+    object?: string | null;
+  }): string {
+    const text = asString(claim.text ?? null);
+    if (text && text.trim()) return text.trim();
+    return [claim.subject, claim.predicate, claim.object]
+      .map((value) => asString(value ?? null))
+      .filter((value): value is string => !!value && value.trim().length > 0)
+      .join(" ")
+      .trim();
+  }
+
+  /** §8.1 dedup-on-write: FTS the incoming text against existing claims, then
+   *  score each candidate by token overlap. Returns candidates ranked by
+   *  overlap (descending); the caller blocks on any candidate >= threshold. */
+  private findDuplicateClaims(
+    text: string
+  ): Array<{ claimId: string; text: string; score: number }> {
+    const mode = this.ensureMemoryIndex();
+    let rows: JsonRecord[] = [];
+    if (mode === "fts") {
+      const match = sanitizeFtsQuery(text);
+      if (!match) return [];
+      rows = this.sql
+        .exec(
+          `SELECT text, anchor_json FROM gad_memory_fts
+            WHERE gad_memory_fts MATCH ? AND kind = 'claim'
+            ORDER BY bm25(gad_memory_fts) LIMIT ?`,
+          match,
+          CLAIM_DEDUP_TOP_K
+        )
+        .toArray() as JsonRecord[];
+    } else {
+      const terms = text
+        .split(/\s+/u)
+        .map((term) => term.trim())
+        .filter(Boolean)
+        .slice(0, 8);
+      if (terms.length === 0) return [];
+      const likeClauses = terms.map(() => `text LIKE ? ESCAPE '\\'`).join(" AND ");
+      rows = this.sql
+        .exec(
+          `SELECT text, anchor_json FROM gad_memory_fts
+            WHERE kind = 'claim' AND ${likeClauses} LIMIT ?`,
+          ...terms.map((term) => `%${term.replace(/[%_\\]/gu, "\\$&")}%`),
+          CLAIM_DEDUP_TOP_K
+        )
+        .toArray() as JsonRecord[];
+    }
+    const queryTokens = claimTokenSet(text);
+    const candidates = rows
+      .map((row) => {
+        const anchor = parseRecord(asString(row["anchor_json"]));
+        const candidateText = String(row["text"]);
+        return {
+          claimId: asString(anchor["claimId"]) ?? "",
+          text: candidateText,
+          score: jaccardOverlap(queryTokens, claimTokenSet(candidateText)),
+        };
+      })
+      .filter((candidate) => candidate.claimId);
+    // §8.1: never dedup against a retracted claim (its FTS row is dropped on
+    // retract, but guard the query leg too so a stale row can't block a rewrite).
+    const retracted = this.retractedClaimIds(candidates.map((c) => c.claimId));
+    return candidates
+      .filter((candidate) => !retracted.has(candidate.claimId))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  /** The subset of the given claim ids whose claim is currently retracted.
+   *  Used to keep retracted claims out of the FTS-backed dedup/recall legs (the
+   *  FTS row is deleted on retract; this is the belt-and-suspenders query guard). */
+  private retractedClaimIds(ids: Array<string | null | undefined>): Set<string> {
+    const out = new Set<string>();
+    const unique = [...new Set(ids.filter((id): id is string => !!id))];
+    if (unique.length === 0) return out;
+    const placeholders = unique.map(() => "?").join(",");
+    const rows = this.sql
+      .exec(
+        `SELECT claim_id FROM gad_claims WHERE status = 'retracted' AND claim_id IN (${placeholders})`,
+        ...unique
+      )
+      .toArray() as JsonRecord[];
+    for (const row of rows) out.add(String(row["claim_id"]));
+    return out;
+  }
+
+  /** The trajectory log's owner as a plain {kind,id} — the claim's actor. Falls
+   *  back to an `agent` participant (trajectory logs are agent-owned) since
+   *  non-public transport caller kinds (server/shell/worker) are not participant
+   *  kinds. */
+  private trajectoryOwner(logId: string, head: string): { kind: string; id: string } {
+    const row = this.logHeadRow(logId, head);
+    const owner = row ? parseJson(asString(row["owner_json"])) : null;
+    if (owner && typeof owner === "object" && !Array.isArray(owner)) {
+      const record = owner as JsonRecord;
+      const kind = asString(record["kind"]);
+      const id = asString(record["id"]);
+      if (id) return { kind: ACTOR_KINDS.has(kind ?? "") ? (kind as string) : "agent", id };
+    }
+    return { kind: "agent", id: logId };
+  }
+
+  /** §8.1 anchor snapshot: denormalize the human-readable provenance at write
+   *  time so a dangling era anchor still renders after a schema bump. */
+  private buildClaimAnchor(input: {
+    owner: { kind: string; id: string };
+    repoPath?: string | null;
+    commitEventId?: string | null;
+    at: string;
+  }): Record<string, unknown> {
+    const anchor: Record<string, unknown> = {
+      actorLabel: `${input.owner.kind}:${input.owner.id}`,
+      recordedAt: input.at,
+    };
+    if (input.repoPath) anchor["repoPath"] = input.repoPath;
+    if (input.commitEventId) {
+      anchor["commitEventId"] = input.commitEventId;
+      const summary = asString(
+        this.sql
+          .exec(`SELECT summary FROM gad_state_transitions WHERE event_id = ?`, input.commitEventId)
+          .toArray()[0]?.["summary"] ?? null
+      );
+      if (summary) anchor["commitMessage"] = summary.split(/\r?\n/u)[0];
+    }
+    return anchor;
+  }
+
+  private bumpProvMetric(metric: string, bucket: string): void {
+    this.sql.exec(
+      `INSERT INTO gad_prov_metrics (metric, bucket, count, updated_at) VALUES (?, ?, 1, ?)
+       ON CONFLICT(metric, bucket) DO UPDATE SET
+         count = gad_prov_metrics.count + 1,
+         updated_at = excluded.updated_at`,
+      metric,
+      bucket,
+      nowIso()
+    );
+  }
+
+  /**
+   * §4.2 soft-signal upsert: record that a session touched a target. One counted
+   * row per (kind, session, target) on `idx_touches_coalesce`; a repeat bumps
+   * `hits` and refreshes the latest producing invocation, the touching turn's
+   * ordinal, and — for `observed` touches — the re-read-suppression block sig
+   * (§7.1). COALESCE keeps a prior value when a fresh call omits the field, so
+   * `turn_seq`/`last_invocation_id`/`last_block_sig` track the LATEST touch that
+   * carried them. `observed` (read attachment) and `cited` (drill-down claim
+   * target) are distinct kinds, hence distinct coalesced rows.
+   */
+  private upsertTouch(input: {
+    kind: "observed" | "cited";
+    sessionLogId: string;
+    sessionHead: string;
+    dstKind: "file" | "claim";
+    dstId: string;
+    invocationId?: string | null;
+    turnSeq?: number | null;
+    blockSig?: string | null;
+  }): void {
+    const now = nowIso();
+    this.sql.exec(
+      `INSERT INTO gad_touches (
+         kind, session_log_id, session_head, dst_kind, dst_id,
+         last_invocation_id, turn_seq, hits, last_block_sig, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+       ON CONFLICT(kind, session_log_id, session_head, dst_kind, dst_id) DO UPDATE SET
+         hits = gad_touches.hits + 1,
+         last_invocation_id = COALESCE(excluded.last_invocation_id, gad_touches.last_invocation_id),
+         turn_seq = COALESCE(excluded.turn_seq, gad_touches.turn_seq),
+         last_block_sig = COALESCE(excluded.last_block_sig, gad_touches.last_block_sig),
+         updated_at = excluded.updated_at`,
+      input.kind,
+      input.sessionLogId,
+      input.sessionHead,
+      input.dstKind,
+      input.dstId,
+      input.invocationId ?? null,
+      input.turnSeq ?? null,
+      input.blockSig ?? null,
+      now,
+      now
+    );
+    // §7.3 warm-cache era stamp: touch_version marks the session's DENSITY-SEED
+    // era, not its read count. A `cited` drill adds a strong claim seed (§6.1)
+    // that re-ranks every other file's density leg, so it advances the stamp and
+    // invalidates the warm cache. An `observed` read does NOT bump it: the version
+    // is session-global, so bumping on every read would throw away the whole
+    // turn.opened warm precompute after the first file touched and leave the
+    // degrade stash unservable (the counter would already have moved past it by
+    // the follow-on read). The safety- and redundancy-critical legs never ride on
+    // this stamp — exceptions are recomputed LIVE on every read (§7.5) and re-read
+    // suppression has its own block-signature key (§7.1) — so a stale density era
+    // can never hide a contradiction, a cross-session collision, or a real change.
+    // Claim writes advance the stamp through their own paths (they add/relate the
+    // asserted seeds the density leg spreads from).
+    if (input.kind === "cited") {
+      this.bumpTouchVersion(input.sessionLogId, input.sessionHead);
+    }
+  }
+
+  /** §7.3 per-session touch_version (state KV). Advances on every touch write;
+   *  the warm cache stamps each row with the value it was computed under so a
+   *  later read invalidates by comparison (never by content). */
+  private touchVersionKey(sessionLogId: string, sessionHead: string): string {
+    return `touchver:${sessionLogId}::${sessionHead}`;
+  }
+
+  private touchVersion(sessionLogId: string, sessionHead: string): number {
+    const raw = this.getStateValue(this.touchVersionKey(sessionLogId, sessionHead));
+    return raw == null ? 0 : asNumber(raw);
+  }
+
+  private bumpTouchVersion(sessionLogId: string, sessionHead: string): void {
+    const next = this.touchVersion(sessionLogId, sessionHead) + 1;
+    this.setStateValue(this.touchVersionKey(sessionLogId, sessionHead), String(next));
+  }
+
+  private knowledgeVersionKey(): string {
+    return "knowledgever";
+  }
+
+  private knowledgeVersion(): number {
+    const raw = this.getStateValue(this.knowledgeVersionKey());
+    return raw == null ? 0 : asNumber(raw);
+  }
+
+  private bumpKnowledgeVersion(): void {
+    const next = this.knowledgeVersion() + 1;
+    this.setStateValue(this.knowledgeVersionKey(), String(next));
+  }
+
+  /**
+   * §6.3 turn-decay basis: the highest turn ordinal stamped on this (log_id,
+   * head) branch (projectTurn stamps `ordinal` = count of prior turns; fork-fold
+   * seeds inherited turns, so ordinals stay monotone along the chain). DO-4 uses
+   * this to compute `turnsAgo` for the session-recency leg and to stamp
+   * `gad_touches.turn_seq`. Returns -1 when the branch has opened no turns yet.
+   */
+  private currentTurnOrdinal(logId: string, head: string): number {
+    const max = this.sql
+      .exec(
+        `SELECT MAX(ordinal) AS m FROM trajectory_turns WHERE log_id = ? AND head = ?`,
+        logId,
+        head
+      )
+      .one()["m"];
+    return max == null ? -1 : asNumber(max);
+  }
+
+  // -------------------------------------------------------------------------
+  // Knowledge write path (§8.1 / C2) — one @rpc per tool. Each does ledger
+  // write + a trajectory `knowledge.*` causality event in one txn; content of
+  // record is the ledger, the event carries only the pointer + minimal denorm.
+  // -------------------------------------------------------------------------
+
+  @rpc({ callers: ["do", "server", "shell", "worker"] })
+  knowledgeRecordClaim(input: {
+    logId: string;
+    head: string;
+    invocationId?: string | null;
+    claim: {
+      text?: string | null;
+      subject?: string | null;
+      predicate?: string | null;
+      object?: string | null;
+      kind?: string | null;
+    };
+    anchor?: { commitEventId?: string | null; repoPath?: string | null } | null;
+    force?: boolean | null;
+  }): {
+    claimId?: string;
+    ledgerEntryId?: string;
+    duplicates: Array<{ claimId: string; text: string; score: number }>;
+  } {
+    this.ensureReady();
+    if (!input.logId || !input.head) {
+      throw new Error("knowledgeRecordClaim requires logId and head");
+    }
+    const claim = input.claim ?? {};
+    const searchText = this.claimSearchText(claim);
+    if (!searchText) {
+      throw new Error("knowledgeRecordClaim requires claim text or subject/predicate/object");
+    }
+    // Dedup-on-write: read-only FTS probe BEFORE the write. A near-duplicate
+    // (and no `force`) returns the candidates without recording — the agent
+    // revises/relates instead of forking a near-identical node.
+    const duplicates = this.findDuplicateClaims(searchText);
+    const nearDuplicate = duplicates.some((c) => c.score >= CLAIM_DEDUP_MIN_OVERLAP);
+    if (nearDuplicate && !input.force) {
+      return { duplicates };
+    }
+    return this.transaction(() => {
+      const at = nowIso();
+      const owner = this.trajectoryOwner(input.logId, input.head);
+      const claimId = `claim-${crypto.randomUUID()}`;
+      const ledgerEntryId = crypto.randomUUID();
+      const trajectoryEventId = crypto.randomUUID();
+      const anchor = this.buildClaimAnchor({
+        owner,
+        repoPath: input.anchor?.repoPath,
+        commitEventId: input.anchor?.commitEventId,
+        at,
+      });
+      this.appendLedgerEntry({
+        entryId: ledgerEntryId,
+        kind: "claim_recorded",
+        payload: {
+          claimId,
+          text: claim.text ?? null,
+          subject: claim.subject ?? null,
+          predicate: claim.predicate ?? null,
+          object: claim.object ?? null,
+          claimKind: claim.kind ?? null,
+          status: "active",
+          logId: input.logId,
+          head: input.head,
+          trajectoryEventId,
+          invocationId: input.invocationId ?? null,
+        },
+        anchor,
+        createdAt: at,
+      });
+      this.appendLogEventInTxn({
+        logId: input.logId,
+        head: input.head,
+        logKind: "trajectory",
+        owner,
+        events: [
+          {
+            envelopeId: trajectoryEventId,
+            actor: owner as unknown as ActorRef,
+            payloadKind: "knowledge.claim_recorded",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              claimId,
+              ledgerEntryId,
+              ...(claim.text ? { text: claim.text } : {}),
+              ...(claim.subject ? { subject: claim.subject } : {}),
+              ...(claim.predicate ? { predicate: claim.predicate } : {}),
+              ...(claim.object ? { object: claim.object } : {}),
+              ...(claim.kind ? { kind: claim.kind } : {}),
+              status: "active",
+            },
+            ...(input.invocationId
+              ? { causality: { invocationId: brandId<InvocationId>(input.invocationId) } }
+              : {}),
+            appendedAt: at,
+          },
+        ],
+      });
+      // §12 counter #3: claims recorded, split commit-borne vs standalone.
+      this.bumpProvMetric("claims_recorded", input.anchor?.commitEventId ? "commit" : "standalone");
+      // Claim content is a global density input; invalidate every warm cache era
+      // that was computed against the previous claim graph.
+      this.bumpKnowledgeVersion();
+      // §7.3 density-seed era: a new asserted claim re-seeds this session's
+      // spreading activation (§6.1), so invalidate its warm density cache.
+      this.bumpTouchVersion(input.logId, input.head);
+      return { claimId, ledgerEntryId, duplicates };
+    });
+  }
+
+  @rpc({ callers: ["do", "server", "shell", "worker"] })
+  knowledgeRelateClaims(input: {
+    logId: string;
+    head: string;
+    invocationId?: string | null;
+    relations: Array<{ src: string; relation: string; dst: string; weight?: number | null }>;
+  }): { ledgerEntryId: string; related: number } {
+    this.ensureReady();
+    if (!input.logId || !input.head) {
+      throw new Error("knowledgeRelateClaims requires logId and head");
+    }
+    if (!input.relations || input.relations.length === 0) {
+      throw new Error("knowledgeRelateClaims requires at least one relation");
+    }
+    return this.transaction(() => {
+      const at = nowIso();
+      const owner = this.trajectoryOwner(input.logId, input.head);
+      const ledgerEntryId = crypto.randomUUID();
+      const trajectoryEventId = crypto.randomUUID();
+      const relations = input.relations.map((rel) => ({
+        src: rel.src,
+        relation: rel.relation,
+        dst: rel.dst,
+        ...(rel.weight != null ? { weight: rel.weight } : {}),
+      }));
+      const anchor = this.buildClaimAnchor({ owner, at });
+      this.appendLedgerEntry({
+        entryId: ledgerEntryId,
+        kind: "claims_related",
+        payload: {
+          relations,
+          logId: input.logId,
+          head: input.head,
+          trajectoryEventId,
+          invocationId: input.invocationId ?? null,
+        },
+        anchor,
+        createdAt: at,
+      });
+      this.appendLogEventInTxn({
+        logId: input.logId,
+        head: input.head,
+        logKind: "trajectory",
+        owner,
+        events: [
+          {
+            envelopeId: trajectoryEventId,
+            actor: owner as unknown as ActorRef,
+            payloadKind: "knowledge.claims_related",
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, ledgerEntryId, relations },
+            ...(input.invocationId
+              ? { causality: { invocationId: brandId<InvocationId>(input.invocationId) } }
+              : {}),
+            appendedAt: at,
+          },
+        ],
+      });
+      // §7.3 density-seed era: new claim↔claim relations change the edges the
+      // §6.1 spread traverses (and the contradiction set), so invalidate the
+      // session's warm density cache.
+      this.bumpKnowledgeVersion();
+      this.bumpTouchVersion(input.logId, input.head);
+      return { ledgerEntryId, related: relations.length };
+    });
+  }
+
+  @rpc({ callers: ["do", "server", "shell", "worker"] })
+  knowledgeReviseClaim(input: {
+    logId: string;
+    head: string;
+    invocationId?: string | null;
+    claimId: string;
+    patch: {
+      text?: string | null;
+      subject?: string | null;
+      predicate?: string | null;
+      object?: string | null;
+      kind?: string | null;
+    };
+  }): { claimId: string; ledgerEntryId: string } {
+    this.ensureReady();
+    if (!input.logId || !input.head) {
+      throw new Error("knowledgeReviseClaim requires logId and head");
+    }
+    if (!input.claimId) throw new Error("knowledgeReviseClaim requires claimId");
+    const patch = input.patch ?? {};
+    return this.transaction(() => {
+      const at = nowIso();
+      const owner = this.trajectoryOwner(input.logId, input.head);
+      const ledgerEntryId = crypto.randomUUID();
+      const trajectoryEventId = crypto.randomUUID();
+      const anchor = this.buildClaimAnchor({ owner, at });
+      this.appendLedgerEntry({
+        entryId: ledgerEntryId,
+        kind: "claim_revised",
+        payload: {
+          claimId: input.claimId,
+          // Only carry the patched fields so replay applies a partial update.
+          ...(patch.text != null ? { text: patch.text } : {}),
+          ...(patch.subject != null ? { subject: patch.subject } : {}),
+          ...(patch.predicate != null ? { predicate: patch.predicate } : {}),
+          ...(patch.object != null ? { object: patch.object } : {}),
+          ...(patch.kind != null ? { claimKind: patch.kind } : {}),
+          logId: input.logId,
+          head: input.head,
+          trajectoryEventId,
+          invocationId: input.invocationId ?? null,
+        },
+        anchor,
+        createdAt: at,
+      });
+      this.appendLogEventInTxn({
+        logId: input.logId,
+        head: input.head,
+        logKind: "trajectory",
+        owner,
+        events: [
+          {
+            envelopeId: trajectoryEventId,
+            actor: owner as unknown as ActorRef,
+            payloadKind: "knowledge.claim_updated",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              claimId: input.claimId,
+              ledgerEntryId,
+              ...(patch.text != null ? { text: patch.text } : {}),
+              ...(patch.subject != null ? { subject: patch.subject } : {}),
+              ...(patch.predicate != null ? { predicate: patch.predicate } : {}),
+              ...(patch.object != null ? { object: patch.object } : {}),
+              ...(patch.kind != null ? { kind: patch.kind } : {}),
+            },
+            ...(input.invocationId
+              ? { causality: { invocationId: brandId<InvocationId>(input.invocationId) } }
+              : {}),
+            appendedAt: at,
+          },
+        ],
+      });
+      // Claim content is rendered into cacheable density items; a revise must
+      // invalidate both the global claim graph era and this session's seed era.
+      this.bumpKnowledgeVersion();
+      this.bumpTouchVersion(input.logId, input.head);
+      return { claimId: input.claimId, ledgerEntryId };
+    });
+  }
+
+  @rpc({ callers: ["do", "server", "shell", "worker"] })
+  knowledgeRetractClaim(input: {
+    logId: string;
+    head: string;
+    invocationId?: string | null;
+    claimId: string;
+  }): { claimId: string; ledgerEntryId: string } {
+    this.ensureReady();
+    if (!input.logId || !input.head) {
+      throw new Error("knowledgeRetractClaim requires logId and head");
+    }
+    if (!input.claimId) throw new Error("knowledgeRetractClaim requires claimId");
+    return this.transaction(() => {
+      const at = nowIso();
+      const owner = this.trajectoryOwner(input.logId, input.head);
+      const ledgerEntryId = crypto.randomUUID();
+      const trajectoryEventId = crypto.randomUUID();
+      const anchor = this.buildClaimAnchor({ owner, at });
+      this.appendLedgerEntry({
+        entryId: ledgerEntryId,
+        kind: "claim_retracted",
+        payload: {
+          claimId: input.claimId,
+          logId: input.logId,
+          head: input.head,
+          trajectoryEventId,
+          invocationId: input.invocationId ?? null,
+        },
+        anchor,
+        createdAt: at,
+      });
+      this.appendLogEventInTxn({
+        logId: input.logId,
+        head: input.head,
+        logKind: "trajectory",
+        owner,
+        events: [
+          {
+            envelopeId: trajectoryEventId,
+            actor: owner as unknown as ActorRef,
+            payloadKind: "knowledge.claim_retracted",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              claimId: input.claimId,
+              ledgerEntryId,
+            },
+            ...(input.invocationId
+              ? { causality: { invocationId: brandId<InvocationId>(input.invocationId) } }
+              : {}),
+            appendedAt: at,
+          },
+        ],
+      });
+      // A retracted claim must stop surfacing from any cached density leg.
+      this.bumpKnowledgeVersion();
+      this.bumpTouchVersion(input.logId, input.head);
+      return { claimId: input.claimId, ledgerEntryId };
+    });
   }
 
   private applyChannelRosterProjection(envelope: LogEnvelope): void {
@@ -3798,75 +5182,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return stateHash;
   }
 
-  /** O(depth) path copy: replace one file, rehash only the ancestor chain. */
-  private applyFileWrite(
-    inputStateHash: string,
-    path: string,
-    fileVersionId: number,
-    contentHash: string,
-    mode: number,
-    metadata: Record<string, unknown>
-  ): string {
-    const segments = path.split("/");
-    const rewrite = (manifestHash: string | null, depth: number): string => {
-      const entries = manifestHash ? this.manifestEntries(manifestHash) : [];
-      const name = segments[depth]!;
-      const next: Array<
-        | { name: string; kind: "file"; contentHash: string; mode: number; fileVersionId: number }
-        | { name: string; kind: "dir"; childHash: string }
-      > = [];
-      let replaced = false;
-      for (const entry of entries) {
-        const entryName = String(entry["name"]);
-        if (entryName === name) {
-          replaced = true;
-          if (depth === segments.length - 1) {
-            next.push({ name, kind: "file", contentHash, mode, fileVersionId });
-          } else {
-            const childHash = rewrite(asString(entry["child_manifest_hash"]), depth + 1);
-            next.push({ name, kind: "dir", childHash });
-          }
-          continue;
-        }
-        if (entry["entry_kind"] === "dir") {
-          next.push({
-            name: entryName,
-            kind: "dir",
-            childHash: String(entry["child_manifest_hash"]),
-          });
-        } else {
-          next.push({
-            name: entryName,
-            kind: "file",
-            contentHash: String(entry["content_hash"]),
-            mode: asNumber(entry["mode"]),
-            fileVersionId: asNumber(entry["file_version_id"]),
-          });
-        }
-      }
-      if (!replaced) {
-        if (depth === segments.length - 1) {
-          next.push({ name, kind: "file", contentHash, mode, fileVersionId });
-        } else {
-          next.push({ name, kind: "dir", childHash: rewrite(null, depth + 1) });
-        }
-      }
-      return this.storeManifestNode(next);
-    };
-    const inputRoot = this.manifestRootForState(inputStateHash);
-    const newRoot = rewrite(inputRoot === EMPTY_MANIFEST_HASH ? null : inputRoot, 0);
-    const stateHash = this.stateHashForRoot(newRoot);
-    this.sql.exec(
-      `INSERT OR IGNORE INTO gad_worktree_states (state_hash, manifest_root_hash, metadata_json, created_at)
-       VALUES (?, ?, ?, ?)`,
-      stateHash,
-      newRoot,
-      JSON.stringify(metadata),
-      nowIso()
-    );
-    return stateHash;
-  }
-
   /** Resolve the manifest hash of the dir at `path` (root when empty). */
   private manifestDirAtPath(stateHash: string, path: string | null | undefined): string | null {
     let manifestHash = this.manifestRootForState(stateHash);
@@ -4120,32 +5435,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
       .toArray() as JsonRecord[];
   }
 
-  @rpc({ callers: ["panel", "do", "worker", "server"] })
-  blameGadFileSnippet(input: {
-    stateHash?: string | null;
-    fileVersionId?: number | null;
-    path: string;
-  }): JsonRecord[] {
-    this.ensureReady();
-    const path = normalizePath(input.path);
-    const fileVersionId =
-      input.fileVersionId ??
-      this.readGadFileAtState({
-        stateHash: input.stateHash ?? EMPTY_STATE_HASH,
-        path,
-      })?.["file_version_id"];
-    if (fileVersionId == null) return [];
-    return this.sql
-      .exec(
-        `SELECT * FROM gad_file_change_hunks
-         WHERE path = ? AND after_file_version_id = ?
-         ORDER BY id ASC`,
-        path,
-        fileVersionId as SqlBinding
-      )
-      .toArray() as JsonRecord[];
-  }
-
   /** Validate a manifest tree recursively; report missing nodes and hash
    *  mismatches into `errors`. Returns the recomputed hash or null. */
   private recomputeManifestHashDeep(
@@ -4372,13 +5661,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
         }
       }
       input.editOps.forEach((op, ordinal) => {
+        // U1: hunk completeness holds for ingest-supplied provenance ops too —
+        // synthetic snapshot ops (import/push/whole-file takes) and binary rows
+        // are the only text mutations allowed to omit hunks.
+        assertHunkCompleteness(op, `${input.logId}:${input.head}`);
         this.sql.exec(
           `INSERT INTO gad_worktree_edit_ops (
                event_id, log_id, head, committed_event_id, committed_seq,
                edit_seq, output_state_hash, ordinal, kind, path,
                old_content_hash, new_content_hash, hunks_json, mode,
-               actor_id, actor_json, invocation_id, turn_id, created_at, synthetic
-             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               actor_id, actor_json, invocation_id, turn_id, created_at, synthetic, binary
+             ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           eventId,
           input.logId,
           input.head,
@@ -4397,7 +5690,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
           input.invocationId ?? null,
           input.turnId ?? null,
           now,
-          op.synthetic ? 1 : null
+          op.synthetic ? 1 : null,
+          op.binary ? 1 : 0
         );
       });
     }
@@ -4482,6 +5776,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       newContentHash?: string | null;
       hunks?: unknown;
       mode?: number | null;
+      /** U1 (Wave 1 engine flag): the op's NEW content is binary — no line
+       *  structure, so hunks are legitimately absent and blame chain-restarts. */
+      binary?: boolean | null;
     }>;
     expectedEditSeq: number;
     expectedCommitHead: string | null;
@@ -4514,13 +5811,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const editSeq = curEditSeq + 1;
       const now = nowIso();
       input.ops.forEach((op, ordinal) => {
+        assertHunkCompleteness(op, `${input.logId}:${input.head}`);
         this.sql.exec(
           `INSERT INTO gad_worktree_edit_ops (
              event_id, log_id, head, committed_event_id, committed_seq,
              edit_seq, output_state_hash, ordinal, kind, path,
              old_content_hash, new_content_hash, hunks_json, mode,
-             actor_id, actor_json, invocation_id, turn_id, created_at
-           ) VALUES (?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             actor_id, actor_json, invocation_id, turn_id, created_at, binary
+           ) VALUES (?, ?, ?, NULL, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           input.eventId,
           input.logId,
           input.head,
@@ -4536,7 +5834,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
           input.actorJson,
           input.invocationId ?? null,
           input.turnId ?? null,
-          now
+          now,
+          op.binary ? 1 : 0
         );
       });
       return { editSeq };
@@ -4898,6 +6197,26 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
       // 2. Apply ops → new file map + edit-op rows (blob bytes through the bridge).
       const { files, rows } = await engine.applyEditOps(working.files, input.edits);
+      // U1 binary-boundary resolution: the engine's `binary` flag reflects the
+      // NEW content, so a WRITE of text over an existing BINARY file arrives
+      // `binary:false` with no hunks. There is genuinely no line structure to
+      // compose through that boundary — mark it `binary` so blame chain-restarts
+      // (attributing the write itself, degraded) instead of the U1 seam rejecting
+      // it as a missing-hunks bug. Only the ambiguous rows pay the old-blob read.
+      for (const row of rows) {
+        if (
+          row.kind === "write" &&
+          !row.binary &&
+          row.hunks === undefined &&
+          row.oldContentHash &&
+          row.oldContentHash !== row.newContentHash
+        ) {
+          const oldB64 = await store.getBase64(row.oldContentHash);
+          if (oldB64 !== null && decodeUtf8Text(base64ToBytes(oldB64)) === null) {
+            row.binary = true;
+          }
+        }
+      }
       if (rows.length === 0) {
         return {
           editSeq: working.maxEditSeq,
@@ -5034,6 +6353,181 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
+  /** Forward edit ops that carry `fromState` to `toState` (the dual of the
+   *  inverse ops {@link revertWorking} builds): added/changed → write the AFTER
+   *  content by blob digest, removed → delete. `write` create-if-absent so a
+   *  pick over divergent content lands cleanly. */
+  private forwardEditsBetween(fromState: string, toState: string): VcsEditOp[] {
+    const diff = this.diffGadStates({ leftStateHash: fromState, rightStateHash: toState });
+    const edits: VcsEditOp[] = [];
+    for (const file of diff.added) {
+      edits.push({
+        kind: "write",
+        path: String(file["path"]),
+        content: { kind: "blob", contentHash: String(file["content_hash"]) },
+        mode: asNumber(file["mode"]),
+      });
+    }
+    for (const file of diff.removed) edits.push({ kind: "delete", path: String(file["path"]) });
+    for (const file of diff.changed) {
+      const after = file["after"] as JsonRecord;
+      edits.push({
+        kind: "write",
+        path: String(file["path"]),
+        content: { kind: "blob", contentHash: String(after["content_hash"]) },
+        mode: asNumber(after["mode"]),
+      });
+    }
+    return edits;
+  }
+
+  /**
+   * Cherry-pick edits for a commit: a 3-way against an EXPLICIT base — base =
+   * the commit's parent state, theirs = the commit's output state, ours = the
+   * caller head's CURRENT working content — so the pick lands the commit's
+   * change adapted to where the caller actually is (not a naive forward-apply
+   * of the raw diff). The merged file set is diffed back against `ours` to yield
+   * the working edits {@link vcsPick} records; conflict-marked content (if the
+   * 3-way conflicted) lands in the working tree for the caller to resolve, just
+   * as a merge resolution does.
+   */
+  private async pickCommitEdits(
+    store: HostContentStore,
+    logId: string,
+    head: string,
+    eventId: string
+  ): Promise<VcsEditOp[]> {
+    const transition = this.getGadStateTransition({ eventId });
+    const theirsState = transition?.["output_state_hash"];
+    if (typeof theirsState !== "string" || !theirsState) {
+      throw new Error(`pick: commit ${eventId} produced no output state`);
+    }
+    const inputState = transition?.["input_state_hash"];
+    const baseState = typeof inputState === "string" && inputState ? inputState : EMPTY_STATE_HASH;
+    // ours = the caller head's current working content (compose base + rows).
+    const { baseStateHash } = await this.resolveComposeBase(store, logId, head);
+    const working = await this.composeWorkingFiles(store, logId, head, baseStateHash);
+    const oursState = await this.stageAndMirror(
+      store,
+      [...working.files.values()],
+      `pick base for ${head}`
+    );
+    const result = await this.mergeEngineFor(store).compute3(
+      { base: baseState, ours: oursState, theirs: theirsState },
+      { ours: head, theirs: `commit:${eventId}` }
+    );
+    if (result.status === "up-to-date") return [];
+    const mergedState = await this.stageAndMirror(
+      store,
+      result.files.map((file) => ({
+        path: file.path,
+        contentHash: file.contentHash,
+        mode: file.mode,
+      })),
+      `pick ${eventId} into ${head}`
+    );
+    return this.forwardEditsBetween(oursState, mergedState);
+  }
+
+  /** Path-injection edits: copy the source context's WORKING content at the
+   *  requested repo-relative paths as write ops (create-if-absent). Paths absent
+   *  in the source are skipped (nothing to copy). */
+  private async pickPathEdits(
+    store: HostContentStore,
+    logId: string,
+    sourceContextId: string,
+    paths: string[]
+  ): Promise<VcsEditOp[]> {
+    const sourceState = (await this.resolveWorkingState({ logId, head: `ctx:${sourceContextId}` }))
+      .stateHash;
+    const byPath = new Map(
+      (sourceState ? await this.stateFilesFor(store, sourceState) : []).map(
+        (file) => [file.path, file] as const
+      )
+    );
+    const edits: VcsEditOp[] = [];
+    for (const path of paths) {
+      const file = byPath.get(normalizePath(path));
+      if (!file) continue;
+      edits.push({
+        kind: "write",
+        path: file.path,
+        content: { kind: "blob", contentHash: file.contentHash },
+        mode: file.mode,
+      });
+    }
+    return edits;
+  }
+
+  /**
+   * PICK — the forward dual of {@link revertWorking}. Lands a selected change
+   * onto a `ctx:*` head as UNCOMMITTED working edits (never a head advance): a
+   * `commit` pick 3-way-applies a commit's patch (see {@link pickCommitEdits});
+   * a `paths` pick injects another context's working content at specific paths.
+   * Both feed {@link applyEditOps} (revert-parity), then tag the just-created
+   * working rows with `pickedFrom` provenance (UX breadcrumb). The caller
+   * reviews and commits deliberately.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsPick(input: {
+    logId: string;
+    head: string;
+    actor: ActorRef;
+    pick:
+      | { kind: "commit"; eventId: string }
+      | { kind: "paths"; sourceContextId: string; paths: string[] };
+  }): Promise<{
+    editSeq: number;
+    stateHash: string;
+    baseStateHash: string;
+    changedPaths: string[];
+  }> {
+    this.ensureReady();
+    const { logId, head } = input;
+    if (head === "main" || !head.startsWith("ctx:")) {
+      throw new Error(`pick: '${head}' — picks target a ctx:* head`);
+    }
+    const store = this.contentStore();
+    const edits =
+      input.pick.kind === "commit"
+        ? await this.pickCommitEdits(store, logId, head, input.pick.eventId)
+        : await this.pickPathEdits(store, logId, input.pick.sourceContextId, input.pick.paths);
+    if (edits.length === 0) {
+      const { baseStateHash } = await this.resolveComposeBase(store, logId, head);
+      return {
+        editSeq: this.workingEditRows(logId, head).reduce(
+          (max, row) => Math.max(max, Number(row["edit_seq"] ?? 0)),
+          0
+        ),
+        stateHash: this.resolveCommittedHeadState(logId, head) ?? baseStateHash,
+        baseStateHash,
+        changedPaths: [],
+      };
+    }
+    const actorId = asString((input.actor as unknown as Record<string, unknown>)?.["id"]) ?? "";
+    const result = await this.applyEditOps({
+      logId,
+      head,
+      actorId,
+      actorJson: JSON.stringify(input.actor),
+      edits,
+    });
+    // Tag the working rows this pick just created with their provenance.
+    const provenance =
+      input.pick.kind === "commit"
+        ? { kind: "commit", logId, eventId: input.pick.eventId }
+        : { kind: "paths", sourceContextId: input.pick.sourceContextId };
+    this.sql.exec(
+      `UPDATE gad_worktree_edit_ops SET picked_from_json = ?
+       WHERE log_id = ? AND head = ? AND edit_seq = ? AND committed_event_id IS NULL`,
+      JSON.stringify(provenance),
+      logId,
+      head,
+      result.editSeq
+    );
+    return result;
+  }
+
   /**
    * The WORKING content state for a `(logId, head)` — compose base +
    * uncommitted ops — staged locally and mirrored into the content store.
@@ -5118,7 +6612,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     logId: string;
     head: string;
     message: string;
-    actor: ParticipantRef;
+    actor: ActorRef;
     invocationId?: string | null;
     turnId?: string | null;
     /** Repo-relative paths whose working rows stay UNCOMMITTED. */
@@ -5192,6 +6686,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
       contentHash: file.contentHash,
       mode: file.mode,
     }));
+    // Merge-resolution provenance (blame invariants 1 + 2/U2): a commit that
+    // seals a pending merge is a merge commit whose first parent is OURS. The
+    // agent's re-keyed working rows only cover the files they hand-resolved and
+    // are anchored to the PROVISIONAL base, not OURS. Synthesize the missing
+    // provenance — an OURS→provisional bridge for each resolved path plus a
+    // whole-file op for every cleanly-taken incoming file — so the committed
+    // chain composes from OURS and nothing incoming is a blame hole. Computed
+    // here (async `stateFilesFor`) before the txn; the txn's CAS re-check aborts
+    // if the head moved under us, so a stale `lineageBase` can't be recorded.
+    const mergeResolutionOps = pending
+      ? this.mergeResolutionEditOps(
+          await this.stateFilesFor(store, lineageBase),
+          baseFiles,
+          fileList,
+          new Set(includedRows.map((row) => String(row["path"])))
+        )
+      : [];
     const result = this.transaction(() => {
       // CAS re-check under the txn: the async compose above may have
       // interleaved with a concurrent commit/merge on this head.
@@ -5220,7 +6731,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
         ...(input.invocationId ? { metadata: { commitInvocationId: input.invocationId } } : {}),
         ...(pending ? { parentStateHashes: [pending.theirsStateHash] } : {}),
         ...(pending?.theirsEventId ? { parentEventIds: [pending.theirsEventId] } : {}),
-        // No editOps — re-key the pre-existing working rows below (NEVER re-insert).
+        // Merge-resolution: SYNTHESIZED provenance for cleanly-taken incoming
+        // files + the OURS→provisional bridges (chain-continuous vs OURS). The
+        // agent's authored resolution rows are RE-KEYED below (NEVER re-inserted
+        // — invariant 10), landing ON TOP of the bridges. A plain snapshot
+        // commit passes no editOps (re-key only).
+        ...(mergeResolutionOps.length > 0
+          ? { editOps: mergeResolutionOps, validateFirstParentChain: true }
+          : {}),
       });
       for (const row of includedRows) {
         this.sql.exec(
@@ -5507,6 +7025,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       invocationId: s(row["invocation_id"]),
       turnId: s(row["turn_id"]),
       createdAt: s(row["created_at"]),
+      hunksJson: s(row["hunks_json"]),
+      synthetic: Number(row["synthetic"]) === 1,
+      binary: Number(row["binary"]) === 1,
     };
   }
 
@@ -5571,6 +7092,1658 @@ export class GadWorkspaceDO extends DurableObjectBase {
   vcsEditsByInvocation(invocationId: string): VcsEditOpRowWire[] {
     this.ensureReady();
     return this.editsByInvocation({ invocationId }).map((row) => this.mapVcsEditOpRow(row));
+  }
+
+  /**
+   * Line-level blame (design §5.2). Materializes the file at `head` (via the
+   * content bridge), maps `[startLine, endLine]` to char offsets, and composes
+   * each offset back along the first-parent op chain (working tail first) with
+   * @workspace/vcs-engine `blameChain`. `theirs`-origin merge hits re-gather the
+   * OTHER parent's first-parent chain (bounded depth) and continue there. Each
+   * range carries its producing op's commit/turn/actor; `create`/`binary`/
+   * `synthetic`/`older-than-log` boundaries report `degraded`. `head` defaults to
+   * `main` (userland dispatch carries no caller-context head resolution).
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  async vcsBlameLines(
+    repoPath: string,
+    filePath: string,
+    startLine: number,
+    endLine: number,
+    head?: string | null
+  ): Promise<VcsBlameLineWire[]> {
+    this.ensureReady();
+    const norm = normalizeRepoPathArg(repoPath);
+    const logId = logIdForRepoPath(norm);
+    const relPath = filePath.startsWith(`${norm}/`) ? filePath.slice(norm.length + 1) : filePath;
+    const path = normalizePath(relPath);
+    const resolvedHead = head ?? "main";
+
+    const store = this.contentStore();
+    // 1. Materialize the file at head; no line blame for a missing or binary file.
+    const text = await this.fileTextAtHead(store, logId, resolvedHead, path);
+    if (text === null || text.length === 0) return [];
+    const lineSpans = computeLineSpans(text);
+    const from = Math.max(1, Math.trunc(startLine));
+    const to = Math.min(Math.trunc(endLine), lineSpans.length);
+    if (to < from) return [];
+    const offsets: number[] = [];
+    const lineOffsetCounts: number[] = [];
+    for (let ln = from; ln <= to; ln += 1) {
+      const span = lineSpans[ln - 1]!;
+      const before = offsets.length;
+      if (span.end > span.start) {
+        for (let offset = span.start; offset < span.end; offset += 1) offsets.push(offset);
+      } else {
+        offsets.push(span.start);
+      }
+      lineOffsetCounts.push(offsets.length - before);
+    }
+
+    // 2. Gather the head's first-parent chain and compose each offset back.
+    const headOps = this.blameChainRows(logId, resolvedHead, path);
+    const perOffset = blameChain(headOps, offsets).map((r) =>
+      this.blameResolvedFor(logId, path, r.resolution)
+    );
+    const perLine: Array<Omit<VcsBlameLineWire, "startLine" | "endLine">> = [];
+    let cursor = 0;
+    for (const count of lineOffsetCounts) {
+      perLine.push(representativeLineBlame(perOffset.slice(cursor, cursor + count)));
+      cursor += count;
+    }
+    // 3. Coalesce contiguous identical resolutions into ranges.
+    return coalesceBlameLines(from, perLine);
+  }
+
+  /** The composed working text at `head` (base + uncommitted edits), or null
+   *  when the path is absent or binary. */
+  private async fileTextAtHead(
+    store: HostContentStore,
+    logId: string,
+    head: string,
+    path: string
+  ): Promise<string | null> {
+    const { baseStateHash } = await this.resolveComposeBase(store, logId, head);
+    const working = await this.composeWorkingFiles(store, logId, head, baseStateHash);
+    const entry = working.files.get(path);
+    if (!entry) return null;
+    const b64 = await store.getBase64(entry.contentHash);
+    if (b64 === null) return null;
+    return decodeUtf8Text(base64ToBytes(b64));
+  }
+
+  /** Blame's first-parent op chain for a path at a head: the uncommitted working
+   *  tail (newest→oldest) then the committed first-parent lineage. */
+  private blameChainRows(logId: string, head: string, path: string): BlameOpRow[] {
+    const ops: BlameOpRow[] = [];
+    const working = this.sql
+      .exec(
+        `SELECT * FROM gad_worktree_edit_ops
+         WHERE log_id = ? AND head = ? AND path = ? AND committed_event_id IS NULL
+         ORDER BY edit_seq DESC, ordinal DESC`,
+        logId,
+        head,
+        path
+      )
+      .toArray() as JsonRecord[];
+    for (const row of working) ops.push(this.toBlameOpRow(row));
+    const tip = this.resolveWorktreeHeadInternal(logId, head)?.commitEventId ?? null;
+    ops.push(...this.committedFirstParentChainRows(logId, path, tip));
+    return ops;
+  }
+
+  /** A path's committed ops along the first-parent commit lineage from `tip`
+   *  (newest→oldest), bounded by {@link BLAME_MAX_COMMITS}. */
+  private committedFirstParentChainRows(
+    logId: string,
+    path: string,
+    tipEventId: string | null
+  ): BlameOpRow[] {
+    const ops: BlameOpRow[] = [];
+    const seen = new Set<string>();
+    let cur: string | null = tipEventId;
+    let commits = 0;
+    while (cur && !seen.has(cur) && commits < BLAME_MAX_COMMITS) {
+      seen.add(cur);
+      commits += 1;
+      const rows = this.sql
+        .exec(
+          `SELECT * FROM gad_worktree_edit_ops
+           WHERE log_id = ? AND path = ? AND committed_event_id = ?
+           ORDER BY edit_seq DESC, ordinal DESC`,
+          logId,
+          path,
+          cur
+        )
+        .toArray() as JsonRecord[];
+      for (const row of rows) ops.push(this.toBlameOpRow(row));
+      cur = this.parentEventIdAt(cur, 0);
+    }
+    return ops;
+  }
+
+  private parentEventIdAt(eventId: string, ordinal: number): string | null {
+    const row = this.sql
+      .exec(
+        `SELECT parent_event_id FROM gad_transition_parents WHERE event_id = ? AND ordinal = ?`,
+        eventId,
+        ordinal
+      )
+      .toArray()[0] as { parent_event_id?: string | null } | undefined;
+    return row?.parent_event_id ?? null;
+  }
+
+  private toBlameOpRow(row: JsonRecord): BlameOpRow {
+    const hunksJson = asString(row["hunks_json"]);
+    return {
+      opId: Number(row["id"]),
+      kind: String(row["kind"]),
+      hunks: hunksJson ? (JSON.parse(hunksJson) as BlameOpRow["hunks"]) : null,
+      oldContentHash: asString(row["old_content_hash"]),
+      newContentHash: asString(row["new_content_hash"]),
+      synthetic: Number(row["synthetic"]) === 1,
+      binary: Number(row["binary"]) === 1,
+    };
+  }
+
+  private blameRowById(opId: string | number): JsonRecord | null {
+    const row = this.sql
+      .exec(`SELECT * FROM gad_worktree_edit_ops WHERE id = ?`, Number(opId))
+      .toArray()[0] as JsonRecord | undefined;
+    return row ?? null;
+  }
+
+  /** Resolve one line's blame result, routing `theirs`-origin merge hits onto the
+   *  other parent's chain (bounded {@link BLAME_MAX_ROUTE_DEPTH}). */
+  private blameResolvedFor(
+    logId: string,
+    path: string,
+    resolution: BlameResolution
+  ): Omit<VcsBlameLineWire, "startLine" | "endLine"> {
+    let res = resolution;
+    let depth = 0;
+    while (res.kind === "route-theirs") {
+      if (depth >= BLAME_MAX_ROUTE_DEPTH) return this.blameStop("older-than-log", null);
+      depth += 1;
+      const mergeRow = this.blameRowById(res.opId);
+      const mergeCommit = mergeRow ? asString(mergeRow["committed_event_id"]) : null;
+      const theirsEvent = mergeCommit ? this.parentEventIdAt(mergeCommit, 1) : null;
+      if (!theirsEvent) return this.blameStop("older-than-log", null);
+      const theirsOps = this.committedFirstParentChainRows(logId, path, theirsEvent);
+      res = blameChain(theirsOps, [res.theirsOffset])[0]!.resolution;
+    }
+    if (res.kind === "op") return this.blameAttribute(res.opId, null);
+    return this.blameStop(res.reason, res.opId ?? null);
+  }
+
+  private blameAttribute(
+    opId: string | number,
+    degraded: VcsBlameLineWire["degraded"]
+  ): Omit<VcsBlameLineWire, "startLine" | "endLine"> {
+    const row = this.blameRowById(opId);
+    if (!row) return this.blameStop("older-than-log", null);
+    return { opId: Number(opId), ...this.blameCommitMeta(row), degraded };
+  }
+
+  private blameStop(
+    reason: VcsBlameLineWire["degraded"],
+    opId: string | number | null
+  ): Omit<VcsBlameLineWire, "startLine" | "endLine"> {
+    if (opId != null) {
+      const row = this.blameRowById(opId);
+      if (row) return { opId: Number(opId), ...this.blameCommitMeta(row), degraded: reason };
+    }
+    return {
+      opId: null,
+      kind: null,
+      commitEventId: null,
+      commitMessage: null,
+      invocationId: null,
+      turnId: null,
+      actorId: null,
+      degraded: reason,
+    };
+  }
+
+  /** The commit/turn/actor attribution for one op row (commit message via
+   *  `gad_state_transitions.summary`; turn via the invocation→turn join). */
+  private blameCommitMeta(row: JsonRecord): {
+    kind: string;
+    commitEventId: string | null;
+    commitMessage: string | null;
+    invocationId: string | null;
+    turnId: string | null;
+    actorId: string | null;
+  } {
+    const commitEventId = asString(row["committed_event_id"]);
+    const invocationId = asString(row["invocation_id"]);
+    let turnId = asString(row["turn_id"]);
+    if (!turnId && invocationId) {
+      const t = this.sql
+        .exec(
+          `SELECT turn_id FROM trajectory_invocations WHERE invocation_id = ? LIMIT 1`,
+          invocationId
+        )
+        .toArray()[0] as { turn_id?: string | null } | undefined;
+      turnId = asString(t?.turn_id ?? null);
+    }
+    let commitMessage: string | null = null;
+    if (commitEventId) {
+      const s = this.sql
+        .exec(`SELECT summary FROM gad_state_transitions WHERE event_id = ?`, commitEventId)
+        .toArray()[0] as { summary?: string | null } | undefined;
+      const summary = asString(s?.summary ?? null);
+      commitMessage = summary ? (summary.split("\n")[0] ?? null) : null;
+    }
+    return {
+      kind: String(row["kind"]),
+      commitEventId,
+      commitMessage,
+      invocationId,
+      turnId,
+      actorId: asString(row["actor_id"]),
+    };
+  }
+
+  // =========================================================================
+  // §6/§7/§9 provenance density + read-time attachment (DO-4). One unit used by
+  // the read attachment, drill-down, and the speculative warm cache. Content
+  // NEVER moves onto this DO (§7.2): the pipeline is pure SQL over the native
+  // graph (edit ops, claims, relations) + the soft touch table + FTS recall.
+  // The soft layer is best-effort and explicitly outside integrity/replay (§7.4).
+  // =========================================================================
+
+  /**
+   * §6 pipeline for one file: provenance ∪ recall, re-ranked by session density,
+   * with exceptions first and a salience floor (§7.5). `tier` is the agent's
+   * budget dial (§7.1). Every read leaves ONE coalesced `observed` touch, at
+   * every tier, even when the block is suppressed (§7.4). Returns the
+   * item-budgeted page + `{ shown, total, nextCursor, suppressed }`.
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  provenanceForFile(input: {
+    repoPath: string;
+    path: string;
+    head: string;
+    tier: "none" | "moderate" | "deep";
+    sessionLogId: string;
+    sessionHead: string;
+    invocationId?: string | null;
+    recallKeywords?: string[] | null;
+    after?: string | null;
+    skipSuppression?: boolean | null;
+  }): ProvenanceForFileResult {
+    this.ensureReady();
+    const logId = logIdForRepoPath(input.repoPath);
+    const norm = normalizePath(this.repoRelative(input.repoPath, input.path));
+    const dstId = fileNodeId(logId, norm);
+    const tier = input.tier;
+    const turnSeq = this.currentTurnOrdinal(input.sessionLogId, input.sessionHead);
+    const observedTurnSeq = turnSeq < 0 ? null : turnSeq;
+
+    // §12 counter #1: tier distribution — the health check on §7.1's judgment bet.
+    this.bumpProvMetric("tier", tier);
+
+    // tier 'none': no attachment. Still record that the read happened (§7.4 — the
+    // touch records what the agent did, never what a block displayed).
+    if (tier === "none") {
+      this.upsertTouch({
+        kind: "observed",
+        sessionLogId: input.sessionLogId,
+        sessionHead: input.sessionHead,
+        dstKind: "file",
+        dstId,
+        invocationId: input.invocationId ?? null,
+        turnSeq: observedTurnSeq,
+      });
+      return { items: [], shown: 0, total: 0, suppressed: false };
+    }
+
+    const drilldown = !!input.after || !!input.skipSuppression;
+    // §12 counter #2: drilldown/paging rate. A drill on a file the system
+    // recently pushed is an attach→action hit (§12 counter #4).
+    if (drilldown) {
+      this.bumpProvMetric("drilldown", input.after ? "page" : "deepen");
+      this.bumpActionRateIfRendered(`file:${fileHandlePath(logId, norm)}`);
+    }
+
+    // §7.3 warm-cache serve: the disposable cache holds the DENSITY/recall leg
+    // ONLY — never the exception class. A `moderate` density leg is served only
+    // when its full density fingerprint still matches; `deep` always recomputes;
+    // a paging/drill request bypasses the cache (it needs the full ranked tail).
+    // Exceptions are spliced in LIVE below, on every path.
+    const cacheKey = this.provenanceCacheKey({
+      logId,
+      head: input.head,
+      path: norm,
+      sessionLogId: input.sessionLogId,
+      sessionHead: input.sessionHead,
+      turnSeq,
+      recallKeywords: input.recallKeywords ?? null,
+    });
+    let density: ProvItem[] | null = null;
+    if (tier === "moderate" && !drilldown) {
+      density = this.readProvenanceCache(cacheKey);
+    }
+
+    // §7.5 exception class — asserted contradictions + cross-session concurrency —
+    // is recomputed LIVE against current state on every non-'none' read, cache hit
+    // or miss (§12: it "always render[s], at the top, regardless of density"). It
+    // is cheap (two indexed lookups) and is exactly the state that materializes
+    // AFTER a turn.opened warm precompute (another session's uncommitted edit, a
+    // freshly-asserted contradiction), so it must never be served from the cache.
+    const exceptions = this.fileExceptionItems(logId, norm, input.head);
+
+    // §7.3 standalone budget: compute the density leg against the PRE-READ touch
+    // state (§7.4), bounded by PROV_BUDGET_MS; an overrun stashes the density leg
+    // warm for the follow-on drill and degrades to the one-line hint — but still
+    // renders the live exceptions ahead of it (the safety lines never hide behind
+    // a budget miss).
+    if (density === null) {
+      const started = Date.now();
+      density = this.fileDensityBlock({
+        logId,
+        path: norm,
+        head: input.head,
+        tier,
+        sessionLogId: input.sessionLogId,
+        sessionHead: input.sessionHead,
+        turnSeq,
+        recallKeywords: input.recallKeywords ?? null,
+      });
+      if (!drilldown && Date.now() - started > PROV_BUDGET_MS) {
+        // §7.4/§7.3 ordering: write the observed touch (it does NOT bump the
+        // version), THEN stash the density leg at that same version so the
+        // follow-on moderate read serves it instead of re-degrading.
+        this.bumpProvMetric("degrade", "budget");
+        this.upsertTouch({
+          kind: "observed",
+          sessionLogId: input.sessionLogId,
+          sessionHead: input.sessionHead,
+          dstKind: "file",
+          dstId,
+          invocationId: input.invocationId ?? null,
+          turnSeq: observedTurnSeq,
+        });
+        this.writeProvenanceCache(cacheKey, density);
+        const hint = this.degradeHintItem(input.repoPath, norm);
+        const items = [...exceptions, hint];
+        return {
+          items,
+          shown: items.length,
+          total: items.length,
+          suppressed: false,
+          degraded: true,
+        };
+      }
+    }
+
+    // Exceptions first, then the (possibly cached) density leg — never re-sorted.
+    const ordered = [...exceptions, ...density];
+
+    // §7.1 re-read suppression: block signature over (path content hash, latest
+    // edit-op id, sorted LIVE exception handles), compared on the observed touch
+    // row. A drill-down (`skipSuppression`) or a page (`after`) always renders.
+    const exceptionHandles = exceptions.map((item) => item.handle).sort();
+    const blockSig = this.blockSignature(logId, norm, input.head, exceptionHandles);
+    let suppressed = false;
+    if (!input.skipSuppression && !input.after) {
+      const prior = this.lastObservedBlockSig(input.sessionLogId, input.sessionHead, dstId);
+      suppressed = prior !== null && prior === blockSig;
+    }
+
+    // §7.1 paging: per-tier item budget; the `after` cursor pages the ranked tail
+    // unbounded. Page one always shows every exception (a safety line the agent
+    // must not skim past), then fills to budget with density.
+    const total = ordered.length;
+    const budget = tier === "deep" ? PROV_ITEM_BUDGET_DEEP : PROV_ITEM_BUDGET_MODERATE;
+    let items: ProvItem[] = [];
+    let nextCursor: string | undefined;
+    if (!suppressed) {
+      const offset = input.after ? Math.max(0, parseInt(input.after, 10) || 0) : 0;
+      const exceptionCount = ordered.filter((item) => item.exception).length;
+      const pageSize = offset === 0 ? Math.max(budget, exceptionCount) : budget;
+      items = ordered.slice(offset, offset + pageSize);
+      const nextOffset = offset + items.length;
+      if (nextOffset < total) nextCursor = String(nextOffset);
+    }
+
+    if (suppressed) {
+      this.bumpProvMetric("suppression", "suppressed");
+    } else if (items.length > 0) {
+      // §4.1 no-`included` rule: an instrumentation-only trace, never a ranking
+      // input — feeds the attach→action counter (#4).
+      this.logRenderedItems(input.sessionLogId, input.sessionHead, norm, items);
+    }
+
+    // §7.4 ordering: write THIS read's observed touch AFTER the query resolves,
+    // carrying the recomputed block signature so the next identical read
+    // suppresses (and, for suppression, so re-attach fires on any change).
+    this.upsertTouch({
+      kind: "observed",
+      sessionLogId: input.sessionLogId,
+      sessionHead: input.sessionHead,
+      dstKind: "file",
+      dstId,
+      invocationId: input.invocationId ?? null,
+      turnSeq: observedTurnSeq,
+      blockSig,
+    });
+
+    return {
+      items,
+      shown: items.length,
+      total,
+      ...(nextCursor ? { nextCursor } : {}),
+      suppressed,
+    };
+  }
+
+  /**
+   * §7.6 session orientation ("what should I know before I act?") — a PULL query
+   * over the whole session touch-set: exceptions first (unreconciled
+   * contradictions among session-touched claims; cross-session uncommitted edits
+   * on session-touched files; main movements on touched repos since the session
+   * base via the host ref log), then density-ranked top claims/files.
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  async provenanceForSession(input: {
+    sessionLogId: string;
+    sessionHead: string;
+    after?: string | null;
+  }): Promise<ProvenanceForSessionResult> {
+    this.ensureReady();
+    const turnSeq = this.currentTurnOrdinal(input.sessionLogId, input.sessionHead);
+    const seeds = this.sessionSeeds(input.sessionLogId, input.sessionHead, turnSeq);
+    const exceptions = await this.sessionExceptionItems(
+      input.sessionLogId,
+      input.sessionHead,
+      seeds
+    );
+    const candidates: ProvCand[] = this.spreadFromSeeds(seeds, 2).map((reach) => ({
+      kind: reach.kind,
+      id: reach.id,
+      sim: 0,
+      prov: reach.prov,
+      recallRank: Number.POSITIVE_INFINITY,
+      ...(reach.coeditCount != null ? { coeditCount: reach.coeditCount } : {}),
+    }));
+    const density = this.rankCandidates(candidates, /* targetFileId */ null).filter(
+      (item) => item.score >= PROV_SALIENCE_FLOOR
+    );
+    const ordered = [...exceptions, ...density];
+
+    const total = ordered.length;
+    const budget = PROV_ITEM_BUDGET_DEEP;
+    const offset = input.after ? Math.max(0, parseInt(input.after, 10) || 0) : 0;
+    const pageSize = offset === 0 ? Math.max(budget, exceptions.length) : budget;
+    const items = ordered.slice(offset, offset + pageSize);
+    const nextOffset = offset + items.length;
+    if (input.after) this.bumpProvMetric("drilldown", "page");
+    return {
+      items,
+      shown: items.length,
+      total,
+      ...(nextOffset < total ? { nextCursor: String(nextOffset) } : {}),
+    };
+  }
+
+  /**
+   * Drill-down on a claim handle (`provenance("claim#…")`). Writes a `cited`
+   * soft touch (§4.1 — a real agent behavior that reinforces density) and
+   * returns the claim's neighborhood: its relations, the sessions that touched
+   * it, and its anchoring commit. Always renders (a drill is never suppressed).
+   */
+  @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
+  provenanceForClaim(input: {
+    claimId: string;
+    sessionLogId: string;
+    sessionHead: string;
+    invocationId?: string | null;
+    after?: string | null;
+  }): ProvenanceForFileResult {
+    this.ensureReady();
+    const turnSeq = this.currentTurnOrdinal(input.sessionLogId, input.sessionHead);
+    // §4.1 cited touch: the drill-down IS the signal.
+    this.upsertTouch({
+      kind: "cited",
+      sessionLogId: input.sessionLogId,
+      sessionHead: input.sessionHead,
+      dstKind: "claim",
+      dstId: input.claimId,
+      invocationId: input.invocationId ?? null,
+      turnSeq: turnSeq < 0 ? null : turnSeq,
+    });
+    this.bumpProvMetric("drilldown", "deepen");
+    this.bumpActionRateIfRendered(`claim#${input.claimId}`);
+
+    const items = this.claimNeighborhoodItems(input.claimId);
+    const total = items.length;
+    const offset = input.after ? Math.max(0, parseInt(input.after, 10) || 0) : 0;
+    const page = items.slice(offset, offset + PROV_ITEM_BUDGET_DEEP);
+    const nextOffset = offset + page.length;
+    return {
+      items: page,
+      shown: page.length,
+      total,
+      ...(nextOffset < total ? { nextCursor: String(nextOffset) } : {}),
+      suppressed: false,
+    };
+  }
+
+  /**
+   * §7.3 speculative warm: on `turn.opened`, precompute `moderate` blocks for the
+   * session's recently-edited files into the disposable cache, keyed by the full
+   * density fingerprint (session era, claim graph era, file stamp, turn, recall).
+   * Best-effort — a failure never breaks the append.
+   */
+  private warmProvenanceForTurn(sessionLogId: string, sessionHead: string): void {
+    try {
+      const turnSeq = this.currentTurnOrdinal(sessionLogId, sessionHead);
+      const files = this.sql
+        .exec(
+          `SELECT eo.log_id AS log_id, eo.head AS head, eo.path AS path, MAX(eo.id) AS recency
+             FROM gad_worktree_edit_ops eo
+             JOIN trajectory_invocations ti ON ti.invocation_id = eo.invocation_id
+            WHERE ti.log_id = ? AND ti.head = ?
+            GROUP BY eo.log_id, eo.head, eo.path
+            ORDER BY recency DESC
+            LIMIT ?`,
+          sessionLogId,
+          sessionHead,
+          PROV_WARM_MAX_FILES
+        )
+        .toArray() as JsonRecord[];
+      for (const row of files) {
+        const logId = String(row["log_id"]);
+        const head = String(row["head"]);
+        const path = String(row["path"]);
+        // Warm the DENSITY leg only — exceptions are always recomputed live on the
+        // read path (§7.5), so precomputing them here would only bake in a stale
+        // snapshot that the read is required to override.
+        const block = this.fileDensityBlock({
+          logId,
+          path,
+          head,
+          tier: "moderate",
+          sessionLogId,
+          sessionHead,
+          turnSeq,
+          recallKeywords: null,
+        });
+        const cacheKey = this.provenanceCacheKey({
+          logId,
+          head,
+          path,
+          sessionLogId,
+          sessionHead,
+          turnSeq,
+          recallKeywords: null,
+        });
+        this.writeProvenanceCache(cacheKey, block);
+      }
+    } catch {
+      // Warm is disposable, never authority (§7.3) — swallow and move on.
+    }
+  }
+
+  /** §6.1 density leg for one file, salience-floored (§7.5) — the CACHEABLE half
+   *  of the block. The exception class is deliberately NOT computed here: it is
+   *  spliced in live on every read (see `provenanceForFile`), never served from
+   *  the disposable warm cache. Shared by the read attachment and the warm
+   *  precompute so both stash the identical density leg. */
+  private fileDensityBlock(input: {
+    logId: string;
+    path: string;
+    head: string;
+    tier: "moderate" | "deep";
+    sessionLogId: string;
+    sessionHead: string;
+    turnSeq: number;
+    recallKeywords: string[] | null;
+  }): ProvItem[] {
+    return this.fileDensityItems(input).filter((item) => item.score >= PROV_SALIENCE_FLOOR);
+  }
+
+  /** §7.5 exception class for one file (always render, sort first, regardless of
+   *  score): asserted contradictions among file-linked claims + cross-session
+   *  uncommitted edits on the path. */
+  private fileExceptionItems(logId: string, path: string, head: string): ProvItem[] {
+    const items: ProvItem[] = [];
+    // Cross-session concurrency: another (log, head) holds uncommitted edits on
+    // this path — the line that prevents co-editing collisions.
+    const concurrent = this.sql
+      .exec(
+        `SELECT head AS other_head, COUNT(*) AS n FROM gad_worktree_edit_ops
+          WHERE log_id = ? AND path = ? AND committed_event_id IS NULL AND head != ?
+          GROUP BY head`,
+        logId,
+        path,
+        head
+      )
+      .toArray() as JsonRecord[];
+    for (const row of concurrent) {
+      const otherHead = String(row["other_head"]);
+      const n = asNumber(row["n"]);
+      items.push({
+        line: `session:${otherHead} has ${n} uncommitted edit${n === 1 ? "" : "s"} on this file`,
+        handle: `session:${otherHead}`,
+        kind: "concurrency",
+        exception: true,
+        score: 0,
+      });
+    }
+    // Asserted contradictions among the file's linked claims (claims asserted by
+    // an invocation that edited this file). Relations are agent-asserted (§8).
+    const fileClaims = this.fileLinkedClaimIds(logId, path);
+    if (fileClaims.size > 0) {
+      for (const rel of this.contradictionsAmong(fileClaims)) {
+        const other = rel.other;
+        const text = this.claimText(other);
+        items.push({
+          line: `⚠ contradicts claim#${other}${text ? ` "${truncateInsight(text, 60)}"` : ""} → provenance(claim#${other})`,
+          handle: `claim#${other}`,
+          kind: "contradiction",
+          exception: true,
+          score: 0,
+        });
+      }
+    }
+    return items;
+  }
+
+  /** §6.1 density leg for one file: commits (exact provenance, recency-scored) +
+   *  bounded 2-hop spreading activation from touch(S) + the recall (FTS) leg,
+   *  each scored `w_sim·sim + w_prov·idf·prov`. */
+  private fileDensityItems(input: {
+    logId: string;
+    path: string;
+    head: string;
+    tier: "moderate" | "deep";
+    sessionLogId: string;
+    sessionHead: string;
+    turnSeq: number;
+    recallKeywords: string[] | null;
+  }): ProvItem[] {
+    const cands = new Map<string, ProvCand>();
+    const ensure = (kind: ProvCand["kind"], id: string): ProvCand => {
+      const key = `${kind}:${id}`;
+      let cand = cands.get(key);
+      if (!cand) {
+        cand = { kind, id, sim: 0, prov: 0, recallRank: Number.POSITIVE_INFINITY };
+        cands.set(key, cand);
+      }
+      return cand;
+    };
+
+    // (1) The file's own recent commits — exact provenance, "never ranked away"
+    // (§6): recency-scored so the newest clears the floor, older ones decay out.
+    const commits = this.fileCommits(input.logId, input.path);
+    commits.forEach((commit, i) => {
+      const cand = ensure("commit", commit.eventId);
+      cand.prov = Math.max(cand.prov, 0.9 * Math.pow(0.6, i));
+      cand.commitMessage = commit.message;
+      cand.turnsAgo = this.turnsAgoForInvocation(
+        commit.invocationId,
+        input.sessionLogId,
+        input.sessionHead,
+        input.turnSeq
+      );
+    });
+
+    // (2) Spreading activation seeded from touch(S) (moderate 1-hop, deep 2-hop).
+    const seeds = this.sessionSeeds(input.sessionLogId, input.sessionHead, input.turnSeq);
+    const hops = input.tier === "deep" ? 2 : 1;
+    for (const reach of this.spreadFromSeeds(seeds, hops)) {
+      const cand = ensure(reach.kind, reach.id);
+      cand.prov += reach.prov;
+      if (reach.coeditCount != null) {
+        cand.coeditCount = Math.max(cand.coeditCount ?? 0, reach.coeditCount);
+      }
+    }
+
+    // (3) Recall (similarity) leg — claims + commit messages surfaced by FTS.
+    const recall = this.recallForFile(
+      input.path,
+      input.recallKeywords,
+      input.sessionLogId,
+      input.sessionHead
+    );
+    recall.forEach((hit, i) => {
+      if (hit.kind === "claim" && hit.id) {
+        const cand = ensure("claim", hit.id);
+        cand.sim = 1;
+        cand.recallRank = Math.min(cand.recallRank, i);
+      } else if (hit.kind === "commit" && hit.id) {
+        const cand = ensure("commit", hit.id);
+        cand.sim = 1;
+        cand.recallRank = Math.min(cand.recallRank, i);
+        if (!cand.commitMessage) cand.commitMessage = hit.snippet;
+      }
+    });
+
+    return this.rankCandidates([...cands.values()], fileNodeId(input.logId, input.path));
+  }
+
+  /** Score + render candidates (§6.1). `targetFileId` (when set) drops the read
+   *  file itself from its own block. Sorted by score, recall-rank as tiebreak. */
+  private rankCandidates(cands: ProvCand[], targetFileId: string | null): ProvItem[] {
+    const items: Array<ProvItem & { rank: number }> = [];
+    for (const cand of cands) {
+      if (targetFileId && cand.kind === "file" && cand.id === targetFileId) continue;
+      const idf = cand.prov > 0 ? this.nodeIdf(cand.kind, cand.id) : 1;
+      const score = PROV_W_SIM * cand.sim + PROV_W_PROV * idf * cand.prov;
+      const rendered = this.renderDensityItem(cand, score);
+      if (rendered) items.push({ ...rendered, rank: cand.recallRank });
+    }
+    items.sort((a, b) => b.score - a.score || a.rank - b.rank);
+    return items.slice(0, PROV_CANDIDATE_CAP_N).map(({ rank: _rank, ...item }) => item);
+  }
+
+  /** Bounded 2-hop spreading activation (§6.1/§6.5): carry each seed's activation
+   *  outward along native + soft edges, accumulating `prov` per reached node.
+   *  Fan-out capped at M per node, frontier re-capped between hops. */
+  private spreadFromSeeds(
+    seeds: Map<string, ProvSeed>,
+    hops: number
+  ): Array<{ kind: "claim" | "file"; id: string; prov: number; coeditCount?: number }> {
+    const prov = new Map<
+      string,
+      { kind: "claim" | "file"; id: string; prov: number; coeditCount?: number }
+    >();
+    let frontier = [...seeds.values()];
+    for (let h = 0; h < hops && frontier.length > 0; h += 1) {
+      const next = new Map<string, ProvSeed>();
+      for (const node of frontier) {
+        const neighbors = this.nodeNeighbors(node.kind, node.id);
+        const norm = 1 / Math.sqrt(Math.max(1, neighbors.length)); // §6.1 norm(src)
+        for (const nb of neighbors) {
+          const contribution =
+            node.activation * nb.weight * this.decayHistorical(nb.laterEdits) * norm;
+          if (contribution <= 0) continue;
+          const key = `${nb.kind}:${nb.id}`;
+          const acc = prov.get(key) ?? { kind: nb.kind, id: nb.id, prov: 0 };
+          acc.prov += contribution;
+          if (nb.coeditCount != null)
+            acc.coeditCount = Math.max(acc.coeditCount ?? 0, nb.coeditCount);
+          prov.set(key, acc);
+          const cur = next.get(key);
+          if (!cur || cur.activation < contribution) {
+            next.set(key, { kind: nb.kind, id: nb.id, activation: contribution });
+          }
+        }
+      }
+      frontier = [...next.values()]
+        .sort((a, b) => b.activation - a.activation)
+        .slice(0, PROV_FANOUT_CAP_M);
+    }
+    return [...prov.values()];
+  }
+
+  /** touch(S): the session's seed set, reconstructed DO-side over the branch
+   *  chain (§6.4 logLineage) — edits (invocation join), claims (trajectory
+   *  event), touches (session index). Each seed's activation is its edge kind
+   *  weight × the sublinear hits curve × the session-recency decay (§6.3). */
+  private sessionSeeds(
+    sessionLogId: string,
+    sessionHead: string,
+    curTurnSeq: number
+  ): Map<string, ProvSeed> {
+    const seeds = new Map<string, ProvSeed>();
+    const add = (
+      kind: "claim" | "file",
+      id: string,
+      weight: number,
+      anchorTurnSeq: number | null,
+      hits: number
+    ): void => {
+      const turnsAgo =
+        curTurnSeq >= 0 && anchorTurnSeq != null ? Math.max(0, curTurnSeq - anchorTurnSeq) : 0;
+      const activation = weight * PROV_HITS_CURVE(hits) * this.decaySession(turnsAgo);
+      const key = `${kind}:${id}`;
+      const cur = seeds.get(key);
+      if (!cur || cur.activation < activation) seeds.set(key, { kind, id, activation });
+    };
+    for (const seg of this.logLineage(sessionLogId, sessionHead)) {
+      // Files edited by the session (edited edge).
+      const edits = this.sql
+        .exec(
+          `SELECT eo.log_id AS log_id, eo.path AS path, tt.ordinal AS ord
+             FROM gad_worktree_edit_ops eo
+             JOIN trajectory_invocations ti ON ti.invocation_id = eo.invocation_id
+             LEFT JOIN trajectory_turns tt
+               ON tt.log_id = ti.log_id AND tt.head = ti.head AND tt.turn_id = ti.turn_id
+            WHERE ti.log_id = ? AND ti.head = ?
+            ORDER BY eo.id DESC LIMIT ?`,
+          seg.logId,
+          seg.head,
+          PROV_SEED_CAP_K
+        )
+        .toArray() as JsonRecord[];
+      for (const row of edits) {
+        add(
+          "file",
+          fileNodeId(String(row["log_id"]), String(row["path"])),
+          PROV_KIND_WEIGHT.edited,
+          row["ord"] == null ? null : asNumber(row["ord"]),
+          1
+        );
+      }
+      // Claims asserted by the session (asserted edge).
+      const claims = this.sql
+        .exec(
+          `SELECT c.claim_id AS claim_id, tt.ordinal AS ord
+             FROM gad_claims c
+             JOIN log_events le ON le.envelope_id = c.trajectory_event_id
+             LEFT JOIN trajectory_invocations ti ON ti.invocation_id = c.invocation_id
+             LEFT JOIN trajectory_turns tt
+               ON tt.log_id = ti.log_id AND tt.head = ti.head AND tt.turn_id = ti.turn_id
+            WHERE le.log_id = ? AND le.head = ? AND c.status != 'retracted'
+            ORDER BY c.rowid DESC LIMIT ?`,
+          seg.logId,
+          seg.head,
+          PROV_SEED_CAP_K
+        )
+        .toArray() as JsonRecord[];
+      for (const row of claims) {
+        add(
+          "claim",
+          String(row["claim_id"]),
+          PROV_KIND_WEIGHT.asserted,
+          row["ord"] == null ? null : asNumber(row["ord"]),
+          1
+        );
+      }
+      // Soft touches by the session (observed files / cited claims).
+      const touches = this.sql
+        .exec(
+          `SELECT kind, dst_kind, dst_id, turn_seq, hits FROM gad_touches
+            WHERE session_log_id = ? AND session_head = ?
+            ORDER BY id DESC LIMIT ?`,
+          seg.logId,
+          seg.head,
+          PROV_SEED_CAP_K
+        )
+        .toArray() as JsonRecord[];
+      for (const row of touches) {
+        const dstKind = String(row["dst_kind"]) === "claim" ? "claim" : "file";
+        const weight =
+          String(row["kind"]) === "cited" ? PROV_KIND_WEIGHT.cited : PROV_KIND_WEIGHT.observed;
+        add(
+          dstKind,
+          String(row["dst_id"]),
+          weight,
+          row["turn_seq"] == null ? null : asNumber(row["turn_seq"]),
+          asNumber(row["hits"] ?? 1)
+        );
+      }
+    }
+    return seeds;
+  }
+
+  /** A node's outgoing edges for spreading (capped at M). Native edges only —
+   *  soft touches seed the walk, they are not re-traversed as edges. */
+  private nodeNeighbors(
+    kind: "claim" | "file",
+    id: string
+  ): Array<{
+    kind: "claim" | "file";
+    id: string;
+    weight: number;
+    laterEdits: number;
+    coeditCount?: number;
+  }> {
+    const out: Array<{
+      kind: "claim" | "file";
+      id: string;
+      weight: number;
+      laterEdits: number;
+      coeditCount?: number;
+    }> = [];
+    if (kind === "claim") {
+      // claim ↔ claim relations (both directions), agent-asserted (§8).
+      const related = this.sql
+        .exec(
+          `SELECT dst_claim_id AS other, weight FROM gad_claim_relations WHERE src_claim_id = ?
+           UNION ALL
+           SELECT src_claim_id AS other, weight FROM gad_claim_relations WHERE dst_claim_id = ?
+           LIMIT ?`,
+          id,
+          id,
+          PROV_FANOUT_CAP_M
+        )
+        .toArray() as JsonRecord[];
+      for (const row of related) {
+        out.push({
+          kind: "claim",
+          id: String(row["other"]),
+          weight: PROV_KIND_WEIGHT.relation * asNumber(row["weight"] ?? 1),
+          laterEdits: 0,
+        });
+      }
+      // claim → files its asserting invocation edited (asserted edge, reversed).
+      const files = this.sql
+        .exec(
+          `SELECT DISTINCT eo.log_id AS log_id, eo.path AS path
+             FROM gad_worktree_edit_ops eo
+             JOIN gad_claims c ON c.invocation_id = eo.invocation_id
+            WHERE c.claim_id = ? LIMIT ?`,
+          id,
+          PROV_FANOUT_CAP_M
+        )
+        .toArray() as JsonRecord[];
+      for (const row of files) {
+        out.push({
+          kind: "file",
+          id: fileNodeId(String(row["log_id"]), String(row["path"])),
+          weight: PROV_KIND_WEIGHT.asserted,
+          laterEdits: 0,
+        });
+      }
+    } else {
+      const parsed = parseFileNodeId(id);
+      if (!parsed) return out;
+      // file ↔ file co-edited (share a commit) — the coupling signal.
+      const coedited = this.sql
+        .exec(
+          `SELECT b.log_id AS log_id, b.path AS path,
+                  COUNT(DISTINCT b.committed_event_id) AS shared
+             FROM gad_worktree_edit_ops a
+             JOIN gad_worktree_edit_ops b
+               ON b.committed_event_id = a.committed_event_id AND b.log_id = a.log_id
+            WHERE a.log_id = ? AND a.path = ? AND a.committed_event_id IS NOT NULL
+              AND b.path != a.path
+            GROUP BY b.log_id, b.path
+            ORDER BY shared DESC LIMIT ?`,
+          parsed.logId,
+          parsed.path,
+          PROV_FANOUT_CAP_M
+        )
+        .toArray() as JsonRecord[];
+      for (const row of coedited) {
+        out.push({
+          kind: "file",
+          id: fileNodeId(String(row["log_id"]), String(row["path"])),
+          weight: PROV_KIND_WEIGHT.edited,
+          laterEdits: 0,
+          coeditCount: asNumber(row["shared"]),
+        });
+      }
+      // file → claims asserted by an invocation that edited it (asserted edge).
+      const claims = this.sql
+        .exec(
+          `SELECT DISTINCT c.claim_id AS claim_id
+             FROM gad_claims c
+             JOIN gad_worktree_edit_ops eo ON eo.invocation_id = c.invocation_id
+            WHERE eo.log_id = ? AND eo.path = ? AND c.status != 'retracted' LIMIT ?`,
+          parsed.logId,
+          parsed.path,
+          PROV_FANOUT_CAP_M
+        )
+        .toArray() as JsonRecord[];
+      for (const row of claims) {
+        out.push({
+          kind: "claim",
+          id: String(row["claim_id"]),
+          weight: PROV_KIND_WEIGHT.asserted,
+          laterEdits: 0,
+        });
+      }
+    }
+    return out.slice(0, PROV_FANOUT_CAP_M);
+  }
+
+  /** A file's committed history, newest first (distinct commit events). */
+  private fileCommits(
+    logId: string,
+    path: string
+  ): Array<{ eventId: string; message: string | null; invocationId: string | null }> {
+    const rows = this.sql
+      .exec(
+        `SELECT eo.committed_event_id AS event_id, MAX(eo.committed_seq) AS seq,
+                st.summary AS summary, st.invocation_id AS inv
+           FROM gad_worktree_edit_ops eo
+           LEFT JOIN gad_state_transitions st ON st.event_id = eo.committed_event_id
+          WHERE eo.log_id = ? AND eo.path = ? AND eo.committed_event_id IS NOT NULL
+          GROUP BY eo.committed_event_id
+          ORDER BY seq DESC
+          LIMIT ?`,
+        logId,
+        path,
+        PROV_FANOUT_CAP_M
+      )
+      .toArray() as JsonRecord[];
+    return rows.map((row) => {
+      const summary = asString(row["summary"]);
+      return {
+        eventId: String(row["event_id"]),
+        message: summary ? (summary.split("\n")[0] ?? null) : null,
+        invocationId: asString(row["inv"]),
+      };
+    });
+  }
+
+  /** The recall (FTS) leg for a file: query = the path (+ steering keywords),
+   *  scoped to claims + commit messages. Absent keywords, the path carries it
+   *  (§7.1 — keyword steering is a bonus, never load-bearing). */
+  private recallForFile(
+    path: string,
+    recallKeywords: string[] | null,
+    _sessionLogId: string,
+    _sessionHead: string
+  ): Array<{ kind: "claim" | "commit"; id: string | null; snippet: string }> {
+    const recall = this.recallMemory({
+      query: path,
+      kinds: ["claim", "commit"],
+      limit: PROV_FANOUT_CAP_M,
+      ...(recallKeywords && recallKeywords.length > 0 ? { recallKeywords } : {}),
+    });
+    return recall.results.map((row) => {
+      if (row.kind === "claim") {
+        const claimId =
+          row.anchor && typeof row.anchor["claimId"] === "string"
+            ? (row.anchor["claimId"] as string)
+            : null;
+        return { kind: "claim" as const, id: claimId, snippet: row.snippet };
+      }
+      return { kind: "commit" as const, id: row.eventId, snippet: row.snippet };
+    });
+  }
+
+  /** Render one density candidate to a bounded `insight + handle` line (§7.5).
+   *  Returns null for a candidate with no displayable insight (e.g. an
+   *  empty/retracted claim). */
+  private renderDensityItem(cand: ProvCand, score: number): ProvItem | null {
+    if (cand.kind === "commit") {
+      const prefix = cand.id.slice(0, 8);
+      const msg = cand.commitMessage ? ` "${truncateInsight(cand.commitMessage, 60)}"` : "";
+      const ago = cand.turnsAgo != null ? ` · ${cand.turnsAgo} turns ago` : "";
+      return {
+        line: `last commit c:${prefix}${msg}${ago}`,
+        handle: `commit:${prefix}`,
+        kind: "commit",
+        exception: false,
+        score,
+      };
+    }
+    if (cand.kind === "claim") {
+      const text = this.claimText(cand.id);
+      if (!text) return null;
+      const sessions = this.claimSessionCount(cand.id);
+      const rel = this.claimRelationNote(cand.id);
+      const touched =
+        sessions > 0 ? ` · ${sessions} session${sessions === 1 ? "" : "s"} touched it` : "";
+      return {
+        line: `claim#${cand.id} "${truncateInsight(text, 80)}"${rel}${touched}`,
+        handle: `claim#${cand.id}`,
+        kind: "claim",
+        exception: false,
+        score,
+      };
+    }
+    const parsed = parseFileNodeId(cand.id);
+    if (!parsed) return null;
+    const wsPath = fileHandlePath(parsed.logId, parsed.path);
+    const times = cand.coeditCount
+      ? ` ×${cand.coeditCount} commit${cand.coeditCount === 1 ? "" : "s"}`
+      : "";
+    return {
+      line: `co-edited with ${wsPath}${times}`,
+      handle: `file:${wsPath}`,
+      kind: "file",
+      exception: false,
+      score,
+    };
+  }
+
+  /** The §7.6 orientation exception class, over the whole session touch-set. */
+  private async sessionExceptionItems(
+    sessionLogId: string,
+    sessionHead: string,
+    seeds: Map<string, ProvSeed>
+  ): Promise<ProvItem[]> {
+    const items: ProvItem[] = [];
+    // Unreconciled contradictions among session-touched claims.
+    const claimIds = new Set<string>();
+    for (const seed of seeds.values()) if (seed.kind === "claim") claimIds.add(seed.id);
+    for (const rel of this.contradictionsAmong(claimIds)) {
+      const text = this.claimText(rel.other);
+      items.push({
+        line: `⚠ contradiction: claim#${rel.src} contradicts claim#${rel.other}${text ? ` "${truncateInsight(text, 50)}"` : ""} → provenance(claim#${rel.other})`,
+        handle: `claim#${rel.other}`,
+        kind: "contradiction",
+        exception: true,
+        score: 0,
+      });
+    }
+    // Cross-session uncommitted edits on session-touched files + touched repos.
+    const repos = new Set<string>();
+    for (const seed of seeds.values()) {
+      if (seed.kind !== "file") continue;
+      const parsed = parseFileNodeId(seed.id);
+      if (!parsed) continue;
+      repos.add(parsed.logId);
+      const concurrent = this.sql
+        .exec(
+          `SELECT head AS other_head, COUNT(*) AS n FROM gad_worktree_edit_ops
+            WHERE log_id = ? AND path = ? AND committed_event_id IS NULL
+            GROUP BY head`,
+          parsed.logId,
+          parsed.path
+        )
+        .toArray() as JsonRecord[];
+      // Any uncommitted edits on a touched file from ANOTHER head are a collision
+      // risk (§7.6). The session's own head is not the acting agent here (session
+      // orientation spans the trajectory, not one vcs head), so surface all.
+      for (const row of concurrent) {
+        const otherHead = String(row["other_head"]);
+        const n = asNumber(row["n"]);
+        items.push({
+          line: `session:${otherHead} has ${n} uncommitted edit${n === 1 ? "" : "s"} on ${fileHandlePath(parsed.logId, parsed.path)}`,
+          handle: `file:${fileHandlePath(parsed.logId, parsed.path)}`,
+          kind: "concurrency",
+          exception: true,
+          score: 0,
+        });
+      }
+    }
+    // Main movements on touched repos since the session base (host ref log, §2).
+    const readLog = this.refsStore().listMainRefLog?.bind(this.refsStore());
+    if (readLog) {
+      const sinceMs = this.sessionStartMs(sessionLogId, sessionHead);
+      for (const logId of repos) {
+        const repoPath = repoPathFromLogId(logId);
+        let movements: Awaited<ReturnType<NonNullable<HostRefsStore["listMainRefLog"]>>>;
+        try {
+          movements = await readLog(repoPath);
+        } catch {
+          continue;
+        }
+        const recent = movements
+          .filter((m) => m.new !== m.old && (sinceMs == null || m.createdAt >= sinceMs))
+          .slice(-3);
+        for (const m of recent) {
+          const to = m.new ? m.new.slice(0, 12) : "<removed>";
+          items.push({
+            line: `main moved on ${repoPath} → ${to} (${m.operation})${m.reason ? ` — ${m.reason}` : ""}`,
+            handle: `session`,
+            kind: "main-moved",
+            exception: true,
+            score: 0,
+          });
+        }
+      }
+    }
+    return items;
+  }
+
+  /** Items for a claim drill-down (§7.1): the claim's relations, its anchoring
+   *  commit, and how many sessions touched it. */
+  private claimNeighborhoodItems(claimId: string): ProvItem[] {
+    const items: ProvItem[] = [];
+    const self = this.claimText(claimId);
+    if (self) {
+      const sessions = this.claimSessionCount(claimId);
+      items.push({
+        line: `claim#${claimId} "${truncateInsight(self, 100)}"${sessions > 0 ? ` · ${sessions} session${sessions === 1 ? "" : "s"} touched it` : ""}`,
+        handle: `claim#${claimId}`,
+        kind: "claim",
+        exception: false,
+        score: 1,
+      });
+    }
+    // §8.1 anchor: the commit the claim was recorded against (within era), or the
+    // denormalized ledger snapshot marked historical once its trajectory event
+    // has been dropped by a schema bump. Sorts right below the claim text.
+    const anchor = this.claimAnchorItem(claimId);
+    if (anchor) items.push(anchor);
+    const relations = this.sql
+      .exec(
+        `SELECT relation, dst_claim_id AS other, weight FROM gad_claim_relations WHERE src_claim_id = ?
+         UNION ALL
+         SELECT relation, src_claim_id AS other, weight FROM gad_claim_relations WHERE dst_claim_id = ?
+         LIMIT ?`,
+        claimId,
+        claimId,
+        PROV_CANDIDATE_CAP_N
+      )
+      .toArray() as JsonRecord[];
+    for (const row of relations) {
+      const other = String(row["other"]);
+      const relation = String(row["relation"]);
+      const text = this.claimText(other);
+      items.push({
+        line: `·${relation}· claim#${other}${text ? ` "${truncateInsight(text, 60)}"` : ""}`,
+        handle: `claim#${other}`,
+        kind: relation === "contradicts" ? "contradiction" : "relation",
+        exception: relation === "contradicts",
+        score: relation === "contradicts" ? 0 : PROV_KIND_WEIGHT.relation,
+      });
+    }
+    // Contradiction relations sort first (exception class).
+    items.sort((a, b) => Number(b.exception) - Number(a.exception));
+    return items;
+  }
+
+  /** §8.1 anchor render for a claim drill-down. Reads the denormalized snapshot
+   *  from the claim's ledger entry (`gad_claims.ledger_entry_id → anchor_json`).
+   *  Within its era (the trajectory causality event still resolves to a log
+   *  event) it surfaces only the anchoring commit — the one anchor fact the
+   *  graph does not otherwise carry. Post-era (the trajectory event was dropped
+   *  by a schema bump so the causality join is empty) it degrades to the stored
+   *  snapshot — actor / repo / commit / time — marked historical, never breaking. */
+  private claimAnchorItem(claimId: string): ProvItem | null {
+    const row = this.sql
+      .exec(
+        `SELECT ledger_entry_id, trajectory_event_id FROM gad_claims WHERE claim_id = ?`,
+        claimId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    if (!row) return null;
+    const ledgerEntryId = asString(row["ledger_entry_id"]);
+    if (!ledgerEntryId) return null; // era-scoped inline claim: no durable anchor.
+    const ledger = this.readLedgerEntry(ledgerEntryId);
+    if (!ledger) return null;
+    const anchor = ledger.anchor;
+    const commitEventId = asString(anchor["commitEventId"]);
+    const commitMessage = asString(anchor["commitMessage"]);
+    const trajectoryEventId = asString(row["trajectory_event_id"]);
+    const withinEra =
+      !!trajectoryEventId &&
+      this.sql
+        .exec(`SELECT 1 FROM log_events WHERE envelope_id = ? LIMIT 1`, trajectoryEventId)
+        .toArray().length > 0;
+    if (withinEra) {
+      if (!commitEventId) return null;
+      const msg = commitMessage ? ` "${truncateInsight(commitMessage, 60)}"` : "";
+      return {
+        line: `recorded against commit c:${commitEventId.slice(0, 8)}${msg}`,
+        handle: `commit:${commitEventId.slice(0, 8)}`,
+        kind: "commit",
+        exception: false,
+        score: PROV_KIND_WEIGHT.relation,
+      };
+    }
+    // Post-era: the trajectory event is gone; render the stored snapshot.
+    const actorLabel = asString(anchor["actorLabel"]);
+    const repoPath = asString(anchor["repoPath"]);
+    const recordedAt = asString(anchor["recordedAt"]);
+    const parts = [
+      actorLabel,
+      repoPath ? `in ${repoPath}` : null,
+      commitMessage ? `commit "${truncateInsight(commitMessage, 50)}"` : null,
+      recordedAt ? `recorded ${recordedAt}` : null,
+    ].filter((part): part is string => !!part);
+    if (parts.length === 0) return null;
+    return {
+      line: `↩ historical anchor · ${parts.join(" · ")}`,
+      handle: `claim#${claimId}`,
+      kind: "historical",
+      exception: false,
+      score: 0,
+    };
+  }
+
+  // ---- provenance density helpers ------------------------------------------
+
+  private repoRelative(repoPath: string, filePath: string): string {
+    const norm = normalizeRepoPathArg(repoPath);
+    return filePath.startsWith(`${norm}/`) ? filePath.slice(norm.length + 1) : filePath;
+  }
+
+  private decaySession(turnsAgo: number): number {
+    return Math.exp(-Math.max(0, turnsAgo) / PROV_DECAY_SESSION_TURNS);
+  }
+
+  private decayHistorical(laterEdits: number): number {
+    return Math.exp(-Math.max(0, laterEdits) / PROV_DECAY_HISTORICAL);
+  }
+
+  /** §6.1 idf(C) = 1 / log(2 + degree(C)) — query-time capped degree count so a
+   *  node connected to everything reads as background hum. */
+  private nodeIdf(kind: "claim" | "file" | "commit", id: string): number {
+    let degree = 0;
+    if (kind === "claim") {
+      degree =
+        this.cappedCount(
+          `SELECT 1 FROM gad_claim_relations WHERE src_claim_id = ? OR dst_claim_id = ? LIMIT 200`,
+          [id, id]
+        ) +
+        this.cappedCount(
+          `SELECT 1 FROM gad_touches WHERE dst_kind = 'claim' AND dst_id = ? LIMIT 200`,
+          [id]
+        );
+    } else if (kind === "file") {
+      const parsed = parseFileNodeId(id);
+      if (parsed) {
+        degree =
+          this.cappedCount(
+            `SELECT 1 FROM gad_worktree_edit_ops WHERE log_id = ? AND path = ? LIMIT 200`,
+            [parsed.logId, parsed.path]
+          ) +
+          this.cappedCount(
+            `SELECT 1 FROM gad_touches WHERE dst_kind = 'file' AND dst_id = ? LIMIT 200`,
+            [id]
+          );
+      }
+    } else {
+      degree = this.cappedCount(
+        `SELECT 1 FROM gad_worktree_edit_ops WHERE committed_event_id = ? LIMIT 200`,
+        [id]
+      );
+    }
+    return 1 / Math.log(2 + degree);
+  }
+
+  private cappedCount(sql: string, bindings: SqlBinding[]): number {
+    return (
+      (this.sql.exec(`SELECT COUNT(*) AS n FROM (${sql})`, ...bindings).one()["n"] as number) ?? 0
+    );
+  }
+
+  private claimText(claimId: string): string | null {
+    const row = this.sql
+      .exec(
+        `SELECT text, subject, predicate, object FROM gad_claims WHERE claim_id = ? AND status != 'retracted'`,
+        claimId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    if (!row) return null;
+    const text = this.claimSearchText({
+      text: asString(row["text"]),
+      subject: asString(row["subject"]),
+      predicate: asString(row["predicate"]),
+      object: asString(row["object"]),
+    });
+    return text || null;
+  }
+
+  private claimSessionCount(claimId: string): number {
+    return this.cappedCount(
+      `SELECT DISTINCT session_log_id, session_head FROM gad_touches
+        WHERE dst_kind = 'claim' AND dst_id = ? LIMIT 200`,
+      [claimId]
+    );
+  }
+
+  /** A short "·supports #x·"-style note naming one of a claim's relations. */
+  private claimRelationNote(claimId: string): string {
+    const row = this.sql
+      .exec(
+        `SELECT relation, dst_claim_id AS other FROM gad_claim_relations WHERE src_claim_id = ? LIMIT 1`,
+        claimId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    if (!row) return "";
+    return ` ·${String(row["relation"])} claim#${String(row["other"])}·`;
+  }
+
+  /** Claim ids linked to a file: claims asserted by an invocation that edited it. */
+  private fileLinkedClaimIds(logId: string, path: string): Set<string> {
+    const rows = this.sql
+      .exec(
+        `SELECT DISTINCT c.claim_id AS claim_id
+           FROM gad_claims c
+           JOIN gad_worktree_edit_ops eo ON eo.invocation_id = c.invocation_id
+          WHERE eo.log_id = ? AND eo.path = ? AND c.status != 'retracted'`,
+        logId,
+        path
+      )
+      .toArray() as JsonRecord[];
+    return new Set(rows.map((row) => String(row["claim_id"])));
+  }
+
+  /** `contradicts` relations among a claim set (both endpoints in the set). */
+  private contradictionsAmong(claimIds: Set<string>): Array<{ src: string; other: string }> {
+    if (claimIds.size === 0) return [];
+    const out: Array<{ src: string; other: string }> = [];
+    const seen = new Set<string>();
+    const rows = this.sql
+      .exec(
+        `SELECT src_claim_id AS src, dst_claim_id AS dst FROM gad_claim_relations
+          WHERE relation = 'contradicts'`
+      )
+      .toArray() as JsonRecord[];
+    for (const row of rows) {
+      const src = String(row["src"]);
+      const dst = String(row["dst"]);
+      if (!claimIds.has(src) || !claimIds.has(dst)) continue;
+      const key = [src, dst].sort().join("|");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ src, other: dst });
+    }
+    return out;
+  }
+
+  private turnsAgoForInvocation(
+    invocationId: string | null,
+    sessionLogId: string,
+    sessionHead: string,
+    curTurnSeq: number
+  ): number | null {
+    if (!invocationId || curTurnSeq < 0) return null;
+    const row = this.sql
+      .exec(
+        `SELECT tt.ordinal AS ord FROM trajectory_invocations ti
+           JOIN trajectory_turns tt
+             ON tt.log_id = ti.log_id AND tt.head = ti.head AND tt.turn_id = ti.turn_id
+          WHERE ti.invocation_id = ? AND ti.log_id = ? AND ti.head = ? LIMIT 1`,
+        invocationId,
+        sessionLogId,
+        sessionHead
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    if (!row || row["ord"] == null) return null;
+    return Math.max(0, curTurnSeq - asNumber(row["ord"]));
+  }
+
+  private sessionStartMs(sessionLogId: string, sessionHead: string): number | null {
+    const row = this.sql
+      .exec(
+        `SELECT MIN(created_at) AS first FROM gad_touches
+          WHERE session_log_id = ? AND session_head = ?`,
+        sessionLogId,
+        sessionHead
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    const iso = asString(row?.["first"] ?? null);
+    if (!iso) return null;
+    const ms = Date.parse(iso);
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  // ---- block signature, render log, warm cache -----------------------------
+
+  private fileContentStamp(logId: string, path: string, head: string): string {
+    const working = this.sql
+      .exec(
+        `SELECT id, new_content_hash FROM gad_worktree_edit_ops
+          WHERE log_id = ? AND head = ? AND path = ? AND committed_event_id IS NULL
+          ORDER BY edit_seq DESC, ordinal DESC LIMIT 1`,
+        logId,
+        head,
+        path
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    const latest =
+      working ??
+      (this.sql
+        .exec(
+          `SELECT id, new_content_hash FROM gad_worktree_edit_ops
+            WHERE log_id = ? AND path = ? AND committed_event_id IS NOT NULL
+            ORDER BY committed_seq DESC, edit_seq DESC, ordinal DESC LIMIT 1`,
+          logId,
+          path
+        )
+        .toArray()[0] as JsonRecord | undefined);
+    const contentHash = latest ? (asString(latest["new_content_hash"]) ?? "") : "";
+    const opId = latest ? String(latest["id"]) : "";
+    return `${contentHash}|${opId}`;
+  }
+
+  private provenanceRecallKey(recallKeywords: string[] | null | undefined): string {
+    return JSON.stringify(recallTokens(recallKeywords));
+  }
+
+  private provenanceCacheKey(input: {
+    logId: string;
+    head: string;
+    path: string;
+    sessionLogId: string;
+    sessionHead: string;
+    turnSeq: number;
+    recallKeywords: string[] | null;
+  }): ProvenanceCacheKey {
+    return {
+      logId: input.logId,
+      head: input.head,
+      path: input.path,
+      sessionLogId: input.sessionLogId,
+      sessionHead: input.sessionHead,
+      recallKey: this.provenanceRecallKey(input.recallKeywords),
+      turnSeq: input.turnSeq,
+      touchVersion: this.touchVersion(input.sessionLogId, input.sessionHead),
+      knowledgeVersion: this.knowledgeVersion(),
+      contentStamp: this.fileContentStamp(input.logId, input.path, input.head),
+    };
+  }
+
+  /** §7.1 block signature: (path content hash, latest edit-op id, sorted
+   *  exception handles). Unchanged ⇒ the block is suppressed; a content change
+   *  or a new exception item re-attaches. */
+  private blockSignature(
+    logId: string,
+    path: string,
+    head: string,
+    exceptionHandles: string[]
+  ): string {
+    return sha256HexSyncText(
+      `${this.fileContentStamp(logId, path, head)}|${exceptionHandles.join(",")}`
+    );
+  }
+
+  private lastObservedBlockSig(
+    sessionLogId: string,
+    sessionHead: string,
+    dstId: string
+  ): string | null {
+    const row = this.sql
+      .exec(
+        `SELECT last_block_sig FROM gad_touches
+          WHERE kind = 'observed' AND session_log_id = ? AND session_head = ?
+            AND dst_kind = 'file' AND dst_id = ?`,
+        sessionLogId,
+        sessionHead,
+        dstId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    return row ? asString(row["last_block_sig"]) : null;
+  }
+
+  private logRenderedItems(
+    sessionLogId: string,
+    sessionHead: string,
+    path: string,
+    items: ProvItem[]
+  ): void {
+    this.sql.exec(
+      `INSERT INTO gad_prov_render_log (session_log_id, session_head, path, item_handles_json, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      sessionLogId,
+      sessionHead,
+      path,
+      JSON.stringify(items.map((item) => item.handle)),
+      nowIso()
+    );
+  }
+
+  /** §12 counter #4 (attach→action rate): bump the numerator when a drill-down /
+   *  citation target matches a handle recently PUSHED to some session (logged in
+   *  gad_prov_render_log). Instrumentation-only — the render log is never a
+   *  ranking input (§4.1). The denominator is the render-log volume itself. */
+  private bumpActionRateIfRendered(handle: string): void {
+    const rendered = this.sql
+      .exec(
+        `SELECT 1 FROM gad_prov_render_log
+          WHERE item_handles_json LIKE ? ESCAPE '\\'
+          ORDER BY id DESC LIMIT 1`,
+        `%${JSON.stringify(handle).replace(/[%_\\]/gu, "\\$&")}%`
+      )
+      .toArray()[0];
+    if (rendered) this.bumpProvMetric("action_rate", "hit");
+  }
+
+  private degradeHintItem(repoPath: string, path: string): ProvItem {
+    const wsPath = `${normalizeRepoPathArg(repoPath)}/${path}`;
+    return {
+      line: `provenance ready — provenance("${wsPath}")`,
+      handle: `file:${wsPath}`,
+      kind: "hint",
+      exception: false,
+      score: 0,
+    };
+  }
+
+  private readProvenanceCache(key: ProvenanceCacheKey): ProvItem[] | null {
+    const row = this.sql
+      .exec(
+        `SELECT touch_version, knowledge_version, content_stamp, rendered_json
+           FROM gad_provenance_cache
+          WHERE log_id = ? AND head = ? AND path = ?
+            AND session_log_id = ? AND session_head = ?
+            AND recall_key = ? AND turn_seq = ?`,
+        key.logId,
+        key.head,
+        key.path,
+        key.sessionLogId,
+        key.sessionHead,
+        key.recallKey,
+        key.turnSeq
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    if (
+      !row ||
+      asNumber(row["touch_version"]) !== key.touchVersion ||
+      asNumber(row["knowledge_version"]) !== key.knowledgeVersion ||
+      asString(row["content_stamp"]) !== key.contentStamp
+    ) {
+      return null;
+    }
+    try {
+      const parsed = JSON.parse(asString(row["rendered_json"]) ?? "[]");
+      return Array.isArray(parsed) ? (parsed as ProvItem[]) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeProvenanceCache(key: ProvenanceCacheKey, items: ProvItem[]): void {
+    this.sql.exec(
+      `INSERT INTO gad_provenance_cache (
+         log_id, head, path, session_log_id, session_head, recall_key, turn_seq,
+         touch_version, knowledge_version, content_stamp, rendered_json, created_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(log_id, head, path, session_log_id, session_head, recall_key, turn_seq) DO UPDATE SET
+         touch_version = excluded.touch_version,
+         knowledge_version = excluded.knowledge_version,
+         content_stamp = excluded.content_stamp,
+         rendered_json = excluded.rendered_json,
+         created_at = excluded.created_at`,
+      key.logId,
+      key.head,
+      key.path,
+      key.sessionLogId,
+      key.sessionHead,
+      key.recallKey,
+      key.turnSeq,
+      key.touchVersion,
+      key.knowledgeVersion,
+      key.contentStamp,
+      JSON.stringify(items),
+      nowIso()
+    );
   }
 
   /** Recent vcs commits for a repo head, newest first. `head` defaults to
@@ -5833,7 +9006,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       logId: string;
       head: string;
       logKind?: LogKind | string | null;
-      actor: ParticipantRef;
+      actor: ActorRef;
       eventId?: string | null;
       metadata?: Record<string, unknown> | null;
     } | null;
@@ -6140,13 +9313,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
         ops.push({ kind: "delete", path, oldContentHash: o.contentHash, newContentHash: null });
       } else if (m && o) {
         if (o.contentHash !== m.contentHash) {
+          // A text file the 3-way merge line-merged carries origin-annotated
+          // hunks (U3) and stays non-synthetic (blame routes through it). A
+          // whole-file take-ours/take-theirs (or a snapshot diff on the
+          // push/import paths) has NO line-level provenance — it is SYNTHETIC
+          // (U1 carve-out): hunks absent is legal and blame treats it as a
+          // chain restart / degraded stop rather than a silent gap.
           ops.push({
             kind: "replace",
             path,
             oldContentHash: o.contentHash,
             newContentHash: m.contentHash,
             mode: m.mode,
-            ...(m.hunks ? { hunks: m.hunks } : {}),
+            ...(m.hunks ? { hunks: m.hunks } : { synthetic: true }),
           });
         } else if (o.mode !== m.mode) {
           ops.push({
@@ -6158,6 +9337,88 @@ export class GadWorkspaceDO extends DurableObjectBase {
           });
         }
       }
+    }
+    return ops;
+  }
+
+  /**
+   * Provenance ops for a CONFLICTED-merge RESOLUTION commit (blame invariants
+   * 1 + 2/U2). The resolution commit's first parent is OURS (`lineageBase`);
+   * its committed tree is the PROVISIONAL (conflict-marked) merge base with the
+   * agent's resolution working rows replayed on top. Two classes of change
+   * reach this commit without a naturally chain-continuous authored op and would
+   * otherwise corrupt blame:
+   *
+   *  (A) files the agent HAND-RESOLVED via `vcs.edit` (`workingPaths`): those
+   *      working rows were composed over the PROVISIONAL base, so the first
+   *      row's `old_content_hash` = provisional (conflict-marked) content ≠ OURS
+   *      — a first-parent chain break (U2 false positive) and provisional-vs-
+   *      ours coordinate skew for regions outside the resolving hunks. A
+   *      SYNTHETIC BRIDGE op OURS→provisional is recorded FIRST (ingest ops
+   *      carry `edit_seq = NULL`, which sorts BEFORE the working rows' `edit_seq
+   *      ≥ 1`), restarting the per-path chain at the merge boundary so the
+   *      agent's rows compose OURS→provisional→resolved while KEEPING their own
+   *      authorship (invocation/turn — merge-notes invariant 4). Blame of a
+   *      resolved region still lands on the agent's hunked op; a context region
+   *      degrades to `synthetic` at the merge commit rather than silently onto
+   *      the ours op in the wrong coordinate space.
+   *
+   *  (B) files the 3-way merge CLEANLY auto-took from THEIRS (clean take-theirs,
+   *      new theirs creates, theirs deletes) carry NO working row at all. Each
+   *      is recorded as a whole-file op OURS→final via {@link mergeEditOps}
+   *      (hunkless text takes are SYNTHETIC per the U1 carve-out) so blame
+   *      attributes the incoming content to the merge commit — never silently
+   *      to the ours/base `create` (blame-1).
+   *
+   * `workingPaths` get only the bridge (their content ops are the re-keyed
+   * working rows); every other path the merged tree changed vs OURS gets a
+   * whole-file op. Together with the re-keyed working rows this makes the
+   * resolution commit a complete, chain-continuous, blame-covered merge commit.
+   */
+  private mergeResolutionEditOps(
+    oursFiles: StateFileEntry[],
+    provisionalFiles: StateFileEntry[],
+    committedFiles: Array<{ path: string; contentHash: string; mode: number }>,
+    workingPaths: Set<string>
+  ): ProvenanceEditOp[] {
+    const oursByPath = new Map(oursFiles.map((f) => [f.path, f]));
+    const provByPath = new Map(provisionalFiles.map((f) => [f.path, f]));
+    const ops: ProvenanceEditOp[] = [];
+    // (A) OURS→provisional bridge for each hand-resolved path (chain restart).
+    for (const path of [...workingPaths].sort()) {
+      const prov = provByPath.get(path);
+      // No provisional content (the agent CREATED this path during resolution):
+      // the working `create` restarts the chain itself — no bridge needed.
+      if (!prov) continue;
+      const ours = oursByPath.get(path);
+      // The merge left this path at OURS content (agent edited an untouched
+      // file): the first working row's old already == OURS — no bridge needed.
+      if (ours && ours.contentHash === prov.contentHash) continue;
+      ops.push(
+        ours
+          ? {
+              kind: "replace",
+              path,
+              oldContentHash: ours.contentHash,
+              newContentHash: prov.contentHash,
+              mode: prov.mode,
+              synthetic: true,
+            }
+          : {
+              // theirs-added file that ALSO carried a resolution edit: the
+              // working row's old = provisional; a `create` restarts the chain.
+              kind: "create",
+              path,
+              oldContentHash: null,
+              newContentHash: prov.contentHash,
+              mode: prov.mode,
+            }
+      );
+    }
+    // (B) whole-file ops for every OTHER path the merged tree changed vs OURS.
+    for (const op of this.mergeEditOps(oursFiles, committedFiles)) {
+      if (workingPaths.has(op.path)) continue;
+      ops.push(op);
     }
     return ops;
   }
@@ -6181,9 +9442,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
   async vcsPush(input: {
     repoPaths: string[];
-    sourceHead: string;
+    sourceHead?: string | null;
     message?: string | null;
-    actor?: ParticipantRef | null;
+    actor?: ActorRef | null;
   }): Promise<VcsPushResultDo> {
     // READ-AT-ENTRY (durable invocation-token contract): capture the
     // on-behalf-of token, the HOST-RESOLVED caller context, AND the verified
@@ -6194,13 +9455,410 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // `actor` is derived from the verified caller (client-side flip: userland
     // callers no longer thread it). An explicit actor (in-process host callers)
     // still wins for parity with the pre-flip contract.
-    const actor = input.actor ?? this.callerParticipant();
+    const actor = input.actor ?? this.callerActor();
     this.ensureReady();
+    const sourceHead = this.resolvePushSourceHead(input.sourceHead, confinement);
     // Structural source-head confinement (register row 11): a sandboxed caller
     // may only push its OWN `ctx:` head. The context is HOST-VERIFIED (threaded
     // via the relay, never client-asserted); enforced BEFORE any read/publish.
-    this.assertSourceHeadConfined(input.sourceHead, confinement);
-    return this.runVcsPush({ ...input, actor }, invocationToken, false);
+    this.assertSourceHeadConfined(sourceHead, confinement);
+    return this.runVcsPush({ ...input, sourceHead, actor }, invocationToken, false);
+  }
+
+  // -------------------------------------------------------------------------
+  // Delete / restore / fork — DO-owned lifecycle sagas (narrow-host boundary
+  // refactor Phase 4). The `refs.updateMains` CAS stays a host PRIMITIVE the DO
+  // drives (approval-gated host-side, D3 — attribution rides the relay-minted
+  // on-behalf-of token). Archive/restore lineage moves, the dependent-gate
+  // DECISION (over the host `worktree.dependentRepos` primitive), the fork
+  // rename bootstrap commit, and disk (re)projection (`worktree.project`) are
+  // orchestrated HERE. The CAS is the FINAL step, so a pre-CAS failure rolls
+  // back only DO-internal state (no gated ref-compensation, Fork D).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Archive a repo's history and drop it from the workspace. Orchestration:
+   * gate on host-computed build-graph dependents (refuse without `force`),
+   * archive the log lineage (DO-internal), THEN retire the protected `main` ref
+   * (the host-gated `updateMains{next:null}` — the severe deletion prompt fires
+   * host-side, classified from the null-next CAS shape). Disk removal is the
+   * host's exactly-once `onMainsUpdated` reaction. A gate denial / CAS conflict
+   * rolls the archive back (un-archive) — DO-internal, ungated.
+   */
+  @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
+  async vcsDeleteRepo(input: {
+    repoPath: string;
+    actor?: ActorRef | null;
+    force?: boolean;
+  }): Promise<{
+    repoPath: string;
+    archived: boolean;
+    archiveHead: string | null;
+    removedPaths: string[];
+    dependents: string[];
+    stateHash: string;
+  }> {
+    // READ-AT-ENTRY (durable token contract): capture the on-behalf-of token
+    // synchronously before any await.
+    const invocationToken = this.invocationToken;
+    this.ensureReady();
+    const repoPath = normalizeRepoPathArg(input.repoPath);
+    if (repoPath === "meta") {
+      throw new Error("Refusing to delete the `meta` repo (workspace configuration).");
+    }
+    const logId = logIdForRepoPath(repoPath);
+    const store = this.contentStore();
+    const mainWorktree = this.resolveWorktreeHeadInternal(logId, VCS_MAIN);
+    if (!mainWorktree) {
+      throw new Error(
+        `Cannot delete ${repoPath}: it has no committed \`main\` (not a tracked repo).`
+      );
+    }
+    const mainState = mainWorktree.stateHash;
+    const removedPaths = (await this.stateFilesFor(store, mainState)).map((f) =>
+      joinRepoPrefixPath(repoPath, f.path)
+    );
+
+    // Dependent gate (Fork B): the DO owns only the DECISION; the build graph is
+    // a dumb host primitive (`worktree.dependentRepos`). Refuse unless `force`.
+    const dependents = await this.worktreeStore().dependentRepos(repoPath);
+    if (dependents.length > 0 && !input.force) {
+      throw new Error(
+        `Cannot delete ${repoPath}: ${dependents.length} repo(s) depend on it ` +
+          `(${dependents.join(", ")}). Their builds will break — pass force to delete anyway.`
+      );
+    }
+
+    // §6 write-ahead protocol. Record a durable lifecycle intent BEFORE the
+    // cross-authority CAS so a throw whose response was LOST (the CAS may have
+    // landed) is reconcilable against the authoritative ref rather than blindly
+    // rolled back. Capture the ref-log cursor first so a landed-but-lost delete
+    // (next=null) is distinguishable from a denial even when this repo has prior
+    // delete cycles in its log.
+    const archiveHead = `${VCS_ARCHIVE_HEAD_PREFIX}${mainState}`;
+    const logCursor = await this.currentMainRefLogCursor(repoPath);
+    const intent: LifecycleIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "delete",
+      repoPath,
+      logId,
+      expectedOld: mainState,
+      next: null,
+      detail: { archiveHead, logCursor },
+      actor: input.actor ?? null,
+    };
+    // Mark in-flight + record durably, THEN archive (DO-internal), THEN the CAS.
+    // Archive after the intent so a crash before the archive still leaves the DO
+    // main live under a covering intent (heal classifies denied → no-op).
+    this.inFlightLifecycleIntents.add(intent.intentId);
+    this.transaction(() => this.recordLifecycleIntent(intent));
+    try {
+      let archive: ReturnType<typeof this.archiveRepoMain>;
+      try {
+        archive = this.archiveRepoMain({ logId, archiveHead });
+      } catch (error) {
+        // Pre-CAS, DO-internal failure: the ref was never touched, nothing
+        // landed — drop the intent (no reconcile needed) and rethrow verbatim.
+        this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+        throw error;
+      }
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath, expectedOld: mainState, next: null }],
+          operation: "delete",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        // Do NOT assume the CAS didn't land: reconcile against the ref.
+        //  - denied (ref unchanged) → compensate (un-archive) + drop intent + rethrow;
+        //  - landed-but-lost (ref gone) → keep archived, drop intent, RETURN success
+        //    (the delete DID happen; disk removal is the host's onMainsUpdated tail);
+        //  - indeterminate → leave the intent parked for heal + rethrow.
+        const cls = await this.reconcileLifecycleIntent(intent, error);
+        if (cls === "landed") {
+          return {
+            repoPath,
+            archived: archive.archived,
+            archiveHead: archive.archiveHead,
+            removedPaths,
+            dependents,
+            stateHash: await this.workspaceViewFromRefs(store),
+          };
+        }
+        if (cls === "denied") {
+          throw new Error(`vcsDeleteRepo(${repoPath}): ref delete denied — ${String(error)}`);
+        }
+        throw error;
+      }
+      // CAS landed: complete the intent (delete it) and return.
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return {
+        repoPath,
+        archived: archive.archived,
+        archiveHead: archive.archiveHead,
+        removedPaths,
+        dependents,
+        stateHash: await this.workspaceViewFromRefs(store),
+      };
+    } finally {
+      this.inFlightLifecycleIntents.delete(intent.intentId);
+    }
+  }
+
+  /**
+   * Recover a deleted repo: re-point `main` at its newest archive head and
+   * re-materialize it on disk. Orchestration: guard the path is free, un-archive
+   * the lineage (DO-internal), THEN re-create the protected `main` ref (the
+   * host-gated `updateMains{expectedOld:null}` — an add-repo prompt classified
+   * from the CAS shape, D3), THEN re-project the repo into the ACTIVE context
+   * checkout (`ctx:workspace`) via the `worktree.project` primitive so it
+   * re-appears on disk (D1/D2 — `main` has no checkout). A gate denial / CAS
+   * conflict re-archives the lineage (DO-internal, ungated).
+   */
+  @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
+  async vcsRestoreRepo(input: { repoPath: string; actor?: ActorRef | null }): Promise<{
+    repoPath: string;
+    restored: boolean;
+    fromArchiveHead: string | null;
+    restoredPaths: string[];
+    stateHash: string;
+  }> {
+    const invocationToken = this.invocationToken;
+    this.ensureReady();
+    const repoPath = normalizeRepoPathArg(input.repoPath);
+    const logId = logIdForRepoPath(repoPath);
+    const store = this.contentStore();
+    // Occupancy guard: a live main (a different repo re-created at the path)
+    // must not be clobbered.
+    if (this.resolveWorktreeHeadInternal(logId, VCS_MAIN)) {
+      throw new Error(
+        `Cannot restore ${repoPath}: a repo already occupies that path (it was re-created since deletion).`
+      );
+    }
+    const archives = this.listWorktreeHeads({ logId })
+      .filter((h) => h.head.startsWith(VCS_ARCHIVE_HEAD_PREFIX))
+      .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    const newest = archives[0];
+    if (!newest) {
+      throw new Error(`Cannot restore ${repoPath}: no archived history found at that path.`);
+    }
+    const restoredPaths = (await this.stateFilesFor(store, newest.stateHash)).map((f) =>
+      joinRepoPrefixPath(repoPath, f.path)
+    );
+
+    // §6 write-ahead protocol (mirrors delete). Record the durable intent BEFORE
+    // the cross-authority CAS so a lost-response throw is reconciled against the
+    // authoritative ref, not blindly re-archived (which — on a landed-but-lost
+    // CAS — would leave the ref present while the DO main is re-archived: the
+    // half-restore that bricks every later push/import at the fail-closed heal).
+    const logCursor = await this.currentMainRefLogCursor(repoPath);
+    const intent: LifecycleIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "restore",
+      repoPath,
+      logId,
+      expectedOld: null,
+      next: newest.stateHash,
+      detail: { archiveHead: newest.head, logCursor },
+      actor: input.actor ?? null,
+    };
+    this.inFlightLifecycleIntents.add(intent.intentId);
+    this.transaction(() => this.recordLifecycleIntent(intent));
+    try {
+      // Un-archive (DO-internal), then the CAS.
+      let restore: ReturnType<typeof this.restoreRepoMain>;
+      try {
+        restore = this.restoreRepoMain({ logId, archiveHead: newest.head });
+      } catch (error) {
+        // Pre-CAS, DO-internal failure: the ref was never touched — drop the
+        // intent (no reconcile needed) and rethrow verbatim.
+        this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+        throw error;
+      }
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath, expectedOld: null, next: newest.stateHash }],
+          operation: "restore",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        //  - denied (ref still absent) → re-archive + drop intent + rethrow;
+        //  - landed-but-lost (ref at next) → keep restored, finish disk projection,
+        //    drop intent, RETURN success (the restore DID happen);
+        //  - indeterminate → leave the intent parked for heal + rethrow.
+        const cls = await this.reconcileLifecycleIntent(intent, error);
+        if (cls === "landed") {
+          return {
+            repoPath,
+            restored: true,
+            fromArchiveHead: newest.head,
+            restoredPaths,
+            stateHash: await this.workspaceViewFromRefs(store),
+          };
+        }
+        if (cls === "denied") {
+          throw new Error(`vcsRestoreRepo(${repoPath}): ref restore denied — ${String(error)}`);
+        }
+        throw error;
+      }
+      // CAS landed: re-materialize into the ACTIVE context checkout so the repo
+      // re-appears on disk (D1/D2 — never a `main` checkout), complete the intent.
+      await this.worktreeStore().project(repoPath, VCS_ACTIVE_CONTEXT_HEAD, newest.stateHash);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return {
+        repoPath,
+        restored: restore.restored,
+        fromArchiveHead: restore.archiveHead,
+        restoredPaths,
+        stateHash: await this.workspaceViewFromRefs(store),
+      };
+    } finally {
+      this.inFlightLifecycleIntents.delete(intent.intentId);
+    }
+  }
+
+  /**
+   * Fork a repo's entire `main` history into a NEW repo at `toPath` — a no-copy
+   * lineage fork. Orchestration: `forkLog` (DO-internal lineage descent), a
+   * `package.json` `name` rewrite as a bootstrap commit (blob put / tree mirror
+   * / provenance ingest over the content-store primitives), the ONE host-gated
+   * `main` ref creation (`updateMains{expectedOld:null}`, the add-repo prompt),
+   * THEN disk projection into the ACTIVE context. Errors if the source has no
+   * history or the destination exists.
+   */
+  @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
+  async vcsForkRepo(input: {
+    fromPath: string;
+    toPath: string;
+    actor?: ActorRef | null;
+  }): Promise<{ repoPath: string; head: string; inherited: number; stateHash: string }> {
+    const invocationToken = this.invocationToken;
+    this.ensureReady();
+    const actor = input.actor ?? this.callerActor();
+    const from = normalizeRepoPathArg(input.fromPath);
+    const to = normalizeRepoPathArg(input.toPath);
+    if (from === to) throw new Error(`forkRepo: source and destination are the same (${from})`);
+    const fromLogId = logIdForRepoPath(from);
+    const toLogId = logIdForRepoPath(to);
+
+    const fromMainWorktree = this.resolveWorktreeHeadInternal(fromLogId, VCS_MAIN);
+    if (!fromMainWorktree) {
+      throw new Error(`forkRepo: source repo "${from}" has no history to fork`);
+    }
+    const fromMain = fromMainWorktree.stateHash;
+    if (this.resolveWorktreeHeadInternal(toLogId, VCS_MAIN)) {
+      throw new Error(`forkRepo: destination repo "${to}" already exists`);
+    }
+    const store = this.contentStore();
+
+    // 1. No-copy lineage fork: vcs:repo:<from> @ main → vcs:repo:<to> @ main.
+    const fork = this.forkLog({
+      fromLogId,
+      fromHead: VCS_MAIN,
+      toLogId,
+      toHead: VCS_MAIN,
+    });
+
+    // 2. Rewrite package.json `name` (when present) so the fork is build-valid —
+    //    a direct main-bootstrap commit on the inherited lineage (history +
+    //    rename). Uses the private ingest (the public surface refuses non-do main
+    //    ingests; this IS the DO's own publish path).
+    let finalState = fromMain;
+    const baseFiles = await this.stateFilesFor(store, fromMain);
+    const pkgEntry = baseFiles.find((f) => f.path === "package.json");
+    if (pkgEntry) {
+      const pkgBase64 = await store.getBase64(pkgEntry.contentHash);
+      const pkgText = pkgBase64 !== null ? decodeUtf8Text(base64ToBytes(pkgBase64)) : null;
+      const renamed = pkgText !== null ? renameWorkspacePackage(pkgText, to) : null;
+      if (renamed && renamed !== pkgText) {
+        const put = await store.putBase64(bytesToBase64(new TextEncoder().encode(renamed)));
+        const files = baseFiles.map((f) =>
+          f.path === "package.json" ? { ...f, contentHash: put.digest } : f
+        );
+        const ingest = this.transaction(() =>
+          this.ingestWorktreeStateInTxn({
+            logId: toLogId,
+            head: VCS_MAIN,
+            logKind: "vcs",
+            actor,
+            files,
+            baseStateHash: fromMain,
+            expectedRefStateHash: fromMain,
+            eventKind: "state.snapshot_ingested",
+            summary: `forkRepo: rename package to ${to}`,
+            // A bootstrap rename on inherited lineage — snapshot-style provenance
+            // (no true first-parent hunks), so it is SYNTHETIC (U1): a chain
+            // restart for blame on the new repo's fresh main lineage.
+            editOps: [
+              {
+                kind: "write",
+                path: "package.json",
+                oldContentHash: pkgEntry.contentHash,
+                newContentHash: put.digest,
+                synthetic: true,
+              },
+            ],
+          })
+        );
+        finalState = ingest.stateHash;
+        // Mirror the composed state so the handed-out hash resolves in the
+        // content store (projection materializes from there).
+        await this.mirrorStateToContentStore(store, files, finalState);
+      }
+    }
+
+    // 3. §6 write-ahead protocol. forkLog (+ the optional rename bootstrap) is
+    //    DO-INTERNAL; the CROSS-authority step is the destination-`main` CAS.
+    //    Record a durable intent BEFORE it (now that `finalState` is known) so a
+    //    lost-response throw is reconciled against the authoritative ref rather
+    //    than leaving a PHANTOM repo (DO main head at `finalState`, no host ref)
+    //    that neither push (ref-absent, invisible to the fail-closed sweep) nor
+    //    the old catch-free path would ever repair.
+    const logCursor = await this.currentMainRefLogCursor(to);
+    const intent: LifecycleIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "fork",
+      repoPath: to,
+      logId: toLogId,
+      expectedOld: null,
+      next: finalState,
+      detail: { fromPath: from, fromLogId, toLogId, forkInherited: fork.inherited, logCursor },
+      actor: actor ?? null,
+    };
+    this.inFlightLifecycleIntents.add(intent.intentId);
+    this.transaction(() => this.recordLifecycleIntent(intent));
+    try {
+      // The ONE host-gated main-ref change: create the new repo's protected
+      // `main` (expectedOld:null = an add-repo prompt from the CAS shape).
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath: to, expectedOld: null, next: finalState }],
+          operation: "import",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        //  - denied (ref still absent) → re-key the created destination lineage
+        //    AWAY (archive it) so no phantom remains + drop intent + rethrow;
+        //  - landed-but-lost (ref at finalState) → keep the forked lineage, finish
+        //    disk projection, drop intent, RETURN success (the fork DID happen);
+        //  - indeterminate → leave the intent parked for heal + rethrow.
+        const cls = await this.reconcileLifecycleIntent(intent, error);
+        if (cls === "landed") {
+          return { repoPath: to, head: VCS_MAIN, inherited: fork.inherited, stateHash: finalState };
+        }
+        if (cls === "denied") {
+          throw new Error(`vcsForkRepo(${from}→${to}): ref create denied — ${String(error)}`);
+        }
+        throw error;
+      }
+      // 4. CAS landed: project the fork onto the ACTIVE context's checkout so it
+      //    appears on disk (D1/D2 — `main` has no checkout), complete the intent.
+      await this.worktreeStore().project(to, VCS_ACTIVE_CONTEXT_HEAD, finalState);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return { repoPath: to, head: VCS_MAIN, inherited: fork.inherited, stateHash: finalState };
+    } finally {
+      this.inFlightLifecycleIntents.delete(intent.intentId);
+    }
   }
 
   /**
@@ -6213,6 +9871,31 @@ export class GadWorkspaceDO extends DurableObjectBase {
       callerKind: this.caller?.callerKind ?? null,
       callerContextId: this.callerContextId ?? null,
     };
+  }
+
+  /**
+   * Resolve the public `vcs.push({ sourceHead? })` shape at the DO boundary.
+   * Context callers may omit it and get their HOST-VERIFIED own `ctx:*` head;
+   * callers with no registered context (shell/server/mobile shell/direct DO)
+   * must name the source explicitly. This keeps the shared typed API intact
+   * without letting an omitted source fall through to a later undefined
+   * dereference.
+   */
+  private resolvePushSourceHead(
+    sourceHead: string | null | undefined,
+    confinement: { callerKind: string | null; callerContextId: string | null }
+  ): string {
+    if (sourceHead !== undefined && sourceHead !== null) {
+      if (typeof sourceHead !== "string" || sourceHead.length === 0) {
+        throw new Error("push: sourceHead must be a non-empty string when provided");
+      }
+      return sourceHead;
+    }
+    if (confinement.callerContextId) return `ctx:${confinement.callerContextId}`;
+    throw new Error(
+      "push: sourceHead is required when the caller has no registered context; " +
+        "pass sourceHead explicitly or call from a context runtime."
+    );
   }
 
   /**
@@ -6258,18 +9941,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
   }
 
-  /** The verified caller as a provenance participant, read synchronously at
+  /** The verified caller as a provenance actor, read synchronously at
    *  handler entry (the invocation-token contract). Falls back to the system
-   *  participant when there is no active RPC caller (alarm/lifecycle). */
-  private callerParticipant(): ParticipantRef {
+   *  actor when there is no active RPC caller (alarm/lifecycle). */
+  private callerActor(): ActorRef {
     const caller = this.caller;
     return caller
-      ? ({ id: caller.callerId, kind: caller.callerKind } as unknown as ParticipantRef)
-      : SYSTEM_PARTICIPANT;
+      ? ({ id: caller.callerId, kind: caller.callerKind } as unknown as ActorRef)
+      : SYSTEM_ACTOR;
   }
 
   private async runVcsPush(
-    input: { repoPaths: string[]; sourceHead: string; message?: string | null; actor: ParticipantRef },
+    input: {
+      repoPaths: string[];
+      sourceHead: string;
+      message?: string | null;
+      actor: ActorRef;
+    },
     invocationToken: string | undefined,
     isRetry: boolean
   ): Promise<VcsPushResultDo> {
@@ -6284,7 +9972,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     // Heal any crash-window drift (pending intents / lineage) before reading
     // mains, so the FF/divergence checks see a consistent lineage.
-    await this.healPublishDrift(store);
+    await this.healPublishDrift();
 
     // Precondition 1 — clean source: no uncommitted edits on any ctx source repo.
     if (sourceHead.startsWith("ctx:")) {
@@ -6373,7 +10061,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
         contentHash: f.contentHash,
         mode: f.mode,
       }));
-      advancing.push({ repoPath, logId, oursState, candidateState: theirsState, sourceEventId, files });
+      advancing.push({
+        repoPath,
+        logId,
+        oursState,
+        candidateState: theirsState,
+        sourceEventId,
+        files,
+      });
     }
 
     if (divergences.length > 0) return { status: "diverged", divergences };
@@ -6402,7 +10097,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // provenance. On CAS conflict: discard intent, re-read, bounded retry.
     const entries: PublishIntentEntry[] = [];
     for (const c of advancing) {
-      const oursFiles = c.oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, c.oursState);
+      const oursFiles =
+        c.oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, c.oursState);
       entries.push({
         repoPath: c.repoPath,
         logId: c.logId,
@@ -6429,7 +10125,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
     try {
       try {
         await this.refsStore().updateMains({
-          entries: entries.map((e) => ({ repoPath: e.repoPath, expectedOld: e.expectedOld, next: e.next })),
+          entries: entries.map((e) => ({
+            repoPath: e.repoPath,
+            expectedOld: e.expectedOld,
+            next: e.next,
+          })),
           reason: input.message ?? `push ${repoPaths.join(", ")} from ${sourceHead}`,
           operation: "push",
           ...(invocationToken ? { invocationToken } : {}),
@@ -6466,7 +10166,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         // intent exists precisely to survive a crash between the CAS and its
         // provenance — healPublishDrift completes it if the CAS landed, else
         // discards it against the ref log. Deleting here would fall back to the
-        // degraded synthetic catch-up ingest (lineage/attribution/hunk loss).
+        // unrecoverable no-intent drift (lineage/attribution/hunk loss).
         throw error;
       }
 
@@ -6509,18 +10209,18 @@ export class GadWorkspaceDO extends DurableObjectBase {
     repoPath: string;
     sourceHead: string;
     message?: string | null;
-    actor?: ParticipantRef | null;
+    actor?: ActorRef | null;
   }): Promise<VcsImportPublishResultDo> {
     // READ-AT-ENTRY (invocation-token contract): capture the on-behalf-of token
     // and verified caller synchronously, before any await.
     const invocationToken = this.invocationToken;
-    const actor = input.actor ?? this.callerParticipant();
+    const actor = input.actor ?? this.callerActor();
     this.ensureReady();
     return this.runVcsImportPublish({ ...input, actor }, invocationToken);
   }
 
   private async runVcsImportPublish(
-    input: { repoPath: string; sourceHead: string; message?: string | null; actor: ParticipantRef },
+    input: { repoPath: string; sourceHead: string; message?: string | null; actor: ActorRef },
     invocationToken: string | undefined
   ): Promise<VcsImportPublishResultDo> {
     const store = this.contentStore();
@@ -6534,7 +10234,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     // Heal any crash-window drift before reading main so the CAS sees a
     // consistent lineage.
-    await this.healPublishDrift(store);
+    await this.healPublishDrift();
 
     // The staging lineage the bridge ingested the imported history onto.
     const stagingRef = this.resolveWorktreeHeadInternal(logId, input.sourceHead);
@@ -6652,7 +10352,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       });
     }
     if (divergences.length > 0) return { status: "diverged", divergences };
-    if (allApplied) return { status: "up-to-date", repoPaths: advancing.map((c) => c.repoPath), reports };
+    if (allApplied)
+      return { status: "up-to-date", repoPaths: advancing.map((c) => c.repoPath), reports };
     return null;
   }
 
@@ -6684,13 +10385,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   private listPublishIntents(): PublishIntent[] {
     return (
-      this.sql.exec(`SELECT * FROM gad_publish_intents ORDER BY created_at`).toArray() as JsonRecord[]
+      this.sql
+        .exec(`SELECT * FROM gad_publish_intents ORDER BY created_at`)
+        .toArray() as JsonRecord[]
     ).map((row) => ({
       intentId: String(row["intent_id"]),
-      operation: String(row["operation"]) as "push" | "merge" | "import",
+      operation: String(row["operation"]) as "push" | "import",
       entries: JSON.parse(String(row["entries_json"])) as PublishIntentEntry[],
       message: row["message"] ? String(row["message"]) : null,
-      actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ParticipantRef) : null,
+      actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ActorRef) : null,
       sourceHead: row["source_head"] ? String(row["source_head"]) : null,
     }));
   }
@@ -6709,7 +10412,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           logId: e.logId,
           head: "main",
           logKind: "vcs",
-          actor: intent.actor ?? SYSTEM_PARTICIPANT,
+          actor: intent.actor ?? SYSTEM_ACTOR,
           files: e.files,
           baseStateHash: e.expectedOld ?? EMPTY_STATE_HASH,
           expectedRefStateHash: e.expectedOld ?? EMPTY_STATE_HASH,
@@ -6736,10 +10439,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *    provenance with full fidelity (its recorded editOps/parents);
    *  - a pending intent whose CAS never landed (ref no longer at `expectedOld`,
    *    and no ref-log transition to `next`) → discard it;
-   *  - a main the DO's recorded lineage lags with NO covering intent → a
-   *    SYNTHETIC catch-up ingest of the ref's tree (stamped synthetic).
+   *  - a main the DO's recorded lineage lags with NO covering intent → fail
+   *    loudly. Refs alone cannot reconstruct the authored transition, so degraded
+   *    synthetic provenance is not allowed.
    */
-  private async healPublishDrift(store: HostContentStore): Promise<void> {
+  private async healPublishDrift(): Promise<void> {
     const intents = this.listPublishIntents();
     const coveredMains = new Set<string>();
     for (const intent of intents) {
@@ -6760,8 +10464,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         // across its (possibly human-gated) `refs.updateMains` window and its CAS
         // may still land — the appearance of staleness is exactly that window,
         // not a genuine orphan. Its repoPaths are already in `coveredMains`
-        // (added above for every entry), so skipping the reap does NOT let the
-        // synthetic pass below synthesize over it. A genuinely orphaned intent
+        // (added above for every entry), so no-intent drift checks below do not
+        // fire over it. A genuinely orphaned intent
         // (owner crashed/evicted) is absent from the set on the fresh instance's
         // startup heal and is reaped there, completing recovery (§6).
         if (!this.inFlightPublishIntents.has(intent.intentId)) {
@@ -6774,7 +10478,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
       if (anyLanded) this.completePublishIntent(intent);
     }
 
-    // Mains whose recorded lineage lags with NO covering intent → synthetic.
+    // Repo-lifecycle intents (fork/delete/restore) BEFORE the fail-closed sweep:
+    // reconcile half-applied ops and register their repoPaths in `coveredMains`
+    // so the sweep (which only iterates listMains) never bricks over a
+    // half-restore and phantom forks / half-deletes get repaired here (§6).
+    await this.healLifecycleDrift(coveredMains);
+
+    // Mains whose recorded lineage lags with NO covering intent cannot be healed
+    // without inventing provenance. Fail closed and leave refs/DO disagreement
+    // visible to the operator.
     for (const ref of await this.refsStore().listMains()) {
       const repoPath = normalizeRepoPathArg(ref.repoPath);
       if (coveredMains.has(repoPath)) continue;
@@ -6782,7 +10494,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const logId = logIdForRepoPath(repoPath);
       const recorded = this.resolveWorktreeHeadInternal(logId, "main")?.stateHash ?? null;
       if (recorded === ref.stateHash) continue;
-      await this.syntheticCatchUpIngest(store, repoPath, logId, recorded, ref.stateHash);
+      throw new UncoveredMainDriftError(
+        `vcsHealPublishDrift: protected ref for ${repoPath} is ${ref.stateHash}, ` +
+          `but the DO recorded main is ${recorded ?? "<absent>"} and no publish intent covers it`
+      );
     }
   }
 
@@ -6790,56 +10505,193 @@ export class GadWorkspaceDO extends DurableObjectBase {
    *  ref log records no transition INTO `next` (consult the log, not just the
    *  current value — a later push may have moved past it). */
   private async intentIsStale(intent: PublishIntent): Promise<boolean> {
-    const readLog = this.refsStore().readMainLog?.bind(this.refsStore());
+    const readLog = this.refsStore().listMainRefLog?.bind(this.refsStore());
     for (const e of intent.entries) {
       const current = (await this.refsStore().readMain(e.repoPath))?.stateHash ?? null;
       if (current === e.next) return false;
       if (readLog) {
-        const log = await readLog(e.repoPath, 200);
+        const log = await readLog(e.repoPath);
         if (log.some((entry) => entry.new === e.next)) return false;
       }
     }
     return true;
   }
 
-  /** Degraded catch-up: record the ref's tree as a synthetic main commit so the
-   *  DO's lineage rejoins the ref. Stamped synthetic (chain restart) since true
-   *  first-parent hunks are unavailable. */
-  private async syntheticCatchUpIngest(
-    store: HostContentStore,
-    repoPath: string,
-    logId: string,
-    recorded: string | null,
-    refState: string
-  ): Promise<void> {
-    const files = (await this.stateFilesFor(store, refState)).map((f) => ({
-      path: f.path,
-      contentHash: f.contentHash,
-      mode: f.mode,
-    }));
-    const editOps: ProvenanceEditOp[] = files.map((f) => ({
-      kind: "create" as const,
-      path: f.path,
-      oldContentHash: null,
-      newContentHash: f.contentHash,
-      mode: f.mode,
-      synthetic: true,
-    }));
-    this.transaction(() =>
-      this.ingestWorktreeStateInTxn({
-        logId,
-        head: "main",
-        logKind: "vcs",
-        actor: SYSTEM_PARTICIPANT,
-        files,
-        baseStateHash: recorded ?? EMPTY_STATE_HASH,
-        expectedRefStateHash: recorded ?? EMPTY_STATE_HASH,
-        eventKind: "state.snapshot_ingested",
-        summary: `synthetic catch-up of ${repoPath} main to ref state`,
-        ...(editOps.length > 0 ? { editOps } : {}),
-      })
+  // ── Write-ahead LIFECYCLE intents (fork/delete/restore self-heal, §6) ───────
+
+  private recordLifecycleIntent(intent: LifecycleIntent): void {
+    this.sql.exec(
+      `INSERT INTO gad_lifecycle_intents
+         (intent_id, operation, repo_path, log_id, expected_old, next_state, detail_json, actor_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      intent.intentId,
+      intent.operation,
+      intent.repoPath,
+      intent.logId,
+      intent.expectedOld,
+      intent.next,
+      JSON.stringify(intent.detail),
+      intent.actor ? JSON.stringify(intent.actor) : null,
+      nowIso()
     );
-    await this.mirrorStateToContentStore(store, files, refState);
+  }
+
+  private deleteLifecycleIntent(intentId: string): void {
+    this.sql.exec(`DELETE FROM gad_lifecycle_intents WHERE intent_id = ?`, intentId);
+  }
+
+  private listLifecycleIntents(): LifecycleIntent[] {
+    return (
+      this.sql
+        .exec(`SELECT * FROM gad_lifecycle_intents ORDER BY created_at`)
+        .toArray() as JsonRecord[]
+    ).map((row) => ({
+      intentId: String(row["intent_id"]),
+      operation: String(row["operation"]) as LifecycleIntent["operation"],
+      repoPath: String(row["repo_path"]),
+      logId: String(row["log_id"]),
+      expectedOld: row["expected_old"] != null ? String(row["expected_old"]) : null,
+      next: row["next_state"] != null ? String(row["next_state"]) : null,
+      detail: JSON.parse(String(row["detail_json"])) as LifecycleIntentDetail,
+      actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ActorRef) : null,
+    }));
+  }
+
+  /** Highest host main-ref-log id for `repoPath` right now (null when empty).
+   *  Captured BEFORE a lifecycle CAS so {@link classifyLifecycleLanded} can page
+   *  the log AFTER it and isolate THIS op's transition from prior ones (delete
+   *  into null is otherwise ambiguous against earlier delete cycles). */
+  private async currentMainRefLogCursor(repoPath: string): Promise<number | null> {
+    const readLog = this.refsStore().listMainRefLog?.bind(this.refsStore());
+    if (!readLog) return null;
+    const log = await readLog(repoPath);
+    let max: number | null = null;
+    for (const e of log) if (max === null || e.id > max) max = e.id;
+    return max;
+  }
+
+  /** Classify a lifecycle intent's CAS outcome against the AUTHORITATIVE ref:
+   *   - `landed`: the ref is at `next` (delete: absent), or the log records a
+   *     transition INTO `next` after the recorded cursor (moved-past / lost
+   *     response) — the op DID happen.
+   *   - `denied`: the ref is unchanged at `expectedOld` — the CAS provably never
+   *     swapped (approval denial / CAS conflict before the swap).
+   *   - `indeterminate`: the ref is at some THIRD value (a concurrent op moved
+   *     it) — cannot decide; leave parked for a later heal pass. */
+  private async classifyLifecycleLanded(
+    intent: LifecycleIntent,
+    error?: unknown
+  ): Promise<"landed" | "denied" | "indeterminate"> {
+    const current = (await this.refsStore().readMain(intent.repoPath))?.stateHash ?? null;
+    if (current === intent.next) return "landed";
+    const readLog = this.refsStore().listMainRefLog?.bind(this.refsStore());
+    if (readLog) {
+      const cursor = intent.detail.logCursor;
+      const log = await readLog(intent.repoPath, cursor ?? undefined);
+      if (log.some((e) => e.id > (cursor ?? -1) && e.new === intent.next)) return "landed";
+    }
+    // Ref is NOT at `next`. If it is still at `expectedOld` the swap plainly never
+    // ran; if the throw was a compare-and-swap CONFLICT, our swap provably did
+    // not apply either (that IS the conflict) even though the ref now holds a
+    // third value — both are definite denials the caller compensates. A
+    // NON-conflict throw (approval denial vs lost-response transport) that left
+    // the ref at some third value is genuinely ambiguous: park for a later heal.
+    if (current === intent.expectedOld) return "denied";
+    if (error !== undefined && this.isRefConflictError(error)) return "denied";
+    return "indeterminate";
+  }
+
+  /** Roll a LANDED lifecycle op forward: bring the DO-side state into lockstep
+   *  with the ref and finish any deferred disk tail (idempotent — a re-run after
+   *  partial completion is a no-op). Delete: keep archived (disk removal is the
+   *  host's `onMainsUpdated` reaction). Restore/fork: keep the restored/forked
+   *  lineage on `main` and (re)project it onto the ACTIVE context checkout. */
+  private async completeLifecycleForward(intent: LifecycleIntent): Promise<void> {
+    if (intent.operation === "delete") return; // archived already; host removes disk
+    const archiveHead = intent.detail.archiveHead;
+    if (intent.operation === "restore") {
+      // Re-key back onto main if a crash left the lineage still archived.
+      if (archiveHead && !this.resolveWorktreeHeadInternal(intent.logId, VCS_MAIN)) {
+        this.restoreRepoMain({ logId: intent.logId, archiveHead });
+      }
+    }
+    // fork lineage is already on the destination `main` (forkLog ran pre-CAS).
+    if (intent.next) {
+      await this.worktreeStore().project(intent.repoPath, VCS_ACTIVE_CONTEXT_HEAD, intent.next);
+    }
+  }
+
+  /** Compensate a provably-DENIED lifecycle op: undo the DO-side re-key so no
+   *  half-applied state survives (the ref never moved). Delete: un-archive back
+   *  onto main. Restore: re-archive. Fork: re-key the created destination
+   *  lineage AWAY (archive it under a unique unwind head) so no phantom repo is
+   *  left at `next` with no covering ref. All DO-internal + ungated. */
+  private compensateLifecycle(intent: LifecycleIntent): void {
+    const archiveHead = intent.detail.archiveHead;
+    if (intent.operation === "delete") {
+      if (archiveHead && !this.resolveWorktreeHeadInternal(intent.logId, VCS_MAIN)) {
+        this.restoreRepoMain({ logId: intent.logId, archiveHead });
+      }
+      return;
+    }
+    if (intent.operation === "restore") {
+      if (archiveHead && this.resolveWorktreeHeadInternal(intent.logId, VCS_MAIN)) {
+        this.archiveRepoMain({ logId: intent.logId, archiveHead });
+      }
+      return;
+    }
+    // fork: the destination lineage forkLog created (+ optional rename commit).
+    // Re-key it off `main` so `resolveWorktreeHeadInternal(toLogId, main)` is
+    // clear again — a subsequent fork/restore to this path is unobstructed and
+    // no phantom repo lingers in the workspace view.
+    const toLogId = intent.detail.toLogId ?? intent.logId;
+    if (this.resolveWorktreeHeadInternal(toLogId, VCS_MAIN)) {
+      this.archiveRepoMain({
+        logId: toLogId,
+        // Keyed by intentId, NOT the forked state hash: `next` is content-derived
+        // and repeats when the same fork is denied twice, and archiveRepoMain
+        // rejects a duplicate archive head — the unwind must be unique per attempt.
+        archiveHead: `${VCS_ARCHIVE_HEAD_PREFIX}fork-unwind:${intent.intentId}`,
+      });
+    }
+  }
+
+  /** Reconcile a parked lifecycle intent against the authoritative ref and act:
+   *  landed → roll forward; denied → compensate; both then delete the intent.
+   *  Indeterminate → leave it parked (returns without touching it). The live op
+   *  calls this in its `updateMains` catch; heal calls it for orphaned intents. */
+  private async reconcileLifecycleIntent(
+    intent: LifecycleIntent,
+    error?: unknown
+  ): Promise<"landed" | "denied" | "indeterminate"> {
+    const cls = await this.classifyLifecycleLanded(intent, error);
+    if (cls === "landed") {
+      await this.completeLifecycleForward(intent);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return "landed";
+    }
+    if (cls === "denied") {
+      this.compensateLifecycle(intent);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return "denied";
+    }
+    return "indeterminate";
+  }
+
+  /** Heal pass over parked lifecycle intents (§6). Runs BEFORE the fail-closed
+   *  uncovered-drift sweep in {@link healPublishDrift}: a half-restore (ref
+   *  present, DO main still archived) is reconciled HERE instead of bricking the
+   *  fail-closed loop, and phantom forks / half-deletes (ref-absent, so invisible
+   *  to that loop's `listMains` iteration) are repaired rather than staying
+   *  silent. Every lifecycle repoPath is added to `coveredMains` so the sweep
+   *  never misfires over a repo an intent is mid-reconciling. In-flight intents
+   *  (a live op driving them) are skipped — their own catch owns the reconcile. */
+  private async healLifecycleDrift(coveredMains: Set<string>): Promise<void> {
+    for (const intent of this.listLifecycleIntents()) {
+      coveredMains.add(normalizeRepoPathArg(intent.repoPath));
+      if (this.inFlightLifecycleIntents.has(intent.intentId)) continue;
+      await this.reconcileLifecycleIntent(intent);
+    }
   }
 
   /** Host-triggerable startup self-heal (§6) — the same reconcile the push path
@@ -6847,12 +10699,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["do", "server"] })
   async vcsHealPublishDrift(): Promise<{ pendingIntents: number }> {
     this.ensureReady();
-    await this.healPublishDrift(this.contentStore());
-    return {
-      pendingIntents: (
-        this.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one() as JsonRecord
-      )["c"] as number,
-    };
+    await this.healPublishDrift();
+    const publish = (
+      this.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one() as JsonRecord
+    )["c"] as number;
+    const lifecycle = (
+      this.sql.exec(`SELECT COUNT(*) AS c FROM gad_lifecycle_intents`).one() as JsonRecord
+    )["c"] as number;
+    return { pendingIntents: publish + lifecycle };
   }
 
   /**
@@ -6879,7 +10733,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     logId: string;
     targetHead: string;
     sourceHead: string;
-    actor: ParticipantRef;
+    actor: ActorRef;
   }): Promise<
     | {
         status: "up-to-date";
@@ -6926,20 +10780,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // READ-AT-ENTRY (invocation-token contract): capture the on-behalf-of token
     // synchronously before any await — the main-advancing tail presents it to
     // `refs.updateMains` for the gate's attribution.
-    const invocationToken = this.invocationToken;
     this.ensureReady();
     const { logId, targetHead, sourceHead } = input;
-    // Main target (mergeGroup / host vcs.merge→main for chrome callers): the
-    // 3-way is computed here and the advance PUBLISHES through the single-writer
-    // write-ahead-intent → refs.updateMains(operation:"merge") machinery — the
-    // same publish path as push, so main stays a gated CAS the host never
-    // side-advances. Conflicted-to-main parks a pending merge the host projects.
-    if (targetHead === "main") {
-      return this.runVcsMergeMain(logId, sourceHead, input.actor, invocationToken);
-    }
+    // `main` is NOT a mergeable target: main advances only through the gated
+    // fast-forward push path (`refs.updateMains`), never by merging a head into
+    // it. Only `ctx:*` heads carry checkouts and accept a merge.
     if (!targetHead.startsWith("ctx:")) {
       throw new Error(
-        `vcsMerge: '${targetHead}' — merge targets a ctx:* head or main; got an unrecognized head`
+        `vcsMerge: '${targetHead}' — merge targets a ctx:* head; main advances via push, not merge`
       );
     }
     const existingPending = this.getPendingMerge({ logId, head: targetHead }).info;
@@ -6955,6 +10803,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
         `uncommitted edits on ${targetHead} — vcs.commit or vcs.discardEdits before merge`
       );
     }
+    // Commit-gated on the SOURCE side too: a ctx source with uncommitted edits
+    // has content that is NOT part of any commit, so merging it would either
+    // silently drop those edits (only committed state moves) or fold half-done
+    // work into the target. `main` sources carry no working rows. Names the
+    // source side + repo (the target gate above names the target side).
+    if (sourceHead.startsWith("ctx:") && this.workingEditRows(logId, sourceHead).length > 0) {
+      throw new Error(
+        `uncommitted edits on merge source ${sourceHead} (${this.repoPathOfLog(logId) ?? logId}) — ` +
+          `commit or discard them before merge`
+      );
+    }
     const store = this.contentStore();
     const repoPath = this.repoPathOfLog(logId);
 
@@ -6964,23 +10823,62 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     let theirsHeadRef: { stateHash: string; commitEventId: string | null } | null;
     if (sourceHead === "main" && repoPath) {
+      // A `main` SOURCE resolves through the protected ref — refs are the
+      // authority; this store's `main` head is a FOLLOWER of its OWN writes (§6).
+      // A concurrent push can land the ref while its provenance ingest is still
+      // parked in a publish intent, so the naive mirror read races an undrained
+      // follower. Read the ref, and only when the mirror disagrees drain pending
+      // intents (as the push path does at entry) and re-read — a covering intent
+      // completes there and brings the mirror to `refValue`.
       const refValue = (await this.refsStore().readMain(repoPath))?.stateHash ?? null;
       if (!refValue) throw new Error(`merge source head has no state: ${sourceHead}`);
-      const doHead = this.resolveWorktreeHeadInternal(logId, "main");
+      let doHead = this.resolveWorktreeHeadInternal(logId, "main");
       if (!doHead || doHead.stateHash !== refValue) {
-        throw new Error(
-          `main lineage for ${repoPath} is behind the protected ref: this store records ` +
-            `${doHead?.stateHash ?? "<absent>"} but the ref is ${refValue} — drain/reconcile ` +
-            `provenance before merging`
-        );
+        // healPublishDrift fails closed on a main NO intent covers (seeded
+        // host-side, or authored by another instance) — that path is fine here:
+        // we only need the source STATE and adopt the ref directly below rather
+        // than fabricating lineage. Tolerate exactly that typed drift error;
+        // any OTHER heal failure (SQL, ref-store RPC, lifecycle reconcile) means
+        // recovery itself is broken and must surface, not be masked by a merge.
+        try {
+          await this.healPublishDrift();
+        } catch (error) {
+          if (!(error instanceof UncoveredMainDriftError)) throw error;
+          // uncovered-main drift: refs remain the authority; adopt below.
+        }
+        doHead = this.resolveWorktreeHeadInternal(logId, "main");
       }
-      theirsHeadRef = doHead;
+      if (doHead && doHead.stateHash === refValue) {
+        theirsHeadRef = doHead;
+      } else {
+        // Still absent/behind after draining: ADOPT the protected ref STATE as
+        // the merge source rather than throwing. Refs are the authority and every
+        // handed-out main is content-store resolvable, so the 3-way merge has all
+        // it needs from the STATE alone; provenance stays gad-owned. Derive the
+        // producing commit id when this store recorded it (a main it authored),
+        // else merge state-only (null event id) — never invent lineage.
+        const producer = this.getGadStateProducer({ stateHash: refValue });
+        const commitEventId = producer ? asString(producer["event_id"]) : null;
+        // When this store DID record the producing commit but only its head
+        // POINTER drifted, repair the follower pointer to the ref — a pure
+        // pointer update over recorded provenance, no fabricated lineage. A truly
+        // foreign main (no recorded producer) is merged state-only, mirror
+        // untouched.
+        if (commitEventId) this.setWorktreeHead(logId, "main", refValue, commitEventId);
+        theirsHeadRef = { stateHash: refValue, commitEventId };
+      }
     } else {
       theirsHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
     }
     const theirsState = theirsHeadRef?.stateHash;
     if (!theirsState) throw new Error(`merge source head has no state: ${sourceHead}`);
-    const theirsEventId = this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
+    // A `main` source may be adopted STATE-ONLY (null commit event) when the ref
+    // outruns this store's provenance — allowed by design. Every OTHER source
+    // must carry its producing commit (the commit-identity guard).
+    const theirsEventId =
+      sourceHead === "main" && repoPath
+        ? (theirsHeadRef?.commitEventId ?? null)
+        : this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
     const upstreamCommits = this.upstreamCommitsBetween(oursState, theirsState, theirsEventId);
 
     const result = await this.computeMerge({
@@ -7058,171 +10956,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.setPendingMerge({
       logId,
       head: targetHead,
-      info: {
-        oursStateHash: oursState,
-        theirsStateHash: theirsState,
-        theirsEventId,
-        baseStateHash: result.baseStateHash,
-        theirsHead: sourceHead,
-        conflicts: result.conflicts,
-        provisionalStateHash,
-        materialized: false,
-      },
-    });
-    return {
-      status: "conflicted",
-      stateHash: provisionalStateHash,
-      conflicts: result.conflicts,
-      mergeable: "conflict",
-      conflictPaths: result.conflicts.map((c) => c.path),
-      theirsHead: sourceHead,
-      upstreamCommits,
-    };
-  }
-
-  /**
-   * Merge `sourceHead` (a ctx head) into a repo's protected `main` — the
-   * publish-class merge (P3). The 3-way is computed here; a clean result is
-   * adopted as `main` through the SAME write-ahead-intent → single-writer
-   * `refs.updateMains(operation:"merge")` → provenance machinery as push (so the
-   * main advance is a gated CAS the host never side-runs). A conflicted result
-   * stages + mirrors the provisional (conflict-marked) tree and parks a pending
-   * merge; the host projects the markers into the live workspace and drives the
-   * resolution → vcs.commit, which records the merge parents. The merge commit's
-   * first parent is `main` (baseStateHash), its second parent is `theirs`.
-   */
-  private async runVcsMergeMain(
-    logId: string,
-    sourceHead: string,
-    actor: ParticipantRef,
-    invocationToken: string | undefined
-  ): Promise<
-    | { status: "up-to-date"; stateHash: string; conflicts: []; mergeable: "clean"; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
-    | { status: "merged"; stateHash: string; eventId: string; headHash: string; previousStateHash: string; conflicts: []; mergeable: "clean"; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
-    | { status: "conflicted"; stateHash: string; conflicts: Array<{ path: string; kind: string }>; mergeable: "conflict"; conflictPaths: string[]; theirsHead: string; upstreamCommits: Array<{ eventId: string; message: string; stateHash: string; createdAt: string | null }> }
-  > {
-    const store = this.contentStore();
-    const repoPath = this.repoPathOfLog(logId);
-    if (!repoPath) throw new Error(`vcsMerge: a main-target merge requires a repo log, got ${logId}`);
-
-    // Heal any crash-window drift before reading main, so the base/tip and the
-    // 3-way see a consistent lineage (mirrors the push precondition).
-    await this.healPublishDrift(store);
-
-    const existingPending = this.getPendingMerge({ logId, head: "main" }).info;
-    if (existingPending) {
-      throw new Error(`merge in progress on main: resolve + vcs.commit, or vcs.discardEdits`);
-    }
-
-    const oursState = (await this.refsStore().readMain(repoPath))?.stateHash ?? EMPTY_STATE_HASH;
-    // The DO's recorded main lineage must be in lockstep with the protected ref
-    // (the host drains the provenance follower before dispatching).
-    const doHead = this.resolveWorktreeHeadInternal(logId, "main");
-    if (oursState !== EMPTY_STATE_HASH && (!doHead || doHead.stateHash !== oursState)) {
-      throw new Error(
-        `main lineage for ${repoPath} is behind the protected ref: this store records ` +
-          `${doHead?.stateHash ?? "<absent>"} but the ref is ${oursState} — drain/reconcile ` +
-          `provenance before merging`
-      );
-    }
-
-    const theirsHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
-    const theirsState = theirsHeadRef?.stateHash;
-    if (!theirsState) throw new Error(`merge source head has no state: ${sourceHead}`);
-    const theirsEventId = this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
-    const upstreamCommits = this.upstreamCommitsBetween(oursState, theirsState, theirsEventId);
-
-    const result = await this.computeMerge({
-      oursStateHash: oursState,
-      theirsStateHash: theirsState,
-      labels: { ours: "main", theirs: sourceHead },
-    });
-
-    if (result.status === "up-to-date") {
-      return { status: "up-to-date", stateHash: oursState, conflicts: [], mergeable: "clean", upstreamCommits };
-    }
-
-    if (result.status === "clean" || result.status === "fast-forward") {
-      // Stage + mirror the merged tree FIRST (mirroring invariant: the ref must
-      // point at a content-store-expandable state before the gated CAS).
-      const mergedState = await this.stageAndMirror(
-        store,
-        result.files,
-        `Merge ${sourceHead} into main`
-      );
-      const oursFiles = oursState === EMPTY_STATE_HASH ? [] : await this.stateFilesFor(store, oursState);
-      const mergedFiles = result.files.map((f) => ({ path: f.path, contentHash: f.contentHash, mode: f.mode }));
-      const intent: PublishIntent = {
-        intentId: crypto.randomUUID(),
-        operation: "merge",
-        entries: [
-          {
-            repoPath,
-            logId,
-            expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState,
-            next: mergedState,
-            parentEventId: theirsEventId,
-            // Second parent = theirs (main is the implicit first parent via
-            // `expectedOld`/baseStateHash), preserving merge parent order.
-            parentStateHash: theirsState,
-            files: mergedFiles,
-            editOps: this.mergeEditOps(oursFiles, result.files),
-          },
-        ],
-        message: `Merge ${sourceHead} into main`,
-        actor,
-        sourceHead,
-      };
-      // Mark in-flight BEFORE the durable record + the (human-gated) CAS window
-      // so a concurrent heal never stale-reaps this parked intent (see field doc).
-      this.inFlightPublishIntents.add(intent.intentId);
-      this.transaction(() => this.recordPublishIntent(intent));
-      try {
-        try {
-          await this.refsStore().updateMains({
-            entries: [{ repoPath, expectedOld: oursState === EMPTY_STATE_HASH ? null : oursState, next: mergedState }],
-            reason: `merge ${repoPath} from ${sourceHead}`,
-            operation: "merge",
-            ...(invocationToken ? { invocationToken } : {}),
-          });
-        } catch (error) {
-          // A concurrent main advance changed the merge base — the caller
-          // recomputes and re-drives (best-effort per-repo, like the host path).
-          // Do NOT delete: updateMains may have landed host-side before throwing
-          // (a lost-response duplicate POST). Leave the write-ahead intent parked
-          // so healPublishDrift completes it with full provenance if the CAS
-          // landed, or discards it against the ref log if it never did.
-          throw error;
-        }
-        this.completePublishIntent(intent);
-        const headRef = this.resolveWorktreeHeadInternal(logId, "main");
-        return {
-          status: "merged",
-          stateHash: mergedState,
-          eventId: headRef?.commitEventId ?? theirsEventId ?? "",
-          headHash: headRef?.commitEventId ?? mergedState,
-          previousStateHash: oursState,
-          conflicts: [],
-          mergeable: "clean",
-          upstreamCommits,
-        };
-      } finally {
-        this.inFlightPublishIntents.delete(intent.intentId);
-      }
-    }
-
-    // Conflicted-to-main: stage + mirror the provisional (conflict-marked) tree
-    // and park a pending merge on `main`. NO ref advance — the host projects the
-    // markers into the live workspace, acknowledges materialization, and the
-    // resolution lands via vcs.edit → vcs.commit (records the merge parents).
-    const provisionalStateHash = await this.stageAndMirror(
-      store,
-      result.files,
-      `Provisional merge of ${sourceHead} into main`
-    );
-    this.setPendingMerge({
-      logId,
-      head: "main",
       info: {
         oursStateHash: oursState,
         theirsStateHash: theirsState,
@@ -7485,6 +11218,141 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { baseView };
   }
 
+  /** Record (or refresh) a child context's fork breadcrumb — UX lineage only,
+   *  never consulted by merge. Idempotent upsert on `context_id`. */
+  private recordContextForkProvenance(
+    contextId: string,
+    parentContextId: string,
+    forkPoint: string
+  ): void {
+    this.sql.exec(
+      `INSERT INTO vcs_context_provenance (context_id, parent_context_id, fork_point_json, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(context_id) DO UPDATE SET
+         parent_context_id = excluded.parent_context_id,
+         fork_point_json = excluded.fork_point_json,
+         created_at = excluded.created_at`,
+      contextId,
+      parentContextId,
+      JSON.stringify({ baseStateHash: forkPoint }),
+      nowIso()
+    );
+  }
+
+  private contextForkDescendsFrom(contextId: string, ancestorContextId: string): boolean {
+    const seen = new Set<string>();
+    let cursor = contextId;
+    while (!seen.has(cursor)) {
+      seen.add(cursor);
+      const row = this.sql
+        .exec(
+          `SELECT parent_context_id AS parent FROM vcs_context_provenance WHERE context_id = ?`,
+          cursor
+        )
+        .toArray()[0] as JsonRecord | undefined;
+      const parent = asString(row?.["parent"]);
+      if (!parent) return false;
+      if (parent === ancestorContextId) return true;
+      cursor = parent;
+    }
+    return false;
+  }
+
+  private assertContextReadAllowed(method: string, targetContextId: string): void {
+    const callerKind = this.caller?.callerKind ?? null;
+    if (callerKind === null || callerKind === "server" || callerKind === "shell") return;
+    const ownContextId = this.callerContextId ?? null;
+    if (!ownContextId) {
+      throw new Error(
+        `${method}: caller ${callerKind} has no context registration; ` +
+          `inspection of ${targetContextId} is denied`
+      );
+    }
+    if (ownContextId === targetContextId) return;
+    if (this.contextForkDescendsFrom(targetContextId, ownContextId)) return;
+    throw new Error(
+      `${method}: context ${targetContextId} is not the caller's context or fork descendant ` +
+        `of ${ownContextId}; inspection denied`
+    );
+  }
+
+  /**
+   * LINEAGE-TRUE context fork — the real locus of fork (host `forkContext` is a
+   * thin wrapper). For every repo the source context touches:
+   *  1. Inherit the source's PINNED base view (or, if the source is unpinned,
+   *     pin the current workspace view — mirrors {@link vcsPinContext} create).
+   *     Unedited repos resolve against the same base.
+   *  2. SHARE the parent's committed state node — the child `ctx:<target>` head
+   *     is set to the SAME committed state hash + SAME commit event id as the
+   *     parent's committed ctx head. Because states are content-addressed and
+   *     that node already lives in `gad_state_transitions`, parent and child
+   *     literally share the ancestor, so {@link getMergeBase} connects for free
+   *     when either side later commits (its transition's first parent is the
+   *     shared state). A source ctx head with only working edits (null commit
+   *     event id) has no committed state to share → the child gets the base pin
+   *     + copied working rows for that repo, no ctx-head row.
+   *  3. COPY the source's uncommitted WORKING edit rows to the child head, so
+   *     the child's uncommitted stays uncommitted (contrast: the old snapshot
+   *     pin baked them into the child's clean base).
+   *  4. Record the fork breadcrumb.
+   * Idempotent (crash-retry / cloneContext targetKey re-run): every write is an
+   * upsert and the working-row copy delete-then-inserts, so a re-run converges.
+   * NB: this does NOT call forkLog on a ctx head — those `log_heads` fork
+   * columns are not read by getMergeBase; the state-DAG share above is the link.
+   */
+  @rpc({ callers: ["do", "server"] })
+  async vcsForkContext(input: { sourceContextId: string; targetContextId: string }): Promise<void> {
+    this.ensureReady();
+    const { sourceContextId, targetContextId } = input;
+    const sourceHead = `ctx:${sourceContextId}`;
+    const targetHead = `ctx:${targetContextId}`;
+    const store = this.contentStore();
+    // Resolve the base to inherit BEFORE the sync txn (workspaceViewFromRefs is
+    // async + mirrors). Inherit the source pin, else pin the live workspace view.
+    const baseStateHash =
+      this.getContextBase({ contextId: sourceContextId })?.stateHash ??
+      (await this.workspaceViewFromRefs(store));
+    // The union of repos the source touches (committed ctx heads ∪ working-only).
+    const repoPaths = this.contextWorkingFingerprint(sourceContextId).map((f) => f.repoPath);
+    this.transaction(() => {
+      this.setContextBase({ contextId: targetContextId, stateHash: baseStateHash });
+      for (const repoPath of repoPaths) {
+        const logId = logIdForRepoPath(repoPath);
+        // 2. Share the parent's committed state node (only when it has a commit
+        //    event identity — an un-committed working-only repo has no node).
+        const srcHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
+        if (srcHeadRef && srcHeadRef.commitEventId) {
+          this.setWorktreeHead(logId, targetHead, srcHeadRef.stateHash, srcHeadRef.commitEventId);
+        }
+        // 3. Copy the WORKING (uncommitted) edit rows — idempotent via
+        //    delete-then-insert so a retried fork never duplicates rows.
+        this.deleteUncommittedWorkingEdits(logId, targetHead);
+        this.sql.exec(
+          `INSERT INTO gad_worktree_edit_ops (
+             event_id, log_id, head, committed_event_id, committed_seq,
+             edit_seq, output_state_hash, ordinal, kind, path,
+             old_content_hash, new_content_hash, hunks_json, mode,
+             actor_id, actor_json, invocation_id, turn_id, created_at, synthetic,
+             binary, picked_from_json
+           )
+           SELECT event_id, log_id, ?, NULL, NULL,
+             edit_seq, NULL, ordinal, kind, path,
+             old_content_hash, new_content_hash, hunks_json, mode,
+             actor_id, actor_json, invocation_id, turn_id, created_at, synthetic,
+             binary, picked_from_json
+           FROM gad_worktree_edit_ops
+           WHERE log_id = ? AND head = ? AND committed_event_id IS NULL`,
+          targetHead,
+          logId,
+          sourceHead
+        );
+      }
+      // 4. Fork breadcrumb (UX lineage only).
+      this.recordContextForkProvenance(targetContextId, sourceContextId, baseStateHash);
+    });
+    this.contextComposedViewCache.delete(targetContextId);
+  }
+
   /**
    * The context's composed view: each touched repo at its WORKING content
    * (committed ctx head + uncommitted edits; a pending merge's provisional
@@ -7494,6 +11362,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "shell", "do", "worker", "server"] })
   async vcsResolveContextView(input: { contextId: string }): Promise<{ stateHash: string }> {
     this.ensureReady();
+    this.assertContextReadAllowed("vcsResolveContextView", input.contextId);
     const store = this.contentStore();
     const baseView = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
     const fingerprint = this.contextWorkingFingerprint(input.contextId);
@@ -7595,7 +11464,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     } else {
       const set = new Set<string>();
       for (const req of input.repos) {
-        const reqNorm = normalizeRepoPathArg(req).replace(/\/+$/u, "");
+        const reqNorm = normalizeRepoPathOrSectionPrefixArg(req);
         for (const repoPath of all) {
           const rn = normalizeRepoPathArg(repoPath);
           if (rn === reqNorm || rn.startsWith(`${reqNorm}/`)) set.add(repoPath);
@@ -7632,6 +11501,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }>
   > {
     this.ensureReady();
+    this.assertContextReadAllowed("vcsContextStatus", input.contextId);
     const store = this.contentStore();
     const baseView = this.getContextBase({ contextId: input.contextId })?.stateHash ?? null;
     const baseRepos = baseView
@@ -7704,7 +11574,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * new state to disk and emit events — the follower half.
    */
   @rpc({ callers: ["do", "server"] })
-  async vcsRebaseContext(input: { contextId: string; actor: ParticipantRef }): Promise<{
+  async vcsRebaseContext(input: { contextId: string; actor: ActorRef }): Promise<{
     repos: Array<{ repoPath: string; status: "up-to-date" | "merged" | "conflicted" }>;
     baseView: string;
     outcomes: Array<
@@ -7847,9 +11717,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       readMain: (repoPath) => this.rpc.call("main", "refs.readMain", [repoPath]),
       listMains: () => this.rpc.call("main", "refs.listMains", []),
       updateMains: (input) => this.rpc.call("main", "refs.updateMains", [input]),
-      readMainLog: (repoPath, limit) =>
-        this.rpc.call("main", "refs.readMainLog", [
-          { repoPath, ...(limit !== undefined ? { limit } : {}) },
+      listMainRefLog: (repoPath, sinceId) =>
+        this.rpc.call("main", "refs.listMainRefLog", [
+          { repoPath, ...(sinceId !== undefined ? { sinceId } : {}) },
         ]),
     };
   }
@@ -7862,6 +11732,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
   protected buildStore(): HostBuildStore {
     return {
       validate: (input) => this.rpc.call("main", "build.validate", [input]),
+    };
+  }
+
+  /**
+   * Disk-scan primitive access — the host `worktree.scan` RPC (narrow-host
+   * boundary refactor P1). Reads a (repoPath, head) working tree into the CAS
+   * and returns its content-addressed `{ stateHash, files }`, DO-free and
+   * semantics-free. Protected SEAM like {@link contentStore}: host unit tests
+   * override it with a local scanner. No consumer yet — the scan-adopt path
+   * that drives it lands in a later phase.
+   */
+  protected worktreeStore(): HostWorktreeStore {
+    return {
+      scan: (repoPath, head) => this.rpc.call("main", "worktree.scan", [repoPath, head]),
+      project: (repoPath, head, stateHash) =>
+        this.rpc.call("main", "worktree.project", [repoPath, head, stateHash]),
+      dependentRepos: (repoPath) => this.rpc.call("main", "worktree.dependentRepos", [repoPath]),
     };
   }
 
@@ -7910,15 +11797,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * store, and returns the merged (or conflict-marked provisional) file set —
    * no refs move and nothing is appended; callers commit the result.
    */
-  @rpc({ callers: ["do", "server"] })
-  async computeMerge(input: {
-    oursStateHash: string;
-    theirsStateHash: string;
-    labels: { ours: string; theirs: string };
-  }): Promise<MergeComputation> {
-    this.ensureReady();
-    const store = this.contentStore();
-    const engine = new MergeEngine({
+  /** The 3-way merge engine over this store's transition DAG + the content
+   *  store's blob bytes — shared by {@link computeMerge} (base auto-discovered)
+   *  and {@link vcsPick} (cherry-pick against an explicit base via compute3). */
+  private mergeEngineFor(store: HostContentStore): MergeEngine {
+    return new MergeEngine({
       listStateFiles: (stateHash) => this.stateFilesFor(store, stateHash),
       getMergeBase: async (leftStateHash, rightStateHash) =>
         this.getMergeBase({ leftStateHash, rightStateHash }).baseStateHash,
@@ -7931,6 +11814,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
         return { digest: result.digest, size: result.size };
       },
     });
+  }
+
+  @rpc({ callers: ["do", "server"] })
+  async computeMerge(input: {
+    oursStateHash: string;
+    theirsStateHash: string;
+    labels: { ours: string; theirs: string };
+  }): Promise<MergeComputation> {
+    this.ensureReady();
+    const engine = this.mergeEngineFor(this.contentStore());
     return engine.compute(input.oursStateHash, input.theirsStateHash, input.labels);
   }
 
@@ -7967,7 +11860,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   private indexMemoryRow(row: {
     text: string;
-    kind: "message" | "claim" | "file";
+    kind: "message" | "claim" | "file" | "commit";
     logId?: string | null;
     head?: string | null;
     eventId?: string | null;
@@ -7978,9 +11871,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.ensureMemoryIndex();
     const text = row.text.slice(0, 64_000);
     if (!text.trim()) return;
-    // One row per identity: events index once (idempotent replay), files keep
-    // only their latest content.
-    if (row.eventId) {
+    // One row per identity: claims collapse to a single row per claim (revisions
+    // replace, keyed by claimId, so a re-record/revise never leaves stale text);
+    // other event rows index once per (event, log, head) — idempotent replay;
+    // files keep only their latest content.
+    const claimId =
+      row.kind === "claim" && row.anchor && typeof row.anchor["claimId"] === "string"
+        ? (row.anchor["claimId"] as string)
+        : null;
+    if (claimId) {
+      this.sql.exec(
+        `DELETE FROM gad_memory_fts WHERE kind = 'claim' AND anchor_json = ?`,
+        JSON.stringify({ claimId })
+      );
+    } else if (row.eventId) {
       this.sql.exec(
         `DELETE FROM gad_memory_fts
           WHERE event_id = ?
@@ -8054,10 +11958,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
     kinds?: string[] | null;
     limit?: number | null;
     /** Workspace-relative repo path prefixes to scope file results to. A row is
-     *  kept when its `path` is null (non-file entries: messages/claims) or falls
-     *  under one of these prefixes. Applied IN the query so `limit` bounds the
-     *  scoped result set, not an unfiltered page that scoping then decimates. */
+     *  kept when its `path` is null (non-file entries: messages/claims/commits)
+     *  or falls under one of these prefixes. Applied IN the query so `limit`
+     *  bounds the scoped result set, not an unfiltered page scoping then
+     *  decimates. */
     pathPrefixes?: string[] | null;
+    /** Steering keywords OR-appended to the query's FTS match to widen recall
+     *  (§7.1/§6, C6). A bonus signal, never load-bearing: they broaden what
+     *  matches, never filter it out, and never outrank the base query. */
+    recallKeywords?: string[] | null;
   }): {
     results: Array<{
       kind: string;
@@ -8076,6 +11985,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.ensureReady();
     const mode = this.ensureMemoryIndex();
     const limit = Math.min(input.limit ?? 10, 50);
+    // Over-fetch so published/fork copies (the same logical item indexed under
+    // several (log,head) pairs) can be collapsed BEFORE the page is sliced —
+    // otherwise duplicates eat slots and the caller's page under-fills (§8.1/C6).
+    const fetchLimit = Math.min(limit * 3, 150);
     const kinds = input.kinds && input.kinds.length > 0 ? input.kinds : null;
     const pathPrefixes =
       input.pathPrefixes && input.pathPrefixes.length > 0 ? input.pathPrefixes : null;
@@ -8090,6 +12003,18 @@ export class GadWorkspaceDO extends DurableObjectBase {
       : [];
     let rows: JsonRecord[];
     if (mode === "fts") {
+      const baseMatch = sanitizeFtsQuery(input.query);
+      // Keyword steering only WIDENS: OR the base query with the keyword terms so
+      // recall matches either — never AND-ed (would narrow), never load-bearing.
+      const keywordMatch = recallTokens(input.recallKeywords)
+        .map((term) => `"${term}"`)
+        .join(" OR ");
+      const match = keywordMatch
+        ? baseMatch
+          ? `(${baseMatch}) OR ${keywordMatch}`
+          : keywordMatch
+        : baseMatch;
+      if (!match) return { results: [] };
       const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : "";
       rows = this.sql
         .exec(
@@ -8098,37 +12023,61 @@ export class GadWorkspaceDO extends DurableObjectBase {
              FROM gad_memory_fts
             WHERE gad_memory_fts MATCH ?${kindFilter}${pathFilter}
             ORDER BY score LIMIT ?`,
-          sanitizeFtsQuery(input.query),
+          match,
           ...(kinds ?? []),
           ...pathBindings,
-          limit
+          fetchLimit
         )
         .toArray() as JsonRecord[];
     } else {
-      const terms = input.query
-        .split(/\s+/u)
-        .map((term) => term.trim())
-        .filter(Boolean)
-        .slice(0, 8);
-      if (terms.length === 0) return { results: [] };
-      const likeClauses = terms.map(() => `text LIKE ? ESCAPE '\\'`).join(" AND ");
+      const queryTerms = recallTokens([input.query]);
+      const keywordTerms = recallTokens(input.recallKeywords);
+      if (queryTerms.length === 0 && keywordTerms.length === 0) return { results: [] };
+      const likeBindings: string[] = [];
+      const likeOf = (term: string): string => {
+        likeBindings.push(`%${term.replace(/[%_\\]/gu, "\\$&")}%`);
+        return `text LIKE ? ESCAPE '\\'`;
+      };
+      // Base query terms AND together; steering keywords OR onto the whole base
+      // (widen, never narrow) — mirrors the fts branch's `(base) OR keywords`.
+      const baseClause = queryTerms.length ? `(${queryTerms.map(likeOf).join(" AND ")})` : "";
+      const keywordClause = keywordTerms.length ? keywordTerms.map(likeOf).join(" OR ") : "";
+      const matchClause =
+        baseClause && keywordClause
+          ? `(${baseClause} OR ${keywordClause})`
+          : baseClause || keywordClause;
       const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : "";
       rows = this.sql
         .exec(
           `SELECT text, kind, log_id, head, event_id, path, content_hash, anchor_json,
                   NULL AS score
              FROM gad_memory_fts
-            WHERE ${likeClauses}${kindFilter}${pathFilter}
+            WHERE ${matchClause}${kindFilter}${pathFilter}
             LIMIT ?`,
-          ...terms.map((term) => `%${term.replace(/[%_\\]/gu, "\\$&")}%`),
+          ...likeBindings,
           ...(kinds ?? []),
           ...pathBindings,
-          limit
+          fetchLimit
         )
         .toArray() as JsonRecord[];
     }
 
-    const results = rows.map((row) => {
+    // §8.1: recall must not surface a retracted claim. Its FTS row is dropped on
+    // retract, but guard the query leg too (a stale row can't leak a dead claim).
+    const claimRowIds = rows
+      .filter((row) => String(row["kind"]) === "claim")
+      .map((row) => asString(parseRecord(asString(row["anchor_json"]))["claimId"]));
+    const retractedClaims = this.retractedClaimIds(claimRowIds);
+    if (retractedClaims.size > 0) {
+      rows = rows.filter((row) => {
+        if (String(row["kind"]) !== "claim") return true;
+        const cid = asString(parseRecord(asString(row["anchor_json"]))["claimId"]);
+        return !cid || !retractedClaims.has(cid);
+      });
+    }
+
+    const pageRows = this.dedupRecallRows(rows, limit);
+    const results = pageRows.map((row) => {
       const eventId = asString(row["event_id"]);
       const logId = asString(row["log_id"]);
       const head = asString(row["head"]);
@@ -8157,6 +12106,58 @@ export class GadWorkspaceDO extends DurableObjectBase {
       };
     });
     return { results };
+  }
+
+  /**
+   * Collapse published/fork copies of the same logical memory item before the
+   * page is sliced (§8.1/C6). A `message.completed` published to a channel, and
+   * every projection copied into a fork head by `copyProjectionKey`, produce
+   * distinct FTS rows that share (kind, event_id) but differ in (log_id, head).
+   * Dedup by (kind, event_id) — or (kind, text) for entries with no event id
+   * (files) — keeping the trajectory-log copy over a channel republish, then
+   * slice to the caller's limit. Rows arrive best-first (fts bm25 order), so the
+   * first occurrence holds the ranking slot; a later trajectory copy only swaps
+   * its metadata in.
+   */
+  private dedupRecallRows(rows: JsonRecord[], limit: number): JsonRecord[] {
+    const trajectoryLogs = this.trajectoryLogIds(rows);
+    const isTrajectory = (row: JsonRecord): boolean => {
+      const logId = asString(row["log_id"]);
+      return logId != null && trajectoryLogs.has(logId);
+    };
+    const slotByKey = new Map<string, number>();
+    const kept: JsonRecord[] = [];
+    for (const row of rows) {
+      const kind = String(row["kind"]);
+      const eventId = asString(row["event_id"]);
+      const key = `${kind}\u0001${eventId ?? `t:${String(row["text"])}`}`;
+      const slot = slotByKey.get(key);
+      if (slot === undefined) {
+        slotByKey.set(key, kept.length);
+        kept.push(row);
+      } else if (!isTrajectory(kept[slot]!) && isTrajectory(row)) {
+        kept[slot] = row;
+      }
+    }
+    return kept.slice(0, limit);
+  }
+
+  /** The subset of the rows' `log_id`s that belong to trajectory logs — used to
+   *  prefer a trajectory copy over a channel republish during recall dedup. One
+   *  batched lookup over `log_heads`; a `log_id`'s kind is stable across heads. */
+  private trajectoryLogIds(rows: JsonRecord[]): Set<string> {
+    const logIds = [
+      ...new Set(rows.map((row) => asString(row["log_id"])).filter((v): v is string => v != null)),
+    ];
+    if (logIds.length === 0) return new Set();
+    const placeholders = logIds.map(() => "?").join(",");
+    const found = this.sql
+      .exec(
+        `SELECT DISTINCT log_id FROM log_heads WHERE log_kind = 'trajectory' AND log_id IN (${placeholders})`,
+        ...logIds
+      )
+      .toArray() as JsonRecord[];
+    return new Set(found.map((row) => String(row["log_id"])));
   }
 
   // -------------------------------------------------------------------------
@@ -8244,6 +12245,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
           // unparseable intent — ignore
         }
       }
+      // §6: pending LIFECYCLE intents' candidate `next` state (fork/restore) is a
+      // GC root too — a crash between intent and heal must not sweep the lineage
+      // the ref will point at. (Delete's next is null; nothing to root.)
+      const lifecycleRows = this.sql
+        .exec(`SELECT next_state FROM gad_lifecycle_intents`)
+        .toArray() as JsonRecord[];
+      for (const row of lifecycleRows) {
+        const next = asString(row["next_state"]);
+        if (next) roots.add(next);
+      }
       // Freshly created worktree states are temporary roots so a GC run cannot
       // race a multi-step flow that has created a state but not yet referenced
       // it. Once the grace window expires, unreferenced staged states are
@@ -8309,25 +12320,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
         if (rootHash) walkManifest(rootHash);
       }
 
-      // 4. Kept file versions: referenced by kept manifests or blame data.
+      // 4. Kept file versions: referenced by kept manifests.
       const keptFileVersions = new Set<number>();
       for (const manifestHash of keptManifests) {
         for (const entry of this.manifestEntries(manifestHash)) {
           const id = entry["file_version_id"];
           if (typeof id === "number") keptFileVersions.add(id);
         }
-      }
-      for (const row of this.sql
-        .exec(`SELECT after_file_version_id AS a FROM gad_file_change_hunks`)
-        .toArray() as JsonRecord[]) {
-        if (typeof row["a"] === "number") keptFileVersions.add(row["a"] as number);
-      }
-      for (const row of this.sql
-        .exec(
-          `SELECT file_version_id AS a FROM gad_file_observations WHERE file_version_id IS NOT NULL`
-        )
-        .toArray() as JsonRecord[]) {
-        if (typeof row["a"] === "number") keptFileVersions.add(row["a"] as number);
       }
 
       // 5. Sweep orphaned rows.
@@ -8361,9 +12360,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
 
       // 6. Blob candidates: not referenced by surviving file versions, log
-      // payload spills, mutations, file observations, nor uncommitted
-      // working-edit ops (the same blob reachability collectGarbageBlobRefs
-      // uses); drop candidates that regained a reference.
+      // payload spills, nor uncommitted working-edit ops (the same blob
+      // reachability collectGarbageBlobRefs uses); drop candidates that
+      // regained a reference.
       //
       // Uncommitted working-edit ops (committed_event_id IS NULL) reference
       // content that has already reached the host CAS via the content bridge
@@ -8377,11 +12376,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
           WHERE NOT EXISTS (SELECT 1 FROM gad_file_versions fv WHERE fv.content_hash = b.hash)
             AND NOT EXISTS (SELECT 1 FROM log_blob_refs lbr WHERE lbr.digest = b.hash)
             AND NOT EXISTS (
-              SELECT 1 FROM gad_file_mutations fm
-               WHERE fm.before_hash = b.hash OR fm.after_hash = b.hash)
-            AND NOT EXISTS (
-              SELECT 1 FROM gad_file_observations fo WHERE fo.content_hash = b.hash)
-            AND NOT EXISTS (
               SELECT 1 FROM gad_worktree_edit_ops eo
                WHERE eo.committed_event_id IS NULL
                  AND (eo.new_content_hash = b.hash OR eo.old_content_hash = b.hash))`,
@@ -8391,13 +12385,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
         `DELETE FROM gad_gc_candidates
           WHERE EXISTS (SELECT 1 FROM gad_file_versions fv WHERE fv.content_hash = gad_gc_candidates.digest)
              OR EXISTS (SELECT 1 FROM log_blob_refs lbr WHERE lbr.digest = gad_gc_candidates.digest)
-             OR EXISTS (
-               SELECT 1 FROM gad_file_mutations fm
-                WHERE fm.before_hash = gad_gc_candidates.digest
-                   OR fm.after_hash = gad_gc_candidates.digest)
-             OR EXISTS (
-               SELECT 1 FROM gad_file_observations fo
-                WHERE fo.content_hash = gad_gc_candidates.digest)
              OR EXISTS (
                SELECT 1 FROM gad_worktree_edit_ops eo
                 WHERE eo.committed_event_id IS NULL
@@ -8413,12 +12400,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
           `SELECT content_hash AS digest FROM gad_file_versions
            UNION
            SELECT digest AS digest FROM log_blob_refs
-           UNION
-           SELECT before_hash AS digest FROM gad_file_mutations WHERE before_hash IS NOT NULL
-           UNION
-           SELECT after_hash AS digest FROM gad_file_mutations WHERE after_hash IS NOT NULL
-           UNION
-           SELECT content_hash AS digest FROM gad_file_observations WHERE content_hash IS NOT NULL
            UNION
            SELECT new_content_hash AS digest FROM gad_worktree_edit_ops
             WHERE committed_event_id IS NULL AND new_content_hash IS NOT NULL
@@ -8475,13 +12456,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
               AND NOT EXISTS (SELECT 1 FROM gad_file_versions fv WHERE fv.content_hash = gad_gc_candidates.digest)
               AND NOT EXISTS (SELECT 1 FROM log_blob_refs lbr WHERE lbr.digest = gad_gc_candidates.digest)
               AND NOT EXISTS (
-                SELECT 1 FROM gad_file_mutations fm
-                 WHERE fm.before_hash = gad_gc_candidates.digest
-                    OR fm.after_hash = gad_gc_candidates.digest)
-              AND NOT EXISTS (
-                SELECT 1 FROM gad_file_observations fo
-                 WHERE fo.content_hash = gad_gc_candidates.digest)
-              AND NOT EXISTS (
                 SELECT 1 FROM gad_worktree_edit_ops eo
                  WHERE eo.committed_event_id IS NULL
                    AND (eo.new_content_hash = gad_gc_candidates.digest
@@ -8504,6 +12478,57 @@ export class GadWorkspaceDO extends DurableObjectBase {
     });
   }
 
+  /**
+   * §4.2/C6 soft-state prune: the hourly server-driven pass (wired next to GC by
+   * the host scheduler) ages out behavioral touches and disposable render
+   * artifacts so the soft layer stays a bounded relevance signal rather than an
+   * unbounded log. Everything pruned here is re-derivable (a pruned touch is
+   * background hum; the cache re-computes on a miss; the render log is
+   * instrumentation), so the floors are generous. Accepts an empty object — the
+   * host calls `gad().call('pruneProvenanceSoftState', {})`. Returns per-category
+   * delete counts.
+   */
+  @rpc({ callers: ["do", "server"] })
+  pruneProvenanceSoftState(_input: Record<string, unknown> = {}): {
+    touches: number;
+    cache: number;
+    renderLog: number;
+  } {
+    this.ensureReady();
+    const now = Date.now();
+    const touchFloor = new Date(now - TOUCH_PRUNE_AGE_MS).toISOString();
+    const cacheFloor = new Date(now - PROV_CACHE_PRUNE_AGE_MS).toISOString();
+    const renderFloor = new Date(now - PROV_RENDER_LOG_PRUNE_AGE_MS).toISOString();
+    return this.transaction(() => {
+      // Single-hit touches past the floor never accumulated repeat signal.
+      const touches = asNumber(
+        this.sql
+          .exec(
+            `SELECT COUNT(*) AS n FROM gad_touches WHERE hits = 1 AND updated_at < ?`,
+            touchFloor
+          )
+          .one()["n"]
+      );
+      this.sql.exec(`DELETE FROM gad_touches WHERE hits = 1 AND updated_at < ?`, touchFloor);
+
+      const cache = asNumber(
+        this.sql
+          .exec(`SELECT COUNT(*) AS n FROM gad_provenance_cache WHERE created_at < ?`, cacheFloor)
+          .one()["n"]
+      );
+      this.sql.exec(`DELETE FROM gad_provenance_cache WHERE created_at < ?`, cacheFloor);
+
+      const renderLog = asNumber(
+        this.sql
+          .exec(`SELECT COUNT(*) AS n FROM gad_prov_render_log WHERE created_at < ?`, renderFloor)
+          .one()["n"]
+      );
+      this.sql.exec(`DELETE FROM gad_prov_render_log WHERE created_at < ?`, renderFloor);
+
+      return { touches, cache, renderLog };
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Projection replay (cache amnesia recovery — P3)
   // -------------------------------------------------------------------------
@@ -8512,6 +12537,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.ensureReady();
     return this.transaction(() => {
       this.clearProjections();
+      // §8.1: claims are re-seeded from the durable ledger, not just from the
+      // trajectory events. Within an era the trajectory replay below re-applies
+      // the same rows idempotently (aligned identities); across a schema era —
+      // when the trajectory events no longer exist — this is the ONLY source
+      // that restores the ledger-only claims + relations + FTS.
+      this.rebuildClaimsFromLedger();
       let replayed = 0;
       const prefixCache = new Map<string, ProjectionKey | null>();
       const temporaryKeys: ProjectionKey[] = [];
@@ -8608,7 +12639,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   private copyProjectionKey(from: ProjectionKey, to: ProjectionKey): void {
-    this.copyProjectionRows("trajectory_turns", "turn_id, opened_at, closed_at, summary", from, to);
+    this.copyProjectionRows(
+      "trajectory_turns",
+      "turn_id, opened_at, closed_at, summary, ordinal",
+      from,
+      to
+    );
     this.copyProjectionRows(
       "trajectory_messages",
       "message_id, turn_id, role, status, started_event_id, completed_event_id, updated_at",
@@ -8720,12 +12756,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
       "trajectory_approvals",
       "trajectory_usage_rollups",
       "channel_roster",
-      "gad_file_observations",
-      "gad_file_mutations",
-      "gad_file_change_hunks",
       "gad_state_transitions",
       "gad_transition_parents",
       "gad_claims",
+      // Rebuilt from the durable ledger during replay (via projectKnowledge,
+      // which resolves content through the surviving gad_knowledge_ledger).
+      "gad_claim_relations",
     ]) {
       this.sql.exec(`DELETE FROM ${table}`);
     }
@@ -8810,7 +12846,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       };
       return {
         envelopeId: item.eventId ?? null,
-        actor: event.actor as ParticipantRef,
+        actor: event.actor as ActorRef,
         payloadKind: event.kind,
         payload: event.payload,
         ...(Object.keys(causality).length > 0 ? { causality: causality as LogEventCausality } : {}),
@@ -10073,8 +14109,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
        LEFT JOIN (
          SELECT digest FROM log_blob_refs
          UNION
-         SELECT content_hash AS digest FROM gad_file_observations WHERE content_hash IS NOT NULL
-         UNION
          SELECT content_hash AS digest FROM gad_file_versions WHERE content_hash IS NOT NULL
        ) refs ON refs.digest = b.hash
        WHERE refs.digest IS NULL
@@ -10110,10 +14144,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
       {
         metric: "Worktree states",
         value: count(`SELECT COUNT(*) AS value FROM gad_worktree_states`),
-      },
-      {
-        metric: "File mutations",
-        value: count(`SELECT COUNT(*) AS value FROM gad_file_mutations`),
       },
       { metric: "Claims", value: count(`SELECT COUNT(*) AS value FROM gad_claims`) },
     ];
@@ -10204,7 +14234,125 @@ export class GadWorkspaceDO extends DurableObjectBase {
       addError("storage-diagnostic", "oversized or missing indexed storage artifact", row);
     }
 
+    this.checkEditOpChainContinuity(addError);
+
     return { ok: errors.length === 0, errors };
+  }
+
+  /**
+   * U2 standing invariant (design §5.1): the per-path first-parent edit-op chain
+   * is total — `op[k+1].old_content_hash == op[k].new_content_hash`. Walks each
+   * repo head's first-parent commit lineage, groups the path's committed ops in
+   * lineage order, and asserts continuity: `synthetic` + `create` RESTART the
+   * chain, `delete` ENDS it, `chmod` passes content through, binary rows
+   * participate by hash only. A break is a loud integrity failure (never a silent
+   * mis-blame). Bounded to {@link CHAIN_CHECK_CAP} committed ops per repo.
+   */
+  private checkEditOpChainContinuity(
+    addError: (type: string, message: string, details?: JsonRecord) => void
+  ): void {
+    const logRows = this.sql
+      .exec(`SELECT DISTINCT log_id FROM gad_worktree_edit_ops WHERE log_id IS NOT NULL`)
+      .toArray() as Array<{ log_id?: string | null }>;
+    for (const logRow of logRows) {
+      const logId = asString(logRow.log_id);
+      if (!logId) continue;
+      let examined = 0;
+      const heads = this.sql
+        .exec(
+          `SELECT head, commit_event_id FROM gad_worktree_heads
+           WHERE log_id = ? AND commit_event_id IS NOT NULL`,
+          logId
+        )
+        .toArray() as Array<{ head?: string; commit_event_id?: string | null }>;
+      for (const h of heads) {
+        if (examined >= CHAIN_CHECK_CAP) break;
+        const tip = asString(h.commit_event_id);
+        if (!tip) continue;
+        // First-parent commit lineage (newest→oldest), then an oldest→newest map.
+        const lineage: string[] = [];
+        const seen = new Set<string>();
+        let cur: string | null = tip;
+        while (cur && !seen.has(cur) && lineage.length < BLAME_MAX_COMMITS) {
+          seen.add(cur);
+          lineage.push(cur);
+          cur = this.parentEventIdAt(cur, 0);
+        }
+        if (lineage.length === 0) continue;
+        const order = new Map(
+          lineage
+            .slice()
+            .reverse()
+            .map((eventId, index) => [eventId, index] as const)
+        );
+        const rows = this.sql
+          .exec(
+            `SELECT id, path, kind, old_content_hash, new_content_hash, synthetic,
+                    edit_seq, ordinal, committed_event_id
+             FROM gad_worktree_edit_ops
+             WHERE log_id = ? AND committed_event_id IN (${lineage.map(() => "?").join(", ")})`,
+            logId,
+            ...lineage
+          )
+          .toArray() as JsonRecord[];
+        examined += rows.length;
+        const byPath = new Map<string, JsonRecord[]>();
+        for (const row of rows) {
+          const p = String(row["path"]);
+          let arr = byPath.get(p);
+          if (!arr) {
+            arr = [];
+            byPath.set(p, arr);
+          }
+          arr.push(row);
+        }
+        for (const [p, pathRows] of byPath) {
+          pathRows.sort((a, b) => {
+            const byCommit =
+              (order.get(String(a["committed_event_id"])) ?? 0) -
+              (order.get(String(b["committed_event_id"])) ?? 0);
+            if (byCommit !== 0) return byCommit;
+            const bySeq = Number(a["edit_seq"] ?? 0) - Number(b["edit_seq"] ?? 0);
+            if (bySeq !== 0) return bySeq;
+            return Number(a["ordinal"] ?? 0) - Number(b["ordinal"] ?? 0);
+          });
+          let prevNew: string | null = null;
+          let started = false;
+          for (const row of pathRows) {
+            const kind = String(row["kind"]);
+            const oldHash = asString(row["old_content_hash"]);
+            const newHash = asString(row["new_content_hash"]);
+            const synthetic = Number(row["synthetic"]) === 1;
+            if (synthetic || kind === "create") {
+              prevNew = newHash;
+              started = true;
+              continue;
+            }
+            if (started && prevNew !== null && oldHash !== prevNew) {
+              addError("edit-op-chain", "committed edit-op chain is broken", {
+                logId,
+                head: h.head ?? null,
+                path: p,
+                opId: Number(row["id"]),
+                kind,
+                commitEventId: asString(row["committed_event_id"]),
+                expectedOldContentHash: prevNew,
+                actualOldContentHash: oldHash,
+              });
+            }
+            if (kind === "delete") {
+              prevNew = null; // the file is gone; a later create restarts.
+            } else if (kind === "chmod") {
+              prevNew = newHash ?? oldHash ?? prevNew;
+              started = true;
+            } else {
+              prevNew = newHash;
+              started = true;
+            }
+          }
+        }
+      }
+    }
   }
 
   private stateExists(stateHash: string): boolean {
@@ -10260,26 +14408,27 @@ const STORED_EVENT_KINDS = new Set<string>([
   "messageType.cleared",
   "custom.started",
   "custom.updated",
-  "state.file_observed",
-  "state.file_mutation_intended",
-  "state.file_mutation_applied",
   "state.transition_recorded",
   "state.snapshot_ingested",
   "state.merge_applied",
+  "memory.recalled",
   "external.envelope_published",
   "external.envelope_observed",
   "external.participant_observed",
   "branch.created",
   "branch.forked",
   "branch.head_changed",
+  "channel.forked",
+  "channel.fork_renamed",
+  "channel.fork_archived",
   "turn.opened",
   "turn.waiting",
   "turn.closed",
   "system.event",
   "system.compaction_recorded",
-  "memory.recalled",
   "build.completed",
   "knowledge.claim_recorded",
   "knowledge.claim_updated",
   "knowledge.claim_retracted",
+  "knowledge.claims_related",
 ]);

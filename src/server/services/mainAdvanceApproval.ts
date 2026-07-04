@@ -20,12 +20,10 @@ const WORKSPACE_REPO_WRITE_CAPABILITY = "workspace-repo-write";
 // destructive whole-repo deletion. The per-repo resource key (below) further
 // ensures approving the deletion of one repo never covers another.
 const WORKSPACE_REPO_DELETE_CAPABILITY = "workspace-repo-delete";
-// Recovering a deleted repo re-adds it to workspace main — a global-state change,
-// so it is gated too, but as a standard (recovery) action rather than severe.
-const WORKSPACE_REPO_RESTORE_CAPABILITY = "workspace-repo-restore";
-
-/** The operations that advance a repo's protected `main` ref. */
-export type MainAdvanceOperation = "push" | "merge";
+// Restoring a deleted repo re-creates its `main` ref (`expectedOld: null`), so it
+// flows through the GENERIC advance prompt as an add-repo (classified from the CAS
+// shape) — there is no distinct restore capability (narrow-host boundary refactor
+// Phase 4/5; restore semantics are DO-owned).
 
 /**
  * A candidate protected-ref (`repo` → main) advance awaiting approval. The
@@ -35,7 +33,6 @@ export type MainAdvanceOperation = "push" | "merge";
  */
 export interface MainAdvanceApprovalCandidate {
   caller: VerifiedCaller;
-  operation: MainAdvanceOperation;
   /** The repo whose `main` ref is advancing. */
   repoPath: string;
   /** Server-computed changed paths, workspace-rooted. */
@@ -71,7 +68,6 @@ export type RefAdvanceGateContext =
   | {
       kind: "caller";
       caller: VerifiedCaller;
-      operation: MainAdvanceOperation;
       sourceHead?: string;
       /** DO identity the write was dispatched through, for "requested by X via
        *  Y" prompt copy (§4). Never authoritative. */
@@ -91,10 +87,7 @@ export type RefAdvanceGateContext =
  */
 export function createMainRefAdvanceGate(deps: {
   blobsDir: string;
-  approvalGate: Pick<
-    MainAdvanceApprovalGate,
-    "approve" | "approveRepoDeletion" | "approveRepoRestore"
-  >;
+  approvalGate: Pick<MainAdvanceApprovalGate, "approve" | "approveRepoDeletion">;
   /** Lazy mirroring hook (WorktreeStore.ensureStateMirrored) so historical states
    *  minted inside the store resolve to full trees before diffing. */
   ensureStateMirrored(stateHash: string): Promise<void>;
@@ -144,11 +137,12 @@ export function createMainRefAdvanceGate(deps: {
     const diffReview = perEntry.map((e) => e.review);
 
     for (const { entry, review, changedPaths } of perEntry) {
-      // Classification is DERIVED from the host's own state + ref log — the
-      // caller's claimed `operation` never loosens it (fail closed to the
-      // stricter prompt).
+      // The ONLY host-side classification is a REMOVAL, derived from the host's
+      // own CAS request shape (`next === null`) — never from a caller-supplied
+      // VCS-operation label. Everything else is an ordinary content advance;
+      // the VCS workflow (push/merge/import/restore) lives in the DO.
       if (entry.next === null) {
-        // Delete → severe per-repo deletion capability, inside the batch. The
+        // Removal → severe per-repo deletion capability, inside the batch. The
         // dependents warning (repos whose build breaks) is host-computed from
         // the build dependency graph, exactly like the file count is from the
         // CAS diff (§5) — never caller-supplied.
@@ -165,24 +159,11 @@ export function createMainRefAdvanceGate(deps: {
         });
         continue;
       }
-      if (entry.old === null && entry.priorDeleted) {
-        // Re-creation of a previously deleted repo (host ref log shows the
-        // prior delete) → restore capability.
-        await deps.approvalGate.approveRepoRestore({
-          caller: context.caller,
-          repoPath: entry.repoPath,
-          fileCount: review.diffStat.filesChanged,
-          stateHash: entry.next,
-          diffReview,
-        });
-        continue;
-      }
 
       // Ordinary advance: changed paths are the server-computed tree delta,
       // re-rooted to the repo (never anything the caller proposed).
       await deps.approvalGate.approve({
         caller: context.caller,
-        operation: context.operation,
         repoPath: entry.repoPath,
         changedPaths,
         stateHash: candidateView,
@@ -382,24 +363,10 @@ export interface RepoDeletionApprovalCandidate {
   diffReview?: DiffReviewEntry[];
 }
 
-/** A pending whole-repo restore awaiting the user's approval. */
-export interface RepoRestoreApprovalCandidate {
-  caller: VerifiedCaller;
-  repoPath: string;
-  /** How many tracked files the restore will re-add (for the prompt). */
-  fileCount: number;
-  /** The archived `main` state being restored. */
-  stateHash: string;
-  /** Host-computed diff-review payload for the whole batch (§5.1). */
-  diffReview?: DiffReviewEntry[];
-}
-
 export interface MainAdvanceApprovalGate {
   approve(candidate: MainAdvanceApprovalCandidate): Promise<void>;
   /** Gate a severe, global-state whole-repo deletion. Throws if denied. */
   approveRepoDeletion(candidate: RepoDeletionApprovalCandidate): Promise<void>;
-  /** Gate a whole-repo restore (re-adds a deleted repo to main). Throws if denied. */
-  approveRepoRestore(candidate: RepoRestoreApprovalCandidate): Promise<void>;
 }
 
 export interface MetaApprovalGrantStore {
@@ -647,58 +614,6 @@ export function createMainAdvanceApprovalGate(deps: {
         throw new Error(authorization.reason ?? `Deletion of ${candidate.repoPath} denied`);
       }
     },
-
-    async approveRepoRestore(candidate) {
-      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
-        return;
-      }
-      const callerKind = userlandCallerKind(candidate.caller.runtime.kind);
-      if (!callerKind) {
-        throw new Error(
-          `Repo restore from ${candidate.caller.runtime.kind} callers is not supported`
-        );
-      }
-      const identity = candidate.caller.code;
-      if (!identity || identity.callerKind !== candidate.caller.runtime.kind) {
-        throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
-      }
-      const fileSummary = `${candidate.fileCount} file${candidate.fileCount === 1 ? "" : "s"}`;
-      const authorization = await requestCapabilityPermission(
-        {
-          approvalQueue: deps.approvalQueue,
-          grantStore: deps.capabilityGrantStore,
-        },
-        {
-          caller: candidate.caller,
-          capability: WORKSPACE_REPO_RESTORE_CAPABILITY,
-          dedupKey: `workspace-repo-restore:${candidate.repoPath}:${candidate.stateHash}`,
-          resource: {
-            type: "vcs-repo",
-            label: "Repo",
-            value: candidate.repoPath,
-            key: `workspace-repo-restore:${candidate.repoPath}`,
-          },
-          operation: {
-            kind: "workspace",
-            verb: "restore deleted repo",
-            object: { type: "vcs-repo", label: "Repo", value: candidate.repoPath },
-            groupKey: `workspace-repo-restore:${candidate.repoPath}`,
-          },
-          title: `Restore repo ${candidate.repoPath}`,
-          description: `Re-add ${candidate.repoPath} (${fileSummary}) to the workspace from its archived history.`,
-          details: [
-            { label: "Repo", value: candidate.repoPath },
-            { label: "Files restored", value: String(candidate.fileCount) },
-            { label: "Archived state", value: candidate.stateHash },
-          ],
-          ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
-          deniedReason: `Restore of ${candidate.repoPath} denied`,
-        }
-      );
-      if (!authorization.allowed) {
-        throw new Error(authorization.reason ?? `Restore of ${candidate.repoPath} denied`);
-      }
-    },
   };
 }
 
@@ -726,7 +641,7 @@ async function approveWorkspaceMainAdvance(
       },
       operation: {
         kind: "workspace",
-        verb: operationLabel(candidate.operation),
+        verb: "update workspace main",
         object: {
           type: "vcs-head",
           label: "Head",
@@ -815,20 +730,18 @@ function metaChangeDescription(units: UnitBatchEntry[]): string {
     : "This push edits sensitive workspace configuration.";
 }
 
-function mainAdvanceTitle(candidate: MainAdvanceApprovalCandidate): string {
-  if (candidate.operation === "push") return "Push workspace changes";
-  return "Merge into workspace main";
+function mainAdvanceTitle(_candidate: MainAdvanceApprovalCandidate): string {
+  return "Update workspace main";
 }
 
 function mainAdvanceDescription(candidate: MainAdvanceApprovalCandidate): string {
-  return `This ${operationLabel(candidate.operation)} moves workspace main and changes ${pathCountSummary(candidate.changedPaths)}.`;
+  return `This advance moves workspace main and changes ${pathCountSummary(candidate.changedPaths)}.`;
 }
 
 function mainAdvanceDetails(
   candidate: MainAdvanceApprovalCandidate
 ): Array<{ label: string; value: string }> {
   return [
-    { label: "Operation", value: operationLabel(candidate.operation) },
     { label: "Repo", value: candidate.repoPath },
     ...(candidate.via ? [{ label: "Via", value: candidate.via }] : []),
     ...(candidate.sourceHead ? [{ label: "Source", value: candidate.sourceHead }] : []),
@@ -859,15 +772,6 @@ async function resolveBuildStatusLine(
   }
   if (!status || !status.validated) return "not validated";
   return status.failed ? "failed" : "ok";
-}
-
-function operationLabel(operation: MainAdvanceOperation): string {
-  switch (operation) {
-    case "merge":
-      return "vcs merge";
-    case "push":
-      return "vcs push";
-  }
 }
 
 function pathCountSummary(paths: string[]): string {

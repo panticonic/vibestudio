@@ -93,9 +93,7 @@ interface BuildSystemLike {
     metadata: ExtensionBuildMetadataLike;
     artifacts: ExtensionBuildArtifactLike[];
   }>;
-  getBuildByKey?(
-    key: string
-  ): {
+  getBuildByKey?(key: string): {
     dir: string;
     sourceStateHash?: string | null;
     metadata: ExtensionBuildMetadataLike;
@@ -556,7 +554,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       throw new ServiceError(
         "extensions",
         "invoke",
-        `Extension is not installed: ${name}`,
+        this.extensionNotInstalledMessage(name),
         "ENOEXT"
       );
     }
@@ -636,7 +634,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       throw new ServiceError(
         "extensions",
         "invokeStream",
-        `Extension is not installed: ${name}`,
+        this.extensionNotInstalledMessage(name),
         "ENOEXT"
       );
     }
@@ -762,6 +760,29 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     return entry?.activeBundleKey ? entry : null;
   }
 
+  private extensionNotInstalledMessage(name: string): string {
+    try {
+      const node = this.findExtensionNode(name);
+      const entry = this.registry.get(node.name);
+      const status = entry?.status ? ` Current registry status: ${entry.status}.` : "";
+      const activeBuild =
+        entry && !entry.activeBundleKey ? " It has no active approved build." : "";
+      return [
+        `Extension is not installed: ${name}.`,
+        `Workspace extension source exists at ${node.relativePath}, but it is not available in the active extension registry.${status}${activeBuild}`,
+        "To install it at runtime, declare it in meta/vibez1.yml under `extensions:`:",
+        `  - source: ${node.relativePath}`,
+        "Then commit/push the meta repo (or otherwise reconcile workspace config), approve the elevated native-code extension install/update prompt, and retry once `extensions.list` reports it as `running`.",
+      ].join(" ");
+    } catch {
+      return [
+        `Extension is not installed: ${name}.`,
+        "No matching workspace extension unit was found in the build graph.",
+        "Check the extension package name/source path, or add the source under `extensions/<name>`, declare it in meta/vibez1.yml under `extensions:`, reconcile the workspace config, and approve the install.",
+      ].join(" ");
+    }
+  }
+
   async handleExtensionHttpRequest(
     req: IncomingMessage,
     res: ServerResponse,
@@ -772,7 +793,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     const entry = this.registry.get(name);
     if (!entry) {
       res.writeHead(503, { "Content-Type": "text/plain" });
-      res.end(`Extension is not installed: ${name}`);
+      res.end(this.extensionNotInstalledMessage(name));
       return;
     }
 

@@ -11,6 +11,8 @@ describe("createWriteTool", () => {
     const result = await tool.execute("call-1", { path: "out.txt", content: "hello" });
     expect(result.details.bytesWritten).toBe(5);
     expect(vcs.read("out.txt")).toBe("hello");
+    // T2: invocation stamping is done by the shared ToolVcs seam, not hand-passed.
+    expect(vcs.lastEditInput?.invocationId).toBe("call-1");
   });
 
   it("overwrites an existing file", async () => {

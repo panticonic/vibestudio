@@ -41,32 +41,32 @@ Everything below changed an existing expectation. Pre-release, no backward compa
 
 ## E. Refs & main advancement (P1b + P3 + P5d)
 
-26. RefService is the sole authority for `repo → main`: durable server store (`{userData}/refs/refs.json`), CAS `advanceRef` through the approval gate, append-only ref log. DO heads are downstream provenance.
+26. RefService is the sole authority for `repo → main`: durable server store (`{userData}/refs/refs.json`), atomic `refs.updateMains` group CAS/delete through the approval gate, append-only main ref log. DO heads are downstream provenance.
 27. Approval prompts show **server-computed** diffs (`diffTrees` inside the gate); callers are never trusted for changed-paths. Prompt detail shows `Repo:` instead of `Head: main`.
 28. Push conflicts surface as typed retryable `REF_CONFLICT`; approval-pending holds the repo's mutation locks (reads never block); mid-group denial rolls back the advanced prefix.
 29. `vcs.abortMerge` on main is no longer approval-gated (nothing to gate — a pending merge never moved the ref).
 30. `vcs.diff` element shape is the content-store `TreeDiff` (was DO snake_case rows).
 31. Repo delete retires refs first; restore starts a fresh ref lineage at seq 1.
-32. `refs.*` is a new userland-reachable RPC surface (readRef/listRefs/readRefLog/advanceRef; advance approval-gated, attribution from verified caller). `seedRef`/`deleteRefs` remain host-internal.
+32. `refs.*` is a main-only userland-reachable RPC surface (`readMain`/`listMains`/`readMainLog` plus DO-only `updateMains`; updates are approval-gated and attributed from the host-resolved invocation token). Movement-limited seeding remains host-internal.
 33. `providers.vcsStore` manifest slot **deleted**: the host resolves the store DO from the `vcs` service declaration (one source of truth). A manifest with a `vcs` service but no singleton row loses the durable store, loud diagnostic.
 
 ## F. Freshness & provenance (P5a)
 
-34. Scan commits complete at ref advance; DO provenance is recorded by an async per-repo follower — `vcs.log`/lineage reflect scans **eventually**; scan-commit events carry `eventId: null`.
-35. Ref↔DO drift self-heals bidirectionally (reconciler at attach/on-demand + `adoptMainFromStore`); only post-heal disagreement throws.
+34. Scan commits complete at ref advance; DO provenance is recorded by `WorkspaceVcs` async direct per-repo ingest backed by a durable host scan record — `vcs.log`/lineage reflect scans **eventually**; scan-commit events carry `eventId: null`.
+35. Ref↔DO drift self-heals only when a covering publish intent exists; uncovered no-intent drift now fails closed at attach/on-demand.
 36. DO main-head ingest validates a known predecessor instead of a strict CAS (ctx heads keep strict CAS).
 37. Crash in the merge-resolution window can produce one redundant-but-convergent merge event.
 
 ## G. VCS semantics in userland (P5b + P5c + P5d)
 
 38. The merge engine (diff3 + MergeEngine + EditEngine) lives in `@workspace/vcs-engine`; the gad DO computes merges/edits/commits/reverts internally, reading/writing through host `blobstore.*` RPC — the DO now has host-service dependencies and mirrored states are written by the DO principal.
-39. `vcs` is a userland manifest service (protocol `vibez1.vcs.v1`): history reads, status (`vcsStatus`/`vcsPushStatus`), ctx merges (`vcsMerge`/`vcsAbortMerge`), and context semantics (pin/view/status/rebase/drop) are DO methods — 12+ new DO RPCs, several admitting panel/shell callers (deliberate widening). Host `vcs.*` keeps only: push build-gate + group CAS, fork/delete/restore disk+ref steps, `adoptImportedRepo`, projection, and the slim read surface (readFile/listFiles/diff/resolveHead — pure content-store+ref reads, justified host-side).
-40. `vcs.merge` rejects non-`ctx:`/non-`main` targets (previously attempted arbitrary heads). Main-target merges are host ref-gated advances.
+39. `vcs` is a userland manifest service (protocol `vibez1.vcs.v1`): history reads, status (`vcsStatus`/`vcsPushStatus`), push (`vcsPush`), ctx merges (`vcsMerge`/`vcsAbortMerge`), and context semantics (pin/view/status/rebase/drop) are DO methods — several admitting panel/shell callers (deliberate widening). Host `vcs.*` keeps fork/delete/restore orchestration, projection, and the slim read surface (readFile/listFiles/diff/resolveHead — pure content-store+ref reads, justified host-side); host `vcs.push` and `vcs.adoptImportedRepo` are not public surfaces.
+40. `vcs.merge` rejects non-`ctx:`/non-`main` targets (previously attempted arbitrary heads). Main-target merges dispatch through gad and publish via the same `refs.updateMains` path as pushes.
 41. `vcs.log` head-defaulting is client-side (runtime clients default to their own ctx head; CLI reads main). `vcs.recall` scoping is solely the DO's query pushdown.
 42. Rebase side-effects: DO records first, host projections/events follow (previously interleaved); crash mid-rebase heals via re-materialization invariants.
-43. Git interchange lives in `@workspace-extensions/git-bridge` (import/export, trailers; `branch` parameter removed — per-repo `main` only). Export markers moved to extension storage: pre-existing DO markers are orphaned (first re-export replays history as fresh commits). New host method `vcs.adoptImportedRepo` (chrome/extension-gated). Existing workspaces see git-bridge in the next joint extension approval.
-44. Policy widenings for the eviction: `blobstore` read/write, `refs.*`, the `vcs` service, and DO `vcsLog`/`ingestWorktreeState`/`listStateFiles` admit `extension` callers.
-45. Module map: `src/server/gadVcs/` → **deleted**; permanent host surfaces live in `src/server/vcsHost/` (`WorktreeStore`, `ProvenanceFollower`, `DiskProjector`, `workspaceTreeScanner`, `repoDiscovery`, slim `workspaceVcs` orchestrator). Renames: `GadVcs`→`WorktreeStore`, `GadProvenanceFollower`→`ProvenanceFollower`, `.vcs`→`.worktrees` deps.
+43. Git interchange lives in `@workspace-extensions/git-bridge` (import/export, trailers; `branch` parameter removed — per-repo `main` only). Export markers moved to extension storage: pre-existing DO markers are orphaned (first re-export replays history as fresh commits). Import publishes through staged lineage and the ordinary gad `vcsPush`/`refs.updateMains({operation:"import"})` path; no host `vcs.adoptImportedRepo` surface remains. Existing workspaces see git-bridge in the next joint extension approval.
+44. Policy widenings for the eviction: `blobstore` read/write, broad `refs` reads, the `vcs` service, and DO `vcsLog`/`ingestWorktreeState`/`listStateFiles` admit `extension` callers. `refs.updateMains` remains DO-only at the public policy layer and is narrowed further by the invocation-token check.
+45. Module map: `src/server/gadVcs/` → **deleted**; permanent host surfaces live in `src/server/vcsHost/` (`WorktreeStore`, `DiskProjector`, `workspaceTreeScanner`, `repoDiscovery`, slim `workspaceVcs` orchestrator). Renames: `GadVcs`→`WorktreeStore`, `.vcs`→`.worktrees` deps. The old provenance follower class is gone; scan/freshness provenance is folded into `WorkspaceVcs` as durable host scan records plus direct per-repo DO ingest.
 
 ## H. Audit deletions (final pass)
 
@@ -78,3 +78,14 @@ Everything below changed an existing expectation. Pre-release, no backward compa
 
 - `packages/rpc`/WebRTC changes in this tree belong to the concurrent WebRTC v2 session (all green; one file fails `format:check` on their side).
 - `docs/` mentions of deleted APIs are changelog/design-history context, kept deliberately.
+
+## I. Fork, workspace-template, and bridge cleanup (2026-07-04)
+
+49. Fork seed plumbing no longer treats `appendSeed` as a privileged operation. The child channel consumes only the pending `forkSeedMarker` for one-shot/idempotent recovery; old `forkSeedAuth` state is ignored, with no migration or compatibility shim.
+50. Channel and agent `postClone` now require the clone's `newContextId`. A clone that cannot be re-homed into its fresh fork context fails instead of falling back to the parent's context.
+51. Subagent lifecycle rows use an explicit `starting` setup phase. Re-drive tears down stale `starting` rows; `running` rows retry the idempotent task seed; terminal publish must succeed before terminal status/teardown.
+52. Dependency resolution for server-side builds now prefers a packaged `workspace-template` only when it contains dependency metadata (`package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml`). Source-only templates fall back to the active workspace's dependency files.
+53. `refs.updateMains` requires an explicit `operation`; seed-style updates must say `operation:"seed"`. Older callers without the operation field fail schema validation.
+54. The repo requires Node `>=22.13.0` in both host and userland package manifests.
+55. The panel asset disk cache uses sha256 blob filenames plus per-cache-key metadata sidecars. Old cache/index layouts are not read; dangling entries are dropped and refetched.
+56. Git bridge export/import state lives entirely in extension storage and uses the protected import publish path. Pre-existing host-side markers are orphaned; the first export/import under the new bridge establishes fresh markers.

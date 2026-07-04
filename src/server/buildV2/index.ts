@@ -259,6 +259,21 @@ export interface BuildUnitResolution {
   stateHash: string;
 }
 
+export interface BuildSystemRootOptions {
+  /**
+   * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
+   * Defaults to VIBEZ1_APP_ROOT, then dirname(workspaceRoot), for older tests.
+   */
+  appRoot?: string;
+  /**
+   * Workspace dependency root containing the userland package/lock/workspace
+   * files that influence build cache identity. This can differ from the active
+   * managed workspace root in dev, where the app runs from a copied workspace
+   * under user data but dependencies are installed from <appRoot>/workspace.
+   */
+  dependencyWorkspaceRoot?: string;
+}
+
 export interface BuildSystemV2 extends RepoPushValidator {
   /**
    * Get build result for a panel/worker/extension/library.
@@ -433,14 +448,19 @@ export interface BuildSystemV2 extends RepoPushValidator {
 export async function initBuildSystemV2(
   workspaceRoot: string,
   source: WorkspaceStateSource & BuildSourceProvider,
-  appNodeModules: string | string[]
+  appNodeModules: string | string[],
+  rootOptions: BuildSystemRootOptions = {}
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
 
-  // Root-dependency fingerprint inputs (package.json/pnpm-lock.yaml/…) resolve
-  // against the app root, not whatever cwd the server happened to start in.
-  setBuildRootConfig({ appRoot: path.dirname(workspaceRoot), workspaceRoot });
+  // Build cache identity depends on dependency manifests, not on where the
+  // active managed workspace copy happens to live. Server startup passes these
+  // roots explicitly; defaults preserve direct test construction.
+  setBuildRootConfig({
+    appRoot: rootOptions.appRoot ?? process.env["VIBEZ1_APP_ROOT"] ?? path.dirname(workspaceRoot),
+    workspaceRoot: rootOptions.dependencyWorkspaceRoot ?? workspaceRoot,
+  });
 
   // Declare where @vibez1/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots);
@@ -1016,9 +1036,10 @@ export async function initBuildSystemV2(
    * eagerly-maintained buildable units (panels/about/workers), matching the set
    * the state trigger keeps warm at main and the GC active set; extensions/apps
    * are activation-gated (not baseline-built) so they are intentionally out of
-   * this coarse read. A unit is `ok` when its runtime build key is in the store,
-   * `failed` when the most recent recorded diagnostics for that key carry
-   * errors, else `unknown` (never validated at this EV).
+   * this coarse read. A unit is `failed` when the most recent recorded
+   * diagnostics for that key carry errors, `ok` when no error diagnostics are
+   * recorded and its runtime build key is in the store, else `unknown` (never
+   * validated at this EV).
    */
   const statusAtImpl = async (viewHash: string): Promise<BuildStatusAt> => {
     let view: GraphView;
@@ -1041,17 +1062,15 @@ export async function initBuildSystemV2(
       anyChecked = true;
       const buildKey = computeBuildUnitKey(node, ev);
       let status: UnitBuildStatus["status"];
-      if (buildStore.has(buildKey)) {
+      const diagnostics = diagnosticsForBuildKey(buildKey);
+      if (diagnostics && hasErrors(diagnostics)) {
+        status = "failed";
+        anyFailed = true;
+      } else if (buildStore.has(buildKey)) {
         status = "ok";
       } else {
-        const diagnostics = diagnosticsForBuildKey(buildKey);
-        if (diagnostics && hasErrors(diagnostics)) {
-          status = "failed";
-          anyFailed = true;
-        } else {
-          status = "unknown";
-          anyUnknown = true;
-        }
+        status = "unknown";
+        anyUnknown = true;
       }
       unitStatuses.push({ unit: node.name, status });
     }

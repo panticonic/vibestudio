@@ -39,6 +39,7 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
+import { bridgeDuplexSockets } from "../socketBridge.js";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "connection",
@@ -1399,27 +1400,46 @@ export class EgressProxy {
       return;
     }
 
-    const port = targetUrl.port ? Number(targetUrl.port) : 443;
-    const upstream = netConnect(port, targetUrl.hostname, () => {
-      status = 200;
-      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) upstream.write(head);
-      upstream.pipe(socket);
-      socket.pipe(upstream);
-      void finishAudit();
-    });
-
-    upstream.on("error", () => {
+    const onUpstreamConnectError = () => {
       if (!socket.destroyed) {
         socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
       }
       void finishAudit();
-    });
+    };
 
-    socket.on("error", () => {
-      upstream.destroy();
+    let upstream: ReturnType<typeof netConnect> | null = null;
+    const onClientConnectError = () => {
+      upstream?.destroy();
+      void finishAudit();
+    };
+    const onClientConnectClose = () => {
+      upstream?.destroy();
+      void finishAudit();
+    };
+
+    const port = targetUrl.port ? Number(targetUrl.port) : 443;
+    upstream = netConnect(port, targetUrl.hostname, () => {
+      if (!upstream) return;
+      upstream.off("error", onUpstreamConnectError);
+      socket.off("error", onClientConnectError);
+      socket.off("close", onClientConnectClose);
+      status = 200;
+      socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length > 0) upstream.write(head);
+      bridgeDuplexSockets(socket, upstream, {
+        onError: () => {
+          void finishAudit();
+        },
+        onClose: () => {
+          void finishAudit();
+        },
+      });
       void finishAudit();
     });
+
+    upstream.on("error", onUpstreamConnectError);
+    socket.on("error", onClientConnectError);
+    socket.on("close", onClientConnectClose);
   }
 
   private async handleWebSocketUpgrade(
@@ -1581,8 +1601,16 @@ export class EgressProxy {
           if (head.length > 0) {
             upstreamSocket.write(head);
           }
-          upstreamSocket.pipe(socket);
-          socket.pipe(upstreamSocket);
+          bridgeDuplexSockets(socket, upstreamSocket, {
+            onError: ({ side, error }) => {
+              if (side !== "upstream") return;
+              this.logWebSocketUpgradeDiagnostic("upstream_error", {
+                reason: "upstream_socket_error",
+                target: diagnosticWebSocketTarget(targetUrl),
+                error: diagnosticThrownError(error),
+              });
+            },
+          });
           settle({ statusCode, bytesIn: 0, bytesOut: 0 });
         });
 
@@ -1729,6 +1757,9 @@ export class EgressProxy {
 
       upstreamRequest.on("error", reject);
       req.on("error", reject);
+      res.on("error", () => {
+        upstreamRequest.destroy();
+      });
       req.on("data", (chunk: Buffer | string) => {
         bytesOut += Buffer.byteLength(chunk);
       });

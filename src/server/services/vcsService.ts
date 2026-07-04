@@ -17,16 +17,14 @@ import {
   vcsMethods,
   vcsApplyEditsInputSchema,
   type VcsRecallInput,
+  type VcsMergeSource,
+  type VcsPick,
 } from "@vibez1/shared/serviceSchemas/vcs";
 import { normalizeWorkspaceRepoPath } from "@vibez1/shared/workspace/remotes";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../vcsHost/paths.js";
-import type {
-  MainAdvanceApprovalGate,
-  MainAdvanceOperation,
-  RefAdvanceGateContext,
-} from "./mainAdvanceApproval.js";
+import type { MainAdvanceApprovalGate } from "./mainAdvanceApproval.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
 export interface VcsServiceDeps {
@@ -35,6 +33,16 @@ export interface VcsServiceDeps {
   getBuildSystem?: () => BuildSystemV2 | null;
   mainAdvanceGate?: MainAdvanceApprovalGate;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  /**
+   * Cross-context READ authorization — the DENY-not-prompt dual of the
+   * `context.boundary` gate. Returns the contexts a caller may inspect: the
+   * lifecycle children it OWNS and the lineage forks off it, from WS-3's runtime
+   * relationship registry (`runtime.listOwnedContexts`). Absent ⇒ no
+   * cross-context reads are authorized (own-context reads always are).
+   */
+  listOwnedContexts?: (input: {
+    contextId: string;
+  }) => Promise<{ contexts: Array<{ contextId: string }> }>;
 }
 
 /** The caller's own context id (extensions resolve through their chained caller). */
@@ -99,6 +107,48 @@ function resolveWriteHead(
   return ownHead;
 }
 
+/**
+ * Cross-context READ authorization — the DENY-not-prompt dual of the
+ * `context.boundary` PROMPT gate (which is control-plane only). A caller may
+ * inspect ONLY its own context, or a context it OWNS (lifecycle child) / FORKED
+ * (lineage descendant) per the runtime relationship registry. Unauthorized
+ * access THROWS (never prompts): a read is non-mutating and a foreign read has
+ * no legitimate consent flow. Own-context and privileged (shell/server)
+ * callers short-circuit before touching the registry, so the hot path is free.
+ */
+async function authorizeContextRead(
+  ctx: ServiceContext,
+  deps: VcsServiceDeps,
+  targetContextId: string
+): Promise<void> {
+  if (callerContextId(ctx, deps) === targetContextId) return;
+  // Shell/server are user-level surfaces — the user owns every context.
+  if (isPrivilegedCaller(ctx, deps)) return;
+  const own = callerContextId(ctx, deps);
+  if (!own) {
+    throw new Error(
+      `vcs: caller ${ctx.caller.runtime.id} (${ctx.caller.runtime.kind}) has no context — ` +
+        `cross-context inspection of ${targetContextId} is denied`
+    );
+  }
+  const owned = await deps.listOwnedContexts?.({ contextId: own });
+  if (owned?.contexts.some((c) => c.contextId === targetContextId)) return;
+  throw new Error(
+    `vcs: context ${targetContextId} is not owned or forked by ${own} — cross-context inspection denied`
+  );
+}
+
+/** Authorize a resolved read head: `ctx:*` heads gate through
+ *  {@link authorizeContextRead}; `main`/`state:` refs are not context-scoped. */
+async function authorizeReadHead(
+  ctx: ServiceContext,
+  deps: VcsServiceDeps,
+  head: string
+): Promise<void> {
+  if (!head.startsWith("ctx:")) return;
+  await authorizeContextRead(ctx, deps, head.slice("ctx:".length));
+}
+
 function routeWorkspacePath(filePath: string): { repoPath: string; repoRelPath: string } | null {
   const split = splitRepoPath(filePath);
   if (!split) return null;
@@ -111,6 +161,81 @@ function routeWorkspacePath(filePath: string): { repoPath: string; repoRelPath: 
   // Validate the routed repo name (segment safety) — vcs edits gate on `main`,
   // so this is the authoritative boundary check.
   return { repoPath: normalizeWorkspaceRepoPath(split.repoPath), repoRelPath: split.repoRelPath };
+}
+
+function pathTrackingHint(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const first = normalized.split("/")[0] ?? "";
+  const platform = new Set([
+    ".tmp",
+    ".vibez1",
+    ".testkit",
+    ".git",
+    ".gad",
+    ".contexts",
+    "node_modules",
+    "dist",
+  ]);
+  if (platform.has(first)) {
+    return (
+      `${JSON.stringify(filePath)} is scratch/platform state and is intentionally outside VCS. ` +
+      `VCS commits only workspace source under repo paths like projects/<name>/..., ` +
+      `panels/<name>/..., packages/<name>/..., or meta/... . ` +
+      `Move or rename the file into a repo path before committing it.`
+    );
+  }
+  return (
+    `Use a workspace source path under a repo section such as projects/<name>/..., ` +
+    `panels/<name>/..., packages/<name>/..., or meta/... .`
+  );
+}
+
+function routeWorkspacePathOrThrow(
+  kind: string,
+  filePath: string
+): {
+  repoPath: string;
+  repoRelPath: string;
+} {
+  const routed = routeWorkspacePath(filePath);
+  if (!routed) {
+    throw new Error(
+      `${kind} could not infer a repo for ${JSON.stringify(filePath)}. ${pathTrackingHint(filePath)}`
+    );
+  }
+  return routed;
+}
+
+function uniqueRepoPaths(repoPaths: string[], owner: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const raw of repoPaths) {
+    const repoPath = normalizeWorkspaceRepoPath(raw);
+    if (seen.has(repoPath)) duplicates.add(repoPath);
+    else {
+      seen.add(repoPath);
+      out.push(repoPath);
+    }
+  }
+  if (duplicates.size > 0) {
+    throw new Error(
+      `${owner} received duplicate repo path(s): ${[...duplicates].join(", ")}. ` +
+        `Pass each repo once; multi-repo operations already handle groups atomically.`
+    );
+  }
+  return out;
+}
+
+function noUncommittedCommitMessage(head: string, repoPaths?: string[]): string {
+  const scope = repoPaths && repoPaths.length > 0 ? ` in ${repoPaths.join(", ")}` : "";
+  return (
+    `vcs.commit refused to no-op: no uncommitted VCS working edits${scope} on ${head}. ` +
+    `Only edits recorded through edit/write/vcs.edit are commit-able. Direct fs.writeFile, ` +
+    `fs.mktemp, .tmp, .vibez1, node_modules, dist, and other scratch/platform paths are ` +
+    `outside VCS and will not be committed. Record a source edit under a repo path first, ` +
+    `or use vcs.status/contextStatus to inspect the current head.`
+  );
 }
 
 function repoRootWriteHint(repoPath: string): string {
@@ -132,24 +257,6 @@ function stripRepoPath(filePath: string, repoPath: string): string {
     : normalized.startsWith(`${repo}/`)
       ? normalized.slice(repo.length + 1)
       : normalized;
-}
-
-/**
- * The advance context a caller-driven main advance carries into the
- * protected-ref gate (`RefService.updateMains` → the injected main-advance
- * approval). The gate computes the authoritative changed-path diff itself;
- * this only conveys WHO is advancing and WHY.
- */
-function mainAdvanceContext(
-  ctx: ServiceContext,
-  input: { operation: MainAdvanceOperation; sourceHead?: string }
-): RefAdvanceGateContext {
-  return {
-    kind: "caller",
-    caller: ctx.caller,
-    operation: input.operation,
-    ...(input.sourceHead ? { sourceHead: input.sourceHead } : {}),
-  };
 }
 
 function looksLikeWorkspacePath(value: string): boolean {
@@ -198,7 +305,8 @@ function assertStateHashArg(method: string, value: string, position: string): vo
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   return {
     name: "vcs",
-    description: "Workspace version control (GAD-native): commit, status, log, diff",
+    description:
+      "Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibez1 vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.",
     policy: {
       allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"],
     },
@@ -211,6 +319,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           // Working edit — tracked, NOT a commit. Actor is the verified caller.
           // Per-repo: edits route by path to their owning repo's ctx head.
           const input = vcsApplyEditsInputSchema.parse(args[0]);
+          if (input.edits.length === 0) {
+            throw new Error(
+              "vcs.edit requires at least one edit op. An empty edit batch would be a no-op; " +
+                "check the path or replacement text before calling vcs.edit."
+            );
+          }
           const head = resolveWriteHead(ctx, deps, input.head);
           const repoPath = input.repoPath ? normalizeWorkspaceRepoPath(input.repoPath) : undefined;
           const groups = new Map<string, typeof input.edits>();
@@ -218,19 +332,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             groups.set(repoPath, input.edits);
           } else {
             for (const edit of input.edits) {
-              const routed = routeWorkspacePath(edit.path);
-              if (!routed) {
-                throw new Error(
-                  `vcs.edit could not infer a repo for ${JSON.stringify(edit.path)}. ` +
-                    `Pass repoPath and repo-relative edit paths, or use a workspace path under a repo section.`
-                );
-              }
+              const routed = routeWorkspacePathOrThrow("vcs.edit", edit.path);
               const list = groups.get(routed.repoPath) ?? [];
               list.push({ ...edit, path: routed.repoRelPath } as (typeof input.edits)[number]);
               groups.set(routed.repoPath, list);
             }
           }
-          if (groups.size === 0) throw new Error("vcs.edit requires at least one edit");
           if (groups.size > 1 && input.baseStateHash !== undefined) {
             throw new Error(
               "vcs.edit cannot enforce baseStateHash across multiple repos; " +
@@ -254,7 +361,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               })
             );
           }
-          if (results.length === 1) return results[0]!;
+          if (results.length === 1) {
+            const [result] = results;
+            if (!result) {
+              throw new Error("vcs.edit failed internally: expected one edit result, found none");
+            }
+            return result;
+          }
           // Aggregate a multi-repo edit into one working result.
           return {
             head,
@@ -277,38 +390,62 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             throw new Error("vcs.commit: main advances only via push; commit a ctx:* head");
           }
           const contextId = head.startsWith("ctx:") ? head.slice("ctx:".length) : null;
+          if (!contextId) {
+            throw new Error(`vcs.commit targets a ctx:* head, not ${head}`);
+          }
+          const contextRows = await vcs.contextStatus(contextId);
+          const uncommittedRepos = new Set(
+            contextRows.filter((r) => r.uncommitted).map((r) => r.repoPath)
+          );
           // Repos to commit: explicit, else every repo with uncommitted edits.
           let repoPaths: string[];
           if (input.repoPaths && input.repoPaths.length > 0) {
-            repoPaths = input.repoPaths.map((r) => normalizeWorkspaceRepoPath(r));
-          } else if (contextId) {
-            repoPaths = (await vcs.contextStatus(contextId))
-              .filter((r) => r.uncommitted)
-              .map((r) => r.repoPath);
+            repoPaths = uniqueRepoPaths(input.repoPaths, "vcs.commit");
+            const clean = repoPaths.filter((repoPath) => !uncommittedRepos.has(repoPath));
+            if (clean.length > 0) {
+              throw new Error(noUncommittedCommitMessage(head, clean));
+            }
           } else {
-            repoPaths = [];
+            repoPaths = [...uncommittedRepos].sort();
+            if (repoPaths.length === 0) {
+              throw new Error(noUncommittedCommitMessage(head));
+            }
           }
           // Exclude paths route to their repo (repo-relative) for filtering.
           const excludeByRepo = new Map<string, string[]>();
+          const targetRepos = new Set(repoPaths);
           for (const p of input.exclude ?? []) {
-            const routed = routeWorkspacePath(p);
-            if (routed) {
-              const list = excludeByRepo.get(routed.repoPath) ?? [];
-              list.push(routed.repoRelPath);
-              excludeByRepo.set(routed.repoPath, list);
+            const routed = routeWorkspacePathOrThrow("vcs.commit exclude", p);
+            if (!targetRepos.has(routed.repoPath)) {
+              throw new Error(
+                `vcs.commit exclude path ${JSON.stringify(p)} belongs to ${routed.repoPath}, ` +
+                  `but this commit targets ${repoPaths.join(", ")}. ` +
+                  `Either include that repo in repoPaths or remove the exclude.`
+              );
             }
+            const list = excludeByRepo.get(routed.repoPath) ?? [];
+            list.push(routed.repoRelPath);
+            excludeByRepo.set(routed.repoPath, list);
           }
           const out = [];
           for (const repoPath of repoPaths) {
+            const exclude = excludeByRepo.get(repoPath);
             const result = await vcs.commit({
               head,
               repoPath,
               message: input.message,
               actor,
-              ...(excludeByRepo.has(repoPath) ? { exclude: excludeByRepo.get(repoPath)! } : {}),
+              ...(exclude ? { exclude } : {}),
               // A2/T1: self-asserted sealing tool-call id, recorded on the commit event.
               ...(input.invocationId ? { invocationId: input.invocationId } : {}),
             });
+            if (result.status === "unchanged") {
+              throw new Error(
+                `vcs.commit refused to report a no-op success for ${repoPath}: no included edits ` +
+                  `were committed. Check exclude paths; excluding every working edit leaves ` +
+                  `nothing to seal.`
+              );
+            }
             out.push({ repoPath: normalizeWorkspaceRepoPath(repoPath), ...result });
           }
           return out;
@@ -338,8 +475,15 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           });
         }
         case "readFile": {
-          const [ref, filePath, repoArg] = args as [string, string, string | undefined];
-          const resolvedRef = ref || headForCaller(ctx, deps);
+          const [ref, filePath, repoArg, scope] = args as [
+            string,
+            string,
+            string | undefined,
+            { contextId: string } | undefined,
+          ];
+          const resolvedRef =
+            ref || (scope ? vcsContextHead(scope.contextId) : headForCaller(ctx, deps));
+          await authorizeReadHead(ctx, deps, resolvedRef);
           if (repoArg) {
             const repoPath = normalizeWorkspaceRepoPath(repoArg);
             const repoRelPath = stripRepoPath(filePath, repoPath);
@@ -371,8 +515,14 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           return await vcs.readFile(stateRef, filePath);
         }
         case "listFiles": {
-          const [ref, repoArg] = args as [string | undefined, string | undefined];
-          const resolvedRef = ref || headForCaller(ctx, deps);
+          const [ref, repoArg, scope] = args as [
+            string | undefined,
+            string | undefined,
+            { contextId: string } | undefined,
+          ];
+          const resolvedRef =
+            ref || (scope ? vcsContextHead(scope.contextId) : headForCaller(ctx, deps));
+          await authorizeReadHead(ctx, deps, resolvedRef);
           if (repoArg) {
             const repoPath = normalizeWorkspaceRepoPath(repoArg);
             if (resolvedRef.startsWith("ctx:")) {
@@ -407,9 +557,16 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           });
         }
         case "status": {
-          const [repoArg, headArg] = args as [string, string | undefined];
+          const [repoArg, headArg, scope] = args as [
+            string,
+            string | undefined,
+            { contextId: string } | undefined,
+          ];
           const repoPath = normalizeWorkspaceRepoPath(repoArg);
-          const head = resolveReadHeadArg("status", headArg, ctx, deps);
+          const head = scope
+            ? vcsContextHead(scope.contextId)
+            : resolveReadHeadArg("status", headArg, ctx, deps);
+          await authorizeReadHead(ctx, deps, head);
           return await vcs.statusHead(head, repoPath);
         }
         case "diff": {
@@ -423,6 +580,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const [requested, repoArg] = args as [string | undefined, string];
           const repoPath = normalizeWorkspaceRepoPath(repoArg);
           const head = requested ?? headForCaller(ctx, deps);
+          await authorizeReadHead(ctx, deps, head);
           return { head, stateHash: await vcs.resolveHead(head, repoPath) };
         }
         case "workspaceViewWithRepoAt": {
@@ -433,34 +591,125 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           return { stateHash: await vcs.workspaceViewWithRepoAt(repoPath, stateHash) };
         }
         case "merge": {
-          // Explicit reconcile: pull `main` into the caller's context head on a
-          // repo → a merge commit (no main approval; the ctx head advances).
-          const [repoArg, headArg] = args as [string, string | undefined];
-          const repoPath = normalizeWorkspaceRepoPath(repoArg);
-          const targetHead = resolveWriteHead(ctx, deps, headArg);
+          // Explicit reconcile: pull a SOURCE (`main`, or a context the caller
+          // owns/forked) into the caller's context head, one merge commit per
+          // repo. The merge ENGINE is source-generic in the gad-store DO
+          // (`vcsMerge`), which owns the commit-gate on BOTH sides; this host
+          // side resolves the source head, loops repos, and surfaces the DO's
+          // source-side dirty-gate error verbatim.
+          const [input] = args as [{ source: VcsMergeSource; repoPaths?: string[]; head?: string }];
+          const targetHead = resolveWriteHead(ctx, deps, input.head);
           if (targetHead === VCS_MAIN_HEAD) {
             throw new Error(
-              "vcs.merge targets a ctx:* head (pulls main into it); main advances via push"
+              "vcs.merge targets a ctx:* head (pulls a source into it); main advances via push"
             );
           }
-          return await vcs.mergeHeads(targetHead, VCS_MAIN_HEAD, { actor, repoPath });
+          let sourceHead: string;
+          // The context whose touched repos default the merge scope: a `main`
+          // merge reconciles the TARGET's own diverged repos; a context merge
+          // takes the SOURCE context's touched repos (e.g. a subagent's work).
+          let defaultScopeContextId: string;
+          if (!input.source || input.source === "main") {
+            // Pull-main (explicit `"main"` or omitted): reconcile the TARGET's
+            // own diverged repos. No source context to read.
+            sourceHead = VCS_MAIN_HEAD;
+            defaultScopeContextId = targetHead.slice("ctx:".length);
+          } else {
+            // Merging another context's committed head IN reads that context.
+            await authorizeContextRead(ctx, deps, input.source.contextId);
+            sourceHead = vcsContextHead(input.source.contextId);
+            defaultScopeContextId = input.source.contextId;
+          }
+          const repoPaths =
+            input.repoPaths && input.repoPaths.length > 0
+              ? uniqueRepoPaths(input.repoPaths, "vcs.merge")
+              : (await vcs.contextStatus(defaultScopeContextId)).map((r) => r.repoPath);
+          if (repoPaths.length === 0) {
+            throw new Error(
+              `vcs.merge refused to no-op: no repos were selected for reconciliation. ` +
+                `Pass repoPaths explicitly, or use vcs.contextStatus to confirm the source/target context has repos to merge.`
+            );
+          }
+          const out = [];
+          for (const repoPath of repoPaths) {
+            const result = await vcs.mergeHeads(targetHead, sourceHead, { actor, repoPath });
+            out.push({ repoPath, ...result });
+          }
+          return out;
         }
-        case "mergeGroup": {
-          const [entries] = args as [
-            Array<{ repoPath: string; sourceHead: string; targetHead?: string }>,
-          ];
-          const normalizedEntries = entries.map((e) => ({
-            repoPath: normalizeWorkspaceRepoPath(e.repoPath),
-            sourceHead: e.sourceHead,
-            targetHead: resolveWriteHead(ctx, deps, e.targetHead),
-          }));
-          return await vcs.mergeGroup(normalizedEntries, {
-            actor,
-            // Entries targeting `main` (chrome callers only — resolveWriteHead
-            // confines everyone else to their own ctx head) advance the
-            // protected ref; the gate needs the caller context.
-            mainAdvance: mainAdvanceContext(ctx, { operation: "merge" }),
-          });
+        case "pick": {
+          // Cherry-pick selected changes from a SOURCE onto the caller's context
+          // head as UNCOMMITTED working edits (never a head advance). Commit
+          // picks 3-way-apply a commit's patch (routed per pick's repoPath);
+          // path picks inject the source context's working content (routed to
+          // the paths' owning repos). Each lands via the DO `vcsPick`.
+          const [input] = args as [{ source: VcsMergeSource; picks: VcsPick[]; head?: string }];
+          const targetHead = resolveWriteHead(ctx, deps, input.head);
+          if (targetHead === VCS_MAIN_HEAD) {
+            throw new Error("vcs.pick targets a ctx:* head; main advances via push");
+          }
+          let sourceContextId: string | null = null;
+          if (input.source && input.source !== "main") {
+            await authorizeContextRead(ctx, deps, input.source.contextId);
+            sourceContextId = input.source.contextId;
+          }
+          if (!input.picks || input.picks.length === 0) {
+            throw new Error(
+              "vcs.pick requires at least one pick. An empty pick list would be a no-op."
+            );
+          }
+          const results = [];
+          for (const p of input.picks) {
+            if (p.kind === "commit") {
+              results.push(
+                await vcs.pick({
+                  head: targetHead,
+                  repoPath: normalizeWorkspaceRepoPath(p.repoPath),
+                  actor,
+                  pick: { kind: "commit", eventId: p.eventId },
+                })
+              );
+              continue;
+            }
+            if (!sourceContextId) {
+              throw new Error(
+                "vcs.pick: a `paths` pick requires source:{contextId} — there is no working " +
+                  "content to inject from main"
+              );
+            }
+            // Route paths to their owning repos (path picks are per-repo in the DO).
+            const byRepo = new Map<string, string[]>();
+            if (p.paths.length === 0) {
+              throw new Error(
+                "vcs.pick paths requires at least one path. An empty path list would be a no-op."
+              );
+            }
+            for (const path of p.paths) {
+              const routed = routeWorkspacePathOrThrow("vcs.pick", path);
+              const list = byRepo.get(routed.repoPath) ?? [];
+              list.push(routed.repoRelPath);
+              byRepo.set(routed.repoPath, list);
+            }
+            for (const [repoPath, repoRelPaths] of byRepo) {
+              results.push(
+                await vcs.pick({
+                  head: targetHead,
+                  repoPath,
+                  actor,
+                  pick: { kind: "paths", sourceContextId, paths: repoRelPaths },
+                })
+              );
+            }
+          }
+          return results;
+        }
+        case "contextDiff": {
+          // A convenience projection: diff a context you own/forked against its
+          // fork-base (default) or main. Read-authorized like the cross-context
+          // reads; NOT a head write.
+          const [input] = args as [{ contextId: string; against?: "fork-base" | "main" }];
+          await authorizeContextRead(ctx, deps, input.contextId);
+          return await vcs.contextDiff(input.contextId, input.against ?? "fork-base");
         }
         case "abortMerge": {
           const [repoArg, headArg] = args as [string | undefined, string | undefined];
@@ -474,30 +723,21 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           return await vcs.abortMerge(targetHead, { actor, repoPath });
         }
         case "pendingMerge": {
-          const [repoArg, headArg] = args as [string | undefined, string | undefined];
-          const targetHead = resolveReadHeadArg("pendingMerge", headArg, ctx, deps);
+          const [repoArg, headArg, scope] = args as [
+            string | undefined,
+            string | undefined,
+            { contextId: string } | undefined,
+          ];
+          const targetHead = scope
+            ? vcsContextHead(scope.contextId)
+            : resolveReadHeadArg("pendingMerge", headArg, ctx, deps);
+          await authorizeReadHead(ctx, deps, targetHead);
           const repoPath = repoArg ? normalizeWorkspaceRepoPath(repoArg) : undefined;
           if (!repoPath) {
             throw new Error("vcs.pendingMerge requires repoPath in the per-repo VCS model");
           }
           return await vcs.pendingMerge(targetHead, repoPath);
         }
-        // `push` is USERLAND-dispatched since the P3 flip: build-gated main
-        // advance runs in the gad-store DO's `vcsPush` (reached via the `vcs`
-        // manifest service), not here. Client-side routing is load-bearing —
-        // the relay mints the on-behalf-of invocation token with the
-        // originating caller only when the DO is called directly. The method
-        // is kept in the advertised `vcsMethods` schema for typed clients, but
-        // reaching this host handler means the caller skipped that routing.
-        case "push":
-          throw new Error(
-            "vcs.push has no host handler: it is userland-dispatched (P3 flip) to the " +
-              "gad-store DO's `vcsPush`, reached via the `vcs` manifest service " +
-              "(workers.resolveService → DO). Route it through the runtime client's push " +
-              "override (packages/runtime/src/shared/vcsClient.ts createVcsClient), which " +
-              "mints the on-behalf-of invocation token with the originating caller — a host " +
-              "forward would erase it."
-          );
         case "pushStatus": {
           const [repoArgs] = args as [string[]];
           const repoPaths = repoArgs.map((r) => normalizeWorkspaceRepoPath(r));
@@ -508,47 +748,18 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const [input] = args as [VcsRecallInput];
           return await vcs.recallMemory(input);
         }
-        case "forkRepo": {
-          const [fromPath, toPath] = args as [string, string];
-          return await vcs.forkRepo(
-            normalizeWorkspaceRepoPath(fromPath),
-            normalizeWorkspaceRepoPath(toPath),
-            actor
-          );
-        }
-        case "deleteRepo": {
-          // Severe, global-state action: archive a repo's history and remove it
-          // from workspace main. The SEVERE per-repo deletion approval is raised
-          // exactly ONCE by the ref gate when `updateMains` classifies the
-          // null-next entry (narrow-host-vcs-plan §5) — the caller is threaded
-          // through so that one prompt attributes to the originating principal.
-          const [input] = args as [{ repoPath: string; force?: boolean }];
-          const repoPath = normalizeWorkspaceRepoPath(input.repoPath);
-          const result = await vcs.deleteRepo({
-            repoPath,
-            actor,
-            caller: ctx.caller,
-            ...(input.force ? { force: true } : {}),
-          });
-          await deps.getBuildSystem?.()?.whenSettled();
-          return result;
-        }
-        case "restoreRepo": {
-          // Recover a deleted repo: re-point main at its archive head. Fails if a
-          // different repo now occupies the path. The restore approval is raised
-          // exactly ONCE by the ref gate when `updateMains` classifies the
-          // previously-deleted re-creation (narrow-host-vcs-plan §5).
-          const [input] = args as [{ repoPath: string }];
-          const repoPath = normalizeWorkspaceRepoPath(input.repoPath);
-          const result = await vcs.restoreRepo({
-            repoPath,
-            actor,
-            caller: ctx.caller,
-          });
-          await deps.getBuildSystem?.()?.whenSettled();
-          return result;
-        }
+        // forkRepo / deleteRepo / restoreRepo are no longer host-serviced:
+        // Phase 4 moved the sagas into the gad-store DO (`vcsForkRepo` /
+        // `vcsDeleteRepo` / `vcsRestoreRepo`) and userland routes to them
+        // DIRECTLY (like `vcs.push` → `vcsPush`) so the relay mints the
+        // on-behalf-of token attributing the severe prompt to the originating
+        // caller (D3). A host forward would erase that attribution.
         case "contextStatus": {
+          const [scope] = args as [{ contextId: string } | undefined];
+          if (scope) {
+            await authorizeContextRead(ctx, deps, scope.contextId);
+            return await vcs.contextStatus(scope.contextId);
+          }
           const contextId = callerContextId(ctx, deps);
           if (!contextId) throw new Error("vcs.contextStatus requires an active context");
           return await vcs.contextStatus(contextId);

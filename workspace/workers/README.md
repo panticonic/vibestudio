@@ -453,7 +453,7 @@ AgentWorkerBase supports conversation forking — cloning an agent DO at a speci
 
 Returns `{ ok, subscriptionCount }`. Rejects multi-channel agents (>1 sub).
 
-### Post-clone: `postClone(parentObjectKey, newChannelId, oldChannelId, forkPointMessageId)`
+### Post-clone: `postClone(parentObjectKey, newChannelId, oldChannelId, forkPointMessageId, newContextId)`
 
 Called on the **newly cloned** DO after `cloneDO()` copies the parent's SQLite. Performs:
 

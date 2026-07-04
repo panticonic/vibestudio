@@ -1,0 +1,14 @@
+{
+  "name": "@workspace-skills/news",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@radix-ui/themes": "^3.2.1",
+    "@radix-ui/react-icons": "^1.3.2",
+    "@workspace/feeds": "workspace:*",
+    "react": "^19.0.0",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0"
+  }
+}

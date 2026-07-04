@@ -26,6 +26,7 @@ import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildP
 import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
+import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -740,6 +741,7 @@ async function main() {
     isPnpmDevMode && workspaceIsEphemeral && hasDevTemplate && templateDiffersFromActive
       ? templateDir
       : null;
+  const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(appRoot, workspacePath);
   if (process.env["VIBEZ1_DOGFOOD"] === "1") {
     console.warn(
       "[Dogfood] VIBEZ1_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
@@ -807,6 +809,13 @@ async function main() {
     contextsRoot: path.join(statePath, ".contexts"),
     buildSourcesRoot: path.join(getUserDataPath(), "build-sources"),
     refs: refService,
+    // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
+    // the source dir only when there is a persistent dev source to extract to.
+    // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
+    // `<appRoot>/workspace` template); the rsync mirror below then bridges the
+    // exported source dir to that checkout. Off in production ephemeral
+    // workspaces, which have no source dir. Computed just above this block.
+    extractMainToSource: devTemplateMirrorDir !== null,
     // On-behalf-of attribution for chrome merge-to-main (register row 12): the
     // host mints an invocation record and threads it to the DO's `vcsMerge`.
     vcsInvocations: vcsInvocationTable,
@@ -1052,7 +1061,8 @@ async function main() {
       return await initBuildSystemV2(
         workspacePath,
         workspaceVcs,
-        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")]
+        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
+        { appRoot, dependencyWorkspaceRoot: buildDependencyWorkspaceRoot }
       );
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -1183,17 +1193,17 @@ async function main() {
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-    onWorkspaceSourceChanged: async (ctx, summary) => {
-      // Per-repo model: a git import mutates one or more repo subtrees on disk
-      // (e.g. importProject rewrites meta/vibez1.yml). Snapshot EVERY present
-      // repo's disk state onto its `vcs:repo:<path>` main —
-      // committing out-of-band changes to EXISTING repos (which
-      // `ensureRepoLogsFromDisk` skips because they already have a main) AND
-      // initializing logs for newly cloned repos. There is no whole-tree commit.
-      await workspaceVcs.snapshotRepoLogsFromDisk({
-        summary,
-        actor: { id: ctx.caller.runtime.id, kind: ctx.caller.runtime.kind },
-      });
+    onWorkspaceSourceChanged: async (_ctx, _summary) => {
+      // Phase-2 revision §5 (INTERIM — see design fork in the revision report):
+      // the actual repo→`main` publish for a git import already runs through
+      // `initRepoLog` → git-bridge `importRepoTree` → `importPublish` (gated,
+      // DO-owned). The removed `ctx:workspace` freshness scan is gone; here we
+      // only seed a `main` for any newly-present-on-disk repo that lacks one
+      // (set-if-absent, host-computed from disk), so a freshly cloned dependency
+      // is usable. NOT the §5 target (routing a caller-initiated import into the
+      // caller's `ctx:{id}` head, absent from `main` until pushed): that requires
+      // a new clone-into-context trigger and is surfaced as a design fork.
+      await workspaceVcs.ensureRepoLogsFromDisk();
     },
   });
   container.registerRpc(gitInteropDefinition);
@@ -1271,6 +1281,23 @@ async function main() {
         },
       })
     );
+    // Disk-scan primitive (narrow-host boundary refactor P1): the pure
+    // `worktree.scan` RPC the gad-store DO drives to read a working tree into
+    // the CAS. Semantics-free (no commit/ref-advance/log) — a sibling of the
+    // blobstore/refs primitives, additive infra with no consumer yet.
+    const { createWorktreeService } = await import("./services/worktreeService.js");
+    container.registerRpc(
+      createWorktreeService({
+        scan: (repoPath, head) => workspaceVcs.scanWorktree(repoPath, head),
+        project: (repoPath, head, stateHash) =>
+          workspaceVcs.projectWorktree(repoPath, head, stateHash),
+        dependentRepos: (repoPath) => workspaceVcs.deleteDependents(repoPath),
+        getVcsWriterIdentity: () => {
+          const binding = resolveVcsStoreBinding(workspaceDecls);
+          return binding ? `do:${binding.source}:${binding.className}:${binding.objectKey}` : null;
+        },
+      })
+    );
     let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;
     container.registerManaged({
       name: "vcsService",
@@ -1288,6 +1315,17 @@ async function main() {
           mainAdvanceGate,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          // Cross-context READ authz (throw-not-prompt): back it with WS-3's
+          // relationship registry so a caller may inspect only the contexts it
+          // owns (lifecycle) or forked (lineage). Resolved lazily per call — the
+          // entity store needs the DO dispatch, wired by the time reads run.
+          listOwnedContexts: async ({ contextId }) => {
+            const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+            const contexts = await ensureEntityStore(doDispatch).listContextEdgesByOwner({
+              ownerContextId: contextId,
+            });
+            return { contexts };
+          },
         });
       },
     });
@@ -3437,7 +3475,11 @@ async function main() {
           coordinator: panelRuntimeCoordinator,
           isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId),
           getServerUrl: () => `http://127.0.0.1:${gatewayPort}`,
-          config: { enabled: autospawnEnabled, spawnTimeoutMs, keepAlive: keepAliveEnabled },
+          config: {
+            enabled: autospawnEnabled,
+            spawnTimeoutMs,
+            keepAlive: keepAliveEnabled,
+          },
         });
         headlessHostManager = manager;
         if (keepAliveEnabled) manager.startKeepAlive();

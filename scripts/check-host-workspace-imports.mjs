@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 // Host/workspace boundary checker.
 //
-// Enforces the invariant that HOST code (src/, packages/, apps/, scripts/,
-// tests/, build.mjs) must never depend on or assume WORKSPACE (userland,
-// workspace/) code beyond defined interfaces.
+// Enforces the host/userland boundary:
 //
-// Two finding categories are produced:
+//   - HOST code (src/, packages/, apps/, scripts/, tests/, build.mjs) must never
+//     depend on or assume WORKSPACE (userland, workspace/) code beyond defined
+//     interfaces.
+//   - WORKSPACE code must never import host-private implementation roots
+//     (`src/`, `apps/`, `scripts/`, or root `tests/`). Shared public packages
+//     such as `@vibez1/shared` are intentionally not host-private.
+//
+// Three finding categories are produced:
 //
 //   1. "import-violation" - a hard dependency: an ES `import`/`export ... from`,
 //      a dynamic `import(...)`, or a CommonJS `require(...)` whose specifier
@@ -20,6 +25,12 @@
 //      import analysis cannot see. It is inherently noisy (caller ids, event
 //      names, build constants, log strings all match), so it is governed
 //      entirely by the allowlist and reported as a distinct category.
+//
+//   3. "workspace-host-import" - a workspace file importing a relative path that
+//      resolves into a host-private root. This is always a real violation.
+//
+// Cross-boundary integration tests live under `tests/workspace-integration/`;
+// that neutral harness is intentionally excluded from both directions.
 //
 // Findings are checked against scripts/host-boundary-allowlist.json. Any finding
 // not covered by an allowlist entry causes a non-zero exit.
@@ -38,9 +49,12 @@ import ts from "typescript";
 
 const DEFAULT_ROOT = process.cwd();
 
-// Roots scanned recursively, plus individual files.
-const SCANNED_ROOTS = ["src", "packages", "apps", "scripts", "tests"];
-const SCANNED_FILES = ["build.mjs"];
+// Host-side roots scanned recursively, plus individual files.
+const HOST_SCANNED_ROOTS = ["src", "packages", "apps", "scripts", "tests"];
+const HOST_SCANNED_FILES = ["build.mjs"];
+const WORKSPACE_SCANNED_ROOTS = ["workspace"];
+const HOST_PRIVATE_IMPORT_ROOTS = ["src", "apps", "scripts", "tests"];
+const NEUTRAL_BOUNDARY_TEST_ROOTS = new Set(["tests/workspace-integration"]);
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set(["node_modules", "dist", "dist-publish", ".git"]);
@@ -86,6 +100,11 @@ export function startsWithWorkspaceScope(specifier) {
 export function resolvesIntoWorkspace(absFile, specifier, workspaceRoot) {
   const resolved = path.resolve(path.dirname(absFile), specifier);
   return resolved === workspaceRoot.slice(0, -1) || resolved.startsWith(workspaceRoot);
+}
+
+export function resolvesIntoAnyRoot(absFile, specifier, roots) {
+  const resolved = path.resolve(path.dirname(absFile), specifier);
+  return roots.some((root) => resolved === root.slice(0, -1) || resolved.startsWith(root));
 }
 
 /**
@@ -208,6 +227,43 @@ export function collectFindings({ text, absFile, root = DEFAULT_ROOT }) {
   return findings;
 }
 
+export function collectWorkspaceFindings({ text, absFile, root = DEFAULT_ROOT }) {
+  const relFile = path.relative(root, absFile).split(path.sep).join("/");
+  const hostPrivateRoots = HOST_PRIVATE_IMPORT_ROOTS.map(
+    (dir) => path.join(root, dir) + path.sep
+  );
+  const sourceFile = ts.createSourceFile(
+    absFile,
+    text,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true
+  );
+  const findings = [];
+  const lineOf = (node) =>
+    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+
+  const visit = (node) => {
+    const imported = getImportSpecifier(node);
+    if (imported) {
+      const { specifier } = imported;
+      if (
+        specifier.startsWith(".") &&
+        resolvesIntoAnyRoot(absFile, specifier, hostPrivateRoots)
+      ) {
+        findings.push({
+          file: relFile,
+          line: lineOf(node),
+          specifier,
+          category: "workspace-host-import",
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return findings;
+}
+
 // ---------------------------------------------------------------------------
 // Allowlist handling.
 // ---------------------------------------------------------------------------
@@ -231,6 +287,8 @@ export function isAllowlisted(finding, allowlist) {
 /** Reason assigned to a freshly-seeded finding (see task description). */
 export function defaultReason(finding) {
   if (isTestContext(finding.file)) return "DO/workspace integration test";
+  if (finding.category === "workspace-host-import")
+    return "workspace code must not import host-private implementation";
   if (finding.category === "import-violation")
     return "pending-fix-2026-07: being removed by parallel cleanup";
   return "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope";
@@ -240,18 +298,22 @@ export function defaultReason(finding) {
 // Filesystem walk.
 // ---------------------------------------------------------------------------
 
-function* walkSourceFiles(root) {
+function shouldSkipDir(root, current) {
+  const rel = path.relative(root, current).split(path.sep).join("/");
+  return NEUTRAL_BOUNDARY_TEST_ROOTS.has(rel) || IGNORED_DIRS.has(path.basename(current));
+}
+
+function* walkSourceFiles(root, scannedRoots, scannedFiles = []) {
   const stack = [];
-  for (const dir of SCANNED_ROOTS) stack.push(path.join(root, dir));
-  const singles = SCANNED_FILES.map((f) => path.join(root, f));
+  for (const dir of scannedRoots) stack.push(path.join(root, dir));
+  const singles = scannedFiles.map((f) => path.join(root, f));
 
   while (stack.length > 0) {
     const current = stack.pop();
     if (!fs.existsSync(current)) continue;
     const stat = fs.statSync(current);
     if (stat.isDirectory()) {
-      if (current === path.join(root, "workspace")) continue;
-      if (IGNORED_DIRS.has(path.basename(current))) continue;
+      if (shouldSkipDir(root, current)) continue;
       for (const entry of fs.readdirSync(current)) stack.push(path.join(current, entry));
       continue;
     }
@@ -265,11 +327,17 @@ function* walkSourceFiles(root) {
 
 export function scanRepository(root = DEFAULT_ROOT) {
   const findings = [];
-  for (const absFile of walkSourceFiles(root)) {
+  for (const absFile of walkSourceFiles(root, HOST_SCANNED_ROOTS, HOST_SCANNED_FILES)) {
     const relFile = path.relative(root, absFile).split(path.sep).join("/");
     if (SELF_FILES.has(relFile)) continue;
     const text = fs.readFileSync(absFile, "utf8");
     findings.push(...collectFindings({ text, absFile, root }));
+  }
+  for (const absFile of walkSourceFiles(root, WORKSPACE_SCANNED_ROOTS)) {
+    const relFile = path.relative(root, absFile).split(path.sep).join("/");
+    if (SELF_FILES.has(relFile)) continue;
+    const text = fs.readFileSync(absFile, "utf8");
+    findings.push(...collectWorkspaceFindings({ text, absFile, root }));
   }
   // Stable ordering: file, then line.
   findings.sort(
@@ -332,6 +400,7 @@ function updateAllowlist(root) {
   console.log(`Wrote ${entries.length} allowlist entries to ${ALLOWLIST_PATH}`);
   console.log(`  import-violation: ${byCategory["import-violation"] ?? 0}`);
   console.log(`  workspace-reference: ${byCategory["workspace-reference"] ?? 0}`);
+  console.log(`  workspace-host-import: ${byCategory["workspace-host-import"] ?? 0}`);
 }
 
 function countByCategory(items) {
@@ -353,7 +422,7 @@ function check(root) {
     return 0;
   }
 
-  const categories = ["import-violation", "workspace-reference"];
+  const categories = ["import-violation", "workspace-reference", "workspace-host-import"];
   console.error("Host/workspace boundary violations (not allowlisted):\n");
   for (const category of categories) {
     const group = violations.filter((f) => f.category === category);
@@ -364,7 +433,7 @@ function check(root) {
   }
   const counts = countByCategory(violations);
   console.error(
-    `Summary: ${violations.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-reference: ${counts["workspace-reference"] ?? 0}. (${allowedCount} finding(s) allowlisted.)`
+    `Summary: ${violations.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-reference: ${counts["workspace-reference"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}. (${allowedCount} finding(s) allowlisted.)`
   );
   console.error(
     `\nIf these are expected, add them to ${ALLOWLIST_PATH} (or run with --update-allowlist).`

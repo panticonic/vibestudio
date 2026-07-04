@@ -21,11 +21,17 @@ import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
 
 export interface VcsInvocationRecord {
   token: string;
+  /** Token purpose. Prevents a generic opaque nonce from being reused as a
+   *  refs writer token. */
+  type: "refs.updateMains";
   /** The originating principal the approval gate attributes to (may itself
    *  carry an upstream chain caller). Resolved by the host, never asserted. */
   caller: VerifiedCaller;
   /** DO identity the dispatch was routed through (for "via" prompt copy). */
   via: string;
+  /** VCS writer DO method this token was minted for (attribution/prompt copy
+   *  only — it grants no operation-specific authority; the real gate on a main
+   *  advance is the host's own content diff + user consent). */
   method: string;
   requestId?: string;
   createdAt: number;
@@ -49,6 +55,7 @@ export class VcsInvocationTable {
     const token = randomUUID();
     this.active.set(token, {
       token,
+      type: "refs.updateMains",
       caller: input.caller,
       via: input.via,
       method: input.method,

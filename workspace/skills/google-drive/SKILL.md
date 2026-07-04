@@ -43,7 +43,12 @@ The underlying client comes from `@workspace/integrations/drive` and supports:
 - `about()` for account and storage metadata
 - `listFiles()`, `getFile()`, `createFile()`, `updateFile()`, `moveFile()`
 - `trashFile()`, `restoreFile()`, `deleteFile()`, `copyFile()`
-- `downloadFile()`, `exportFile()`
+- `downloadFileBytes()` for agent workflows that need bytes and download
+  metadata. It returns `{ bytes: Uint8Array, size, mimeType, responseUrl }`.
+- `exportFileBytes()` for Google Docs/Sheets/Slides exports that need bytes,
+  MIME type, and filename metadata
+- `downloadFile()`, `exportFile()` when a caller explicitly needs the raw
+  streaming `Response`
 - `listPermissions()`, `createPermission()`, `updatePermission()`,
   `deletePermission()`
 - `listDrives()`, `getDrive()`, `createDrive()`, `updateDrive()`,
@@ -51,7 +56,21 @@ The underlying client comes from `@workspace/integrations/drive` and supports:
 - `getStartPageToken()`, `listChanges()`, `startPollingChanges()`
 
 Use the Drive client directly for file operations; use this skill for
-onboarding, readiness checks, and a stable Drive-facing entrypoint.
+onboarding, readiness checks, and a stable Drive-facing entrypoint. Prefer the
+byte helpers before writing Drive downloads to runtime fs so raw `Response`
+objects do not cross JSON/RPC/tool-result boundaries.
+
+When passing `downloadFileBytes().bytes` into an extension invocation or any
+other RPC/tool boundary, convert or wrap the bytes first. Do not rely on
+`Uint8Array` identity to survive another JSON/RPC hop:
+
+```ts
+const downloaded = await drive.downloadFileBytes(fileId);
+const extensionBytes = {
+  __bin: true,
+  data: Buffer.from(downloaded.bytes).toString("base64"),
+};
+```
 
 ## Files
 

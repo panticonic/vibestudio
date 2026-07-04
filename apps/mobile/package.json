@@ -2,7 +2,7 @@
   "name": "@vibez1/mobile",
   "version": "0.1.0",
   "private": true,
-  "//dependencies": "react-native-screens ~4.10: v4.11+ requires RN >=0.82. react-native-get-random-values ~1.11: v2.0+ requires RN >=0.81. Revisit when upgrading react-native.",
+  "//dependencies": "react-native-screens ~4.10: v4.11+ requires RN >=0.82. react-native-get-random-values ~1.11: v2.0+ requires RN >=0.81. react-native-webview 13.16.1: 13.17.0 makes JSX props resolve to never under our TS/React setup. Revisit when upgrading react-native.",
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
@@ -43,7 +43,7 @@
     "react-native-svg": "^15.15.4",
     "react-native-tcp-socket": "^6.4.1",
     "react-native-url-polyfill": "^3.0.0",
-    "react-native-webview": "^13.13.5",
+    "react-native-webview": "13.16.1",
     "react-native-webrtc": "^124.0.5",
     "web-streams-polyfill": "^3.3.3"
   },
@@ -64,6 +64,12 @@
   "jest": {
     "preset": "react-native",
     "moduleNameMapper": {
+      "^jotai$": "<rootDir>/../../node_modules/jotai",
+      "^jotai/(.*)$": "<rootDir>/../../node_modules/jotai/$1",
+      "^react$": "<rootDir>/../../node_modules/react",
+      "^react/(.*)$": "<rootDir>/../../node_modules/react/$1",
+      "^react-native$": "<rootDir>/../../node_modules/react-native",
+      "^react-test-renderer$": "<rootDir>/../../node_modules/react-test-renderer",
       "^(\\.{1,2}/.*)\\.js$": "$1"
     },
     "roots": [
