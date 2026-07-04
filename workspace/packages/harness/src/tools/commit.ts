@@ -131,14 +131,19 @@ export function createCommitTool(
       }
 
       const lines: string[] = [];
-      if (committed.length === 0) {
-        lines.push("Nothing to commit — no uncommitted edits on your head.");
-      } else {
-        for (const r of committed) {
-          lines.push(
-            `committed ${r.repoPath} (${r.editCount} edit${r.editCount === 1 ? "" : "s"}).`
-          );
-        }
+      if (committed.length === 0 || unchanged.length > 0) {
+        const unchangedRepos = unchanged.map((r) => r.repoPath).join(", ");
+        throw new Error(
+          committed.length === 0
+            ? "commit produced no snapshots: no uncommitted VCS working edits were found. " +
+                "Only edit/write/vcs.edit changes under workspace repo paths can be committed; " +
+                "scratch/direct fs writes under .tmp, .vibez1, node_modules, dist, etc. are outside VCS."
+            : `commit returned unchanged repo(s) (${unchangedRepos}). This is treated as an error ` +
+                "because a commit tool call should seal real working edits, not silently no-op."
+        );
+      }
+      for (const r of committed) {
+        lines.push(`committed ${r.repoPath} (${r.editCount} edit${r.editCount === 1 ? "" : "s"}).`);
       }
 
       // Claims ride the commit: record each on the agent's own trajectory, anchored

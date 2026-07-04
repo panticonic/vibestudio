@@ -604,6 +604,44 @@ describe("vcsService", () => {
       expect(recordEdit).not.toHaveBeenCalled();
     });
 
+    it("rejects empty edit batches before calling WorkspaceVcs", async () => {
+      const recordEdit = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+      const caller = createVerifiedCaller("do:agent", "do");
+
+      await expect(
+        service.handler({ caller }, "edit", [{ repoPath: "panels/source", edits: [] }])
+      ).rejects.toThrow(/vcs\.edit requires at least one edit op.*no-op/s);
+      expect(recordEdit).not.toHaveBeenCalled();
+    });
+
+    it("rejects scratch paths with an actionable tracking hint", async () => {
+      const recordEdit = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-1", "do"),
+      });
+      const caller = createVerifiedCaller("do:agent", "do");
+
+      await expect(
+        service.handler({ caller }, "edit", [
+          {
+            edits: [
+              {
+                kind: "write",
+                path: ".tmp/round-trip.txt",
+                content: { kind: "text", text: "scratch\n" },
+              },
+            ],
+          },
+        ])
+      ).rejects.toThrow(/scratch\/platform state.*outside VCS.*projects\/<name>/s);
+      expect(recordEdit).not.toHaveBeenCalled();
+    });
+
     it("rejects baseStateHash when one edit call routes to multiple repos", async () => {
       const recordEdit = vi.fn();
       const service = createVcsService({
@@ -728,6 +766,155 @@ describe("vcsService", () => {
         service.handler({ caller: shell }, "commit", [{ message: "x", head: "main" }])
       ).rejects.toThrow(/main advances only via push/);
       expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects auto-commit when the context has no uncommitted VCS edits", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => []);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [{ message: "nothing" }])
+      ).rejects.toThrow(
+        /refused to no-op: no uncommitted VCS working edits.*fs\.mktemp.*outside VCS/s
+      );
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects explicit repo commits when any target repo has no uncommitted edits", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: false,
+          ahead: true,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          { message: "seal", repoPaths: ["panels/source"] },
+        ])
+      ).rejects.toThrow(/no uncommitted VCS working edits in panels\/source/);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects duplicate commit repoPaths before committing", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => []);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          { message: "seal", repoPaths: ["panels/source", "panels/source"] },
+        ])
+      ).rejects.toThrow(/duplicate repo path\(s\): panels\/source/);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects scratch commit excludes instead of silently ignoring them", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          { message: "seal", exclude: [".vibez1/tmp/not-tracked.txt"] },
+        ])
+      ).rejects.toThrow(/vcs\.commit exclude.*scratch\/platform state.*outside VCS/s);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects commit excludes that belong to repos outside the target set", async () => {
+      const commit = vi.fn();
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+        {
+          repoPath: "packages/other",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [
+          {
+            message: "seal",
+            repoPaths: ["panels/source"],
+            exclude: ["packages/other/index.ts"],
+          },
+        ])
+      ).rejects.toThrow(/exclude path .* belongs to packages\/other.*targets panels\/source/s);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it("rejects lower-layer unchanged commit results instead of reporting success", async () => {
+      const commit = vi.fn(async () => ({
+        head: "ctx:ctx-1",
+        stateHash: "state:same",
+        eventId: null,
+        headHash: null,
+        editCount: 0,
+        status: "unchanged" as const,
+        changedPaths: [],
+      }));
+      const contextStatus = vi.fn(async () => [
+        {
+          repoPath: "panels/source",
+          forked: true,
+          uncommitted: true,
+          ahead: false,
+          behind: false,
+          deleted: false,
+        },
+      ]);
+      const service = createVcsService({
+        workspaceVcs: { commit, contextStatus } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      await expect(
+        service.handler({ caller: panelCaller() }, "commit", [{ message: "seal" }])
+      ).rejects.toThrow(/refused to report a no-op success.*panels\/source/s);
     });
   });
 

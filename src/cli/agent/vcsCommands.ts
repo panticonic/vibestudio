@@ -683,14 +683,21 @@ async function commit(inv: ParsedInvocation): Promise<number> {
     const result = await client.call<VcsCommitResult[]>("vcs.commit", [
       { message, head, ...(repoPaths.length > 0 ? { repoPaths } : {}) },
     ]);
+    const committed = result.filter((r) => r.status === "committed");
+    const unchanged = result.filter((r) => r.status === "unchanged");
+    if (committed.length === 0 || unchanged.length > 0) {
+      throw new CliError(
+        committed.length === 0
+          ? "commit produced no snapshots: no uncommitted VCS working edits were found. " +
+              "Only edit/write/vcs.edit changes under workspace repo paths can be committed; " +
+              "scratch/direct fs writes under .tmp, .vibez1, node_modules, dist, etc. are outside VCS."
+          : `commit returned unchanged repo(s) (${unchanged.map((r) => r.repoPath).join(", ")}). ` +
+              "This is treated as an error because commit should seal real working edits, not silently no-op."
+      );
+    }
     printResult(result, {
       json,
       human: () => {
-        const committed = result.filter((r) => r.status === "committed");
-        if (committed.length === 0) {
-          console.log("nothing to commit — no uncommitted working edits.");
-          return;
-        }
         for (const r of committed) {
           console.log(`committed ${r.repoPath} — ${r.editCount} edit(s)`);
           for (const p of r.changedPaths) console.log(`  ${p}`);

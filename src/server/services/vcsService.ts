@@ -163,6 +163,81 @@ function routeWorkspacePath(filePath: string): { repoPath: string; repoRelPath: 
   return { repoPath: normalizeWorkspaceRepoPath(split.repoPath), repoRelPath: split.repoRelPath };
 }
 
+function pathTrackingHint(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  const first = normalized.split("/")[0] ?? "";
+  const platform = new Set([
+    ".tmp",
+    ".vibez1",
+    ".testkit",
+    ".git",
+    ".gad",
+    ".contexts",
+    "node_modules",
+    "dist",
+  ]);
+  if (platform.has(first)) {
+    return (
+      `${JSON.stringify(filePath)} is scratch/platform state and is intentionally outside VCS. ` +
+      `VCS commits only workspace source under repo paths like projects/<name>/..., ` +
+      `panels/<name>/..., packages/<name>/..., or meta/... . ` +
+      `Move or rename the file into a repo path before committing it.`
+    );
+  }
+  return (
+    `Use a workspace source path under a repo section such as projects/<name>/..., ` +
+    `panels/<name>/..., packages/<name>/..., or meta/... .`
+  );
+}
+
+function routeWorkspacePathOrThrow(
+  kind: string,
+  filePath: string
+): {
+  repoPath: string;
+  repoRelPath: string;
+} {
+  const routed = routeWorkspacePath(filePath);
+  if (!routed) {
+    throw new Error(
+      `${kind} could not infer a repo for ${JSON.stringify(filePath)}. ${pathTrackingHint(filePath)}`
+    );
+  }
+  return routed;
+}
+
+function uniqueRepoPaths(repoPaths: string[], owner: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const raw of repoPaths) {
+    const repoPath = normalizeWorkspaceRepoPath(raw);
+    if (seen.has(repoPath)) duplicates.add(repoPath);
+    else {
+      seen.add(repoPath);
+      out.push(repoPath);
+    }
+  }
+  if (duplicates.size > 0) {
+    throw new Error(
+      `${owner} received duplicate repo path(s): ${[...duplicates].join(", ")}. ` +
+        `Pass each repo once; multi-repo operations already handle groups atomically.`
+    );
+  }
+  return out;
+}
+
+function noUncommittedCommitMessage(head: string, repoPaths?: string[]): string {
+  const scope = repoPaths && repoPaths.length > 0 ? ` in ${repoPaths.join(", ")}` : "";
+  return (
+    `vcs.commit refused to no-op: no uncommitted VCS working edits${scope} on ${head}. ` +
+    `Only edits recorded through edit/write/vcs.edit are commit-able. Direct fs.writeFile, ` +
+    `fs.mktemp, .tmp, .vibez1, node_modules, dist, and other scratch/platform paths are ` +
+    `outside VCS and will not be committed. Record a source edit under a repo path first, ` +
+    `or use vcs.status/contextStatus to inspect the current head.`
+  );
+}
+
 function repoRootWriteHint(repoPath: string): string {
   const segments = repoPath.split("/");
   const leaf = segments.at(-1) ?? repoPath;
@@ -244,6 +319,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           // Working edit — tracked, NOT a commit. Actor is the verified caller.
           // Per-repo: edits route by path to their owning repo's ctx head.
           const input = vcsApplyEditsInputSchema.parse(args[0]);
+          if (input.edits.length === 0) {
+            throw new Error(
+              "vcs.edit requires at least one edit op. An empty edit batch would be a no-op; " +
+                "check the path or replacement text before calling vcs.edit."
+            );
+          }
           const head = resolveWriteHead(ctx, deps, input.head);
           const repoPath = input.repoPath ? normalizeWorkspaceRepoPath(input.repoPath) : undefined;
           const groups = new Map<string, typeof input.edits>();
@@ -251,19 +332,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             groups.set(repoPath, input.edits);
           } else {
             for (const edit of input.edits) {
-              const routed = routeWorkspacePath(edit.path);
-              if (!routed) {
-                throw new Error(
-                  `vcs.edit could not infer a repo for ${JSON.stringify(edit.path)}. ` +
-                    `Pass repoPath and repo-relative edit paths, or use a workspace path under a repo section.`
-                );
-              }
+              const routed = routeWorkspacePathOrThrow("vcs.edit", edit.path);
               const list = groups.get(routed.repoPath) ?? [];
               list.push({ ...edit, path: routed.repoRelPath } as (typeof input.edits)[number]);
               groups.set(routed.repoPath, list);
             }
           }
-          if (groups.size === 0) throw new Error("vcs.edit requires at least one edit");
           if (groups.size > 1 && input.baseStateHash !== undefined) {
             throw new Error(
               "vcs.edit cannot enforce baseStateHash across multiple repos; " +
@@ -287,7 +361,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               })
             );
           }
-          if (results.length === 1) return results[0]!;
+          if (results.length === 1) {
+            const [result] = results;
+            if (!result) {
+              throw new Error("vcs.edit failed internally: expected one edit result, found none");
+            }
+            return result;
+          }
           // Aggregate a multi-repo edit into one working result.
           return {
             head,
@@ -310,38 +390,62 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             throw new Error("vcs.commit: main advances only via push; commit a ctx:* head");
           }
           const contextId = head.startsWith("ctx:") ? head.slice("ctx:".length) : null;
+          if (!contextId) {
+            throw new Error(`vcs.commit targets a ctx:* head, not ${head}`);
+          }
+          const contextRows = await vcs.contextStatus(contextId);
+          const uncommittedRepos = new Set(
+            contextRows.filter((r) => r.uncommitted).map((r) => r.repoPath)
+          );
           // Repos to commit: explicit, else every repo with uncommitted edits.
           let repoPaths: string[];
           if (input.repoPaths && input.repoPaths.length > 0) {
-            repoPaths = input.repoPaths.map((r) => normalizeWorkspaceRepoPath(r));
-          } else if (contextId) {
-            repoPaths = (await vcs.contextStatus(contextId))
-              .filter((r) => r.uncommitted)
-              .map((r) => r.repoPath);
+            repoPaths = uniqueRepoPaths(input.repoPaths, "vcs.commit");
+            const clean = repoPaths.filter((repoPath) => !uncommittedRepos.has(repoPath));
+            if (clean.length > 0) {
+              throw new Error(noUncommittedCommitMessage(head, clean));
+            }
           } else {
-            repoPaths = [];
+            repoPaths = [...uncommittedRepos].sort();
+            if (repoPaths.length === 0) {
+              throw new Error(noUncommittedCommitMessage(head));
+            }
           }
           // Exclude paths route to their repo (repo-relative) for filtering.
           const excludeByRepo = new Map<string, string[]>();
+          const targetRepos = new Set(repoPaths);
           for (const p of input.exclude ?? []) {
-            const routed = routeWorkspacePath(p);
-            if (routed) {
-              const list = excludeByRepo.get(routed.repoPath) ?? [];
-              list.push(routed.repoRelPath);
-              excludeByRepo.set(routed.repoPath, list);
+            const routed = routeWorkspacePathOrThrow("vcs.commit exclude", p);
+            if (!targetRepos.has(routed.repoPath)) {
+              throw new Error(
+                `vcs.commit exclude path ${JSON.stringify(p)} belongs to ${routed.repoPath}, ` +
+                  `but this commit targets ${repoPaths.join(", ")}. ` +
+                  `Either include that repo in repoPaths or remove the exclude.`
+              );
             }
+            const list = excludeByRepo.get(routed.repoPath) ?? [];
+            list.push(routed.repoRelPath);
+            excludeByRepo.set(routed.repoPath, list);
           }
           const out = [];
           for (const repoPath of repoPaths) {
+            const exclude = excludeByRepo.get(repoPath);
             const result = await vcs.commit({
               head,
               repoPath,
               message: input.message,
               actor,
-              ...(excludeByRepo.has(repoPath) ? { exclude: excludeByRepo.get(repoPath)! } : {}),
+              ...(exclude ? { exclude } : {}),
               // A2/T1: self-asserted sealing tool-call id, recorded on the commit event.
               ...(input.invocationId ? { invocationId: input.invocationId } : {}),
             });
+            if (result.status === "unchanged") {
+              throw new Error(
+                `vcs.commit refused to report a no-op success for ${repoPath}: no included edits ` +
+                  `were committed. Check exclude paths; excluding every working edit leaves ` +
+                  `nothing to seal.`
+              );
+            }
             out.push({ repoPath: normalizeWorkspaceRepoPath(repoPath), ...result });
           }
           return out;
@@ -518,8 +622,14 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           }
           const repoPaths =
             input.repoPaths && input.repoPaths.length > 0
-              ? input.repoPaths.map((r) => normalizeWorkspaceRepoPath(r))
+              ? uniqueRepoPaths(input.repoPaths, "vcs.merge")
               : (await vcs.contextStatus(defaultScopeContextId)).map((r) => r.repoPath);
+          if (repoPaths.length === 0) {
+            throw new Error(
+              `vcs.merge refused to no-op: no repos were selected for reconciliation. ` +
+                `Pass repoPaths explicitly, or use vcs.contextStatus to confirm the source/target context has repos to merge.`
+            );
+          }
           const out = [];
           for (const repoPath of repoPaths) {
             const result = await vcs.mergeHeads(targetHead, sourceHead, { actor, repoPath });
@@ -543,6 +653,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             await authorizeContextRead(ctx, deps, input.source.contextId);
             sourceContextId = input.source.contextId;
           }
+          if (!input.picks || input.picks.length === 0) {
+            throw new Error(
+              "vcs.pick requires at least one pick. An empty pick list would be a no-op."
+            );
+          }
           const results = [];
           for (const p of input.picks) {
             if (p.kind === "commit") {
@@ -564,14 +679,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             }
             // Route paths to their owning repos (path picks are per-repo in the DO).
             const byRepo = new Map<string, string[]>();
+            if (p.paths.length === 0) {
+              throw new Error(
+                "vcs.pick paths requires at least one path. An empty path list would be a no-op."
+              );
+            }
             for (const path of p.paths) {
-              const routed = routeWorkspacePath(path);
-              if (!routed) {
-                throw new Error(
-                  `vcs.pick could not infer a repo for ${JSON.stringify(path)}. ` +
-                    "Use a workspace path under a repo section."
-                );
-              }
+              const routed = routeWorkspacePathOrThrow("vcs.pick", path);
               const list = byRepo.get(routed.repoPath) ?? [];
               list.push(routed.repoRelPath);
               byRepo.set(routed.repoPath, list);

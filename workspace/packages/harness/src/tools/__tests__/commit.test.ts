@@ -149,6 +149,53 @@ describe("createCommitTool", () => {
     expect(result.details.nudged).toBe(false);
   });
 
+  it("fails loudly when commit returns no committed snapshots", async () => {
+    const vcs = new StubVcs({
+      commitResult: { status: "unchanged", changedPaths: [], editCount: 0 },
+    });
+    const tool = createCommitTool(vcs, makeKnowledge().deps);
+
+    await expect(tool.execute("call-1", { message: "no-op" })).rejects.toThrow(
+      /commit produced no snapshots.*scratch\/direct fs writes.*outside VCS/s
+    );
+  });
+
+  it("fails loudly when any requested repo comes back unchanged", async () => {
+    class MixedCommitVcs extends StubVcs {
+      override async commit(input: Parameters<StubVcs["commit"]>[0]) {
+        this.lastCommitInput = input;
+        return [
+          {
+            repoPath: "packages/a",
+            head: "ctx:test",
+            stateHash: "state-1",
+            eventId: "event-a",
+            headHash: "head-a",
+            editCount: 1,
+            status: "committed" as const,
+            changedPaths: ["a.ts"],
+          },
+          {
+            repoPath: "packages/b",
+            head: "ctx:test",
+            stateHash: "state-1",
+            eventId: null,
+            headHash: null,
+            editCount: 0,
+            status: "unchanged" as const,
+            changedPaths: [],
+          },
+        ];
+      }
+    }
+    const vcs = new MixedCommitVcs();
+    const tool = createCommitTool(vcs, makeKnowledge().deps);
+
+    await expect(
+      tool.execute("call-1", { message: "multi", repoPaths: ["packages/a", "packages/b"] })
+    ).rejects.toThrow(/commit returned unchanged repo\(s\).*packages\/b/s);
+  });
+
   it("ignores claims when the agent class has no knowledge client", async () => {
     const vcs = new StubVcs({ commitResult: { changedPaths: ["a.ts"], editCount: 1 } });
     const tool = createCommitTool(vcs);

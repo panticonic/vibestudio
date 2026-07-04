@@ -229,6 +229,37 @@ describe("vibez1 vcs commands", () => {
     expect(logs).not.toContain("clean (in sync with main)");
   });
 
+  it("commit treats unchanged/no-op responses as errors", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    stubServer((body) => {
+      if (body.method === "vcs.commit") {
+        return [
+          {
+            repoPath: "panels/notes",
+            head: "ctx:ctx_1",
+            stateHash: "state:same",
+            eventId: null,
+            headHash: null,
+            editCount: 0,
+            status: "unchanged",
+            changedPaths: [],
+          },
+        ];
+      }
+      return null;
+    });
+
+    const { main } = await import("../client.js");
+    await expect(
+      main(["vcs", "commit", "-m", "noop", "--repo", "panels/notes", "--json"])
+    ).resolves.toBe(1);
+
+    const errors = vi.mocked(console.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain("commit produced no snapshots");
+    expect(errors.join("\n")).toContain("scratch/direct fs writes");
+  });
+
   it("push --repo (single) dispatches USERLAND: resolves the vcs service, then calls the DO's vcsPush", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
