@@ -234,6 +234,109 @@ describe("WorkspaceVcs merge", () => {
     expect(await readAt(VCS_MAIN_HEAD, "ctx-new.txt")).toBe("made in context\n");
   });
 
+  it("merges a `main` source even when the DO main mirror is ABSENT (adopts the protected ref)", async () => {
+    // Refs are the authority; the DO `main` head is a follower of its own
+    // writes. Simulate a follower that never drained (or a ref authored by
+    // another instance): the protected ref is set but the DO has NO recorded
+    // `main` head for the repo. `vcsMerge` used to throw "merge source head has
+    // no state: main" / "behind the protected ref"; it must now heal + adopt.
+    await divergedSetup({ conflict: false });
+    const refValue = await vcs.resolveHead(VCS_MAIN_HEAD, REPO);
+    expect(refValue).toBeTruthy();
+
+    // Drop the DO's recorded `main` head, leaving the protected ref intact.
+    gad.sql.exec(`DELETE FROM gad_worktree_heads WHERE log_id = ? AND head = ?`, REPO_LOG, "main");
+    expect(gad.instance.resolveWorktreeHead({ logId: REPO_LOG, head: "main" })).toBeNull();
+
+    const result = await vcs.mergeHeads(CTX_HEAD, VCS_MAIN_HEAD, { actor: AGENT, repoPath: REPO });
+    expect(result.status).toBe("merged");
+    expect(result.mergeable).toBe("clean");
+    // Both sides survived the reconcile against the adopted ref state.
+    expect(await readAt(CTX_HEAD, "shared.txt")).toBe("MAIN1\nline2\nctx3\n");
+    expect(await readAt(CTX_HEAD, "ctx-new.txt")).toBe("made in context\n");
+
+    // The reconciled ctx now descends from main's tip → push fast-forwards.
+    const pushed = await pushToMain(gad, { repoPaths: [REPO], sourceHead: CTX_HEAD, actor: AGENT });
+    expect(pushed.status).toBe("pushed");
+    expect(await readAt(VCS_MAIN_HEAD, "shared.txt")).toBe("MAIN1\nline2\nctx3\n");
+  });
+
+  it("merges a `main` source when the DO main mirror LAGS the protected ref (behind)", async () => {
+    // Same authority model, but the mirror is present at an ANCESTOR state (an
+    // undrained provenance follower after a concurrent push). Capture the seed
+    // (ancestor) main state, diverge, then rewind the mirror to the ancestor.
+    const seed = await seedMain([
+      { kind: "create", path: "shared.txt", content: text("line1\nline2\nline3\n") },
+    ]);
+    await commitCtx(
+      [{ kind: "write", path: "shared.txt", content: text("line1\nline2\nctx3\n") }],
+      "ctx side"
+    );
+    await advanceMain(
+      [{ kind: "write", path: "shared.txt", content: text("MAIN1\nline2\nline3\n") }],
+      "main side"
+    );
+    const refValue = await vcs.resolveHead(VCS_MAIN_HEAD, REPO);
+    expect(refValue).not.toBe(seed);
+
+    // Rewind the DO main mirror to the ancestor (behind the ref), leaving the
+    // protected ref at its advanced value.
+    gad.sql.exec(
+      `UPDATE gad_worktree_heads SET state_hash = ?, commit_event_id = NULL WHERE log_id = ? AND head = ?`,
+      seed,
+      REPO_LOG,
+      "main"
+    );
+    expect(gad.instance.resolveWorktreeHead({ logId: REPO_LOG, head: "main" })!.stateHash).toBe(seed);
+
+    const result = await vcs.mergeHeads(CTX_HEAD, VCS_MAIN_HEAD, { actor: AGENT, repoPath: REPO });
+    expect(result.status).toBe("merged");
+    expect(await readAt(CTX_HEAD, "shared.txt")).toBe("MAIN1\nline2\nctx3\n");
+
+    const pushed = await pushToMain(gad, { repoPaths: [REPO], sourceHead: CTX_HEAD, actor: AGENT });
+    expect(pushed.status).toBe("pushed");
+  });
+
+  it("heals an undrained publish intent at merge entry (mirror lags a concurrent push)", async () => {
+    // The realistic production race: a concurrent push landed the protected ref
+    // but its provenance ingest is still parked in a publish intent, so the DO
+    // `main` mirror lags. `vcsMerge` must drain pending intents at entry (as the
+    // push path does) so the source read sees a lockstep mirror. Stub the
+    // intent-completion once so advanceMain lands the ref but leaves the mirror
+    // behind + a covering intent parked.
+    await seedMain([{ kind: "create", path: "shared.txt", content: text("line1\nline2\nline3\n") }]);
+    await commitCtx(
+      [{ kind: "write", path: "shared.txt", content: text("line1\nline2\nctx3\n") }],
+      "ctx side"
+    );
+    const completeSpy = vi
+      .spyOn(gad.instance as unknown as { completePublishIntent: () => void }, "completePublishIntent")
+      .mockImplementationOnce(() => {});
+    await advanceMain(
+      [{ kind: "write", path: "shared.txt", content: text("MAIN1\nline2\nline3\n") }],
+      "main side"
+    );
+    completeSpy.mockRestore();
+    // Mirror is behind, a covering intent is parked (ref landed).
+    expect(gad.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one()["c"]).toBe(1);
+    const refValue = await vcs.resolveHead(VCS_MAIN_HEAD, REPO);
+    expect(gad.instance.resolveWorktreeHead({ logId: REPO_LOG, head: "main" })!.stateHash).not.toBe(
+      refValue
+    );
+
+    const result = await vcs.mergeHeads(CTX_HEAD, VCS_MAIN_HEAD, { actor: AGENT, repoPath: REPO });
+    expect(result.status).toBe("merged");
+    // The entry heal completed the parked intent → mirror is now in lockstep.
+    expect(gad.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one()["c"]).toBe(0);
+    expect(gad.instance.resolveWorktreeHead({ logId: REPO_LOG, head: "main" })!.stateHash).toBe(
+      refValue
+    );
+    expect(await readAt(CTX_HEAD, "shared.txt")).toBe("MAIN1\nline2\nctx3\n");
+
+    const pushed = await pushToMain(gad, { repoPaths: [REPO], sourceHead: CTX_HEAD, actor: AGENT });
+    expect(pushed.status).toBe("pushed");
+  });
+
   it("rejects worktree-escaping edit paths at the recordEdit boundary", async () => {
     await seedMain([{ kind: "create", path: "a.txt", content: text("one\n") }]);
     await expect(

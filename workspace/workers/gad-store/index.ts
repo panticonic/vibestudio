@@ -11,6 +11,7 @@ import {
   publicParticipantRef,
   sanitizeAgenticEventParticipantRefs,
   storedAgenticEventSchema,
+  type ActorRef,
   type AgenticEvent,
   type ChannelEnvelope,
   type ChannelId,
@@ -91,8 +92,50 @@ interface PublishIntent {
   operation: "push" | "import";
   entries: PublishIntentEntry[];
   message?: string | null;
-  actor?: ParticipantRef | null;
+  actor?: ActorRef | null;
   sourceHead?: string | null;
+}
+
+/** Op-specific reconcile detail for a repo-lifecycle intent (§6). Carries
+ *  everything heal / the live catch needs to roll a half-applied lifecycle op
+ *  FORWARD (keep the DO consistent with a landed ref) or COMPENSATE it (undo the
+ *  DO-side mutation when the ref CAS provably never landed). */
+interface LifecycleIntentDetail {
+  /** Archive head the delete moved `main` onto / the restore/fork lineage. Used
+   *  to re-key `main` ↔ `archive:*` when compensating or forward-completing. */
+  archiveHead?: string | null;
+  /** fork: source repo path + its log id (attribution / audit only). */
+  fromPath?: string | null;
+  fromLogId?: string | null;
+  /** fork: destination log id — the lineage forkLog created. On definite denial
+   *  this is re-keyed AWAY (archived) so no phantom repo remains. */
+  toLogId?: string | null;
+  /** fork: inherited event count (echoed into the success result on roll-forward). */
+  forkInherited?: number | null;
+  /** Highest host main-ref-log id observed for `repoPath` BEFORE the CAS. A
+   *  landed-but-lost delete (next===null) is otherwise indistinguishable from a
+   *  denial when the repo has PRIOR delete→null transitions in its log; paging
+   *  the log after this cursor isolates THIS op's transition. */
+  logCursor?: number | null;
+}
+
+/** A durable write-ahead record for a repo-lifecycle op (fork / delete /
+ *  restore) that crosses the two durable authorities — DO-internal VCS state
+ *  and the host protected `main` refs. Recorded BEFORE the first cross-authority
+ *  mutation so a crash / lost-response between the DO re-key and the host CAS is
+ *  reconcilable (§6): refs are the authority; the DO follows its OWN successful
+ *  writes. `expectedOld`/`next` mirror the single `updateMains` entry the op
+ *  drives (delete: next=null; fork/restore: expectedOld=null). */
+interface LifecycleIntent {
+  intentId: string;
+  operation: "fork" | "delete" | "restore";
+  /** The repo whose protected `main` ref the op mutates (fork: the destination). */
+  repoPath: string;
+  logId: string;
+  expectedOld: string | null;
+  next: string | null;
+  detail: LifecycleIntentDetail;
+  actor?: ActorRef | null;
 }
 
 /** The DO-side push result — mirrors the host push contract (and the shared
@@ -125,7 +168,7 @@ type VcsImportPublishResultDo = {
   stateHash: string;
 };
 
-const SYSTEM_PARTICIPANT = { kind: "system", id: "system" } as unknown as ParticipantRef;
+const SYSTEM_ACTOR = { kind: "system", id: "system" } as const satisfies ActorRef;
 
 type JsonPrimitive = null | string | number | boolean;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -140,9 +183,21 @@ interface GadGcRootsInput {
 
 const CHANNEL_LOG_HEAD = "main";
 
-/** Valid agentic participant kinds (an actor.kind on a log event). Transport
- *  caller kinds (server/shell/do/worker) are NOT participant kinds. */
-const PARTICIPANT_KINDS = new Set(["user", "agent", "system", "panel", "external"]);
+/** Valid log/event actor kinds. Actor provenance can be semantic participants
+ *  (`agent`, `user`) or runtime principals (`do`, `worker`, `server`, etc.). */
+const ACTOR_KINDS = new Set([
+  "user",
+  "agent",
+  "system",
+  "external",
+  "panel",
+  "app",
+  "worker",
+  "do",
+  "shell",
+  "server",
+  "extension",
+]);
 
 /** Independent schema version for the durable knowledge ledger (§8.1). Bumped
  *  only when the ledger's own shape changes — decoupled from the DO's
@@ -348,7 +403,7 @@ const PROV_RENDER_LOG_PRUNE_AGE_MS = 14 * DAY_MS;
 
 export interface LogAppendEventInput {
   envelopeId?: string | null;
-  actor: ParticipantRef;
+  actor: ActorRef;
   to?: ParticipantRef[] | ParticipantSelector | null;
   payloadKind: string;
   payload: unknown;
@@ -446,7 +501,7 @@ export interface IngestWorktreeStateInput {
   head: string;
   logKind?: LogKind | string | null;
   expectedRefStateHash?: string | null;
-  actor: ParticipantRef;
+  actor: ActorRef;
   summary?: string | null;
   eventId?: string | null;
   metadata?: Record<string, unknown> | null;
@@ -1185,11 +1240,7 @@ function summarizeJsonForInspection(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
-function isActorRefLike(value: unknown): value is {
-  kind: "user" | "agent" | "system" | "panel" | "external";
-  id: string;
-  metadata?: Record<string, unknown>;
-} {
+function isActorRefLike(value: unknown): value is ActorRef {
   const kind =
     !!value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)["kind"]
@@ -1198,11 +1249,7 @@ function isActorRefLike(value: unknown): value is {
     !!value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
-    (kind === "user" ||
-      kind === "agent" ||
-      kind === "system" ||
-      kind === "panel" ||
-      kind === "external") &&
+    ACTOR_KINDS.has(String(kind)) &&
     typeof (value as Record<string, unknown>)["id"] === "string"
   );
 }
@@ -1367,7 +1414,7 @@ interface PreparedLogEvent {
   /** Whether the caller supplied appendedAt (idempotent replays of implicit-
    *  timestamp appends compare against the stored timestamp instead). */
   appendedAtExplicit: boolean;
-  actor: ParticipantRef;
+  actor: ActorRef;
   to?: ParticipantRef[] | ParticipantSelector;
   payloadKind: string;
   payload: unknown;
@@ -1497,6 +1544,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * startup heal correctly reaps and completes the crashed op's intent (§6).
    */
   private readonly inFlightPublishIntents = new Set<string>();
+
+  /** Same guard, for repo-lifecycle intents (fork/delete/restore): an intent a
+   *  live op is actively driving across its human-gated `refs.updateMains`
+   *  window must not be reconciled/reaped by a concurrent heal — the op's own
+   *  catch owns that reconcile. Cleared in the op's `finally`; in-memory so a
+   *  crashed op's leftover is reconciled by a fresh instance's startup heal. */
+  private readonly inFlightLifecycleIntents = new Set<string>();
 
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
@@ -2129,6 +2183,29 @@ export class GadWorkspaceDO extends DurableObjectBase {
         message TEXT,
         actor_json TEXT,
         source_head TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      -- §6: write-ahead intents for repo-LIFECYCLE ops (fork / delete /
+      -- restore). Sibling to gad_publish_intents (which re-ingests provenance);
+      -- these instead re-key main ↔ archive lineage, so they carry archive-head
+      -- / fork-lineage reconcile detail rather than file/editOp entries. Recorded
+      -- durably BEFORE the host refs.updateMains so a crash / lost-response
+      -- between the DO re-key and the host CAS is reconcilable: on heal the ref
+      -- is authoritative — a landed CAS rolls the DO FORWARD, a provably-denied
+      -- CAS compensates the DO-side re-key, an indeterminate one stays parked.
+      -- Deleted once the op completes (success, roll-forward, or compensation).
+      -- The 'next' state is a GC root while pending (see runGadGcMark).
+      CREATE TABLE IF NOT EXISTS gad_lifecycle_intents (
+        intent_id TEXT PRIMARY KEY,
+        operation TEXT NOT NULL,          -- "fork" | "delete" | "restore"
+        repo_path TEXT NOT NULL,          -- the repo whose main ref the op mutates
+        log_id TEXT NOT NULL,
+        expected_old TEXT,                -- CAS expectedOld (null for fork/restore create)
+        next_state TEXT,                  -- CAS next (null for delete)
+        detail_json TEXT NOT NULL,        -- op-specific reconcile detail (archiveHead, fork lineage, logCursor)
+        actor_json TEXT,
         created_at TEXT NOT NULL
       )
     `);
@@ -2864,7 +2941,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       head: String(row["head"]),
       seq: asNumber(row["seq"]),
       envelopeId: brandId<EnvelopeId>(String(row["envelope_id"])),
-      actor: parseRecord(asString(row["actor_json"])) as unknown as ParticipantRef,
+      actor: parseRecord(asString(row["actor_json"])) as unknown as ActorRef,
       ...(row["to_json"] ? { to: parseJson(asString(row["to_json"])) as LogEnvelope["to"] } : {}),
       payloadKind: String(row["payload_kind"]),
       payload: parseJson(asString(row["payload_ref_json"])),
@@ -3285,7 +3362,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const envelopeId = input.envelopeId ?? crypto.randomUUID();
     const appendedAtExplicit = input.appendedAt != null;
     const appendedAt = input.appendedAt ?? nowIso();
-    const actor = publicParticipantRef(input.actor) as ParticipantRef;
+    const actor = publicActorRef(input.actor) as ActorRef;
     const to = sanitizeAudience(input.to ?? undefined);
     let payload = input.payload;
     const causality = input.causality ?? undefined;
@@ -4360,8 +4437,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   /** The trajectory log's owner as a plain {kind,id} — the claim's actor. Falls
-   *  back to an `agent` participant (trajectory logs are agent-owned) since the
-   *  transport caller kinds (server/shell/do/worker) are not participant kinds. */
+   *  back to an `agent` participant (trajectory logs are agent-owned) since
+   *  non-public transport caller kinds (server/shell/worker) are not participant
+   *  kinds. */
   private trajectoryOwner(logId: string, head: string): { kind: string; id: string } {
     const row = this.logHeadRow(logId, head);
     const owner = row ? parseJson(asString(row["owner_json"])) : null;
@@ -4369,7 +4447,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const record = owner as JsonRecord;
       const kind = asString(record["kind"]);
       const id = asString(record["id"]);
-      if (id) return { kind: PARTICIPANT_KINDS.has(kind ?? "") ? (kind as string) : "agent", id };
+      if (id) return { kind: ACTOR_KINDS.has(kind ?? "") ? (kind as string) : "agent", id };
     }
     return { kind: "agent", id: logId };
   }
@@ -4602,7 +4680,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         events: [
           {
             envelopeId: trajectoryEventId,
-            actor: owner as unknown as ParticipantRef,
+            actor: owner as unknown as ActorRef,
             payloadKind: "knowledge.claim_recorded",
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
@@ -4681,7 +4759,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         events: [
           {
             envelopeId: trajectoryEventId,
-            actor: owner as unknown as ParticipantRef,
+            actor: owner as unknown as ActorRef,
             payloadKind: "knowledge.claims_related",
             payload: { protocol: AGENTIC_PROTOCOL_VERSION, ledgerEntryId, relations },
             ...(input.invocationId
@@ -4753,7 +4831,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         events: [
           {
             envelopeId: trajectoryEventId,
-            actor: owner as unknown as ParticipantRef,
+            actor: owner as unknown as ActorRef,
             payloadKind: "knowledge.claim_updated",
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
@@ -4819,7 +4897,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         events: [
           {
             envelopeId: trajectoryEventId,
-            actor: owner as unknown as ParticipantRef,
+            actor: owner as unknown as ActorRef,
             payloadKind: "knowledge.claim_retracted",
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
@@ -6388,7 +6466,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   async vcsPick(input: {
     logId: string;
     head: string;
-    actor: ParticipantRef;
+    actor: ActorRef;
     pick:
       | { kind: "commit"; eventId: string }
       | { kind: "paths"; sourceContextId: string; paths: string[] };
@@ -6528,7 +6606,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     logId: string;
     head: string;
     message: string;
-    actor: ParticipantRef;
+    actor: ActorRef;
     invocationId?: string | null;
     turnId?: string | null;
     /** Repo-relative paths whose working rows stay UNCOMMITTED. */
@@ -8922,7 +9000,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       logId: string;
       head: string;
       logKind?: LogKind | string | null;
-      actor: ParticipantRef;
+      actor: ActorRef;
       eventId?: string | null;
       metadata?: Record<string, unknown> | null;
     } | null;
@@ -9360,7 +9438,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     repoPaths: string[];
     sourceHead?: string | null;
     message?: string | null;
-    actor?: ParticipantRef | null;
+    actor?: ActorRef | null;
   }): Promise<VcsPushResultDo> {
     // READ-AT-ENTRY (durable invocation-token contract): capture the
     // on-behalf-of token, the HOST-RESOLVED caller context, AND the verified
@@ -9371,7 +9449,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     // `actor` is derived from the verified caller (client-side flip: userland
     // callers no longer thread it). An explicit actor (in-process host callers)
     // still wins for parity with the pre-flip contract.
-    const actor = input.actor ?? this.callerParticipant();
+    const actor = input.actor ?? this.callerActor();
     this.ensureReady();
     const sourceHead = this.resolvePushSourceHead(input.sourceHead, confinement);
     // Structural source-head confinement (register row 11): a sandboxed caller
@@ -9404,7 +9482,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
   async vcsDeleteRepo(input: {
     repoPath: string;
-    actor?: ParticipantRef | null;
+    actor?: ActorRef | null;
     force?: boolean;
   }): Promise<{
     repoPath: string;
@@ -9445,34 +9523,80 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
     }
 
-    // Archive FIRST (DO-internal), ref CAS LAST (Fork D): a pre-CAS failure
-    // needs no gated ref-compensation.
-    const archive = this.archiveRepoMain({
-      logId,
-      archiveHead: `${VCS_ARCHIVE_HEAD_PREFIX}${mainState}`,
-    });
-    try {
-      await this.refsStore().updateMains({
-        entries: [{ repoPath, expectedOld: mainState, next: null }],
-        operation: "delete",
-        ...(invocationToken ? { invocationToken } : {}),
-      });
-    } catch (error) {
-      // The gated ref delete was denied / conflicted before it landed — roll the
-      // archive back onto `main` (DO-internal, ungated) so the repo is intact.
-      if (archive.archived && archive.archiveHead) {
-        this.restoreRepoMain({ logId, archiveHead: archive.archiveHead });
-      }
-      throw error;
-    }
-    return {
+    // §6 write-ahead protocol. Record a durable lifecycle intent BEFORE the
+    // cross-authority CAS so a throw whose response was LOST (the CAS may have
+    // landed) is reconcilable against the authoritative ref rather than blindly
+    // rolled back. Capture the ref-log cursor first so a landed-but-lost delete
+    // (next=null) is distinguishable from a denial even when this repo has prior
+    // delete cycles in its log.
+    const archiveHead = `${VCS_ARCHIVE_HEAD_PREFIX}${mainState}`;
+    const logCursor = await this.currentMainRefLogCursor(repoPath);
+    const intent: LifecycleIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "delete",
       repoPath,
-      archived: archive.archived,
-      archiveHead: archive.archiveHead,
-      removedPaths,
-      dependents,
-      stateHash: await this.workspaceViewFromRefs(store),
+      logId,
+      expectedOld: mainState,
+      next: null,
+      detail: { archiveHead, logCursor },
+      actor: input.actor ?? null,
     };
+    // Mark in-flight + record durably, THEN archive (DO-internal), THEN the CAS.
+    // Archive after the intent so a crash before the archive still leaves the DO
+    // main live under a covering intent (heal classifies denied → no-op).
+    this.inFlightLifecycleIntents.add(intent.intentId);
+    this.transaction(() => this.recordLifecycleIntent(intent));
+    try {
+      let archive: ReturnType<typeof this.archiveRepoMain>;
+      try {
+        archive = this.archiveRepoMain({ logId, archiveHead });
+      } catch (error) {
+        // Pre-CAS, DO-internal failure: the ref was never touched, nothing
+        // landed — drop the intent (no reconcile needed) and rethrow verbatim.
+        this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+        throw error;
+      }
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath, expectedOld: mainState, next: null }],
+          operation: "delete",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        // Do NOT assume the CAS didn't land: reconcile against the ref.
+        //  - denied (ref unchanged) → compensate (un-archive) + drop intent + rethrow;
+        //  - landed-but-lost (ref gone) → keep archived, drop intent, RETURN success
+        //    (the delete DID happen; disk removal is the host's onMainsUpdated tail);
+        //  - indeterminate → leave the intent parked for heal + rethrow.
+        const cls = await this.reconcileLifecycleIntent(intent, error);
+        if (cls === "landed") {
+          return {
+            repoPath,
+            archived: archive.archived,
+            archiveHead: archive.archiveHead,
+            removedPaths,
+            dependents,
+            stateHash: await this.workspaceViewFromRefs(store),
+          };
+        }
+        if (cls === "denied") {
+          throw new Error(`vcsDeleteRepo(${repoPath}): ref delete denied — ${String(error)}`);
+        }
+        throw error;
+      }
+      // CAS landed: complete the intent (delete it) and return.
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return {
+        repoPath,
+        archived: archive.archived,
+        archiveHead: archive.archiveHead,
+        removedPaths,
+        dependents,
+        stateHash: await this.workspaceViewFromRefs(store),
+      };
+    } finally {
+      this.inFlightLifecycleIntents.delete(intent.intentId);
+    }
   }
 
   /**
@@ -9486,7 +9610,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * conflict re-archives the lineage (DO-internal, ungated).
    */
   @rpc({ callers: ["panel", "shell", "app", "worker", "do", "server", "extension"] })
-  async vcsRestoreRepo(input: { repoPath: string; actor?: ParticipantRef | null }): Promise<{
+  async vcsRestoreRepo(input: { repoPath: string; actor?: ActorRef | null }): Promise<{
     repoPath: string;
     restored: boolean;
     fromArchiveHead: string | null;
@@ -9516,29 +9640,75 @@ export class GadWorkspaceDO extends DurableObjectBase {
       joinRepoPrefixPath(repoPath, f.path)
     );
 
-    // Un-archive FIRST (DO-internal), ref CAS LAST (Fork D).
-    const restore = this.restoreRepoMain({ logId, archiveHead: newest.head });
-    try {
-      await this.refsStore().updateMains({
-        entries: [{ repoPath, expectedOld: null, next: newest.stateHash }],
-        operation: "restore",
-        ...(invocationToken ? { invocationToken } : {}),
-      });
-    } catch (error) {
-      // Re-archive (DO-internal, ungated) so nothing is left half-restored.
-      this.archiveRepoMain({ logId, archiveHead: newest.head });
-      throw error;
-    }
-    // Re-materialize into the ACTIVE context checkout so the repo re-appears on
-    // disk (D1/D2 — never a `main` checkout).
-    await this.worktreeStore().project(repoPath, VCS_ACTIVE_CONTEXT_HEAD, newest.stateHash);
-    return {
+    // §6 write-ahead protocol (mirrors delete). Record the durable intent BEFORE
+    // the cross-authority CAS so a lost-response throw is reconciled against the
+    // authoritative ref, not blindly re-archived (which — on a landed-but-lost
+    // CAS — would leave the ref present while the DO main is re-archived: the
+    // half-restore that bricks every later push/import at the fail-closed heal).
+    const logCursor = await this.currentMainRefLogCursor(repoPath);
+    const intent: LifecycleIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "restore",
       repoPath,
-      restored: restore.restored,
-      fromArchiveHead: restore.archiveHead,
-      restoredPaths,
-      stateHash: await this.workspaceViewFromRefs(store),
+      logId,
+      expectedOld: null,
+      next: newest.stateHash,
+      detail: { archiveHead: newest.head, logCursor },
+      actor: input.actor ?? null,
     };
+    this.inFlightLifecycleIntents.add(intent.intentId);
+    this.transaction(() => this.recordLifecycleIntent(intent));
+    try {
+      // Un-archive (DO-internal), then the CAS.
+      let restore: ReturnType<typeof this.restoreRepoMain>;
+      try {
+        restore = this.restoreRepoMain({ logId, archiveHead: newest.head });
+      } catch (error) {
+        // Pre-CAS, DO-internal failure: the ref was never touched — drop the
+        // intent (no reconcile needed) and rethrow verbatim.
+        this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+        throw error;
+      }
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath, expectedOld: null, next: newest.stateHash }],
+          operation: "restore",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        //  - denied (ref still absent) → re-archive + drop intent + rethrow;
+        //  - landed-but-lost (ref at next) → keep restored, finish disk projection,
+        //    drop intent, RETURN success (the restore DID happen);
+        //  - indeterminate → leave the intent parked for heal + rethrow.
+        const cls = await this.reconcileLifecycleIntent(intent, error);
+        if (cls === "landed") {
+          return {
+            repoPath,
+            restored: true,
+            fromArchiveHead: newest.head,
+            restoredPaths,
+            stateHash: await this.workspaceViewFromRefs(store),
+          };
+        }
+        if (cls === "denied") {
+          throw new Error(`vcsRestoreRepo(${repoPath}): ref restore denied — ${String(error)}`);
+        }
+        throw error;
+      }
+      // CAS landed: re-materialize into the ACTIVE context checkout so the repo
+      // re-appears on disk (D1/D2 — never a `main` checkout), complete the intent.
+      await this.worktreeStore().project(repoPath, VCS_ACTIVE_CONTEXT_HEAD, newest.stateHash);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return {
+        repoPath,
+        restored: restore.restored,
+        fromArchiveHead: restore.archiveHead,
+        restoredPaths,
+        stateHash: await this.workspaceViewFromRefs(store),
+      };
+    } finally {
+      this.inFlightLifecycleIntents.delete(intent.intentId);
+    }
   }
 
   /**
@@ -9554,11 +9724,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
   async vcsForkRepo(input: {
     fromPath: string;
     toPath: string;
-    actor?: ParticipantRef | null;
+    actor?: ActorRef | null;
   }): Promise<{ repoPath: string; head: string; inherited: number; stateHash: string }> {
     const invocationToken = this.invocationToken;
     this.ensureReady();
-    const actor = input.actor ?? this.callerParticipant();
+    const actor = input.actor ?? this.callerActor();
     const from = normalizeRepoPathArg(input.fromPath);
     const to = normalizeRepoPathArg(input.toPath);
     if (from === to) throw new Error(`forkRepo: source and destination are the same (${from})`);
@@ -9631,18 +9801,58 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
     }
 
-    // 3. The ONE host-gated main-ref change: create the new repo's protected
-    //    `main` (expectedOld:null = an add-repo prompt from the CAS shape).
-    await this.refsStore().updateMains({
-      entries: [{ repoPath: to, expectedOld: null, next: finalState }],
-      operation: "import",
-      ...(invocationToken ? { invocationToken } : {}),
-    });
-
-    // 4. Project the fork onto the ACTIVE context's checkout so it appears on
-    //    disk (D1/D2 — `main` has no checkout).
-    await this.worktreeStore().project(to, VCS_ACTIVE_CONTEXT_HEAD, finalState);
-    return { repoPath: to, head: VCS_MAIN, inherited: fork.inherited, stateHash: finalState };
+    // 3. §6 write-ahead protocol. forkLog (+ the optional rename bootstrap) is
+    //    DO-INTERNAL; the CROSS-authority step is the destination-`main` CAS.
+    //    Record a durable intent BEFORE it (now that `finalState` is known) so a
+    //    lost-response throw is reconciled against the authoritative ref rather
+    //    than leaving a PHANTOM repo (DO main head at `finalState`, no host ref)
+    //    that neither push (ref-absent, invisible to the fail-closed sweep) nor
+    //    the old catch-free path would ever repair.
+    const logCursor = await this.currentMainRefLogCursor(to);
+    const intent: LifecycleIntent = {
+      intentId: crypto.randomUUID(),
+      operation: "fork",
+      repoPath: to,
+      logId: toLogId,
+      expectedOld: null,
+      next: finalState,
+      detail: { fromPath: from, fromLogId, toLogId, forkInherited: fork.inherited, logCursor },
+      actor: actor ?? null,
+    };
+    this.inFlightLifecycleIntents.add(intent.intentId);
+    this.transaction(() => this.recordLifecycleIntent(intent));
+    try {
+      // The ONE host-gated main-ref change: create the new repo's protected
+      // `main` (expectedOld:null = an add-repo prompt from the CAS shape).
+      try {
+        await this.refsStore().updateMains({
+          entries: [{ repoPath: to, expectedOld: null, next: finalState }],
+          operation: "import",
+          ...(invocationToken ? { invocationToken } : {}),
+        });
+      } catch (error) {
+        //  - denied (ref still absent) → re-key the created destination lineage
+        //    AWAY (archive it) so no phantom remains + drop intent + rethrow;
+        //  - landed-but-lost (ref at finalState) → keep the forked lineage, finish
+        //    disk projection, drop intent, RETURN success (the fork DID happen);
+        //  - indeterminate → leave the intent parked for heal + rethrow.
+        const cls = await this.reconcileLifecycleIntent(intent, error);
+        if (cls === "landed") {
+          return { repoPath: to, head: VCS_MAIN, inherited: fork.inherited, stateHash: finalState };
+        }
+        if (cls === "denied") {
+          throw new Error(`vcsForkRepo(${from}→${to}): ref create denied — ${String(error)}`);
+        }
+        throw error;
+      }
+      // 4. CAS landed: project the fork onto the ACTIVE context's checkout so it
+      //    appears on disk (D1/D2 — `main` has no checkout), complete the intent.
+      await this.worktreeStore().project(to, VCS_ACTIVE_CONTEXT_HEAD, finalState);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return { repoPath: to, head: VCS_MAIN, inherited: fork.inherited, stateHash: finalState };
+    } finally {
+      this.inFlightLifecycleIntents.delete(intent.intentId);
+    }
   }
 
   /**
@@ -9725,14 +9935,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
   }
 
-  /** The verified caller as a provenance participant, read synchronously at
+  /** The verified caller as a provenance actor, read synchronously at
    *  handler entry (the invocation-token contract). Falls back to the system
-   *  participant when there is no active RPC caller (alarm/lifecycle). */
-  private callerParticipant(): ParticipantRef {
+   *  actor when there is no active RPC caller (alarm/lifecycle). */
+  private callerActor(): ActorRef {
     const caller = this.caller;
     return caller
-      ? ({ id: caller.callerId, kind: caller.callerKind } as unknown as ParticipantRef)
-      : SYSTEM_PARTICIPANT;
+      ? ({ id: caller.callerId, kind: caller.callerKind } as unknown as ActorRef)
+      : SYSTEM_ACTOR;
   }
 
   private async runVcsPush(
@@ -9740,7 +9950,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       repoPaths: string[];
       sourceHead: string;
       message?: string | null;
-      actor: ParticipantRef;
+      actor: ActorRef;
     },
     invocationToken: string | undefined,
     isRetry: boolean
@@ -9993,18 +10203,18 @@ export class GadWorkspaceDO extends DurableObjectBase {
     repoPath: string;
     sourceHead: string;
     message?: string | null;
-    actor?: ParticipantRef | null;
+    actor?: ActorRef | null;
   }): Promise<VcsImportPublishResultDo> {
     // READ-AT-ENTRY (invocation-token contract): capture the on-behalf-of token
     // and verified caller synchronously, before any await.
     const invocationToken = this.invocationToken;
-    const actor = input.actor ?? this.callerParticipant();
+    const actor = input.actor ?? this.callerActor();
     this.ensureReady();
     return this.runVcsImportPublish({ ...input, actor }, invocationToken);
   }
 
   private async runVcsImportPublish(
-    input: { repoPath: string; sourceHead: string; message?: string | null; actor: ParticipantRef },
+    input: { repoPath: string; sourceHead: string; message?: string | null; actor: ActorRef },
     invocationToken: string | undefined
   ): Promise<VcsImportPublishResultDo> {
     const store = this.contentStore();
@@ -10177,7 +10387,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       operation: String(row["operation"]) as "push" | "import",
       entries: JSON.parse(String(row["entries_json"])) as PublishIntentEntry[],
       message: row["message"] ? String(row["message"]) : null,
-      actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ParticipantRef) : null,
+      actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ActorRef) : null,
       sourceHead: row["source_head"] ? String(row["source_head"]) : null,
     }));
   }
@@ -10196,7 +10406,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           logId: e.logId,
           head: "main",
           logKind: "vcs",
-          actor: intent.actor ?? SYSTEM_PARTICIPANT,
+          actor: intent.actor ?? SYSTEM_ACTOR,
           files: e.files,
           baseStateHash: e.expectedOld ?? EMPTY_STATE_HASH,
           expectedRefStateHash: e.expectedOld ?? EMPTY_STATE_HASH,
@@ -10262,6 +10472,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
       if (anyLanded) this.completePublishIntent(intent);
     }
 
+    // Repo-lifecycle intents (fork/delete/restore) BEFORE the fail-closed sweep:
+    // reconcile half-applied ops and register their repoPaths in `coveredMains`
+    // so the sweep (which only iterates listMains) never bricks over a
+    // half-restore and phantom forks / half-deletes get repaired here (§6).
+    await this.healLifecycleDrift(coveredMains);
+
     // Mains whose recorded lineage lags with NO covering intent cannot be healed
     // without inventing provenance. Fail closed and leave refs/DO disagreement
     // visible to the operator.
@@ -10295,17 +10511,193 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return true;
   }
 
+  // ── Write-ahead LIFECYCLE intents (fork/delete/restore self-heal, §6) ───────
+
+  private recordLifecycleIntent(intent: LifecycleIntent): void {
+    this.sql.exec(
+      `INSERT INTO gad_lifecycle_intents
+         (intent_id, operation, repo_path, log_id, expected_old, next_state, detail_json, actor_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      intent.intentId,
+      intent.operation,
+      intent.repoPath,
+      intent.logId,
+      intent.expectedOld,
+      intent.next,
+      JSON.stringify(intent.detail),
+      intent.actor ? JSON.stringify(intent.actor) : null,
+      nowIso()
+    );
+  }
+
+  private deleteLifecycleIntent(intentId: string): void {
+    this.sql.exec(`DELETE FROM gad_lifecycle_intents WHERE intent_id = ?`, intentId);
+  }
+
+  private listLifecycleIntents(): LifecycleIntent[] {
+    return (
+      this.sql
+        .exec(`SELECT * FROM gad_lifecycle_intents ORDER BY created_at`)
+        .toArray() as JsonRecord[]
+    ).map((row) => ({
+      intentId: String(row["intent_id"]),
+      operation: String(row["operation"]) as LifecycleIntent["operation"],
+      repoPath: String(row["repo_path"]),
+      logId: String(row["log_id"]),
+      expectedOld: row["expected_old"] != null ? String(row["expected_old"]) : null,
+      next: row["next_state"] != null ? String(row["next_state"]) : null,
+      detail: JSON.parse(String(row["detail_json"])) as LifecycleIntentDetail,
+      actor: row["actor_json"] ? (JSON.parse(String(row["actor_json"])) as ActorRef) : null,
+    }));
+  }
+
+  /** Highest host main-ref-log id for `repoPath` right now (null when empty).
+   *  Captured BEFORE a lifecycle CAS so {@link classifyLifecycleLanded} can page
+   *  the log AFTER it and isolate THIS op's transition from prior ones (delete
+   *  into null is otherwise ambiguous against earlier delete cycles). */
+  private async currentMainRefLogCursor(repoPath: string): Promise<number | null> {
+    const readLog = this.refsStore().listMainRefLog?.bind(this.refsStore());
+    if (!readLog) return null;
+    const log = await readLog(repoPath);
+    let max: number | null = null;
+    for (const e of log) if (max === null || e.id > max) max = e.id;
+    return max;
+  }
+
+  /** Classify a lifecycle intent's CAS outcome against the AUTHORITATIVE ref:
+   *   - `landed`: the ref is at `next` (delete: absent), or the log records a
+   *     transition INTO `next` after the recorded cursor (moved-past / lost
+   *     response) — the op DID happen.
+   *   - `denied`: the ref is unchanged at `expectedOld` — the CAS provably never
+   *     swapped (approval denial / CAS conflict before the swap).
+   *   - `indeterminate`: the ref is at some THIRD value (a concurrent op moved
+   *     it) — cannot decide; leave parked for a later heal pass. */
+  private async classifyLifecycleLanded(
+    intent: LifecycleIntent,
+    error?: unknown
+  ): Promise<"landed" | "denied" | "indeterminate"> {
+    const current = (await this.refsStore().readMain(intent.repoPath))?.stateHash ?? null;
+    if (current === intent.next) return "landed";
+    const readLog = this.refsStore().listMainRefLog?.bind(this.refsStore());
+    if (readLog) {
+      const cursor = intent.detail.logCursor;
+      const log = await readLog(intent.repoPath, cursor ?? undefined);
+      if (log.some((e) => e.id > (cursor ?? -1) && e.new === intent.next)) return "landed";
+    }
+    // Ref is NOT at `next`. If it is still at `expectedOld` the swap plainly never
+    // ran; if the throw was a compare-and-swap CONFLICT, our swap provably did
+    // not apply either (that IS the conflict) even though the ref now holds a
+    // third value — both are definite denials the caller compensates. A
+    // NON-conflict throw (approval denial vs lost-response transport) that left
+    // the ref at some third value is genuinely ambiguous: park for a later heal.
+    if (current === intent.expectedOld) return "denied";
+    if (error !== undefined && this.isRefConflictError(error)) return "denied";
+    return "indeterminate";
+  }
+
+  /** Roll a LANDED lifecycle op forward: bring the DO-side state into lockstep
+   *  with the ref and finish any deferred disk tail (idempotent — a re-run after
+   *  partial completion is a no-op). Delete: keep archived (disk removal is the
+   *  host's `onMainsUpdated` reaction). Restore/fork: keep the restored/forked
+   *  lineage on `main` and (re)project it onto the ACTIVE context checkout. */
+  private async completeLifecycleForward(intent: LifecycleIntent): Promise<void> {
+    if (intent.operation === "delete") return; // archived already; host removes disk
+    const archiveHead = intent.detail.archiveHead;
+    if (intent.operation === "restore") {
+      // Re-key back onto main if a crash left the lineage still archived.
+      if (archiveHead && !this.resolveWorktreeHeadInternal(intent.logId, VCS_MAIN)) {
+        this.restoreRepoMain({ logId: intent.logId, archiveHead });
+      }
+    }
+    // fork lineage is already on the destination `main` (forkLog ran pre-CAS).
+    if (intent.next) {
+      await this.worktreeStore().project(intent.repoPath, VCS_ACTIVE_CONTEXT_HEAD, intent.next);
+    }
+  }
+
+  /** Compensate a provably-DENIED lifecycle op: undo the DO-side re-key so no
+   *  half-applied state survives (the ref never moved). Delete: un-archive back
+   *  onto main. Restore: re-archive. Fork: re-key the created destination
+   *  lineage AWAY (archive it under a unique unwind head) so no phantom repo is
+   *  left at `next` with no covering ref. All DO-internal + ungated. */
+  private compensateLifecycle(intent: LifecycleIntent): void {
+    const archiveHead = intent.detail.archiveHead;
+    if (intent.operation === "delete") {
+      if (archiveHead && !this.resolveWorktreeHeadInternal(intent.logId, VCS_MAIN)) {
+        this.restoreRepoMain({ logId: intent.logId, archiveHead });
+      }
+      return;
+    }
+    if (intent.operation === "restore") {
+      if (archiveHead && this.resolveWorktreeHeadInternal(intent.logId, VCS_MAIN)) {
+        this.archiveRepoMain({ logId: intent.logId, archiveHead });
+      }
+      return;
+    }
+    // fork: the destination lineage forkLog created (+ optional rename commit).
+    // Re-key it off `main` so `resolveWorktreeHeadInternal(toLogId, main)` is
+    // clear again — a subsequent fork/restore to this path is unobstructed and
+    // no phantom repo lingers in the workspace view.
+    const toLogId = intent.detail.toLogId ?? intent.logId;
+    if (this.resolveWorktreeHeadInternal(toLogId, VCS_MAIN)) {
+      this.archiveRepoMain({
+        logId: toLogId,
+        archiveHead: `${VCS_ARCHIVE_HEAD_PREFIX}fork-unwind:${intent.next ?? crypto.randomUUID()}`,
+      });
+    }
+  }
+
+  /** Reconcile a parked lifecycle intent against the authoritative ref and act:
+   *  landed → roll forward; denied → compensate; both then delete the intent.
+   *  Indeterminate → leave it parked (returns without touching it). The live op
+   *  calls this in its `updateMains` catch; heal calls it for orphaned intents. */
+  private async reconcileLifecycleIntent(
+    intent: LifecycleIntent,
+    error?: unknown
+  ): Promise<"landed" | "denied" | "indeterminate"> {
+    const cls = await this.classifyLifecycleLanded(intent, error);
+    if (cls === "landed") {
+      await this.completeLifecycleForward(intent);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return "landed";
+    }
+    if (cls === "denied") {
+      this.compensateLifecycle(intent);
+      this.transaction(() => this.deleteLifecycleIntent(intent.intentId));
+      return "denied";
+    }
+    return "indeterminate";
+  }
+
+  /** Heal pass over parked lifecycle intents (§6). Runs BEFORE the fail-closed
+   *  uncovered-drift sweep in {@link healPublishDrift}: a half-restore (ref
+   *  present, DO main still archived) is reconciled HERE instead of bricking the
+   *  fail-closed loop, and phantom forks / half-deletes (ref-absent, so invisible
+   *  to that loop's `listMains` iteration) are repaired rather than staying
+   *  silent. Every lifecycle repoPath is added to `coveredMains` so the sweep
+   *  never misfires over a repo an intent is mid-reconciling. In-flight intents
+   *  (a live op driving them) are skipped — their own catch owns the reconcile. */
+  private async healLifecycleDrift(coveredMains: Set<string>): Promise<void> {
+    for (const intent of this.listLifecycleIntents()) {
+      coveredMains.add(normalizeRepoPathArg(intent.repoPath));
+      if (this.inFlightLifecycleIntents.has(intent.intentId)) continue;
+      await this.reconcileLifecycleIntent(intent);
+    }
+  }
+
   /** Host-triggerable startup self-heal (§6) — the same reconcile the push path
    *  runs on demand, exposed so the host can drive it at DO attach. */
   @rpc({ callers: ["do", "server"] })
   async vcsHealPublishDrift(): Promise<{ pendingIntents: number }> {
     this.ensureReady();
     await this.healPublishDrift();
-    return {
-      pendingIntents: (
-        this.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one() as JsonRecord
-      )["c"] as number,
-    };
+    const publish = (
+      this.sql.exec(`SELECT COUNT(*) AS c FROM gad_publish_intents`).one() as JsonRecord
+    )["c"] as number;
+    const lifecycle = (
+      this.sql.exec(`SELECT COUNT(*) AS c FROM gad_lifecycle_intents`).one() as JsonRecord
+    )["c"] as number;
+    return { pendingIntents: publish + lifecycle };
   }
 
   /**
@@ -10332,7 +10724,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     logId: string;
     targetHead: string;
     sourceHead: string;
-    actor: ParticipantRef;
+    actor: ActorRef;
   }): Promise<
     | {
         status: "up-to-date";
@@ -10422,23 +10814,59 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     let theirsHeadRef: { stateHash: string; commitEventId: string | null } | null;
     if (sourceHead === "main" && repoPath) {
+      // A `main` SOURCE resolves through the protected ref — refs are the
+      // authority; this store's `main` head is a FOLLOWER of its OWN writes (§6).
+      // A concurrent push can land the ref while its provenance ingest is still
+      // parked in a publish intent, so the naive mirror read races an undrained
+      // follower. Read the ref, and only when the mirror disagrees drain pending
+      // intents (as the push path does at entry) and re-read — a covering intent
+      // completes there and brings the mirror to `refValue`.
       const refValue = (await this.refsStore().readMain(repoPath))?.stateHash ?? null;
       if (!refValue) throw new Error(`merge source head has no state: ${sourceHead}`);
-      const doHead = this.resolveWorktreeHeadInternal(logId, "main");
+      let doHead = this.resolveWorktreeHeadInternal(logId, "main");
       if (!doHead || doHead.stateHash !== refValue) {
-        throw new Error(
-          `main lineage for ${repoPath} is behind the protected ref: this store records ` +
-            `${doHead?.stateHash ?? "<absent>"} but the ref is ${refValue} — drain/reconcile ` +
-            `provenance before merging`
-        );
+        // healPublishDrift fails closed on a main NO intent covers (seeded
+        // host-side, or authored by another instance) — that path is fine here:
+        // we only need the source STATE and adopt the ref directly below rather
+        // than fabricating lineage, so swallow that (repo-unrelated) drift error.
+        try {
+          await this.healPublishDrift();
+        } catch {
+          // uncovered-main drift: refs remain the authority; adopt below.
+        }
+        doHead = this.resolveWorktreeHeadInternal(logId, "main");
       }
-      theirsHeadRef = doHead;
+      if (doHead && doHead.stateHash === refValue) {
+        theirsHeadRef = doHead;
+      } else {
+        // Still absent/behind after draining: ADOPT the protected ref STATE as
+        // the merge source rather than throwing. Refs are the authority and every
+        // handed-out main is content-store resolvable, so the 3-way merge has all
+        // it needs from the STATE alone; provenance stays gad-owned. Derive the
+        // producing commit id when this store recorded it (a main it authored),
+        // else merge state-only (null event id) — never invent lineage.
+        const producer = this.getGadStateProducer({ stateHash: refValue });
+        const commitEventId = producer ? asString(producer["event_id"]) : null;
+        // When this store DID record the producing commit but only its head
+        // POINTER drifted, repair the follower pointer to the ref — a pure
+        // pointer update over recorded provenance, no fabricated lineage. A truly
+        // foreign main (no recorded producer) is merged state-only, mirror
+        // untouched.
+        if (commitEventId) this.setWorktreeHead(logId, "main", refValue, commitEventId);
+        theirsHeadRef = { stateHash: refValue, commitEventId };
+      }
     } else {
       theirsHeadRef = this.resolveWorktreeHeadInternal(logId, sourceHead);
     }
     const theirsState = theirsHeadRef?.stateHash;
     if (!theirsState) throw new Error(`merge source head has no state: ${sourceHead}`);
-    const theirsEventId = this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
+    // A `main` source may be adopted STATE-ONLY (null commit event) when the ref
+    // outruns this store's provenance — allowed by design. Every OTHER source
+    // must carry its producing commit (the commit-identity guard).
+    const theirsEventId =
+      sourceHead === "main" && repoPath
+        ? (theirsHeadRef?.commitEventId ?? null)
+        : this.commitEventIdOf(theirsHeadRef, `merge source head ${sourceHead}`);
     const upstreamCommits = this.upstreamCommitsBetween(oursState, theirsState, theirsEventId);
 
     const result = await this.computeMerge({
@@ -11134,7 +11562,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
    * new state to disk and emit events — the follower half.
    */
   @rpc({ callers: ["do", "server"] })
-  async vcsRebaseContext(input: { contextId: string; actor: ParticipantRef }): Promise<{
+  async vcsRebaseContext(input: { contextId: string; actor: ActorRef }): Promise<{
     repos: Array<{ repoPath: string; status: "up-to-date" | "merged" | "conflicted" }>;
     baseView: string;
     outcomes: Array<
@@ -11805,6 +12233,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
           // unparseable intent — ignore
         }
       }
+      // §6: pending LIFECYCLE intents' candidate `next` state (fork/restore) is a
+      // GC root too — a crash between intent and heal must not sweep the lineage
+      // the ref will point at. (Delete's next is null; nothing to root.)
+      const lifecycleRows = this.sql
+        .exec(`SELECT next_state FROM gad_lifecycle_intents`)
+        .toArray() as JsonRecord[];
+      for (const row of lifecycleRows) {
+        const next = asString(row["next_state"]);
+        if (next) roots.add(next);
+      }
       // Freshly created worktree states are temporary roots so a GC run cannot
       // race a multi-step flow that has created a state but not yet referenced
       // it. Once the grace window expires, unreferenced staged states are
@@ -12396,7 +12834,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       };
       return {
         envelopeId: item.eventId ?? null,
-        actor: event.actor as ParticipantRef,
+        actor: event.actor as ActorRef,
         payloadKind: event.kind,
         payload: event.payload,
         ...(Object.keys(causality).length > 0 ? { causality: causality as LogEventCausality } : {}),
