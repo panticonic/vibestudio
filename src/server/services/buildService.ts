@@ -1,6 +1,6 @@
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { buildMethods } from "@vibez1/shared/serviceSchemas/build";
-import { BUILDABLE_UNIT_DIRS } from "@vibez1/shared/workspace/sourceDirs";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { buildMethods } from "@vibestudio/shared/serviceSchemas/build";
+import { BUILDABLE_UNIT_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
 import type { BuildSystemV2, BuildUnitOptions } from "../buildV2/index.js";
 import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 import { diagnosticsForBuildKey, diagnosticsForUnit } from "../buildV2/diagnosticsStore.js";

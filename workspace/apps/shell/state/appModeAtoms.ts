@@ -1,5 +1,5 @@
 import { atom } from "jotai";
-import type { WorkspaceEntry } from "@vibez1/shared/types";
+import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import { workspace } from "../shell/client.js";
 
 // =============================================================================

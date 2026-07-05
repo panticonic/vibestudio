@@ -49,20 +49,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- vibez1://connect onboarding links only. OAuth callbacks use the verified App Link below. -->
+            <!-- vibestudio://connect onboarding links only. OAuth callbacks use the verified App Link below. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:scheme="vibez1"
+                    android:scheme="vibestudio"
                     android:host="connect" />
             </intent-filter>
 
             <!--
                 Verified Android App Link for OAuth callbacks. With
                 android:autoVerify="true" + a valid assetlinks.json served
-                from https://auth.snugenv.com/.well-known/assetlinks.json
+                from https://vibestudio.app/.well-known/assetlinks.json
                 (see apps/well-known/build.ts), Android binds this
                 intent-filter to *only* this app's signing certificate.
                 Other apps registering the same host cannot intercept the
@@ -70,8 +70,8 @@
                 docs/audit/08-mobile-supply-chain.md H-1 / H-2.
 
                 Verify post-install with:
-                  adb shell pm get-app-links com.vibez1.mobile
-                Expected state for auth.snugenv.com: `verified`.
+                  adb shell pm get-app-links app.vibestudio.mobile
+                Expected state for vibestudio.app: `verified`.
             -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
@@ -79,7 +79,7 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
                     android:scheme="https"
-                    android:host="auth.snugenv.com"
+                    android:host="vibestudio.app"
                     android:pathPrefix="/oauth/" />
             </intent-filter>
         </activity>

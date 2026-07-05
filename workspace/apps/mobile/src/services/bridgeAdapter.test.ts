@@ -1,7 +1,7 @@
 import { createBridgeAdapter } from "./bridgeAdapter";
-import type { RpcConnectionStatus, RpcEnvelope } from "@vibez1/rpc";
-import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
-import type { PanelEntityId } from "@vibez1/shared/panel/ids";
+import type { RpcConnectionStatus, RpcEnvelope } from "@vibestudio/rpc";
+import type { WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
+import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
 
 function createAdapter(overrides?: Partial<Parameters<typeof createBridgeAdapter>[0]>) {
   return createBridgeAdapter({
@@ -259,7 +259,7 @@ describe("bridgeAdapter panel session relay", () => {
 // §1.6 upload hop: a panel's streaming request body crosses the postMessage
 // bridge as base64 chunk messages, reassembles host-side, and feeds the panel
 // session's streamReadable(); the response streams back through deliverToPanel
-// tagged __vibez1BridgeStream, ack-gated.
+// tagged __vibestudioBridgeStream, ack-gated.
 describe("bridgeAdapter upload streams", () => {
   const PANEL = "panel:tree/panel-a";
 
@@ -322,7 +322,7 @@ describe("bridgeAdapter upload streams", () => {
       );
     const session = makePanelSession({ streamReadable, ...overrides?.session } as never);
     const delivered: Array<{
-      __vibez1BridgeStream: boolean;
+      __vibestudioBridgeStream: boolean;
       msg: { kind: string; opId?: string; seq?: number };
     }> = [];
     // Auto-ack response chunks like the injected panel bootstrap does.
@@ -373,7 +373,7 @@ describe("bridgeAdapter upload streams", () => {
       })
     );
     expect(delivered[0]).toMatchObject({
-      __vibez1BridgeStream: true,
+      __vibestudioBridgeStream: true,
       msg: { kind: "head", opId: "op-1", status: 201 },
     });
     const chunk = delivered.find((entry) => entry.msg.kind === "chunk");

@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
-    "displayName": "Vibez1 Remote CLI",
+  "vibestudio": {
+    "displayName": "Vibestudio Remote CLI",
     "app": {
       "target": "terminal",
       "entry": "index.ts",
@@ -14,8 +14,8 @@
     }
   },
   "dependencies": {
-    "@vibez1/rpc": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
     "ws": "^8.18.3",
-    "@vibez1/shared": "workspace:*"
+    "@vibestudio/shared": "workspace:*"
   }
 }

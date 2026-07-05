@@ -6,17 +6,17 @@
  */
 
 import { randomUUID } from "crypto";
-import { createDevLogger } from "@vibez1/dev-log";
-import type { ServiceContainer } from "@vibez1/shared/serviceContainer";
+import { createDevLogger } from "@vibestudio/dev-log";
+import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import {
   createVerifiedCaller,
   type ServiceContext,
   type ServiceDispatcher,
-} from "@vibez1/shared/serviceDispatcher";
-import type { Workspace, WorkspaceConfig } from "@vibez1/shared/workspace/types";
-import { isAboutSource } from "@vibez1/shared/workspace/aboutNamespace";
-import type { CentralDataManager } from "@vibez1/shared/centralData";
-import type { HostConfig } from "@vibez1/shared/hostConfig";
+} from "@vibestudio/shared/serviceDispatcher";
+import type { Workspace, WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import { isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
+import type { CentralDataManager } from "@vibestudio/shared/centralData";
+import type { HostConfig } from "@vibestudio/shared/hostConfig";
 import type {
   HostTarget,
   HostTargetCandidate,
@@ -24,20 +24,20 @@ import type {
   HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
   HostTargetSelectionInput,
-} from "@vibez1/shared/hostTargets";
+} from "@vibestudio/shared/hostTargets";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
-import { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import {
   getCurrentSnapshot,
   getPanelContextId,
   getPanelSource,
   getPanelStateArgs,
-} from "@vibez1/shared/panel/accessors";
-import { isBrowserPanelSource, isOpenPanelBrowserUrl } from "@vibez1/shared/panelChrome";
-import { asPanelSlotId } from "@vibez1/shared/panel/ids";
-import { resolveOwningPanelSlot } from "@vibez1/shared/panel/owningPanelSlot";
-import { PanelManager } from "@vibez1/shared/shell/panelManager";
+} from "@vibestudio/shared/panel/accessors";
+import { isBrowserPanelSource, isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
+import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
+import { PanelManager } from "@vibestudio/shared/shell/panelManager";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -45,19 +45,19 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@vibez1/shared/shell/workspaceStateClient";
+} from "@vibestudio/shared/shell/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-} from "@vibez1/shared/runtime/entitySpec";
-import type { PanelNavigationState } from "@vibez1/shared/types";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+} from "@vibestudio/shared/runtime/entitySpec";
+import type { PanelNavigationState } from "@vibestudio/shared/types";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type {
   IndexablePanel,
   PanelSearchIndex,
   PanelSearchResult,
-} from "@vibez1/shared/panelSearchTypes";
+} from "@vibestudio/shared/panelSearchTypes";
 
 const log = createDevLogger("PanelRuntimeRegistration");
 
@@ -438,7 +438,7 @@ export async function createServerPanelTreeBridge(
     };
   };
   const panelToListItem = (
-    panel: import("@vibez1/shared/types").Panel,
+    panel: import("@vibestudio/shared/types").Panel,
     parentId: string | null
   ) => ({
     panelId: panel.id,
@@ -886,13 +886,13 @@ export interface CommonDeps {
   centralData: CentralDataManager | null;
   hostConfig: HostConfig;
   isIpcMode: boolean;
-  tokenManager?: import("@vibez1/shared/tokenManager").TokenManager;
-  eventService?: import("@vibez1/shared/eventsService").EventService;
+  tokenManager?: import("@vibestudio/shared/tokenManager").TokenManager;
+  eventService?: import("@vibestudio/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
-  entityCache?: import("@vibez1/shared/runtime/entityCache").EntityCache;
+  entityCache?: import("@vibestudio/shared/runtime/entityCache").EntityCache;
   /** True when the target context already holds state (active entity or materialized folder). */
   contextExists: (contextId: string) => boolean;
   /** Human label for the entity owning the target context, for prompt copy. */
@@ -912,7 +912,7 @@ export interface CommonDeps {
     | Promise<import("./services/workspaceService.js").WorkspaceUnitStatus[]>
     | import("./services/workspaceService.js").WorkspaceUnitStatus[];
   restartWorkspaceUnit?: (
-    ctx: import("@vibez1/shared/serviceDispatcher").ServiceContext,
+    ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
     name: string
   ) => Promise<void>;
   listWorkspaceUnitLogs?: (
@@ -1045,7 +1045,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     return { ...meta, id: panelId };
   };
   const resolveRequesterPanelMetadataForServices = async (
-    caller: import("@vibez1/shared/serviceDispatcher").VerifiedCaller
+    caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller
   ): Promise<PanelAccessMetadata | null> => {
     if (caller.runtime.kind !== "panel") return null;
     const lease = deps.panelRuntimeCoordinator?.getLease(caller.runtime.id);
@@ -1083,8 +1083,8 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   {
     const { createWorkspaceService } = await import("./services/workspaceService.js");
     const { createWorkspaceConfigManager, createAndRegisterWorkspace, deleteWorkspaceDir } =
-      await import("@vibez1/shared/workspace/loader");
-    const wsConfigPath = path.join(workspacePath, "meta/vibez1.yml");
+      await import("@vibestudio/shared/workspace/loader");
+    const wsConfigPath = path.join(workspacePath, "meta/vibestudio.yml");
     const wsConfigManager = createWorkspaceConfigManager(wsConfigPath, workspaceConfig);
 
     container.registerRpc(
@@ -1204,7 +1204,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   }
 
   {
-    let panelCdpDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition;
+    let panelCdpDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelCdp",
       dependencies: ["cdpBridge", "shellPresence"],
@@ -1345,7 +1345,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   }
 
   {
-    let panelTreeDefinition: import("@vibez1/shared/serviceDefinition").ServiceDefinition;
+    let panelTreeDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
     container.registerManaged({
       name: "panelTree",
       dependencies: ["shellPresence", "buildSystem", "workspace-state", "runtime"],
@@ -1421,7 +1421,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             type: "ws:event",
             event: "build:complete",
             payload: { source, error },
-          } as import("@vibez1/shared/ws/protocol").WsServerMessage);
+          } as import("@vibestudio/shared/ws/protocol").WsServerMessage);
         },
       });
 
@@ -1433,13 +1433,13 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     const { createFsServiceDefinition } = await import("./services/fsServiceDef.js");
-    let fsServiceInstance: import("@vibez1/shared/fsService").FsService;
+    let fsServiceInstance: import("@vibestudio/shared/fsService").FsService;
     container.registerManaged({
       name: "fsRpc",
       dependencies: ["fsService"],
       async start(resolve) {
         fsServiceInstance = assertPresent(
-          resolve<import("@vibez1/shared/fsService").FsService>("fsService")
+          resolve<import("@vibestudio/shared/fsService").FsService>("fsService")
         );
       },
       getServiceDefinition() {

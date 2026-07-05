@@ -15,7 +15,7 @@ import {
   GLOBAL_TYPE_DEFINITIONS,
   PATH_TYPE_DEFINITIONS,
   TS_LIB_FILES,
-} from "@vibez1/typecheck";
+} from "@vibestudio/typecheck";
 
 let panelDir: string;
 
@@ -379,7 +379,7 @@ describe("typecheck.getBrowserTypeDefinitions", () => {
           moduleName: "path",
         }),
         expect.objectContaining({
-          filePath: "file:///vibez1/globals.d.ts",
+          filePath: "file:///vibestudio/globals.d.ts",
           content: GLOBAL_TYPE_DEFINITIONS,
         }),
       ]),

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { StoredCookie } from "@vibez1/browser-data";
+import type { StoredCookie } from "@vibestudio/browser-data";
 
 vi.mock("electron", () => ({
   session: {
@@ -8,8 +8,8 @@ vi.mock("electron", () => ({
 }));
 
 import { createBrowserSessionSyncService, toElectronCookie } from "./browserSessionSync.js";
-import type { BrowserDataClient } from "@vibez1/browser-data";
-import type { EventService } from "@vibez1/shared/eventsService";
+import type { BrowserDataClient } from "@vibestudio/browser-data";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServerClient } from "../serverClient.js";
 
 function storedCookie(partial: Partial<StoredCookie>): StoredCookie {

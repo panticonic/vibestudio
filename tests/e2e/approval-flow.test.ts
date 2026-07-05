@@ -2,9 +2,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RPC_METHODS } from "@vibez1/shared/approvalContract";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createApprovalPushBridge, type ApprovalPushBridge } from "../../src/server/services/approvalPushBridge.js";
 import { createApprovalQueue, type ApprovalQueueWithListeners } from "../../src/server/services/approvalQueue.js";
 import { createPushMetrics, type PushMetrics } from "../../src/server/services/pushMetrics.js";
@@ -39,7 +39,7 @@ class FakeTransport {
   }
 }
 function tempRegistrationsPath(): string {
-    return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-approval-flow-")), "registrations.json");
+    return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-approval-flow-")), "registrations.json");
 }
 async function flushAsyncWork(): Promise<void> {
     for (let i = 0; i < 5; i += 1) {

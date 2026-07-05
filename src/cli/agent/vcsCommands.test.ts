@@ -76,7 +76,7 @@ function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequ
 }
 
 function writeCredentials(tmpDir: string): void {
-  const dir = path.join(tmpDir, ".config", "vibez1");
+  const dir = path.join(tmpDir, ".config", "vibestudio");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
@@ -92,7 +92,7 @@ function writeCredentials(tmpDir: string): void {
 }
 
 function writeSession(tmpDir: string, name = "default"): void {
-  const dir = path.join(tmpDir, ".config", "vibez1", "agent-sessions");
+  const dir = path.join(tmpDir, ".config", "vibestudio", "agent-sessions");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `${name}.json`),
@@ -125,11 +125,11 @@ function withTtyStdout<T>(fn: () => Promise<T>): Promise<T> {
   });
 }
 
-describe("vibez1 vcs commands", () => {
+describe("vibestudio vcs commands", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-vcs-cli-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-vcs-cli-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -289,7 +289,7 @@ describe("vibez1 vcs commands", () => {
     // Hop 1: resolve the vcs manifest service (userland dispatch, P3 flip).
     expect(rpcBodies[0]).toEqual({
       method: "workers.resolveService",
-      args: ["vibez1.vcs.v1", null],
+      args: ["vibestudio.vcs.v1", null],
     });
     // Hop 2: the build-gated push against the resolved DO target.
     expect(rpcBodies[1]).toEqual({
@@ -432,7 +432,7 @@ describe("vibez1 vcs commands", () => {
     expect(
       errors.some((line) =>
         line.includes(
-          "Reconcile with `vibez1 vcs merge --repo REPOPATH`, then push. " +
+          "Reconcile with `vibestudio vcs merge --repo REPOPATH`, then push. " +
             "If the merge conflicts, resolve markers and commit before pushing."
         )
       )
@@ -540,7 +540,7 @@ describe("vibez1 vcs commands", () => {
     // Hop 1: the single typed-host bootstrap hop (resolve the manifest service).
     expect(rpcBodies[0]).toEqual({
       method: "workers.resolveService",
-      args: ["vibez1.vcs.v1", null],
+      args: ["vibestudio.vcs.v1", null],
     });
     // Hop 2: positional (repoPath, limit?) against the resolved DO target;
     // no --limit ⇒ limit serializes to null.
@@ -573,7 +573,7 @@ describe("vibez1 vcs commands", () => {
     // Hop 1: resolve the vcs manifest service (userland dispatch, Phase 4 flip).
     expect(rpcBodies[0]).toEqual({
       method: "workers.resolveService",
-      args: ["vibez1.vcs.v1", null],
+      args: ["vibestudio.vcs.v1", null],
     });
     // Hop 2: the history-preserving fork against the resolved DO target.
     expect(rpcBodies[1]).toEqual({
@@ -604,7 +604,7 @@ describe("vibez1 vcs commands", () => {
     await expect(main(["vcs", "delete-repo", "--repo", "panels/old", "--json"])).resolves.toBe(0);
     expect(rpcBodies[0]).toEqual({
       method: "workers.resolveService",
-      args: ["vibez1.vcs.v1", null],
+      args: ["vibestudio.vcs.v1", null],
     });
     expect(rpcBodies[1]).toEqual({
       type: "call",
@@ -633,7 +633,7 @@ describe("vibez1 vcs commands", () => {
     await expect(main(["vcs", "restore-repo", "--repo", "panels/old", "--json"])).resolves.toBe(0);
     expect(rpcBodies[0]).toEqual({
       method: "workers.resolveService",
-      args: ["vibez1.vcs.v1", null],
+      args: ["vibestudio.vcs.v1", null],
     });
     expect(rpcBodies[1]).toEqual({
       type: "call",

@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import type { EventService } from "@vibez1/shared/eventsService";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import type {
   ClientSession,
   PanelHostRegistration,
@@ -9,14 +9,14 @@ import type {
   PanelRuntimeLeaseChangedReason,
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
-} from "@vibez1/shared/panel/panelLease";
+} from "@vibestudio/shared/panel/panelLease";
 import {
   asPanelEntityId,
   asPanelSlotId,
   isPanelEntityId,
   isPanelSlotId,
-} from "@vibez1/shared/panel/ids";
-import type { PanelEntityId, PanelSlotId } from "@vibez1/shared/panel/ids";
+} from "@vibestudio/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 
 const LEASE_RECONNECT_GRACE_MS = 3000;
 

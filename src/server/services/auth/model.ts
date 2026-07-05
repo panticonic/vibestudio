@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { TokenManager } from "@vibez1/shared/tokenManager";
-import { type ConnectPairing, createConnectDeepLink } from "@vibez1/shared/connect";
+import type { TokenManager } from "@vibestudio/shared/tokenManager";
+import { type ConnectPairing, createConnectDeepLink } from "@vibestudio/shared/connect";
 import { DEFAULT_PAIRING_CODE_TTL_MS, type DeviceAuthStore } from "../deviceAuthStore.js";
 
 /**
@@ -90,7 +90,7 @@ export interface MintedPairingInvite {
 /**
  * Mint one pairing invite: a registered pairing code plus, when WebRTC ingress
  * is live, a FRESH signaling room (plan §2.1 — room-per-invite) armed on the
- * pool and embedded in the `vibez1://connect` deep link. The room follows the
+ * pool and embedded in the `vibestudio://connect` deep link. The room follows the
  * invite's lifecycle: redemption persists it onto the device record (the store
  * re-tags the armed room via `onPairingRoomRedeemed`); expiry unredeemed
  * releases it (`onPairingRoomReleased` → disarm). Without ingress (loopback

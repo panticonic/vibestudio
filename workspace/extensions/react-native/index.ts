@@ -4,10 +4,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
-import type { BuildProviderInput, BuildProviderOutput } from "@vibez1/shared/buildProvider";
+import type { BuildProviderInput, BuildProviderOutput } from "@vibestudio/shared/buildProvider";
 
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@vibez1/extension" {
+declare module "@vibestudio/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/react-native": Api;
   }
@@ -36,7 +36,7 @@ export async function activate() {
       const rnHostAbi = typeof appManifest["rnHostAbi"] === "string"
         ? appManifest["rnHostAbi"]
         : null;
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-rn-provider-"));
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rn-provider-"));
       const artifacts: BuildProviderOutput["artifacts"] = [];
       for (const platform of ["android", "ios"] as const) {
         const bundlePath = path.join(tempDir, `index.${platform}.bundle`);
@@ -137,7 +137,7 @@ async function runReactNativeBundle(
       // Provider builds are one-shot bundles. Keep Metro out of watch mode so
       // local mobile smoke tests do not depend on the host inotify limit.
       CI: "1",
-      VIBEZ1_WORKSPACE_APP_ROOT: input.sourcePath,
+      VIBESTUDIO_WORKSPACE_APP_ROOT: input.sourcePath,
     },
   });
 }
@@ -166,7 +166,7 @@ function run(
 }
 
 function resolveRepoRoot(workspaceRoot: string): string {
-  for (const start of [process.env["VIBEZ1_REPO_ROOT"], process.cwd(), workspaceRoot]) {
+  for (const start of [process.env["VIBESTUDIO_REPO_ROOT"], process.cwd(), workspaceRoot]) {
     if (!start) continue;
     let current = path.resolve(start);
     while (true) {
@@ -181,7 +181,7 @@ function resolveRepoRoot(workspaceRoot: string): string {
       current = parent;
     }
   }
-  throw new Error("Could not locate Vibez1 repo root for React Native provider");
+  throw new Error("Could not locate Vibestudio repo root for React Native provider");
 }
 
 function walkFiles(dir: string): string[] {

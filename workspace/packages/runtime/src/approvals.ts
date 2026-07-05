@@ -1,10 +1,10 @@
-import type { RpcCaller } from "@vibez1/rpc";
-import type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalRequest, } from "@vibez1/shared/approvals";
-export type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalOption, UserlandApprovalRequest, UserlandApprovalSubject, } from "@vibez1/shared/approvals";
+import type { RpcCaller } from "@vibestudio/rpc";
+import type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalRequest, } from "@vibestudio/shared/approvals";
+export type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalOption, UserlandApprovalRequest, UserlandApprovalSubject, } from "@vibestudio/shared/approvals";
 /**
  * Consumer contract: use this only for custom userland services that expose a
  * shared resource to other userland callers and need a user decision that
- * Vibez1 cannot represent with a built-in permission.
+ * Vibestudio cannot represent with a built-in permission.
  *
  * Do not call this before ordinary actions the caller can already perform:
  * context filesystem work, eval work, panel operations, browser automation,

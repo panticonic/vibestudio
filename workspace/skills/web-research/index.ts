@@ -88,13 +88,13 @@ function getCredentialRuntime(): RuntimeCredentials {
   const api = credentials as Partial<RuntimeCredentials> | undefined;
   if (!api) {
     throw new Error(
-      "Vibez1 credential runtime is unavailable: @workspace/runtime did not export credentials.",
+      "Vibestudio credential runtime is unavailable: @workspace/runtime did not export credentials.",
     );
   }
   for (const method of ["requestCredentialInput", "listStoredCredentials", "revokeCredential"] as const) {
     if (typeof api[method] !== "function") {
       throw new Error(
-        `Vibez1 credential runtime is unavailable: credentials.${method} is missing.`,
+        `Vibestudio credential runtime is unavailable: credentials.${method} is missing.`,
       );
     }
   }

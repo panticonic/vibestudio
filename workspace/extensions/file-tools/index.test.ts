@@ -13,7 +13,7 @@ interface TextToolResult {
 }
 
 async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "vibez1-file-tools-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "vibestudio-file-tools-"));
   tempRoots.push(root);
   return root;
 }

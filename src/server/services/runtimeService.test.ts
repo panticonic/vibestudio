@@ -3,24 +3,24 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { createTestDO } from "@vibez1/durable/test-utils";
+import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createRuntimeService } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import {
   canonicalEntityId,
   type EntityRecord,
   type RuntimeEntityCreateSpec,
-} from "@vibez1/shared/runtime/entitySpec";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/runtime/entitySpec";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import type { DODispatch, DORef } from "../doDispatch.js";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-runtime-svc-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-svc-"));
 }
 
 function approvalQueueMock(
@@ -776,7 +776,7 @@ describe("runtimeService.retireEntity", () => {
 
   it("prompts with retire-specific copy when a caller retires a foreign entity", async () => {
     const { service, approvalQueue } = await buildDeps({ approvalDecision: "session" });
-    const owner = evalDoCaller("do:vibez1/internal:EvalDO:owner");
+    const owner = evalDoCaller("do:vibestudio/internal:EvalDO:owner");
     const handle = (await service.handler({ caller: owner }, "createEntity", [
       doCreateSpec({
         source: "workers/agent-worker",
@@ -1126,11 +1126,11 @@ const workerCaller = (id = "worker:workers/fork:fork", _ctx = "ctx-fork") =>
     effectiveVersion: "v1",
   });
 
-const evalDoCaller = (id = "do:vibez1/internal:EvalDO:eval-1") =>
+const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval-1") =>
   createVerifiedCaller(id, "do", {
     callerId: id,
     callerKind: "do",
-    repoPath: "vibez1/internal",
+    repoPath: "vibestudio/internal",
     effectiveVersion: "internal",
   });
 
@@ -1175,7 +1175,7 @@ async function seedInternalEvalDO(
   parent = serverCaller
 ) {
   return (await service.handler({ caller: parent }, "createEntity", [
-    { kind: "do", source: "vibez1/internal", className: "EvalDO", key, contextId },
+    { kind: "do", source: "vibestudio/internal", className: "EvalDO", key, contextId },
   ])) as { id: string };
 }
 
@@ -1278,7 +1278,7 @@ describe("runtimeService.cloneContext", () => {
     expect(result.entities.some((e) => e.sourceId === internal.id)).toBe(false);
     expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
     expect(cloneDurableStorage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ source: "vibez1/internal" })
+      expect.objectContaining({ source: "vibestudio/internal" })
     );
   });
 
@@ -1519,7 +1519,7 @@ describe("runtimeService.destroyContext", () => {
       expect.objectContaining({ source: "workers/agent", className: "AgentDO", key: "agent-1" })
     );
     expect(destroyDurableStorage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ source: "vibez1/internal" })
+      expect.objectContaining({ source: "vibestudio/internal" })
     );
   });
 

@@ -8,8 +8,8 @@
 
 import { randomUUID } from "node:crypto";
 
-import { canonicalKey } from "@vibez1/shared/canonicalKey";
-import type { EventService } from "@vibez1/shared/eventsService";
+import { canonicalKey } from "@vibestudio/shared/canonicalKey";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import type {
   ApprovalDecision,
   ApprovalOperationDescriptor,
@@ -29,12 +29,12 @@ import type {
   UserlandApprovalChoice,
   UserlandApprovalOption,
   UserlandApprovalSubject,
-} from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvals";
 import type {
   AccountIdentity,
   CredentialInjection,
   UrlAudience,
-} from "@vibez1/shared/credentials/types";
+} from "@vibestudio/shared/credentials/types";
 
 /** Terminal decision surfaced back to queue waiters (dismiss collapses to deny). */
 export type GrantedDecision = "once" | "session" | "version" | "repo" | "deny";
@@ -136,7 +136,7 @@ export interface SecretInputApprovalQueueRequest extends ApprovalQueueRequestBas
 export interface UserlandApprovalQueueRequest {
   principal: ApprovalPrincipal;
   /** Issuer of the request — defaults to principal when omitted. */
-  issuer?: import("@vibez1/shared/approvals").UserlandApprovalIssuer;
+  issuer?: import("@vibestudio/shared/approvals").UserlandApprovalIssuer;
   subject: UserlandApprovalSubject;
   title: string;
   summary?: string;

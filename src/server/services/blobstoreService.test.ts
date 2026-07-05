@@ -5,15 +5,15 @@ import * as path from "path";
 import * as os from "os";
 import { Readable } from "stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import {
   buildWorktreeManifest,
   manifestHashForEntries,
   EMPTY_STATE_HASH,
   type ManifestHashEntry,
   type WorktreeHashFile,
-} from "@vibez1/shared/contentTree/worktreeHash";
-import { treeHashDigest } from "@vibez1/shared/contentTree/treeObjects";
+} from "@vibestudio/shared/contentTree/worktreeHash";
+import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
 import {
   createBlobstoreService,
   diffTrees,
@@ -135,7 +135,7 @@ describe("blobstoreService", () => {
   let blobsDir: string;
 
   beforeEach(async () => {
-    rootDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vibez1-blobstore-"));
+    rootDir = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-blobstore-"));
     blobsDir = path.join(rootDir, "blobs");
   });
 

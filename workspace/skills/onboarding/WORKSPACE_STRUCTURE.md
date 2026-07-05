@@ -1,13 +1,13 @@
 # Workspace Directory Structure
 
-A Vibez1 workspace is organized into source directories backed by a shared GAD VCS state graph. This structure enables isolated context folders where agents can safely read and write files.
+A Vibestudio workspace is organized into source directories backed by a shared GAD VCS state graph. This structure enables isolated context folders where agents can safely read and write files.
 
 ## Layout
 
 ```
 source/
   meta/                 ← Workspace metadata
-    vibez1.yml        ← Workspace config: init panels, external git remotes
+    vibestudio.yml        ← Workspace config: init panels, external git remotes
     AGENTS.md           ← Agent system prompt
   panels/               ← Panel source code
     chat/               ← Default chat panel
@@ -38,7 +38,7 @@ state/
 
 `meta/` contains workspace-level configuration that agents need access to:
 
-- **vibez1.yml** — Workspace configuration (initial panels and external git remotes). Read by the server at startup; agents can read it via `workspace.getConfig()`.
+- **vibestudio.yml** — Workspace configuration (initial panels and external git remotes). Read by the server at startup; agents can read it via `workspace.getConfig()`.
 - **AGENTS.md** — The system prompt injected into every agent session. Loaded by the resource loader at agent startup. Agents can also read it directly from `meta/AGENTS.md` in their context folder.
 
 Like every other source directory, `meta/` is tracked by workspace VCS. This means:
@@ -102,7 +102,7 @@ such as minting a pairing invite require the `connection-management`
 capability.
 
 For the full trust and client-auth model, see
-`docs/trusted-workspace-units.md` in the Vibez1 source checkout.
+`docs/trusted-workspace-units.md` in the Vibestudio source checkout.
 
 For authoring apps, target contracts, capabilities, mobile bootstrap, and
 terminal-client guidance, read `skills/appdev/SKILL.md`.
@@ -122,7 +122,7 @@ Plain projects are still external Git-backed projects when imported that way:
   materialized into their `.git/config`. Use object declarations with `url` and
   `branch` when a workspace project must clone a non-default branch.
 - `git.importProject({ path: "projects/name", remote })` creates a canonical
-  workspace project from a remote and records the shared remote in `meta/vibez1.yml`.
+  workspace project from a remote and records the shared remote in `meta/vibestudio.yml`.
 - Missing configured remotes are imported automatically at startup;
   `git.completeWorkspaceDependencies()` is available as an explicit retry or
   backfill operation.
@@ -135,9 +135,9 @@ credentialed private repo retries, see
 
 ## Template vs Live Workspace
 
-The `workspace/` directory in the Vibez1 source repo is a **template**, never used directly as a live workspace. When a workspace is created:
+The `workspace/` directory in the Vibestudio source repo is a **template**, never used directly as a live workspace. When a workspace is created:
 
-1. Source directories are copied from the template into `~/.config/vibez1/workspaces/{name}/source/`
+1. Source directories are copied from the template into `~/.config/vibestudio/workspaces/{name}/source/`
 2. Source directories are ingested into the workspace GAD VCS state graph
 3. State directories are scaffolded fresh
 

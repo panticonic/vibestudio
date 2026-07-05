@@ -1,8 +1,8 @@
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ViewManager } from "../viewManager.js";
-import type { PaletteCommand } from "@vibez1/shared/types";
-import { paletteMethods } from "@vibez1/shared/serviceSchemas/palette";
+import type { PaletteCommand } from "@vibestudio/shared/types";
+import { paletteMethods } from "@vibestudio/shared/serviceSchemas/palette";
 import { requireChromeCaller } from "./appCapabilities.js";
 
 /**

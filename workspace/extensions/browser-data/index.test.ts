@@ -88,7 +88,7 @@ function makeContext(
     unhealthy: vi.fn(),
   };
   const resolveDurableObject = vi.fn(async () => ({
-    targetId: "do:vibez1/internal:BrowserDataDO:global",
+    targetId: "do:vibestudio/internal:BrowserDataDO:global",
   }));
   const approvalsRequest = vi.fn(async () => approvalChoice);
   return {
@@ -158,8 +158,8 @@ describe("@workspace-extensions/browser-data", () => {
     const api = await activate(ctx as never);
 
     await expect(api.getBookmarks()).resolves.toEqual([{ id: 1, title: "Example" }]);
-    expect(resolveDurableObject).toHaveBeenCalledWith("vibez1/internal", "BrowserDataDO", "global");
-    expect(rpcCall).toHaveBeenCalledWith("do:vibez1/internal:BrowserDataDO:global", "getBookmarks", "/");
+    expect(resolveDurableObject).toHaveBeenCalledWith("vibestudio/internal", "BrowserDataDO", "global");
+    expect(rpcCall).toHaveBeenCalledWith("do:vibestudio/internal:BrowserDataDO:global", "getBookmarks", "/");
   });
 
   it("emits change events for mutations", async () => {
@@ -181,13 +181,13 @@ describe("@workspace-extensions/browser-data", () => {
     })).resolves.toMatchObject([{ dataType: "bookmarks", success: true }]);
 
     expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibez1/internal:BrowserDataDO:global",
+      "do:vibestudio/internal:BrowserDataDO:global",
       "addBookmarksBatch",
       [{ title: "Example", url: "https://example.com" }],
       { browser: "chrome", profilePath: "/tmp/profile" },
     );
     expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibez1/internal:BrowserDataDO:global",
+      "do:vibestudio/internal:BrowserDataDO:global",
       "recordImportRun",
       expect.objectContaining({
         browser: "chrome",
@@ -212,7 +212,7 @@ describe("@workspace-extensions/browser-data", () => {
     })).resolves.toMatchObject([{ dataType: "history", success: true }]);
 
     expect(rpcCall).toHaveBeenCalledWith(
-      "do:vibez1/internal:BrowserDataDO:global",
+      "do:vibestudio/internal:BrowserDataDO:global",
       "addHistoryBatch",
       [{ url: "https://example.com/docs", title: "Docs", visitCount: 1, lastVisitTime: 100 }],
       { browser: "chrome", profilePath: "/tmp/profile" },

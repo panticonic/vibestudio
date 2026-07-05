@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "title": "Agentic Chat",
     "entry": "index.tsx",
     "exposeModules": [
@@ -19,7 +19,7 @@
     ]
   },
   "dependencies": {
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@workspace/eval": "workspace:*",

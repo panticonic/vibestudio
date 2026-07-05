@@ -1,6 +1,6 @@
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibez1/durable";
-import type { AuthenticatedCaller } from "@vibez1/rpc";
-import { BROWSER_DATA_SCHEMA } from "@vibez1/browser-data";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
+import type { AuthenticatedCaller } from "@vibestudio/rpc";
+import { BROWSER_DATA_SCHEMA } from "@vibestudio/browser-data";
 import type {
   ImportedAutofillEntry,
   ImportedBookmark,
@@ -15,12 +15,12 @@ import type {
   ImportedSearchEngine,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,
-} from "@vibez1/browser-data";
+} from "@vibestudio/browser-data";
 import { assertPresent } from "../../lintHelpers";
 
 const BATCH_SIZE = 1000;
 
-type HistoryVisitSource = "vibez1" | "import";
+type HistoryVisitSource = "vibestudio" | "import";
 
 interface HistoryVisitWrite {
   visitTime: number;
@@ -42,7 +42,7 @@ interface HistoryVisitWrite {
  * every other caller kind is refused (this DO holds user credentials).
  *
  * `brokerCallerId` is the package name of the extension declared in
- * `workspace/meta/vibez1.yml` under `providers.browserData.extension` (the
+ * `workspace/meta/vibestudio.yml` under `providers.browserData.extension` (the
  * server injects it as the `BROWSER_DATA_BROKER_ID` env binding). When no
  * broker is declared, NO extension is accepted — the host never falls back to
  * a hardcoded extension name. Exported so the policy is unit-testable without
@@ -68,7 +68,7 @@ export class BrowserDataDO extends DurableObjectBase {
   /**
    * The manifest-declared broker extension's callerId, injected by the server
    * as the `BROWSER_DATA_BROKER_ID` env binding (derived from
-   * `providers.browserData.extension` in meta/vibez1.yml). Null when the
+   * `providers.browserData.extension` in meta/vibestudio.yml). Null when the
    * workspace declares no broker — extension access is then disabled.
    */
   private brokerCallerId(): string | null {
@@ -97,7 +97,7 @@ export class BrowserDataDO extends DurableObjectBase {
     if (!isBrowserDataDirectCaller(caller, broker)) {
       const detail =
         caller?.callerKind === "extension" && broker === null
-          ? " (no browser-data broker extension is declared in meta/vibez1.yml providers.browserData)"
+          ? " (no browser-data broker extension is declared in meta/vibestudio.yml providers.browserData)"
           : "";
       throw new Error(
         `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}${detail}`
@@ -334,7 +334,7 @@ export class BrowserDataDO extends DurableObjectBase {
       visitTime,
       transition: request.transition ?? "link",
       typed: Boolean(request.typed),
-      source: request.source ?? "vibez1",
+      source: request.source ?? "vibestudio",
       panelId: request.panelId,
       title: request.title,
     });

@@ -5,21 +5,21 @@ import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTab
 import { CliError, UsageError, jsonMode, printError, printResult } from "../output.js";
 
 /**
- * `vibez1 agent skill install|print` — install (or print) the bundled
- * vibez1-agent Claude Code skill that documents this CLI.
+ * `vibestudio agent skill install|print` — install (or print) the bundled
+ * vibestudio-agent Claude Code skill that documents this CLI.
  */
 
-const SKILL_NAME = "vibez1-agent";
+const SKILL_NAME = "vibestudio-agent";
 const DEFAULT_INSTALL_DIR = path.join(".claude", "skills", SKILL_NAME);
 
 /**
  * Locate the bundled skill directory. Built CLI: build.mjs copies
- * skills/vibez1-agent next to client.mjs (dist/cli/skills/vibez1-agent).
- * Dev (tsx on src/): falls back to <repoRoot>/skills/vibez1-agent.
- * VIBEZ1_AGENT_SKILL_DIR overrides (test seam).
+ * skills/vibestudio-agent next to client.mjs (dist/cli/skills/vibestudio-agent).
+ * Dev (tsx on src/): falls back to <repoRoot>/skills/vibestudio-agent.
+ * VIBESTUDIO_AGENT_SKILL_DIR overrides (test seam).
  */
 export function resolveSkillDir(): string {
-  const override = process.env["VIBEZ1_AGENT_SKILL_DIR"];
+  const override = process.env["VIBESTUDIO_AGENT_SKILL_DIR"];
   if (override) return override;
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
@@ -72,7 +72,7 @@ async function skill(inv: ParsedInvocation): Promise<number> {
       case "print":
         return await print(inv.flags["json"] === true);
       default:
-        throw new UsageError("usage: vibez1 agent skill install [--dir DIR] | print");
+        throw new UsageError("usage: vibestudio agent skill install [--dir DIR] | print");
     }
   } catch (error) {
     return printError(error, { json });
@@ -82,8 +82,8 @@ async function skill(inv: ParsedInvocation): Promise<number> {
 export const skillCommand: CliCommand = {
   group: "agent",
   name: "skill",
-  summary: "Install or print the bundled vibez1-agent Claude Code skill",
-  usage: "vibez1 agent skill install [--dir DIR] | print",
+  summary: "Install or print the bundled vibestudio-agent Claude Code skill",
+  usage: "vibestudio agent skill install [--dir DIR] | print",
   flags: [
     {
       name: "dir",

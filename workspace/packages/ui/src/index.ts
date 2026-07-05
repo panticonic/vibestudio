@@ -1,8 +1,8 @@
 // --- App-wide design language ---
 export { APP_THEME } from "./theme.config";
 export type { AppTheme } from "./theme.config";
-export { Vibez1Logo } from "./brand";
-export type { Vibez1LogoProps } from "./brand";
+export { VibestudioLogo } from "./brand";
+export type { VibestudioLogoProps } from "./brand";
 
 // --- Shared UI kit: layout primitives ---
 export { Stack, Surface, Toolbar, PanelChrome } from "./kit/layout";

@@ -43,7 +43,7 @@ When a static token or API key must be entered by the user, do not collect it in
 chat or panel-owned React state. Use the host-owned credential input prompt.
 This prompt currently supports one required secret field; multi-field setup
 material belongs in client config or another provider-specific setup API.
-The secret is entered in Vibez1's shell UI and stored encrypted after
+The secret is entered in Vibestudio's shell UI and stored encrypted after
 submission, but it is not exposed to panels, workers, or chat state.
 
 ```ts
@@ -151,14 +151,14 @@ packfiles through `credentials.fetch()`, and do not expose PATs to userland
 
 ```ts
 import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@vibez1/git";
+import { GitClient } from "@vibestudio/git";
 
 const client = new GitClient(fs, { http: credentials.gitHttp() });
 await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
 const status = await client.status("/repo");
 ```
 
-When the caller needs external Git transport, use `@vibez1/git` with
+When the caller needs external Git transport, use `@vibestudio/git` with
 `credentials.gitHttp()` so credentials stay host-mediated.
 Use `client.status(dir)` for structured status and `client.statusMatrix(dir)`
 only when raw isomorphic-git HEAD/WORKDIR/STAGE tuples are required.
@@ -192,7 +192,7 @@ await git.importProject({
 });
 ```
 
-Repos declared in `meta/vibez1.yml` are imported automatically at startup.
+Repos declared in `meta/vibestudio.yml` are imported automatically at startup.
 Use `git.completeWorkspaceDependencies()` as an explicit retry/backfill when a
 configured workspace repo is still missing. For private repos, pass a
 credential id on the retry call because startup auto-import has no interactive
@@ -200,7 +200,7 @@ credential id on the retry call because startup auto-import has no interactive
 
 `git.importProject()` uses one workspace config approval showing the destination
 path, remote URL, and branch. The durable declaration is written to
-`meta/vibez1.yml` before clone so a failed clone can be retried from config.
+`meta/vibestudio.yml` before clone so a failed clone can be retried from config.
 For the full model, see `skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
 
 ## Provider Setup UI Pattern
@@ -223,7 +223,7 @@ export default function ProviderSetup({ onSubmit, onCancel }) {
       <Flex align="center" justify="between" gap="3" wrap="wrap">
         <Flex align="center" gap="2">
           <Checkbox checked={done} onCheckedChange={(checked) => setDone(checked === true)} />
-          <Text size="2">Create an OAuth app and copy the client ID into Vibez1.</Text>
+          <Text size="2">Create an OAuth app and copy the client ID into Vibestudio.</Text>
         </Flex>
         <Flex gap="2">
           <Button size="1" variant="soft" onClick={() => openPanel(consoleUrl, { focus: true })}>

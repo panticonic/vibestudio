@@ -11,7 +11,7 @@
  * - `/cdp/{targetId}` — per-panel Playwright client WebSocket connections
  *
  * Both paths authenticate with a first WebSocket message:
- * `{ "type": "vibez1:cdp-auth", "token": "..." }`.
+ * `{ "type": "vibestudio:cdp-auth", "token": "..." }`.
  *
  * The client ↔ server protocol is standard CDP, so Playwright connects
  * identically regardless of backend.
@@ -20,10 +20,10 @@
 import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
-import { constantTimeStringEqual } from "@vibez1/shared/tokenManager";
-import { CdpGrantService } from "@vibez1/shared/cdpGrants";
-import type { PanelRuntimeLeaseChangedEvent } from "@vibez1/shared/panel/panelLease";
-import { createDevLogger } from "@vibez1/dev-log";
+import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
+import { CdpGrantService } from "@vibestudio/shared/cdpGrants";
+import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
+import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("CdpBridge");
 
@@ -203,7 +203,7 @@ export class CdpBridge {
           return;
         }
         if (
-          parsed.type !== "vibez1:cdp-auth" ||
+          parsed.type !== "vibestudio:cdp-auth" ||
           typeof parsed.token !== "string" ||
           !validate(parsed.token)
         ) {
@@ -241,7 +241,7 @@ export class CdpBridge {
         ).then((ok) => {
           if (!ok) return;
           this.handleProviderConnection(hostConnectionId, ws);
-          ws.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+          ws.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
         });
       });
     } else if (pathname.startsWith("/cdp/")) {
@@ -264,7 +264,7 @@ export class CdpBridge {
             return;
           }
           this.handleClientConnection(ws, targetId);
-          ws.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+          ws.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
         });
       });
     } else {
@@ -295,7 +295,7 @@ export class CdpBridge {
       throw new Error(`CDP host provider not authorized: ${hostConnectionId}`);
     }
     this.handleProviderConnection(hostConnectionId, provider);
-    provider.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+    provider.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
   }
 
   /**

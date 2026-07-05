@@ -6,7 +6,7 @@
  */
 
 import type { ComponentType } from "react";
-import type { FieldDefinition, FieldValue } from "@vibez1/types";
+import type { FieldDefinition, FieldValue } from "@vibestudio/types";
 
 // ============================================================================
 // Feedback Result Types

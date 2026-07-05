@@ -1,7 +1,7 @@
 // Public type surface for @workspace/cdp-client — a lightweight, workerd-native
 // CDP client with a Playwright-style Page/Locator API implemented over raw CDP.
 // Kept in sync with src/worker.ts (the implementation for the worker/workerd and
-// vibez1-panel conditions).
+// vibestudio-panel conditions).
 
 export interface BoundingBox {
   x: number;

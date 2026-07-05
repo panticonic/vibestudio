@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { NotificationPayload } from "@vibez1/shared/events";
-import type { EventService } from "@vibez1/shared/eventsService";
-import { notificationMethods } from "@vibez1/shared/serviceSchemas/notification";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { NotificationPayload } from "@vibestudio/shared/events";
+import type { EventService } from "@vibestudio/shared/eventsService";
+import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notification";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ViewManager } from "../viewManager.js";
 import { requireAppCapability } from "./appCapabilities.js";
 

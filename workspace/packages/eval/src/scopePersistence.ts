@@ -1,1 +1,1 @@
-export type { ScopeEntry, ScopeListEntry, ScopePersistence } from "@vibez1/shared/scopePersistence";
+export type { ScopeEntry, ScopeListEntry, ScopePersistence } from "@vibestudio/shared/scopePersistence";

@@ -14,7 +14,7 @@
  *   rest = method path
  */
 
-import { constantTimeStringEqual, type TokenManager } from "@vibez1/shared/tokenManager";
+import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { HELD_CONNECTION_DISPATCHER } from "./workerdRpcRelay.js";
@@ -74,7 +74,7 @@ export interface PostToDOWithTokenDeps {
   heldConnection?: boolean;
   /**
    * Per-process dispatch secret stamped onto internal `/_w/` dispatches as
-   * the `X-Vibez1-Dispatch-Secret` header. The auto-generated workerd router
+   * the `X-Vibestudio-Dispatch-Secret` header. The auto-generated workerd router
    * validates this header when present, while allowing public DO routes that
    * cannot know the process-private secret.
    *
@@ -137,7 +137,7 @@ export async function postToDOWithToken(
     Authorization: `Bearer ${deps.workerdGatewayToken}`,
   };
   if (deps.dispatchSecret) {
-    headers["X-Vibez1-Dispatch-Secret"] = deps.dispatchSecret;
+    headers["X-Vibestudio-Dispatch-Secret"] = deps.dispatchSecret;
   }
 
   const res = await fetch(url, {
@@ -198,7 +198,7 @@ export interface VerifyInstanceTokenResult {
  *
  * Wave-2 status (audit 4.8): the receiver inside workerd is the
  * auto-generated router worker (see `WorkerdManager.generateRouterCode`).
- * The generated router requires `X-Vibez1-Dispatch-Secret` for every
+ * The generated router requires `X-Vibestudio-Dispatch-Secret` for every
  * `/_w/` DO dispatch. `DODispatch` supplies it for server-originated calls,
  * and the gateway supplies it only after route-registry auth/rewrites for
  * public DO routes. The TokenManager-based envelope check below is the
@@ -298,7 +298,7 @@ export class DODispatch {
   /**
    * Set a function that returns the current per-process dispatch secret
    * (`WorkerdManager.getDispatchSecret()`). Stamped onto every `/_w/`
-   * request as `X-Vibez1-Dispatch-Secret` and verified by the
+   * request as `X-Vibestudio-Dispatch-Secret` and verified by the
    * auto-generated workerd router worker. Closes audit finding 4.8.
    *
    * Called on each dispatch so a workerd restart that rotates the secret

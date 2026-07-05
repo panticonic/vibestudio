@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, lazy, Suspense } from "react";
 import { useSetAtom } from "jotai";
 import { Theme, Flex, Spinner, Text } from "@radix-ui/themes";
-import { Vibez1Logo, type AppTheme } from "@workspace/ui";
+import { VibestudioLogo, type AppTheme } from "@workspace/ui";
 
 import { workspaceChooserDialogOpenAtom, activeWorkspaceNameAtom } from "../state/appModeAtoms";
 import {
@@ -24,10 +24,10 @@ let LazyMainMode = lazy(() => import("./MainMode"));
 function LoadingSpinner() {
   return (
     <Flex direction="column" align="center" justify="center" gap="3" style={{ height: "100dvh" }}>
-      <Vibez1Logo size={72} variant="tile" />
+      <VibestudioLogo size={72} variant="tile" />
       <Spinner size="3" />
       <Text size="2" color="gray">
-        Loading Vibez1
+        Loading Vibestudio
       </Text>
     </Flex>
   );

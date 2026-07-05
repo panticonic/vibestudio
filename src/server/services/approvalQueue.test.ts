@@ -151,9 +151,9 @@ describe("approvalQueue", () => {
     });
     void queue.request({
       kind: "capability",
-      callerId: "do:vibez1/internal:EvalDO:one",
+      callerId: "do:vibestudio/internal:EvalDO:one",
       callerKind: "do",
-      repoPath: "vibez1/internal",
+      repoPath: "vibestudio/internal",
       effectiveVersion: "internal",
       capability: "external-browser-open",
       title: "Open external browser",

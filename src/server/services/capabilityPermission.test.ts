@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { parseCanonicalKey } from "@vibez1/shared/canonicalKey";
+import { parseCanonicalKey } from "@vibestudio/shared/canonicalKey";
 import { CapabilityGrantStore, capabilityGrantKey } from "./capabilityGrantStore.js";
 import {
   normalizeCallerKind,
@@ -10,10 +10,10 @@ import {
   requestCapabilityPermission,
 } from "./capabilityPermission.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-capability-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-capability-"));
 }
 
 function createApprovalQueueMock(
@@ -144,28 +144,28 @@ describe("capabilityPermission", () => {
 
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:vibez1/internal:EvalDO:one", "do", {
-        callerId: "do:vibez1/internal:EvalDO:one",
+      caller: createVerifiedCaller("do:vibestudio/internal:EvalDO:one", "do", {
+        callerId: "do:vibestudio/internal:EvalDO:one",
         callerKind: "do",
-        repoPath: "vibez1/internal",
+        repoPath: "vibestudio/internal",
         effectiveVersion: "internal",
       }),
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:vibez1/internal:EvalDO:one", "do", {
-        callerId: "do:vibez1/internal:EvalDO:one",
+      caller: createVerifiedCaller("do:vibestudio/internal:EvalDO:one", "do", {
+        callerId: "do:vibestudio/internal:EvalDO:one",
         callerKind: "do",
-        repoPath: "vibez1/internal",
+        repoPath: "vibestudio/internal",
         effectiveVersion: "internal",
       }),
     });
     await requestCapabilityPermission(deps, {
       ...baseRequest,
-      caller: createVerifiedCaller("do:vibez1/internal:EvalDO:two", "do", {
-        callerId: "do:vibez1/internal:EvalDO:two",
+      caller: createVerifiedCaller("do:vibestudio/internal:EvalDO:two", "do", {
+        callerId: "do:vibestudio/internal:EvalDO:two",
         callerKind: "do",
-        repoPath: "vibez1/internal",
+        repoPath: "vibestudio/internal",
         effectiveVersion: "internal",
       }),
     });
@@ -183,7 +183,7 @@ describe("capabilityPermission", () => {
             capability: "external-browser-open",
             resourceKey: "https://example.com",
             scope: "version",
-            repoPath: "vibez1/internal",
+            repoPath: "vibestudio/internal",
             effectiveVersion: "internal",
             grantedAt: 1,
           },
@@ -195,8 +195,8 @@ describe("capabilityPermission", () => {
 
     expect(
       grantStore.hasGrant("external-browser-open", "https://example.com", {
-        callerId: "do:vibez1/internal:EvalDO:one",
-        repoPath: "vibez1/internal",
+        callerId: "do:vibestudio/internal:EvalDO:one",
+        repoPath: "vibestudio/internal",
         effectiveVersion: "internal",
       })
     ).toBe(false);
@@ -336,7 +336,7 @@ describe("capabilityPermission", () => {
       createVerifiedCaller(id, "do", {
         callerId: id,
         callerKind: "do",
-        repoPath: "vibez1/internal",
+        repoPath: "vibestudio/internal",
         effectiveVersion: "internal",
       });
     const requestFor = (id: string, origin: string) => ({
@@ -355,15 +355,15 @@ describe("capabilityPermission", () => {
 
     await requestCapabilityPermission(
       deps,
-      requestFor("do:vibez1/internal:EvalDO:one", "https://one.example")
+      requestFor("do:vibestudio/internal:EvalDO:one", "https://one.example")
     );
     await requestCapabilityPermission(
       deps,
-      requestFor("do:vibez1/internal:EvalDO:one", "https://two.example")
+      requestFor("do:vibestudio/internal:EvalDO:one", "https://two.example")
     );
     await requestCapabilityPermission(
       deps,
-      requestFor("do:vibez1/internal:EvalDO:two", "https://two.example")
+      requestFor("do:vibestudio/internal:EvalDO:two", "https://two.example")
     );
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);

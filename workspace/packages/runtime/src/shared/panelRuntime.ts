@@ -1,5 +1,5 @@
-import type { RpcClient } from "@vibez1/rpc";
-import type { PanelLifecycleResult } from "@vibez1/shared/types";
+import type { RpcClient } from "@vibestudio/rpc";
+import type { PanelLifecycleResult } from "@vibestudio/shared/types";
 import type { PanelHandle, PanelNavigateOptions } from "../core/index.js";
 import { createCdpAutomation, type CdpAutomation } from "../panel/cdpAutomation.js";
 import {

@@ -1,7 +1,7 @@
 /**
  * Typed service clients for the CLI — thin adapter binding the shared
  * `createTypedServiceClient` (schema-derived call surfaces, see
- * `@vibez1/shared/typedServiceClient`) to any transport exposing the CLI's
+ * `@vibestudio/shared/typedServiceClient`) to any transport exposing the CLI's
  * `call("service.method", args)` shape (RpcClient, the eval RunnerRpc, …).
  *
  * The wire format is unchanged: each typed leaf still dispatches
@@ -12,7 +12,7 @@ import {
   createTypedServiceClient,
   type ServiceMethodSchemas,
   type TypedServiceClient,
-} from "@vibez1/shared/typedServiceClient";
+} from "@vibestudio/shared/typedServiceClient";
 
 /** Anything that can dispatch a raw `"service.method"` RPC with an args array. */
 export interface ServiceMethodCaller {

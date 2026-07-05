@@ -2,15 +2,18 @@
  * Package Graph — DAG discovery from workspace package.json files.
  *
  * Scans the buildable-unit directories declared by BUILDABLE_UNIT_DIRS in
- * @vibez1/shared/workspace/sourceDirs (packages, panels, apps, about, workers,
+ * @vibestudio/shared/workspace/sourceDirs (packages, panels, apps, about, workers,
  * extensions, skills, templates) and builds an adjacency-list DAG of internal
  * dependencies. Detects cycles, produces topological ordering.
  */
 
 import * as fs from "fs";
 import * as path from "path";
-import type { PackageManifest } from "@vibez1/shared/types";
-import { BUILDABLE_UNIT_DIRS, WORKSPACE_PACKAGE_SCOPES } from "@vibez1/shared/workspace/sourceDirs";
+import type { PackageManifest } from "@vibestudio/shared/types";
+import {
+  BUILDABLE_UNIT_DIRS,
+  WORKSPACE_PACKAGE_SCOPES,
+} from "@vibestudio/shared/workspace/sourceDirs";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,7 +44,7 @@ export interface GraphNode {
    * for each declared export, not just the root entry.
    */
   exports?: string[];
-  /** vibez1 manifest from package.json */
+  /** vibestudio manifest from package.json */
   manifest: PackageManifest;
 }
 
@@ -176,7 +179,7 @@ interface PackageJson {
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
-  vibez1?: PackageManifest;
+  vibestudio?: PackageManifest;
   overrides?: unknown;
   pnpm?: { overrides?: unknown };
   exports?: Record<string, unknown>;
@@ -242,7 +245,7 @@ function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind
       internalDeps,
       ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
       ...(pkg.exports ? { exports: declaredExportSubpaths(pkg.exports) } : {}),
-      manifest: pkg.vibez1 ?? {},
+      manifest: pkg.vibestudio ?? {},
     });
   }
 

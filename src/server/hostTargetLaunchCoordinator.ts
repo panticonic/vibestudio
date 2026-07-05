@@ -1,17 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { workspaceAppPackageName } from "@vibez1/shared/workspace/configParser";
-import { filterBootstrapApprovalsForTarget } from "@vibez1/shared/bootstrapApprovals";
-import type { PendingApproval, PendingUnitBatchApproval } from "@vibez1/shared/approvals";
-import { approvalViewModels, targetLabel } from "@vibez1/shared/bootstrapLaunchGate";
-import type { EventService } from "@vibez1/shared/eventsService";
-import type { HostTargetChangedPayload } from "@vibez1/shared/events";
+import { workspaceAppPackageName } from "@vibestudio/shared/workspace/configParser";
+import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
+import type { PendingApproval, PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import { approvalViewModels, targetLabel } from "@vibestudio/shared/bootstrapLaunchGate";
+import type { EventService } from "@vibestudio/shared/eventsService";
+import type { HostTargetChangedPayload } from "@vibestudio/shared/events";
 import type {
   HostTarget,
   HostTargetLaunchPhaseId,
   HostTargetLaunchSessionSnapshot,
   HostTargetLaunchSessionStatus,
   HostTargetLaunchResult,
-} from "@vibez1/shared/hostTargets";
+} from "@vibestudio/shared/hostTargets";
 import type { AppHost, ReactNativeHostReadiness } from "./appHost.js";
 
 const BEGIN_LAUNCH_REFRESH_GRACE_MS = 250;
@@ -348,7 +348,7 @@ export class HostTargetLaunchCoordinator {
 
   private reactNativePreparingDetails(details: string[] = []): string[] | null {
     // The react-native app unit is recognized via the AppHost's manifest-driven
-    // selection (meta/vibez1.yml hostTargets.react-native.app / explicit
+    // selection (meta/vibestudio.yml hostTargets.react-native.app / explicit
     // selection) — never by a hardcoded unit name. No resolvable app ⇒ only
     // building extensions count as "preparing".
     const rnAppSource = this.deps.getAppHost()?.selectedHostTargetAppSource("react-native") ?? null;

@@ -28,7 +28,7 @@ const BLOCKED_NATIVE_IMPORTS = {
   // consumers too — not just the direct AsyncStorage import inside it — to the
   // trusted shell chrome. (apps/mobile/index.js, the out-of-tree native host
   // bootstrap, is allowlisted by absolute path in createNativeBoundary.)
-  "@vibez1/mobile-webrtc": [
+  "@vibestudio/mobile-webrtc": [
     "src/services/mobileTransport.ts",
     "src/components/LoginScreen.tsx",
   ],
@@ -57,7 +57,7 @@ function createNativeBoundary(workspaceAppRoot) {
   // Trusted PLATFORM code that persists the device's WebRTC shell-reconnect
   // credential directly (not userland workspace surface, so not capability-gated):
   // the native host bootstrap (apps/mobile/index.js) and the shared WebRTC
-  // transport package (@vibez1/mobile-webrtc). Both live OUTSIDE
+  // transport package (@vibestudio/mobile-webrtc). Both live OUTSIDE
   // workspaceAppRoot and bundle through this Metro, so they are exempted by
   // absolute path rather than the workspaceAppRoot-relative allowlist above.
   const mobileWebRtcConnect = normalize(
@@ -71,10 +71,10 @@ function createNativeBoundary(workspaceAppRoot) {
   asyncStorageAllowed?.add(normalize(path.join(__dirname, "index.js")));
   asyncStorageAllowed?.add(mobileWebRtcConnect);
   // The native host bootstrap (apps/mobile/index.js) is the out-of-tree trusted
-  // consumer of the @vibez1/mobile-webrtc capability; allowlist it by absolute
+  // consumer of the @vibestudio/mobile-webrtc capability; allowlist it by absolute
   // path alongside the workspace-app-relative shell consumers above.
   allowedByModule
-    .get("@vibez1/mobile-webrtc")
+    .get("@vibestudio/mobile-webrtc")
     ?.add(normalize(path.join(__dirname, "index.js")));
 
   return {
@@ -85,7 +85,7 @@ function createNativeBoundary(workspaceAppRoot) {
       if (allowedByModule.get(blocked)?.has(origin)) return;
       throw new Error(
         `Direct import of native module "${moduleName}" from workspace app code is blocked. ` +
-          "Use the Vibez1 capability-gated service wrapper for this native surface.",
+          "Use the Vibestudio capability-gated service wrapper for this native surface.",
       );
     },
   };

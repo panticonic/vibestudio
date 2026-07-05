@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { HeadlessHost } from "./headlessHost.js";
 import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
-import { LeaseTracker } from "@vibez1/shared/panel/leaseTracker";
-import type { PanelRuntimeLease } from "@vibez1/shared/panel/panelLease";
+import { LeaseTracker } from "@vibestudio/shared/panel/leaseTracker";
+import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
 
 function config(): HeadlessHostConfig {
   return {
@@ -12,8 +12,8 @@ function config(): HeadlessHostConfig {
     clientSessionId: "headless-test",
     maxPanels: 8,
     idleUnloadMs: 60_000,
-    cacheDir: "/tmp/vibez1-test-cache",
-    profileDir: "/tmp/vibez1-test-profile",
+    cacheDir: "/tmp/vibestudio-test-cache",
+    profileDir: "/tmp/vibestudio-test-profile",
   };
 }
 

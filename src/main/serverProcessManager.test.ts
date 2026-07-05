@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ProcessAdapter } from "@vibez1/process-adapter";
+import type { ProcessAdapter } from "@vibestudio/process-adapter";
 import { ServerProcessManager } from "./serverProcessManager.js";
 
 class FakeProcess extends EventEmitter implements ProcessAdapter {

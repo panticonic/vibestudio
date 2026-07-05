@@ -1,14 +1,14 @@
 {
-  "name": "@vibez1/durable",
+  "name": "@vibestudio/durable",
   "version": "0.1.0",
-  "description": "Neutral Durable Object primitives for Vibez1 host and workspace workers",
+  "description": "Neutral Durable Object primitives for Vibestudio host and workspace workers",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./test-utils": "./src/test-utils.ts"
   },
   "dependencies": {
-    "@vibez1/rpc": "workspace:*"
+    "@vibestudio/rpc": "workspace:*"
   },
   "devDependencies": {
     "sql.js": "^1.14.0",

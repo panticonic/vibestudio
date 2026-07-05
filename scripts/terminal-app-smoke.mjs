@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 
-const READY_FILE = path.join(os.tmpdir(), `vibez1-terminal-smoke-${process.pid}.json`);
+const READY_FILE = path.join(os.tmpdir(), `vibestudio-terminal-smoke-${process.pid}.json`);
 const REMOTE_CLI = "@workspace-apps/remote-cli";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 

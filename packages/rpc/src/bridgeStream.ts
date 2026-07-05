@@ -2,7 +2,7 @@
  * §1.6 upload hop for PANEL SHELL BRIDGES.
  *
  * A panel lives in a webview and reaches its server through the shell bridge
- * (`__vibez1Shell` — Electron `contextBridge` on desktop, the React-Native
+ * (`__vibestudioShell` — Electron `contextBridge` on desktop, the React-Native
  * `postMessage` bridge on mobile). Plain RPC envelopes relay transparently, but
  * a streaming REQUEST body (an upload) cannot ride an envelope and the bridge
  * has no native stream type — so the body crosses the bridge as explicit,
@@ -454,7 +454,7 @@ export function createBridgeStreamRelay(deps: BridgeStreamRelayDeps): BridgeStre
 // ---------------------------------------------------------------------------
 
 /**
- * The stream surface a body-capable shell bridge exposes on `__vibez1Shell`.
+ * The stream surface a body-capable shell bridge exposes on `__vibestudioShell`.
  * Desktop wires these to `ipcRenderer` channels (binary chunks); mobile's
  * injected bootstrap wires them to the `postMessage` bridge (base64 chunks).
  */

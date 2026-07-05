@@ -25,13 +25,16 @@ import {
   type RpcClient,
   type RpcCallOptions,
   type RpcStreamOptions,
-} from "@vibez1/rpc";
-import { type WebRtcSession, type WebRtcTransport } from "@vibez1/rpc/transports/webrtcClient";
-import { createPairedConnection } from "@vibez1/rpc/transports/pairedConnection";
-import type { PeerConnectionProvider, RtcCandidateType } from "@vibez1/rpc/transports/webrtcPeer";
-import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import type { ConnectPairing } from "@vibez1/shared/connect";
+} from "@vibestudio/rpc";
+import { type WebRtcSession, type WebRtcTransport } from "@vibestudio/rpc/transports/webrtcClient";
+import { createPairedConnection } from "@vibestudio/rpc/transports/pairedConnection";
+import type {
+  PeerConnectionProvider,
+  RtcCandidateType,
+} from "@vibestudio/rpc/transports/webrtcPeer";
+import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import type { ConnectPairing } from "@vibestudio/shared/connect";
 import type {
   ConnectionStatus,
   PanelSession,

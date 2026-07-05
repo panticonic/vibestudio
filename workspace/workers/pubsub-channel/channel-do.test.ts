@@ -69,7 +69,7 @@ function messageTypeRegisteredEvent(
       typeId,
       displayMode: "row",
       source: {
-        protocol: "vibez1.blob-ref.v1",
+        protocol: "vibestudio.blob-ref.v1",
         digest: `source-${typeId}`,
         size: encoded.length,
         encoding: "json",
@@ -221,7 +221,7 @@ describe("PubSubChannel", () => {
         return undefined;
       },
     });
-    const evalDoId = "do:vibez1/internal:EvalDO:eval-1";
+    const evalDoId = "do:vibestudio/internal:EvalDO:eval-1";
     const arbitraryLabel = "headless-diagnose-123";
     setRpcCaller(instance, evalDoId, "durable-object");
 
@@ -508,7 +508,7 @@ describe("PubSubChannel", () => {
   it("delivers onChannelEnvelope only to DO participants that opted in (receivesChannelEnvelopes)", async () => {
     const envelopeTargets: string[] = [];
     const agentDoId = "do:workers/agent-worker:AiChatWorker:agent-x";
-    const clientDoId = "do:vibez1/internal:EvalDO:client-x";
+    const clientDoId = "do:vibestudio/internal:EvalDO:client-x";
     const { instance } = await createGadBackedChannel({
       // resolveDurableObject is an existence check (result ignored); onChannelEnvelope
       // is the structured delivery we record per target.
@@ -646,7 +646,7 @@ describe("PubSubChannel", () => {
     // method calls the RPC way: the broadcast `started` (delivered as channel:message to every
     // participant) + submitMethodResult. It must NOT be routed through deliverDoMethodCall, which
     // would dispatch onMethodCall to a missing handler and never settle the call (the redelivery echo).
-    const evalPid = "do:vibez1/internal:EvalDO:eval-1";
+    const evalPid = "do:vibestudio/internal:EvalDO:eval-1";
     const rpcCalls: Array<{ target: string; method: string }> = [];
     const { instance, gad } = await createGadBackedChannel({
       rpcCall: (target, method) => {
@@ -795,7 +795,7 @@ describe("PubSubChannel", () => {
       channelKey: "channel-lf-parent",
       rpcCall: (target, method, args) => {
         // Sibling-channel resolve (fork parent): hand back THIS channel's own ref.
-        if (target === "main" && method === "workers.resolveService" && args[0] === "vibez1.channel.v1") {
+        if (target === "main" && method === "workers.resolveService" && args[0] === "vibestudio.channel.v1") {
           return {
             source: "workers/pubsub-channel",
             className: "PubSubChannel",
@@ -1214,7 +1214,7 @@ describe("PubSubChannel", () => {
               name: "set_title",
               invocationType: "panel",
               request: {
-                protocol: "vibez1.blob-ref.v1",
+                protocol: "vibestudio.blob-ref.v1",
                 digest: "request-agent-loop",
                 size: 35,
                 encoding: "json",
@@ -1706,7 +1706,7 @@ describe("PubSubChannel", () => {
     expect(output).toMatchObject({
       kind: "invocation.output",
       causality: { transportCallId: "transport-output" },
-      payload: { output: { protocol: "vibez1.blob-ref.v1", encoding: "text" } },
+      payload: { output: { protocol: "vibestudio.blob-ref.v1", encoding: "text" } },
     });
 
     // Consume the call, then a late progress chunk is a quiet no-op (not appended).
@@ -2166,7 +2166,7 @@ describe("PubSubChannel", () => {
     // method-specific "capped/omitted" wrapper).
     const resultRef = completed?.payload?.result as { digest?: string } | undefined;
     expect(resultRef).toMatchObject({
-      protocol: "vibez1.blob-ref.v1",
+      protocol: "vibestudio.blob-ref.v1",
       digest: expect.any(String),
       encoding: "json",
     });
@@ -2466,7 +2466,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
     // args come back in journal form — $.payload.request is blob-spilled by
     // the storage boundary, so the rebuilt row carries the blob ref
     expect(JSON.parse(rows[0]!["args"] as string)).toMatchObject({
-      protocol: "vibez1.blob-ref.v1",
+      protocol: "vibestudio.blob-ref.v1",
     });
     expect(Number(rows[0]!["deadline_at"])).toBeGreaterThan(0);
 

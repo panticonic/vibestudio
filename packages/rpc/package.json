@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/rpc",
+  "name": "@vibestudio/rpc",
   "version": "0.1.0-b15c87a08b3b",
   "type": "module",
   "main": "./dist/index.js",
@@ -82,7 +82,7 @@
     "dev": "tsc --project tsconfig.build.json --watch"
   },
   "dependencies": {
-    "@vibez1/types": "workspace:*"
+    "@vibestudio/types": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

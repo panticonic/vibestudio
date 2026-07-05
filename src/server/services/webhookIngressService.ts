@@ -1,11 +1,11 @@
 import * as crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
-import { doTargetId, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
+import { doTargetId, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import {
   getHeader,
@@ -24,7 +24,7 @@ import {
 } from "../../../packages/shared/src/webhooks/ingress.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
-const DEFAULT_RELAY_PUBLIC_BASE_URL = "https://hooks.snugenv.com";
+const DEFAULT_RELAY_PUBLIC_BASE_URL = "https://vibestudio.app";
 const DEFAULT_RELAY_TOLERANCE_MS = 5 * 60 * 1000;
 const GOOGLE_OIDC_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 
@@ -377,12 +377,12 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
 
   function verifyRelayEnvelope(req: IncomingMessage, rawBody: Buffer): boolean {
     if (!deps.relaySigningSecret) return false;
-    const method = getHeader(req.headers, "x-vibez1-relay-method");
-    const path = getHeader(req.headers, "x-vibez1-relay-path");
-    const query = getHeader(req.headers, "x-vibez1-relay-query") ?? "";
-    const timestamp = getHeader(req.headers, "x-vibez1-relay-timestamp");
-    const bodySha256 = getHeader(req.headers, "x-vibez1-relay-body-sha256");
-    const signature = getHeader(req.headers, "x-vibez1-relay-signature");
+    const method = getHeader(req.headers, "x-vibestudio-relay-method");
+    const path = getHeader(req.headers, "x-vibestudio-relay-path");
+    const query = getHeader(req.headers, "x-vibestudio-relay-query") ?? "";
+    const timestamp = getHeader(req.headers, "x-vibestudio-relay-timestamp");
+    const bodySha256 = getHeader(req.headers, "x-vibestudio-relay-body-sha256");
+    const signature = getHeader(req.headers, "x-vibestudio-relay-signature");
     if (!method || !path || !timestamp || !bodySha256 || !signature) {
       return false;
     }

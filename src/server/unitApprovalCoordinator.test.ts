@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { UnitBatchEntry } from "@vibez1/shared/approvals";
+import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 
 function unit(kind: "extension" | "app", name: string): UnitBatchEntry {

@@ -1,7 +1,7 @@
 /**
  * @workspace/svelte
  *
- * Svelte bindings for Vibez1 panels. This provides:
+ * Svelte bindings for Vibestudio panels. This provides:
  * - Auto-mount utilities for Svelte panels
  * - Svelte stores for panel state and RPC
  *

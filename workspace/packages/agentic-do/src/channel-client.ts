@@ -4,7 +4,7 @@
  * All operations go through the RPC bridge, which routes to the
  * channel service DO via the server's userland service resolver.
  */
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 import {
     AGENTIC_EVENT_PAYLOAD_KIND,
@@ -36,7 +36,7 @@ interface ChannelSendOptions {
      */
     saliency?: "say";
 }
-const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
+const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 interface ResolvedService {
     kind: "durable-object" | "worker";
     targetId?: string;

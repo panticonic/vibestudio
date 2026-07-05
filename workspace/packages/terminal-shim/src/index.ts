@@ -12,5 +12,5 @@ export {
   type TerminalHostSink,
   type TerminalSize,
 } from "./runtime/createInkTerminalSession.js";
-export { Vibez1WritableTTY } from "./streams/Vibez1WritableTTY.js";
-export { Vibez1ReadableTTY } from "./streams/Vibez1ReadableTTY.js";
+export { VibestudioWritableTTY } from "./streams/VibestudioWritableTTY.js";
+export { VibestudioReadableTTY } from "./streams/VibestudioReadableTTY.js";

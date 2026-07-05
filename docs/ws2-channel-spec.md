@@ -153,7 +153,7 @@ list — each is asserted by `channel-do.test.ts`):
   - sender metadata for the durable envelope comes from the roster row;
   - broadcast `{kind:"log", phase:"live"}` after append, with `ref` echoed
     only to the sender;
-  - oversized payload fields are blob-spilled (`vibez1.blob-ref.v1`) on the
+  - oversized payload fields are blob-spilled (`vibestudio.blob-ref.v1`) on the
     durable side and hydrated on replay; blobstore failure fails the publish.
 - Method-call transport:
   - `callMethod(callerPid, targetPid, callId, method, args, opts)` stores a

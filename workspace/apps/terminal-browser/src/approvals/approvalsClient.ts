@@ -1,14 +1,14 @@
-import type { RpcClient } from "@vibez1/rpc";
-import type { ApprovalDecisionId } from "@vibez1/shared/approvalContract";
-import type { PendingApproval } from "@vibez1/shared/approvals";
-import { filterRuntimeApprovals } from "@vibez1/shared/bootstrapApprovals";
+import type { RpcClient } from "@vibestudio/rpc";
+import type { ApprovalDecisionId } from "@vibestudio/shared/approvalContract";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
+import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
-} from "@vibez1/shared/shell/approvalState";
-import { eventsMethods } from "@vibez1/shared/serviceSchemas/events";
-import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+} from "@vibestudio/shared/shell/approvalState";
+import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
+import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 /**
  * Thin wrapper over the existing global shell-approval queue. The terminal

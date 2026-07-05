@@ -1,4 +1,4 @@
-export const CONNECT_DEEP_LINK_SCHEME = "vibez1:";
+export const CONNECT_DEEP_LINK_SCHEME = "vibestudio:";
 export const CONNECT_DEEP_LINK_HOST = "connect";
 export const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{16,512}$/;
 export const WORKSPACE_ROUTE_PREFIX = "/_workspace/";
@@ -62,7 +62,7 @@ export function createConnectDeepLink(pairing: ConnectPairing): string {
     `ice=${encodeURIComponent(pairing.ice ?? "all")}`,
   ];
   if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
-  return `vibez1://connect?${params.join("&")}`;
+  return `vibestudio://connect?${params.join("&")}`;
 }
 
 export function appendServerPath(baseUrl: string | URL, suffix: string): URL {
@@ -144,14 +144,14 @@ export function parseConnectLink(raw: string): ConnectLink {
 
   const prefix = `${CONNECT_DEEP_LINK_SCHEME}//${CONNECT_DEEP_LINK_HOST}`;
   if (!raw.startsWith(prefix)) {
-    return { kind: "error", reason: "Not a vibez1://connect link" };
+    return { kind: "error", reason: "Not a vibestudio://connect link" };
   }
 
   const queryStart = raw.indexOf("?");
   if (queryStart < 0) {
     return { kind: "error", reason: "Deep link is missing pairing parameters" };
   }
-  // Manual (non-`new URL()`) query parse — the vibez1: custom scheme is not
+  // Manual (non-`new URL()`) query parse — the vibestudio: custom scheme is not
   // URL-parseable on RN/Hermes (asserted by connect.test.ts).
   const params = parseQuery(raw.slice(queryStart + 1));
   if (params.kind === "error") return params;

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { PaletteCommand } from "@vibez1/shared/types";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { PaletteCommand } from "@vibestudio/shared/types";
 import { createPaletteService } from "./paletteService.js";
 import type { ViewManager } from "../viewManager.js";
 

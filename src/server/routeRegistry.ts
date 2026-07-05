@@ -5,7 +5,7 @@
  * kinds of routes are supported:
  *
  * - **Worker routes** (`/_r/w/<source>/<path>`) — declared in the workspace
- *   config (`workspace/meta/vibez1.yml` → `routes[]`). Each entry is either
+ *   config (`workspace/meta/vibestudio.yml` → `routes[]`). Each entry is either
  *   DO-backed (`durableObject` set, joined against `singletonObjects[]` to get
  *   the object key) or worker-backed (`worker: true`,
  *   dispatched via workerd's `/_w/` router) or bound to the default `fetch` of
@@ -31,9 +31,9 @@
 
 import type { IncomingMessage, ServerResponse } from "http";
 import type { Duplex } from "stream";
-import { createDevLogger } from "@vibez1/dev-log";
-import type { SingletonRegistry } from "@vibez1/shared/workspace/singletonRegistry";
-import type { WorkspaceRouteDecl } from "@vibez1/shared/workspace/types";
+import { createDevLogger } from "@vibestudio/dev-log";
+import type { SingletonRegistry } from "@vibestudio/shared/workspace/singletonRegistry";
+import type { WorkspaceRouteDecl } from "@vibestudio/shared/workspace/types";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("RouteRegistry");
@@ -43,7 +43,7 @@ export type RouteAuth = "public" | "admin-token" | "caller-token";
 
 /**
  * Shape consumed by routeRegistry for worker/DO route registration. Mirrors
- * `WorkspaceRouteDecl` from vibez1.yml: routes either set
+ * `WorkspaceRouteDecl` from vibestudio.yml: routes either set
  * `durableObject.className` (DO-backed) or `worker: true` (regular-worker
  * canonical fetch). The DO `objectKey` is NOT carried per-entry — it is
  * resolved by joining the route's `(source, className)` against the

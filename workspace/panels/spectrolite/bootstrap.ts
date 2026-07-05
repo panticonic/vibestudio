@@ -10,7 +10,7 @@ import { rpc } from "@workspace/runtime";
 import { parseDoTargetId } from "@workspace/runtime/workerd-client";
 import { launchAgentIntoChannel } from "@workspace/agentic-core";
 
-const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
+const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 
 export interface InstalledAgentRecord {
   agentId: string;

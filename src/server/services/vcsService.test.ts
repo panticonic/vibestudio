@@ -1,7 +1,7 @@
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityKind } from "@vibez1/shared/runtime/entitySpec";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityKind } from "@vibestudio/shared/runtime/entitySpec";
 import { createVcsService } from "./vcsService.js";
 
 function panelCaller(id = "panel-source") {
@@ -844,7 +844,7 @@ describe("vcsService", () => {
 
       await expect(
         service.handler({ caller: panelCaller() }, "commit", [
-          { message: "seal", exclude: [".vibez1/tmp/not-tracked.txt"] },
+          { message: "seal", exclude: [".vibestudio/tmp/not-tracked.txt"] },
         ])
       ).rejects.toThrow(/vcs\.commit exclude.*scratch\/platform state.*outside VCS/s);
       expect(commit).not.toHaveBeenCalled();

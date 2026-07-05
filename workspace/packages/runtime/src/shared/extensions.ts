@@ -6,7 +6,7 @@ import {
     type ExtensionSource,
     type RegistryEntry,
     type WorkspaceExtensions,
-} from "@vibez1/extension";
+} from "@vibestudio/extension";
 export {
     createExtensionsClient,
     type Disposable,

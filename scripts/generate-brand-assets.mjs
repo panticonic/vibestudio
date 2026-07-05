@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const sourceDir = path.join(repoRoot, "build-resources", "brand", "source");
-const defaultLightSource = path.join(sourceDir, "vibez1-light.png");
-const defaultDarkSource = path.join(sourceDir, "vibez1-dark.png");
+const defaultLightSource = path.join(sourceDir, "vibestudio-light.png");
+const defaultDarkSource = path.join(sourceDir, "vibestudio-dark.png");
 
 const args = new Map();
 for (let i = 2; i < process.argv.length; i += 1) {
@@ -235,7 +235,7 @@ if (shouldUpdateSource) {
 
 const lightSource = defaultLightSource;
 const darkSource = defaultDarkSource;
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-brand-"));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-brand-"));
 
 try {
   const brandDir = path.join(repoRoot, "build-resources", "brand");
@@ -255,7 +255,7 @@ try {
     "apps",
     "mobile",
     "ios",
-    "Vibez1",
+    "Vibestudio",
     "Images.xcassets",
     "AppIcon.appiconset"
   );
@@ -264,7 +264,7 @@ try {
     "apps",
     "mobile",
     "ios",
-    "Vibez1",
+    "Vibestudio",
     "Images.xcassets",
     "LaunchLogo.imageset"
   );
@@ -281,19 +281,19 @@ try {
     ensureDir(dir);
   }
 
-  fs.copyFileSync(lightSource, path.join(brandDir, "vibez1-light.png"));
-  fs.copyFileSync(darkSource, path.join(brandDir, "vibez1-dark.png"));
-  resizeOpaquePng(lightSource, path.join(brandDir, "vibez1-light-512.png"), 512);
-  resizeOpaquePng(darkSource, path.join(brandDir, "vibez1-dark-512.png"), 512);
-  resizeOpaquePng(darkSource, path.join(brandDir, "vibez1-icon-1024.png"), 1024);
-  resizeOpaquePng(darkSource, path.join(brandDir, "vibez1-icon-512.png"), 512);
-  transparentMark(lightSource, path.join(brandDir, "vibez1-mark-on-light.png"), 1024);
-  transparentMark(darkSource, path.join(brandDir, "vibez1-mark-on-dark.png"), 1024);
-  transparentMark(lightSource, path.join(brandDir, "vibez1-mark-on-light-512.png"), 512);
-  transparentMark(darkSource, path.join(brandDir, "vibez1-mark-on-dark-512.png"), 512);
-  writeText(path.join(brandDir, "vibez1-mark.svg"), brandMarkSvg());
-  writeText(path.join(brandDir, "vibez1-mark-black.svg"), brandMarkSvg("#050506"));
-  writeText(path.join(brandDir, "vibez1-mark-white.svg"), brandMarkSvg("#F8FAFC"));
+  fs.copyFileSync(lightSource, path.join(brandDir, "vibestudio-light.png"));
+  fs.copyFileSync(darkSource, path.join(brandDir, "vibestudio-dark.png"));
+  resizeOpaquePng(lightSource, path.join(brandDir, "vibestudio-light-512.png"), 512);
+  resizeOpaquePng(darkSource, path.join(brandDir, "vibestudio-dark-512.png"), 512);
+  resizeOpaquePng(darkSource, path.join(brandDir, "vibestudio-icon-1024.png"), 1024);
+  resizeOpaquePng(darkSource, path.join(brandDir, "vibestudio-icon-512.png"), 512);
+  transparentMark(lightSource, path.join(brandDir, "vibestudio-mark-on-light.png"), 1024);
+  transparentMark(darkSource, path.join(brandDir, "vibestudio-mark-on-dark.png"), 1024);
+  transparentMark(lightSource, path.join(brandDir, "vibestudio-mark-on-light-512.png"), 512);
+  transparentMark(darkSource, path.join(brandDir, "vibestudio-mark-on-dark-512.png"), 512);
+  writeText(path.join(brandDir, "vibestudio-mark.svg"), brandMarkSvg());
+  writeText(path.join(brandDir, "vibestudio-mark-black.svg"), brandMarkSvg("#050506"));
+  writeText(path.join(brandDir, "vibestudio-mark-white.svg"), brandMarkSvg("#F8FAFC"));
   writeText(path.join(brandDir, "favicon.svg"), brandTileSvg());
 
   for (const size of [16, 32, 48, 64, 128, 180, 192, 256, 512]) {
@@ -333,34 +333,34 @@ try {
     resizeOpaquePng(darkSource, path.join(linuxDir, `${size}x${size}.png`), size);
   }
 
-  resizeOpaquePng(lightSource, path.join(workspaceBrandAssetsPackageDir, "vibez1-light.png"), 512);
-  resizeOpaquePng(darkSource, path.join(workspaceBrandAssetsPackageDir, "vibez1-dark.png"), 512);
+  resizeOpaquePng(lightSource, path.join(workspaceBrandAssetsPackageDir, "vibestudio-light.png"), 512);
+  resizeOpaquePng(darkSource, path.join(workspaceBrandAssetsPackageDir, "vibestudio-dark.png"), 512);
   transparentMark(
     lightSource,
-    path.join(workspaceBrandAssetsPackageDir, "vibez1-mark-on-light.png"),
+    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-on-light.png"),
     512
   );
   transparentMark(
     darkSource,
-    path.join(workspaceBrandAssetsPackageDir, "vibez1-mark-on-dark.png"),
+    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-on-dark.png"),
     512
   );
-  writeText(path.join(workspaceBrandAssetsPackageDir, "vibez1-mark.svg"), brandMarkSvg());
+  writeText(path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark.svg"), brandMarkSvg());
   writeText(
-    path.join(workspaceBrandAssetsPackageDir, "vibez1-mark-black.svg"),
+    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-black.svg"),
     brandMarkSvg("#050506")
   );
   writeText(
-    path.join(workspaceBrandAssetsPackageDir, "vibez1-mark-white.svg"),
+    path.join(workspaceBrandAssetsPackageDir, "vibestudio-mark-white.svg"),
     brandMarkSvg("#F8FAFC")
   );
   writeText(path.join(workspaceBrandAssetsPackageDir, "favicon.svg"), brandTileSvg());
 
   for (const dir of [mobileWorkspaceAssets, mobileHostAssets]) {
-    resizeOpaquePng(lightSource, path.join(dir, "vibez1-light.png"), 512);
-    resizeOpaquePng(darkSource, path.join(dir, "vibez1-dark.png"), 512);
-    transparentMark(lightSource, path.join(dir, "vibez1-mark-on-light.png"), 512);
-    transparentMark(darkSource, path.join(dir, "vibez1-mark-on-dark.png"), 512);
+    resizeOpaquePng(lightSource, path.join(dir, "vibestudio-light.png"), 512);
+    resizeOpaquePng(darkSource, path.join(dir, "vibestudio-dark.png"), 512);
+    transparentMark(lightSource, path.join(dir, "vibestudio-mark-on-light.png"), 512);
+    transparentMark(darkSource, path.join(dir, "vibestudio-mark-on-dark.png"), 512);
   }
 
   const androidSizes = new Map([
@@ -375,17 +375,17 @@ try {
     resizeOpaquePng(darkSource, path.join(androidRes, dir, "ic_launcher_round.png"), size);
   }
   resizePng(
-    path.join(brandDir, "vibez1-mark-on-dark.png"),
+    path.join(brandDir, "vibestudio-mark-on-dark.png"),
     path.join(androidRes, "drawable", "splash_logo.png"),
     192
   );
   writeText(
     path.join(androidRes, "drawable", "launch_screen.xml"),
-    `<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n    <item android:drawable="@color/vibez1_splash_background" />\n    <item>\n        <bitmap\n            android:gravity="center"\n            android:src="@drawable/splash_logo" />\n    </item>\n</layer-list>\n`
+    `<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n    <item android:drawable="@color/vibestudio_splash_background" />\n    <item>\n        <bitmap\n            android:gravity="center"\n            android:src="@drawable/splash_logo" />\n    </item>\n</layer-list>\n`
   );
   writeText(
     path.join(androidRes, "values", "colors.xml"),
-    `<resources>\n    <color name="vibez1_splash_background">#0A0B0C</color>\n</resources>\n`
+    `<resources>\n    <color name="vibestudio_splash_background">#0A0B0C</color>\n</resources>\n`
   );
 
   const iosEntries = [
@@ -425,17 +425,17 @@ try {
   });
 
   resizePng(
-    path.join(brandDir, "vibez1-mark-on-dark.png"),
+    path.join(brandDir, "vibestudio-mark-on-dark.png"),
     path.join(iosLaunchLogoDir, "launch-logo.png"),
     96
   );
   resizePng(
-    path.join(brandDir, "vibez1-mark-on-dark.png"),
+    path.join(brandDir, "vibestudio-mark-on-dark.png"),
     path.join(iosLaunchLogoDir, "launch-logo@2x.png"),
     192
   );
   resizePng(
-    path.join(brandDir, "vibez1-mark-on-dark.png"),
+    path.join(brandDir, "vibestudio-mark-on-dark.png"),
     path.join(iosLaunchLogoDir, "launch-logo@3x.png"),
     288
   );
@@ -465,7 +465,7 @@ try {
     "28",
     "-annotate",
     "+0+74",
-    "Vibez1",
+    "Vibestudio",
     "-fill",
     "#a8adb3",
     "-font",
@@ -482,4 +482,4 @@ try {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-console.log("Generated Vibez1 brand assets.");
+console.log("Generated Vibestudio brand assets.");

@@ -1,11 +1,11 @@
-import type { RpcCaller } from "@vibez1/rpc";
-import { createGadServiceClient } from "@vibez1/shared/userlandServiceRpc";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { blobstoreMethods } from "@vibez1/shared/serviceSchemas/blobstore";
+import type { RpcCaller } from "@vibestudio/rpc";
+import { createGadServiceClient } from "@vibestudio/shared/userlandServiceRpc";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
 import type {
   VcsProvenanceForFileResult,
   VcsProvenanceForSessionResult,
-} from "@vibez1/shared/serviceSchemas/vcs";
+} from "@vibestudio/shared/serviceSchemas/vcs";
 import {
   hydrateStoredValueRefs,
   type AgenticEvent,
@@ -13,7 +13,7 @@ import {
   type TrajectoryEvent,
 } from "@workspace/agentic-protocol";
 
-export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibez1/shared/userlandServiceRpc";
+export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/userlandServiceRpc";
 
 export type GadSqlBinding = null | string | number | boolean | Uint8Array;
 export type GadJsonRecord = Record<string, unknown>;

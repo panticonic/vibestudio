@@ -167,7 +167,7 @@ New `src/server/webrtcIngress.ts`, one instance per server process:
   UUID; the invite stores `{code, room}`; the deep link carries them. On
   redemption the room is persisted onto the device record
   (`deviceAuthStore`: `deviceId → room`). The per-server singleton room file
-  (`<appRoot>/.vibez1/webrtc/room`, `ensurePersistentRoom`) is **deleted**.
+  (`<appRoot>/.vibestudio/webrtc/room`, `ensurePersistentRoom`) is **deleted**.
 - The pool arms **one answerer pipe per device room + per outstanding invite**,
   and tears pipes down on device revocation / invite expiry.
 - **Lazy peers:** the answerer arms signaling only on `connect()`; the
@@ -466,7 +466,7 @@ No compatibility is kept, but these are the _observable_ semantic changes:
 6. **Auth negative through the real path:** un-authed / replayed-grant
    `SESSION_OPEN` via `attachWebRtcPipe` → real `handleAuth` rejection
    (default-run, not e2e-gated).
-7. **Native e2e** (`VIBEZ1_RUN_WEBRTC_E2E=1`) runs nightly in CI.
+7. **Native e2e** (`VIBESTUDIO_RUN_WEBRTC_E2E=1`) runs nightly in CI.
 8. **Relay alarm:** per-pipe candidate type + recovery-path-used logged and
    surfaced on the status route; client `onCandidateType` plumbed through
    `createPairedConnection` / shell clients. Alert when relay rate exceeds
@@ -525,7 +525,7 @@ carries over as-is.
   variants are gone; `protocol/streamCodec.ts` keeps the shared frame constants
   and HTTP/WS decoder while `protocol/bulkMux.ts` owns WebRTC stream
   multiplexing. The standalone offerer transport file/export is gone after
-  `createPairedConnection` convergence. The `VIBEZ1_WEBRTC_ROOM` /
-  `VIBEZ1_PAIRING_CODE` env inputs are also gone from smoke scripts and
+  `createPairedConnection` convergence. The `VIBESTUDIO_WEBRTC_ROOM` /
+  `VIBESTUDIO_PAIRING_CODE` env inputs are also gone from smoke scripts and
   onboarding docs; the server mints per-invite rooms and codes itself and prints
   the `v=2` link.

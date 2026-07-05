@@ -26,7 +26,7 @@ import {
   createDocsOpenTool,
   createWebTools,
   createToolVcs,
-  loadVibez1Resources,
+  loadVibestudioResources,
 } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import type {
@@ -36,11 +36,11 @@ import type {
 } from "@workspace/harness";
 import type { AgentTurnContextPolicy, ThinkingLevel } from "@workspace/agent-loop";
 import { ids } from "@workspace/agent-loop";
-import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
+import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 import type {
   VcsProvenanceForFileResult,
   VcsProvenanceForSessionResult,
-} from "@vibez1/shared/serviceSchemas/vcs";
+} from "@vibestudio/shared/serviceSchemas/vcs";
 import { AgentVesselBase, type AgentPromptResources, type ApprovalLevel } from "./agent-vessel.js";
 import { AgentHeartbeatLoop, type AgentHeartbeatLoopDeps } from "./agent-heartbeat-loop.js";
 import {
@@ -120,7 +120,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     }
     if (this.promptResourceLoad) return this.promptResourceLoad;
 
-    const load = loadVibez1Resources({ rpc: this.rpc })
+    const load = loadVibestudioResources({ rpc: this.rpc })
       .then(
         (resources): AgentPromptResources => ({
           workspacePrompt: resources.systemPrompt,

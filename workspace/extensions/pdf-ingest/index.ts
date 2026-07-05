@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@vibez1/extension";
+import type { ExtensionContext } from "@vibestudio/extension";
 import { assertPdfBytes, toUint8Array } from "./pdf/binary.js";
 import { createArtifactStoreFromStorage, type ArtifactStore } from "./pdf/artifacts.js";
 import { normalizePageImageMode, selectPages } from "./pdf/pages.js";
@@ -45,7 +45,7 @@ const DEFAULT_RENDER_SCALE = 2;
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@vibez1/extension" {
+declare module "@vibestudio/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/pdf-ingest": Api;
   }
@@ -280,7 +280,7 @@ async function defaultEngineStatus(languages = ["eng"]): Promise<PdfEngineStatus
 }
 
 function doclingStatus(): PdfEngineStatus {
-  const command = process.env["VIBEZ1_PDF_DOCLING_CMD"];
+  const command = process.env["VIBESTUDIO_PDF_DOCLING_CMD"];
   return {
     id: "docling-sidecar",
     label: "Docling sidecar",
@@ -288,7 +288,7 @@ function doclingStatus(): PdfEngineStatus {
     bundled: false,
     role: "layout",
     detail: command
-      ? `Configured via VIBEZ1_PDF_DOCLING_CMD=${command}`
+      ? `Configured via VIBESTUDIO_PDF_DOCLING_CMD=${command}`
       : "Optional adapter hook; no sidecar command configured",
   };
 }

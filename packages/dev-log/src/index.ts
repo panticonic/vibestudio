@@ -2,7 +2,7 @@
  * Simple development logging utility with log levels.
  *
  * Controls verbosity of console output during development.
- * Set VIBEZ1_LOG_LEVEL environment variable to control output:
+ * Set VIBESTUDIO_LOG_LEVEL environment variable to control output:
  *   - "verbose" - All logs including detailed debug info
  *   - "info" - Normal operational logs (default)
  *   - "warn" - Warnings and errors only
@@ -21,7 +21,7 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
 };
 
 function getLogLevel(): LogLevel {
-  const level = process.env["VIBEZ1_LOG_LEVEL"] as LogLevel | undefined;
+  const level = process.env["VIBESTUDIO_LOG_LEVEL"] as LogLevel | undefined;
   if (level && level in LOG_LEVEL_PRIORITY) {
     return level;
   }

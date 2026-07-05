@@ -140,7 +140,7 @@ example `rpc.call("main", "build.getBuild", ["panels/my-app"])` or
 
 ### Using extensions
 
-Extensions are **declared** in `meta/vibez1.yml` under `extensions:`. That declaration is the only way to add or remove one. To start using an extension, add it to the `extensions:` list in `meta/vibez1.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it. **From eval**, invoke an extension method via
+Extensions are **declared** in `meta/vibestudio.yml` under `extensions:`. That declaration is the only way to add or remove one. To start using an extension, add it to the `extensions:` list in `meta/vibestudio.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it. **From eval**, invoke an extension method via
 `services.extensions.invoke(name, "method", [args])` (the underlying RPC); list
 availability with `rpc.call("main", "extensions.list", [])`. **In panel/component code**,
 use the typed client `extensions.use(name)` instead (panel-runtime sugar over the
@@ -153,7 +153,7 @@ call instead: `await extensions.use(name).method(...).catch(...)`. The eval form
 `services.extensions.invoke(name, "method", [args])` returns the result promise
 directly — `.catch(...)` it as usual. Either form fails with `ENOEXT` if the
 extension is not declared, or `ENOTREADY` if it is still starting. If you need an
-extension that isn't declared yet, edit `meta/vibez1.yml`.
+extension that isn't declared yet, edit `meta/vibestudio.yml`.
 
 Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end. Streaming `Response`/`ReadableStream` methods need the panel-runtime typed client (`extensions.use`), so this runs in panel/component code, not server-side eval:
 
@@ -178,13 +178,13 @@ eval({
   const name = "@workspace-extensions/image-service";
   const entry = (await rpc.call("main", "extensions.list", [])).find((e) => e.name === name);
   if (!entry || entry.status !== "running") {
-    throw new Error(name + " is not available — declare it in meta/vibez1.yml and approve it.");
+    throw new Error(name + " is not available — declare it in meta/vibestudio.yml and approve it.");
   }
 `,
 });
 ```
 
-If an extension isn't declared, adding it to `meta/vibez1.yml` raises a joint approval. If the user denies it, stop and report that the extension is required for the requested operation.
+If an extension isn't declared, adding it to `meta/vibestudio.yml` raises a joint approval. If the user denies it, stop and report that the extension is required for the requested operation.
 
 **Pre-injected** (use directly, do NOT import):
 
@@ -506,13 +506,13 @@ Available methods:
 | `browserData.detectBrowsers()`                       | Detect all installed browsers and their profiles             |
 | `browserData.startImport(request)`                   | Incrementally import data from a browser profile             |
 | `browserData.getOpenTabs(request)`                   | Preview current Firefox/Chrome-family tabs                   |
-| `browserData.openTabsAsPanels(request)`              | Open current HTTP(S) tabs as Vibez1 browser panels         |
+| `browserData.openTabsAsPanels(request)`              | Open current HTTP(S) tabs as Vibestudio browser panels         |
 | `browserData.getImportHistory()`                     | Get log of past imports                                      |
 | `browserData.getBookmarks(folderPath?)`              | Get bookmarks in a folder                                    |
 | `browserData.searchBookmarks(query)`                 | Search bookmarks by title/URL                                |
 | `browserData.addBookmark(bookmark)`                  | Add a bookmark                                               |
 | `browserData.deleteBookmark(id)`                     | Delete a bookmark                                            |
-| `browserData.getHistory(query)`                      | Query unified imported + Vibez1 browser-panel history      |
+| `browserData.getHistory(query)`                      | Query unified imported + Vibestudio browser-panel history      |
 | `browserData.searchHistory(query, limit?)`           | Full-text search history                                     |
 | `browserData.clearAllHistory()`                      | Clear all history                                            |
 | `browserData.getPasswords()`                         | Get all stored passwords                                     |

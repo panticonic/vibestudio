@@ -47,7 +47,7 @@ describe("VS Code shell integration launch preparation", () => {
 
     expect(launch.args).toEqual([]);
     expect(launch.env["USER_ZDOTDIR"]).toBe("/home/user");
-    expect(launch.env["ZDOTDIR"]).toContain("vibez1-vscode-zdotdir-");
+    expect(launch.env["ZDOTDIR"]).toContain("vibestudio-vscode-zdotdir-");
     await expect(stat(`${launch.env["ZDOTDIR"]}/.zshrc`)).resolves.toBeTruthy();
     await expect(readFile(`${launch.env["ZDOTDIR"]}/.zshrc`, "utf8")).resolves.toContain(
       "shellIntegration-rc.zsh"

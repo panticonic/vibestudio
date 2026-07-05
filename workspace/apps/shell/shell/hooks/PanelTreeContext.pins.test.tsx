@@ -3,7 +3,7 @@
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { Provider, createStore, useAtomValue } from "jotai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Panel } from "@vibez1/shared/types";
+import type { Panel } from "@vibestudio/shared/types";
 
 // The shell client facade is mocked so we control the tree + pin sources.
 const getTreeSnapshot = vi.fn();

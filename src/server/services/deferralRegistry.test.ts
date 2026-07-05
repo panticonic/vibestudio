@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isDeferredResult } from "@vibez1/shared/serviceDispatcher";
+import { isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import { DeferralRegistry } from "./deferralRegistry.js";
 
 interface Delivery {

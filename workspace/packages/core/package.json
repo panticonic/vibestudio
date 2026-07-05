@@ -8,7 +8,7 @@
     "./form-schema": "./src/form-schema.ts"
   },
   "dependencies": {
-    "@vibez1/types": "workspace:*"
+    "@vibestudio/types": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

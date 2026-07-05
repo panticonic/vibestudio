@@ -1,1 +1,1 @@
-export * from "@vibez1/shared/providerConnect";
+export * from "@vibestudio/shared/providerConnect";

@@ -1,12 +1,12 @@
 # Credential System
 
-Vibez1 credentials are URL-bound. Userland owns provider-specific setup and
+Vibestudio credentials are URL-bound. Userland owns provider-specific setup and
 OAuth semantics; the host stores encrypted credential material and injects it
 only through host-mediated egress when the request URL matches an approved
 audience.
 
-Mobile OAuth on `auth.snugenv.com` and public webhook ingress on
-`hooks.snugenv.com` are tracked in `docs/credential-system-human-tasks.md`.
+Mobile OAuth and public webhook ingress on `vibestudio.app` are tracked in
+`docs/credential-system-human-tasks.md`.
 
 ## Store Directly
 
@@ -60,7 +60,7 @@ configs support `client_secret_post`, `client_secret_basic`, and
 ## Broad Upstream, Staged Local Bindings
 
 For workspace providers, prefer requesting a durable broad upstream grant once,
-then expose narrow local bindings inside Vibez1. This avoids reconnecting the
+then expose narrow local bindings inside Vibestudio. This avoids reconnecting the
 user when an agent moves from Gmail to Calendar or from GitHub issues to Git
 transport, while still keeping runtime approval grants scoped to the service or
 resource being used.
@@ -157,7 +157,7 @@ People API lookups without sharing raw tokens with userland.
 `type: "oauth2-device-code"` is the right choice when a redirect-based flow
 can't reach the server — for example, when an OAuth provider rejects the
 auto-detected Tailscale `*.ts.net` redirect URI, or when the user wants to
-authorize from a different device than the one running vibez1. The server:
+authorize from a different device than the one running vibestudio. The server:
 
 1. Calls the provider's `device_authorization_url` to obtain a `device_code`,
    `user_code`, and `verification_uri`.

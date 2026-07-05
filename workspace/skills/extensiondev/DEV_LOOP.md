@@ -71,7 +71,7 @@ const info = await workspace.units.inspector("@workspace-extensions/hello");
 
 Opening that URL attaches Chrome DevTools to the extension process. Sourcemaps are inlined (required), so breakpoints land in the original TypeScript.
 
-In production mode (`VIBEZ1_PROD=1` or `NODE_ENV=production`), `--inspect` is disabled and `inspector(name)` returns `null`.
+In production mode (`VIBESTUDIO_PROD=1` or `NODE_ENV=production`), `--inspect` is disabled and `inspector(name)` returns `null`.
 
 ## Status, health, logs
 
@@ -98,13 +98,13 @@ await extensions.reload("@workspace-extensions/hello");
 
 Approval-gated. Restarts the _currently active approved build_ — does not pull dependency changes. Use this after editing in-process state (env vars, on-disk config) that the extension reads at `activate()` time.
 
-To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump), the extension must rebuild — and rebuilds happen only on reconcile, at workspace startup or when `meta/vibez1.yml` is pushed into its `main`. `extensions.reload(name)` restarts the _active approved build_ and does **not** rebuild, so it won't pick up dependency changes on its own, and dependency pushes don't auto-reload a running extension either.
+To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump), the extension must rebuild — and rebuilds happen only on reconcile, at workspace startup or when `meta/vibestudio.yml` is pushed into its `main`. `extensions.reload(name)` restarts the _active approved build_ and does **not** rebuild, so it won't pick up dependency changes on its own, and dependency pushes don't auto-reload a running extension either.
 
 ## Common failure shapes
 
 | Symptom                             | Cause                                                                   | Fix                                                                           |
 | ----------------------------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `MANIFEST_KIND`                     | `package.json` is missing `vibez1.extension` (or has two kind blocks) | Add exactly one `vibez1.extension` block                                    |
+| `MANIFEST_KIND`                     | `package.json` is missing `vibestudio.extension` (or has two kind blocks) | Add exactly one `vibestudio.extension` block                                    |
 | `MANIFEST_ACTIVATION`               | `activationEvents` is not `["*"]`                                       | Lazy activation is future work — must be `["*"]` in v1                        |
 | Stays in `error` after update       | `activate()` threw                                                      | Check `lastError` on `workspace.units.list()`; look at the inspector log      |
 | `Cannot find module ...` at runtime | Dep was externalized but missing from runtime install                   | Set `dependencyMode: "external"` and confirm the package is in `dependencies` |
@@ -115,4 +115,4 @@ To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump)
 
 ## Remove a Declaration
 
-Remove the extension's entry from the `extensions:` list in `meta/vibez1.yml` (the `edit`/`write` tools land the change as working content), then `vcs.commit({ message })` and push the `meta` repo into its `main` (`vcs.push({ repoPaths: ["meta"] })`). The next reconcile stops the process and deletes its registry entry; the per-extension storage scratch is retained. The workspace source tree stays until you remove those files separately. Userland approval grants the extension received persist (they're keyed by `(principal, extension-name)`); re-declaring under the same name reuses them. The declared set is authoritative.
+Remove the extension's entry from the `extensions:` list in `meta/vibestudio.yml` (the `edit`/`write` tools land the change as working content), then `vcs.commit({ message })` and push the `meta` repo into its `main` (`vcs.push({ repoPaths: ["meta"] })`). The next reconcile stops the process and deletes its registry entry; the per-extension storage scratch is retained. The workspace source tree stays until you remove those files separately. Userland approval grants the extension received persist (they're keyed by `(principal, extension-name)`); re-declaring under the same name reuses them. The declared set is authoritative.

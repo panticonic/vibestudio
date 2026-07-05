@@ -1,6 +1,6 @@
 # Permission System
 
-Vibez1 treats runtime tokens as authentication, not authorization. A token
+Vibestudio treats runtime tokens as authentication, not authorization. A token
 identifies the caller. Sensitive actions must still pass through the server-side
 permission system before they run.
 
@@ -38,7 +38,7 @@ Do not hand-roll this flow in individual services.
 ## Userland Approval Grants
 
 Use the `userlandApproval` service through `requestApproval()` when panel or
-worker code owns a policy question that Vibez1 cannot interpret as a built-in
+worker code owns a policy question that Vibestudio cannot interpret as a built-in
 host capability. Examples: a worker exposes a workspace-local service and wants
 the user to decide whether a provider-supplied subject may access it, or a panel
 has a domain-specific "allow/deny" decision for one of its own resources.
@@ -81,7 +81,7 @@ identifies the requester; it does not authorize writes by itself.
 The same `workspace-repo-write` capability is used for host-mediated repo
 writes, keyed to the target repo path.
 
-This lets Vibez1 show approvals that are specific to the destination repo,
+This lets Vibestudio show approvals that are specific to the destination repo,
 ref, and change. Generic workspace source repos such as `panels/*`,
 `workers/*`, `skills/*`, and `packages/*` use a push-specific
 `workspace-repo-write` resource key. Unit repos (`apps/*`, `extensions/*`) and

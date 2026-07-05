@@ -32,11 +32,11 @@ export interface DurableObjectServiceClient {
   call<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
 }
 
-export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibez1.gad.workspace.v1";
+export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
 
 /** The userland VCS service (P5c): the gad-store DO's `vcs*` surface behind
  *  the `vcs` manifest-service declaration. */
-export const VCS_SERVICE_PROTOCOL = "vibez1.vcs.v1";
+export const VCS_SERVICE_PROTOCOL = "vibestudio.vcs.v1";
 
 export function doTargetId(ref: DORefParam): string {
   return `do:${ref.source}:${ref.className}:${ref.objectKey}`;

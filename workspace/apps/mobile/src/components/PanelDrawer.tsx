@@ -31,11 +31,11 @@ import { themeColorsAtom } from "../state/themeAtoms";
 import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms";
 import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PanelTreeItem, type FlatPanelItem } from "./PanelTreeItem";
-import { Vibez1Logo } from "./Vibez1Logo";
-import type { Panel } from "@vibez1/shared/types";
-import { buildPanelChromeState, isBrowserPanelSource } from "@vibez1/shared/panelChrome";
-import { getAvailablePanelCommands, type PanelCommandId } from "@vibez1/shared/panelCommands";
-import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
+import { VibestudioLogo } from "./VibestudioLogo";
+import type { Panel } from "@vibestudio/shared/types";
+import { buildPanelChromeState, isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
+import { getAvailablePanelCommands, type PanelCommandId } from "@vibestudio/shared/panelCommands";
+import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
 
 interface PanelDrawerProps {
@@ -271,7 +271,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
 
       {flatItems.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <Vibez1Logo size={72} variant="mark" style={styles.emptyLogo} />
+          <VibestudioLogo size={72} variant="mark" style={styles.emptyLogo} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>No panels open yet</Text>
           <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
             Tap the address bar at the top of the screen and enter a URL or panel source to open

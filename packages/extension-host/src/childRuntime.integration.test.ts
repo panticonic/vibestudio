@@ -6,22 +6,22 @@ import { randomUUID } from "node:crypto";
 import * as esbuild from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { createNodeProcessAdapter, type ProcessAdapter } from "@vibez1/process-adapter";
+import { createNodeProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 import {
   envelopeFromMessage,
   type RpcEnvelope,
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
-} from "@vibez1/rpc";
+} from "@vibestudio/rpc";
 import type {
   WsClientMessage,
   WsServerMessage,
   WsRpcResponseMessage,
-} from "@vibez1/shared/ws/protocol";
+} from "@vibestudio/shared/ws/protocol";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extension-runtime-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-runtime-"));
 }
 
 function waitForMessage<T>(
@@ -95,7 +95,7 @@ describe("extension child runtime process", () => {
       target: "node20",
       format: "esm",
       outfile: childRuntimePath,
-      external: ["@vibez1/process-adapter"],
+      external: ["@vibestudio/process-adapter"],
       logLevel: "silent",
     });
 
@@ -172,12 +172,12 @@ describe("extension child runtime process", () => {
 
     proc = createNodeProcessAdapter(childRuntimePath, {
       ...process.env,
-      VIBEZ1_EXTENSION_NAME: "@workspace-extensions/process-test",
-      VIBEZ1_EXTENSION_VERSION: "0.0.0",
-      VIBEZ1_EXTENSION_BUNDLE_PATH: bundlePath,
-      VIBEZ1_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
-      VIBEZ1_EXTENSION_GATEWAY_URL: gatewayUrl,
-      VIBEZ1_EXTENSION_RPC_TOKEN: "test-token",
+      VIBESTUDIO_EXTENSION_NAME: "@workspace-extensions/process-test",
+      VIBESTUDIO_EXTENSION_VERSION: "0.0.0",
+      VIBESTUDIO_EXTENSION_BUNDLE_PATH: bundlePath,
+      VIBESTUDIO_EXTENSION_STORAGE_DIR: path.join(root, "storage"),
+      VIBESTUDIO_EXTENSION_GATEWAY_URL: gatewayUrl,
+      VIBESTUDIO_EXTENSION_RPC_TOKEN: "test-token",
     });
 
     const ready = await readyPromise;

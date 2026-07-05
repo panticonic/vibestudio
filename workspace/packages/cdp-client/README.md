@@ -159,7 +159,7 @@ params)` / `.on(event, cb)` give you the entire CDP protocol.
 | condition          | entry            |
 | ------------------ | ---------------- |
 | `worker`/`workerd` | `src/worker.ts`  |
-| `vibez1-panel`   | `src/browser.ts` |
+| `vibestudio-panel`   | `src/browser.ts` |
 | `default`          | `src/index.ts`   |
 
 Types are published from `index.d.ts` (kept in sync with `src/worker.ts`).

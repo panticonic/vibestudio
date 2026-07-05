@@ -88,7 +88,7 @@ describe("FsService", () => {
   let entityCache: EntityCache;
 
   beforeEach(() => {
-    tmpRoot = mkdtempSync(path.join(tmpdir(), "vibez1-fsservice-"));
+    tmpRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-fsservice-"));
     entityCache = new EntityCache();
     service = new FsService(makeStubFolderManager(tmpRoot), entityCache);
   });
@@ -174,15 +174,15 @@ describe("FsService", () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-nested-write");
 
-      await service.handleCall(ctx, "writeFile", [".vibez1/tmp/fs-text-roundtrip.txt", "ok"]);
+      await service.handleCall(ctx, "writeFile", [".vibestudio/tmp/fs-text-roundtrip.txt", "ok"]);
 
       expect(
         existsSync(
-          path.join(tmpRoot, "ctx-nested-write", ".vibez1", "tmp", "fs-text-roundtrip.txt")
+          path.join(tmpRoot, "ctx-nested-write", ".vibestudio", "tmp", "fs-text-roundtrip.txt")
         )
       ).toBe(true);
       await expect(
-        service.handleCall(ctx, "readFile", [".vibez1/tmp/fs-text-roundtrip.txt", "utf8"])
+        service.handleCall(ctx, "readFile", [".vibestudio/tmp/fs-text-roundtrip.txt", "utf8"])
       ).resolves.toBe("ok");
     });
 
@@ -878,8 +878,8 @@ describe("FsService", () => {
       const isScratch = (rel: string) =>
         rel === ".tmp" ||
         rel.startsWith(".tmp/") ||
-        rel === ".vibez1" ||
-        rel.startsWith(".vibez1/") ||
+        rel === ".vibestudio" ||
+        rel.startsWith(".vibestudio/") ||
         rel === ".testkit" ||
         rel.startsWith(".testkit/");
       const bridge: FsVcsBridge = {
@@ -905,10 +905,10 @@ describe("FsService", () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-scratch-read");
 
-      await svc.handleCall(ctx, "writeFile", [".vibez1/tmp/text-round-trip.txt", "ok"]);
+      await svc.handleCall(ctx, "writeFile", [".vibestudio/tmp/text-round-trip.txt", "ok"]);
 
       await expect(
-        svc.handleCall(ctx, "readFile", [".vibez1/tmp/text-round-trip.txt", "utf8"])
+        svc.handleCall(ctx, "readFile", [".vibestudio/tmp/text-round-trip.txt", "utf8"])
       ).resolves.toBe("ok");
       expect(calls).toEqual([]);
     });

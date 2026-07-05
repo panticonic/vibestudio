@@ -32,7 +32,7 @@ build_key = hash(BUILD_CACHE_VERSION, rootDepsFingerprint, unitName, ev, sourcem
 
 `BUILD_CACHE_VERSION` (currently `"17"`) is incremented when build logic changes (plugins, esbuild options, shims) or when the build-key derivation itself changes, to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
 
-`rootDepsFingerprint` folds in the **contents** of the host-root `package.json`, `pnpm-lock.yaml`, and `pnpm-workspace.yaml`, so a change to the host's dependency set (which can change what external npm deps resolve to) invalidates cached workspace builds. Missing files are handled deterministically (absent is distinct from present-but-empty). The host app root is injected explicitly at build-system construction (`setBuildRootConfig`), with the `VIBEZ1_APP_ROOT` env var as an override and `process.cwd()` as a last-resort fallback. The fingerprint, its resolved root, how the root was resolved, and its per-file inputs are exposed via `getRootDependencyFingerprintInfo()` for build metadata/diagnostics. (These host-root files are read off live disk, not content-addressed workspace state; folding them into GAD state is a future step.)
+`rootDepsFingerprint` folds in the **contents** of the host-root `package.json`, `pnpm-lock.yaml`, and `pnpm-workspace.yaml`, so a change to the host's dependency set (which can change what external npm deps resolve to) invalidates cached workspace builds. Missing files are handled deterministically (absent is distinct from present-but-empty). The host app root is injected explicitly at build-system construction (`setBuildRootConfig`), with the `VIBESTUDIO_APP_ROOT` env var as an override and `process.cwd()` as a last-resort fallback. The fingerprint, its resolved root, how the root was resolved, and its per-file inputs are exposed via `getRootDependencyFingerprintInfo()` for build metadata/diagnostics. (These host-root files are read off live disk, not content-addressed workspace state; folding them into GAD state is a future step.)
 
 ### Runtime Provenance
 
@@ -86,7 +86,7 @@ src/server/buildV2/
 
 ### Package Graph (`packageGraph.ts`)
 
-Scans eight workspace directories (the `BUILDABLE_UNIT_DIRS` subset of the canonical `WORKSPACE_SOURCE_DIRS` in `@vibez1/shared/workspace/sourceDirs` — `meta/`, `agents/`, and `projects/` are source dirs but hold no build units, so they are not scanned):
+Scans eight workspace directories (the `BUILDABLE_UNIT_DIRS` subset of the canonical `WORKSPACE_SOURCE_DIRS` in `@vibestudio/shared/workspace/sourceDirs` — `meta/`, `agents/`, and `projects/` are source dirs but hold no build units, so they are not scanned):
 
 | Directory               | Kind        | Scope                     |
 | ----------------------- | ----------- | ------------------------- |
@@ -147,7 +147,7 @@ Two build strategies, selected by unit kind:
 - `path` shim delegates to `pathe` (browser-compatible)
 - Forced split points for known heavy modules (`@mdx-js/mdx`, `typescript`, `monaco-editor`, etc.)
 - Manifest `externals` produce an import map in the generated HTML
-- Manifest `exposeModules` register modules on `globalThis.__vibez1ModuleMap__`
+- Manifest `exposeModules` register modules on `globalThis.__vibestudioModuleMap__`
 - Output: `bundle.js` + `bundle.css` + `index.html` + `assets/`
 
 **Extension build** (node target):
@@ -180,9 +180,9 @@ Two build strategies, selected by unit kind:
 - Used by `imports` parameter of the eval tool with `"npm:<version>"` values
 - Native addons are not supported (esbuild will fail to bundle `.node` files)
 
-**Concurrency:** Semaphore with `MAX_CONCURRENT_BUILDS = 8` by default (override via `VIBEZ1_MAX_CONCURRENT_BUILDS`). Build coalescing deduplicates concurrent builds of the same key.
+**Concurrency:** Semaphore with `MAX_CONCURRENT_BUILDS = 8` by default (override via `VIBESTUDIO_MAX_CONCURRENT_BUILDS`). Build coalescing deduplicates concurrent builds of the same key.
 
-**Workspace resolve plugin:** Resolves `@workspace/*` imports from the materialized source tree. Reads `package.json` exports fields with condition-based resolution (panel: `vibez1-panel`, `import`, `default`; extension: `import`, `default`). Since build sources do not include generated `dist/` output, the plugin maps `dist/` paths to their TypeScript source equivalents.
+**Workspace resolve plugin:** Resolves `@workspace/*` imports from the materialized source tree. Reads `package.json` exports fields with condition-based resolution (panel: `vibestudio-panel`, `import`, `default`; extension: `import`, `default`). Since build sources do not include generated `dist/` output, the plugin maps `dist/` paths to their TypeScript source equivalents.
 
 ### State Trigger (`stateTrigger.ts`)
 
@@ -190,7 +190,7 @@ Subscribes to GAD VCS state-advance events. Only the advanced head's changed pat
 
 **On main-head advance:**
 
-1. Check if `package.json` deps or vibez1 manifest changed (sorted JSON comparison to avoid key-order false positives). If changed → full rediscovery.
+1. Check if `package.json` deps or vibestudio manifest changed (sorted JSON comparison to avoid key-order false positives). If changed → full rediscovery.
 2. Otherwise: incremental path. Recompute EVs from changed units upward. Build changed units from the immutable state that triggered the advance.
 
 **Full rediscovery** (triggered by dep/manifest changes or pinned source-ref advances):
@@ -251,12 +251,12 @@ workspace/
 
 ### Package Manifest
 
-Unit metadata lives in `package.json` under the `vibez1` key:
+Unit metadata lives in `package.json` under the `vibestudio` key:
 
 ```json
 {
   "name": "@workspace-about/model-provider-config",
-  "vibez1": {
+  "vibestudio": {
     "title": "Model Provider Config",
     "shell": true,
     "hiddenInLauncher": false,
@@ -277,7 +277,7 @@ Unit metadata lives in `package.json` under the `vibez1` key:
 | `sourcemap`        | `true`        | Include inline source maps                                          |
 | `entry`            | auto-detected | Explicit entry point path                                           |
 | `externals`        | `{}`          | Import map entries (externalized from bundle)                       |
-| `exposeModules`    | `[]`          | Modules registered on `__vibez1ModuleMap__`                       |
+| `exposeModules`    | `[]`          | Modules registered on `__vibestudioModuleMap__`                       |
 | `dedupeModules`    | `[]`          | Additional packages to deduplicate (react/react-dom always deduped) |
 | `frameworkModule`  | per framework | Override the workspace module the generated panel entry imports the framework auto-mount contract from (defaults per `buildV2/platformModules.ts` `FRAMEWORK_MODULES`) |
 

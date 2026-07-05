@@ -4,7 +4,7 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PendingUnitBatchApproval, PendingUserlandApproval } from "@vibez1/shared/approvals";
+import type { PendingUnitBatchApproval, PendingUserlandApproval } from "@vibestudio/shared/approvals";
 import type { ApprovalCardIntent } from "./approvalCardModel";
 
 type ListPendingFn = () => Promise<unknown[]>;

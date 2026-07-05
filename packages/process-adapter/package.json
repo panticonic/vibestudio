@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/process-adapter",
+  "name": "@vibestudio/process-adapter",
   "version": "0.1.0",
   "description": "Process spawning abstraction (Electron utilityProcess / Node.js child_process)",
   "type": "module",

@@ -7,22 +7,22 @@ import {
   type EnvelopeRpcTransport,
   type RpcEnvelope,
   type RpcRequest,
-} from "@vibez1/rpc";
-import { createRecoveryCoordinator } from "@vibez1/shared/shell/recoveryCoordinator";
-import type { RecoveryCoordinator, RecoveryKind } from "@vibez1/shared/shell/recoveryCoordinator";
+} from "@vibestudio/rpc";
+import { createRecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
+import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shared/shell/recoveryCoordinator";
 
 /**
  * The host bridge a panel reaches its server through. A panel lives in a webview
  * and cannot touch the host's WebRTC `RTCPeerConnection` directly, so its RPC
  * crosses the webview boundary over the **shell bridge** — Electron
- * `contextBridge` IPC (`__vibez1Shell`) on desktop, the React-Native
+ * `contextBridge` IPC (`__vibestudioShell`) on desktop, the React-Native
  * `postMessage` bridge injected by `PanelWebView` on mobile. The host forwards
  * each panel's envelopes onto its single control channel as that panel's own
  * logical session (per-panel principal, lease, and recovery preserved exactly)
  * and delivers the demuxed inbound envelopes back via `onEnvelope`. There is no
  * panel-side socket and no direct `ws://…/rpc` connection.
  */
-type vibez1ShellBridge = Partial<BridgeStreamShellSurface> & {
+type vibestudioShellBridge = Partial<BridgeStreamShellSurface> & {
   /** Post one RPC envelope to the host (→ this panel's logical session on the pipe). */
   postEnvelope: (envelope: RpcEnvelope) => void | Promise<void>;
   /** Subscribe to inbound envelopes the host demuxes for this panel's session. */
@@ -47,15 +47,15 @@ type vibez1ShellBridge = Partial<BridgeStreamShellSurface> & {
 
 export const recoveryCoordinator: RecoveryCoordinator = createRecoveryCoordinator();
 
-function getShellBridge(): vibez1ShellBridge {
-  const shell = (globalThis as any).__vibez1Shell as vibez1ShellBridge | undefined;
+function getShellBridge(): vibestudioShellBridge {
+  const shell = (globalThis as any).__vibestudioShell as vibestudioShellBridge | undefined;
   if (
     !shell ||
     typeof shell.postEnvelope !== "function" ||
     typeof shell.onEnvelope !== "function"
   ) {
     throw new Error(
-      "Vibez1 shell bridge is not available (missing __vibez1Shell.postEnvelope/onEnvelope)"
+      "Vibestudio shell bridge is not available (missing __vibestudioShell.postEnvelope/onEnvelope)"
     );
   }
   return shell;
@@ -104,7 +104,7 @@ export function createPanelTransport(): EnvelopeRpcTransport {
   const transport: EnvelopeRpcTransport = {
     async send(envelope: RpcEnvelope): Promise<void> {
       // Route RPC requests to "main": Electron-local services go via IPC
-      // through __vibez1Shell.serviceCall. Everything else rides the shell
+      // through __vibestudioShell.serviceCall. Everything else rides the shell
       // bridge to the host, which muxes it onto the panel's logical session on
       // the control channel — so userland/workerd services need no static
       // routing edits and no panel-side socket exists.
@@ -190,7 +190,7 @@ export function createPanelTransport(): EnvelopeRpcTransport {
   // §1.6 upload hop: when the shell bridge exposes the stream surface
   // (streamOpen/streamBodyChunk/…), streaming REQUEST bodies pump across the
   // bridge as chunk messages and the HOST feeds them to this panel's WebRTC
-  // session (see @vibez1/rpc bridgeStream.ts). The RPC client calls this ONLY
+  // session (see @vibestudio/rpc bridgeStream.ts). The RPC client calls this ONLY
   // for requests WITH a body — body-less streams keep the duplex envelope path
   // byte-identical. Without the surface, a body throws loudly in the client
   // core ("uploads require the WebRTC transport").

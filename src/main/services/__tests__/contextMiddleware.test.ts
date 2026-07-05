@@ -3,7 +3,7 @@
  */
 
 import { resolveContextScope } from "../contextMiddleware.js";
-import type { ContextFolderManager } from "@vibez1/shared/contextFolderManager";
+import type { ContextFolderManager } from "@vibestudio/shared/contextFolderManager";
 import * as path from "path";
 
 // Mock ContextFolderManager

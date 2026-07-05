@@ -18,17 +18,17 @@ export function getContentScript(): string {
   'use strict';
 
   // Idempotency guard — prevent stacking on SPA re-injection
-  if (window.__vibez1_af_initialized) return;
-  window.__vibez1_af_initialized = true;
+  if (window.__vibestudio_af_initialized) return;
+  window.__vibestudio_af_initialized = true;
 
   // State exposed to main process (pulled via executeJavaScriptInIsolatedWorld)
-  window.__vibez1_af_fields = null;       // detected form info
-  window.__vibez1_af_focus = null;        // focused field info + rect
-  window.__vibez1_af_pending = null;      // snapshot of credentials on submit
-  window.__vibez1_af_fields_removed = false;
-  window.__vibez1_af_username_snapshot = null; // carried forward for multi-step login
+  window.__vibestudio_af_fields = null;       // detected form info
+  window.__vibestudio_af_focus = null;        // focused field info + rect
+  window.__vibestudio_af_pending = null;      // snapshot of credentials on submit
+  window.__vibestudio_af_fields_removed = false;
+  window.__vibestudio_af_username_snapshot = null; // carried forward for multi-step login
 
-  var ping = window.__vibez1_autofill ? window.__vibez1_autofill.ping : function() {};
+  var ping = window.__vibestudio_autofill ? window.__vibestudio_autofill.ping : function() {};
 
   // Top-frame-only policy (audit S3): the autofill content script is only
   // injected into the main frame and does not accept ping relays from
@@ -165,7 +165,7 @@ export function getContentScript(): string {
     function onFocus(evt) {
       var el = evt.target;
       if (el !== usernameEl && el !== passwordEl) return;
-      window.__vibez1_af_focus = {
+      window.__vibestudio_af_focus = {
         fieldType: el === passwordEl ? 'password' : 'username',
         rect: getFieldRect(el),
         element: el,
@@ -177,7 +177,7 @@ export function getContentScript(): string {
       // Delay clearing focus to allow overlay click to register
       setTimeout(function() {
         if (document.activeElement !== usernameEl && document.activeElement !== passwordEl) {
-          window.__vibez1_af_focus = null;
+          window.__vibestudio_af_focus = null;
           ping(); // notify main to dismiss overlay
         }
       }, 200);
@@ -207,9 +207,9 @@ export function getContentScript(): string {
       var password = nativeGetter.call(passwordEl);
       if (!password) return; // No password entered
 
-      var username = usernameEl ? nativeGetter.call(usernameEl) : (window.__vibez1_af_username_snapshot || '');
+      var username = usernameEl ? nativeGetter.call(usernameEl) : (window.__vibestudio_af_username_snapshot || '');
 
-      window.__vibez1_af_pending = {
+      window.__vibestudio_af_pending = {
         username: username,
         password: password,
         timestamp: Date.now(),
@@ -252,7 +252,7 @@ export function getContentScript(): string {
 
     function snapshot() {
       var val = nativeGetter.call(usernameEl);
-      if (val) window.__vibez1_af_username_snapshot = val;
+      if (val) window.__vibestudio_af_username_snapshot = val;
     }
 
     // Snapshot on form submit or Enter
@@ -272,7 +272,7 @@ export function getContentScript(): string {
   function startFieldRemovalWatch(passwordEl) {
     var observer = new MutationObserver(function() {
       if (!document.contains(passwordEl)) {
-        window.__vibez1_af_fields_removed = true;
+        window.__vibestudio_af_fields_removed = true;
         ping();
         observer.disconnect();
         clearInterval(visibilityPoll);
@@ -284,7 +284,7 @@ export function getContentScript(): string {
       if (!document.contains(passwordEl) ||
           passwordEl.offsetWidth === 0 ||
           getComputedStyle(passwordEl).visibility === 'hidden') {
-        window.__vibez1_af_fields_removed = true;
+        window.__vibestudio_af_fields_removed = true;
         ping();
         observer.disconnect();
         clearInterval(visibilityPoll);
@@ -295,8 +295,8 @@ export function getContentScript(): string {
     setTimeout(function() {
       observer.disconnect();
       clearInterval(visibilityPoll);
-      window.__vibez1_af_pending = null;
-      window.__vibez1_af_fields_removed = false;
+      window.__vibestudio_af_pending = null;
+      window.__vibestudio_af_fields_removed = false;
     }, 30000);
   }
 
@@ -315,7 +315,7 @@ export function getContentScript(): string {
         var emailForm = emailEl.closest('form');
         if (emailForm && !trackedForms.has(emailForm)) {
           trackedForms.add(emailForm);
-          window.__vibez1_af_fields = {
+          window.__vibestudio_af_fields = {
             type: 'username-only',
             usernameSelector: buildSelector(emailEl),
             usernameRect: getFieldRect(emailEl),
@@ -339,7 +339,7 @@ export function getContentScript(): string {
       var usernameEl = findUsernameField(passwordEl);
       var formSelector = form ? buildSelector(form) : null;
 
-      window.__vibez1_af_fields = {
+      window.__vibestudio_af_fields = {
         type: 'login',
         usernameSelector: usernameEl ? buildSelector(usernameEl) : null,
         passwordSelector: buildSelector(passwordEl),
@@ -356,13 +356,13 @@ export function getContentScript(): string {
   }
 
   // Expose for main process to call via getInjectKeyIconScript
-  window.__vibez1_af_injectIcon = injectKeyIcon;
+  window.__vibestudio_af_injectIcon = injectKeyIcon;
 
   // Scroll → clear focus (main will hide overlay)
   var scrollTimer = null;
   window.addEventListener('scroll', function() {
-    if (window.__vibez1_af_focus) {
-      window.__vibez1_af_focus = null;
+    if (window.__vibestudio_af_focus) {
+      window.__vibestudio_af_focus = null;
       if (scrollTimer) clearTimeout(scrollTimer);
       scrollTimer = setTimeout(function() {
         scrollTimer = null;
@@ -390,7 +390,7 @@ export function getContentScript(): string {
  */
 export function getPullStateScript(): string {
   return `(function() {
-  var focus = window.__vibez1_af_focus;
+  var focus = window.__vibestudio_af_focus;
   // Re-read rect from live element to avoid stale position after scroll
   if (focus && focus.element && document.contains(focus.element)) {
     var rect = focus.element.getBoundingClientRect();
@@ -406,14 +406,14 @@ export function getPullStateScript(): string {
       },
     };
   }
-  var fieldsRemoved = window.__vibez1_af_fields_removed || false;
-  window.__vibez1_af_fields_removed = false; // consume — prevent stale re-reads
+  var fieldsRemoved = window.__vibestudio_af_fields_removed || false;
+  window.__vibestudio_af_fields_removed = false; // consume — prevent stale re-reads
   return {
-    fields: window.__vibez1_af_fields || null,
+    fields: window.__vibestudio_af_fields || null,
     focus: focus || null,
-    pending: window.__vibez1_af_pending || null,
+    pending: window.__vibestudio_af_pending || null,
     fieldsRemoved: fieldsRemoved,
-    usernameSnapshot: window.__vibez1_af_username_snapshot || null,
+    usernameSnapshot: window.__vibestudio_af_username_snapshot || null,
   };
 })()`;
 }
@@ -423,9 +423,9 @@ export function getPullStateScript(): string {
  */
 export function getReadSnapshotScript(): string {
   return `(function() {
-  var pending = window.__vibez1_af_pending;
-  window.__vibez1_af_pending = null;
-  window.__vibez1_af_fields_removed = false;
+  var pending = window.__vibestudio_af_pending;
+  window.__vibestudio_af_pending = null;
+  window.__vibestudio_af_fields_removed = false;
   return pending;
 })()`;
 }
@@ -464,8 +464,8 @@ export function getInjectKeyIconScript(fieldSelector: string): string {
   var el = document.querySelector(${JSON.stringify(fieldSelector)});
   if (!el) return;
   // Re-use the icon injection from the content script
-  if (typeof window.__vibez1_af_injectIcon === 'function') {
-    window.__vibez1_af_injectIcon(el);
+  if (typeof window.__vibestudio_af_injectIcon === 'function') {
+    window.__vibestudio_af_injectIcon(el);
   }
 })()`;
 }

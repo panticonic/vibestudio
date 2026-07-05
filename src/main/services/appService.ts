@@ -1,10 +1,10 @@
 import { app, nativeTheme, shell } from "electron";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { appMethods } from "@vibez1/shared/serviceSchemas/app";
-import { buildMethods } from "@vibez1/shared/serviceSchemas/build";
-import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import type { ThemeMode } from "@vibez1/shared/types";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { appMethods } from "@vibestudio/shared/serviceSchemas/app";
+import { buildMethods } from "@vibestudio/shared/serviceSchemas/build";
+import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import type { ThemeMode } from "@vibestudio/shared/types";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";

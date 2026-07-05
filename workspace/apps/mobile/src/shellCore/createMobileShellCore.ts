@@ -1,6 +1,6 @@
-import { PanelRegistry } from "@vibez1/shared/panelRegistry";
-import { PanelManager } from "@vibez1/shared/shell/panelManager";
-import type { Panel, PanelTreeSnapshot } from "@vibez1/shared/types";
+import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import { PanelManager } from "@vibestudio/shared/shell/panelManager";
+import type { Panel, PanelTreeSnapshot } from "@vibestudio/shared/types";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -8,17 +8,17 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@vibez1/shared/shell/workspaceStateClient";
+} from "@vibestudio/shared/shell/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-} from "@vibez1/shared/runtime/entitySpec";
+} from "@vibestudio/shared/runtime/entitySpec";
 import type {
   IndexablePanel,
   PanelSearchIndex,
   PanelSearchResult,
-} from "@vibez1/shared/panelSearchTypes";
+} from "@vibestudio/shared/panelSearchTypes";
 import type { MobileRpcClient } from "../services/mobileTransport";
 import { parseHostConfig } from "../services/panelUrls";
 import { createMobileLocalViewStateStore } from "./localViewState";

@@ -11,7 +11,7 @@ describe("Firefox profile detection", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-test-firefox-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-test-firefox-"));
   });
 
   afterEach(() => {
@@ -118,7 +118,7 @@ describe("Chromium profile detection", () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-test-chromium-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-test-chromium-"));
   });
 
   afterEach(() => {

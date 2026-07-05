@@ -1,7 +1,7 @@
 /**
  * fs service definition — per-context filesystem operations, sandboxed to the
  * caller's context folder. The implementation lives in
- * `@vibez1/shared/fsService` (FsService); this module declares the RPC
+ * `@vibestudio/shared/fsService` (FsService); this module declares the RPC
  * surface (method schemas + policy) for dispatcher registration.
  *
  * Caller-kind argument conventions (handled inside FsService):
@@ -14,9 +14,9 @@
  * needs them.
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { handleFsCall, type FsService } from "@vibez1/shared/fsService";
-import { fsMethods } from "@vibez1/shared/serviceSchemas/fs";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { handleFsCall, type FsService } from "@vibestudio/shared/fsService";
+import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
 
 export function createFsServiceDefinition(getFsService: () => FsService): ServiceDefinition {
   return {

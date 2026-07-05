@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
 import { webContents } from "electron";
-import { createDevLogger } from "@vibez1/dev-log";
-import { serverCdpHostWsUrl } from "@vibez1/shared/connect";
+import { createDevLogger } from "@vibestudio/dev-log";
+import { serverCdpHostWsUrl } from "@vibestudio/shared/connect";
 import type { ViewManager } from "./viewManager.js";
 import type {
   RuntimeDiagnosticRecord,
@@ -142,7 +142,7 @@ export class CdpHostProvider {
     this.authenticated = false;
 
     socket.on("open", () => {
-      socket.send(JSON.stringify({ type: "vibez1:cdp-auth", token: this.authToken() }));
+      socket.send(JSON.stringify({ type: "vibestudio:cdp-auth", token: this.authToken() }));
     });
     socket.on("message", (data: Buffer | string) => {
       this.handleSocketMessage(data).catch((error: unknown) => {
@@ -248,7 +248,7 @@ export class CdpHostProvider {
 
   private async handleSocketMessage(data: Buffer | string): Promise<void> {
     const message = JSON.parse(data.toString()) as ProviderMessage;
-    if (message.type === "vibez1:cdp-auth-ok") {
+    if (message.type === "vibestudio:cdp-auth-ok") {
       this.authenticated = true;
       this.registerAllTargets();
       return;

@@ -13,8 +13,8 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
-      "@vibez1/rpc": ["../rpc/src/index.ts"],
-      "@vibez1/rpc/*": ["../rpc/src/*"]
+      "@vibestudio/rpc": ["../rpc/src/index.ts"],
+      "@vibestudio/rpc/*": ["../rpc/src/*"]
     }
   },
   "include": ["src/**/*.ts"],

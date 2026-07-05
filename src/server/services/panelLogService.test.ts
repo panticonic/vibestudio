@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createPanelLogService, type PanelLogRecord } from "./panelLogService.js";
 
 describe("panelLogService", () => {

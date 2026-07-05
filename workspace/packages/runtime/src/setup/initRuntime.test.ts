@@ -1,21 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EnvelopeRpcTransport, RpcEnvelope } from "@vibez1/rpc";
+import type { EnvelopeRpcTransport, RpcEnvelope } from "@vibestudio/rpc";
 import { initRuntime } from "./initRuntime.js";
 import { setStateArgs } from "../panel/stateArgs.js";
 import { DEFAULT_THEME_CONFIG } from "../types.js";
 
 const g = globalThis as typeof globalThis & {
-  __vibez1EntityId?: string;
-  __vibez1SlotId?: string;
-  __vibez1ContextId?: string;
-  __vibez1Kind?: "panel" | "shell";
-  __vibez1ParentId?: string | null;
-  __vibez1ParentEntityId?: string | null;
-  __vibez1InitialTheme?: "light" | "dark";
-  __vibez1GatewayConfig?: { serverUrl: string; token: string };
-  __vibez1Env?: Record<string, string>;
-  __vibez1Shell?: Record<string, unknown>;
-  __vibez1StateArgs?: Record<string, unknown>;
+  __vibestudioEntityId?: string;
+  __vibestudioSlotId?: string;
+  __vibestudioContextId?: string;
+  __vibestudioKind?: "panel" | "shell";
+  __vibestudioParentId?: string | null;
+  __vibestudioParentEntityId?: string | null;
+  __vibestudioInitialTheme?: "light" | "dark";
+  __vibestudioGatewayConfig?: { serverUrl: string; token: string };
+  __vibestudioEnv?: Record<string, string>;
+  __vibestudioShell?: Record<string, unknown>;
+  __vibestudioStateArgs?: Record<string, unknown>;
 };
 
 function createTransport(options?: {
@@ -63,9 +63,9 @@ function responseFor(envelope: RpcEnvelope, result: unknown): RpcEnvelope {
   };
 }
 
-function stubPanelWindow(): EventTarget & { __vibez1StateArgs?: Record<string, unknown> } {
+function stubPanelWindow(): EventTarget & { __vibestudioStateArgs?: Record<string, unknown> } {
   const panelWindow = new EventTarget() as EventTarget & {
-    __vibez1StateArgs?: Record<string, unknown>;
+    __vibestudioStateArgs?: Record<string, unknown>;
   };
   vi.stubGlobal("window", panelWindow);
   if (typeof CustomEvent === "undefined") {
@@ -85,27 +85,27 @@ function stubPanelWindow(): EventTarget & { __vibez1StateArgs?: Record<string, u
 
 describe("initRuntime", () => {
   afterEach(() => {
-    delete g.__vibez1EntityId;
-    delete g.__vibez1SlotId;
-    delete g.__vibez1ContextId;
-    delete g.__vibez1Kind;
-    delete g.__vibez1ParentId;
-    delete g.__vibez1ParentEntityId;
-    delete g.__vibez1InitialTheme;
-    delete g.__vibez1GatewayConfig;
-    delete g.__vibez1Env;
-    delete g.__vibez1Shell;
-    delete g.__vibez1StateArgs;
+    delete g.__vibestudioEntityId;
+    delete g.__vibestudioSlotId;
+    delete g.__vibestudioContextId;
+    delete g.__vibestudioKind;
+    delete g.__vibestudioParentId;
+    delete g.__vibestudioParentEntityId;
+    delete g.__vibestudioInitialTheme;
+    delete g.__vibestudioGatewayConfig;
+    delete g.__vibestudioEnv;
+    delete g.__vibestudioShell;
+    delete g.__vibestudioStateArgs;
     vi.unstubAllGlobals();
   });
 
   it("uses the injected canonical panel id as the RPC self id", () => {
-    g.__vibez1EntityId = "panel:panel-1";
-    g.__vibez1SlotId = "slot-1";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:panel-1";
+    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
@@ -123,12 +123,12 @@ describe("initRuntime", () => {
 
   it("preserves call delivery metadata through the runtime transport envelope", async () => {
     const sent: RpcEnvelope[] = [];
-    g.__vibez1EntityId = "panel:panel-1";
-    g.__vibez1SlotId = "slot-1";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:panel-1";
+    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
@@ -171,16 +171,16 @@ describe("initRuntime", () => {
     const panelTreeSetStateArgsMock = vi.fn();
     const stateArgsChanged = vi.fn();
     const panelWindow = stubPanelWindow();
-    g.__vibez1EntityId = "panel:entity-1";
-    g.__vibez1SlotId = "slot-1";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:entity-1";
+    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
     };
-    panelWindow.addEventListener("vibez1:stateArgsChanged", stateArgsChanged);
+    panelWindow.addEventListener("vibestudio:stateArgsChanged", stateArgsChanged);
 
     initRuntime({
       createTransport: () =>
@@ -201,7 +201,7 @@ describe("initRuntime", () => {
       "slot-1",
       { mode: "live" },
     ]);
-    expect(panelWindow.__vibez1StateArgs).toEqual({ mode: "live", fromHost: true });
+    expect(panelWindow.__vibestudioStateArgs).toEqual({ mode: "live", fromHost: true });
     expect(stateArgsChanged).toHaveBeenCalledTimes(1);
     expect((stateArgsChanged.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
       mode: "live",
@@ -213,12 +213,12 @@ describe("initRuntime", () => {
     const panelWindow = stubPanelWindow();
     const stateArgsChanged = vi.fn();
     const shellListeners: Array<(event: string, payload: unknown) => void> = [];
-    g.__vibez1EntityId = "panel:panel-1";
-    g.__vibez1SlotId = "slot-1";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:panel-1";
+    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       addEventListener: vi.fn((listener: (event: string, payload: unknown) => void) => {
         shellListeners.push(listener);
         return 1;
@@ -228,7 +228,7 @@ describe("initRuntime", () => {
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
     };
-    panelWindow.addEventListener("vibez1:stateArgsChanged", stateArgsChanged);
+    panelWindow.addEventListener("vibestudio:stateArgsChanged", stateArgsChanged);
 
     initRuntime({
       createTransport,
@@ -239,7 +239,7 @@ describe("initRuntime", () => {
       listener("runtime:stateArgsChanged", { mode: "external" });
     }
 
-    expect(panelWindow.__vibez1StateArgs).toEqual({ mode: "external" });
+    expect(panelWindow.__vibestudioStateArgs).toEqual({ mode: "external" });
     expect(stateArgsChanged).toHaveBeenCalledTimes(1);
     expect((stateArgsChanged.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
       mode: "external",
@@ -248,12 +248,12 @@ describe("initRuntime", () => {
 
   it("normalizes loopback gateway URLs to the panel page origin", () => {
     vi.stubGlobal("location", { origin: "http://localhost:3000" });
-    g.__vibez1EntityId = "panel:panel-1";
-    g.__vibez1SlotId = "slot-1";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:panel-1";
+    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
@@ -270,12 +270,12 @@ describe("initRuntime", () => {
 
   it("does not normalize non-equivalent gateway origins", () => {
     vi.stubGlobal("location", { origin: "http://localhost:3000" });
-    g.__vibez1EntityId = "panel:panel-1";
-    g.__vibez1SlotId = "slot-1";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:4000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:panel-1";
+    g.__vibestudioSlotId = "slot-1";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:4000", token: "token" };
+    g.__vibestudioShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
@@ -292,14 +292,14 @@ describe("initRuntime", () => {
 
   it("uses the parent slot id for handle identity/control and the parent entity id for RPC", async () => {
     const sends: Array<{ targetId: string; method: string; args: unknown[] }> = [];
-    g.__vibez1EntityId = "panel:child-entity";
-    g.__vibez1SlotId = "child-slot";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1ParentId = "parent-slot";
-    g.__vibez1ParentEntityId = "panel:parent-entity";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:child-entity";
+    g.__vibestudioSlotId = "child-slot";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioParentId = "parent-slot";
+    g.__vibestudioParentEntityId = "panel:parent-entity";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
@@ -344,14 +344,14 @@ describe("initRuntime", () => {
 
   it("exposes full panelTree lifecycle and state operations on the unified parent handle", async () => {
     const sends: Array<{ targetId: string; method: string; args: unknown[] }> = [];
-    g.__vibez1EntityId = "panel:child-entity";
-    g.__vibez1SlotId = "child-slot";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1ParentId = "parent-slot";
-    g.__vibez1ParentEntityId = "panel:parent-entity";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:child-entity";
+    g.__vibestudioSlotId = "child-slot";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioParentId = "parent-slot";
+    g.__vibestudioParentEntityId = "panel:parent-entity";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
@@ -412,12 +412,12 @@ describe("initRuntime", () => {
 
   it("launches workers through runtime.createEntity (server derives the parent)", async () => {
     const sends: Array<{ targetId: string; method: string; args: unknown[] }> = [];
-    g.__vibez1EntityId = "panel:child-entity";
-    g.__vibez1SlotId = "child-slot";
-    g.__vibez1ContextId = "ctx-1";
-    g.__vibez1Kind = "panel";
-    g.__vibez1GatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
-    g.__vibez1Shell = {
+    g.__vibestudioEntityId = "panel:child-entity";
+    g.__vibestudioSlotId = "child-slot";
+    g.__vibestudioContextId = "ctx-1";
+    g.__vibestudioKind = "panel";
+    g.__vibestudioGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__vibestudioShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
       focusPanel: vi.fn(),

@@ -2,7 +2,7 @@
  * Tests for the entry wrapper / module-map bootstrap generators.
  *
  * These cover the small pure-function half of the build pipeline that lives
- * around `__vibez1Require__` and `exposeModules`. The full builder is tested
+ * around `__vibestudioRequire__` and `exposeModules`. The full builder is tested
  * indirectly by the running dev server; this file locks in the contract of
  * the helpers shared by both panel and worker builds.
  */
@@ -22,17 +22,19 @@ import {
 describe("generateModuleMapBootstrap (panel target)", () => {
   it("declares the module map and both require functions on globalThis", () => {
     const code = generateModuleMapBootstrap("panel");
-    expect(code).toContain("globalThis.__vibez1ModuleMap__");
-    expect(code).toContain("globalThis.__vibez1Require__");
-    expect(code).toContain("globalThis.__vibez1RequireAsync__");
+    expect(code).toContain("globalThis.__vibestudioModuleMap__");
+    expect(code).toContain("globalThis.__vibestudioRequire__");
+    expect(code).toContain("globalThis.__vibestudioRequireAsync__");
   });
 
   it("uses idempotent initialization so repeated boots don't clobber state", () => {
     const code = generateModuleMapBootstrap("panel");
-    expect(code).toMatch(/__vibez1ModuleMap__\s*=\s*globalThis\.__vibez1ModuleMap__\s*\|\|\s*\{\}/);
+    expect(code).toMatch(
+      /__vibestudioModuleMap__\s*=\s*globalThis\.__vibestudioModuleMap__\s*\|\|\s*\{\}/
+    );
   });
 
-  it("__vibez1Require__ throws a clear error for unknown modules", () => {
+  it("__vibestudioRequire__ throws a clear error for unknown modules", () => {
     const code = generateModuleMapBootstrap("panel");
     expect(code).toContain("not available. Workspace packages");
   });
@@ -43,16 +45,16 @@ describe("generateModuleMapBootstrap (panel target)", () => {
 });
 
 describe("generateModuleMapBootstrap (worker target)", () => {
-  it("emits the module map and __vibez1Require__", () => {
+  it("emits the module map and __vibestudioRequire__", () => {
     const code = generateModuleMapBootstrap("worker");
-    expect(code).toContain("globalThis.__vibez1ModuleMap__");
-    expect(code).toContain("globalThis.__vibez1Require__");
+    expect(code).toContain("globalThis.__vibestudioModuleMap__");
+    expect(code).toContain("globalThis.__vibestudioRequire__");
   });
 
-  it("omits __vibez1RequireAsync__ entirely (workerd has no dynamic import)", () => {
+  it("omits __vibestudioRequireAsync__ entirely (workerd has no dynamic import)", () => {
     const code = generateModuleMapBootstrap("worker");
-    expect(code).not.toContain("__vibez1RequireAsync__");
-    expect(code).not.toContain("__vibez1ModuleLoadingPromises__");
+    expect(code).not.toContain("__vibestudioRequireAsync__");
+    expect(code).not.toContain("__vibestudioModuleLoadingPromises__");
     // No `import(id)` either — that's the body of the async fallback.
     expect(code).not.toMatch(/\bimport\(id\)/);
   });
@@ -67,8 +69,8 @@ describe("generateModuleMapBootstrap (worker target)", () => {
 describe("generateExposeModuleCode", () => {
   it("includes the bootstrap even with no expose modules", () => {
     const code = generateExposeModuleCode([]);
-    expect(code).toContain("globalThis.__vibez1ModuleMap__");
-    expect(code).toContain("globalThis.__vibez1Require__");
+    expect(code).toContain("globalThis.__vibestudioModuleMap__");
+    expect(code).toContain("globalThis.__vibestudioRequire__");
     // No imports or registrations when the list is empty.
     expect(code).not.toContain("__mod0__");
   });
@@ -77,8 +79,8 @@ describe("generateExposeModuleCode", () => {
     const code = generateExposeModuleCode(["@workspace/runtime", "zod"]);
     expect(code).toContain('import * as __mod0__ from "@workspace/runtime"');
     expect(code).toContain('import * as __mod1__ from "zod"');
-    expect(code).toContain('globalThis.__vibez1ModuleMap__["@workspace/runtime"] = __mod0__');
-    expect(code).toContain('globalThis.__vibez1ModuleMap__["zod"] = __mod1__');
+    expect(code).toContain('globalThis.__vibestudioModuleMap__["@workspace/runtime"] = __mod0__');
+    expect(code).toContain('globalThis.__vibestudioModuleMap__["zod"] = __mod1__');
   });
 
   it("panel target does not preload the lightweight CDP client when runtime is exposed", () => {
@@ -99,14 +101,16 @@ describe("generateExposeModuleCode", () => {
 
   it("worker target produces the worker-flavored bootstrap", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
-    expect(code).not.toContain("__vibez1RequireAsync__");
+    expect(code).not.toContain("__vibestudioRequireAsync__");
     expect(code).toContain('import * as __mod0__ from "@workspace/runtime"');
   });
 
   it("worker target preloads only the lightweight CDP client when runtime handles are exposed", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
     expect(code).toContain('import * as __mod1__ from "@workspace/cdp-client"');
-    expect(code).toContain('globalThis.__vibez1ModuleMap__["@workspace/cdp-client"] = __mod1__');
+    expect(code).toContain(
+      'globalThis.__vibestudioModuleMap__["@workspace/cdp-client"] = __mod1__'
+    );
   });
 
   it("worker target synthesizes fs shims from runtime exports", () => {
@@ -117,7 +121,7 @@ describe("generateExposeModuleCode", () => {
 
   it("panel target produces the panel-flavored bootstrap", () => {
     const code = generateExposeModuleCode(["react"], "panel");
-    expect(code).toContain("__vibez1RequireAsync__");
+    expect(code).toContain("__vibestudioRequireAsync__");
     expect(code).toContain('import * as __mod0__ from "react"');
   });
 });
@@ -134,15 +138,15 @@ describe("generateWorkerEntry", () => {
   it("re-exports named exports and forwards default when present", () => {
     const code = generateWorkerEntry("/tmp/_expose.js", "/src/index.ts");
     expect(code).toContain('export * from "/src/index.ts"');
-    expect(code).toContain('import * as __vibez1WorkerEntry from "/src/index.ts"');
-    expect(code).toContain('Reflect.get(__vibez1WorkerEntry, "default")');
-    expect(code).toContain("export default __vibez1DefaultExport");
+    expect(code).toContain('import * as __vibestudioWorkerEntry from "/src/index.ts"');
+    expect(code).toContain('Reflect.get(__vibestudioWorkerEntry, "default")');
+    expect(code).toContain("export default __vibestudioDefaultExport");
   });
 
   it("synthesizes a default fetch handler for DO-only modules", () => {
     const code = generateWorkerEntry("/tmp/_expose.js", "/src/index.ts");
-    expect(code).toContain('hasOwnProperty.call(__vibez1WorkerEntry, "default")');
-    expect(code).toContain("Vibez1 worker module has no default fetch handler.");
+    expect(code).toContain('hasOwnProperty.call(__vibestudioWorkerEntry, "default")');
+    expect(code).toContain("Vibestudio worker module has no default fetch handler.");
   });
 
   it("JSON-quotes paths to handle special characters", () => {
@@ -158,8 +162,10 @@ describe("generateWorkerEntry", () => {
 describe("generateForcedSplitEntry", () => {
   it("uses a live namespace import instead of a bare side-effect import", () => {
     const code = generateForcedSplitEntry("@radix-ui/react-icons");
-    expect(code).toContain('import * as __vibez1ForcedSplitModule from "@radix-ui/react-icons"');
-    expect(code).toContain("export { __vibez1ForcedSplitModule }");
+    expect(code).toContain(
+      'import * as __vibestudioForcedSplitModule from "@radix-ui/react-icons"'
+    );
+    expect(code).toContain("export { __vibestudioForcedSplitModule }");
     expect(code).not.toContain('import "@radix-ui/react-icons"');
   });
 });
@@ -211,7 +217,7 @@ describe("injectHtmlTransforms", () => {
 
 describe("resolveEntryPoint", () => {
   it("honors package exports before stale root index.js files", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-entry-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-entry-"));
     try {
       fs.mkdirSync(path.join(root, "src"), { recursive: true });
       fs.writeFileSync(

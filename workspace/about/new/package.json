@@ -2,7 +2,7 @@
   "name": "@workspace-about/new",
   "version": "0.1.0",
   "private": true,
-  "vibez1": {
+  "vibestudio": {
     "title": "New Panel",
     "hiddenInLauncher": true,
     "autoArchiveWhenEmpty": true

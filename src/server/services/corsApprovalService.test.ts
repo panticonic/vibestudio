@@ -1,4 +1,4 @@
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -9,7 +9,7 @@ import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createCorsApprovalService } from "./corsApprovalService.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-cors-approval-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cors-approval-"));
 }
 
 function createApprovalQueueMock(

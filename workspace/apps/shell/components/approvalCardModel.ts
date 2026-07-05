@@ -5,8 +5,8 @@
  * surface, a separate document with NO RPC). Keeping these helpers here lets the
  * card be hosted in the overlay without dragging in `../shell/client`.
  */
-import type { ApprovalDecision, PendingApproval } from "@vibez1/shared/approvals";
-import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibez1/shared/approvalCopy";
+import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
+import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibestudio/shared/approvalCopy";
 import type { DiffChangedFile, DiffReviewEntry } from "@workspace/ui";
 
 export interface CallerInfo {

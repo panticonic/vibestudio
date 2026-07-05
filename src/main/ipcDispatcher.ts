@@ -19,19 +19,19 @@ import {
   type RpcMessage,
   type RpcRequest,
   type RpcResponse,
-} from "@vibez1/rpc";
+} from "@vibestudio/rpc";
 import {
   createVerifiedCaller,
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
-} from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/serviceDispatcher";
 import type { PanelSession, ServerClient } from "./serverClient.js";
-import type { EventService, Subscriber } from "@vibez1/shared/eventsService";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { WebSocket } from "ws";
 import { assertPresent } from "../lintHelpers";
 
-/** Electron-main services that are not owned by the Vibez1 server process. */
+/** Electron-main services that are not owned by the Vibestudio server process. */
 const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
 
 const MAIN_CALLER = { callerId: "main", callerKind: "server" as const };
@@ -152,7 +152,7 @@ class IpcSubscriber implements Subscriber {
     const wc = assertPresent(this.getWebContents());
     // Deliver as an RPC event message that the shell transport understands
     wc.send(
-      "vibez1:rpc:message",
+      "vibestudio:rpc:message",
       envelopeFor(this.callerId, "main", {
         type: "event",
         fromId: "main",
@@ -185,7 +185,7 @@ export class IpcDispatcher {
   private readonly panelSessions = new Map<string, Promise<PanelSessionEntry>>();
   /** webContents ids with a destroy teardown attached (so we attach it once). */
   private readonly panelDestroyHooked = new Set<number>();
-  /** §1.6 upload relays, one per panel principal (see @vibez1/rpc bridgeStream.ts). */
+  /** §1.6 upload relays, one per panel principal (see @vibestudio/rpc bridgeStream.ts). */
   private readonly panelStreamRelays = new Map<string, BridgeStreamRelay>();
 
   constructor(deps: IpcDispatcherDeps) {
@@ -196,11 +196,11 @@ export class IpcDispatcher {
     const shellSubscriber = new IpcSubscriber(deps.getShellWebContents, "shell", "shell");
     deps.eventService.registerSubscriber("shell", shellSubscriber);
 
-    ipcMain.on("vibez1:rpc:send", (event, envelope: RpcEnvelope) => {
+    ipcMain.on("vibestudio:rpc:send", (event, envelope: RpcEnvelope) => {
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller) {
         console.warn(
-          `[IpcDispatcher] Rejecting vibez1:rpc:send from unresolved sender ` +
+          `[IpcDispatcher] Rejecting vibestudio:rpc:send from unresolved sender ` +
             `(webContentsId=${event.sender.id})`
         );
         return;
@@ -214,7 +214,7 @@ export class IpcDispatcher {
       }
       if (caller.callerKind !== "shell" && caller.callerKind !== "app") {
         console.warn(
-          `[IpcDispatcher] Rejecting vibez1:rpc:send from unauthorized sender ` +
+          `[IpcDispatcher] Rejecting vibestudio:rpc:send from unauthorized sender ` +
             `(webContentsId=${event.sender.id}, kind=${caller.callerKind})`
         );
         return;
@@ -231,11 +231,11 @@ export class IpcDispatcher {
     // the relay reassembles it and feeds the panel session's first-class
     // streamReadable(). invoke()-backed channels reject loudly on bad callers /
     // malformed messages — a body is never silently dropped.
-    ipcMain.handle("vibez1:rpc:stream-open", (event, msg: BridgeStreamOpen) => {
+    ipcMain.handle("vibestudio:rpc:stream-open", (event, msg: BridgeStreamOpen) => {
       const caller = this.requirePanelCaller(event.sender.id, "stream-open");
       this.ensurePanelStreamRelay(event.sender, caller.callerId).open(msg);
     });
-    ipcMain.handle("vibez1:rpc:stream-body-chunk", (event, msg: BridgeBodyChunk) => {
+    ipcMain.handle("vibestudio:rpc:stream-body-chunk", (event, msg: BridgeBodyChunk) => {
       const caller = this.requirePanelCaller(event.sender.id, "stream-body-chunk");
       const relay = this.panelStreamRelays.get(caller.callerId);
       if (!relay) {
@@ -245,12 +245,12 @@ export class IpcDispatcher {
       // reassembly buffer is back under the watermark.
       return relay.pushBodyChunk(msg);
     });
-    ipcMain.on("vibez1:rpc:stream-abort", (event, opId: unknown) => {
+    ipcMain.on("vibestudio:rpc:stream-abort", (event, opId: unknown) => {
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller || caller.callerKind !== "panel") return;
       this.panelStreamRelays.get(caller.callerId)?.abort(String(opId));
     });
-    ipcMain.on("vibez1:rpc:stream-ack", (event, payload: { opId?: unknown; seq?: unknown }) => {
+    ipcMain.on("vibestudio:rpc:stream-ack", (event, payload: { opId?: unknown; seq?: unknown }) => {
       const caller = this.deps.resolveCallerForWebContents(event.sender.id);
       if (!caller || caller.callerKind !== "panel") return;
       this.panelStreamRelays.get(caller.callerId)?.ack(String(payload?.opId), Number(payload?.seq));
@@ -275,7 +275,7 @@ export class IpcDispatcher {
    * One §1.6 upload relay per panel principal. The relay opens the panel's
    * session stream (`streamReadable` — WebRTC only; the loopback WS session has
    * none and uploads fail LOUDLY) and ships the response back over
-   * `vibez1:rpc:stream-message` with ack-gated chunks.
+   * `vibestudio:rpc:stream-message` with ack-gated chunks.
    */
   private ensurePanelStreamRelay(sender: WebContents, callerId: string): BridgeStreamRelay {
     const existing = this.panelStreamRelays.get(callerId);
@@ -299,7 +299,7 @@ export class IpcDispatcher {
       },
       sendToPanel: (msg) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
-        if (wc && !wc.isDestroyed()) wc.send("vibez1:rpc:stream-message", msg);
+        if (wc && !wc.isDestroyed()) wc.send("vibestudio:rpc:stream-message", msg);
       },
     });
     this.panelStreamRelays.set(callerId, relay);
@@ -318,7 +318,7 @@ export class IpcDispatcher {
   sendToShell(fromId: string, message: RpcMessage): void {
     const wc = this.deps.getShellWebContents();
     if (wc && !wc.isDestroyed()) {
-      wc.send("vibez1:rpc:message", envelopeFor("shell", fromId, message));
+      wc.send("vibestudio:rpc:message", envelopeFor("shell", fromId, message));
     }
   }
 
@@ -435,7 +435,7 @@ export class IpcDispatcher {
   ): void {
     if (!sender.isDestroyed()) {
       sender.send(
-        "vibez1:rpc:message",
+        "vibestudio:rpc:message",
         responseEnvelopeFor(requestEnvelope, MAIN_CALLER, response)
       );
     }
@@ -531,7 +531,7 @@ export class IpcDispatcher {
         // panel's current webContents.
         session.onMessage((env) => {
           const wc = this.deps.getWebContentsForCaller(callerId);
-          if (wc && !wc.isDestroyed()) wc.send("vibez1:rpc:message", env);
+          if (wc && !wc.isDestroyed()) wc.send("vibestudio:rpc:message", env);
         });
         return { session, leaseKey: expectedLeaseKey };
       })
@@ -550,7 +550,7 @@ export class IpcDispatcher {
       (envelope) => {
         const wc = this.deps.getWebContentsForCaller(callerId);
         if (!wc || wc.isDestroyed()) return;
-        wc.send("vibez1:rpc:message", envelope);
+        wc.send("vibestudio:rpc:message", envelope);
       }
     );
     this.appMessageBridges.set(callerId, unsubscribe);

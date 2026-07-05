@@ -1,5 +1,5 @@
 /**
- * Gateway — Single-port HTTP/WS router for Vibez1 server.
+ * Gateway — Single-port HTTP/WS router for Vibestudio server.
  *
  * In-process routing for RPC, PanelHttp, and git, plus reverse proxying for
  * external worker processes.
@@ -19,15 +19,15 @@ import { randomBytes } from "crypto";
 import { connect as connectNet } from "net";
 import { WebSocketServer, WebSocket } from "ws";
 import type { Duplex } from "stream";
-import { createDevLogger } from "@vibez1/dev-log";
-import { constantTimeStringEqual, type TokenManager } from "@vibez1/shared/tokenManager";
-import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
-import { createVerifiedCaller, type VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createDevLogger } from "@vibestudio/dev-log";
+import { constantTimeStringEqual, type TokenManager } from "@vibestudio/shared/tokenManager";
+import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
+import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import { assertPresent } from "../lintHelpers";
-import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
 
@@ -36,7 +36,7 @@ const log = createDevLogger("Gateway");
 // ---------------------------------------------------------------------------
 // Per-upstream gateway credentials (audit finding #32).
 //
-// Inbound `Authorization` and `x-vibez1-*` headers are stripped before
+// Inbound `Authorization` and `x-vibestudio-*` headers are stripped before
 // forwarding to upstream processes so panel/admin tokens never leak past the
 // gateway. Workerd receives a gateway-scoped bearer that its router validates.
 // Git is dispatched in-process after caller bearer validation, so it receives
@@ -51,8 +51,8 @@ const log = createDevLogger("Gateway");
  * server services after gateway caller validation, not by forwarding bearer
  * credentials upstream.
  *
- * `x-vibez1-*` covers `x-vibez1-token` (admin) and any future
- * Vibez1-internal admin-bearing headers.
+ * `x-vibestudio-*` covers `x-vibestudio-token` (admin) and any future
+ * Vibestudio-internal admin-bearing headers.
  */
 const STRIP_UPSTREAM_HEADERS = new Set<string>(["authorization", "cookie", "proxy-authorization"]);
 
@@ -64,7 +64,7 @@ function stripUpstreamHeaders(
     if (v === undefined) continue;
     const lower = k.toLowerCase();
     if (STRIP_UPSTREAM_HEADERS.has(lower)) continue;
-    if (lower.startsWith("x-vibez1-")) continue;
+    if (lower.startsWith("x-vibestudio-")) continue;
     out[k] = v as string | string[];
   }
   return out;
@@ -240,7 +240,7 @@ export class Gateway {
           res.end("Worker host unavailable");
           return;
         }
-        const provided = req.headers["x-vibez1-loader-secret"];
+        const provided = req.headers["x-vibestudio-loader-secret"];
         if (
           typeof provided !== "string" ||
           !constantTimeStringEqual(provided, host.getLoaderSecret())
@@ -312,7 +312,7 @@ export class Gateway {
           res.end("Worker host unavailable");
           return;
         }
-        const provided = req.headers["x-vibez1-loader-secret"];
+        const provided = req.headers["x-vibestudio-loader-secret"];
         if (
           typeof provided !== "string" ||
           !constantTimeStringEqual(provided, host.getLoaderSecret())
@@ -401,7 +401,7 @@ export class Gateway {
           res.end("DO dispatch unavailable");
           return;
         }
-        const providedSecret = req.headers["x-vibez1-dispatch-secret"];
+        const providedSecret = req.headers["x-vibestudio-dispatch-secret"];
         if (
           typeof providedSecret !== "string" ||
           !constantTimeStringEqual(providedSecret, dispatchSecret)
@@ -411,7 +411,7 @@ export class Gateway {
           return;
         }
         return proxyRequest(req, res, workerdPort, url, workerdToken, undefined, {
-          "X-Vibez1-Dispatch-Secret": dispatchSecret,
+          "X-Vibestudio-Dispatch-Secret": dispatchSecret,
         });
       }
 
@@ -557,7 +557,7 @@ export class Gateway {
           socket.destroy();
           return;
         }
-        const providedSecret = req.headers["x-vibez1-dispatch-secret"];
+        const providedSecret = req.headers["x-vibestudio-dispatch-secret"];
         if (
           typeof providedSecret !== "string" ||
           !constantTimeStringEqual(providedSecret, dispatchSecret)
@@ -567,7 +567,7 @@ export class Gateway {
           return;
         }
         return proxyUpgrade(req, socket, head, workerdPort, workerdToken, {
-          "X-Vibez1-Dispatch-Secret": dispatchSecret,
+          "X-Vibestudio-Dispatch-Secret": dispatchSecret,
         });
       }
 
@@ -651,7 +651,7 @@ export class Gateway {
  * The list intentionally does not contain a port: we accept any port the
  * caller used (the gateway is loopback-bound).
  *
- * Override / extension: set `VIBEZ1_WS_ALLOWED_ORIGINS` to a comma list
+ * Override / extension: set `VIBESTUDIO_WS_ALLOWED_ORIGINS` to a comma list
  * of additional origins (e.g. `http://my-dev-host:5173,chrome-extension://xyz`).
  */
 function buildOriginAllowList(externalHost: string): { exact: Set<string>; suffix: Set<string> } {
@@ -666,7 +666,7 @@ function buildOriginAllowList(externalHost: string): { exact: Set<string>; suffi
     exact.add(`https://${h}`);
   }
   // Custom panel/extension origins via env.
-  const extra = process.env["VIBEZ1_WS_ALLOWED_ORIGINS"];
+  const extra = process.env["VIBESTUDIO_WS_ALLOWED_ORIGINS"];
   if (extra) {
     for (const raw of extra.split(",")) {
       const v = raw.trim();
@@ -724,7 +724,7 @@ function proxyRequest(
   hostHeader?: string,
   extraHeaders: Record<string, string> = {}
 ): void {
-  // Strip inbound auth/cookie/X-Vibez1-* before forwarding (audit #32).
+  // Strip inbound auth/cookie/X-Vibestudio-* before forwarding (audit #32).
   // Workerd-served code is untrusted-by-design; it must never see the
   // gateway's admin token, the panel's bearer, or session cookies. After
   // stripping, stamp a per-upstream gateway-internal bearer so the
@@ -780,7 +780,7 @@ function proxyUpgrade(
   upstreamToken: string,
   extraHeaders: Record<string, string> = {}
 ): void {
-  // Strip inbound auth/cookie/X-Vibez1-* (audit #32). See proxyRequest.
+  // Strip inbound auth/cookie/X-Vibestudio-* (audit #32). See proxyRequest.
   // After stripping, stamp the per-upstream gateway bearer.
   const safeHeaders = stripUpstreamHeaders(req.headers);
   safeHeaders["authorization"] = `Bearer ${upstreamToken}`;
@@ -1081,7 +1081,7 @@ async function handleRouteRequest(
   const targetPath = buildWorkerTargetPath(result, url);
   const extraHeaders =
     result.kind === "worker-do" && workerdDispatchSecret
-      ? { "X-Vibez1-Dispatch-Secret": workerdDispatchSecret }
+      ? { "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret }
       : undefined;
   proxyRequest(req, res, workerdPort, targetPath, workerdToken, undefined, extraHeaders);
   return true;
@@ -1154,7 +1154,7 @@ async function handleRouteUpgrade(
   req.url = buildWorkerTargetPath(result, url);
   const extraHeaders =
     result.kind === "worker-do" && workerdDispatchSecret
-      ? { "X-Vibez1-Dispatch-Secret": workerdDispatchSecret }
+      ? { "X-Vibestudio-Dispatch-Secret": workerdDispatchSecret }
       : undefined;
   proxyUpgrade(req, socket, head, workerdPort, workerdToken, extraHeaders);
   return true;

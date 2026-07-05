@@ -1,5 +1,5 @@
 /**
- * ErrorBoundary -- Top-level error boundary for the Vibez1 mobile app.
+ * ErrorBoundary -- Top-level error boundary for the Vibestudio mobile app.
  *
  * Catches unhandled React render errors and shows a recovery screen
  * instead of crashing the entire app. Uses static colors since Jotai

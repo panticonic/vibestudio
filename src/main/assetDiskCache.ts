@@ -16,7 +16,7 @@
  *   metadata/<key>.json  sidecar: { status, statusText, gzip, contentType, replayHeaders, size }
  *
  * Digest source: the cache hashes the body (sha-256) on first receipt — a
- * digest-on-write cache. A server-supplied `x-vibez1-content-digest` header is
+ * digest-on-write cache. A server-supplied `x-vibestudio-content-digest` header is
  * treated only as advisory metadata; filenames are always derived from the
  * actual bytes. Because artifacts are immutable, a changed
  * build changes the bytes → a new digest → the index entry for that path is

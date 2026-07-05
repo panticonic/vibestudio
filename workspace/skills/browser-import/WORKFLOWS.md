@@ -81,9 +81,9 @@ inline_ui({
 
 ## Workflow: Migrate Browser Life
 
-Use this when the user wants Vibez1 to become their primary browser surface.
+Use this when the user wants Vibestudio to become their primary browser surface.
 This pulls persistent browser data first, then recreates the source browser's
-current open HTTP(S) tabs as Vibez1 child panels.
+current open HTTP(S) tabs as Vibestudio child panels.
 
 ### Step 1: Discover and choose profile
 
@@ -146,11 +146,11 @@ No extra wiring is required. The address bar suggests from:
 
 - currently open browser panels
 - imported browser history
-- Vibez1-local browser-panel history
+- Vibestudio-local browser-panel history
 - bookmarks
 - search engines
 
-Imported history and Vibez1-local panel visits share the same `BrowserDataDO`
+Imported history and Vibestudio-local panel visits share the same `BrowserDataDO`
 history system.
 
 ## Workflow: Repeat Import Later
@@ -331,7 +331,7 @@ The agent should compose these building blocks based on what the user actually a
 - **"What browsers do I have?"** → discovery only, show rich browser cards
 - **"Show me my saved passwords"** → import passwords if not already imported → show password vault
 - **"Import everything from Firefox"** → detect Firefox → import all types → show summary → leave managers for each type
-- **"Move my browser life to Vibez1"** → full persistent import → open current tabs as panels → explain unified address-bar suggestions
+- **"Move my browser life to Vibestudio"** → full persistent import → open current tabs as panels → explain unified address-bar suggestions
 - **"Sync again" / "pull latest browser data"** → repeat `startImport` for the same profile; do not clear first
 - **"Compare my browsers"** → cross-browser comparison workflow → show table
 - **"Export my bookmarks as HTML"** → targeted export, return the file

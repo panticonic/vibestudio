@@ -19,7 +19,7 @@ import { PanelWebView } from "./PanelWebView";
 import { WebViewErrorBoundary } from "./WebViewErrorBoundary";
 import { ApprovalSheet } from "./ApprovalSheet";
 import { Toast } from "./Toast";
-import { Vibez1Logo } from "./Vibez1Logo";
+import { VibestudioLogo } from "./VibestudioLogo";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
 import type { WebViewNavigation } from "react-native-webview/lib/WebViewTypes";
@@ -36,7 +36,7 @@ import {
 } from "../state/navigationAtoms";
 import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webViewStack";
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
-import { PANEL_UI_IDLE_SWEEP_MS } from "@vibez1/shared/constants";
+import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
 import { parseHostConfig, getExternalHost } from "../services/panelUrls";
 import { materializeMobilePanel } from "../services/panelMaterializer";
 import { handleExternalOpen, type ExternalOpenPayload } from "../services/oauthLoopback";
@@ -56,7 +56,7 @@ import {
   type AddressAutocompleteItem,
   type PanelAddressOptions,
   type PanelRepoState,
-} from "@vibez1/shared/panelChrome";
+} from "@vibestudio/shared/panelChrome";
 import {
   applySearchTemplate,
   canonicalizeBrowserHistoryUrl,
@@ -66,17 +66,17 @@ import {
   type BrowserNavigationIntent,
   type AddressNavigationMode,
   type PanelCommandId,
-} from "@vibez1/shared/panelCommands";
-import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
-import { filterRuntimeApprovals } from "@vibez1/shared/bootstrapApprovals";
+} from "@vibestudio/shared/panelCommands";
+import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
+import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
   createApprovalStateController,
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
   type ApprovalStateController,
-} from "@vibez1/shared/shell/approvalState";
+} from "@vibestudio/shared/shell/approvalState";
 import type { HostConfig } from "../services/panelUrls";
-import type { ApprovalDecision, PendingApproval } from "@vibez1/shared/approvals";
+import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
 const PANEL_MATERIALIZE_TIMEOUT_MS = 45_000;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -90,7 +90,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 }
 
 function smokePhase(phase: string, extra?: Record<string, unknown>): void {
-  console.log(`[Vibez1MobileSmoke] phase=${phase}`, extra ?? "");
+  console.log(`[VibestudioMobileSmoke] phase=${phase}`, extra ?? "");
 }
 
 export function MainScreen() {
@@ -699,7 +699,7 @@ export function MainScreen() {
         });
       } else {
         pushToast({
-          title: notif.title ?? "Vibez1",
+          title: notif.title ?? "Vibestudio",
           message: notif.message ?? "",
           tone: "info",
         });
@@ -1331,7 +1331,7 @@ export function MainScreen() {
       <View style={styles.contentArea}>
         {!activePanelId && (
           <View style={styles.placeholderContainer}>
-            <Vibez1Logo size={76} variant="mark" style={styles.placeholderLogo} />
+            <VibestudioLogo size={76} variant="mark" style={styles.placeholderLogo} />
             <Text style={[styles.placeholderText, { color: colors.textSecondary }]}>
               Select a panel from the drawer
             </Text>
@@ -1346,7 +1346,7 @@ export function MainScreen() {
           !activePanelLoadError &&
           !webViewStack.some((entry) => entry.panelId === loadingPanelId) && (
             <View style={styles.loadingContainer}>
-              <Vibez1Logo size={64} variant="mark" style={styles.placeholderLogo} />
+              <VibestudioLogo size={64} variant="mark" style={styles.placeholderLogo} />
               <ActivityIndicator size="large" color={colors.primary} />
               <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
                 Loading panel...
@@ -1359,7 +1359,7 @@ export function MainScreen() {
           !activePanelLeasedElsewhere &&
           !webViewStack.some((entry) => entry.panelId === activePanelId) && (
             <View style={styles.placeholderContainer}>
-              <Vibez1Logo size={72} variant="mark" style={styles.placeholderLogo} />
+              <VibestudioLogo size={72} variant="mark" style={styles.placeholderLogo} />
               <Text style={[styles.placeholderText, { color: colors.text }]}>
                 Panel failed to load
               </Text>
@@ -1384,7 +1384,7 @@ export function MainScreen() {
 
         {activePanelId && activePanelLeasedElsewhere && (
           <View style={styles.placeholderContainer}>
-            <Vibez1Logo size={72} variant="mark" style={styles.placeholderLogo} />
+            <VibestudioLogo size={72} variant="mark" style={styles.placeholderLogo} />
             <Text style={[styles.placeholderText, { color: colors.text }]}>
               Running on {activeRuntimeLease?.holderLabel ?? "another client"}
             </Text>

@@ -5,9 +5,9 @@
  * `http` is the credential client's `gitHttp` (credentialed git-over-HTTP).
  */
 
-import type { RpcCaller } from "@vibez1/rpc";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { gitInteropMethods } from "@vibez1/shared/serviceSchemas/gitInterop";
+import type { RpcCaller } from "@vibestudio/rpc";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { gitInteropMethods } from "@vibestudio/shared/serviceSchemas/gitInterop";
 import type { CredentialClient } from "./credentials.js";
 
 export interface GitRemoteSpec {

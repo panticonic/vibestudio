@@ -1,8 +1,8 @@
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { settingsMethods } from "@vibez1/shared/serviceSchemas/settings";
-import type { SettingsData, ModelRoleConfig } from "@vibez1/shared/types";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { settingsMethods } from "@vibestudio/shared/serviceSchemas/settings";
+import type { SettingsData, ModelRoleConfig } from "@vibestudio/shared/types";
 import type { ServerClient } from "../serverClient.js";
-import { loadCentralConfig } from "@vibez1/shared/workspace/loader";
+import { loadCentralConfig } from "@vibestudio/shared/workspace/loader";
 import type { ViewManager } from "../viewManager.js";
 import { requireAppCapability } from "./appCapabilities.js";
 

@@ -14,7 +14,7 @@ import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
 import type { BuildResult } from "./buildV2/buildStore.js";
 
-// Resolve @workspace/* and @vibez1/* imports to source via the
+// Resolve @workspace/* and @vibestudio/* imports to source via the
 // workspace/tsconfig.json path map (same source of truth vitest.config.ts
 // uses), so this test doesn't depend on built package dists.
 const tsconfigPaths: Record<string, string[]> = JSON.parse(
@@ -49,7 +49,7 @@ function resolveFromTsconfigPaths(specifier: string): string | undefined {
 const workspaceAliasPlugin: esbuild.Plugin = {
   name: "workspace-alias",
   setup(build) {
-    build.onResolve({ filter: /^(@workspace|@vibez1)[/-]/ }, (args) => {
+    build.onResolve({ filter: /^(@workspace|@vibestudio)[/-]/ }, (args) => {
       const path = resolveFromTsconfigPaths(args.path);
       return path ? { path } : undefined;
     });
@@ -107,8 +107,8 @@ async function createWorkerdHarness(
       };
     },
     getBuildByKey: (key: string) => builds.get(key) ?? null,
-    workspacePath: mkdtempSync(join(tmpdir(), "vibez1-workerd-workspace-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibez1-workerd-state-")),
+    workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-")),
+    statePath: mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-")),
     getProxyPort: () => 9,
     getSharedEgressPort: () => Promise.resolve(10),
     registerEgressCaller: () => {},
@@ -120,7 +120,7 @@ async function createWorkerdHarness(
   const loaderServer = createServer((req, res) => {
     const u = req.url ?? "";
     if (u.startsWith("/_doversion/") || u.startsWith("/_docode/")) {
-      if (req.headers["x-vibez1-loader-secret"] !== manager.getLoaderSecret()) {
+      if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -215,7 +215,7 @@ async function bundleWorker(source: string, entryPoint: string, ev: string): Pro
 
 function buildResult(source: string, ev: string, bundle: string): BuildResult {
   return {
-    dir: `/tmp/vibez1-${ev}-build`,
+    dir: `/tmp/vibestudio-${ev}-build`,
     sourceStateHash: "state:test",
     metadata: {
       kind: "worker",
@@ -783,7 +783,7 @@ describe("internal storage DOs under workerd", () => {
         });
         const bundle = result.outputFiles[0]!.text;
         return {
-          dir: "/tmp/vibez1-gad-store-test-build",
+          dir: "/tmp/vibestudio-gad-store-test-build",
           sourceStateHash: "state:test",
           metadata: {
             kind: "worker",

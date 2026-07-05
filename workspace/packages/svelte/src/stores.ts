@@ -31,15 +31,15 @@ export const connectionError = readable<{ code: number; reason: string; source?:
  *
  * Initializes from the current snapshot via `getStateArgs()` (exposed by
  * @workspace/runtime as `panel.stateArgs.get`) and updates whenever the host
- * dispatches the `vibez1:stateArgsChanged` CustomEvent, whose `.detail` is the
+ * dispatches the `vibestudio:stateArgsChanged` CustomEvent, whose `.detail` is the
  * new args object. This is the Svelte-store analogue of React's `useStateArgs`.
  */
 export const stateArgs = readable<Record<string, unknown>>(panel.stateArgs.get(), (set) => {
   const handler = (event: Event) => {
     set((event as CustomEvent<Record<string, unknown>>).detail);
   };
-  window.addEventListener("vibez1:stateArgsChanged", handler as EventListener);
-  return () => window.removeEventListener("vibez1:stateArgsChanged", handler as EventListener);
+  window.addEventListener("vibestudio:stateArgsChanged", handler as EventListener);
+  return () => window.removeEventListener("vibestudio:stateArgsChanged", handler as EventListener);
 });
 
 /**

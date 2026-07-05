@@ -50,7 +50,7 @@ import {
 } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
 import { typecheckUnit } from "./typecheckFold.js";
-import { CONTAINER_SECTIONS, CONTENT_SECTIONS } from "@vibez1/shared/runtime/entitySpec";
+import { CONTAINER_SECTIONS, CONTENT_SECTIONS } from "@vibestudio/shared/runtime/entitySpec";
 
 /** Expected unit kind for a build-unit section, used to report a malformed
  *  (unresolvable) unit at the right kind even when no GraphNode exists. */
@@ -68,7 +68,7 @@ import {
   diagnosticsForUnit,
   diagnosticsForBuildKey,
 } from "./diagnosticsStore.js";
-import type { LibraryBuildTarget } from "@vibez1/shared/serviceSchemas/build";
+import type { LibraryBuildTarget } from "@vibestudio/shared/serviceSchemas/build";
 import {
   StateTransitionTrigger,
   unitsForChangedPaths,
@@ -84,8 +84,8 @@ import {
   collectTransitiveExternalDeps,
   ensureExternalDeps,
 } from "./externalDeps.js";
-import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibez1/shared/extensionRuntimeAbi";
-import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibez1/shared/workspace/aboutNamespace";
+import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
+import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
 
@@ -262,7 +262,7 @@ export interface BuildUnitResolution {
 export interface BuildSystemRootOptions {
   /**
    * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
-   * Defaults to VIBEZ1_APP_ROOT, then dirname(workspaceRoot), for older tests.
+   * Defaults to VIBESTUDIO_APP_ROOT, then dirname(workspaceRoot), for older tests.
    */
   appRoot?: string;
   /**
@@ -458,11 +458,12 @@ export async function initBuildSystemV2(
   // active managed workspace copy happens to live. Server startup passes these
   // roots explicitly; defaults preserve direct test construction.
   setBuildRootConfig({
-    appRoot: rootOptions.appRoot ?? process.env["VIBEZ1_APP_ROOT"] ?? path.dirname(workspaceRoot),
+    appRoot:
+      rootOptions.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? path.dirname(workspaceRoot),
     workspaceRoot: rootOptions.dependencyWorkspaceRoot ?? workspaceRoot,
   });
 
-  // Declare where @vibez1/* platform packages live (workspace:* deps).
+  // Declare where @vibestudio/* platform packages live (workspace:* deps).
   initBuilder(appNodeModuleRoots);
   setBuildSourceProvider(source);
 
@@ -936,7 +937,7 @@ export async function initBuildSystemV2(
                         column: 1,
                         message:
                           `No buildable unit resolved at ${repoPath}. A ${section}/ unit needs a ` +
-                          `package.json with a "name" (and a vibez1 manifest). Create/fix it, then re-push.`,
+                          `package.json with a "name" (and a vibestudio manifest). Create/fix it, then re-push.`,
                       },
                     ],
                   },
@@ -1160,7 +1161,7 @@ export async function initBuildSystemV2(
       const resolved = resolvePinnedUnit();
       const node = resolved.node;
       if (!node) {
-        if (unitPath.startsWith("@vibez1/") && options?.library) {
+        if (unitPath.startsWith("@vibestudio/") && options?.library) {
           const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
           return { bundle };
         }
@@ -1209,10 +1210,10 @@ export async function initBuildSystemV2(
       resolved = resolveRequestedUnit();
       node = resolved.node;
       if (!node) {
-        // @vibez1/* packages aren't in the workspace graph — they're compiled
+        // @vibestudio/* packages aren't in the workspace graph — they're compiled
         // platform packages in node_modules. Build them as library bundles
         // so eval can import them.
-        if (unitPath.startsWith("@vibez1/") && options?.library) {
+        if (unitPath.startsWith("@vibestudio/") && options?.library) {
           const bundle = await buildPlatformLibrary(unitPath, options.externals ?? []);
           return { bundle };
         }
@@ -1704,7 +1705,7 @@ async function prewarmInitialBuilds(opts: InitialBuildPrewarmOptions): Promise<v
 }
 
 function initialBuildPrewarmConcurrency(): number {
-  const raw = Number.parseInt(process.env["VIBEZ1_INITIAL_BUILD_CONCURRENCY"] ?? "", 10);
+  const raw = Number.parseInt(process.env["VIBESTUDIO_INITIAL_BUILD_CONCURRENCY"] ?? "", 10);
   if (Number.isInteger(raw) && raw > 0) return raw;
   return 4;
 }

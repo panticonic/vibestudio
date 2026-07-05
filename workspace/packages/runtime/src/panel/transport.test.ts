@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { RpcEnvelope, RpcMessage } from "@vibez1/rpc";
+import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import { createPanelTransport } from "./transport.js";
 
 const g = globalThis as typeof globalThis & {
-  __vibez1Shell?: {
+  __vibestudioShell?: {
     postEnvelope: ReturnType<typeof vi.fn>;
     onEnvelope: ReturnType<typeof vi.fn>;
     onRecovery?: ReturnType<typeof vi.fn>;
@@ -11,7 +11,7 @@ const g = globalThis as typeof globalThis & {
   };
 };
 
-function makeShell(overrides: Partial<NonNullable<typeof g.__vibez1Shell>> = {}) {
+function makeShell(overrides: Partial<NonNullable<typeof g.__vibestudioShell>> = {}) {
   return {
     postEnvelope: vi.fn(async () => {}),
     onEnvelope: vi.fn(() => vi.fn()),
@@ -32,12 +32,12 @@ function envelope(target: string, message: RpcMessage): RpcEnvelope {
 
 describe("createPanelTransport", () => {
   afterEach(() => {
-    delete g.__vibez1Shell;
+    delete g.__vibestudioShell;
   });
 
   it("posts canonical envelopes over the shell bridge unchanged", async () => {
     const shell = makeShell();
-    g.__vibez1Shell = shell;
+    g.__vibestudioShell = shell;
     const transport = createPanelTransport();
     const message: RpcMessage = {
       type: "event",
@@ -54,7 +54,7 @@ describe("createPanelTransport", () => {
 
   it("delivers incoming envelopes unchanged", () => {
     let incoming!: (envelope: RpcEnvelope) => void;
-    g.__vibez1Shell = makeShell({
+    g.__vibestudioShell = makeShell({
       onEnvelope: vi.fn((handler) => {
         incoming = handler;
         return vi.fn();
@@ -79,7 +79,7 @@ describe("createPanelTransport", () => {
   it("sends panel event subscriptions over the shell bridge", async () => {
     const serviceCall = vi.fn(async () => {});
     const shell = makeShell({ serviceCall });
-    g.__vibez1Shell = shell;
+    g.__vibestudioShell = shell;
     const transport = createPanelTransport();
     const message: RpcMessage = {
       type: "request",
@@ -99,7 +99,7 @@ describe("createPanelTransport", () => {
   it("sends panel CDP requests over the shell bridge", async () => {
     const serviceCall = vi.fn(async () => {});
     const shell = makeShell({ serviceCall });
-    g.__vibez1Shell = shell;
+    g.__vibestudioShell = shell;
     const transport = createPanelTransport();
     const message: RpcMessage = {
       type: "request",
@@ -119,7 +119,7 @@ describe("createPanelTransport", () => {
   it("routes Electron-local panel host helpers through serviceCall", async () => {
     const serviceCall = vi.fn(async () => "ok");
     const shell = makeShell({ serviceCall });
-    g.__vibez1Shell = shell;
+    g.__vibestudioShell = shell;
     const transport = createPanelTransport();
     const handler = vi.fn();
     transport.onMessage(handler);
@@ -200,7 +200,7 @@ describe("createPanelTransport", () => {
 
     it("wires streamBody from the shell bridge surface and pumps the body across", async () => {
       const { shell, sentBodyChunks } = makeStreamShell();
-      g.__vibez1Shell = shell as never;
+      g.__vibestudioShell = shell as never;
       const transport = createPanelTransport();
       expect(typeof transport.streamBody).toBe("function");
 
@@ -230,14 +230,14 @@ describe("createPanelTransport", () => {
     });
 
     it("leaves streamBody undefined when the bridge has no upload surface", () => {
-      g.__vibez1Shell = makeShell();
+      g.__vibestudioShell = makeShell();
       const transport = createPanelTransport();
       expect(transport.streamBody).toBeUndefined();
     });
 
     it("passes the upload body through a first-class shell.stream verbatim", async () => {
       const stream = vi.fn(async () => new Response(null, { status: 204 }));
-      g.__vibez1Shell = makeShell({ stream } as never);
+      g.__vibestudioShell = makeShell({ stream } as never);
       const transport = createPanelTransport();
       const body = new ReadableStream<Uint8Array>();
       const sentEnvelope = streamRequestEnvelope();

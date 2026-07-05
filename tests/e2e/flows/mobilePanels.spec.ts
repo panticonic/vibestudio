@@ -49,7 +49,7 @@ function writeInitPanelsConfig(
   workspacePath: string,
   panels: Array<{ source: string; stateArgs?: Record<string, unknown> }>
 ): void {
-  const configPath = path.join(workspacePath, "source", "meta", "vibez1.yml");
+  const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<
     string,
     unknown
@@ -68,7 +68,7 @@ async function launchMobileTestApp(
   const testApp = await launchTestApp({
     workspace: workspacePath,
     launchTimeout: 240_000,
-    env: { VIBEZ1_AUTO_APPROVE: "1" },
+    env: { VIBESTUDIO_AUTO_APPROVE: "1" },
   });
   const shellWindow = await waitForShellWindow(testApp.app);
   return {

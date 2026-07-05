@@ -5,7 +5,7 @@ for the target you changed, then run broader smoke checks for shared code.
 
 ## Focused Local Commands
 
-From the Vibez1 application checkout:
+From the Vibestudio application checkout:
 
 ```bash
 pnpm type-check
@@ -34,7 +34,7 @@ pnpm vitest run \
 Host target selection changes should also cover:
 
 - selected target state persists per workspace and is not written to
-  `meta/vibez1.yml`
+  `meta/vibestudio.yml`
 - missing or incompatible selected apps report an invalid selection
 - Electron ignores unselected app availability events once a desktop target is
   selected
@@ -72,7 +72,7 @@ Verify:
 
 Verify:
 
-- clean install can consume `vibez1://connect`
+- clean install can consume `vibestudio://connect`
 - bootstrap shows the target server URL and requires Pair/Cancel confirmation
 - native bootstrap pairs before workspace app bundle exists
 - active workspace bundle registers the native root component name requested by

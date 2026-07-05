@@ -1,7 +1,7 @@
-import type { UnitRegistryEntryBase } from "@vibez1/unit-host";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
-import { extensionsMethods } from "@vibez1/shared/serviceSchemas/extensions";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export interface Disposable {
   dispose(): void;
@@ -64,7 +64,7 @@ export interface RegistryEntry extends UnitRegistryEntryBase {
  *
  * ```ts
  * export type Api = Awaited<ReturnType<typeof activate>>;
- * declare module "@vibez1/extension" {
+ * declare module "@vibestudio/extension" {
  *   interface WorkspaceExtensions { "@workspace-extensions/foo": Api; }
  * }
  * ```

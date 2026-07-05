@@ -3,7 +3,7 @@
  *
  * The moved read/history methods (vcsFileHistory / vcsLog / vcsCommitEdits /
  * vcsCommitAncestors / vcsEditsBy*) no longer exist on the host `vcs` service;
- * consumers resolve the `vcs` service declared in workspace/meta/vibez1.yml
+ * consumers resolve the `vcs` service declared in workspace/meta/vibestudio.yml
  * (workers.resolveService → gad-store DO singleton) and call the DO methods
  * with positional args. This test drives that resolution against the REAL
  * workspace manifest and dispatches the resolved method names against a real
@@ -14,10 +14,10 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { parseWorkspaceConfigContentWithId } from "@vibez1/shared/workspace/configParser";
-import { buildWorkspaceDeclarations } from "@vibez1/shared/workspace/singletonRegistry";
-import { VCS_SERVICE_PROTOCOL } from "@vibez1/shared/userlandServiceRpc";
-import { vcsMethods } from "@vibez1/shared/serviceSchemas/vcs";
+import { parseWorkspaceConfigContentWithId } from "@vibestudio/shared/workspace/configParser";
+import { buildWorkspaceDeclarations } from "@vibestudio/shared/workspace/singletonRegistry";
+import { VCS_SERVICE_PROTOCOL } from "@vibestudio/shared/userlandServiceRpc";
+import { vcsMethods } from "@vibestudio/shared/serviceSchemas/vcs";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../workspace/workers/gad-store/index.js";
 import { resolveUserlandService } from "../../src/server/userlandServices.js";
@@ -58,7 +58,7 @@ function dispatchTo(gad: TestGad) {
 describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
   it("the workspace manifest declares `vcs` as a DO service on the gad-store singleton", async () => {
     const yml = await fsp.readFile(
-      path.resolve(__dirname, "../../workspace/meta/vibez1.yml"),
+      path.resolve(__dirname, "../../workspace/meta/vibestudio.yml"),
       "utf8"
     );
     const config = parseWorkspaceConfigContentWithId(yml, "test");
@@ -87,7 +87,7 @@ describe("vcs userland dispatch (manifest service → gad-store DO)", () => {
       "editsByInvocation",
       "log",
       // Publishing is no longer a public host RPC: push dispatches userland to
-      // the gad-store DO's vcsPush (runtime VcsClient.push / `vibez1 vcs push`).
+      // the gad-store DO's vcsPush (runtime VcsClient.push / `vibestudio vcs push`).
       "push",
       // Repo lifecycle sagas are also direct userland dispatches. The host
       // service must not validate methods it will reject as unknown.

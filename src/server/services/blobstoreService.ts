@@ -5,13 +5,13 @@ import * as path from "path";
 import { Transform } from "stream";
 import { pipeline } from "stream/promises";
 import type { IncomingMessage, ServerResponse } from "http";
-import { createDevLogger } from "@vibez1/dev-log";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import { createDevLogger } from "@vibestudio/dev-log";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   BLOBSTORE_READ_POLICY as READ_POLICY,
   DIGEST_RE,
   blobstoreMethods,
-} from "@vibez1/shared/serviceSchemas/blobstore";
+} from "@vibestudio/shared/serviceSchemas/blobstore";
 import {
   decodeStateNode,
   decodeTreeNode,
@@ -23,8 +23,11 @@ import {
   STATE_HASH_RE,
   TREE_HASH_RE,
   TREE_EXEC_MODE,
-} from "@vibez1/shared/contentTree/treeObjects";
-import type { ManifestHashEntry, WorktreeHashFile } from "@vibez1/shared/contentTree/worktreeHash";
+} from "@vibestudio/shared/contentTree/treeObjects";
+import type {
+  ManifestHashEntry,
+  WorktreeHashFile,
+} from "@vibestudio/shared/contentTree/worktreeHash";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
 import { assertPresent } from "../../lintHelpers";
@@ -460,7 +463,7 @@ export async function pruneUnreferencedTreeObjects(
 // in the ONE flat CAS: blob GC/list/prune see tree nodes as ordinary blobs,
 // and tree hashes stay byte-compatible with existing gad manifest/state
 // hashes. Pure encode/decode/validation lives in
-// @vibez1/shared/contentTree/treeObjects; this section binds it to the disk
+// @vibestudio/shared/contentTree/treeObjects; this section binds it to the disk
 // store. Stored nodes are decoded STRICTLY on every read — raw blob writes
 // are unauthenticated, so a crafted "node" (path traversal names, junk shape,
 // non-canonical bytes) is rejected before it can flow into list/read/

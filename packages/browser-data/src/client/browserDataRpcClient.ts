@@ -1,7 +1,7 @@
-import { extensionsMethods } from "@vibez1/shared/serviceSchemas/extensions";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { browserDataBrokerPackageName } from "@vibez1/shared/workspace/configParser";
-import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { browserDataBrokerPackageName } from "@vibestudio/shared/workspace/configParser";
+import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import type { ImportedPassword } from "../types.js";
 import type { RecordHistoryVisitRequest, UpdateHistoryTitleRequest } from "../types.js";
 import type { StoredBookmark, StoredCookie, StoredHistory, StoredPassword, StoredSearchEngine } from "../storage/types.js";
@@ -48,7 +48,7 @@ export interface BrowserDataClient {
 }
 /**
  * Resolve the manifest-declared browser-data broker extension name
- * (`providers.browserData.extension` in meta/vibez1.yml) over the workspace
+ * (`providers.browserData.extension` in meta/vibestudio.yml) over the workspace
  * service. Returns null when the workspace declares no broker — browser-data
  * features are then unavailable (there is no hardcoded fallback extension).
  */
@@ -70,7 +70,7 @@ export function createBrowserDataRpcClient(rpc: RpcLike): BrowserDataClient {
             .then((name) => {
                 if (!name) {
                     throw new Error(
-                        "browser-data: no broker extension is declared in meta/vibez1.yml (providers.browserData.extension) — browser data is unavailable"
+                        "browser-data: no broker extension is declared in meta/vibestudio.yml (providers.browserData.extension) — browser data is unavailable"
                     );
                 }
                 return name;

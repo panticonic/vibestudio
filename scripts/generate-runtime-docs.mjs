@@ -94,7 +94,7 @@ function updateDoc(relativePath, replacements, checkOnly) {
   }
 }
 
-// The authoritative surfaces live in @vibez1/shared; the workspace runtime
+// The authoritative surfaces live in @vibestudio/shared; the workspace runtime
 // files are re-export shims this loader cannot evaluate.
 const panelSurface = loadRuntimeSurface(
   "packages/shared/src/runtimeSurface.panel.ts",

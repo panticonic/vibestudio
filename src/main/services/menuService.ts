@@ -1,16 +1,16 @@
 import { Menu, type MenuItemConstructorOptions } from "electron";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { buildMethods } from "@vibez1/shared/serviceSchemas/build";
-import { menuMethods } from "@vibez1/shared/serviceSchemas/menu";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { buildMethods } from "@vibestudio/shared/serviceSchemas/build";
+import { menuMethods } from "@vibestudio/shared/serviceSchemas/menu";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
-import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { ViewManager } from "../viewManager.js";
 import type { ServerClient } from "../serverClient.js";
-import type { PanelContextMenuAction } from "@vibez1/shared/types";
-import { buildPanelChromeState } from "@vibez1/shared/panelChrome";
-import { getAvailablePanelCommands, type PanelCommandId } from "@vibez1/shared/panelCommands";
-import { getPanelSource } from "@vibez1/shared/panel/accessors";
+import type { PanelContextMenuAction } from "@vibestudio/shared/types";
+import { buildPanelChromeState } from "@vibestudio/shared/panelChrome";
+import { getAvailablePanelCommands, type PanelCommandId } from "@vibestudio/shared/panelCommands";
+import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { buildHamburgerMenuTemplate } from "../menu.js";
 import { requireAppCapability } from "./appCapabilities.js";
 

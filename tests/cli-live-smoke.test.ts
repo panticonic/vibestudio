@@ -10,9 +10,9 @@ import type {
   CallerKind,
   ServiceContext,
   ServiceDispatcher,
-} from "@vibez1/shared/serviceDispatcher";
-import { TokenManager } from "@vibez1/shared/tokenManager";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+} from "@vibestudio/shared/serviceDispatcher";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/services/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
@@ -21,7 +21,7 @@ import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngr
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
 
 const execFileAsync = promisify(execFile);
-const RUN_WEBRTC_E2E = process.env["VIBEZ1_RUN_WEBRTC_E2E"] === "1";
+const RUN_WEBRTC_E2E = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI_SIGNAL_PORT = 8799;
 const CLI_SIGNAL_URL = `ws://127.0.0.1:${CLI_SIGNAL_PORT}`;
@@ -92,14 +92,14 @@ describe("live CLI smoke", () => {
       timeout: 10_000,
     });
 
-    expect(stdout).toContain("vibez1 remote serve");
+    expect(stdout).toContain("vibestudio remote serve");
     expect(stdout).toContain("src/server/index.ts");
   });
 
   it.runIf(RUN_WEBRTC_E2E)(
     "pairs and checks status through the real CLI WebRTC path",
     async () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-cli-live-"));
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-live-"));
       let wrangler: ChildProcess | null = null;
       let ingress: WebRtcIngress | null = null;
       try {
@@ -132,7 +132,7 @@ describe("live CLI smoke", () => {
         const childEnv = {
           ...process.env,
           HOME: path.join(tmp, "home"),
-          VIBEZ1_LOG_LEVEL: "error",
+          VIBESTUDIO_LOG_LEVEL: "error",
         };
         const pair = await execFileAsync(
           "pnpm",
@@ -145,7 +145,7 @@ describe("live CLI smoke", () => {
         const credentialPath = path.join(
           childEnv.HOME,
           ".config",
-          "vibez1",
+          "vibestudio",
           "cli-credentials.json"
         );
         const stored = JSON.parse(fs.readFileSync(credentialPath, "utf8")) as {

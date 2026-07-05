@@ -12,7 +12,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.78.0':
-    hash: 05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce
+    hash: 48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d
     path: workspace/packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch
 
 importers:
@@ -30,7 +30,7 @@ importers:
         version: 3.2.2(react@19.0.0)
       '@earendil-works/pi-ai':
         specifier: 0.78.0
-        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@ghostery/adblocker':
         specifier: ^2.13.4
         version: 2.13.4
@@ -58,43 +58,43 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
-      '@vibez1/browser-data':
+      '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:packages/browser-data
-      '@vibez1/dev-log':
+      '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:packages/dev-log
-      '@vibez1/durable':
+      '@vibestudio/durable':
         specifier: workspace:*
         version: link:packages/durable
-      '@vibez1/env-paths':
+      '@vibestudio/env-paths':
         specifier: workspace:*
         version: link:packages/env-paths
-      '@vibez1/extension':
+      '@vibestudio/extension':
         specifier: workspace:*
         version: link:packages/extension
-      '@vibez1/extension-host':
+      '@vibestudio/extension-host':
         specifier: workspace:*
         version: link:packages/extension-host
-      '@vibez1/git':
+      '@vibestudio/git':
         specifier: workspace:*
         version: link:packages/git
-      '@vibez1/port-utils':
+      '@vibestudio/port-utils':
         specifier: workspace:*
         version: link:packages/port-utils
-      '@vibez1/process-adapter':
+      '@vibestudio/process-adapter':
         specifier: workspace:*
         version: link:packages/process-adapter
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:packages/shared
-      '@vibez1/typecheck':
+      '@vibestudio/typecheck':
         specifier: workspace:*
         version: link:packages/typecheck
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:packages/types
       '@xterm/addon-clipboard':
@@ -287,13 +287,13 @@ importers:
       '@puppeteer/browsers':
         specifier: ^2.6.1
         version: 2.13.2
-      '@vibez1/dev-log':
+      '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../../packages/dev-log
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       ws:
@@ -345,16 +345,16 @@ importers:
       '@react-navigation/stack':
         specifier: ^7.2.6
         version: 7.8.9(@react-navigation/native@7.2.2(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-gesture-handler@2.30.1(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-safe-area-context@5.7.0(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native-screens@4.10.0(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0))(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)
-      '@vibez1/browser-data':
+      '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../packages/browser-data
-      '@vibez1/mobile-webrtc':
+      '@vibestudio/mobile-webrtc':
         specifier: workspace:*
         version: link:../../packages/mobile-webrtc
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       jotai:
@@ -484,7 +484,7 @@ importers:
 
   packages/browser-data:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -509,7 +509,7 @@ importers:
 
   packages/durable:
     dependencies:
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
     devDependencies:
@@ -531,10 +531,10 @@ importers:
 
   packages/extension:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
-      '@vibez1/unit-host':
+      '@vibestudio/unit-host':
         specifier: workspace:*
         version: link:../unit-host
     devDependencies:
@@ -544,19 +544,19 @@ importers:
 
   packages/extension-host:
     dependencies:
-      '@vibez1/extension':
+      '@vibestudio/extension':
         specifier: workspace:*
         version: link:../extension
-      '@vibez1/process-adapter':
+      '@vibestudio/process-adapter':
         specifier: workspace:*
         version: link:../process-adapter
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
-      '@vibez1/unit-host':
+      '@vibestudio/unit-host':
         specifier: workspace:*
         version: link:../unit-host
       yaml:
@@ -575,7 +575,7 @@ importers:
 
   packages/git:
     dependencies:
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
       diff:
@@ -603,7 +603,7 @@ importers:
       '@react-native-community/netinfo':
         specifier: ^11.4.1
         version: 11.5.2(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@5.9.3))(@types/react@19.2.10)(react@19.2.4))(react@19.2.4)
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
       react-native-keychain:
@@ -640,7 +640,7 @@ importers:
 
   packages/rpc:
     dependencies:
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
     devDependencies:
@@ -650,16 +650,16 @@ importers:
 
   packages/shared:
     dependencies:
-      '@vibez1/dev-log':
+      '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../dev-log
-      '@vibez1/env-paths':
+      '@vibestudio/env-paths':
         specifier: workspace:*
         version: link:../env-paths
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
 
@@ -9844,7 +9844,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -12385,9 +12385,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

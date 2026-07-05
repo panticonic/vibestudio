@@ -8,7 +8,7 @@
 
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
-import type { ExtensionInvocation } from "@vibez1/extension";
+import type { ExtensionInvocation } from "@vibestudio/extension";
 import {
   createRpcClient,
   envelopeFromMessage,
@@ -21,7 +21,7 @@ import {
   type RpcRequest,
   type RpcResponse,
   type RpcStreamRequest,
-} from "@vibez1/rpc";
+} from "@vibestudio/rpc";
 import { createWsServerTransport, type WsServerTransportInternal } from "./wsServerTransport.js";
 import {
   decodeControlFrame,
@@ -29,19 +29,19 @@ import {
   SESSION_CLOSED,
   SESSION_NOT_OPEN_CLOSE_CODE,
   type SessionControlFrame,
-} from "@vibez1/rpc/protocol/sessionNegotiation";
+} from "@vibestudio/rpc/protocol/sessionNegotiation";
 import {
   FRAME_DATA,
   FRAME_END,
   FRAME_ERROR,
   FRAME_HEAD,
   parseEndFrame,
-} from "@vibez1/rpc/protocol/streamCodec";
-import type { StreamFrameType } from "@vibez1/rpc/protocol/bulkMux";
+} from "@vibestudio/rpc/protocol/streamCodec";
+import type { StreamFrameType } from "@vibestudio/rpc/protocol/bulkMux";
 import { PIPE_LANE, SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
-import type { WsClientMessage, WsServerMessage } from "@vibez1/shared/ws/protocol";
-import type { ToolExecutionResult } from "@vibez1/shared/types";
-import { createDevLogger } from "@vibez1/dev-log";
+import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
+import type { ToolExecutionResult } from "@vibestudio/shared/types";
+import { createDevLogger } from "@vibestudio/dev-log";
 import {
   parseServiceMethod,
   createVerifiedCaller,
@@ -52,21 +52,21 @@ import {
   type VerifiedCodeIdentity,
   type WsClientInfo,
   type VerifiedCaller,
-} from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/serviceDispatcher";
 import { DeferralRegistry } from "./services/deferralRegistry.js";
-import { checkServiceAccess } from "@vibez1/shared/servicePolicy";
-import type { TokenManager } from "@vibez1/shared/tokenManager";
-import { WsEventSession, type EventService } from "@vibez1/shared/eventsService";
-import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
-import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import { callerKindForPrincipalKind } from "@vibez1/shared/principalKinds";
+import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
+import type { TokenManager } from "@vibestudio/shared/tokenManager";
+import { WsEventSession, type EventService } from "@vibestudio/shared/eventsService";
+import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { callerKindForPrincipalKind } from "@vibestudio/shared/principalKinds";
 import { resolveCodeIdentity } from "./services/principalIdentity.js";
 import { SessionRegistry, type SessionRegistryOptions } from "./rpcServer/sessionRegistry.js";
-import type { ClientPlatform } from "@vibez1/shared/panel/panelLease";
+import type { ClientPlatform } from "@vibestudio/shared/panel/panelLease";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 
 const log = createDevLogger("RpcServer");
-const RPC_RUNTIME_ID_HEADER = "x-vibez1-runtime-id";
+const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
 const ADMIN_RPC_AUTH_ERROR =
   "Admin token cannot authenticate RPC; use a caller-scoped token or connection grant.";
 
@@ -367,9 +367,9 @@ class ConnectionRegistry {
 
 const DEFAULT_RPC_MAX_BODY_BYTES = 256 * 1024 * 1024;
 
-/** Max HTTP RPC body size; VIBEZ1_RPC_MAX_BODY_BYTES overrides (0 = uncapped). */
+/** Max HTTP RPC body size; VIBESTUDIO_RPC_MAX_BODY_BYTES overrides (0 = uncapped). */
 function resolveRpcMaxBodyBytes(): number {
-  const raw = process.env["VIBEZ1_RPC_MAX_BODY_BYTES"];
+  const raw = process.env["VIBESTUDIO_RPC_MAX_BODY_BYTES"];
   if (raw !== undefined) {
     const parsed = Number(raw);
     if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
@@ -518,7 +518,7 @@ export class RpcServer {
         import("./services/egressProxy.js").EgressProxy,
         "forwardProxyFetchStream"
       >;
-      fsService?: Pick<import("@vibez1/shared/fsService").FsService, "closeHandlesForCaller">;
+      fsService?: Pick<import("@vibestudio/shared/fsService").FsService, "closeHandlesForCaller">;
       entityCache?: EntityCache;
       connectionGrants?: ConnectionGrantService;
       resolveExtensionInvocation?: (
@@ -604,7 +604,7 @@ export class RpcServer {
 
   private serviceContextForRpcMessage(
     client: WsClientState,
-    message: Pick<RpcRequest | import("@vibez1/rpc").RpcStreamRequest, "parentInvocationToken">,
+    message: Pick<RpcRequest | import("@vibestudio/rpc").RpcStreamRequest, "parentInvocationToken">,
     extras: Omit<ServiceContext, "caller" | "connectionId" | "wsClient" | "chainCaller"> = {}
   ): ServiceContext {
     const ctx: ServiceContext = {
@@ -620,7 +620,7 @@ export class RpcServer {
 
   private resolveExtensionParentCaller(
     client: WsClientState,
-    message: Pick<RpcRequest | import("@vibez1/rpc").RpcStreamRequest, "parentInvocationToken">
+    message: Pick<RpcRequest | import("@vibestudio/rpc").RpcStreamRequest, "parentInvocationToken">
   ): ResolvedExtensionParentCaller | null {
     if (client.caller.runtime.kind !== "extension" || !message.parentInvocationToken) {
       return null;
@@ -1751,7 +1751,7 @@ export class RpcServer {
     // Read body, bounded. The cap is deliberately generous (large file writes
     // ride this path) but finite, so a runaway or malicious client can't
     // buffer unbounded memory server-side. Override via
-    // VIBEZ1_RPC_MAX_BODY_BYTES (0 disables the cap).
+    // VIBESTUDIO_RPC_MAX_BODY_BYTES (0 disables the cap).
     const maxBodyBytes = resolveRpcMaxBodyBytes();
     const chunks: Buffer[] = [];
     let bodyBytes = 0;
@@ -1761,7 +1761,7 @@ export class RpcServer {
         res.writeHead(413, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            error: `RPC body exceeds ${maxBodyBytes} bytes (set VIBEZ1_RPC_MAX_BODY_BYTES to raise)`,
+            error: `RPC body exceeds ${maxBodyBytes} bytes (set VIBESTUDIO_RPC_MAX_BODY_BYTES to raise)`,
           })
         );
         req.destroy();
@@ -2199,7 +2199,7 @@ export class RpcServer {
       } catch (err) {
         const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
         res.writeHead(200, {
-          "Content-Type": "application/vnd.vibez1.credentialed-fetch+binary",
+          "Content-Type": "application/vnd.vibestudio.credentialed-fetch+binary",
           "Cache-Control": "no-store",
           "X-Accel-Buffering": "no",
         });
@@ -2217,7 +2217,7 @@ export class RpcServer {
       }
 
       res.writeHead(200, {
-        "Content-Type": "application/vnd.vibez1.credentialed-fetch+binary",
+        "Content-Type": "application/vnd.vibestudio.credentialed-fetch+binary",
         "Cache-Control": "no-store",
         "X-Accel-Buffering": "no",
       });
@@ -2283,7 +2283,7 @@ export class RpcServer {
 
     // Headers go out before the first frame.
     res.writeHead(200, {
-      "Content-Type": "application/vnd.vibez1.credentialed-fetch+binary",
+      "Content-Type": "application/vnd.vibestudio.credentialed-fetch+binary",
       "Cache-Control": "no-store",
       "X-Accel-Buffering": "no",
     });
@@ -2376,7 +2376,7 @@ export class RpcServer {
    */
   private async handleWsStreamRequest(
     client: WsClientState,
-    request: import("@vibez1/rpc").RpcStreamRequest,
+    request: import("@vibestudio/rpc").RpcStreamRequest,
     envelope: RpcEnvelope
   ): Promise<void> {
     const idempotencyKey = envelope.delivery.idempotencyKey;

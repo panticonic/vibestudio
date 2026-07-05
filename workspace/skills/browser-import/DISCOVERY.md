@@ -230,7 +230,7 @@ a browser/profile, use:
 
 - `browserData.getOpenTabs({ browser, profile })` to preview current tabs.
 - `browserData.openTabsAsPanels({ browser, profile })` to open HTTP(S) tabs as
-  child Vibez1 browser panels.
+  child Vibestudio browser panels.
 
 See [HISTORY.md](HISTORY.md) for the open-tabs result shape and the full
 browser-life migration workflow.

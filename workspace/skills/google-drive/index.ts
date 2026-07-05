@@ -51,7 +51,7 @@ function getCredentialRuntime(): RuntimeCredentials {
   const api = credentials as Partial<RuntimeCredentials> | undefined;
   if (!api) {
     throw new Error(
-      "Vibez1 credential runtime is unavailable: @workspace/runtime did not export credentials."
+      "Vibestudio credential runtime is unavailable: @workspace/runtime did not export credentials."
     );
   }
   for (const method of [
@@ -61,7 +61,7 @@ function getCredentialRuntime(): RuntimeCredentials {
   ] as const) {
     if (typeof api[method] !== "function") {
       throw new Error(
-        `Vibez1 credential runtime is unavailable: credentials.${method} is missing.`
+        `Vibestudio credential runtime is unavailable: credentials.${method} is missing.`
       );
     }
   }
@@ -73,15 +73,15 @@ function normalizeCredentialRuntimeError(error: unknown): Error {
   const runtimeUnavailable =
     message.includes("undefined (reading 'call')") ||
     message.includes("Panel credentials have not been initialized") ||
-    message.includes("Vibez1 transport bridge is not available") ||
-    message.includes("__vibez1Transport") ||
+    message.includes("Vibestudio transport bridge is not available") ||
+    message.includes("__vibestudioTransport") ||
     message.includes("credential runtime is unavailable");
   if (!runtimeUnavailable) {
     return error instanceof Error ? error : new Error(message);
   }
   return new Error(
-    "Vibez1 credential runtime is unavailable in this context. " +
-      "Google Drive helpers must run in a Vibez1 panel/eval/worker runtime with credentials initialized. " +
+    "Vibestudio credential runtime is unavailable in this context. " +
+      "Google Drive helpers must run in a Vibestudio panel/eval/worker runtime with credentials initialized. " +
       `Original error: ${message}`
   );
 }

@@ -11,7 +11,7 @@
  * disk access). Everything host-side is reached through the injected
  * {@link BridgeHost}:
  *
- *  - `store`   — the userland `vcs` service (gad-store DO, vibez1.vcs.v1):
+ *  - `store`   — the userland `vcs` service (gad-store DO, vibestudio.vcs.v1):
  *                `vcsLog` for the export walk, `ingestWorktreeState` for the
  *                import staging transition (non-main head), `importPublish` to
  *                advance the protected `main` through the gated single-writer
@@ -40,13 +40,13 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { GitClient } from "@vibez1/git";
+import { GitClient } from "@vibestudio/git";
 import { VCS_IGNORED_DIRS, VCS_IGNORED_FILES } from "@workspace/vcs-engine";
 import {
   buildWorktreeManifest,
   type ManifestHashEntry,
-} from "@vibez1/shared/contentTree/worktreeHash";
-import { normalizeWorkspaceRepoPath } from "@vibez1/shared/workspace/remotes";
+} from "@vibestudio/shared/contentTree/worktreeHash";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/workspace/remotes";
 
 export const VCS_MAIN_HEAD = "main";
 
@@ -250,7 +250,7 @@ export class GitBridge {
   }
 
   private trace(message: string, details: Record<string, unknown>): void {
-    if (process.env["VIBEZ1_DEBUG_GIT_BRIDGE"] !== "1") return;
+    if (process.env["VIBESTUDIO_DEBUG_GIT_BRIDGE"] !== "1") return;
     console.info(`[GitBridge] ${message}`, details);
   }
 
@@ -380,7 +380,7 @@ export class GitBridge {
       const actorId =
         entry.actor && typeof entry.actor === "object" && "id" in entry.actor
           ? String((entry.actor as { id: unknown }).id)
-          : "vibez1";
+          : "vibestudio";
       const trailers = [
         `GAD-Repo: ${repo}`,
         `GAD-State: ${entry.outputStateHash}`,
@@ -392,7 +392,7 @@ export class GitBridge {
         message,
         author: {
           name: opts.authorName ?? actorId,
-          email: opts.authorEmail ?? "vibez1@local",
+          email: opts.authorEmail ?? "vibestudio@local",
         },
       });
       lastSha = sha;

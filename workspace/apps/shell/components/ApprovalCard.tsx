@@ -46,7 +46,7 @@ import type {
   PendingDeviceCodeApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
-} from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvals";
 import {
   formatAccount,
   formatInjection,
@@ -58,12 +58,12 @@ import {
   getUnitBatchActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
-} from "@vibez1/shared/approvalCopy";
-import type { ApprovalDecision } from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvalCopy";
+import type { ApprovalDecision } from "@vibestudio/shared/approvals";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
-} from "@vibez1/shared/approvalMarkdown";
+} from "@vibestudio/shared/approvalMarkdown";
 import { DiffViewer, type DiffContentFetcher, type DiffReviewEntry } from "@workspace/ui";
 import {
   approvalAccent,
@@ -1054,7 +1054,7 @@ function SecretConfigFields({
   return (
     <Flex direction="column" gap="2" pt="1" style={{ maxWidth: 620 }}>
       <Text size="1" color="gray" style={{ lineHeight: 1.35 }}>
-        Secrets are entered in Vibez1's shell UI, not exposed to panels or workers, and stored
+        Secrets are entered in Vibestudio's shell UI, not exposed to panels or workers, and stored
         encrypted after submission.
       </Text>
       {approval.fields.map((field) => (

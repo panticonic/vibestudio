@@ -34,7 +34,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibez1/env-paths";
+import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
@@ -52,7 +52,7 @@ function commit(dir: string, msg: string): void {
   git(dir, ["add", "."]);
   git(dir, [
     "-c",
-    "user.name=Vibez1 Test",
+    "user.name=Vibestudio Test",
     "-c",
     "user.email=test@example.invalid",
     "commit",
@@ -71,7 +71,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
   let workspaceRoot: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-frameworks-build-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-frameworks-build-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
     // Resolve esbuild-svelte / svelte (and any other npm deps) from the repo's
@@ -134,7 +134,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     commit(svelteDir, "svelte");
 
     // Svelte template (html shell + framework declaration), referenced by the
-    // svelte panel via `vibez1.template: "svelte"`.
+    // svelte panel via `vibestudio.template: "svelte"`.
     const tmplDir = path.join(workspaceRoot, "templates", "svelte");
     writeJson(path.join(tmplDir, "template.json"), { framework: "svelte" });
     fs.writeFileSync(
@@ -154,7 +154,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
       version: "0.1.0",
       private: true,
       type: "module",
-      vibez1: { title: "Hello Vanilla", entry: "index.ts" },
+      vibestudio: { title: "Hello Vanilla", entry: "index.ts" },
       dependencies: { "@workspace/runtime": "workspace:*" },
     });
     fs.writeFileSync(
@@ -209,7 +209,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
       version: "0.1.0",
       private: true,
       type: "module",
-      vibez1: { title: "Hello Svelte", entry: "index.ts", template: "svelte" },
+      vibestudio: { title: "Hello Svelte", entry: "index.ts", template: "svelte" },
       dependencies: { "@workspace/runtime": "workspace:*", "@workspace/svelte": "workspace:*" },
     });
     // Entry re-exports the component as default; the svelte adapter's generated

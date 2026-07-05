@@ -426,23 +426,23 @@ describe("approvalCopy", () => {
       .approval as Extract<PendingApproval, { kind: "credential" }>;
     const evalCredential = {
       ...repoBinding,
-      repoPath: "vibez1/internal",
+      repoPath: "vibestudio/internal",
       effectiveVersion: "internal",
       requester: {
-        id: "do:vibez1/internal:EvalDO:one",
+        id: "do:vibestudio/internal:EvalDO:one",
         kind: "do" as const,
         category: "eval" as const,
         title: "Agentic Chat",
-        repoPath: "vibez1/internal",
+        repoPath: "vibestudio/internal",
         effectiveVersion: "internal",
-        stableIdentityKey: "do:vibez1/internal:EvalDO:one",
-        ephemeralInstanceKey: "do:vibez1/internal:EvalDO:one",
+        stableIdentityKey: "do:vibestudio/internal:EvalDO:one",
+        ephemeralInstanceKey: "do:vibestudio/internal:EvalDO:one",
         breadcrumbs: [],
       },
     };
     const evalNetworkEgress = {
       ...networkEgress,
-      repoPath: "vibez1/internal",
+      repoPath: "vibestudio/internal",
       effectiveVersion: "internal",
       requester: evalCredential.requester,
     };

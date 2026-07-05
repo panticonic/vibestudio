@@ -1,12 +1,12 @@
 # WebRTC remote access — deployment
 
-Remote clients reach a Vibez1 server over a peer-to-peer **WebRTC** pipe
+Remote clients reach a Vibestudio server over a peer-to-peer **WebRTC** pipe
 (DTLS-encrypted, paired by QR). Two small Cloudflare Workers support it; the
 server itself stays on loopback and needs **no public endpoint**.
 
 ```
    desktop / mobile / CLI client                      home server / VPS
-            │  vibez1://connect?room&fp&code&sig          │
+            │  vibestudio://connect?room&fp&code&sig          │
             ▼                                                ▼
    ┌─────────────────────┐   offer/answer   ┌──────────────────────────┐
    │  signaling Worker    │◀────────────────▶│  server (WebRTC answerer) │
@@ -35,16 +35,16 @@ wrangler secret put TURN_KEY_API_TOKEN     # …and its signing key
 
 `SIGNALING_ROOM` is a Durable Object (one instance per UUID room, WebSocket
 Hibernation so a room survives ICE-restart). Note the deployed URL, e.g.
-`wss://vibez1-signaling.<account>.workers.dev` — that becomes `sig`.
+`wss://vibestudio-signaling.<account>.workers.dev` — that becomes `sig`.
 
 ## 2. Deploy the callback relay (only if you use OAuth / webhooks remotely)
 
 ```bash
 cd apps/webhook-relay
 wrangler deploy
-wrangler secret put VIBEZ1_RELAY_SIGNING_SECRET   # backhaul auth + envelope signing
+wrangler secret put VIBESTUDIO_RELAY_SIGNING_SECRET   # backhaul auth + envelope signing
 # universal-link hosting for mobile OAuth deep links (plain vars or secrets):
-#   VIBEZ1_APPLE_APP_ID, VIBEZ1_ANDROID_PACKAGE_NAME, VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS
+#   VIBESTUDIO_APPLE_APP_ID, VIBESTUDIO_ANDROID_PACKAGE_NAME, VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS
 ```
 
 `RELAY_REGISTRY` is one global DO: each home server opens one authenticated
@@ -53,23 +53,23 @@ is no per-server base URL — routing is multi-tenant.
 
 ## 3. Run the server as a WebRTC answerer
 
-Set `VIBEZ1_WEBRTC_SIGNAL_URL` to activate the answerer (off by default ⇒
+Set `VIBESTUDIO_WEBRTC_SIGNAL_URL` to activate the answerer (off by default ⇒
 loopback co-located mode is unchanged):
 
 ```bash
-VIBEZ1_WEBRTC_SIGNAL_URL=wss://vibez1-signaling.<account>.workers.dev \
-  vibez1-server --serve-panels --print-credentials
-# logs:  Pairing link: vibez1://connect?room=…&fp=…&code=…&sig=…&v=2
+VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev \
+  vibestudio-server --serve-panels --print-credentials
+# logs:  Pairing link: vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2
 ```
 
 The server mints the per-invite signaling room and pairing code itself (one
 fresh room per invite; paired devices keep their own rooms).
 
-- The server presents a **persistent DTLS cert** at `<appRoot>/.vibez1/webrtc/server.{pem,key}`
-  (override with `VIBEZ1_WEBRTC_CERT`/`VIBEZ1_WEBRTC_KEY`). Its SHA-256 is the
+- The server presents a **persistent DTLS cert** at `<appRoot>/.vibestudio/webrtc/server.{pem,key}`
+  (override with `VIBESTUDIO_WEBRTC_CERT`/`VIBESTUDIO_WEBRTC_KEY`). Its SHA-256 is the
   `fp` in the link — the client pins it, **fail-closed** on mismatch.
-- `VIBEZ1_WEBRTC_ICE=relay` forces TURN (needs the signaling TURN secrets above).
-- OAuth redirect URIs are minted from `VIBEZ1_RELAY_OAUTH_BASE_URL` (the relay
+- `VIBESTUDIO_WEBRTC_ICE=relay` forces TURN (needs the signaling TURN secrets above).
+- OAuth redirect URIs are minted from `VIBESTUDIO_RELAY_OAUTH_BASE_URL` (the relay
   origin); register that `…/oauth/callback` with your providers.
 
 The native `node-datachannel` module is loaded lazily on first connect; build it
@@ -77,7 +77,7 @@ once with `pnpm rebuild node-datachannel`.
 
 ## 4. Pair a client
 
-Scan/open the printed `vibez1://connect?…` link from the desktop chooser, the
+Scan/open the printed `vibestudio://connect?…` link from the desktop chooser, the
 mobile app, or the CLI. The client redeems the one-time `code` over
 the pipe, receives a durable device credential, and persists it (encrypted) for
 reconnects — see [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) for the

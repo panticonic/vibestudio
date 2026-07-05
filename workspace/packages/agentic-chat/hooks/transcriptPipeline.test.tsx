@@ -59,14 +59,14 @@ describe("headless transcript pipeline", () => {
       );
     });
 
-    const assistant = assistantMessage("assistant-1", "Welcome to Vibez1.");
+    const assistant = assistantMessage("assistant-1", "Welcome to Vibestudio.");
     await agent.publish(AGENTIC_EVENT_PAYLOAD_KIND, agenticPublication(assistant));
 
     await waitFor(() => {
       expect(latest!.messages.map((message) => message.content)).toEqual(
         expect.arrayContaining([
           "The user just opened this workspace for the first time",
-          "Welcome to Vibez1.",
+          "Welcome to Vibestudio.",
         ]),
       );
     });
@@ -78,7 +78,7 @@ describe("headless transcript pipeline", () => {
     expect(stored.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)).toEqual(
       expect.arrayContaining([
         "The user just opened this workspace for the first time",
-        "Welcome to Vibez1.",
+        "Welcome to Vibestudio.",
       ]),
     );
 

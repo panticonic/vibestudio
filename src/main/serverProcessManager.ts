@@ -1,13 +1,13 @@
 /**
- * ServerProcessManager — spawns and manages the vibez1-server child process.
+ * ServerProcessManager — spawns and manages the vibestudio-server child process.
  *
  * Uses Electron utilityProcess.fork().
  * Communicates via IPC messages (ready, shutdown, error).
  */
 
-import { type ProcessAdapter } from "@vibez1/process-adapter";
+import { type ProcessAdapter } from "@vibestudio/process-adapter";
 import { shell, utilityProcess } from "electron";
-import { serverRpcWsUrl } from "@vibez1/shared/connect";
+import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
 
 const SERVER_SHUTDOWN_TIMEOUT_MS = 12_000;
@@ -223,26 +223,26 @@ export class ServerProcessManager {
     const esbuildBinaryPath = getEsbuildBinaryPath();
     const env: Record<string, string | undefined> = {
       ...process.env,
-      VIBEZ1_WORKSPACE_DIR: this.config.wsDir,
-      VIBEZ1_APP_ROOT: this.config.appRoot,
+      VIBESTUDIO_WORKSPACE_DIR: this.config.wsDir,
+      VIBESTUDIO_APP_ROOT: this.config.appRoot,
       ...(esbuildBinaryPath ? { ESBUILD_BINARY_PATH: esbuildBinaryPath } : {}),
-      VIBEZ1_WORKSPACE_EPHEMERAL: this.config.isEphemeral ? "1" : undefined,
-      VIBEZ1_AUTO_APPROVE_STARTUP_UNITS: this.config.autoApproveStartupUnits ? "1" : undefined,
-      ...(this.config.logLevel ? { VIBEZ1_LOG_LEVEL: this.config.logLevel } : {}),
+      VIBESTUDIO_WORKSPACE_EPHEMERAL: this.config.isEphemeral ? "1" : undefined,
+      VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: this.config.autoApproveStartupUnits ? "1" : undefined,
+      ...(this.config.logLevel ? { VIBESTUDIO_LOG_LEVEL: this.config.logLevel } : {}),
     };
-    if (!this.config.isEphemeral) delete env["VIBEZ1_WORKSPACE_EPHEMERAL"];
+    if (!this.config.isEphemeral) delete env["VIBESTUDIO_WORKSPACE_EPHEMERAL"];
     if (!this.config.autoApproveStartupUnits) {
-      delete env["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"];
+      delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
     }
 
     // Heap headroom for the server child. It is a single Node process that runs
     // builds (esbuild), git, and the DO relay hub, so V8's default ~2 GB old-space
     // limit is tight under load. This is headroom, not a crash fix — the relay/
     // restart fixes prevent unbounded growth; this just avoids starving legit work.
-    // Override with VIBEZ1_SERVER_MAX_OLD_SPACE_MB.
-    const maxOldSpaceMb = Number(process.env["VIBEZ1_SERVER_MAX_OLD_SPACE_MB"]) || 4096;
+    // Override with VIBESTUDIO_SERVER_MAX_OLD_SPACE_MB.
+    const maxOldSpaceMb = Number(process.env["VIBESTUDIO_SERVER_MAX_OLD_SPACE_MB"]) || 4096;
     return utilityProcess.fork(bundlePath, [], {
-      serviceName: "vibez1-server",
+      serviceName: "vibestudio-server",
       stdio: "pipe",
       env,
       execArgv: [`--max-old-space-size=${maxOldSpaceMb}`],

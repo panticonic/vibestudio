@@ -197,7 +197,7 @@ export class TestkitDriverDO extends DurableObjectBase {
 export default {
   async fetch(_request: Request) {
     return new Response(
-      "Testkit driver Durable Object.\nUsed by @workspace/testkit for workspace-panel CDP automation and profiling.\nResolve via workers.resolveService(\"vibez1.testkit-driver.v1\").",
+      "Testkit driver Durable Object.\nUsed by @workspace/testkit for workspace-panel CDP automation and profiling.\nResolve via workers.resolveService(\"vibestudio.testkit-driver.v1\").",
       { headers: { "Content-Type": "text/plain" } }
     );
   },

@@ -38,11 +38,11 @@ import type {
   PendingUnitBatchApproval,
   PendingUserlandApproval,
   UserlandApprovalOption,
-} from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvals";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
-} from "@vibez1/shared/approvalMarkdown";
+} from "@vibestudio/shared/approvalMarkdown";
 import {
   type ApprovalAttribution,
   formatAccount,
@@ -57,7 +57,7 @@ import {
   getUnitBatchActionCopy,
   originForUrl,
   shouldOpenApprovalDetails,
-} from "@vibez1/shared/approvalCopy";
+} from "@vibestudio/shared/approvalCopy";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 
@@ -877,8 +877,8 @@ function SecretConfigFields({
     <View style={styles.fields}>
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
         {approval.kind === "secret-input"
-          ? "Secrets are entered in Vibez1's shell UI, not exposed to panels or workers, and used once without being stored."
-          : "Secrets are entered in Vibez1's shell UI, not exposed to panels or workers, and stored encrypted after submission."}
+          ? "Secrets are entered in Vibestudio's shell UI, not exposed to panels or workers, and used once without being stored."
+          : "Secrets are entered in Vibestudio's shell UI, not exposed to panels or workers, and stored encrypted after submission."}
       </Text>
       {approval.fields.map((field) => (
         <View key={field.name} style={styles.fieldBlock}>

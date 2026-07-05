@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
 
-import { createTestDO } from "@vibez1/durable/test-utils";
+import { createTestDO } from "@vibestudio/durable/test-utils";
 import {
   canonicalEntityId,
   type EntityRecord,

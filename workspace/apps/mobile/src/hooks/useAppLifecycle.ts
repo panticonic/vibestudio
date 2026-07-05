@@ -1,5 +1,5 @@
 /**
- * useAppLifecycle -- Coordinates all app lifecycle events for Vibez1 mobile.
+ * useAppLifecycle -- Coordinates all app lifecycle events for Vibestudio mobile.
  *
  * Handles:
  * - AppState transitions (foreground/background): reconnect transport + toggle

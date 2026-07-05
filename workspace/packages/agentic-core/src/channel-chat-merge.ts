@@ -629,7 +629,7 @@ function lifecycleReasonValue(value: unknown): LifecycleNotice["reason"] | undef
 }
 
 function lifecycleNoticeFromMessage(message: ProjectedMessage): LifecycleNotice | null {
-  const diagnostic = record(record(message.actor.metadata)["vibez1Diagnostic"]);
+  const diagnostic = record(record(message.actor.metadata)["vibestudioDiagnostic"]);
   if (diagnostic["type"] === "lifecycle_recovery") {
     const status = diagnostic["status"];
     if (status === "recovered" || status === "interrupted" || status === "failed") {

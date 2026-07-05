@@ -11,15 +11,15 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   runtimeMethods,
   type ClonedEntity,
   type CloneContextResult,
-} from "@vibez1/shared/serviceSchemas/runtime";
-import type { ContextEdge, ContextEdgeKind } from "@vibez1/shared/runtime/contextEdges";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+} from "@vibestudio/shared/serviceSchemas/runtime";
+import type { ContextEdge, ContextEdgeKind } from "@vibestudio/shared/runtime/contextEdges";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import {
   buildWorkspaceContext,
   canonicalEntityId,
@@ -27,7 +27,7 @@ import {
   type RuntimeEntityCreateSpec,
   type RuntimeEntityHandle,
   type WorkspaceContext,
-} from "@vibez1/shared/runtime/entitySpec";
+} from "@vibestudio/shared/runtime/entitySpec";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 import {

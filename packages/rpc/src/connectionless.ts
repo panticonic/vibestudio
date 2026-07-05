@@ -6,7 +6,7 @@
  * `callDeferred`.
  *
  * There is intentionally ONE builder so the two DurableObjectBase codebases
- * (`@vibez1/durable` and `@workspace/runtime`) cannot drift their RPC wiring
+ * (`@vibestudio/durable` and `@workspace/runtime`) cannot drift their RPC wiring
  * again. The base feeds inbound POSTs to `respond`/`deliver` and dispatches via
  * the core's `handleEnvelope` (method calls flow through `rpc.exposeAll(...)`).
  */
@@ -49,9 +49,9 @@ function generateRequestId(): string {
 }
 
 /** Per-class registry of `@rpc`-marked method names (own + inherited), keyed on the constructor. */
-const RPC_EXPOSED_METHODS = Symbol.for("vibez1.rpc.exposedMethods");
+const RPC_EXPOSED_METHODS = Symbol.for("vibestudio.rpc.exposedMethods");
 /** Per-class registry of `@rpc({ callers })` caller policies, keyed by method name. */
-const RPC_METHOD_POLICIES = Symbol.for("vibez1.rpc.methodPolicies");
+const RPC_METHOD_POLICIES = Symbol.for("vibestudio.rpc.methodPolicies");
 
 type RpcExposedCtor = {
   [RPC_EXPOSED_METHODS]?: Set<string>;

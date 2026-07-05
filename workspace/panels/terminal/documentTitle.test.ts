@@ -23,9 +23,9 @@ describe("documentTitleForSession", () => {
 describe("compactHomePath", () => {
   it("compacts common home directory prefixes", () => {
     expect(compactHomePath("/home/alice")).toBe("~");
-    expect(compactHomePath("/home/alice/src/vibez1")).toBe("~/src/vibez1");
-    expect(compactHomePath("/Users/alice/src/vibez1")).toBe("~/src/vibez1");
-    expect(compactHomePath("C:\\Users\\alice\\src\\vibez1")).toBe("~\\src\\vibez1");
+    expect(compactHomePath("/home/alice/src/vibestudio")).toBe("~/src/vibestudio");
+    expect(compactHomePath("/Users/alice/src/vibestudio")).toBe("~/src/vibestudio");
+    expect(compactHomePath("C:\\Users\\alice\\src\\vibestudio")).toBe("~\\src\\vibestudio");
   });
 
   it("leaves other titles alone", () => {

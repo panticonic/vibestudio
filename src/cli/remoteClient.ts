@@ -7,10 +7,10 @@ import {
   parseConnectServerUrl,
   selectedWorkspacePath,
   type ConnectPairing,
-} from "@vibez1/shared/connect";
+} from "@vibestudio/shared/connect";
 import { AuthError } from "./output.js";
-import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
-import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import {
   isWebRtcCredential,
   type CliHubCredential,

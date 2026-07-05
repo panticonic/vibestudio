@@ -10,7 +10,7 @@ The server binds loopback only and remote clients reach it over WebRTC, so there
 is no per-server public URL for OAuth providers to redirect to. Provider redirect
 URIs that need a public HTTPS endpoint resolve through the **callback relay**
 (`apps/webhook-relay`, plan §7): the relay owns a stable public origin
-(`VIBEZ1_RELAY_OAUTH_BASE_URL`), receives the provider's redirect, and backhauls
+(`VIBESTUDIO_RELAY_OAUTH_BASE_URL`), receives the provider's redirect, and backhauls
 the authorization code to the originating loopback server over its pipe. Each user
 registers the relay's `…/oauth/callback` URL with their own OAuth provider clients
 (in their own Google / GitHub / etc developer console).
@@ -21,30 +21,29 @@ HTTPS-ingress path was decommissioned with remote-mode public ingress.
 The bootstrap and registration flow is described in
 [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) (§7 callback relay).
 
-The `auth.snugenv.com` shared universal-link relay below is an alternative
-path — useful only if you want one redirect URI shared across many vibez1
+The `vibestudio.app` shared universal-link relay below is an alternative
+path — useful only if you want one redirect URI shared across many vibestudio
 deployments without per-user provider registration. It requires hosted
 infrastructure (DNS, static site, signed mobile app) and is not on the
 critical path for personal-server use.
 
-## Target Domains (shared-relay path, optional)
+## Target Domain (shared-relay path, optional)
 
-- `snugenv.com`: public product/apex domain and optional well-known fallback.
-- `auth.snugenv.com`: OAuth universal-link callback host.
-- `hooks.snugenv.com`: public webhook ingress relay host.
+Use `vibestudio.app` as the shared public host for the product site, OAuth
+universal-link callbacks, well-known mobile verification, and webhook ingress.
 
 OAuth callback paths (when using the shared-relay path) should be:
 
-- `https://auth.snugenv.com/oauth/callback/:providerId`
+- `https://vibestudio.app/oauth/callback/:providerId`
 
-`vibez1://oauth/callback/:providerId` is no longer accepted; OAuth callbacks
+`vibestudio://oauth/callback/:providerId` is no longer accepted; OAuth callbacks
 must arrive through the verified app-link/universal-link host.
 
 Webhook public ingress paths should be:
 
-- `https://hooks.snugenv.com/i/:subscriptionId`
+- `https://vibestudio.app/i/:subscriptionId`
 
-The Vibez1 server should continue to receive relay traffic on private service
+The Vibestudio server should continue to receive relay traffic on private service
 routes, not on provider-facing URLs directly.
 
 ## Operating Principles
@@ -95,36 +94,32 @@ Follow-up TODOs:
 ### TODO: Domain and Cloudflare
 
 - TODO: Add DNS records for:
-  - `snugenv.com`
-  - `auth.snugenv.com`
-  - `hooks.snugenv.com`
-- TODO: Bind `snugenv.com` and `auth.snugenv.com` to the well-known static site.
-- TODO: Bind `hooks.snugenv.com` to the webhook relay Worker.
-- TODO: Decide the production Vibez1 relay-to-server target for hosted/dev
+  - `vibestudio.app`
+- TODO: Bind `vibestudio.app` to the well-known static site and webhook relay
+  Worker routes.
+- TODO: Decide the production Vibestudio relay-to-server target for hosted/dev
   deployments. For local-only development, expose the local gateway through an
   explicit tunnel and set the relay's upstream to that tunnel URL.
 - TODO: Configure Cloudflare secrets for the relay:
-  - `VIBEZ1_SERVER_BASE_URL`
-  - `VIBEZ1_RELAY_SIGNING_SECRET`
+  - `VIBESTUDIO_SERVER_BASE_URL`
+  - `VIBESTUDIO_RELAY_SIGNING_SECRET`
 
 ### TODO: Mobile App Links
 
 - TODO: Fill `apps/well-known/config.json` with the real Apple Developer Team ID,
-  or set `VIBEZ1_APPLE_TEAM_ID` in CI/deploy.
+  or set `VIBESTUDIO_APPLE_TEAM_ID` in CI/deploy.
 - TODO: Fill `apps/well-known/config.json` with Android release signing SHA256
-  fingerprints, or set `VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS` as a
+  fingerprints, or set `VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS` as a
   comma-separated list in CI/deploy:
   - upload key
   - Play App Signing key, if Play signing is enabled
 - TODO: Build and deploy the well-known site.
 - TODO: Verify:
-  - `https://auth.snugenv.com/.well-known/apple-app-site-association`
-  - `https://auth.snugenv.com/.well-known/assetlinks.json`
-  - same payloads from `https://snugenv.com/.well-known/...` if apex deep links
-    are kept.
-- TODO: Confirm iOS associated domains include `applinks:auth.snugenv.com`.
-- TODO: Confirm Android intent filters include `https://auth.snugenv.com/oauth/callback`.
-- Done: OAuth callbacks are app-link/universal-link only. `vibez1://` remains
+  - `https://vibestudio.app/.well-known/apple-app-site-association`
+  - `https://vibestudio.app/.well-known/assetlinks.json`
+- TODO: Confirm iOS associated domains include `applinks:vibestudio.app`.
+- TODO: Confirm Android intent filters include `https://vibestudio.app/oauth/callback`.
+- Done: OAuth callbacks are app-link/universal-link only. `vibestudio://` remains
   registered only for connect-link onboarding and is not accepted as an OAuth
   callback path.
 
@@ -135,15 +130,15 @@ For each OAuth-backed credential provider we ship or document:
 - **Per-personal-server** (default path): each user registers
   `https://<their-server>.<their-tailnet>.ts.net/_r/s/credentials/oauth/callback`
   with their own OAuth client in the provider's developer console. The
-  vibez1 readiness banner prints the exact string to copy.
+  vibestudio readiness banner prints the exact string to copy.
 - **Device-code fallback** (RFC 8628): for providers that support it
   (Google, Microsoft/Azure AD, GitHub, GitLab, Slack, Twitch, Spotify,
   Dropbox, Atlassian, Discord), userland can pass `type: "oauth2-device-code"`
   to `credentials.connect()` and skip redirect-URI registration entirely.
   The trusted approval bar displays the `user_code`; the polling loop is
   cancellable. See `docs/credential-system.md#device-code-flow-rfc-8628`.
-- **Shared-relay (optional)**: if maintaining the `auth.snugenv.com` path,
-  register `https://auth.snugenv.com/oauth/callback/:providerId` instead.
+- **Shared-relay (optional)**: if maintaining the `vibestudio.app` path,
+  register `https://vibestudio.app/oauth/callback/:providerId` instead.
 - Loopback redirects only for desktop flows that need them.
 - Prefer public PKCE clients. Do not require a mobile client secret.
 - Record whether the provider supports:
@@ -165,7 +160,7 @@ server-supported OAuth PKCE path. The default model is
 For each provider integration that needs webhooks:
 
 - TODO: Create the provider-side webhook URL with
-  `https://hooks.snugenv.com/i/:subscriptionId`.
+  `https://vibestudio.app/i/:subscriptionId`.
 - TODO: Generate a provider webhook secret where the provider supports one.
 - TODO: Select a verifier primitive:
   - HMAC SHA-256 header
@@ -174,17 +169,17 @@ For each provider integration that needs webhooks:
   - provider-specific built-in verifier only when needed
 - TODO: Document expected event headers and replay identifiers.
 
-Provider webhooks must use `https://hooks.snugenv.com/i/:subscriptionId`.
+Provider webhooks must use `https://vibestudio.app/i/:subscriptionId`.
 
 ## Programming Work
 
-### Completed: Mobile OAuth on `auth.snugenv.com`
+### Completed: Mobile OAuth on `vibestudio.app`
 
 Done:
 
 1. Mobile credential OAuth helper delegates to `credentials.connect`.
 2. The helper uses
-   `https://auth.snugenv.com/oauth/callback/:providerId` by default on mobile.
+   `https://vibestudio.app/oauth/callback/:providerId` by default on mobile.
 3. Desktop loopback is host-owned. Panels and workers use `connect` and do
    not receive raw tokens or compose redirects.
 
@@ -199,7 +194,7 @@ Follow-up:
 ### TODO: Well-Known Deployment Hardening
 
 1. TODO: Extend `apps/well-known` build output with an explicit
-   `auth.snugenv.com`/`snugenv.com` deployment checklist.
+   `vibestudio.app` deployment checklist.
 2. Done: production builds fail if placeholder Team ID or Android fingerprints
    remain; CI/deploy can provide those values via environment variables without
    committing release identifiers to `config.json`.
@@ -217,7 +212,7 @@ Done:
 1. Provider-shaped relay routes were replaced with one public route:
    - `POST /i/:subscriptionId`
 2. The relay preserves the raw request body and original provider headers.
-3. The relay signs an envelope before forwarding to the Vibez1 server:
+3. The relay signs an envelope before forwarding to the Vibestudio server:
    - method
    - path
    - query
@@ -291,7 +286,7 @@ Follow-up:
 
 ## Open Decisions
 
-- TODO: Decide whether `hooks.snugenv.com` points directly at a Cloudflare
+- TODO: Decide whether `vibestudio.app` points directly at a Cloudflare
   Worker in all environments or only production.
 - TODO: Decide whether local development should require an explicit tunnel or
   use a hosted relay queue.

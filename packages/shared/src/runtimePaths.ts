@@ -49,7 +49,7 @@ export function getExistingAppNodeModulesRoots(appRoot: string): string[] {
     path.join(layout.appUnpackedRoot, "node_modules"),
     path.join(layout.appRoot, "node_modules"),
   ];
-  // When installed via npm (e.g. <prefix>/node_modules/@vibez1/app), the
+  // When installed via npm (e.g. <prefix>/node_modules/@vibestudio/app), the
   // package's own dependencies are hoisted to an ancestor node_modules rather
   // than nested under the package directory. Walk ancestors and include every
   // node_modules dir — mirroring Node's own module resolution — so runtime

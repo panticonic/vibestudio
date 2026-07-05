@@ -11,14 +11,14 @@ import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { Badge, Flex, Text } from "@radix-ui/themes";
 import { ChevronRightIcon } from "@radix-ui/react-icons";
-import type { ApprovalDecision, PendingApproval } from "@vibez1/shared/approvals";
-import { getApprovalCopy } from "@vibez1/shared/approvalCopy";
-import { filterRuntimeApprovals } from "@vibez1/shared/bootstrapApprovals";
+import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
+import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 import {
   createApprovalStateController,
   SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
   SHELL_APPROVAL_PENDING_CHANGED_EVENT,
-} from "@vibez1/shared/shell/approvalState";
+} from "@vibestudio/shared/shell/approvalState";
 import { blobstore, events, onRpcEvent, panel, shellApproval, shellPresence } from "../shell/client";
 import { useShellContentOverlay, type ContentOverlayBounds } from "../shell/useShellContentOverlay";
 import { effectiveThemeAtom, themeConfigAtom } from "../state/themeAtoms";

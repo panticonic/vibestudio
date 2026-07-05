@@ -1,9 +1,9 @@
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   ExtensionInvocation,
   ExtensionSource,
   RegistryEntry,
-} from "@vibez1/extension";
+} from "@vibestudio/extension";
 
 export type {
   ExtensionInvocation,

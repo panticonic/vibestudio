@@ -1,10 +1,10 @@
-import type { PanelAccessOperation, PanelAccessTarget } from "@vibez1/shared/panelAccessPolicy";
+import type { PanelAccessOperation, PanelAccessTarget } from "@vibestudio/shared/panelAccessPolicy";
 import {
   isOpenPanelOperation,
   panelAccessSeverityForTarget,
-} from "@vibez1/shared/panelAccessPolicy";
-import type { ServiceContext, VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+} from "@vibestudio/shared/panelAccessPolicy";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { requireContextBoundaryPermission, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {

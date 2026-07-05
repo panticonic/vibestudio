@@ -13,7 +13,7 @@ function makeCredential(overrides: Partial<Credential> = {}): Credential {
     accountIdentity: {
       email: "dev@example.com",
       username: "octocat",
-      workspaceName: "vibez1",
+      workspaceName: "vibestudio",
       providerUserId: "user-123",
     },
     accessToken: "access-token",
@@ -28,7 +28,7 @@ describe("CredentialStore", () => {
   let store: CredentialStore;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(path.join(tmpdir(), "vibez1-credentials-store-"));
+    tempDir = await mkdtemp(path.join(tmpdir(), "vibestudio-credentials-store-"));
     store = new CredentialStore({ basePath: tempDir });
   });
 

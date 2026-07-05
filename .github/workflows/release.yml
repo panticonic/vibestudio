@@ -1,7 +1,7 @@
 name: Release
 
 # Tag a release with `v*` (e.g. v0.2.0). publish-npm always runs and publishes
-# @vibez1/server + @vibez1/app at the tag version. The native-installer jobs
+# @vibestudio/server + @vibestudio/app at the tag version. The native-installer jobs
 # are opt-in via repo variables so a release is green before icons/signing exist:
 #   - vars.RELEASE_LINUX = 'true'  → build + attach AppImage/deb (needs build-resources icons)
 #   - vars.RELEASE_MAC   = 'true'  → build + attach a signed/notarized DMG (needs the Apple secrets)
@@ -33,11 +33,11 @@ jobs:
         run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"
       - run: pnpm build
       - run: node scripts/build-npm-packages.mjs
-      - name: Publish @vibez1/server
+      - name: Publish @vibestudio/server
         run: npm publish ./dist-packages/server --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Publish @vibez1/app
+      - name: Publish @vibestudio/app
         run: npm publish ./dist-packages/app --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -50,8 +50,8 @@ jobs:
             ### Install
 
             ```sh
-            npm install -g @vibez1/app      # desktop app + the `vibez1` CLI
-            npm install -g @vibez1/server   # headless server (CLI + daemon)
+            npm install -g @vibestudio/app      # desktop app + the `vibestudio` CLI
+            npm install -g @vibestudio/server   # headless server (CLI + daemon)
             ```
 
             Requires Node.js 20+. Native installers (DMG/AppImage/deb) are attached when available.

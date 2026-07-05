@@ -1,9 +1,9 @@
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretResult,
   WebhookIngressSubscriptionSummary,
-} from "@vibez1/shared/webhooks/ingress";
+} from "@vibestudio/shared/webhooks/ingress";
 export type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretRequest,
@@ -17,7 +17,7 @@ export type {
   WebhookResponsePolicy,
   WebhookTarget,
   WebhookVerifierConfig,
-} from "@vibez1/shared/webhooks/ingress";
+} from "@vibestudio/shared/webhooks/ingress";
 export interface WebhookIngressClient {
   createSubscription(
     input: CreateWebhookIngressSubscriptionRequest

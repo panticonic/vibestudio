@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Set the root package.json version from a release tag like "v1.2.3" → "1.2.3".
 // The release workflow runs this before `pnpm build` + staging so the published
-// @vibez1/server / @vibez1/app (which read the root version) and the
+// @vibestudio/server / @vibestudio/app (which read the root version) and the
 // electron-builder installers all carry the tag version. Usage:
 //   node scripts/set-version-from-tag.mjs "$GITHUB_REF_NAME"
 import * as fs from "node:fs";

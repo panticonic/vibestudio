@@ -58,7 +58,7 @@
       projection logic remains inlined in operations; the projector decides WHERE a state lands,
       never WHAT the tree is.
     * FIRST USERLAND-DISPATCHED vcs.* METHODS: the `vcs` service is declared in
-      workspace/meta/vibez1.yml (protocol `vibez1.vcs.v1`, gad-store DO singleton). The
+      workspace/meta/vibestudio.yml (protocol `vibestudio.vcs.v1`, gad-store DO singleton). The
       read/history traversals — commitEdits, fileHistory, commitAncestors, editsByActor,
       editsByTurn, editsByInvocation, log — were REMOVED from the host vcs service/schema and are
       served by the DO's `vcs*` methods (camelCase rows, positional args), reached through
@@ -69,7 +69,7 @@
   - P5c part 2 (git interchange evicted to the git-bridge extension, landed):
     * GIT INTERCHANGE moved to the trusted `git-bridge` workspace extension
       (workspace/extensions/git-bridge — a Node child process with disk access), built on
-      platform primitives only: `@vibez1/git` for git ops, the userland `vcs` service
+      platform primitives only: `@vibestudio/git` for git ops, the userland `vcs` service
       (gad-store DO, `vcsLog`/`ingestWorktreeState`/`listStateFiles`, now extension-admitted)
       for VCS reads + import provenance, `blobstore.*` for gad-side content (import mirrors the
       scanned tree bottom-up via `putTree`; export materializes checkouts from `listTree` +
@@ -81,7 +81,7 @@
       through the ordinary gad push path (`vcsPush` → `refs.updateMains({operation:"import"})`).
     * Host `gitInterop` stays as a thin POLICY/DISPATCH shim (stable service name for the
       runtime `git.*` namespace + startup dependency completion): approvals, egress-proxied
-      clone, and meta/vibez1.yml writes are host substrate; its repo-log init hook now invokes
+      clone, and meta/vibestudio.yml writes are host substrate; its repo-log init hook now invokes
       the extension. It carries ZERO gadVcs imports (structural tree-scanner type).
       `src/server/gadVcs/gitBridge.ts` (+ test) and `WorkspaceVcs.gadCall` are DELETED.
     * `blobstore`/`refs`/userland-`vcs` service policies admit `extension` callers.
@@ -153,11 +153,11 @@
       `workspaceVcs.ts` (the orchestrator; still buildV2's `WorkspaceStateSource` +
       `BuildSourceProvider`). buildV2's `WorkspaceStateSource` dropped the never-called
       `diffPaths` member (and `WorkspaceVcs.diffPaths` with it); buildV2 imports the
-      section taxonomy from `@vibez1/shared/runtime/entitySpec` directly.
+      section taxonomy from `@vibestudio/shared/runtime/entitySpec` directly.
     * PROVIDER SLOT DELETED: `providers.vcsStore` is gone from the manifest schema
-      (`WorkspaceVcsStoreProviderDecl`), the config parser, and `meta/vibez1.yml`. The
+      (`WorkspaceVcsStoreProviderDecl`), the config parser, and `meta/vibestudio.yml`. The
       host resolves the store DO from the userland `vcs` SERVICE declaration (protocol
-      `vibez1.vcs.v1` + its `singletonObjects` row) via `resolveVcsStoreBinding` — the
+      `vibestudio.vcs.v1` + its `singletonObjects` row) via `resolveVcsStoreBinding` — the
       SAME row `workers.resolveService` resolves for userland dispatch, so the store the
       host attaches/records into is by construction the store the `vcs` service serves.
       workerd's bootstrap-main-bound predicate derives from the same declaration.

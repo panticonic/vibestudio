@@ -1,7 +1,7 @@
-import type { Panel } from "@vibez1/shared/types";
-import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
-import { formatPanelRuntimeLeaseDeniedMessage } from "@vibez1/shared/panel/panelLease";
-import { asPanelEntityId, type PanelEntityId } from "@vibez1/shared/panel/ids";
+import type { Panel } from "@vibestudio/shared/types";
+import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
+import { formatPanelRuntimeLeaseDeniedMessage } from "@vibestudio/shared/panel/panelLease";
+import { asPanelEntityId, type PanelEntityId } from "@vibestudio/shared/panel/ids";
 import { buildPanelUrl, type HostConfig } from "./panelUrls";
 
 export interface MobileMaterializedPanel {

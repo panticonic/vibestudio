@@ -4,7 +4,7 @@
  * Adds: stateArgs bridge, unified panel handles, panel lifecycle methods.
  */
 
-import type { EnvelopeRpcTransport } from "@vibez1/rpc";
+import type { EnvelopeRpcTransport } from "@vibestudio/rpc";
 import { createBaseRuntime } from "./createBaseRuntime.js";
 import type { EndpointInfo } from "../core/index.js";
 import type { GatewayConfig } from "../shared/globals.js";
@@ -13,7 +13,7 @@ import { createPanelRuntime } from "../shared/panelRuntime.js";
 import type { RuntimeFs, ThemeAppearance } from "../types.js";
 import { _applyStateArgsFromHost, _initStateArgsRuntime } from "../panel/stateArgs.js";
 import { exposeAgentApi } from "../panel/agentApi.js";
-import type { PanelEntityId, PanelSlotId } from "@vibez1/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 
 export interface RuntimeDeps {
   selfId: PanelEntityId;
@@ -36,7 +36,7 @@ export function createRuntime(deps: RuntimeDeps) {
   const slotId = deps.slotId ?? (entityId as unknown as PanelSlotId);
   const parentRuntimeId = deps.parentEntityId ?? deps.parentId ?? null;
   const base = createBaseRuntime({ ...deps, id: entityId });
-  const shell = (globalThis as any).__vibez1Shell;
+  const shell = (globalThis as any).__vibestudioShell;
 
   _initStateArgsRuntime(slotId, (service, method, args) => base.rpc.call(service, method, args));
   exposeAgentApi(base.expose);

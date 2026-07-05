@@ -1,6 +1,6 @@
 # Remote Clients And Pairing
 
-Vibez1 remote clients use device credentials and short-lived principal grants.
+Vibestudio remote clients use device credentials and short-lived principal grants.
 Apps that help connect other clients need the `connection-management`
 capability.
 
@@ -21,9 +21,9 @@ Remote startup is a two-step WebRTC flow:
 1. Pair with the server hub and store a device credential.
 2. Select a workspace, which returns a workspace-scoped WebRTC pairing invite.
 
-`vibez1 remote pair "vibez1://connect?room=...&fp=...&code=...&sig=...&v=2"`
+`vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"`
 exchanges a pairing invite over the pipe and stores the hub credential.
-`vibez1 remote select <name>` pairs to the selected workspace's room and keeps
+`vibestudio remote select <name>` pairs to the selected workspace's room and keeps
 the hub credential for later workspace listing/selection.
 
 ## Mobile Client
@@ -105,7 +105,7 @@ new client bootstrap material.
   fingerprint pinning. Do not add public-ingress, VPN, or cleartext-host
   exceptions for RPC reachability.
 - Prefer verified app-link/universal-link routes for mobile OAuth callbacks.
-- `vibez1://connect` is for pairing bootstrap, not OAuth callbacks.
+- `vibestudio://connect` is for pairing bootstrap, not OAuth callbacks.
 - Mobile OAuth callbacks should use verified app-link/universal-link routes
   where configured.
 
@@ -130,12 +130,12 @@ When testing pairing or remote-server state without a shell UI:
 
 1. Start the server with `--ready-file` and read `gatewayUrl` plus
    `adminToken`.
-2. Use `scripts/vibez1-admin.mjs approvals list` to inspect pending trusted
+2. Use `scripts/vibestudio-admin.mjs approvals list` to inspect pending trusted
    unit approvals.
-3. Use `scripts/vibez1-admin.mjs approvals approve version` only for local
+3. Use `scripts/vibestudio-admin.mjs approvals approve version` only for local
    trusted-template/dev scenarios where the unit set is expected.
-4. Use `scripts/vibez1-admin.mjs units list` to inspect active build keys and
+4. Use `scripts/vibestudio-admin.mjs units list` to inspect active build keys and
    lifecycle states.
-5. Use `scripts/vibez1-admin.mjs units restart <app>` for terminal apps.
-6. Use `scripts/vibez1-admin.mjs units logs <app>` to inspect stdout/stderr
+5. Use `scripts/vibestudio-admin.mjs units restart <app>` for terminal apps.
+6. Use `scripts/vibestudio-admin.mjs units logs <app>` to inspect stdout/stderr
    and runner errors.

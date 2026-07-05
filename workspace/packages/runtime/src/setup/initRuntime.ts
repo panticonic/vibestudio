@@ -6,9 +6,9 @@
 
 import { createRuntime } from "./createRuntime.js";
 import { getInjectedConfig, type InjectedConfig } from "../shared/globals.js";
-import { assertPanelPrincipalId } from "@vibez1/shared/principalIds";
+import { assertPanelPrincipalId } from "@vibestudio/shared/principalIds";
 import type { RuntimeFs } from "../types.js";
-import type { EnvelopeRpcTransport } from "@vibez1/rpc";
+import type { EnvelopeRpcTransport } from "@vibestudio/rpc";
 import { _initFsWithRpc } from "../panel/fs.js";
 
 export interface InitRuntimeOptions {

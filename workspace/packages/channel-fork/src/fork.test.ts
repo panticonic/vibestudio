@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { forkConversation } from "./fork.js";
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 
 // The saga itself now lives in the parent channel DO (`PubSubChannel.fork`);
 // this package is only the thin client helper. We assert it resolves the
@@ -54,7 +54,7 @@ describe("forkConversation()", () => {
     expect(out).toEqual(result);
 
     const resolve = calls.find((c) => c.method === "workers.resolveService");
-    expect(resolve?.args).toEqual(["vibez1.channel.v1", "chan-1"]);
+    expect(resolve?.args).toEqual(["vibestudio.channel.v1", "chan-1"]);
 
     const forkCall = calls.find((c) => c.method === "fork");
     expect(forkCall?.targetId).toBe("do:workers/pubsub-channel:PubSubChannel:chan-1");

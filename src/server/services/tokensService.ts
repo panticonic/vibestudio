@@ -1,15 +1,15 @@
 import { randomBytes } from "node:crypto";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { tokensMethods } from "@vibez1/shared/serviceSchemas/tokens";
-import type { TokenManager } from "@vibez1/shared/tokenManager";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { tokensMethods } from "@vibestudio/shared/serviceSchemas/tokens";
+import type { TokenManager } from "@vibestudio/shared/tokenManager";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 
 export function createTokensService(deps: {
   tokenManager: TokenManager;
   /**
    * Optional — omit in IPC (Electron-embedded) mode where the admin token
    * lives in Electron parent memory and is never persisted centrally. When
-   * set, `rotateAdmin` persists the new token to `~/.config/vibez1/admin-token`
+   * set, `rotateAdmin` persists the new token to `~/.config/vibestudio/admin-token`
    * so restarts pick it up.
    */
   persistAdminToken?: (token: string) => void;

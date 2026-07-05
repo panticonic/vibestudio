@@ -91,9 +91,9 @@ export function buildBootstrapConfig(opts: BuildBootstrapConfigOpts): unknown {
     env: {
       ...opts.env,
       PARENT_ID: opts.parentId ?? "",
-      __VIBEZ1_SOURCE_REPO: opts.source,
-      __VIBEZ1_EFFECTIVE_VERSION: opts.effectiveVersion ?? "",
-      __VIBEZ1_GATEWAY_CONFIG: JSON.stringify(opts.gatewayConfig),
+      __VIBESTUDIO_SOURCE_REPO: opts.source,
+      __VIBESTUDIO_EFFECTIVE_VERSION: opts.effectiveVersion ?? "",
+      __VIBESTUDIO_GATEWAY_CONFIG: JSON.stringify(opts.gatewayConfig),
     },
     stateArgs: opts.stateArgs ?? {},
   };
@@ -154,8 +154,8 @@ export function buildPanelEnv(opts: BuildPanelEnvOpts): Record<string, string> {
   return {
     ...criticalEnv,
     ...opts.baseEnv,
-    __VIBEZ1_SOURCE_REPO: opts.sourceRepo,
-    __VIBEZ1_GATEWAY_CONFIG: gatewayConfig,
+    __VIBESTUDIO_SOURCE_REPO: opts.sourceRepo,
+    __VIBESTUDIO_GATEWAY_CONFIG: gatewayConfig,
   };
 }
 

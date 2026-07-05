@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-atomic-file-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-atomic-file-"));
 }
 
 describe("writeJsonFileAtomic", () => {

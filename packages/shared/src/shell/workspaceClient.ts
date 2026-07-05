@@ -6,7 +6,7 @@
  * operations (like workspace.select which requires app restart on Electron)
  * are intentionally excluded; each platform handles those independently.
  */
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import type { WorkspaceEntry } from "../types.js";
 import type {
   HostTarget,

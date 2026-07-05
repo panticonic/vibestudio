@@ -15,8 +15,8 @@
  */
 
 import { EventEmitter } from "events";
-import { createDevLogger } from "@vibez1/dev-log";
-import { serializeByKey } from "@vibez1/shared/keyedSerializer";
+import { createDevLogger } from "@vibestudio/dev-log";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import * as crypto from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
@@ -35,7 +35,7 @@ import {
   type TreeDiff,
 } from "../services/blobstoreService.js";
 import { type RefService, type RefChange } from "../services/refService.js";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 import type {
   BuildRecord,
@@ -50,7 +50,7 @@ import {
   type GraphNode,
   type PackageGraph,
 } from "../buildV2/packageGraph.js";
-import { CONTAINER_SECTIONS, FLAT_SECTIONS } from "@vibez1/shared/runtime/entitySpec";
+import { CONTAINER_SECTIONS, FLAT_SECTIONS } from "@vibestudio/shared/runtime/entitySpec";
 import {
   VCS_MAIN_HEAD,
   contextIdFromVcsHead,
@@ -62,7 +62,7 @@ import {
 } from "./paths.js";
 import { WorktreeStore, collectTreeFiles } from "./worktreeStore.js";
 import { discoverRepos } from "./repoDiscovery.js";
-import { EMPTY_STATE_HASH } from "@vibez1/shared/contentTree/worktreeHash";
+import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import { DiskProjector } from "./diskProjector.js";
 
 /** Narrow call surface onto the gad-store DO. */

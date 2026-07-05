@@ -47,7 +47,7 @@ describe("CdpHostProviderRpcChannel", () => {
     });
     const readFrame = createFrameReader(response);
 
-    await expect(readFrame()).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
+    await expect(readFrame()).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
 
     channel.send(
       "provider-session",
@@ -104,7 +104,7 @@ describe("CdpHostProviderRpcChannel", () => {
       kind: "shell",
     });
     const readFrame = createFrameReader(response);
-    await expect(readFrame()).resolves.toMatchObject({ type: "vibez1:cdp-auth-ok" });
+    await expect(readFrame()).resolves.toMatchObject({ type: "vibestudio:cdp-auth-ok" });
 
     expect(() =>
       channel.send("provider-session", "{}", { id: "shell:other", kind: "shell" })

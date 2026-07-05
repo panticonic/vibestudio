@@ -52,8 +52,8 @@ In development, app reconciliation prints an app status diagnostic with source,
 target, active EV, build key, source HEAD, and clean/dirty state. Here
 "dirty" means the repo's context head has committed changes ahead of `main` (or
 uncommitted working edits) that the running trusted app build does not yet
-include — not filesystem dirtiness. Set `VIBEZ1_APP_DEV_STATUS=0` to silence
-the diagnostic, or `VIBEZ1_APP_DEV_STATUS=1` to force it outside
+include — not filesystem dirtiness. Set `VIBESTUDIO_APP_DEV_STATUS=0` to silence
+the diagnostic, or `VIBESTUDIO_APP_DEV_STATUS=1` to force it outside
 `NODE_ENV=development`.
 
 ## Approval Behavior
@@ -147,7 +147,7 @@ Useful smoke path:
 
 1. Start a pairable server.
 2. Install or launch a clean mobile host.
-3. Open a `vibez1://connect?...` link.
+3. Open a `vibestudio://connect?...` link.
 4. Verify native bootstrap completes pairing.
 5. Verify the host fetches the current platform bundle and reloads into the
    workspace app.
@@ -167,7 +167,7 @@ For terminal apps:
   should replace the process with the selected trusted build.
 
 Terminal app source should be written as a clean Node ESM entry that reads the
-runner-provided `VIBEZ1_TERMINAL_APP_*` environment, connects with the
+runner-provided `VIBESTUDIO_TERMINAL_APP_*` environment, connects with the
 provided RPC grant, and handles shutdown messages from the runner.
 
 ## Debugging Headless App State
@@ -175,11 +175,11 @@ provided RPC grant, and handles shutdown messages from the runner.
 Use the admin helper when testing a server without a desktop shell:
 
 ```bash
-node scripts/vibez1-admin.mjs --url http://localhost:39139 --admin-token "$VIBEZ1_ADMIN_TOKEN" approvals list
-node scripts/vibez1-admin.mjs --url http://localhost:39139 --admin-token "$VIBEZ1_ADMIN_TOKEN" approvals approve version
-node scripts/vibez1-admin.mjs --url http://localhost:39139 --admin-token "$VIBEZ1_ADMIN_TOKEN" units list
-node scripts/vibez1-admin.mjs --url http://localhost:39139 --admin-token "$VIBEZ1_ADMIN_TOKEN" units restart @workspace-apps/remote-cli
-node scripts/vibez1-admin.mjs --url http://localhost:39139 --admin-token "$VIBEZ1_ADMIN_TOKEN" units logs @workspace-apps/remote-cli --limit 120
+node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" approvals list
+node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" approvals approve version
+node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units list
+node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units restart @workspace-apps/remote-cli
+node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units logs @workspace-apps/remote-cli --limit 120
 ```
 
 For a full terminal app smoke:

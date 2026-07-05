@@ -4,9 +4,9 @@ import {
   type LifecyclePrepareInput,
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
-} from "@vibez1/durable";
-import { docsMethods } from "@vibez1/shared/serviceSchemas/docs";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+} from "@vibestudio/durable";
+import { docsMethods } from "@vibestudio/shared/serviceSchemas/docs";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export class LifecycleProbeDO extends DurableObjectBase {
   protected createTables(): void {

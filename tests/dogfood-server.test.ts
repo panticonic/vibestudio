@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 function tmpRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-dogfood-test-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-dogfood-test-"));
   tempRoots.push(root);
   return root;
 }
@@ -77,14 +77,14 @@ describe("dogfood server supervisor", () => {
     const remoteUrl = tmpRoot();
 
     const wsDir = bootstrapWorkspace("dogfood-test", { gitRemoteUrl: remoteUrl });
-    const projectDir = path.join(wsDir, "source", "projects", "vibez1");
+    const projectDir = path.join(wsDir, "source", "projects", "vibestudio");
 
     expect(wsDir).toBe(workspaceDir("dogfood-test"));
     expect(gitConfig(projectDir, "remote.origin.url")).toBe(remoteUrl);
     const workspaceConfig = YAML.parse(
-      fs.readFileSync(path.join(wsDir, "source", "meta", "vibez1.yml"), "utf8")
+      fs.readFileSync(path.join(wsDir, "source", "meta", "vibestudio.yml"), "utf8")
     );
-    expect(workspaceConfig.git.remotes.projects.vibez1.origin).toBe(remoteUrl);
+    expect(workspaceConfig.git.remotes.projects.vibestudio.origin).toBe(remoteUrl);
     const dogfoodMeta = JSON.parse(
       fs.readFileSync(path.join(wsDir, "source", "meta", "dogfood.json"), "utf8")
     );

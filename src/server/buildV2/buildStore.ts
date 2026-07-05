@@ -15,7 +15,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { getUserDataPath } from "@vibez1/env-paths";
+import { getUserDataPath } from "@vibestudio/env-paths";
 import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------

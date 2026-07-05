@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { PANEL_PRINCIPAL_PREFIX } from "@vibez1/shared/principalIds";
+import { PANEL_PRINCIPAL_PREFIX } from "@vibestudio/shared/principalIds";
 import { typeCheckRpcMethods } from "./typecheckService.js";
 import {
   discoverWorkspaceContext,
   type WorkspaceContext,
   type WorkspacePackageInfo,
-} from "@vibez1/typecheck";
+} from "@vibestudio/typecheck";
 
 const WORKSPACE_PACKAGE_ROOTS = [
   "about",
@@ -221,7 +221,7 @@ export type Api = Awaited<ReturnType<typeof activate>>;
 // Intentionally NOT registered in the WorkspaceExtensions type registry.
 // typecheck-service is agent/host infrastructure invoked over the extension RPC,
 // not something panels call via extensions.use(...). Registering it would drag
-// its type graph — including @vibez1/typecheck and the ~2.4MB bundled
+// its type graph — including @vibestudio/typecheck and the ~2.4MB bundled
 // TypeScript lib sources — into every panel's type-check program for no benefit.
 
 export async function activate(ctx: ExtensionContextLike) {

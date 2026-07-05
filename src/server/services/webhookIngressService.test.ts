@@ -8,7 +8,7 @@ import {
   createWebhookIngressService,
   type WebhookIngressServiceDeps,
 } from "./webhookIngressService.js";
-import { createVerifiedCaller, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type {
   CreateWebhookIngressSubscriptionRequest,
   WebhookDeliveryEvent,
@@ -120,12 +120,12 @@ function signRelayEnvelope(
   const canonical = [method.toUpperCase(), path, query, String(ts), bodySha].join("\n");
   const sig = `v1=${crypto.createHmac("sha256", secret).update(canonical).digest("hex")}`;
   return {
-    "x-vibez1-relay-method": method,
-    "x-vibez1-relay-path": path,
-    "x-vibez1-relay-query": query,
-    "x-vibez1-relay-timestamp": String(ts),
-    "x-vibez1-relay-body-sha256": bodySha,
-    "x-vibez1-relay-signature": sig,
+    "x-vibestudio-relay-method": method,
+    "x-vibestudio-relay-path": path,
+    "x-vibestudio-relay-query": query,
+    "x-vibestudio-relay-timestamp": String(ts),
+    "x-vibestudio-relay-body-sha256": bodySha,
+    "x-vibestudio-relay-signature": sig,
   };
 }
 

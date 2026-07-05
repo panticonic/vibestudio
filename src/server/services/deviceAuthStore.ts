@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { constantTimeStringEqual } from "@vibez1/shared/tokenManager";
+import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 import { authError } from "./auth/errors.js";
 
@@ -121,7 +121,7 @@ export class DeviceAuthStore {
     if (record.expiryTimer) clearTimeout(record.expiryTimer);
     this.pairingCodes.delete(codeHash);
     const credential = this.issueDevice({
-      label: input.label ?? "Vibez1 client",
+      label: input.label ?? "Vibestudio client",
       platform: input.platform,
       room: record.room,
     });

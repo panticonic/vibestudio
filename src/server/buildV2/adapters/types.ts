@@ -32,7 +32,7 @@ export interface FrameworkAdapter {
    * `frameworkModule` overrides the workspace module the wrapper imports the
    * auto-mount contract from (see `platformModules.FRAMEWORK_MODULES`); when
    * omitted, the adapter uses the platform default for its framework. Set per
-   * unit via the `vibez1.frameworkModule` manifest field. Adapters without an
+   * unit via the `vibestudio.frameworkModule` manifest field. Adapters without an
    * auto-mount module (vanilla) ignore it.
    */
   generateEntry(exposeEntryFile: string, entryFile: string, frameworkModule?: string): string;

@@ -2,7 +2,7 @@
   "name": "@workspace-about/keyboard-shortcuts",
   "version": "0.1.0",
   "private": true,
-  "vibez1": {
+  "vibestudio": {
     "title": "Keyboard Shortcuts",
     "description": "View keyboard shortcuts",
     "hiddenInLauncher": false,

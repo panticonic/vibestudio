@@ -2,7 +2,7 @@
  * Panel accessor functions for the shared panel snapshot.
  */
 
-import type { CreateChildOptions } from "@vibez1/types";
+import type { CreateChildOptions } from "@vibestudio/types";
 import type { Panel, PanelNavigationState, PanelSnapshot, PackageManifest, StateArgsValue } from "../types.js";
 
 /**

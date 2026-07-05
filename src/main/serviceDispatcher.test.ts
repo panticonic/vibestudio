@@ -8,10 +8,10 @@ import {
   ServiceDispatcher,
   ServiceError,
   parseServiceMethod,
-} from "@vibez1/shared/serviceDispatcher";
-import { fsMethods } from "@vibez1/shared/serviceSchemas/fs";
-import type { ServiceContext, ServiceHandler } from "@vibez1/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+} from "@vibestudio/shared/serviceDispatcher";
+import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
+import type { ServiceContext, ServiceHandler } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 

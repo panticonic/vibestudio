@@ -29,8 +29,8 @@ import type {
   FieldValue,
   FieldWarning,
   FormSchema,
-} from "@vibez1/types";
-import { FREE_TEXT_CHOICE_VALUE } from "@vibez1/types";
+} from "@vibestudio/types";
+import { FREE_TEXT_CHOICE_VALUE } from "@vibestudio/types";
 import {
   isFieldVisible,
   isFieldEnabled,

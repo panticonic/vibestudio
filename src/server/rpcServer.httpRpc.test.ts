@@ -310,7 +310,7 @@ describe("RpcServer HTTP POST /rpc", () => {
           args: [],
         },
         {
-          "X-vibez1-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+          "X-vibestudio-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
         }
       );
 
@@ -361,7 +361,7 @@ describe("RpcServer HTTP POST /rpc", () => {
           args: [],
         },
         {
-          "X-vibez1-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+          "X-vibestudio-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
         }
       );
 
@@ -395,7 +395,7 @@ describe("RpcServer HTTP POST /rpc", () => {
           args: [],
         },
         {
-          "X-vibez1-Runtime-Id": "do:workers/other-worker:OtherDO:agent-1",
+          "X-vibestudio-Runtime-Id": "do:workers/other-worker:OtherDO:agent-1",
         }
       );
 
@@ -923,7 +923,7 @@ describe("RpcServer HTTP POST /rpc", () => {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${serviceToken}`,
-            "X-vibez1-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+            "X-vibestudio-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
           },
           body: JSON.stringify(
             toStreamEnvelope({

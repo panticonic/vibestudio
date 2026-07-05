@@ -1,6 +1,6 @@
 # Mobile App Authoring
 
-Vibez1 mobile has two layers:
+Vibestudio mobile has two layers:
 
 1. The shipped native host bootstrap in the application checkout.
 2. The trusted workspace React Native app under `apps/mobile`.
@@ -14,7 +14,7 @@ mobile UX can be updated through workspace app builds.
 The native host owns:
 
 - durable device credential storage
-- `vibez1://connect` clean-install pairing
+- `vibestudio://connect` clean-install pairing
 - `/auth/complete-pairing`
 - `/auth/refresh-principal-grant`
 - `/auth/mobile-app-bootstrap`
@@ -41,11 +41,11 @@ It should not directly hold long-lived refresh tokens. It should call native
 host wrappers to obtain short-lived grants or current connection bootstrap.
 
 The workspace app bundle entry must register the same root component name the
-native host requests. The current native host requests `Vibez1`, so the active
+native host requests. The current native host requests `Vibestudio`, so the active
 workspace bundle must call:
 
 ```ts
-AppRegistry.registerComponent("Vibez1", () => App);
+AppRegistry.registerComponent("Vibestudio", () => App);
 ```
 
 Do not rely on the shipped bootstrap's registration. Once the native host reloads
@@ -61,7 +61,7 @@ foreground login flow can miss approval pushes/actions.
 Clean install:
 
 1. Desktop/server creates a pairing invite.
-2. User opens a `vibez1://connect?room=...&fp=...&code=...&sig=...&v=2` link on the phone.
+2. User opens a `vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2` link on the phone.
 3. Native bootstrap consumes the initial URL or URL event.
 4. Native bootstrap shows a trusted recovery-surface confirmation with the
    target server/workspace label from the link.

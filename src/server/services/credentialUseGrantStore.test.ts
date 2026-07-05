@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { CredentialUseGrantStore } from "./credentialUseGrantStore.js";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-credential-use-grants-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-credential-use-grants-"));
 }
 
 describe("CredentialUseGrantStore", () => {

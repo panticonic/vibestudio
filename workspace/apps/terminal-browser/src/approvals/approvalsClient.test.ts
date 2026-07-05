@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RpcClient } from "@vibez1/rpc";
-import type { PendingApproval } from "@vibez1/shared/approvals";
+import type { RpcClient } from "@vibestudio/rpc";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { createApprovalsClient } from "./approvalsClient.js";
 
 function startupUnitApproval(): PendingApproval {

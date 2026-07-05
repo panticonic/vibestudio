@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createVerifiedCaller, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
@@ -11,7 +11,7 @@ import {
 } from "./workerdInspectorService.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-workerd-inspector-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-inspector-"));
 }
 
 function createApprovalQueueMock(

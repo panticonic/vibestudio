@@ -18,7 +18,7 @@ import {
   CONTAINER_SECTIONS,
   CONTENT_SECTIONS,
   FLAT_SECTIONS,
-} from "@vibez1/shared/runtime/entitySpec";
+} from "@vibestudio/shared/runtime/entitySpec";
 
 type RepoKind = "build-unit" | "content" | "meta";
 

@@ -15,8 +15,8 @@
  * targets expose the identical core surface.
  */
 
-import type { RpcClient } from "@vibez1/rpc";
-import type { OpenExternalOptions, OpenExternalResult } from "@vibez1/shared/externalOpen";
+import type { RpcClient } from "@vibestudio/rpc";
+import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { helpfulNamespace } from "./helpfulNamespace.js";
 import { createGadClient, type GadClient } from "./gad.js";
 import { createBlobstoreClient, type BlobstoreClient } from "./blobstore.js";

@@ -92,8 +92,8 @@ zero importers). Export map updated in `packages/rpc/package.json`.
 ## Pairing link (Workstream B — `packages/shared/src/connect.ts`)
 
 Rewritten **outright** to the new grammar (no shim):
-`vibez1://connect?room=<uuid>&fp=<dtls-sha256>&code=<secret>&sig=<endpoint>&v=<ver>&ice=<policy>&srv=<label>`.
-Kept the load-bearing manual (non-`new URL()`) parse for the vibez1: custom
+`vibestudio://connect?room=<uuid>&fp=<dtls-sha256>&code=<secret>&sig=<endpoint>&v=<ver>&ice=<policy>&srv=<label>`.
+Kept the load-bearing manual (non-`new URL()`) parse for the vibestudio: custom
 scheme. `isTrustedCleartextHost` + `isPrivateIPv4`/`isTailscaleIPv4`/
 `isSingleLabelHostname` DELETED → one `isLoopbackHost` (127/8, ::1, localhost,
 10.0.2.2). `parseConnectServerUrl` kept, gate swapped to `isLoopbackHost`. Tests:
@@ -120,11 +120,11 @@ This is the work that makes the repo build green end-to-end. Ordered:
 ### 2. Workstream D — loopback origin + shell-bridge panel RPC
 
 - Repoint `workspace/packages/runtime/src/panel/transport.ts:createPanelTransport`
-  so ALL non-electron-local RPC rides the **shell bridge** (`__vibez1Shell`)
-  instead of `globalThis.__vibez1Transport` (the direct WS). The host forwards
+  so ALL non-electron-local RPC rides the **shell bridge** (`__vibestudioShell`)
+  instead of `globalThis.__vibestudioTransport` (the direct WS). The host forwards
   each panel's envelopes onto the pipe as that panel's logical session.
 - Rewrite `src/server/browserTransportEntry.ts` + `configLoader.ts:107-110` to
-  stop building `__vibez1GatewayRpcWsUrl`/opening a direct `/rpc` WS.
+  stop building `__vibestudioGatewayRpcWsUrl`/opening a direct `/rpc` WS.
 - Loopback façade: split `panelHttpServer.ts` so the build authority stays
   server-side and the client serves **non-secret assets only** over the bulk
   channel + a content-addressed cache; drop `validateManagementAuth`/`/api/*`;
@@ -155,7 +155,7 @@ rebuild` + `asarUnpack` for the `.node`. `react-native-webrtc` bare-RN linking
   `src/server/tailscaleServe.ts`, `src/main/tlsPinning.ts`,
   `src/main/remoteCredentialStore.ts` (+ tests). Strip the TLS/HTTPS branch in
   `gateway.ts`, `hubServer.ts`, `src/server/index.ts`; delete the env vars
-  (`VIBEZ1_PUBLIC_URL`, `VIBEZ1_PROTOCOL`, `VIBEZ1_REMOTE_*`, …). Repoint
+  (`VIBESTUDIO_PUBLIC_URL`, `VIBESTUDIO_PROTOCOL`, `VIBESTUDIO_REMOTE_*`, …). Repoint
   `credentialService.buildPublicUrl` to the relay host.
 
 ### 5. Integration seam test
@@ -181,7 +181,7 @@ not in the diff, import nothing changed, last commits predate the cutover.
 Cutover-caused test changes, all now green:
 
 - `credentialService.test.ts` 55/55 — OAuth redirect default moved loopback→relay
-  (§7); tests set `VIBEZ1_RELAY_OAUTH_BASE_URL` and opt into the server-local
+  (§7); tests set `VIBESTUDIO_RELAY_OAUTH_BASE_URL` and opt into the server-local
   `loopback` redirect for in-process callback round-trips.
 - `authService.test.ts` 8/8 — pairing responses dropped `deepLink` (the full WebRTC
   link needs the answerer's room/fp).
@@ -203,7 +203,7 @@ reconciled by the orchestrator.
 ### Remaining (deployment / runtime, not code-blocking)
 
 - Install `node-datachannel`; deploy `apps/signaling` + the rebuilt relay; set
-  `VIBEZ1_RELAY_OAUTH_BASE_URL`, TURN, and relay secrets.
+  `VIBESTUDIO_RELAY_OAUTH_BASE_URL`, TURN, and relay secrets.
 - Wire the answerer bootstrap with an injected native provider; mobile
   `MobileRpcClient`→WebRTC (the `MOBILE_SERVER_LOOPBACK_ORIGIN` seam).
 - Live end-to-end smoke (pair→connect→panel→proxyFetch→webhook) — needs the native

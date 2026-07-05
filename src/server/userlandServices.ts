@@ -1,10 +1,10 @@
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
-import { VCS_SERVICE_PROTOCOL, type DORefParam } from "@vibez1/shared/userlandServiceRpc";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { VCS_SERVICE_PROTOCOL, type DORefParam } from "@vibestudio/shared/userlandServiceRpc";
 import type {
   WorkspaceDeclarations,
   SingletonRegistry,
-} from "@vibez1/shared/workspace/singletonRegistry";
-import type { WorkspaceServiceDecl } from "@vibez1/shared/workspace/types";
+} from "@vibestudio/shared/workspace/singletonRegistry";
+import type { WorkspaceServiceDecl } from "@vibestudio/shared/workspace/types";
 
 export interface UserlandServicePolicy {
   allowed?: CallerKind[];
@@ -47,7 +47,7 @@ export type ResolvedUserlandService = DurableObjectServiceResolution | WorkerSer
  */
 /**
  * The gad-store DO backing the workspace VCS — resolved from the `vcs`
- * SERVICE declaration (protocol `vibez1.vcs.v1`), i.e. the SAME manifest row
+ * SERVICE declaration (protocol `vibestudio.vcs.v1`), i.e. the SAME manifest row
  * userland dispatch resolves through `workers.resolveService`. One source of
  * truth by construction: the store the host attaches to (provenance follower,
  * host `vcs.*` dispatch, bootstrap main-binding) is exactly the store the

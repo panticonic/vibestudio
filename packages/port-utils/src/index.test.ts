@@ -8,12 +8,12 @@ describe("findServicePort", () => {
   let lockDir: string;
 
   beforeEach(() => {
-    lockDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-port-lock-test-"));
-    process.env["VIBEZ1_PORT_LOCK_DIR"] = lockDir;
+    lockDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-port-lock-test-"));
+    process.env["VIBESTUDIO_PORT_LOCK_DIR"] = lockDir;
   });
 
   afterEach(() => {
-    delete process.env["VIBEZ1_PORT_LOCK_DIR"];
+    delete process.env["VIBESTUDIO_PORT_LOCK_DIR"];
     fs.rmSync(lockDir, { recursive: true, force: true });
   });
 

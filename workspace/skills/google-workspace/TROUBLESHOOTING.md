@@ -32,7 +32,7 @@ token under the Production app.
 ## `credential-expired` After Restart
 
 The stored Google credential has an expired access token and no usable refresh
-token. Older Vibez1 Google connections requested offline access from Google
+token. Older Vibestudio Google connections requested offline access from Google
 but did not opt into persisting the returned refresh token in the host
 credential store.
 

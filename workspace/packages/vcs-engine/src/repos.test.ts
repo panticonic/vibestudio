@@ -14,7 +14,7 @@ describe("repo taxonomy (userland twin of the host section taxonomy)", () => {
         "packages/core/src/index.ts",
         "packages/core/package.json",
         "panels/chat/index.tsx",
-        "meta/vibez1.yml",
+        "meta/vibestudio.yml",
         "agents/scribe/AGENT.md", // non-repo section
         "unknown/thing.txt", // unknown section
         "projects/vault/notes.md",

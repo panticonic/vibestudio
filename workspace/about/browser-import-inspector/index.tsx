@@ -1,6 +1,6 @@
 /**
  * Browser Migration & State — a first-party operational dashboard for migrating
- * browser data into Vibez1, safely re-running imports, inspecting the imported
+ * browser data into Vibestudio, safely re-running imports, inspecting the imported
  * store, opening current source-browser tabs as panels, and debugging the
  * address bar.
  *

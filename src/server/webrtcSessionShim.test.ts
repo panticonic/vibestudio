@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { FRAME_DATA, FRAME_END } from "@vibez1/rpc/protocol/streamCodec";
+import { FRAME_DATA, FRAME_END } from "@vibestudio/rpc/protocol/streamCodec";
 import {
   decodeControlFrame,
   type SessionControlFrame,
-} from "@vibez1/rpc/protocol/sessionNegotiation";
-import type { WsClientMessage, WsServerMessage } from "@vibez1/shared/ws/protocol";
+} from "@vibestudio/rpc/protocol/sessionNegotiation";
+import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 
 interface BulkWrite {

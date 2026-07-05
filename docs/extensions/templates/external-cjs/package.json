@@ -6,7 +6,7 @@
   "dependencies": {
     "some-commonjs-package": "1.0.0"
   },
-  "vibez1": {
+  "vibestudio": {
     "displayName": "External CommonJS Example",
     "entry": "index.ts",
     "sourcemap": true,

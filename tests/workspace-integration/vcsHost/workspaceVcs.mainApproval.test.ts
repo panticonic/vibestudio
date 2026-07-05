@@ -18,9 +18,9 @@ import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/testSupport.js";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { UnitBatchEntry } from "@vibez1/shared/approvals";
-import type { UnitMetaChangeApprovalProvider } from "@vibez1/unit-host";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { UnitMetaChangeApprovalProvider } from "@vibestudio/unit-host";
 import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
@@ -313,7 +313,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
   });
 
   it("the meta repo still derives its semantic unit-change prompt from the candidate view", async () => {
-    await seedMain("meta", [{ kind: "create", path: "vibez1.yml", content: text("name: test\n") }]);
+    await seedMain("meta", [{ kind: "create", path: "vibestudio.yml", content: text("name: test\n") }]);
 
     const provider: UnitMetaChangeApprovalProvider<UnitBatchEntry> = {
       metaChangeApprovalForCommit: vi.fn(async () => ({
@@ -353,7 +353,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
       head: ctxHead,
       repoPath: "meta",
       actor: AGENT,
-      edits: [{ kind: "write", path: "vibez1.yml", content: text("name: test-v2\n") }],
+      edits: [{ kind: "write", path: "vibestudio.yml", content: text("name: test-v2\n") }],
     });
     await vcs.commit({ head: ctxHead, repoPath: "meta", message: "config change", actor: AGENT });
 
@@ -365,11 +365,11 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
     expect(pushed.status).toBe("pushed");
 
     // The provider derived the unit changes from the CANDIDATE composed view:
-    // the state it was handed resolves meta/vibez1.yml to the NEW content.
+    // the state it was handed resolves meta/vibestudio.yml to the NEW content.
     expect(provider.metaChangeApprovalForCommit).toHaveBeenCalledTimes(1);
     const commitState = (provider.metaChangeApprovalForCommit as ReturnType<typeof vi.fn>).mock
       .calls[0]![0] as string;
-    const configAtCandidate = await vcs.readFile(commitState, "meta/vibez1.yml");
+    const configAtCandidate = await vcs.readFile(commitState, "meta/vibestudio.yml");
     expect(configAtCandidate?.content).toMatchObject({ kind: "text", text: "name: test-v2\n" });
 
     // ... and the user prompt was the semantic unit-batch, with the
@@ -380,7 +380,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
         trigger: "meta-change",
         configWrite: {
           repoPath: "meta",
-          summary: "meta/vibez1.yml changed",
+          summary: "meta/vibestudio.yml changed",
         },
       })
     );

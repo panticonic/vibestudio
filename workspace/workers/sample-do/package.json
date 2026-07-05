@@ -2,7 +2,7 @@
   "name": "sample-do",
   "version": "0.0.0",
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "title": "Sample Durable Object",
     "kind": "worker",
     "entry": "index.ts",

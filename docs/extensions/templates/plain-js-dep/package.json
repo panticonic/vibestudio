@@ -6,7 +6,7 @@
   "dependencies": {
     "tldts": "^7.0.19"
   },
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Plain JS Dependency Example",
     "entry": "index.ts",
     "sourcemap": true,

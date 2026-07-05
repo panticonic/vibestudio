@@ -7,8 +7,8 @@ import {
   createVerifiedCaller,
   ServiceDispatcher,
   type ServiceContext,
-} from "@vibez1/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+} from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 

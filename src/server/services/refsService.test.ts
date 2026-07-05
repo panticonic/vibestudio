@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createRefService, type RefGateBatch } from "./refService.js";
 import { createRefsService } from "./refsService.js";
 import { VcsInvocationTable } from "./vcsInvocationTable.js";

@@ -9,15 +9,15 @@ describe("ExtensionProcessManager runtime resolution", () => {
   });
 
   it("preserves parent exec argv when inspector injection is disabled", () => {
-    const previous = process.env["VIBEZ1_PROD"];
-    process.env["VIBEZ1_PROD"] = "1";
+    const previous = process.env["VIBESTUDIO_PROD"];
+    process.env["VIBESTUDIO_PROD"] = "1";
     try {
       expect(extensionRuntimeExecArgv()).toEqual(
         process.execArgv.length > 0 ? process.execArgv : undefined
       );
     } finally {
-      if (previous === undefined) delete process.env["VIBEZ1_PROD"];
-      else process.env["VIBEZ1_PROD"] = previous;
+      if (previous === undefined) delete process.env["VIBESTUDIO_PROD"];
+      else process.env["VIBESTUDIO_PROD"] = previous;
     }
   });
 });

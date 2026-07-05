@@ -1,9 +1,9 @@
-import type { Panel } from "@vibez1/shared/types";
+import type { Panel } from "@vibestudio/shared/types";
 import { materializeMobilePanel } from "./panelMaterializer";
 
 const hostConfig = {
   protocol: "https",
-  host: "vibez1.example.com",
+  host: "vibestudio.example.com",
   port: "3000",
   basePath: "/_workspace/dev",
 };

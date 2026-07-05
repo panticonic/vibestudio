@@ -1,6 +1,6 @@
 # App Targets
 
-Vibez1 app targets define how a trusted workspace app is built, delivered,
+Vibestudio app targets define how a trusted workspace app is built, delivered,
 and activated.
 
 ## Electron Target
@@ -9,7 +9,7 @@ Manifest:
 
 ```json
 {
-  "vibez1": {
+  "vibestudio": {
     "app": {
       "target": "electron",
       "renderer": "index.tsx",
@@ -59,11 +59,11 @@ Manifest:
 
 ```json
 {
-  "vibez1": {
+  "vibestudio": {
     "app": {
       "target": "react-native",
       "renderer": "App.tsx",
-      "rnComponentName": "Vibez1",
+      "rnComponentName": "Vibestudio",
       "rnHostAbi": "rn-host-1",
       "capabilities": ["notifications", "open-external"]
     }
@@ -98,7 +98,7 @@ Manifest:
 
 ```json
 {
-  "vibez1": {
+  "vibestudio": {
     "app": {
       "target": "terminal",
       "entry": "index.ts",
@@ -120,12 +120,12 @@ Important behavior:
 - Runtime identity is `callerKind: "app"` and `callerId` is the app package
   name, for example `@workspace-apps/remote-cli`.
 - The runner passes bootstrap env vars:
-  `VIBEZ1_TERMINAL_APP_ID`, `VIBEZ1_TERMINAL_APP_SOURCE`,
-  `VIBEZ1_TERMINAL_APP_BUILD_KEY`,
-  `VIBEZ1_TERMINAL_APP_EFFECTIVE_VERSION`,
-  `VIBEZ1_TERMINAL_APP_GATEWAY_URL`,
-  `VIBEZ1_TERMINAL_APP_RPC_TOKEN`, and
-  `VIBEZ1_TERMINAL_APP_CONNECTION_ID`.
+  `VIBESTUDIO_TERMINAL_APP_ID`, `VIBESTUDIO_TERMINAL_APP_SOURCE`,
+  `VIBESTUDIO_TERMINAL_APP_BUILD_KEY`,
+  `VIBESTUDIO_TERMINAL_APP_EFFECTIVE_VERSION`,
+  `VIBESTUDIO_TERMINAL_APP_GATEWAY_URL`,
+  `VIBESTUDIO_TERMINAL_APP_RPC_TOKEN`, and
+  `VIBESTUDIO_TERMINAL_APP_CONNECTION_ID`.
 - Terminal builds remain available after activation until the host target is
   launched or `workspace.units.restart(appName)` starts the process.
 - Push updates and rollback replace the process if it is already running.
@@ -151,7 +151,7 @@ configuration. A workspace may contain multiple apps for the same target under
 `apps/*`; the user chooses which app the current host should run through the
 workspace/host target picker. The selection is stored under the workspace state
 directory and can differ per workspace and per client install. Do not write
-these bindings into `meta/vibez1.yml`.
+these bindings into `meta/vibestudio.yml`.
 
 Selection modes:
 

@@ -1,18 +1,18 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ExtensionContext } from "@vibez1/extension";
-import type { ApprovalDetailFormat } from "@vibez1/shared/approvals";
+import type { ExtensionContext } from "@vibestudio/extension";
+import type { ApprovalDetailFormat } from "@vibestudio/shared/approvals";
 
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@vibez1/extension" {
+declare module "@vibestudio/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/mobile-debug": Api;
   }
 }
 
-const defaultPackage = "com.vibez1.mobile.internal";
-const defaultActivity = "com.vibez1.mobile.MainActivity";
+const defaultPackage = "app.vibestudio.mobile.internal";
+const defaultActivity = "app.vibestudio.mobile.MainActivity";
 
 class MobileDebugError extends Error {
   constructor(
@@ -29,7 +29,7 @@ export async function activate(ctx: ExtensionContext) {
   const workspace = await ctx.workspace.getInfo();
   if (!tryResolveRepoRoot(workspace.path)) {
     ctx.health.degraded({
-      summary: "Mobile debug activated without a Vibez1 repo root",
+      summary: "Mobile debug activated without a Vibestudio repo root",
       reasons: ["Build and install helpers require a checkout containing apps/mobile/android."],
     });
   }
@@ -42,7 +42,7 @@ export async function activate(ctx: ExtensionContext) {
       const apkPath = repoRoot ? defaultApkPath(repoRoot) : null;
       const issues: string[] = [];
       if (!repoRoot)
-        issues.push("Could not locate Vibez1 repo root containing apps/mobile/android");
+        issues.push("Could not locate Vibestudio repo root containing apps/mobile/android");
       if (!adb) issues.push("adb is not on PATH");
       if (devices.some((device) => device.state === "unauthorized"))
         issues.push("Accept the Android USB debugging prompt");
@@ -494,12 +494,12 @@ function streamProcess(command: string, args: string[]): Response {
 
 function requireRepoRoot(workspacePath: string): string {
   const repoRoot = tryResolveRepoRoot(workspacePath);
-  if (!repoRoot) throw new MobileDebugError("EBUILD", "Could not locate Vibez1 repo root");
+  if (!repoRoot) throw new MobileDebugError("EBUILD", "Could not locate Vibestudio repo root");
   return repoRoot;
 }
 
 function tryResolveRepoRoot(workspacePath: string): string | null {
-  let current = process.env["VIBEZ1_REPO_ROOT"] ?? process.cwd();
+  let current = process.env["VIBESTUDIO_REPO_ROOT"] ?? process.cwd();
   for (const start of [current, workspacePath]) {
     current = path.resolve(start);
     while (true) {

@@ -25,7 +25,7 @@ export function StatusBar({
   return (
     <Box>
       <Text backgroundColor="blue" color="white">
-        {` Vibez1 Terminal `}
+        {` Vibestudio Terminal `}
       </Text>
       <Text>{`  ws: ${workspace}   session: ${sessionTitle}   `}</Text>
       <Text color={STATUS_COLOR[status] ?? "white"}>{`● ${status}`}</Text>

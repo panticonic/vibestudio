@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   createWithAgent: vi.fn(async (config: unknown) => ({ config })),
   rpc: {
-    selfId: "do:vibez1/internal:EvalDO:test-eval",
+    selfId: "do:vibestudio/internal:EvalDO:test-eval",
     call: vi.fn(),
   },
   gad: {},

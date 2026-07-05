@@ -13,4 +13,4 @@ export type {
   WsRoutedEventErrorMessage,
   WsRoutedResponseErrorMessage,
   WsServerMessage,
-} from "@vibez1/rpc/protocol/wsProtocol";
+} from "@vibestudio/rpc/protocol/wsProtocol";

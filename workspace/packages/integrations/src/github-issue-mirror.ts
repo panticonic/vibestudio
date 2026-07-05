@@ -232,7 +232,7 @@ function buildTargetIssuePayload(
 }
 
 function buildMirrorMarker(sourceOwner: string, sourceRepo: string, issueNumber: number): string {
-  return `<!-- vibez1-mirror-source: ${sourceOwner}/${sourceRepo}#${issueNumber} -->`;
+  return `<!-- vibestudio-mirror-source: ${sourceOwner}/${sourceRepo}#${issueNumber} -->`;
 }
 
 /**

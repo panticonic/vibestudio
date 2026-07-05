@@ -1,5 +1,5 @@
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibez1/durable";
-import type { AuthenticatedCaller } from "@vibez1/rpc";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
+import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 
 interface WebhookIngressSubscriptionRow {

@@ -67,8 +67,8 @@ describe("createGatewayFetch", () => {
         Promise.resolve(new Response("tunneled")),
       ),
     ) {
-      vi.stubGlobal("__vibez1Shell", { stream });
-      vi.stubGlobal("__vibez1EntityId", "panel:p1");
+      vi.stubGlobal("__vibestudioShell", { stream });
+      vi.stubGlobal("__vibestudioEntityId", "panel:p1");
       return stream;
     }
 
@@ -148,8 +148,8 @@ describe("createGatewayFetch", () => {
 
     it("fails loud when the host has not wired stream()", async () => {
       captureFetch();
-      vi.stubGlobal("__vibez1Shell", {}); // bridge present, stream() not wired
-      vi.stubGlobal("__vibez1EntityId", "panel:p1");
+      vi.stubGlobal("__vibestudioShell", {}); // bridge present, stream() not wired
+      vi.stubGlobal("__vibestudioEntityId", "panel:p1");
       const gw = createGatewayFetch({ serverUrl: "http://gw.test", token: "T" });
       await expect(gw("/x")).rejects.toThrow(/stream\(\) is unavailable/);
     });

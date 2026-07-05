@@ -12,8 +12,8 @@ def hermesOsBin = {
 def hermesExecutable = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "hermesc.exe" : "hermesc"
 def defaultHermesCommand = rootProject.file("../../../node_modules/react-native/sdks/hermesc/${hermesOsBin}/${hermesExecutable}").absolutePath
 def configuredHermesCommand = providers
-    .gradleProperty("vibez1HermesCommand")
-    .orElse(providers.environmentVariable("VIBEZ1_HERMESC"))
+    .gradleProperty("vibestudioHermesCommand")
+    .orElse(providers.environmentVariable("VIBESTUDIO_HERMESC"))
     .orNull
 
 // Apply google-services only when the JSON exists locally. Devs without
@@ -40,16 +40,16 @@ react {
 }
 
 android {
-    namespace "com.vibez1.mobile"
+    namespace "app.vibestudio.mobile"
     compileSdk rootProject.ext.compileSdkVersion
 
     defaultConfig {
-        applicationId "com.vibez1.mobile"
+        applicationId "app.vibestudio.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "0.1.0"
-        buildConfigField "boolean", "VIBEZ1_HAS_FIREBASE", hasFirebaseConfig ? "true" : "false"
+        buildConfigField "boolean", "VIBESTUDIO_HAS_FIREBASE", hasFirebaseConfig ? "true" : "false"
     }
 
     signingConfigs {

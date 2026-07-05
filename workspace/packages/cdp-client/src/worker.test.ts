@@ -41,11 +41,11 @@ class FakeWebSocket {
       method?: string;
       params?: Record<string, unknown>;
     };
-    if (message.type === "vibez1:cdp-auth") {
+    if (message.type === "vibestudio:cdp-auth") {
       setTimeout(
         () =>
           this.dispatch("message", {
-            data: JSON.stringify({ type: "vibez1:cdp-auth-ok" }),
+            data: JSON.stringify({ type: "vibestudio:cdp-auth-ok" }),
           }),
         0
       );

@@ -1,10 +1,10 @@
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import { setWorkspaceAppTrust } from "@vibez1/shared/chromeTrust";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createViewService } from "./viewService.js";
 
-// App trust is manifest-declared (meta/vibez1.yml trust.chromeApps) and seeded
+// App trust is manifest-declared (meta/vibestudio.yml trust.chromeApps) and seeded
 // per process when the workspace manifest loads. Seed the shipped defaults so
 // the unauthorized-source rejection path is exercised as a live host sees it.
 beforeEach(() => {

@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@vibez1/extension";
+import type { ExtensionContext } from "@vibestudio/extension";
 import { sha256Hex } from "./binary.js";
 import type { PdfArtifact } from "./types.js";
 

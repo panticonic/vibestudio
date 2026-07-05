@@ -3,7 +3,7 @@
  * P5c part 2). Hosts the {@link GitBridge} core in a trusted Node extension
  * process and adapts it onto the platform primitives:
  *
- *  - the userland `vcs` service (gad-store DO, protocol vibez1.vcs.v1),
+ *  - the userland `vcs` service (gad-store DO, protocol vibestudio.vcs.v1),
  *    resolved through `ctx.workers.resolveService` and called over unified RPC
  *  - the host `blobstore.*` content-store RPC (blob bytes + immutable trees)
  *  - the host `refs.*` protected-ref reads
@@ -42,7 +42,7 @@ interface ExtensionContextLike {
   };
 }
 
-const VCS_SERVICE_PROTOCOL = "vibez1.vcs.v1";
+const VCS_SERVICE_PROTOCOL = "vibestudio.vcs.v1";
 const STATE_DIR = "state";
 
 function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {

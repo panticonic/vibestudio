@@ -1,11 +1,11 @@
 ---
 name: workspace-dev
-description: Build and develop Vibez1 workspace units — project scaffolding, panels, workers, Durable Objects, runtime publishing, and development workflow.
+description: Build and develop Vibestudio workspace units — project scaffolding, panels, workers, Durable Objects, runtime publishing, and development workflow.
 ---
 
 # Workspace Development Skill
 
-Documentation for developing Vibez1 workspace units, including panels, workers,
+Documentation for developing Vibestudio workspace units, including panels, workers,
 packages, skills, and extensions.
 
 For trusted workspace apps under `apps/` (`@workspace-apps/*`, Electron shell,

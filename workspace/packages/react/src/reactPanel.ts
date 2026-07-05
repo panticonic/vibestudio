@@ -24,7 +24,7 @@ type PanelErrorDiagnosticLauncher = (
 ) => Promise<PanelErrorDiagnosticChatResult>;
 
 interface PanelErrorDiagnosticLauncherGlobal {
-  __vibez1PanelErrorDiagnostics?: PanelErrorDiagnosticLauncher;
+  __vibestudioPanelErrorDiagnostics?: PanelErrorDiagnosticLauncher;
 }
 
 export interface ReactPanelOptions {
@@ -43,8 +43,8 @@ export interface ReactPanelInstance<Props> {
 
 function getPanelErrorDiagnosticLauncher(): PanelErrorDiagnosticLauncher | null {
   const g = globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal;
-  return typeof g.__vibez1PanelErrorDiagnostics === "function"
-    ? g.__vibez1PanelErrorDiagnostics
+  return typeof g.__vibestudioPanelErrorDiagnostics === "function"
+    ? g.__vibestudioPanelErrorDiagnostics
     : null;
 }
 
@@ -57,7 +57,7 @@ export function createReactPanelMount(
   const ThemeProvider = options?.ThemeComponent
     ? (() => {
         const ThemeComponent = options.ThemeComponent!;
-        return function vibez1RadixThemeProvider({ children }: { children?: ReactNode }): ReactNode {
+        return function vibestudioRadixThemeProvider({ children }: { children?: ReactNode }): ReactNode {
           const [theme, setTheme] = ReactLib.useState(() => panel.getTheme());
 
           ReactLib.useEffect(() => {

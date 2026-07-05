@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { EventService } from "@vibez1/shared/eventsService";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { EventService } from "@vibestudio/shared/eventsService";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 export interface ActivePanelRecord {
   panelId: string;

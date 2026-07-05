@@ -2,18 +2,18 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { TokenManager } from "@vibez1/shared/tokenManager";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { Gateway } from "../gateway.js";
 import { RpcServer } from "../rpcServer.js";
 import { RouteRegistry } from "../routeRegistry.js";
 import { createAuthService, createPairingRedeemer } from "./authService.js";
 import { DeviceAuthStore } from "./deviceAuthStore.js";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
-import { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
-import type { CredentialAuditEvent } from "@vibez1/shared/credentials/types";
-import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
+import type { CredentialAuditEvent } from "@vibestudio/shared/credentials/types";
+import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 
 function makePanelRecord(id: string): EntityRecord {
   return {
@@ -87,7 +87,7 @@ describe("auth service device credentials", () => {
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const authStore = new DeviceAuthStore(
       path.join(
-        fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-service-")),
+        fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-service-")),
         "auth",
         "devices.json"
       ),
@@ -287,7 +287,7 @@ describe("auth service device credentials", () => {
     const authService = createAuthService({
       tokenManager: new TokenManager(),
       deviceAuthStore: new DeviceAuthStore(
-        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-rpc-")), "devices.json")
+        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-rpc-")), "devices.json")
       ),
       getServerBootId: () => "boot_rpc",
       getWorkspaceId: () => "workspace_rpc",
@@ -380,7 +380,7 @@ describe("auth service connection grants", () => {
     const service = createAuthService({
       tokenManager: new TokenManager(),
       deviceAuthStore: new DeviceAuthStore(
-        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-grant-")), "devices.json")
+        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-grant-")), "devices.json")
       ),
       getServerBootId: () => "boot_test",
       getWorkspaceId: () => "workspace_test",
@@ -404,7 +404,7 @@ describe("auth service connection grants", () => {
     const service = createAuthService({
       tokenManager: new TokenManager(),
       deviceAuthStore: new DeviceAuthStore(
-        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-grant-")), "devices.json")
+        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-grant-")), "devices.json")
       ),
       getServerBootId: () => "boot_test",
       getWorkspaceId: () => "workspace_test",
@@ -432,7 +432,7 @@ describe("auth service connection grants", () => {
     const service = createAuthService({
       tokenManager: new TokenManager(),
       deviceAuthStore: new DeviceAuthStore(
-        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-grant-")), "devices.json")
+        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-grant-")), "devices.json")
       ),
       getServerBootId: () => "boot_test",
       getWorkspaceId: () => "workspace_test",
@@ -466,7 +466,7 @@ describe("auth service connection grants", () => {
     const service = createAuthService({
       tokenManager: new TokenManager(),
       deviceAuthStore: new DeviceAuthStore(
-        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-grant-")), "devices.json")
+        path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-grant-")), "devices.json")
       ),
       getServerBootId: () => "boot_test",
       getWorkspaceId: () => "workspace_test",
@@ -489,7 +489,7 @@ describe("auth service connection grants", () => {
     const routeRegistry = new RouteRegistry();
     const authStore = new DeviceAuthStore(
       path.join(
-        fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-mobile-approval-")),
+        fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-mobile-approval-")),
         "devices.json"
       )
     );
@@ -581,7 +581,7 @@ describe("auth service pairing invite flow", () => {
     const dispatcher = new ServiceDispatcher();
     let gatewayPort = 0;
     const authStore = new DeviceAuthStore(
-      path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-e2e-")), "devices.json")
+      path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-e2e-")), "devices.json")
     );
     const authService = createAuthService({
       tokenManager,
@@ -706,7 +706,7 @@ describe("createPairingRedeemer (over-the-pipe device pairing)", () => {
   const makeStore = () =>
     new DeviceAuthStore(
       path.join(
-        fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-pair-redeem-")),
+        fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-redeem-")),
         "auth",
         "devices.json"
       ),

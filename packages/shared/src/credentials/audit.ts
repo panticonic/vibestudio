@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { getCentralDataPath } from "@vibez1/env-paths";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 
 import type { AuditEntry, CredentialAuditEvent } from "./types.js";
 

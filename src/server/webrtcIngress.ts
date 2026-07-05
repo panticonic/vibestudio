@@ -18,14 +18,17 @@
  * (arming then fails loud per room instead of crashing the server).
  */
 
-import type { RpcConnectionStatus } from "@vibez1/rpc";
+import type { RpcConnectionStatus } from "@vibestudio/rpc";
 import {
   createWebRtcAnswererPipe,
   type WebRtcAnswererPipe,
-} from "@vibez1/rpc/transports/webrtcAnswerer";
-import type { PeerConnectionProvider, RtcCandidateType } from "@vibez1/rpc/transports/webrtcPeer";
-import { createSignalingClient } from "@vibez1/rpc/transports/webrtcSignalingClient";
-import type { TurnPolicy } from "@vibez1/shared/connect";
+} from "@vibestudio/rpc/transports/webrtcAnswerer";
+import type {
+  PeerConnectionProvider,
+  RtcCandidateType,
+} from "@vibestudio/rpc/transports/webrtcPeer";
+import { createSignalingClient } from "@vibestudio/rpc/transports/webrtcSignalingClient";
+import type { TurnPolicy } from "@vibestudio/shared/connect";
 
 /** Minimal surface of RpcServer the pool needs (avoids a hard type dep). */
 export interface WebRtcAttachable {
@@ -145,7 +148,7 @@ export function startWebRtcIngress(options: WebRtcIngressOptions): WebRtcIngress
     (providerPromise ??= (async () => {
       const { createNodeDatachannelProvider } =
         await import("../main/webrtc/nodeDatachannelPeer.js");
-      return createNodeDatachannelProvider({ peerName: "vibez1-server" });
+      return createNodeDatachannelProvider({ peerName: "vibestudio-server" });
     })());
 
   const defaultCreatePipe = async (room: string): Promise<WebRtcAnswererPipe> => {

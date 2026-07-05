@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { WebSocket } from "ws";
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import type { CdpHostBridgeSocket } from "./hostBridge.js";
 
 export interface RemoteCdpHostBridgeSocketOptions {

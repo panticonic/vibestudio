@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import {
   createHostedRuntime,
   createServicesProxy,
@@ -7,7 +7,7 @@ import {
   type WorkspaceRuntime,
 } from "./hostedRuntime.js";
 import { createWorkerdClient } from "./workerd.js";
-import { portableExports, PORTABLE_KEYS } from "@vibez1/shared/runtimeSurface.portable";
+import { portableExports, PORTABLE_KEYS } from "@vibestudio/shared/runtimeSurface.portable";
 
 /**
  * Identity/wiring assertions for the ONE shared runtime assembly: prove the

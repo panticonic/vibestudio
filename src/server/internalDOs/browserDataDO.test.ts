@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { AuthenticatedCaller } from "@vibez1/rpc";
+import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import { isBrowserDataDirectCaller } from "./browserDataDO.js";
 
 /**
  * Layer-A receiver policy for BrowserDataDO (holds user
  * credentials/passwords/cookies/history). Direct callers are shell + shell-side
  * server services, PLUS the manifest-declared browser-data broker extension
- * (meta/vibez1.yml `providers.browserData.extension`, injected as the
+ * (meta/vibestudio.yml `providers.browserData.extension`, injected as the
  * `BROWSER_DATA_BROKER_ID` env binding) — the designated mediator panels/agents
  * go through. Every other caller kind, and every OTHER extension, must be
  * refused so the open relay cannot read secrets by addressing the DO directly.

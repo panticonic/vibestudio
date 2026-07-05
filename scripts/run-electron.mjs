@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { resolveElectronExecutableForVibez1 } from "./branded-electron.mjs";
+import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
-const electronBinary = resolveElectronExecutableForVibez1();
+const electronBinary = resolveElectronExecutableForVibestudio();
 
 const rawExtraArgs = process.argv.slice(2);
 const autoApprove = rawExtraArgs.includes("--auto-approve");
@@ -11,7 +11,7 @@ const extraArgs = rawExtraArgs.filter((arg) => arg !== "--auto-approve");
 function initialElectronArgs() {
   const args = [];
   const rendererMaxOldSpace = Number.parseInt(
-    process.env.VIBEZ1_RENDERER_MAX_OLD_SPACE_MB ?? "",
+    process.env.VIBESTUDIO_RENDERER_MAX_OLD_SPACE_MB ?? "",
     10
   );
   if (Number.isFinite(rendererMaxOldSpace) && rendererMaxOldSpace > 0) {
@@ -40,8 +40,8 @@ async function runElectron(args) {
         ...process.env,
         // Increase Node.js memory limit for main process (3GB)
         NODE_OPTIONS: "--max-old-space-size=3072",
-        VIBEZ1_DEV_RUNNER_IPC: "1",
-        ...(autoApprove ? { VIBEZ1_AUTO_APPROVE: "1" } : {}),
+        VIBESTUDIO_DEV_RUNNER_IPC: "1",
+        ...(autoApprove ? { VIBESTUDIO_AUTO_APPROVE: "1" } : {}),
       },
     });
     child = currentChild;
@@ -54,7 +54,7 @@ async function runElectron(args) {
     };
 
     currentChild.on("message", (message) => {
-      if (message && message.type === "vibez1:dev-relaunch" && isStringArray(message.args)) {
+      if (message && message.type === "vibestudio:dev-relaunch" && isStringArray(message.args)) {
         relaunchArgs = message.args;
       }
     });

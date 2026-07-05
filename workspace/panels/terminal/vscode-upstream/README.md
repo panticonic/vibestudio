@@ -1,6 +1,6 @@
 # VS Code Terminal Upstream
 
-This directory vendors terminal source from `microsoft/vscode` so the vibez1 terminal
+This directory vendors terminal source from `microsoft/vscode` so the vibestudio terminal
 can be ported from battle-tested upstream implementation details instead of re-creating
 them from memory.
 
@@ -15,4 +15,4 @@ Included upstream slices:
 
 This subtree is not imported directly by the panel bundle. Ported, system-adapted code
 lives beside the panel source and should preserve upstream names and comments where
-practical, with vibez1-specific connectivity isolated at adapter boundaries.
+practical, with vibestudio-specific connectivity isolated at adapter boundaries.

@@ -1,11 +1,11 @@
 ---
 name: extensiondev
-description: Author Vibez1 extensions — long-lived Node processes that expose RPC APIs (and optionally HTTP fetch handlers) to panels, workers, and other extensions. Covers manifest, activate(), the ctx surface, approvals, the VCS dev loop, debugging.
+description: Author Vibestudio extensions — long-lived Node processes that expose RPC APIs (and optionally HTTP fetch handlers) to panels, workers, and other extensions. Covers manifest, activate(), the ctx surface, approvals, the VCS dev loop, debugging.
 ---
 
 # Extension Development Skill
 
-Vibez1 extensions are workspace units that live alongside panels and workers but run in their own forked Node process with **full Node access** (`node:fs`, `child_process`, native addons). They are the canonical way to add a new RPC API, replace an in-host service, or wrap a long-running native dependency.
+Vibestudio extensions are workspace units that live alongside panels and workers but run in their own forked Node process with **full Node access** (`node:fs`, `child_process`, native addons). They are the canonical way to add a new RPC API, replace an in-host service, or wrap a long-running native dependency.
 
 If you're calling an existing extension from a panel or worker, you don't need this skill — see `workspace-dev/TOOLS.md` for `extensions.use(name)` patterns. This skill is for **writing** an extension.
 
@@ -29,7 +29,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 
 ## Critical rules
 
-1. **`extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibez1.extension` (validated at install **and** boot — bad manifests fail closed).
+1. **`extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibestudio.extension` (validated at install **and** boot — bad manifests fail closed).
 2. **`activate(ctx)` returns a plain object.** Its own enumerable function properties become RPC methods. Inherited methods, `then`, and non-function properties are skipped.
 3. **`ctx.fs` for an extension is unrestricted** — it covers the whole host filesystem. This is not a sandbox; it exists for _auditable_ writes. For silent ambient work, import `node:fs` directly. The install approval is the trust boundary.
 4. **Use `ctx.approvals.request(...)` only for extension-owned shared resources exposed to other userland callers.** Do not use it as a generic confirmation prompt or wrapper around ordinary filesystem/process/network work; the host/runtime APIs own those permission boundaries.
@@ -46,7 +46,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Hello",
     "entry": "index.ts",
     "sourcemap": true,
@@ -57,7 +57,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 
 ```ts
 // extensions/hello/index.ts
-import type { ExtensionContext } from "@vibez1/extension";
+import type { ExtensionContext } from "@vibestudio/extension";
 
 export async function activate(ctx: ExtensionContext) {
   ctx.log.info("hello activating");
@@ -69,7 +69,7 @@ export async function activate(ctx: ExtensionContext) {
 }
 ```
 
-Declare it in `meta/vibez1.yml`:
+Declare it in `meta/vibestudio.yml`:
 
 ```yaml
 extensions:
@@ -86,14 +86,14 @@ const hello = extensions.use<{ greet(name: string): Promise<string> }>(
 await hello.greet("world");
 ```
 
-The declared set in `meta/vibez1.yml` is the single source of truth, reconciled at startup and on every `meta` push into `main`.
+The declared set in `meta/vibestudio.yml` is the single source of truth, reconciled at startup and on every `meta` push into `main`.
 
 ## Common tasks
 
 | Task                                              | How                                                                                                                            |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Scaffold a new extension                          | Copy from `docs/extensions/templates/{minimal,plain-js-dep,external-cjs,native-wasm}/`                                         |
-| Read manifest rules                               | See [AUTHORING.md](AUTHORING.md) — `vibez1.extension` shape, `dependencyMode`                                                |
+| Read manifest rules                               | See [AUTHORING.md](AUTHORING.md) — `vibestudio.extension` shape, `dependencyMode`                                                |
 | Gate access to an extension-owned shared resource | See [APPROVALS.md](APPROVALS.md) — `ctx.approvals.request` + grant lookup                                                      |
 | Add an HTTP endpoint                              | See [FETCH.md](FETCH.md) — default-export `fetch` handler                                                                      |
 | Push edits and pick up changes                    | See [DEV_LOOP.md](DEV_LOOP.md) — build-gated `vcs.push`, dev-session, inspector                                                |

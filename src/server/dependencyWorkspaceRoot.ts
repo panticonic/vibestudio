@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveWorkspaceTemplateDir } from "@vibez1/shared/workspace/loader";
+import { resolveWorkspaceTemplateDir } from "@vibestudio/shared/workspace/loader";
 
 export function hasDependencyWorkspaceMetadata(dir: string): boolean {
   return (

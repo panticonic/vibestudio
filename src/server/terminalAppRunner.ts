@@ -1,5 +1,5 @@
-import { createProcessAdapter, type ProcessAdapter } from "@vibez1/process-adapter";
-import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
+import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
+import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { artifactFilePath } from "./buildV2/buildStore.js";
 
 export interface TerminalAppBuild {
@@ -78,13 +78,13 @@ export class TerminalAppRunner {
       entryPath,
       {
         ...process.env,
-        VIBEZ1_TERMINAL_APP_ID: launch.appId,
-        VIBEZ1_TERMINAL_APP_SOURCE: launch.source,
-        VIBEZ1_TERMINAL_APP_BUILD_KEY: launch.buildKey,
-        VIBEZ1_TERMINAL_APP_EFFECTIVE_VERSION: launch.effectiveVersion ?? "",
-        VIBEZ1_TERMINAL_APP_GATEWAY_URL: launch.gatewayUrl,
-        VIBEZ1_TERMINAL_APP_RPC_TOKEN: rpcGrant.token,
-        VIBEZ1_TERMINAL_APP_CONNECTION_ID: connectionId,
+        VIBESTUDIO_TERMINAL_APP_ID: launch.appId,
+        VIBESTUDIO_TERMINAL_APP_SOURCE: launch.source,
+        VIBESTUDIO_TERMINAL_APP_BUILD_KEY: launch.buildKey,
+        VIBESTUDIO_TERMINAL_APP_EFFECTIVE_VERSION: launch.effectiveVersion ?? "",
+        VIBESTUDIO_TERMINAL_APP_GATEWAY_URL: launch.gatewayUrl,
+        VIBESTUDIO_TERMINAL_APP_RPC_TOKEN: rpcGrant.token,
+        VIBESTUDIO_TERMINAL_APP_CONNECTION_ID: connectionId,
       },
       { preferNode: true, stdio: launch.interactive ? "inherit" : "pipe" }
     );

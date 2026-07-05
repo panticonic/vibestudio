@@ -1,7 +1,7 @@
 {
-  "name": "@vibez1/env-paths",
+  "name": "@vibestudio/env-paths",
   "version": "0.1.0",
-  "description": "Platform-specific user data paths for Vibez1",
+  "description": "Platform-specific user data paths for Vibestudio",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

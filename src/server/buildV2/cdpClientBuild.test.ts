@@ -20,7 +20,7 @@ describe("lightweight CDP client build", () => {
   });
 
   it("builds the lightweight CDP client standalone (no vendored engine, exports CdpConnection)", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-cdp-client-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cdp-client-"));
     try {
       const outfile = path.join(tempDir, "bundle.js");
       await esbuild.build({
@@ -29,7 +29,7 @@ describe("lightweight CDP client build", () => {
         bundle: true,
         format: "esm",
         platform: "browser",
-        conditions: ["vibez1-panel", "browser", "import", "default"],
+        conditions: ["vibestudio-panel", "browser", "import", "default"],
         logLevel: "silent",
       });
 

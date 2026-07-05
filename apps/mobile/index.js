@@ -2,13 +2,13 @@
 //
 // This file is intentionally not the workspace mobile app. It is the minimal
 // native-host recovery surface used only when no approved workspace app bundle
-// is active yet. The workspace app is fetched through Vibez1MobileHost,
+// is active yet. The workspace app is fetched through VibestudioMobileHost,
 // verified by rnHostAbi + integrity, activated from native-owned storage, and
 // then the RN bridge reloads onto that bundle.
 
-// Must precede any @vibez1/rpc import: installs a TextDecoder polyfill that
+// Must precede any @vibestudio/rpc import: installs a TextDecoder polyfill that
 // Hermes lacks (the WebRTC control-frame codec needs it).
-import "@vibez1/mobile-webrtc/polyfills";
+import "@vibestudio/mobile-webrtc/polyfills";
 import "react-native-get-random-values";
 import "react-native-url-polyfill/auto";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -26,7 +26,7 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { parseConnectLink } from "@vibez1/shared/connect";
+import { parseConnectLink } from "@vibestudio/shared/connect";
 import {
   establishWebRtcConnection,
   reconnectViaWebRtc,
@@ -35,7 +35,7 @@ import {
   clearShellCredential,
   makeShellTokenProvider,
   deviceIdFromCallerId,
-} from "@vibez1/mobile-webrtc";
+} from "@vibestudio/mobile-webrtc";
 import {
   formatCapabilities,
   launchCopy,
@@ -44,20 +44,20 @@ import {
   unitReviewRows,
   unitSourceLabel,
   unitSummaryChips,
-} from "@vibez1/shared/bootstrapLaunchGate";
+} from "@vibestudio/shared/bootstrapLaunchGate";
 import {
   HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS,
   isLaunchSessionEventForTarget,
-} from "@vibez1/shared/hostTargetLaunchGate";
+} from "@vibestudio/shared/hostTargetLaunchGate";
 import { name as appName } from "./app.json";
-import { Vibez1Logo } from "./Vibez1Logo";
+import { VibestudioLogo } from "./VibestudioLogo";
 
 const RN_HOST_ABI = "rn-host-1";
-const CONSUMED_CONNECT_LINK_KEY = "vibez1:connect:consumed-url";
-const nativeHost = NativeModules.Vibez1MobileHost;
+const CONSUMED_CONNECT_LINK_KEY = "vibestudio:connect:consumed-url";
+const nativeHost = NativeModules.VibestudioMobileHost;
 
 function smokePhase(phase) {
-  console.log(`[Vibez1MobileSmoke] phase=${phase}`);
+  console.log(`[VibestudioMobileSmoke] phase=${phase}`);
 }
 
 function platformName() {
@@ -65,11 +65,11 @@ function platformName() {
 }
 
 function missingNativeHostError() {
-  return new Error("Vibez1MobileHost native module is unavailable");
+  return new Error("VibestudioMobileHost native module is unavailable");
 }
 
 function parseConnectDeepLink(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibez1://connect")) return null;
+  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibestudio://connect")) return null;
   const parsed = parseConnectLink(rawUrl);
   if (parsed.kind === "error") throw new Error(parsed.reason);
   // New WebRTC pairing payload: a signaling rendezvous room + the server's pinned
@@ -90,12 +90,12 @@ function pairingLabel(pairing) {
   try {
     return new URL(pairing.sig).host;
   } catch {
-    return "this Vibez1 server";
+    return "this Vibestudio server";
   }
 }
 
 async function markConnectLinkConsumed(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibez1://connect")) return;
+  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibestudio://connect")) return;
   await AsyncStorage.setItem(
     CONSUMED_CONNECT_LINK_KEY,
     JSON.stringify({ url: rawUrl, consumedAt: Date.now() })
@@ -240,7 +240,7 @@ async function streamArtifactToNative(connection, descriptor, buildKey, artifact
   // small enough for react-native-webrtc's serialized bulk receive; the native host
   // decompresses before verifying the uncompressed integrity. The header confirms it.
   const gzipped = decoded.headers.some(
-    (h) => h[0].toLowerCase() === "x-vibez1-content-gzip" && h[1] === "1"
+    (h) => h[0].toLowerCase() === "x-vibestudio-content-gzip" && h[1] === "1"
   );
   const reader = decoded.body.getReader();
   let first = true;
@@ -261,7 +261,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
   const stored = await loadShellCredential();
   if (!stored) {
     throw new Error(
-      "Pair this device with a trusted Vibez1 server before loading the workspace app."
+      "Pair this device with a trusted Vibestudio server before loading the workspace app."
     );
   }
 
@@ -327,7 +327,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
 // The shell-credential store + the WebRTC connect helpers
 // (establishWebRtcConnection / reconnectViaWebRtc / persist+loadShellCredential /
 // makeShellTokenProvider / deviceIdFromCallerId) now live in
-// @vibez1/mobile-webrtc, shared with the post-reload workspace app. Only the
+// @vibestudio/mobile-webrtc, shared with the post-reload workspace app. Only the
 // fresh-pairing flow below (which emits the smoke phases) stays here.
 
 /** Fresh pairing: redeem the code, capture + persist the issued device credential. */
@@ -535,7 +535,7 @@ function LaunchTimeline({ session }) {
   );
 }
 
-function Vibez1MobileHostBootstrap() {
+function VibestudioMobileHostBootstrap() {
   const [status, setStatus] = useState("Loading approved workspace app...");
   const [busy, setBusy] = useState(true);
   const [pendingConnect, setPendingConnect] = useState(null);
@@ -670,7 +670,7 @@ function Vibez1MobileHostBootstrap() {
       const parsed = parseConnectDeepLink(rawUrl);
       if (!parsed) {
         setPendingConnect(null);
-        setStatus("Open a Vibez1 connect link to pair this device.");
+        setStatus("Open a Vibestudio connect link to pair this device.");
         setBusy(false);
         return;
       }
@@ -683,7 +683,7 @@ function Vibez1MobileHostBootstrap() {
       setStatus(
         `${
           error instanceof Error ? error.message : String(error)
-        }\n\nScan a fresh Vibez1 pairing QR code to re-pair this device.`
+        }\n\nScan a fresh Vibestudio pairing QR code to re-pair this device.`
       );
       setBusy(false);
     }
@@ -712,7 +712,7 @@ function Vibez1MobileHostBootstrap() {
     setStatus("Loading approved workspace app...");
     try {
       const initialUrl = await Linking.getInitialURL();
-      if (initialUrl && initialUrl.startsWith("vibez1://connect")) {
+      if (initialUrl && initialUrl.startsWith("vibestudio://connect")) {
         presentConnectLink(initialUrl);
         return;
       }
@@ -721,7 +721,7 @@ function Vibez1MobileHostBootstrap() {
       const stored = await loadShellCredential();
       if (!stored) {
         setStatus(
-          "Open a Vibez1 pairing link or scan a QR code from a trusted desktop or terminal."
+          "Open a Vibestudio pairing link or scan a QR code from a trusted desktop or terminal."
         );
         return;
       }
@@ -733,7 +733,7 @@ function Vibez1MobileHostBootstrap() {
       // for a fresh QR instead of looping on a credential the server won't honor.
       if (error?.code === "SESSION_AUTH_FAILED") {
         await clearShellCredential().catch(() => {});
-        setStatus("Your saved pairing was rejected. Scan a fresh Vibez1 QR code to re-pair.");
+        setStatus("Your saved pairing was rejected. Scan a fresh Vibestudio QR code to re-pair.");
       } else {
         setStatus(error instanceof Error ? error.message : String(error));
       }
@@ -816,9 +816,9 @@ function Vibez1MobileHostBootstrap() {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.panel}>
           <View style={styles.brandRow}>
-            <Vibez1Logo size={44} variant="tile" />
+            <VibestudioLogo size={44} variant="tile" />
             <View style={styles.brandText}>
-              <Text style={styles.eyebrow}>Vibez1</Text>
+              <Text style={styles.eyebrow}>Vibestudio</Text>
               <Text style={styles.title}>Mobile Host</Text>
             </View>
           </View>
@@ -948,7 +948,7 @@ function Vibez1MobileHostBootstrap() {
           ) : (
             <View style={styles.actions}>
               <Text style={styles.hint}>
-                Open a Vibez1 pairing link or scan a QR code from a trusted desktop or terminal.
+                Open a Vibestudio pairing link or scan a QR code from a trusted desktop or terminal.
               </Text>
               <ActionButton title="Retry" onPress={load} variant="secondary" />
             </View>
@@ -1279,4 +1279,4 @@ const styles = StyleSheet.create({
   },
 });
 
-AppRegistry.registerComponent(appName, () => Vibez1MobileHostBootstrap);
+AppRegistry.registerComponent(appName, () => VibestudioMobileHostBootstrap);

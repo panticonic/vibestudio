@@ -13,12 +13,12 @@ import {
   type VcsPushInput,
   type VcsPushResult,
   type VcsWorkingAdvance,
-} from "@vibez1/shared/serviceSchemas/vcs";
+} from "@vibestudio/shared/serviceSchemas/vcs";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
-} from "@vibez1/shared/typedServiceClient";
-import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
+} from "@vibestudio/shared/typedServiceClient";
+import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 
 export type {
   VcsApplyEditsInput,
@@ -46,7 +46,7 @@ export type {
   VcsResolveHeadResult,
   VcsStatusResult,
   VcsWorkingAdvance,
-} from "@vibez1/shared/serviceSchemas/vcs";
+} from "@vibestudio/shared/serviceSchemas/vcs";
 
 /** Minimal event-capable rpc surface (method form -> param bivariance, so the
  * runtime rpc client is assignable). */
@@ -58,7 +58,7 @@ export type VcsRpcClient = TypedServiceClient<typeof vcsMethods>;
 
 /**
  * The read/history traversals — USERLAND-dispatched (P5c): they run in the
- * gad-store DO behind the `vcs` manifest service (vibez1.vcs.v1), resolved
+ * gad-store DO behind the `vcs` manifest service (vibestudio.vcs.v1), resolved
  * through `workers.resolveService`, not the host `vcs.*` service. Same
  * caller-facing signatures as before the move.
  */

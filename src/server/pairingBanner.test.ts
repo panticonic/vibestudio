@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createConnectDeepLink, type ConnectPairing } from "@vibez1/shared/connect";
+import { createConnectDeepLink, type ConnectPairing } from "@vibestudio/shared/connect";
 import { formatPairUrlLine } from "./pairingBanner";
 
 describe("server pairing banner", () => {

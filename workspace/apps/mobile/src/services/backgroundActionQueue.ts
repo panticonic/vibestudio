@@ -1,9 +1,9 @@
 import type { ShellClient } from "./shellClient";
 import { clearAction as clearActionCore, clearWorkspaceMutation, enqueueAction as enqueueActionCore, enqueueWorkspaceMutation, loadDeepLink, loadPendingActions as loadPendingActionsCore, loadWorkspaceMutations, pruneStaleActions, serializeDeepLink, serializePendingActions, serializeWorkspaceMutations, type BackgroundApprovalDecision, type QueuedBackgroundAction, type QueuedWorkspaceMutation, } from "./backgroundActionQueueCore";
 declare const require: (moduleName: string) => unknown;
-const ACTION_QUEUE_KEY = "vibez1:push:queued-actions";
-const WORKSPACE_MUTATION_QUEUE_KEY = "vibez1:workspace:queued-mutations";
-const DEEP_LINK_KEY = "vibez1:push:pending-deep-link";
+const ACTION_QUEUE_KEY = "vibestudio:push:queued-actions";
+const WORKSPACE_MUTATION_QUEUE_KEY = "vibestudio:workspace:queued-mutations";
+const DEEP_LINK_KEY = "vibestudio:push:pending-deep-link";
 export const SYNCING_NOTIFICATION_BODY = "Sent — syncing…";
 interface AsyncStorageLike {
     getItem(key: string): Promise<string | null>;

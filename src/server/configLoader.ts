@@ -50,7 +50,7 @@ export const CONFIG_LOADER_JS = `(async () => {
   };
   installRandomUuidPolyfill();
 
-  const storageKey = () => "__vibez1PanelInit:" + location.href;
+  const storageKey = () => "__vibestudioPanelInit:" + location.href;
   const parseStoredInit = () => {
     try {
       const raw = sessionStorage.getItem(storageKey());
@@ -72,7 +72,7 @@ export const CONFIG_LOADER_JS = `(async () => {
   };
 
   let cfg = null;
-  const shell = globalThis.__vibez1Shell;
+  const shell = globalThis.__vibestudioShell;
 
   if (shell && typeof shell.getPanelInit === "function") {
     try {
@@ -83,8 +83,8 @@ export const CONFIG_LOADER_JS = `(async () => {
       if (root) root.textContent = "Failed to load panel init: " + (err.message || err);
       return;
     }
-  } else if (globalThis.__vibez1PanelInit) {
-    cfg = globalThis.__vibez1PanelInit;
+  } else if (globalThis.__vibestudioPanelInit) {
+    cfg = globalThis.__vibestudioPanelInit;
     persistPanelInit(cfg);
   } else {
     cfg = parseStoredInit();
@@ -97,35 +97,35 @@ export const CONFIG_LOADER_JS = `(async () => {
 
   if (!cfg || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
     const root = document.getElementById("root");
-    if (root) root.innerHTML = "<p>Open this panel from Vibez1.</p>";
+    if (root) root.innerHTML = "<p>Open this panel from Vibestudio.</p>";
     return;
   }
 
-  globalThis.__vibez1EntityId = entityId;
-  globalThis.__vibez1SlotId = slotId;
+  globalThis.__vibestudioEntityId = entityId;
+  globalThis.__vibestudioSlotId = slotId;
   const gatewayConfig = cfg.gatewayConfig;
   // Panel RPC rides the shell bridge (host → WebRTC control channel), not a
   // direct /rpc WebSocket: no panel-side ws URL is built. The token still
   // arrives out-of-band here and is consumed by the bridge's SessionNegotiation.
-  globalThis.__vibez1GatewayToken = gatewayConfig.token;
-  globalThis.__vibez1Kind = "panel";
+  globalThis.__vibestudioGatewayToken = gatewayConfig.token;
+  globalThis.__vibestudioKind = "panel";
 
   let effectiveStateArgs = cfg.stateArgs;
   if (url.searchParams.has("stateArgs")) {
     try { effectiveStateArgs = JSON.parse(url.searchParams.get("stateArgs")); } catch { /* ignore */ }
   }
   Object.assign(globalThis, {
-    __vibez1ContextId: cfg.contextId,
-    __vibez1ParentId: cfg.parentId,
-    __vibez1ParentEntityId: cfg.parentEntityId,
-    __vibez1InitialTheme: cfg.theme,
-    __vibez1GatewayConfig: gatewayConfig,
-    __vibez1SourceRepo: cfg.sourceRepo,
-    __vibez1EffectiveVersion: cfg.effectiveVersion ?? cfg.env?.__VIBEZ1_EFFECTIVE_VERSION ?? null,
-    __vibez1Env: cfg.env,
-    __vibez1StateArgs: effectiveStateArgs,
-    __vibez1ConnectionId: connectionId,
-    __vibez1ClientLabel: cfg.clientLabel,
+    __vibestudioContextId: cfg.contextId,
+    __vibestudioParentId: cfg.parentId,
+    __vibestudioParentEntityId: cfg.parentEntityId,
+    __vibestudioInitialTheme: cfg.theme,
+    __vibestudioGatewayConfig: gatewayConfig,
+    __vibestudioSourceRepo: cfg.sourceRepo,
+    __vibestudioEffectiveVersion: cfg.effectiveVersion ?? cfg.env?.__VIBESTUDIO_EFFECTIVE_VERSION ?? null,
+    __vibestudioEnv: cfg.env,
+    __vibestudioStateArgs: effectiveStateArgs,
+    __vibestudioConnectionId: connectionId,
+    __vibestudioClientLabel: cfg.clientLabel,
     process: { env: cfg.env },
   });
 
@@ -136,9 +136,9 @@ export const CONFIG_LOADER_JS = `(async () => {
     s.onerror = reject;
     document.head.appendChild(s);
   });
-  delete globalThis.__vibez1ConnectionId;
+  delete globalThis.__vibestudioConnectionId;
 
-  globalThis.__vibez1ContextReady = true;
+  globalThis.__vibestudioContextReady = true;
   const bundle = document.createElement("script");
   bundle.type = "module";
   bundle.src = configuredBundleSrc || "./bundle.js";

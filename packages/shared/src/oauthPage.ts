@@ -4,7 +4,7 @@
  *
  * Lives in shared rather than inside any single provider module because
  * every OAuth provider we own the callback for (currently just
- * `vibez1CodexProvider`; GitHub / Google / Anthropic are the likely next
+ * `vibestudioCodexProvider`; GitHub / Google / Anthropic are the likely next
  * additions) renders the same two pages. Keeping them here also means the
  * markup is version-tracked separately from any one provider's token-exchange
  * logic.

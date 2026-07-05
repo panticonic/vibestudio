@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 export interface ShellPresenceInternal {
   isAnyShellActive(maxAgeMs?: number): boolean;

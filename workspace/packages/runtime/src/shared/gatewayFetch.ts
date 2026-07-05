@@ -1,4 +1,4 @@
-import { envelopeFromMessage, type RpcEnvelope } from "@vibez1/rpc";
+import { envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
 
 export interface GatewayFetchConfig {
   serverUrl: string;
@@ -31,7 +31,7 @@ type ShellStreamBridge = {
 };
 
 function getShellBridge(): unknown {
-  return (globalThis as any).__vibez1Shell;
+  return (globalThis as any).__vibestudioShell;
 }
 
 export interface GatewayFetchDeps {
@@ -109,7 +109,7 @@ export function createGatewayFetch(
     return fetch(target, { ...init, headers });
 
     async function tunnelOverBridge(absoluteTarget: string, gatewayBase: string): Promise<Response> {
-      const entityId = (globalThis as any).__vibez1EntityId as string | undefined;
+      const entityId = (globalThis as any).__vibestudioEntityId as string | undefined;
       if (typeof entityId !== "string" || entityId.length === 0) {
         throw new Error("gatewayFetch: panel entity id is unavailable");
       }

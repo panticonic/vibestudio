@@ -35,16 +35,16 @@
  * buffer-and-hash the body on this side — this method must stream (bundles exceed
  * the message-size limit), and hashing here would force a full buffer. Instead the
  * façade hashes immutable-cacheable bodies itself on first receipt (digest-on-write;
- * see AssetDiskCache). If a future gateway change emits `x-vibez1-content-digest`,
+ * see AssetDiskCache). If a future gateway change emits `x-vibestudio-content-digest`,
  * it rides through untouched (it is not in STRIP_RESPONSE_HEADERS) and the façade
  * prefers it over hashing — no change needed here.
  */
 
 import { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { ServiceError } from "@vibez1/shared/serviceDispatcher";
-import { checkPanelGatewayPath } from "@vibez1/shared/panel/assetPathPolicy";
-import { GZIP_MARKER_HEADER, hasRangeRequestHeader } from "@vibez1/shared/panel/assetHeaders";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
+import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
+import { GZIP_MARKER_HEADER, hasRangeRequestHeader } from "@vibestudio/shared/panel/assetHeaders";
 
 /** Loopback fetch request shape sent by the panel-asset façade. The request
  * body (if any) rides the bulk channel as a stream (`ctx.body`), never in here. */
@@ -70,7 +70,7 @@ const fetchDescriptorSchema = z
     // receive (one message per round-trip), so a multi-MB asset streams too slowly
     // over a relay; gzip (~4×) keeps it inside the pipe window. The caller is
     // responsible for decompressing (the mobile native host does, before verifying
-    // the *uncompressed* integrity). Signaled back via `x-vibez1-content-gzip`.
+    // the *uncompressed* integrity). Signaled back via `x-vibestudio-content-gzip`.
     gzip: z.boolean().optional(),
   })
   .strict();

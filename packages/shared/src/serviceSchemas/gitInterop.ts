@@ -11,7 +11,7 @@ import type { MethodAccessDescriptor } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
 // Access descriptors shared across the gitInterop method group. All four
-// methods mutate workspace config (`meta/vibez1.yml`) and/or reach the
+// methods mutate workspace config (`meta/vibestudio.yml`) and/or reach the
 // network/filesystem.
 const SHARED_REMOTE_WRITE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
@@ -105,7 +105,7 @@ export type GitCompleteWorkspaceDependenciesResult = z.infer<
 export const gitInteropMethods = defineServiceMethods({
   setSharedRemote: {
     description:
-      "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibez1.yml and syncing it into the repo's git config; may prompt for capability approval.",
+      "Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml and syncing it into the repo's git config; may prompt for capability approval.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the remote applies to."),
       gitRemoteSchema,
@@ -123,7 +123,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   removeSharedRemote: {
     description:
-      "Remove a named shared Git remote declaration for a workspace unit from meta/vibez1.yml and sync the repo's git config; may prompt for capability approval.",
+      "Remove a named shared Git remote declaration for a workspace unit from meta/vibestudio.yml and sync the repo's git config; may prompt for capability approval.",
     args: z.tuple([
       z.string().describe("Workspace-relative repo/unit path the remote belongs to."),
       z.string().describe('Name of the remote to remove, e.g. "origin".'),
@@ -134,7 +134,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   importProject: {
     description:
-      "Clone an external Git project into the workspace at the requested path and record its remote in meta/vibez1.yml; clones over the network and may prompt for config-write approval.",
+      "Clone an external Git project into the workspace at the requested path and record its remote in meta/vibestudio.yml; clones over the network and may prompt for config-write approval.",
     args: z.tuple([gitImportProjectSchema]),
     returns: gitImportedWorkspaceRepoSchema,
     access: IMPORT_PROJECT_ACCESS,
@@ -144,7 +144,7 @@ export const gitInteropMethods = defineServiceMethods({
           {
             path: "projects/bgkit",
             remote: { name: "origin", url: "https://github.com/werg/bgkit.git" },
-            branch: "vibez1-bridge",
+            branch: "vibestudio-bridge",
           },
         ],
       },
@@ -152,7 +152,7 @@ export const gitInteropMethods = defineServiceMethods({
   },
   completeWorkspaceDependencies: {
     description:
-      "Clone every remote declared in meta/vibez1.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results.",
+      "Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results.",
     args: z.union([z.tuple([]), z.tuple([gitCompleteWorkspaceDependenciesSchema.optional()])]),
     returns: gitCompleteWorkspaceDependenciesResultSchema,
     access: COMPLETE_DEPENDENCIES_ACCESS,

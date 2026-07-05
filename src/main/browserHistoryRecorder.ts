@@ -1,9 +1,9 @@
-import { createDevLogger } from "@vibez1/dev-log";
-import { createBrowserDataRpcClient, type BrowserDataClient } from "@vibez1/browser-data";
+import { createDevLogger } from "@vibestudio/dev-log";
+import { createBrowserDataRpcClient, type BrowserDataClient } from "@vibestudio/browser-data";
 import {
   canonicalizeBrowserHistoryUrl,
   type BrowserNavigationIntent,
-} from "@vibez1/shared/panelCommands";
+} from "@vibestudio/shared/panelCommands";
 import type { ServerClient } from "./serverClient.js";
 
 const log = createDevLogger("BrowserHistoryRecorder");

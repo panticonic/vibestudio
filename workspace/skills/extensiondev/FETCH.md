@@ -5,7 +5,7 @@ An extension can additionally expose an HTTP surface by adding a default export 
 ## Minimum example
 
 ```ts
-import type { ExtensionContext, ExtensionFetchContext } from "@vibez1/extension";
+import type { ExtensionContext, ExtensionFetchContext } from "@vibestudio/extension";
 
 let activated: ExtensionContext;
 

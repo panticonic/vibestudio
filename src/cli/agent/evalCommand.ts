@@ -1,5 +1,5 @@
 /**
- * `vibez1 eval ...` — run TypeScript/JavaScript server-side in the CLI
+ * `vibestudio eval ...` — run TypeScript/JavaScript server-side in the CLI
  * session's EvalDO, via the `eval` service. The paired shell credential is the
  * transport identity, but the eval owner is the selected agent session entity
  * so persistent REPL scope + fs/git/vcs are bound to that session's context.
@@ -8,7 +8,7 @@
  * a context-relative file the server reads itself.
  */
 import * as fs from "node:fs";
-import { evalMethods } from "@vibez1/shared/serviceSchemas/eval";
+import { evalMethods } from "@vibestudio/shared/serviceSchemas/eval";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import {
@@ -216,7 +216,7 @@ export const evalCommands: CliCommand[] = [
     group: "eval",
     name: "run",
     summary: "Run TS/JS server-side in the session's eval sandbox",
-    usage: "vibez1 eval run [FILE | -e CODE | - | --path P] [--timeout MS] [--fresh-scope]",
+    usage: "vibestudio eval run [FILE | -e CODE | - | --path P] [--timeout MS] [--fresh-scope]",
     flags: [
       { name: "code", short: "e", takesValue: true, description: "Inline code" },
       { name: "path", takesValue: true, description: "Context-relative file the server runs" },
@@ -245,7 +245,7 @@ export const evalCommands: CliCommand[] = [
     group: "eval",
     name: "repl-reset",
     summary: "Reset the persistent REPL scope for a session",
-    usage: "vibez1 eval repl-reset [--session NAME]",
+    usage: "vibestudio eval repl-reset [--session NAME]",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: evalReplReset,
   },

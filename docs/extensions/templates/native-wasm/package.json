@@ -6,7 +6,7 @@
   "dependencies": {
     "@silvia-odwyer/photon-node": "^0.3.4"
   },
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Native or WASM Example",
     "entry": "index.ts",
     "sourcemap": true,

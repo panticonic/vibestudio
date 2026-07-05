@@ -9,7 +9,7 @@ decision.
 Use a UI instead of plain text when the task has:
 
 - Multiple steps the user can complete independently.
-- Links or resources the user may open inside Vibez1 or externally.
+- Links or resources the user may open inside Vibestudio or externally.
 - Progress, status, or retry states.
 - Choices where a card, table, segmented control, or checklist is clearer than
   prose.
@@ -21,7 +21,7 @@ status that should remain pinned above chat history in the current panel, use
 `load_action_bar` with a TSX file instead.
 
 You can send raw TSX with `code`, or put the component in a context-relative
-file and call `inline_ui({ path: ".vibez1/ui/review.tsx", props: {...} })`.
+file and call `inline_ui({ path: ".vibestudio/ui/review.tsx", props: {...} })`.
 File-loaded components support static relative imports from that file and infer
 bare package imports from the nearest `package.json` when possible. Use
 `imports` for explicit package versions. Package-local aliases from

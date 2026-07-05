@@ -81,7 +81,7 @@ function makeRegistry(env: Partial<Env> = {}): { registry: RelayRegistry; state:
   const state = new FakeState();
   const registry = new RelayRegistry(
     state as unknown as DurableObjectState,
-    { VIBEZ1_RELAY_SIGNING_SECRET: "relay-secret", ...env } as Env,
+    { VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-secret", ...env } as Env,
   );
   return { registry, state };
 }
@@ -94,7 +94,7 @@ function makeRegistry(env: Partial<Env> = {}): { registry: RelayRegistry; state:
 function freshInstanceOver(state: FakeState, env: Partial<Env> = {}): RelayRegistry {
   return new RelayRegistry(
     state as unknown as DurableObjectState,
-    { VIBEZ1_RELAY_SIGNING_SECRET: "relay-secret", ...env } as Env,
+    { VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-secret", ...env } as Env,
   );
 }
 
@@ -185,13 +185,13 @@ describe("RelayRegistry — webhook profile", () => {
   });
 
   it("fails closed when the relay signing secret is missing", async () => {
-    const { registry } = makeRegistry({ VIBEZ1_RELAY_SIGNING_SECRET: undefined });
+    const { registry } = makeRegistry({ VIBESTUDIO_RELAY_SIGNING_SECRET: undefined });
     const ws = new FakeWebSocket();
     registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
     await send(registry, ws, { t: "register-webhook", subscriptionId: "sub-3" });
     const resp = await ingress(registry, "sub-3", "{}");
     expect(resp.status).toBe(500);
-    expect(await resp.json()).toMatchObject({ error: "VIBEZ1_RELAY_SIGNING_SECRET is not configured" });
+    expect(await resp.json()).toMatchObject({ error: "VIBESTUDIO_RELAY_SIGNING_SECRET is not configured" });
   });
 });
 
@@ -293,7 +293,7 @@ describe("RelayRegistry — OAuth profile (state-keyed handoff, one path per pla
     // Reaching the landing for a mobile tx means the deep-link failed: fail loud,
     // never silently forward down the desktop path.
     expect(resp.status).toBe(200);
-    expect(await resp.text()).toContain("Vibez1 app");
+    expect(await resp.text()).toContain("Vibestudio app");
     expect(ws.frames().some((f) => f.t === "oauth-callback")).toBe(false);
   });
 

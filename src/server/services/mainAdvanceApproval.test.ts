@@ -3,10 +3,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { UnitBatchEntry } from "@vibez1/shared/approvals";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import { unitChangeSessionGrantKey, type UnitMetaChangeApprovalProvider } from "@vibez1/unit-host";
-import { EMPTY_STATE_HASH } from "@vibez1/shared/contentTree/worktreeHash";
+import type { UnitBatchEntry } from "@vibestudio/shared/approvals";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import {
+  unitChangeSessionGrantKey,
+  type UnitMetaChangeApprovalProvider,
+} from "@vibestudio/unit-host";
+import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { mirrorWorktreeTree, putBytes } from "./blobstoreService.js";
@@ -26,7 +29,7 @@ afterEach(() => {
 });
 
 function tempStatePath(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-main-advance-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-main-advance-"));
   roots.push(root);
   return root;
 }
@@ -61,7 +64,7 @@ function candidate(
   return {
     caller: panelCaller(),
     repoPath: "meta",
-    changedPaths: ["meta/vibez1.yml"],
+    changedPaths: ["meta/vibestudio.yml"],
     stateHash: "state:next",
     sourceHead: "ctx:ctx-1",
     ...overrides,
@@ -123,7 +126,7 @@ describe("createMainAdvanceApprovalGate", () => {
         trigger: "meta-change",
         configWrite: {
           repoPath: "meta",
-          summary: "meta/vibez1.yml changed",
+          summary: "meta/vibestudio.yml changed",
         },
         units: [unit],
       })
@@ -237,14 +240,16 @@ describe("createMainAdvanceApprovalGate", () => {
       ],
     });
 
-    await gate.approve(candidate({ changedPaths: ["meta/vibez1.yml", "apps/shell/index.tsx"] }));
+    await gate.approve(
+      candidate({ changedPaths: ["meta/vibestudio.yml", "apps/shell/index.tsx"] })
+    );
 
     expect(deps.approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "unit-batch",
         configWrite: {
           repoPath: "meta",
-          summary: "meta/vibez1.yml changed",
+          summary: "meta/vibestudio.yml changed",
         },
       })
     );

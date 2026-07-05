@@ -1,4 +1,4 @@
-import { redactToken } from "@vibez1/shared/redact";
+import { redactToken } from "@vibestudio/shared/redact";
 
 /**
  * CLI output + exit-code conventions.

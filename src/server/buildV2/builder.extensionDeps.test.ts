@@ -29,7 +29,7 @@ describe("extension dependency diagnostics", () => {
   let nodeModules: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extension-deps-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-deps-"));
     nodeModules = path.join(root, "node_modules");
     fs.mkdirSync(nodeModules, { recursive: true });
   });

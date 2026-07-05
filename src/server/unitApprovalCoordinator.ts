@@ -1,5 +1,5 @@
-import type { UnitApprovalCoordinator, UnitApprovalDecision } from "@vibez1/unit-host";
-import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibez1/shared/approvals";
+import type { UnitApprovalCoordinator, UnitApprovalDecision } from "@vibestudio/unit-host";
+import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
 
 export interface UnitApprovalQueueLike {
   request(req: {

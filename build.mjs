@@ -34,7 +34,7 @@ const serverElectronConfig = {
     "esbuild",
     "@npmcli/arborist",
     "node-datachannel",
-    "@vibez1/extension-host",
+    "@vibestudio/extension-host",
     "vitest",
     "vitest/node",
     "vite",
@@ -117,7 +117,7 @@ const serverConfig = {
   external: [
     "esbuild",
     "@npmcli/arborist",
-    "@vibez1/extension-host",
+    "@vibestudio/extension-host",
     "vitest",
     "vitest/node",
     "vite",
@@ -418,9 +418,9 @@ function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
   copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
   fs.mkdirSync("dist/baked-app", { recursive: true });
-  // Bundled agent skill consumed by `vibez1 agent skill install|print`
+  // Bundled agent skill consumed by `vibestudio agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
-  copyDirectoryRecursive("skills/vibez1-agent", "dist/cli/skills/vibez1-agent");
+  copyDirectoryRecursive("skills/vibestudio-agent", "dist/cli/skills/vibestudio-agent");
 }
 
 function copyDirectoryRecursive(srcDir, destDir) {
@@ -436,15 +436,15 @@ function copyDirectoryRecursive(srcDir, destDir) {
   }
 }
 
-async function buildvibez1Packages() {
-  console.log("Building @vibez1/* infrastructure packages...");
+async function buildVibestudioPackages() {
+  console.log("Building @vibestudio/* infrastructure packages...");
   try {
-    execSync('pnpm --filter "!@vibez1/headless-host" --filter "@vibez1/*" build', {
+    execSync('pnpm --filter "!@vibestudio/headless-host" --filter "@vibestudio/*" build', {
       stdio: "inherit",
     });
-    console.log("@vibez1/* packages built successfully!");
+    console.log("@vibestudio/* packages built successfully!");
   } catch (error) {
-    console.error("Failed to build @vibez1/* packages:", error);
+    console.error("Failed to build @vibestudio/* packages:", error);
     throw error;
   }
 }
@@ -463,14 +463,14 @@ async function buildWorkspacePackages() {
 }
 
 async function buildHeadlessHost() {
-  console.log("Building @vibez1/headless-host...");
+  console.log("Building @vibestudio/headless-host...");
   try {
-    execSync('pnpm --filter "@vibez1/headless-host" build', { stdio: "inherit" });
+    execSync('pnpm --filter "@vibestudio/headless-host" build', { stdio: "inherit" });
     fs.rmSync("dist/headless-host", { recursive: true, force: true });
     copyDirectoryRecursive("apps/headless-host/dist", "dist/headless-host");
-    console.log("@vibez1/headless-host built successfully!");
+    console.log("@vibestudio/headless-host built successfully!");
   } catch (error) {
-    console.error("Failed to build @vibez1/headless-host:", error);
+    console.error("Failed to build @vibestudio/headless-host:", error);
     throw error;
   }
 }
@@ -486,7 +486,7 @@ async function checkBuildArtifacts() {
 }
 
 /**
- * Build web workers declared by dependencies via vibez1.workers in package.json.
+ * Build web workers declared by dependencies via vibestudio.workers in package.json.
  * Scans node_modules for worker declarations and bundles them.
  */
 async function buildDependencyWorkers() {
@@ -550,17 +550,17 @@ async function build() {
     fs.mkdirSync("dist", { recursive: true });
 
     // ========================================================================
-    // STEP 0.75: Build @vibez1/* infrastructure packages
+    // STEP 0.75: Build @vibestudio/* infrastructure packages
     // ========================================================================
-    // Must be built before @workspace/* packages since they depend on @vibez1/*
+    // Must be built before @workspace/* packages since they depend on @vibestudio/*
     // Dependencies: none
-    await buildvibez1Packages();
+    await buildVibestudioPackages();
 
     // ========================================================================
     // STEP 1: Build @workspace/* packages
     // ========================================================================
     // These must be built as they are consumed by later steps
-    // Dependencies: buildvibez1Packages
+    // Dependencies: buildVibestudioPackages
     await buildWorkspacePackages();
 
     // ========================================================================
@@ -568,7 +568,7 @@ async function build() {
     // ========================================================================
     // The server auto-spawns this bundle as a child process when no desktop
     // CDP host is connected; copy it under dist/ so packaged CLIs can find it.
-    // Dependencies: buildvibez1Packages, buildWorkspacePackages
+    // Dependencies: buildVibestudioPackages, buildWorkspacePackages
     await buildHeadlessHost();
 
     // ========================================================================
@@ -595,7 +595,7 @@ async function build() {
     // lookup if the define is absent (test/dev paths run from source).
     const internalDoBundleContent = fs.readFileSync("dist/internal-do.bundle.mjs", "utf8");
     const internalDoBundleDefine = {
-      "globalThis.__VIBEZ1_INTERNAL_DO_BUNDLE__": JSON.stringify(internalDoBundleContent),
+      "globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__": JSON.stringify(internalDoBundleContent),
     };
     const serverElectronWithBundle = {
       ...serverElectronConfig,

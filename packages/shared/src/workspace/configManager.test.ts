@@ -11,7 +11,7 @@ const mockFs = vi.mocked(fs);
 const mockYAML = vi.mocked(YAML);
 
 describe("createWorkspaceConfigManager", () => {
-  const configPath = "/fake/workspace/source/vibez1.yml";
+  const configPath = "/fake/workspace/source/vibestudio.yml";
   let config: WorkspaceConfig;
 
   beforeEach(() => {

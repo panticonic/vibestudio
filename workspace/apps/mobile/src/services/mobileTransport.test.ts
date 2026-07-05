@@ -1,15 +1,15 @@
-import type { RpcClient, RpcConnectionStatus, RpcEventContext } from "@vibez1/rpc";
-import type { RecoveryKind } from "@vibez1/rpc/protocol/recoveryCoordinator";
-import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
+import type { RpcClient, RpcConnectionStatus, RpcEventContext } from "@vibestudio/rpc";
+import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
+import type { WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import {
   loadShellCredential,
   reconnectViaWebRtc,
   type StoredShellCredential,
   type WebRtcConnection,
-} from "@vibez1/mobile-webrtc";
+} from "@vibestudio/mobile-webrtc";
 import { MobileRpcClient } from "./mobileTransport";
 
-jest.mock("@vibez1/mobile-webrtc", () => ({
+jest.mock("@vibestudio/mobile-webrtc", () => ({
   loadShellCredential: jest.fn(),
   reconnectViaWebRtc: jest.fn(),
 }));

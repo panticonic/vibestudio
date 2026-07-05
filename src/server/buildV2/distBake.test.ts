@@ -140,12 +140,12 @@ describe("app dist bake", () => {
           target: "react-native",
           platform: "android",
           integrity: "sha256-mobile",
-          rnHostAbi: "rn-0.79-vibez1-1",
+          rnHostAbi: "rn-0.79-vibestudio-1",
           provider: {
             name: "@workspace-extensions/react-native",
             activeEv: "ev-provider",
             activeBuildKey: "provider-build",
-            contractVersion: "vibez1-build-provider-v1",
+            contractVersion: "vibestudio-build-provider-v1",
           },
         },
       },
@@ -163,7 +163,7 @@ describe("app dist bake", () => {
     });
 
     expect(createAppDistBakeManifest({ entry: rnEntry, build: rnBuild }).build.rnHostAbi).toBe(
-      "rn-0.79-vibez1-1"
+      "rn-0.79-vibestudio-1"
     );
 
     expect(() =>
@@ -178,7 +178,7 @@ describe("app dist bake", () => {
   });
 
   it("writes a manifest and artifact tree atomically", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-dist-bake-"));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-dist-bake-"));
     const outDir = path.join(root, "baked-app");
     try {
       writeAppDistBake({

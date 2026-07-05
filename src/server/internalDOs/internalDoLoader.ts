@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 
-export const INTERNAL_DO_SOURCE = "vibez1/internal";
+export const INTERNAL_DO_SOURCE = "vibestudio/internal";
 
 export const INTERNAL_DO_CLASSES = [
   "WebhookStoreDO",
@@ -18,7 +18,7 @@ export interface InternalDOBundle {
   buildKey: string;
 }
 
-declare const globalThis: { __VIBEZ1_INTERNAL_DO_BUNDLE__?: string };
+declare const globalThis: { __VIBESTUDIO_INTERNAL_DO_BUNDLE__?: string };
 
 let cached: InternalDOBundle | null = null;
 
@@ -37,8 +37,8 @@ function loadBundle(): InternalDOBundle {
   // constant via esbuild `define`, eliminating any runtime file lookup. See
   // `build.mjs` (the `internalDoBundleDefine` block).
   const inlined =
-    typeof globalThis.__VIBEZ1_INTERNAL_DO_BUNDLE__ === "string"
-      ? globalThis.__VIBEZ1_INTERNAL_DO_BUNDLE__
+    typeof globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__ === "string"
+      ? globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__
       : undefined;
   if (inlined && inlined.length > 0) {
     return {
@@ -51,7 +51,7 @@ function loadBundle(): InternalDOBundle {
   // Used by Vitest and any non-bundled execution. `pnpm build` produces the
   // bundle at `dist/internal-do.bundle.mjs`.
   const runtimeDir = typeof __dirname === "string" ? __dirname : process.cwd();
-  const appRoot = process.env["VIBEZ1_APP_ROOT"] ?? process.cwd();
+  const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
   const candidates = [
     path.join(runtimeDir, "internal-do.bundle.mjs"),
     path.resolve(appRoot, "dist/internal-do.bundle.mjs"),

@@ -1,4 +1,4 @@
-// Vibez1 Android root build file
+// Vibestudio Android root build file
 
 buildscript {
     ext {

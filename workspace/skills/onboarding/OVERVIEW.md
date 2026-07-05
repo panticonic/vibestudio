@@ -1,6 +1,6 @@
-# What is Vibez1?
+# What is Vibestudio?
 
-Vibez1 is a desktop application (Electron) that gives you a personal, AI-powered workspace organized as horizontally stacked panels. Each panel is its own TypeScript app running in an isolated webview, and an AI agent (the chat panel) can create, edit, and launch new panels on the fly.
+Vibestudio is a desktop application (Electron) that gives you a personal, AI-powered workspace organized as horizontally stacked panels. Each panel is its own TypeScript app running in an isolated webview, and an AI agent (the chat panel) can create, edit, and launch new panels on the fly.
 
 ## Key Concepts
 
@@ -31,7 +31,7 @@ A workspace is a named collection of panels, packages, workers, and configuratio
 - Switch between workspaces (triggers app relaunch)
 - Configure which panels open on first launch (`initPanels`)
 
-Workspace config lives in `meta/vibez1.yml`. Each workspace gets its own GAD VCS state graph.
+Workspace config lives in `meta/vibestudio.yml`. Each workspace gets its own GAD VCS state graph.
 
 ### Contexts
 

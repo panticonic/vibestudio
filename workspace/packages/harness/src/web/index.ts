@@ -1,5 +1,5 @@
 /**
- * Vibez1 Web Tools Extension
+ * Vibestudio Web Tools Extension
  *
  * Registers three Pi tools:
  *   - `web_search` — Discovery via DuckDuckGo (zero-config) or an

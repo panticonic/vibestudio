@@ -1,11 +1,11 @@
 import { app, Notification } from "electron";
 
 const REGISTRY = "https://registry.npmjs.org";
-const CHANNEL_ENV = "VIBEZ1_NPM_CHANNEL";
+const CHANNEL_ENV = "VIBESTUDIO_NPM_CHANNEL";
 
 /**
- * npm-channel update notice. The launcher (`scripts/vibez1-launcher.mjs`) sets
- * `VIBEZ1_NPM_CHANNEL` to the installed package name (e.g. "@vibez1/app")
+ * npm-channel update notice. The launcher (`scripts/vibestudio-launcher.mjs`) sets
+ * `VIBESTUDIO_NPM_CHANNEL` to the installed package name (e.g. "@vibestudio/app")
  * when it launches the GUI from a global npm install. We then check the registry
  * for a newer version and surface a notification with the exact upgrade command.
  *
@@ -13,7 +13,7 @@ const CHANNEL_ENV = "VIBEZ1_NPM_CHANNEL";
  * fail on permissions and corrupts a directory Electron is executing from — and
  * may have been launched via npx/pnpm rather than `npm i -g`). The packaged
  * electron-builder channel uses electron-updater instead; dev source checkouts
- * have no `VIBEZ1_NPM_CHANNEL` and skip this entirely.
+ * have no `VIBESTUDIO_NPM_CHANNEL` and skip this entirely.
  */
 export async function maybeNotifyNpmUpdate(): Promise<void> {
   const pkg = process.env[CHANNEL_ENV];
@@ -32,7 +32,7 @@ export async function maybeNotifyNpmUpdate(): Promise<void> {
     console.log(`[npm-update] ${pkg} ${current} → ${latest} available: ${command}`);
     if (Notification.isSupported()) {
       new Notification({
-        title: `Vibez1 ${latest} is available`,
+        title: `Vibestudio ${latest} is available`,
         body: `You're on ${current}. Update with:\n${command}`,
       }).show();
     }

@@ -676,7 +676,7 @@ const contextScopeArg = z
 // commitAncestors, editsByActor, editsByTurn, editsByInvocation, log,
 // blameLines — and the §6/§7 provenance surface — provenanceForFile,
 // provenanceForSession, provenanceForClaim — are USERLAND-dispatched: they run
-// in the gad-store DO behind the `vcs` manifest service (vibez1.vcs.v1) and are
+// in the gad-store DO behind the `vcs` manifest service (vibestudio.vcs.v1) and are
 // called through `createDurableObjectServiceClient`, not this host service
 // table. Their row/result schemas above (VcsEditOpRow, VcsBlameLine,
 // VcsCommitAncestor, VcsLogEntry, VcsProvItem/VcsProvenanceForFileResult) remain

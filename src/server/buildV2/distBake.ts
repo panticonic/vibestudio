@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { normalizeUnitRepoPath } from "@vibez1/unit-host";
+import { normalizeUnitRepoPath } from "@vibestudio/unit-host";
 import type { BuildArtifactManifestEntry, BuildMetadata, BuildResult } from "./buildStore.js";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 
 export const APP_DIST_BAKE_VERSION = 1;
 

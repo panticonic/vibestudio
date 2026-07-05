@@ -8,7 +8,7 @@
  * envelopeIds), and crash recovery are the DO's; nothing here is stateful.
  */
 
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import type { MessageBlockInput, ParticipantRef } from "@workspace/agentic-protocol";
 
 export interface DORef {
@@ -50,7 +50,7 @@ export interface ForkResult {
   seededMessageId?: string;
 }
 
-const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
+const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 
 /** Resolved durable-object channel service (the fields we address). */
 interface ResolvedChannelService extends DORef {

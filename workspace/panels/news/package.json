@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "title": "News",
     "entry": "index.tsx",
     "exposeModules": [
@@ -17,7 +17,7 @@
     ]
   },
   "dependencies": {
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@workspace/agentic-core": "workspace:*",

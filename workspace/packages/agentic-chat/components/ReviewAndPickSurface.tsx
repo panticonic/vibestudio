@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Box, Button, Callout, Dialog, Flex, Text } from "@radix-ui/themes";
 import { DiffViewer } from "@workspace/ui";
 import type { DiffChangedFile, DiffContentFetcher, DiffReviewEntry } from "@workspace/ui";
-import { createVcsUserlandClient } from "@vibez1/shared/userlandServiceRpc";
+import { createVcsUserlandClient } from "@vibestudio/shared/userlandServiceRpc";
 import type { ReviewTarget } from "../types";
 
 /**

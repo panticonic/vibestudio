@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "entry": "index.ts",
     "durable": {
       "classes": [{ "className": "NewsAgentWorker" }]

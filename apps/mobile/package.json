@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/mobile",
+  "name": "@vibestudio/mobile",
   "version": "0.1.0",
   "private": true,
   "//dependencies": "react-native-screens ~4.10: v4.11+ requires RN >=0.82. react-native-get-random-values ~1.11: v2.0+ requires RN >=0.81. react-native-webview 13.16.1: 13.17.0 makes JSX props resolve to never under our TS/React setup. Revisit when upgrading react-native.",
@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@babel/runtime": "^7.29.2",
-    "@vibez1/browser-data": "workspace:*",
-    "@vibez1/mobile-webrtc": "workspace:*",
-    "@vibez1/rpc": "workspace:*",
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/browser-data": "workspace:*",
+    "@vibestudio/mobile-webrtc": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@notifee/react-native": "^9.1.8",
     "@react-native-community/netinfo": "^11.4.1",
     "@react-native-async-storage/async-storage": "^2.2.0",

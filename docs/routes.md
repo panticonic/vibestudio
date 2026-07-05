@@ -8,7 +8,7 @@ pages) publish one without opening its own port.
 The primitive has two sub-namespaces:
 
 - **`/_r/w/<source>/<path>`** — worker-owned routes declared at the workspace
-  level in `workspace/meta/vibez1.yml`'s top-level `routes:` section.
+  level in `workspace/meta/vibestudio.yml`'s top-level `routes:` section.
 - **`/_r/s/<serviceName>/<path>`** — server-side service routes, registered
   in-process by server-side service factories.
 
@@ -17,14 +17,14 @@ or an in-process handler) receives a URL whose path begins after it.
 
 ## Worker routes
 
-Routes are declared at the workspace level in `workspace/meta/vibez1.yml`,
+Routes are declared at the workspace level in `workspace/meta/vibestudio.yml`,
 which has three top-level sections: `singletonObjects:`, `services:`, and
 `routes:`. The package's own `package.json` manifest only declares the
 worker's `durable.classes`; everything route- and service-shaped lives in
-`vibez1.yml`.
+`vibestudio.yml`.
 
 ```yaml
-# workspace/meta/vibez1.yml
+# workspace/meta/vibestudio.yml
 singletonObjects:
   - source: workers/oauth-receiver
     className: OauthFlow
@@ -75,7 +75,7 @@ Regular-worker routes disappear when the canonical instance is destroyed.
 ## Userland Services
 
 The workspace can also advertise higher-level services in the top-level
-`services:` section of `workspace/meta/vibez1.yml`. This is the stable
+`services:` section of `workspace/meta/vibestudio.yml`. This is the stable
 discovery layer for userland capabilities: panels, workers, and server
 services should resolve by service `name` or protocol instead of hardcoding
 worker source paths, DO class names, or route URLs.
@@ -83,7 +83,7 @@ worker source paths, DO class names, or route URLs.
 Services can be backed by a Durable Object or by a stateless worker route:
 
 ```yaml
-# workspace/meta/vibez1.yml
+# workspace/meta/vibestudio.yml
 singletonObjects:
   # Only declare a row here if the service should resolve to a single,
   # stable DO instance by default. Omit it to make the service a factory.
@@ -166,7 +166,7 @@ Bootstrap wires both through `serviceWithHttpRoutes(...)` in
 `container.registerManaged(...)`. That helper registers the RPC `definition`
 on the dispatcher (via the container lifecycle) and the HTTP routes on the
 `RouteRegistry` (via `registerHttpServiceRoutes(...)`) — two distinct
-mechanisms. Route concerns stay server-local — `@vibez1/shared` has no
+mechanisms. Route concerns stay server-local — `@vibestudio/shared` has no
 knowledge of routes.
 
 Handlers receive the raw Node `IncomingMessage` / `ServerResponse`. For
@@ -202,8 +202,8 @@ WebRTC (paired by QR), and the gateway binds loopback only. Third-party inbound
 that genuinely needs a public HTTPS URL (OAuth provider redirects, webhook
 advertisements) goes through the **callback relay** (`apps/webhook-relay`, plan
 §7), which backhauls to this server. OAuth redirect URIs are built from
-`VIBEZ1_RELAY_OAUTH_BASE_URL` (the relay origin). There is no `--public-url` /
-`VIBEZ1_PUBLIC_URL` / `publicUrl.ts` — those were decommissioned with
+`VIBESTUDIO_RELAY_OAUTH_BASE_URL` (the relay origin). There is no `--public-url` /
+`VIBESTUDIO_PUBLIC_URL` / `publicUrl.ts` — those were decommissioned with
 remote-mode public ingress.
 
 ## URL rewrite detail (for debugging)

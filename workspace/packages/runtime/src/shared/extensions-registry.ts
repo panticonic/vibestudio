@@ -1,13 +1,13 @@
-// @vibez1-extension-registry-sink
-// Workspace-owned registry sink — the Vibez1 host rewrites everything below the
+// @vibestudio-extension-registry-sink
+// Workspace-owned registry sink — the Vibestudio host rewrites everything below the
 // directive line whenever the workspace extension set changes (generator:
-// @vibez1/shared/workspace/extensionRegistry). Keep the directive to stay
+// @vibestudio/shared/workspace/extensionRegistry). Keep the directive to stay
 // subscribed; remove it (or delete the file) to opt out; move the file to
 // relocate the registry. The committed contents are the fallback used when the
 // host has not (re)generated the registry.
 //
 // Type-only re-exports that pull each workspace extension's module into the
-// type-check program so its `declare module "@vibez1/extension"` registry
+// type-check program so its `declare module "@vibestudio/extension"` registry
 // augmentation is active. Re-exported from the runtime SDK's extensions
 // surface, so any panel that imports `@workspace/runtime` can type-check
 // `extensions.use("...")` against the full registry — the same set the

@@ -1,6 +1,6 @@
-import type { RpcClient, RpcEventContext } from "@vibez1/rpc";
+import type { RpcClient, RpcEventContext } from "@vibestudio/rpc";
 import type { PanelHandle as CorePanelHandle, Rpc } from "../core/index.js";
-import type { OpenExternalOptions, OpenExternalResult } from "@vibez1/shared/externalOpen";
+import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import {
   createPanelRuntime,
   type OpenPanelOptions,
@@ -21,7 +21,7 @@ type PanelRuntimeRpc = Pick<RpcClient, "call" | "emit" | "on">;
 
 let _rpc: PanelRuntimeRpc | null = null;
 let _runtime: PanelRuntimeApi | null = null;
-const shell = (globalThis as any).__vibez1Shell;
+const shell = (globalThis as any).__vibestudioShell;
 
 export function _initPanelHandleBridge(
   rpc: PanelRuntimeRpc,

@@ -1,5 +1,5 @@
 /**
- * Virtual type definitions for Vibez1 type checking.
+ * Virtual type definitions for Vibestudio type checking.
  *
  * These definitions are loaded by the TypeCheckService to provide accurate
  * type information for shimmed APIs (fs, globals) without requiring external
@@ -234,28 +234,28 @@ export function toNamespacedPath(p: string): string;
 `;
 
 /**
- * Global type definitions for Vibez1 panels/workers.
+ * Global type definitions for Vibestudio panels/workers.
  */
 export const GLOBAL_TYPE_DEFINITIONS = `
 /**
- * Vibez1 global module map for shared dependencies.
+ * Vibestudio global module map for shared dependencies.
  */
-declare const __vibez1ModuleMap__: Record<string, unknown>;
+declare const __vibestudioModuleMap__: Record<string, unknown>;
 
 /**
- * Vibez1 require function for pre-bundled modules.
+ * Vibestudio require function for pre-bundled modules.
  */
-declare function __vibez1Require__(specifier: string): unknown;
+declare function __vibestudioRequire__(specifier: string): unknown;
 
 /**
- * Vibez1 async require for CDN-loaded modules.
+ * Vibestudio async require for CDN-loaded modules.
  */
-declare function __vibez1RequireAsync__(specifier: string): Promise<unknown>;
+declare function __vibestudioRequireAsync__(specifier: string): Promise<unknown>;
 
 /**
  * Preload multiple modules from CDN.
  */
-declare function __vibez1PreloadModules__(specifiers: string[]): Promise<void>;
+declare function __vibestudioPreloadModules__(specifiers: string[]): Promise<void>;
 
 /**
  * Async tracking context for promise management.
@@ -265,9 +265,9 @@ interface AsyncTrackingContext {
 }
 
 /**
- * Vibez1 async tracking API.
+ * Vibestudio async tracking API.
  */
-declare const __vibez1AsyncTracking__: {
+declare const __vibestudioAsyncTracking__: {
   start(): AsyncTrackingContext;
   enter(ctx: AsyncTrackingContext): void;
   exit(): void;

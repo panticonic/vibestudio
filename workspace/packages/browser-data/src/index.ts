@@ -30,13 +30,13 @@ export type {
   CookieExportFormat,
   HistoryVisitSource,
   ImportPhase,
-} from "@vibez1/browser-data";
+} from "@vibestudio/browser-data";
 
 export {
   BrowserDataError,
   resolveProfilePath,
-} from "@vibez1/browser-data";
-export type { BrowserDataErrorCode } from "@vibez1/browser-data";
+} from "@vibestudio/browser-data";
+export type { BrowserDataErrorCode } from "@vibestudio/browser-data";
 
 export { detectBrowsers } from "./detection/index.js";
 export { getReader } from "./readers/index.js";

@@ -1,7 +1,7 @@
 {
-  "name": "@vibez1/types",
+  "name": "@vibestudio/types",
   "version": "0.1.0",
-  "description": "Shared type definitions for Vibez1",
+  "description": "Shared type definitions for Vibestudio",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

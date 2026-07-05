@@ -1,4 +1,4 @@
-import type { AuthenticatedCaller, RpcClient } from "@vibez1/rpc";
+import type { AuthenticatedCaller, RpcClient } from "@vibestudio/rpc";
 import { HOST_METHODS, type TerminalFrame } from "@workspace/terminal-host-protocol";
 import type { SessionManager } from "./SessionManager.js";
 

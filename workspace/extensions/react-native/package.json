@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "displayName": "React Native Build Provider",
     "entry": "index.ts",
     "sourcemap": true,
@@ -17,6 +17,6 @@
     }
   },
   "dependencies": {
-    "@vibez1/shared": "workspace:*"
+    "@vibestudio/shared": "workspace:*"
   }
 }

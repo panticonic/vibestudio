@@ -45,9 +45,9 @@ describe("createWorkerdClient", () => {
   });
 
   it("resolveService calls workers.resolveService", async () => {
-    await client.resolveService("vibez1.channel.v1", "chat-1");
+    await client.resolveService("vibestudio.channel.v1", "chat-1");
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.resolveService", [
-      "vibez1.channel.v1",
+      "vibestudio.channel.v1",
       "chat-1",
     ]);
   });

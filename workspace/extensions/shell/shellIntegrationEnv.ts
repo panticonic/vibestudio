@@ -82,7 +82,7 @@ function scriptPath(file: string): string {
 }
 
 async function createZdotdir(userZdotdir: string): Promise<string> {
-  const dir = path.join(tmpdir(), `vibez1-vscode-zdotdir-${randomUUID()}`);
+  const dir = path.join(tmpdir(), `vibestudio-vscode-zdotdir-${randomUUID()}`);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await writeFile(
     path.join(dir, ".zshenv"),

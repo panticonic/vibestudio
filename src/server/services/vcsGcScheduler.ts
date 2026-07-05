@@ -1,4 +1,4 @@
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 
 const log = createDevLogger("VcsGcScheduler");

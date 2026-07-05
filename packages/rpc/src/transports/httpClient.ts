@@ -84,7 +84,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
   // matching capture instead of POSTing it back to the server.
   const captures = new Map<string, (envelope: RpcEnvelope) => void>();
   const fetchImpl = config.fetch ?? rpcFetch;
-  const runtimeIdHeader = config.runtimeIdHeader ?? "X-vibez1-Runtime-Id";
+  const runtimeIdHeader = config.runtimeIdHeader ?? "X-vibestudio-Runtime-Id";
   const rpcUrl = `${config.serverUrl}/rpc`;
   const streamUrl = `${config.serverUrl}/rpc/stream`;
 

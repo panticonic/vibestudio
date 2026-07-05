@@ -18,15 +18,15 @@
  * redemption re-tags the invite's room onto the device record
  * (`onPairingRoomRedeemed` → `armRoom`), and clients connect through the ONE
  * shared bootstrap (`createPairedConnection`), parsing the invite's real
- * `vibez1://connect` (v=2) deep link.
+ * `vibestudio://connect` (v=2) deep link.
  *
  * Scenarios: invite → pairing → RPC dispatch; one-shot code replay rejection;
  * pairing → refresh-credential reconnect; TWO concurrent clients on two invite
  * rooms with independent sessions (plan §9.5); same-device reconnect on the
  * SAME room → deterministic takeover.
  *
- * Gated behind VIBEZ1_RUN_WEBRTC_E2E=1 (spawns wrangler dev + opens real UDP):
- *   VIBEZ1_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-system.e2e.test.ts
+ * Gated behind VIBESTUDIO_RUN_WEBRTC_E2E=1 (spawns wrangler dev + opens real UDP):
+ *   VIBESTUDIO_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-system.e2e.test.ts
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -36,16 +36,16 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { CallerKind, ServiceContext, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
-import { TokenManager } from "@vibez1/shared/tokenManager";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import { parseConnectLink } from "@vibez1/shared/connect";
-import { createRpcClient } from "@vibez1/rpc";
+import type { CallerKind, ServiceContext, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { parseConnectLink } from "@vibestudio/shared/connect";
+import { createRpcClient } from "@vibestudio/rpc";
 import {
   createPairedConnection,
   type DeviceCredential,
   type PairedConnection,
-} from "@vibez1/rpc/transports/pairedConnection";
+} from "@vibestudio/rpc/transports/pairedConnection";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { DeviceAuthStore } from "../src/server/services/deviceAuthStore.js";
 import { createPairingRedeemer } from "../src/server/services/authService.js";
@@ -54,7 +54,7 @@ import { startWebRtcIngress, type WebRtcIngress } from "../src/server/webrtcIngr
 import { createNodeDatachannelProvider } from "../src/main/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
 
-const RUN = process.env["VIBEZ1_RUN_WEBRTC_E2E"] === "1";
+const RUN = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SIGNAL_PORT = 8798;
 const SIG = `ws://127.0.0.1:${SIGNAL_PORT}`;
@@ -114,7 +114,7 @@ let clientSeq = 0;
 
 /**
  * Dial the invite's deep link the way every real platform does now: parse the
- * v=2 `vibez1://connect` link, then `createPairedConnection` (the ONE shared
+ * v=2 `vibestudio://connect` link, then `createPairedConnection` (the ONE shared
  * bootstrap — connect + main-session auth + close-on-failure).
  */
 async function dial(
@@ -165,7 +165,7 @@ async function rpcEcho(conn: PairedConnection, marker: string): Promise<void> {
 }
 
 describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingress pool + createPairedConnection)", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-rtc-sys-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rtc-sys-"));
   const cert = ensurePersistentCert({
     certificatePemFile: path.join(tmp, "server.pem"),
     keyPemFile: path.join(tmp, "server.key"),

@@ -1,10 +1,10 @@
 import type { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   ServiceError,
   type ServiceContext,
   type DeferredResult,
-} from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { withCapability } from "./capabilityPermission.js";
@@ -12,9 +12,9 @@ import {
   authorizeCorsSchema,
   corsApprovalMethods,
   type CorsApprovalResult,
-} from "@vibez1/shared/serviceSchemas/corsApproval";
+} from "@vibestudio/shared/serviceSchemas/corsApproval";
 
-export type { CorsApprovalResult } from "@vibez1/shared/serviceSchemas/corsApproval";
+export type { CorsApprovalResult } from "@vibestudio/shared/serviceSchemas/corsApproval";
 
 const SERVICE_NAME = "corsApproval";
 const CAPABILITY = "cors-response-read";

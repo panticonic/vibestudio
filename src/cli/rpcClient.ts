@@ -1,14 +1,14 @@
 import { AuthError } from "./output.js";
-import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibez1/shared/connect";
+import { serverAuthRouteUrl, serverRpcHttpUrl } from "@vibestudio/shared/connect";
 import {
   isWebRtcCredential,
   type CliHubCredential,
   type CliStoredPairing,
 } from "./credentialStore.js";
-import type { RpcStreamOptions } from "@vibez1/rpc";
+import type { RpcStreamOptions } from "@vibestudio/rpc";
 
 /**
- * HTTP RPC client for a paired Vibez1 server.
+ * HTTP RPC client for a paired Vibestudio server.
  *
  * Auth flow: the long-lived device credential (deviceId + refreshToken) is
  * exchanged at `/_r/s/auth/refresh-shell` for a short-lived shell token,
@@ -299,7 +299,7 @@ export class RpcClient {
             pairing: this.creds.pairing!,
             callerId: `shell:${this.creds.deviceId}`,
             getToken: () => `refresh:${this.creds.deviceId}:${this.creds.refreshToken}`,
-            clientLabel: "Vibez1 CLI",
+            clientLabel: "Vibestudio CLI",
             onPaired: () => undefined,
           });
           return client;

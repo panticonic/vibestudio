@@ -1,5 +1,5 @@
 /**
- * @vibez1/types - Shared type definitions for Vibez1.
+ * @vibestudio/types - Shared type definitions for Vibestudio.
  *
  * This is the canonical source for all types shared between the app (src/)
  * and workspace packages. Zero runtime dependencies.

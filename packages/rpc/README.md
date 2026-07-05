@@ -1,10 +1,10 @@
-# @vibez1/rpc
+# @vibestudio/rpc
 
-`@vibez1/rpc` is Vibez1's unified RPC SDK. It provides one client surface for in-process, WebSocket, HTTP, Electron IPC, worker, app, shell, extension, and server call paths.
+`@vibestudio/rpc` is Vibestudio's unified RPC SDK. It provides one client surface for in-process, WebSocket, HTTP, Electron IPC, worker, app, shell, extension, and server call paths.
 
 ```ts
-import { createRpcClient } from "@vibez1/rpc";
-import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
+import { createRpcClient } from "@vibestudio/rpc";
+import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 
 const rpc = createRpcClient({
   selfId: "panel:abc",
@@ -45,7 +45,7 @@ await rpc.peer("panel:other").emit("notes.changed", { id: "n1" });
 
 ## Transports
 
-Transport implementations live under `@vibez1/rpc/transports/*`:
+Transport implementations live under `@vibestudio/rpc/transports/*`:
 
 - `wsClientTransport` for authenticated WebSocket clients with reconnect/recovery.
 - `httpClientTransport` for HTTP RPC calls.
@@ -53,4 +53,4 @@ Transport implementations live under `@vibez1/rpc/transports/*`:
 - `inProcessTransport` / `createInProcessNetwork` for tests and local composition.
 - `composeTransports` for routing across multiple transports.
 
-Protocol helpers live under `@vibez1/rpc/protocol/*`.
+Protocol helpers live under `@vibestudio/rpc/protocol/*`.

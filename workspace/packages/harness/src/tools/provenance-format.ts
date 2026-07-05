@@ -10,7 +10,7 @@
  * (§7.1: the low-ranked tail is withheld but advertised).
  */
 
-import type { VcsProvItem } from "@vibez1/shared/serviceSchemas/vcs";
+import type { VcsProvItem } from "@vibestudio/shared/serviceSchemas/vcs";
 
 export interface ProvenanceBlockInput {
   /** Header label + drill handle target — the workspace-relative path, a

@@ -6,11 +6,11 @@
  */
 
 import { NativeModules } from "react-native";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 
 export class StoredCredentialsNeedRepairError extends Error {
   constructor(
-    message = "Stored mobile credentials were created by an older Vibez1 build and cannot be reused. Scan a new pairing QR code to reconnect."
+    message = "Stored mobile credentials were created by an older Vibestudio build and cannot be reused. Scan a new pairing QR code to reconnect."
   ) {
     super(message);
     this.name = "StoredCredentialsNeedRepairError";
@@ -92,7 +92,7 @@ export function isWorkspaceMobileHostCallerId(callerId: string, deviceId?: strin
   );
 }
 
-interface Vibez1MobileHostNative {
+interface VibestudioMobileHostNative {
   getCredentials(): Promise<Credentials | null>;
   clearCredentials(): Promise<void>;
   resetToNativeBootstrap(): Promise<ResetToNativeBootstrapResult>;
@@ -112,11 +112,11 @@ interface Vibez1MobileHostNative {
   ): Promise<ActivatePreparedAppBundleResult>;
 }
 
-function nativeHost(): Vibez1MobileHostNative {
-  const module = NativeModules["Vibez1MobileHost"] as Vibez1MobileHostNative | undefined;
+function nativeHost(): VibestudioMobileHostNative {
+  const module = NativeModules["VibestudioMobileHost"] as VibestudioMobileHostNative | undefined;
   if (!module) {
     throw new Error(
-      "Vibez1MobileHost native module is unavailable; mobile credentials cannot be handled in JS"
+      "VibestudioMobileHost native module is unavailable; mobile credentials cannot be handled in JS"
     );
   }
   return module;

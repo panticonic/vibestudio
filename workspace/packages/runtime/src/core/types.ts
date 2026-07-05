@@ -1,11 +1,11 @@
 /**
- * Core type definitions for Vibez1 runtime
+ * Core type definitions for Vibestudio runtime
  * Shared types for panels and workers
  */
 
 import type { ZodType } from "zod";
 import type * as Rpc from "./rpc.js";
-import type { PanelLifecycleResult } from "@vibez1/shared/types";
+import type { PanelLifecycleResult } from "@vibestudio/shared/types";
 
 // =============================================================================
 // Event Schema Types (zod-based validation)
@@ -354,7 +354,7 @@ export interface WorkspaceNode {
   /** True if this directory is a workspace unit root. */
   isUnit: boolean;
   /**
-   * If this is a launchable panel/worker (has vibez1 config).
+   * If this is a launchable panel/worker (has vibestudio config).
    * Note: We intentionally include entries even if some fields are missing
    * (e.g., no title) - better to show them in the UI and let panelBuilder
    * report the real error than to silently hide repos with incomplete configs.

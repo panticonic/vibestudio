@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
-} from "@vibez1/shared/workspace/singletonRegistry";
+} from "@vibestudio/shared/workspace/singletonRegistry";
 import { resolveUserlandService, resolveVcsStoreBinding } from "./userlandServices.js";
 
 function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
@@ -82,7 +82,7 @@ describe("resolveVcsStoreBinding — the vcs service IS the store declaration", 
       {
         source: "workers/gad-store",
         name: "vcs",
-        protocols: ["vibez1.vcs.v1"],
+        protocols: ["vibestudio.vcs.v1"],
         policy: { allowed: ["panel", "shell", "server", "worker", "extension"] },
         durableObject: { className: "GadWorkspaceDO" },
       },

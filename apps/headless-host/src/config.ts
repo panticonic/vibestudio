@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import type { CdpHostBridgeDiagnostic, CdpHostBridgeSocket } from "./hostBridge.js";
 
 export interface DeviceCredentialAuth {
@@ -87,11 +87,11 @@ export function resolveConfig(
   env = process.env
 ): HeadlessHostConfig {
   const serverUrl =
-    overrides.serverUrl ?? overrides.deviceCredential?.serverUrl ?? env["VIBEZ1_SERVER_URL"];
+    overrides.serverUrl ?? overrides.deviceCredential?.serverUrl ?? env["VIBESTUDIO_SERVER_URL"];
   if (!serverUrl) {
-    throw new Error("headless-host: serverUrl is required (--url or VIBEZ1_SERVER_URL)");
+    throw new Error("headless-host: serverUrl is required (--url or VIBESTUDIO_SERVER_URL)");
   }
-  const token = overrides.token ?? env["VIBEZ1_HEADLESS_TOKEN"];
+  const token = overrides.token ?? env["VIBESTUDIO_HEADLESS_TOKEN"];
   const auth: HeadlessHostConfig["auth"] = overrides.deviceCredential
     ? { kind: "device", ...overrides.deviceCredential }
     : token
@@ -104,7 +104,7 @@ export function resolveConfig(
             );
           })();
 
-  const idleExitEnv = env["VIBEZ1_HEADLESS_IDLE_EXIT_MS"];
+  const idleExitEnv = env["VIBESTUDIO_HEADLESS_IDLE_EXIT_MS"];
   return {
     serverUrl: serverUrl.replace(/\/$/, ""),
     auth,
@@ -113,10 +113,10 @@ export function resolveConfig(
     maxPanels: overrides.maxPanels ?? 8,
     idleUnloadMs: overrides.idleUnloadMs ?? 5 * 60_000,
     idleExitMs: overrides.idleExitMs ?? parseOptionalNonNegativeInt(idleExitEnv),
-    chromiumPath: overrides.chromiumPath ?? env["VIBEZ1_CHROMIUM_PATH"],
-    cacheDir: overrides.cacheDir ?? path.join(os.homedir(), ".cache", "vibez1", "chromium"),
+    chromiumPath: overrides.chromiumPath ?? env["VIBESTUDIO_CHROMIUM_PATH"],
+    cacheDir: overrides.cacheDir ?? path.join(os.homedir(), ".cache", "vibestudio", "chromium"),
     profileDir:
-      overrides.profileDir ?? path.join(os.homedir(), ".local", "state", "vibez1", "headless-host"),
+      overrides.profileDir ?? path.join(os.homedir(), ".local", "state", "vibestudio", "headless-host"),
     leanBrowser: overrides.leanBrowser ?? false,
     connectionFactory: overrides.connectionFactory,
     bridgeSocketFactory: overrides.bridgeSocketFactory,

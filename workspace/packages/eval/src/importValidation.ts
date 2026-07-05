@@ -11,7 +11,7 @@
  *     yields `undefined` silently, surfacing as a confusing error far away.
  */
 
-import { EVAL_AMBIENT_ONLY } from "@vibez1/shared/runtimeSurface.eval";
+import { EVAL_AMBIENT_ONLY } from "@vibestudio/shared/runtimeSurface.eval";
 
 /**
  * Eval globals that are injected ambiently, NOT exported by `@workspace/runtime`
@@ -21,7 +21,7 @@ import { EVAL_AMBIENT_ONLY } from "@vibez1/shared/runtimeSurface.eval";
 const PRE_INJECTED = new Set<string>(EVAL_AMBIENT_ONLY);
 const RUNTIME_SPECIFIER = "@workspace/runtime";
 /** Workspace-controlled namespaces with stable, statically-known named exports. */
-const WORKSPACE_NAMESPACE = /^@(?:workspace|workspace-skills|vibez1)\//;
+const WORKSPACE_NAMESPACE = /^@(?:workspace|workspace-skills|vibestudio)\//;
 
 export interface ParsedImport {
   specifier: string;

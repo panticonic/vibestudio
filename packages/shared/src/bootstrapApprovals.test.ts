@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PendingApproval, PendingUnitBatchApproval } from "@vibez1/shared/approvals";
+import type { PendingApproval, PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 
 import {
   filterBootstrapApprovals,

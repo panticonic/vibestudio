@@ -1,11 +1,11 @@
 import { session } from "electron";
-import { createDevLogger } from "@vibez1/dev-log";
-import type { BrowserDataClient, StoredCookie } from "@vibez1/browser-data";
-import type { ManagedService } from "@vibez1/shared/managedService";
-import { BROWSER_SESSION_PARTITION } from "@vibez1/shared/panelInterfaces";
-import type { EventService, Subscriber } from "@vibez1/shared/eventsService";
-import { browserDataBrokerPackageName } from "@vibez1/shared/workspace/configParser";
-import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import { createDevLogger } from "@vibestudio/dev-log";
+import type { BrowserDataClient, StoredCookie } from "@vibestudio/browser-data";
+import type { ManagedService } from "@vibestudio/shared/managedService";
+import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
+import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
+import { browserDataBrokerPackageName } from "@vibestudio/shared/workspace/configParser";
+import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import type { ServerClient } from "../serverClient.js";
 
 const log = createDevLogger("BrowserSessionSync");
@@ -52,7 +52,7 @@ export function createBrowserSessionSyncService(deps: {
     name: "browser-session-sync",
     async start() {
       // Browser-data import-complete is emitted by the manifest-declared
-      // broker extension (meta/vibez1.yml providers.browserData.extension).
+      // broker extension (meta/vibestudio.yml providers.browserData.extension).
       // Extension events are namespaced as `extensions:<name>::<event>` on the
       // wire. No broker declared ⇒ cookie session sync stays disabled.
       try {
@@ -73,7 +73,7 @@ export function createBrowserSessionSyncService(deps: {
       }
       if (!importEventName) {
         log.info(
-          "No browser-data broker declared (meta/vibez1.yml providers.browserData) — cookie session sync disabled"
+          "No browser-data broker declared (meta/vibestudio.yml providers.browserData) — cookie session sync disabled"
         );
         return { syncCookies };
       }

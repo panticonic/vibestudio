@@ -14,7 +14,7 @@ Do not add a package scope segment to the filesystem path. The path
 
 ## Package Manifest
 
-Each app is a normal package with a `vibez1.app` manifest in `package.json`:
+Each app is a normal package with a `vibestudio.app` manifest in `package.json`:
 
 ```json
 {
@@ -22,7 +22,7 @@ Each app is a normal package with a `vibez1.app` manifest in `package.json`:
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Foo",
     "app": {
       "target": "electron",
@@ -36,18 +36,18 @@ Each app is a normal package with a `vibez1.app` manifest in `package.json`:
 Fields:
 
 - `name`: stable app principal identity. Must use `@workspace-apps/<name>`.
-- `vibez1.displayName`: user-facing name in approval and unit surfaces.
-- `vibez1.app.target`: one of `electron`, `react-native`, or `terminal`.
+- `vibestudio.displayName`: user-facing name in approval and unit surfaces.
+- `vibestudio.app.target`: one of `electron`, `react-native`, or `terminal`.
 - Target entry:
   - `electron`: `renderer`
   - `react-native`: `renderer`, plus mobile metadata such as
     `rnComponentName` and `rnHostAbi`
   - `terminal`: `entry`
-- `vibez1.app.capabilities`: explicit host/service privileges.
+- `vibestudio.app.capabilities`: explicit host/service privileges.
 
 ## Workspace Declaration
 
-Apps are trusted workspace units and should be declared in `meta/vibez1.yml`
+Apps are trusted workspace units and should be declared in `meta/vibestudio.yml`
 when they are part of the workspace runtime:
 
 ```yaml
@@ -124,8 +124,8 @@ Use workspace dependencies for shared code:
 {
   "dependencies": {
     "@workspace/react": "workspace:*",
-    "@vibez1/rpc": "workspace:*",
-    "@vibez1/shared": "workspace:*"
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*"
   }
 }
 ```

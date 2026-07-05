@@ -3,8 +3,8 @@ import {
   ServiceDispatcher,
   type ServiceContext,
   type VerifiedCodeIdentity,
-} from "@vibez1/shared/serviceDispatcher";
-import type { RpcEnvelope, RpcMessage } from "@vibez1/rpc";
+} from "@vibestudio/shared/serviceDispatcher";
+import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
@@ -53,7 +53,7 @@ function expectSentRpcMessage(
   message: RpcMessage
 ): void {
   expect(wc.send).toHaveBeenCalledWith(
-    "vibez1:rpc:message",
+    "vibestudio:rpc:message",
     expect.objectContaining({
       from: "main",
       target,
@@ -139,7 +139,7 @@ describe("IpcDispatcher", () => {
       callAs,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -183,7 +183,7 @@ describe("IpcDispatcher", () => {
       onServerRpcResult,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: shellWc } as never,
       rpcEnvelope("shell", "shell", {
         type: "request",
@@ -233,7 +233,7 @@ describe("IpcDispatcher", () => {
       callAs,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: shellWc } as never,
       rpcEnvelope("shell", "shell", {
         type: "request",
@@ -278,7 +278,7 @@ describe("IpcDispatcher", () => {
       method: "workspace.getInfo",
       args: [],
     } satisfies RpcMessage);
-    ipcHandlers.get("vibez1:rpc:send")?.({ sender: panelWc } as never, envelope as never);
+    ipcHandlers.get("vibestudio:rpc:send")?.({ sender: panelWc } as never, envelope as never);
 
     await vi.waitFor(() => {
       expect(openPanelSession).toHaveBeenCalledWith("entity-1", "conn-1");
@@ -307,7 +307,7 @@ describe("IpcDispatcher", () => {
       getPanelRuntimeConnection: () => undefined,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: panelWc } as never,
       rpcEnvelope("panel-2", "panel", {
         type: "request",
@@ -320,7 +320,7 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() => {
       expect(panelWc.send).toHaveBeenCalledWith(
-        "vibez1:rpc:message",
+        "vibestudio:rpc:message",
         expect.objectContaining({
           message: expect.objectContaining({ type: "response", requestId: "req-2" }),
         })
@@ -341,7 +341,7 @@ describe("IpcDispatcher", () => {
       authorizeAppServerCall,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -377,7 +377,7 @@ describe("IpcDispatcher", () => {
       authorizeAppServerCall,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -426,7 +426,7 @@ describe("IpcDispatcher", () => {
       authorizeAppServerCall: vi.fn(),
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", request, {
         idempotencyKey: "idem-1",
@@ -472,7 +472,7 @@ describe("IpcDispatcher", () => {
       },
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -506,7 +506,7 @@ describe("IpcDispatcher", () => {
       addMessageListener,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -534,7 +534,7 @@ describe("IpcDispatcher", () => {
     );
     emitToApp(eventEnvelope);
 
-    expect(appWc.send).toHaveBeenCalledWith("vibez1:rpc:message", eventEnvelope);
+    expect(appWc.send).toHaveBeenCalledWith("vibestudio:rpc:message", eventEnvelope);
   });
 
   it("registers an IPC event subscriber for app-backed shell views", async () => {
@@ -544,7 +544,7 @@ describe("IpcDispatcher", () => {
       getWebContentsForCaller: () => appWc,
     });
 
-    ipcHandlers.get("vibez1:rpc:send")?.(
+    ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
       rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
@@ -595,7 +595,7 @@ describe("IpcDispatcher", () => {
         openPanelSession,
       });
 
-      ipcHandlers.get("vibez1:rpc:send")?.(
+      ipcHandlers.get("vibestudio:rpc:send")?.(
         { sender: panelWc } as never,
         panelEnvelope("r1") as never
       );
@@ -604,7 +604,7 @@ describe("IpcDispatcher", () => {
       // Routine pipe reconnect: transport reads "connecting" but the session is
       // NOT terminally closed — it must be reused, not recycled.
       status = "connecting";
-      ipcHandlers.get("vibez1:rpc:send")?.(
+      ipcHandlers.get("vibestudio:rpc:send")?.(
         { sender: panelWc } as never,
         panelEnvelope("r2") as never
       );
@@ -643,14 +643,14 @@ describe("IpcDispatcher", () => {
         openPanelSession,
       });
 
-      ipcHandlers.get("vibez1:rpc:send")?.(
+      ipcHandlers.get("vibestudio:rpc:send")?.(
         { sender: panelWc } as never,
         panelEnvelope("r1") as never
       );
       await vi.waitFor(() => expect(firstSend).toHaveBeenCalledTimes(1));
 
       closed = true; // lease revoke / server-side teardown: terminal
-      ipcHandlers.get("vibez1:rpc:send")?.(
+      ipcHandlers.get("vibestudio:rpc:send")?.(
         { sender: panelWc } as never,
         panelEnvelope("r2") as never
       );
@@ -690,14 +690,14 @@ describe("IpcDispatcher", () => {
         openPanelSession,
       });
 
-      ipcHandlers.get("vibez1:rpc:send")?.(
+      ipcHandlers.get("vibestudio:rpc:send")?.(
         { sender: panelWc } as never,
         panelEnvelope("r1") as never
       );
       await vi.waitFor(() => expect(firstSend).toHaveBeenCalledTimes(1));
 
       connectionId = "conn-2";
-      ipcHandlers.get("vibez1:rpc:send")?.(
+      ipcHandlers.get("vibestudio:rpc:send")?.(
         { sender: panelWc } as never,
         panelEnvelope("r2") as never
       );
@@ -747,9 +747,9 @@ describe("IpcDispatcher", () => {
       const wc = makeWebContents(id);
       wc.send.mockImplementation(
         (channel: string, msg: { kind?: string; opId?: string; seq?: number }) => {
-          if (channel !== "vibez1:rpc:stream-message" || msg.kind !== "chunk") return;
+          if (channel !== "vibestudio:rpc:stream-message" || msg.kind !== "chunk") return;
           queueMicrotask(() =>
-            ipcHandlers.get("vibez1:rpc:stream-ack")?.(
+            ipcHandlers.get("vibestudio:rpc:stream-ack")?.(
               { sender: wc } as never,
               { opId: msg.opId, seq: msg.seq } as never
             )
@@ -794,8 +794,8 @@ describe("IpcDispatcher", () => {
         })),
       });
 
-      const open = ipcInvokeHandlers.get("vibez1:rpc:stream-open");
-      const pushChunk = ipcInvokeHandlers.get("vibez1:rpc:stream-body-chunk");
+      const open = ipcInvokeHandlers.get("vibestudio:rpc:stream-open");
+      const pushChunk = ipcInvokeHandlers.get("vibestudio:rpc:stream-body-chunk");
       expect(open).toBeTruthy();
       expect(pushChunk).toBeTruthy();
 
@@ -814,7 +814,7 @@ describe("IpcDispatcher", () => {
 
       await vi.waitFor(() => {
         expect(panelWc.send).toHaveBeenCalledWith(
-          "vibez1:rpc:stream-message",
+          "vibestudio:rpc:stream-message",
           expect.objectContaining({ kind: "end", opId: "op-1" })
         );
       });
@@ -825,11 +825,11 @@ describe("IpcDispatcher", () => {
         seen.envelope?.message.type === "stream-request" ? seen.envelope.message.fromId : null
       ).toBe("entity-1");
       expect(panelWc.send).toHaveBeenCalledWith(
-        "vibez1:rpc:stream-message",
+        "vibestudio:rpc:stream-message",
         expect.objectContaining({ kind: "head", opId: "op-1", status: 201 })
       );
       expect(panelWc.send).toHaveBeenCalledWith(
-        "vibez1:rpc:stream-message",
+        "vibestudio:rpc:stream-message",
         expect.objectContaining({ kind: "chunk", opId: "op-1", chunk: new Uint8Array([9, 9]) })
       );
     });
@@ -843,14 +843,14 @@ describe("IpcDispatcher", () => {
         // Default session shape: no streamReadable — like the WS PanelSession.
       });
 
-      await ipcInvokeHandlers.get("vibez1:rpc:stream-open")?.(
+      await ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
         { sender: panelWc } as never,
         { opId: "op-1", envelope: streamRequest(), bodyId: "b-1" } as never
       );
 
       await vi.waitFor(() => {
         expect(panelWc.send).toHaveBeenCalledWith(
-          "vibez1:rpc:stream-message",
+          "vibestudio:rpc:stream-message",
           expect.objectContaining({
             kind: "error",
             opId: "op-1",
@@ -869,7 +869,7 @@ describe("IpcDispatcher", () => {
 
       // ipcMain.handle converts a synchronous throw into an invoke() rejection.
       expect(() =>
-        ipcInvokeHandlers.get("vibez1:rpc:stream-open")?.(
+        ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
           { sender: appWc } as never,
           { opId: "op-1", envelope: streamRequest(), bodyId: "b-1" } as never
         )
@@ -900,19 +900,22 @@ describe("IpcDispatcher", () => {
         })),
       });
 
-      await ipcInvokeHandlers.get("vibez1:rpc:stream-open")?.(
+      await ipcInvokeHandlers.get("vibestudio:rpc:stream-open")?.(
         { sender: panelWc } as never,
         { opId: "op-1", envelope: streamRequest(), bodyId: "b-1" } as never
       );
       await vi.waitFor(() => expect(streamReadable).toHaveBeenCalled());
 
-      ipcHandlers.get("vibez1:rpc:stream-abort")?.({ sender: panelWc } as never, "op-1" as never);
+      ipcHandlers.get("vibestudio:rpc:stream-abort")?.(
+        { sender: panelWc } as never,
+        "op-1" as never
+      );
       await vi.waitFor(() => expect(seenSignal?.aborted).toBe(true));
 
       // Late body chunks for the aborted op fail loudly (op is gone).
       await expect(
         Promise.resolve(
-          ipcInvokeHandlers.get("vibez1:rpc:stream-body-chunk")?.(
+          ipcInvokeHandlers.get("vibestudio:rpc:stream-body-chunk")?.(
             { sender: panelWc } as never,
             { bodyId: "b-1", seq: 1, chunk: new Uint8Array([1]) } as never
           )

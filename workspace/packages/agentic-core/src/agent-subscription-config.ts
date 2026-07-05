@@ -6,7 +6,7 @@ export type AgentRespondPolicy =
   | "mentioned-strict"
   | "mentioned-or-followup"
   | "from-participants";
-export type AgentSystemPromptMode = "append" | "replace" | "replace-vibez1";
+export type AgentSystemPromptMode = "append" | "replace" | "replace-vibestudio";
 /**
  * When the agent WAKES to run a turn on a channel. "every-envelope" (default,
  * current behavior) = every inbound envelope wakes it. "turn-final" = buffer and

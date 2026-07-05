@@ -261,7 +261,7 @@ describe("PanelHttpServer build cache", () => {
 
     const loader = await handlePanelRequest(server, "/panels/my-app/__loader.js");
     expect(loader.statusCodeWritten).toBe(200);
-    expect(String(loader.body)).toContain("__vibez1PanelInit");
+    expect(String(loader.body)).toContain("__vibestudioPanelInit");
 
     const transport = await handlePanelRequest(server, "/panels/my-app/__transport.js");
     expect(transport.statusCodeWritten).toBe(200);

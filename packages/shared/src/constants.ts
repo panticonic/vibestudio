@@ -1,5 +1,5 @@
 /**
- * Shared constants for the Vibez1 application.
+ * Shared constants for the Vibestudio application.
  * Centralized to avoid magic numbers and ensure consistency.
  */
 

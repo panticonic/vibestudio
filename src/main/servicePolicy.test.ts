@@ -2,8 +2,8 @@
  * Tests for service access policy checking.
  */
 
-import { checkServiceAccess, type PolicyRegistry } from "@vibez1/shared/servicePolicy";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import { checkServiceAccess, type PolicyRegistry } from "@vibestudio/shared/servicePolicy";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 
 function makeRegistry(policies: Record<string, { allowed: CallerKind[] }>): PolicyRegistry {
   return {

@@ -1,4 +1,4 @@
-import { wsClientTransport, type WsClientTransportConfig } from "@vibez1/rpc/transports/wsClient";
+import { wsClientTransport, type WsClientTransportConfig } from "@vibestudio/rpc/transports/wsClient";
 import { serverRpcWsUrl } from "../../connect.js";
 
 export interface ServerWsTransportConfig extends Omit<WsClientTransportConfig, "getWsUrl"> {

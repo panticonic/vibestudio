@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/well-known",
+  "name": "@vibestudio/well-known",
   "private": true,
   "scripts": {
     "build:site": "tsx build.ts",

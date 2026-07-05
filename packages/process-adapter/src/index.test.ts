@@ -8,7 +8,7 @@ import { createNodeProcessAdapter } from "./index.js";
 const tempDirs: string[] = [];
 
 function tempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-process-adapter-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-process-adapter-"));
   tempDirs.push(dir);
   return dir;
 }

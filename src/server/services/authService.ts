@@ -1,16 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "http";
 import { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { authMethods, CreatePairingInviteArgsSchema } from "@vibez1/shared/serviceSchemas/auth";
-import type { TokenManager } from "@vibez1/shared/tokenManager";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { authMethods, CreatePairingInviteArgsSchema } from "@vibestudio/shared/serviceSchemas/auth";
+import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
 import type { DeviceAuthStore } from "./deviceAuthStore.js";
-import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
-import type { AuditLog } from "@vibez1/shared/credentials/audit";
-import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
-import { isPanelSlotId } from "@vibez1/shared/panel/ids";
+import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
+import type { AuditLog } from "@vibestudio/shared/credentials/audit";
+import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { isPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
   connectionInfoResponse,
   createPairingInviteResponse,
@@ -243,7 +243,7 @@ export function createAuthService(deps: {
         try {
           const body = IssueDeviceBodySchema.parse(await readJson(req));
           const credential = deps.deviceAuthStore.issueDevice({
-            label: body.label ?? "Vibez1 client",
+            label: body.label ?? "Vibestudio client",
             platform: body.platform,
           });
           sendJson(res, 200, responseForCredential(deps, credential, { includeShellToken: true }));

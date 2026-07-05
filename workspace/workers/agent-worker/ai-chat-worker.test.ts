@@ -197,7 +197,7 @@ describe("AiChatWorker", () => {
 
     const prompt = await worker.materializedPrompt("ch-1");
 
-    expect(prompt).toContain("Vibez1 is a local workspace");
+    expect(prompt).toContain("Vibestudio is a local workspace");
     expect(prompt).toContain("WORKSPACE AGENTS");
     expect(prompt).toContain("onboarding");
     expect(prompt).toContain("CHANNEL CUSTOM");

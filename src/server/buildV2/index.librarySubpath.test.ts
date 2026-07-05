@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { setUserDataPath } from "@vibez1/env-paths";
+import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { initBuildSystemV2, type BuildSystemV2 } from "./index.js";
 import type { BuildSourceProvider } from "./buildSource.js";
@@ -87,7 +87,7 @@ describe("BuildSystemV2 library package subpaths", () => {
   let buildSystem: BuildSystemV2 | null;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-lib-subpath-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-lib-subpath-"));
     workspaceRoot = path.join(root, "workspace");
     setUserDataPath(path.join(root, "state"));
     buildSystem = null;
@@ -159,7 +159,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         type: "module",
         exports: {
           ".": {
-            "vibez1-panel": "./src/panel.ts",
+            "vibestudio-panel": "./src/panel.ts",
             worker: "./src/worker.ts",
             default: "./src/default.ts",
           },
@@ -184,7 +184,7 @@ describe("BuildSystemV2 library package subpaths", () => {
       []
     );
 
-    // Panel target resolves the `vibez1-panel` condition.
+    // Panel target resolves the `vibestudio-panel` condition.
     const panelBuild = await buildSystem.getBuild("@workspace/dual-entry", undefined, {
       library: true,
       libraryTarget: "panel",
@@ -261,7 +261,7 @@ describe("BuildSystemV2 library package subpaths", () => {
         name: "@workspace-panels/context-panel",
         version: "0.1.0",
         type: "module",
-        vibez1: { entry: "index.tsx" },
+        vibestudio: { entry: "index.tsx" },
         dependencies: {},
       })
     );

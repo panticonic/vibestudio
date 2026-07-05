@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceError } from "@vibez1/shared/serviceDispatcher";
-import type { PendingApproval, PendingUnitBatchApproval } from "@vibez1/shared/approvals";
+import { createVerifiedCaller, ServiceError } from "@vibestudio/shared/serviceDispatcher";
+import type { PendingApproval, PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createShellApprovalService } from "./shellApprovalService.js";
 import { createPushMetrics } from "./pushMetrics.js";

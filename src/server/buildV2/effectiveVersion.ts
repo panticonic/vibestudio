@@ -30,7 +30,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import type { PackageGraph } from "./packageGraph.js";
-import { getUserDataPath } from "@vibez1/env-paths";
+import { getUserDataPath } from "@vibestudio/env-paths";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -268,7 +268,7 @@ export interface RootDependencyFingerprintInfo {
 /**
  * App root injected at build-system construction (see setBuildRootConfig).
  * Makes the fingerprint's file inputs explicit instead of cwd-guessing. The
- * VIBEZ1_APP_ROOT env var still overrides this; process.cwd() remains a
+ * VIBESTUDIO_APP_ROOT env var still overrides this; process.cwd() remains a
  * last-resort fallback when neither is set.
  */
 let injectedAppRoot: string | null = null;
@@ -280,7 +280,7 @@ let rootFingerprintLogged = false;
  * dependency fingerprint inputs. Call once from the build system's construction
  * with explicit roots — this removes the fragile process.cwd() dependence from
  * the build-cache identity. Passing `null` clears the injected values (used by
- * tests). The VIBEZ1_APP_ROOT env var, when set, still takes precedence for the
+ * tests). The VIBESTUDIO_APP_ROOT env var, when set, still takes precedence for the
  * host app root.
  */
 export function setBuildRootConfig(
@@ -291,7 +291,7 @@ export function setBuildRootConfig(
 }
 
 function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo["rootSource"] } {
-  const envRoot = process.env["VIBEZ1_APP_ROOT"];
+  const envRoot = process.env["VIBESTUDIO_APP_ROOT"];
   if (envRoot) return { root: envRoot, source: "env" };
   if (injectedAppRoot) return { root: injectedAppRoot, source: "injected" };
   return { root: process.cwd(), source: "cwd" };

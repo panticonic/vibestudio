@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "title": "Browser Migration & State",
     "description": "Migrate browser data, preview imports, inspect imported cookies/passwords/history, and debug the address bar",
     "hiddenInLauncher": false

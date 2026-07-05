@@ -12,7 +12,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-ai@0.78.0':
-    hash: 05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce
+    hash: 48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d
     path: packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch
   re2@1.24.0:
     hash: a4a166273fe3817fd493cfc042f1d966f4ada60f1234330cd306e798259b549b
@@ -34,7 +34,7 @@ importers:
 
   ../packages/browser-data:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
       zod:
@@ -59,7 +59,7 @@ importers:
 
   ../packages/durable:
     dependencies:
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
     devDependencies:
@@ -81,10 +81,10 @@ importers:
 
   ../packages/extension:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
-      '@vibez1/unit-host':
+      '@vibestudio/unit-host':
         specifier: workspace:*
         version: link:../unit-host
     devDependencies:
@@ -94,19 +94,19 @@ importers:
 
   ../packages/extension-host:
     dependencies:
-      '@vibez1/extension':
+      '@vibestudio/extension':
         specifier: workspace:*
         version: link:../extension
-      '@vibez1/process-adapter':
+      '@vibestudio/process-adapter':
         specifier: workspace:*
         version: link:../process-adapter
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
-      '@vibez1/unit-host':
+      '@vibestudio/unit-host':
         specifier: workspace:*
         version: link:../unit-host
       yaml:
@@ -125,7 +125,7 @@ importers:
 
   ../packages/git:
     dependencies:
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
       diff:
@@ -153,7 +153,7 @@ importers:
       '@react-native-community/netinfo':
         specifier: ^11.4.1
         version: 11.5.2(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))(react@19.0.0)
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
       react-native-keychain:
@@ -190,7 +190,7 @@ importers:
 
   ../packages/rpc:
     dependencies:
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
     devDependencies:
@@ -200,16 +200,16 @@ importers:
 
   ../packages/shared:
     dependencies:
-      '@vibez1/dev-log':
+      '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../dev-log
-      '@vibez1/env-paths':
+      '@vibestudio/env-paths':
         specifier: workspace:*
         version: link:../env-paths
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../types
 
@@ -360,16 +360,16 @@ importers:
       '@react-navigation/stack':
         specifier: ^7.2.6
         version: 7.10.7(@react-navigation/native@7.3.5(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))(react@19.0.0))(react-native-gesture-handler@2.32.0(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))(react@19.0.0))(react-native-safe-area-context@5.8.0(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))(react@19.0.0))(react-native-screens@4.10.0(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))(react@19.0.0))(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))(react@19.0.0)
-      '@vibez1/browser-data':
+      '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
-      '@vibez1/mobile-webrtc':
+      '@vibestudio/mobile-webrtc':
         specifier: workspace:*
         version: link:../../../packages/mobile-webrtc
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       jotai:
@@ -423,10 +423,10 @@ importers:
 
   apps/remote-cli:
     dependencies:
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       ws:
@@ -453,10 +453,10 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.0
         version: 3.14.5(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/react':
@@ -480,10 +480,10 @@ importers:
 
   apps/terminal-browser:
     dependencies:
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/terminal-host-protocol':
@@ -508,7 +508,7 @@ importers:
 
   extensions/browser-data:
     dependencies:
-      '@vibez1/browser-data':
+      '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
       '@workspace/browser-data':
@@ -523,10 +523,10 @@ importers:
 
   extensions/git-bridge:
     dependencies:
-      '@vibez1/git':
+      '@vibestudio/git':
         specifier: workspace:*
         version: link:../../../packages/git
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/vcs-engine':
@@ -561,7 +561,7 @@ importers:
 
   extensions/react-native:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
 
@@ -582,13 +582,13 @@ importers:
 
   extensions/typecheck-service:
     dependencies:
-      '@vibez1/env-paths':
+      '@vibestudio/env-paths':
         specifier: workspace:*
         version: link:../../../packages/env-paths
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@vibez1/typecheck':
+      '@vibestudio/typecheck':
         specifier: workspace:*
         version: link:../../../packages/typecheck
 
@@ -630,7 +630,7 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-core':
@@ -669,7 +669,7 @@ importers:
 
   packages/agentic-core:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-protocol':
@@ -689,8 +689,8 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.78.0
-        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(ws@8.21.0)(zod@3.25.76)
-      '@vibez1/shared':
+        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agent-loop':
@@ -730,7 +730,7 @@ importers:
 
   packages/agentic-session:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-core':
@@ -750,7 +750,7 @@ importers:
 
   packages/browser-data:
     dependencies:
-      '@vibez1/browser-data':
+      '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../../packages/browser-data
       bplist-parser:
@@ -774,7 +774,7 @@ importers:
 
   packages/channel-fork:
     dependencies:
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
       '@workspace/agentic-protocol':
@@ -793,7 +793,7 @@ importers:
 
   packages/core:
     dependencies:
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
     devDependencies:
@@ -803,7 +803,7 @@ importers:
 
   packages/eval:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       sucrase:
@@ -844,17 +844,17 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.78.0
-        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(ws@8.21.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
       '@sinclair/typebox':
         specifier: ^0.27.8
         version: 0.27.10
-      '@vibez1/extension':
+      '@vibestudio/extension':
         specifier: workspace:*
         version: link:../../../packages/extension
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
       '@workspace/pi-core':
@@ -868,7 +868,7 @@ importers:
         version: 0.18.12
       unpdf:
         specifier: ^1.6.2
-        version: 1.6.2(@napi-rs/canvas@0.1.100)
+        version: 1.6.2
     devDependencies:
       '@types/diff':
         specifier: ^7.0.0
@@ -989,7 +989,7 @@ importers:
 
   packages/model-catalog:
     dependencies:
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
     devDependencies:
@@ -1003,7 +1003,7 @@ importers:
         specifier: workspace:*
         version: link:../runtime
     devDependencies:
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
       typescript:
@@ -1014,7 +1014,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.78.0
-        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(ws@8.21.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1031,7 +1031,7 @@ importers:
 
   packages/pubsub:
     dependencies:
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
       '@workspace/agentic-protocol':
@@ -1065,7 +1065,7 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
       '@workspace/core':
@@ -1096,19 +1096,19 @@ importers:
 
   packages/runtime:
     dependencies:
-      '@vibez1/extension':
+      '@vibestudio/extension':
         specifier: workspace:*
         version: link:../../../packages/extension
-      '@vibez1/git':
+      '@vibestudio/git':
         specifier: workspace:*
         version: link:../../../packages/git
-      '@vibez1/rpc':
+      '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
       '@workspace/agentic-protocol':
@@ -1183,7 +1183,7 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@vibez1/types':
+      '@vibestudio/types':
         specifier: workspace:*
         version: link:../../../packages/types
       '@workspace/pubsub':
@@ -1246,7 +1246,7 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-chat':
@@ -1322,7 +1322,7 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@vibez1/shared':
+      '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
       '@workspace/agentic-chat':
@@ -1660,7 +1660,7 @@ importers:
 
   skills/workspace-dev:
     dependencies:
-      '@vibez1/git':
+      '@vibestudio/git':
         specifier: workspace:*
         version: link:../../../packages/git
       '@workspace/runtime':
@@ -1728,7 +1728,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.78.0
-        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(ws@8.21.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
@@ -1764,7 +1764,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 0.78.0
-        version: 0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(ws@8.21.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
@@ -2860,142 +2860,6 @@ packages:
   '@mozilla/readability@0.6.0':
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
     engines: {node: '>=14.0.0'}
-
-  '@napi-rs/canvas-android-arm64@0.1.100':
-    resolution: {integrity: sha512-hjhCKhntPv9+t4ckHymdx0phYNcVW+GKQR6Lzw2zE+pOVjOplSmtx9nNNknTjbEDLcuLZqA1y8ufKg1XfgftzQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [android]
-
-  '@napi-rs/canvas-android-arm64@1.0.2':
-    resolution: {integrity: sha512-IMXKVQod0ol4vt3gmClUfXz4JAgHYESGPCUqmH3lQxBoL0K/2greJaQE1HVBVxWWFKfLc4OLZVdxg7kXVyXv+g==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [android]
-
-  '@napi-rs/canvas-darwin-arm64@0.1.100':
-    resolution: {integrity: sha512-2PcswRaC7Ly645DGt88///zuFDhJxJYdKAs1uU3mfk1atYkXufgcgLfBpk6Tm12nCQBaNt1wpybuPZ4qOhTo8A==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@napi-rs/canvas-darwin-arm64@1.0.2':
-    resolution: {integrity: sha512-Sc8tPi6cF+5lqOzCCKFALJHhDiRwyMzTPYm3bbhdXsOunU0lQO5f05ucyOzN2r55I23Hg5bsjH63uSCvWp3EgQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@napi-rs/canvas-darwin-x64@0.1.100':
-    resolution: {integrity: sha512-ePNZtj7pNIva/siZMg+HmbeozkIjqUIYdoymH8HaA3qK7LfzFN4WMBM8G6HQ9ZC+H3+Dnn5pqtiXpgLykaPOhw==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@napi-rs/canvas-darwin-x64@1.0.2':
-    resolution: {integrity: sha512-niDXZ9LhKB1zLrUdYB64RHQFDGz9rr0eGx061qtJJU3U20EMMIx28ADF5fVYbhtOgkWQrBjFicfaye1yM0U62A==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.100':
-    resolution: {integrity: sha512-d5cDB48oWFGU8/XPhUOFAlySgb/VAu7D+s8fi55K1Pcfg8aPplHWqMgibhVLU8ky7Pyg/fuiVLz4Nf3JrSTuUA==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@1.0.2':
-    resolution: {integrity: sha512-sgatQL9JxGRH/Amzcvu0P3t8Am3duou74CisfuJ41Dwt8cWy723z/9KZ8LlgmxfypEwEZxSTNFJtU8d281lmhQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.100':
-    resolution: {integrity: sha512-rDxgxRu69RvDlX/bh9o22DxLsGr8EqsNgotL9+RwQE1S0b0cqeatqsw6aW45mukm0B42DIAaAacKaYQ8cqS1nw==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-gnu@1.0.2':
-    resolution: {integrity: sha512-dgKuX0peF3xwY6ZF5QxGS4wbfDqpoFAJYXiLSp+guZKARQUKMkRqZSDrXKj7nfrec3UCMzC0PFCPte0ES98AiA==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-musl@0.1.100':
-    resolution: {integrity: sha512-K3mDW66N+xT2/V439u1alFANiBUjdEx2gLiNYnCmUsva5jZMxWTjafBYwTzYK+EMFMHrUoabuU+T1BIP5CgbYQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-musl@1.0.2':
-    resolution: {integrity: sha512-qwROoDIC9upfvDoRLuPn2aNg9CGW1x0Ygr4k2Or+8paA9d0qBLwk87U+g8KQpoOviKoPoiwl97kvBYuYD7qZoA==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.100':
-    resolution: {integrity: sha512-mooqUBTIsccZpnoQC4NgrC1v6C1vof39etLNMnBwCY+p0gajWJvAHLGQ6g/gGyS5YrpDW+GefSN4+Cvcr08UWw==}
-    engines: {node: '>= 10'}
-    cpu: [riscv64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-riscv64-gnu@1.0.2':
-    resolution: {integrity: sha512-fXRjnPihdnbO6qy1QQOgxAonb68A0TCEG7rj1x7v7rxNElsE8EVIKIEUTvyDtU+sthYSbX+8e7g3oZiLGnOmxw==}
-    engines: {node: '>= 10'}
-    cpu: [riscv64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-gnu@0.1.100':
-    resolution: {integrity: sha512-1eCvkDCazm7FFhsT7DfGOdSaHgZVK3bt/dSBl5EWHOWmnz+I7j8tPseJqqD81NF+MH21jKUK4wQSDjN0mdhnTg==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-gnu@1.0.2':
-    resolution: {integrity: sha512-nPR97DXhbWIAy7yazF3jc06kEPMqYMLmPzFOVNlwKPfIoSChnI+x7dc0hTLaihz3jxrjL6j4BbA7earxfx4X3g==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-musl@0.1.100':
-    resolution: {integrity: sha512-20arT6lnI19S68qNlii73TSEDbECNgzMz2EpldC1V3mZFuRkeujXkcebRk0LRJe9SEUAooYiLokfMViY8IX7yA==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-musl@1.0.2':
-    resolution: {integrity: sha512-l7zZY5+jL5qnBZtDz7CoBtY6p7EkHu422g/0zWwrOrzIwWyWxZFRfZZORY1UG7YApymPLx+UbOkN206xXn/c1Q==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.100':
-    resolution: {integrity: sha512-DZFFT1wIAg37LJw37yhMRFfjATd3vTQzjZ1Yki8u2vhO6Hi5VE6BVaGQ1aaDu7xb4iMErz+9EOwjpS7xcxFeBw==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@napi-rs/canvas-win32-arm64-msvc@1.0.2':
-    resolution: {integrity: sha512-yE0koHCFF4PIbMc2o2SEALhnipz7WBISh5glLvQiomtIoCcW0np3H4Lw93ceJAfJttTTeIIWFbwH84F7EVzjMQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@napi-rs/canvas-win32-x64-msvc@0.1.100':
-    resolution: {integrity: sha512-MyT1j3mHC2+Lu4pBi9mKyMJhtP6U7k7EldY7sj/uS5gJA65gTXt8MefJQXLJo5d/vZbuWmfxzkEUNc/urV3pHA==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
-
-  '@napi-rs/canvas-win32-x64-msvc@1.0.2':
-    resolution: {integrity: sha512-okU8/t2foV6C31n0GtvEMbfD5rOFc70+/6xUNME9Guld29sgSOIGUEDScAWFlcP3k5TYQRl9TNkwJEEjh15w8A==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
-
-  '@napi-rs/canvas@0.1.100':
-    resolution: {integrity: sha512-xglYA6q3XO5P3BNJYxVZ1IV7DLVjp1Py6nwag88YntrS+3vKHyYcMqXVS4ZztJmwz2uGvz1FWhI/4LgbR5uQDA==}
-    engines: {node: '>= 10'}
 
   '@napi-rs/canvas@1.0.2':
     resolution: {integrity: sha512-EYEqlMYaCbpZDz+IgDH5xp9MTd3ui4dmGqbQYryhMLnSRxrhHKq5KQWHHKxFUcEP4Hp8/BWgvqXocX4j7iSbOQ==}
@@ -7679,7 +7543,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.78.0(patch_hash=05b9b583ee0d32c07453548f74f8c008ad8fe97ee09fc90a20cffa8b1fd3d4ce)(ws@8.21.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
@@ -8430,100 +8294,7 @@ snapshots:
 
   '@mozilla/readability@0.6.0': {}
 
-  '@napi-rs/canvas-android-arm64@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-android-arm64@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-darwin-arm64@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-darwin-arm64@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-darwin-x64@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-darwin-x64@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-gnu@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-musl@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-linux-arm64-musl@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-linux-riscv64-gnu@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-gnu@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-gnu@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-musl@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-linux-x64-musl@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-win32-arm64-msvc@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas-win32-x64-msvc@0.1.100':
-    optional: true
-
-  '@napi-rs/canvas-win32-x64-msvc@1.0.2':
-    optional: true
-
-  '@napi-rs/canvas@0.1.100':
-    optionalDependencies:
-      '@napi-rs/canvas-android-arm64': 0.1.100
-      '@napi-rs/canvas-darwin-arm64': 0.1.100
-      '@napi-rs/canvas-darwin-x64': 0.1.100
-      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.100
-      '@napi-rs/canvas-linux-arm64-gnu': 0.1.100
-      '@napi-rs/canvas-linux-arm64-musl': 0.1.100
-      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.100
-      '@napi-rs/canvas-linux-x64-gnu': 0.1.100
-      '@napi-rs/canvas-linux-x64-musl': 0.1.100
-      '@napi-rs/canvas-win32-arm64-msvc': 0.1.100
-      '@napi-rs/canvas-win32-x64-msvc': 0.1.100
-    optional: true
-
-  '@napi-rs/canvas@1.0.2':
-    optionalDependencies:
-      '@napi-rs/canvas-android-arm64': 1.0.2
-      '@napi-rs/canvas-darwin-arm64': 1.0.2
-      '@napi-rs/canvas-darwin-x64': 1.0.2
-      '@napi-rs/canvas-linux-arm-gnueabihf': 1.0.2
-      '@napi-rs/canvas-linux-arm64-gnu': 1.0.2
-      '@napi-rs/canvas-linux-arm64-musl': 1.0.2
-      '@napi-rs/canvas-linux-riscv64-gnu': 1.0.2
-      '@napi-rs/canvas-linux-x64-gnu': 1.0.2
-      '@napi-rs/canvas-linux-x64-musl': 1.0.2
-      '@napi-rs/canvas-win32-arm64-msvc': 1.0.2
-      '@napi-rs/canvas-win32-x64-msvc': 1.0.2
+  '@napi-rs/canvas@1.0.2': {}
 
   '@notifee/react-native@9.1.8(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))':
     dependencies:
@@ -12089,9 +11860,7 @@ snapshots:
 
   pathval@2.0.1: {}
 
-  pdfjs-dist@6.1.200:
-    optionalDependencies:
-      '@napi-rs/canvas': 1.0.2
+  pdfjs-dist@6.1.200: {}
 
   picocolors@1.1.1: {}
 
@@ -13047,9 +12816,7 @@ snapshots:
       unist-util-is: 6.0.1
       unist-util-visit-parents: 6.0.2
 
-  unpdf@1.6.2(@napi-rs/canvas@0.1.100):
-    optionalDependencies:
-      '@napi-rs/canvas': 0.1.100
+  unpdf@1.6.2: {}
 
   unpipe@1.0.0: {}
 

@@ -1,8 +1,8 @@
-import type { PanelManager } from "@vibez1/shared/shell/panelManager";
-import { asPanelSlotId, type PanelEntityId } from "@vibez1/shared/panel/ids";
-import type { OpenExternalOptions } from "@vibez1/shared/externalOpen";
-import { externalOpenMethods } from "@vibez1/shared/serviceSchemas/externalOpen";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import type { PanelManager } from "@vibestudio/shared/shell/panelManager";
+import { asPanelSlotId, type PanelEntityId } from "@vibestudio/shared/panel/ids";
+import type { OpenExternalOptions } from "@vibestudio/shared/externalOpen";
+import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   createBridgeStreamRelay,
   stampEnvelopeCaller,
@@ -10,8 +10,8 @@ import {
   type BridgeStreamOpen,
   type BridgeStreamRelay,
   type RpcEnvelope,
-} from "@vibez1/rpc";
-import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
+} from "@vibestudio/rpc";
+import type { WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import type { MobileRpcClient } from "./mobileTransport";
 
 export interface BridgeAdapterCallbacks {
@@ -114,11 +114,11 @@ export function createBridgeAdapter(deps: {
     return { session, leaseKey: panelLeaseKey(lease) };
   }
 
-  // §1.6 upload relays, one per panel (see @vibez1/rpc bridgeStream.ts). The
+  // §1.6 upload relays, one per panel (see @vibestudio/rpc bridgeStream.ts). The
   // RN postMessage bridge is string-only, so chunks cross as base64 (~256 KiB);
   // the relay reassembles the request body (8 MiB cap, fail-loud) and feeds the
   // panel's WebRTC session streamReadable(). Response head/chunks/end go back
-  // through deliverToPanel tagged `__vibez1BridgeStream` (the injected bootstrap
+  // through deliverToPanel tagged `__vibestudioBridgeStream` (the injected bootstrap
   // demuxes them off the envelope path), ack-gated so the webview buffer stays
   // bounded.
   const streamRelays = new Map<string, BridgeStreamRelay>();
@@ -155,7 +155,7 @@ export function createBridgeAdapter(deps: {
           body
         );
       },
-      sendToPanel: (msg) => deps.deliverToPanel(panelId, { __vibez1BridgeStream: true, msg }),
+      sendToPanel: (msg) => deps.deliverToPanel(panelId, { __vibestudioBridgeStream: true, msg }),
     });
     streamRelays.set(panelId, relay);
     return relay;

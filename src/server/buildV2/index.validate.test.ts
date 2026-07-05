@@ -50,7 +50,7 @@ function writeUnit(
       version: "0.1.0",
       type: "module",
       ...(deps ? { dependencies: deps } : {}),
-      vibez1: { entry: "index.ts" },
+      vibestudio: { entry: "index.ts" },
     })
   );
   fs.writeFileSync(path.join(abs, "index.ts"), "export const x = 1;\n");
@@ -97,7 +97,7 @@ async function loadWithMocks(): Promise<{
   persistEvState: ReturnType<typeof vi.fn>;
 }> {
   vi.resetModules();
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-build-validate-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-validate-"));
   const workspaceRoot = path.join(root, "workspace");
   writeUnit(workspaceRoot, "packages/lib", "@workspace/lib");
   writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
@@ -105,7 +105,7 @@ async function loadWithMocks(): Promise<{
   });
   writeUnit(workspaceRoot, "panels/solo", "@workspace-panels/solo");
 
-  const { setUserDataPath } = await import("@vibez1/env-paths");
+  const { setUserDataPath } = await import("@vibestudio/env-paths");
   setUserDataPath(path.join(root, "state"));
 
   const persistEvState = vi.fn();

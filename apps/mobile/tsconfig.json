@@ -21,13 +21,13 @@
     "isolatedModules": true,
     "baseUrl": ".",
     "paths": {
-      "@vibez1/shared/*": ["../../packages/shared/src/*"],
-      "@vibez1/dev-log": ["../../packages/dev-log/src/index.ts"],
-      "@vibez1/env-paths": ["../../packages/env-paths/src/index.ts"],
-      "@vibez1/browser-data": ["../../packages/browser-data/src/index.ts"],
-      "@vibez1/browser-data/client": ["../../packages/browser-data/src/client.ts"],
-      "@vibez1/rpc": ["../../packages/rpc/src/index.ts"],
-      "@vibez1/types": ["../../packages/types/src/index.ts"]
+      "@vibestudio/shared/*": ["../../packages/shared/src/*"],
+      "@vibestudio/dev-log": ["../../packages/dev-log/src/index.ts"],
+      "@vibestudio/env-paths": ["../../packages/env-paths/src/index.ts"],
+      "@vibestudio/browser-data": ["../../packages/browser-data/src/index.ts"],
+      "@vibestudio/browser-data/client": ["../../packages/browser-data/src/client.ts"],
+      "@vibestudio/rpc": ["../../packages/rpc/src/index.ts"],
+      "@vibestudio/types": ["../../packages/types/src/index.ts"]
     }
   },
   "include": ["../../workspace/apps/mobile/**/*", "src/**/*"],

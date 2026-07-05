@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Typecheck Service",
     "entry": "index.ts",
     "sourcemap": true,
@@ -12,8 +12,8 @@
     }
   },
   "dependencies": {
-    "@vibez1/env-paths": "workspace:*",
-    "@vibez1/shared": "workspace:*",
-    "@vibez1/typecheck": "workspace:*"
+    "@vibestudio/env-paths": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/typecheck": "workspace:*"
   }
 }

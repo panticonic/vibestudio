@@ -1,7 +1,7 @@
 /**
  * Drift guard: the packaged-template staging list in the (.mjs, un-importable
  * by TS) build script must stay in sync with the canonical workspace taxonomy
- * in @vibez1/shared/workspace/sourceDirs.
+ * in @vibestudio/shared/workspace/sourceDirs.
  *
  * The build script mirrors the dir list because an .mjs script cannot import the
  * TS constant. This test imports the script's exported list and the shared
@@ -12,7 +12,7 @@
 import * as fs from "node:fs";
 import YAML from "yaml";
 
-import { WORKSPACE_SOURCE_DIRS } from "@vibez1/shared/workspace/sourceDirs";
+import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
 import {
   WORKSPACE_TEMPLATE_DIRS,
   WORKSPACE_TEMPLATE_ROOT_FILES,

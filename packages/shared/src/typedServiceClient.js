@@ -1,7 +1,7 @@
 /**
  * Runtime companion for typedServiceClient.ts.
  *
- * Some extension child processes load @vibez1/shared source through Node's
+ * Some extension child processes load @vibestudio/shared source through Node's
  * native TS loader. That loader resolves literal relative ".js" specifiers
  * against the filesystem and does not rewrite them to ".ts". Keep this file
  * in sync with the runtime helpers in typedServiceClient.ts so imports such as

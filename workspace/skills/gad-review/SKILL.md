@@ -1,6 +1,6 @@
 ---
 name: gad-review
-description: Review code provenance using Vibez1's canonical trajectory log, channel envelopes, worktree state graph, state transitions, and per-edit operations.
+description: Review code provenance using Vibestudio's canonical trajectory log, channel envelopes, worktree state graph, state transitions, and per-edit operations.
 ---
 
 # GAD Review

@@ -51,7 +51,7 @@ import type { ScratchBuffer, SessionInfo, SplitNode, TerminalState } from "./typ
 
 declare global {
   interface Window {
-    __vibez1TerminalTestApi?: {
+    __vibestudioTerminalTestApi?: {
       openSession(args?: { command?: string }): Promise<{ sessionId: string | undefined }>;
       splitPane(args?: {
         direction?: "right" | "down";
@@ -616,7 +616,7 @@ export function TerminalApp() {
       getScrollback: async (args: { sessionId: string; maxBytes?: number }) =>
         shell.getScrollback(args.sessionId, args.maxBytes),
       getRenderedText: async (args: { sessionId: string }) =>
-        window.__vibez1TerminalPaneTestRegistry?.[args.sessionId]?.serialize() ?? "",
+        window.__vibestudioTerminalPaneTestRegistry?.[args.sessionId]?.serialize() ?? "",
       focusSession: async (args: { sessionId: string }) => actions.focusSession(args.sessionId),
       runCommand: async (args: { command: string; target?: CommandRunTarget }) => ({
         sessionId: await runCommand(args.command, args.target ?? "splitRight"),
@@ -645,10 +645,10 @@ export function TerminalApp() {
     expose("terminal.deleteMeta", async (args: { sessionId: string; key: string }) =>
       actions.deleteMeta(args.sessionId, args.key)
     );
-    window.__vibez1TerminalTestApi = terminalApi;
+    window.__vibestudioTerminalTestApi = terminalApi;
     return () => {
-      if (window.__vibez1TerminalTestApi === terminalApi) {
-        delete window.__vibez1TerminalTestApi;
+      if (window.__vibestudioTerminalTestApi === terminalApi) {
+        delete window.__vibestudioTerminalTestApi;
       }
     };
   }, [actions, openDefaultPane, runInteractiveOpen, sessions]);

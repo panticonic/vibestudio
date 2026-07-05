@@ -39,7 +39,7 @@ import {
   putTree,
   statBlob,
 } from "../../src/server/services/blobstoreService.js";
-import type { ManifestHashEntry } from "@vibez1/shared/contentTree/worktreeHash";
+import type { ManifestHashEntry } from "@vibestudio/shared/contentTree/worktreeHash";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 

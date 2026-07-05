@@ -40,12 +40,12 @@ function writeExtension(
   const { manifestExtension = true, selfRegisters = true } = opts;
   write(
     path.join(root, "extensions", relDir, "package.json"),
-    JSON.stringify({ name, ...(manifestExtension ? { vibez1: { extension: {}, entry: "index.ts" } } : {}) }),
+    JSON.stringify({ name, ...(manifestExtension ? { vibestudio: { extension: {}, entry: "index.ts" } } : {}) }),
   );
   write(
     path.join(root, "extensions", relDir, "index.ts"),
     selfRegisters
-      ? `export type Api = {};\ndeclare module "@vibez1/extension" { interface WorkspaceExtensions { "${name}": Api } }\n`
+      ? `export type Api = {};\ndeclare module "@vibestudio/extension" { interface WorkspaceExtensions { "${name}": Api } }\n`
       : "export type Api = {};\n",
   );
 }

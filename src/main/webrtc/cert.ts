@@ -160,7 +160,7 @@ export function ensurePersistentCert(opts: {
  * (DER X.509 wrapped in `BEGIN CERTIFICATE`) and the PKCS#8 private key — both in
  * the shapes `node-datachannel`'s `certificatePemFile`/`keyPemFile` expect.
  */
-export function generateSelfSignedEcCert(commonName = "vibez1-webrtc"): {
+export function generateSelfSignedEcCert(commonName = "vibestudio-webrtc"): {
   certPem: string;
   keyPem: string;
 } {

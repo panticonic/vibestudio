@@ -1,5 +1,5 @@
 /**
- * Generate skills/vibez1-agent/API.md — the RPC service reference for the
+ * Generate skills/vibestudio-agent/API.md — the RPC service reference for the
  * agent CLI — statically from the server service registry.
  *
  * Like scripts/generate-runtime-docs.mjs this runs without a live server:
@@ -21,7 +21,7 @@ import { tsImport } from "tsx/esm/api";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const servicesDir = path.join(repoRoot, "src", "server", "services");
-const outputPath = path.join(repoRoot, "skills", "vibez1-agent", "API.md");
+const outputPath = path.join(repoRoot, "skills", "vibestudio-agent", "API.md");
 
 /**
  * An inert stand-in for service deps: every property access, call, and
@@ -106,21 +106,21 @@ function renderService(def) {
 function renderDoc(defs) {
   return `<!-- GENERATED FILE — do not edit. Regenerate with: pnpm generate:agent-docs -->
 
-# Vibez1 RPC Service Reference (agent CLI)
+# Vibestudio RPC Service Reference (agent CLI)
 
 Every service below is callable from a paired CLI as
-\`vibez1 agent call SERVICE.METHOD 'ARGS_JSON'\` (and from \`vibez1 eval run\`
+\`vibestudio agent call SERVICE.METHOD 'ARGS_JSON'\` (and from \`vibestudio eval run\`
 code as \`services.SERVICE.METHOD(...args)\` or \`rpc.call("SERVICE.METHOD", args)\`).
 
 This file lists methods and descriptions only. For full Zod argument and
 return schemas of a service, ask the live server:
 
 \`\`\`bash
-vibez1 agent services SERVICE_NAME --json
+vibestudio agent services SERVICE_NAME --json
 \`\`\`
 
 Generated statically from \`src/server/services/\`; a server build may register
-a subset depending on its configuration — \`vibez1 agent services\` shows what
+a subset depending on its configuration — \`vibestudio agent services\` shows what
 is actually live.
 
 Some internal services (e.g. workerd) are not shell-callable and do not appear
@@ -139,7 +139,7 @@ async function main() {
   const current = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, "utf8") : null;
   if (checkOnly) {
     if (next !== current) {
-      throw new Error("skills/vibez1-agent/API.md is out of date. Run: pnpm generate:agent-docs");
+      throw new Error("skills/vibestudio-agent/API.md is out of date. Run: pnpm generate:agent-docs");
     }
     return;
   }

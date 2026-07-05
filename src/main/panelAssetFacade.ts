@@ -14,7 +14,7 @@
  *
  * On top of that raw proxy the façade adds three cache layers (plan §6):
  *  - It requests `gzip: true` (parity with mobile) so multi-MB assets ride the
- *    pipe compressed; the gateway marks the body `x-vibez1-content-gzip` and the
+ *    pipe compressed; the gateway marks the body `x-vibestudio-content-gzip` and the
  *    façade re-derives `Content-Encoding: gzip` so the webview inflates natively
  *    (the façade never touches the bytes).
  *  - A content-addressed on-disk cache ({@link AssetDiskCache}) serves immutable
@@ -38,14 +38,14 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import type { ServerClient } from "./serverClient.js";
 import {
   FORWARD_REQUEST_HEADERS,
   STRIP_RESPONSE_HEADERS,
   GZIP_MARKER_HEADER,
-} from "@vibez1/shared/panel/assetHeaders";
-import { checkPanelGatewayPath } from "@vibez1/shared/panel/assetPathPolicy";
+} from "@vibestudio/shared/panel/assetHeaders";
+import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
 import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
 
 const log = createDevLogger("PanelAssetFacade");
@@ -57,7 +57,7 @@ const log = createDevLogger("PanelAssetFacade");
  * falls back to hashing immutable bodies on write. If a future change surfaces a
  * digest here, the cache prefers it (it is not forwarded to the webview).
  */
-const CONTENT_DIGEST_HEADER = "x-vibez1-content-digest";
+const CONTENT_DIGEST_HEADER = "x-vibestudio-content-digest";
 
 export interface PanelAssetFacadeOptions {
   /**
@@ -226,7 +226,7 @@ async function handleRequest(
   const method = (req.method ?? "GET").toUpperCase();
 
   // Mirror of the AUTHORITATIVE server-side allowlist in gatewayFetchService
-  // (see @vibez1/shared/panel/assetPathPolicy): reject non-panel-reachable
+  // (see @vibestudio/shared/panel/assetPathPolicy): reject non-panel-reachable
   // paths (management /_r/s/*, /rpc, workerd internals) here for a cheap,
   // clear 403 instead of a pipe round-trip + 502. The server enforces the
   // same policy regardless of this check.

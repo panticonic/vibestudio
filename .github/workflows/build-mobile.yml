@@ -118,7 +118,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vibez1-mobile-${{ github.sha }}
+          name: vibestudio-mobile-${{ github.sha }}
           path: apps/mobile/android/app/build/outputs/apk/release/*.apk
           retention-days: 30
 

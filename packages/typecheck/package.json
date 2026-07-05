@@ -1,7 +1,7 @@
 {
-  "name": "@vibez1/typecheck",
+  "name": "@vibestudio/typecheck",
   "version": "0.1.0",
-  "description": "TypeScript type checking for Vibez1 panels and workers",
+  "description": "TypeScript type checking for Vibestudio panels and workers",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

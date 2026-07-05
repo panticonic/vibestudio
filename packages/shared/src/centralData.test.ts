@@ -9,7 +9,7 @@ describe("CentralDataManager", () => {
   let originalXdgConfigHome: string | undefined;
 
   beforeEach(() => {
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-central-data-"));
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-central-data-"));
     originalXdgConfigHome = process.env["XDG_CONFIG_HOME"];
     process.env["XDG_CONFIG_HOME"] = tempRoot;
   });
@@ -26,12 +26,12 @@ describe("CentralDataManager", () => {
   it("repairs a missing registry entry when touching an existing workspace", () => {
     const configPath = path.join(
       tempRoot,
-      "vibez1",
+      "vibestudio",
       "workspaces",
       "client",
       "source",
       "meta",
-      "vibez1.yml"
+      "vibestudio.yml"
     );
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, "id: client\n", "utf8");

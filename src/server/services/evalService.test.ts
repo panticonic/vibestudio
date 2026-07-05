@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { DODispatch } from "../doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import { createEvalService } from "./evalService.js";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 const WORKSPACE_REF = {
   source: INTERNAL_DO_SOURCE,

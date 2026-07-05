@@ -33,7 +33,7 @@ const WORKER_BUNDLE = `export default {
     }
     if (url.pathname.endsWith("/egress")) {
       // Try to forge identity — the egress gateway must override it.
-      const res = await fetch("https://example.com/probe", { headers: { "X-Vibez1-Egress-Caller": "FORGED" } });
+      const res = await fetch("https://example.com/probe", { headers: { "X-Vibestudio-Egress-Caller": "FORGED" } });
       const seen = await res.json();
       return new Response(JSON.stringify({ result: seen }), { headers: { "content-type": "application/json" } });
     }
@@ -91,12 +91,12 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
   // Shared egress listener: records the attributed caller header.
   const egress = createServer((req, res) => {
     egressHits.push({
-      caller: req.headers["x-vibez1-egress-caller"] as string | undefined,
-      secret: req.headers["x-vibez1-egress-secret"] as string | undefined,
+      caller: req.headers["x-vibestudio-egress-caller"] as string | undefined,
+      secret: req.headers["x-vibestudio-egress-secret"] as string | undefined,
       path: req.url ?? "",
     });
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ seenCaller: req.headers["x-vibez1-egress-caller"] ?? null }));
+    res.end(JSON.stringify({ seenCaller: req.headers["x-vibestudio-egress-caller"] ?? null }));
   });
   const egressPort = await listen(egress);
 
@@ -115,8 +115,8 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
       buildKey: `build:${unitPath}:${currentBuild.value.metadata.ev}`,
     }),
     getBuildByKey: () => currentBuild.value,
-    workspacePath: mkdtempSync(join(tmpdir(), "vibez1-dwh-ws-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibez1-dwh-state-")),
+    workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-ws-")),
+    statePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-")),
     getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(egressPort),
     registerEgressCaller: () => {},
@@ -129,7 +129,7 @@ async function createHarness(buildRef?: { value: BuildResult }): Promise<Harness
   // Minimal gateway serving the loader endpoints (mirrors gateway.ts).
   const gateway = createServer((req, res) => {
     const url = req.url ?? "";
-    const secret = req.headers["x-vibez1-loader-secret"];
+    const secret = req.headers["x-vibestudio-loader-secret"];
     if (url.startsWith("/_workerversion/") || url.startsWith("/_workercode/")) {
       if (secret !== manager.getLoaderSecret()) {
         res.writeHead(403);

@@ -5,16 +5,16 @@
  * with in-memory view state. getPanelInit() returns the bootstrap config
  * (incl. a fresh single-use auth.grantConnection token — never cache it).
  */
-import { PanelRegistry } from "@vibez1/shared/panelRegistry";
-import { PanelManager } from "@vibez1/shared/shell/panelManager";
-import type { CreatePanelResult, NavigatePanelOptions } from "@vibez1/shared/shell/panelManager";
-import { asPanelSlotId, type PanelSlotId } from "@vibez1/shared/panel/ids";
-import { buildPanelUrl } from "@vibez1/shared/panelFactory";
-import type { PanelRuntimeAcquireResult } from "@vibez1/shared/panel/panelLease";
+import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import { PanelManager } from "@vibestudio/shared/shell/panelManager";
+import type { CreatePanelResult, NavigatePanelOptions } from "@vibestudio/shared/shell/panelManager";
+import { asPanelSlotId, type PanelSlotId } from "@vibestudio/shared/panel/ids";
+import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
+import type { PanelRuntimeAcquireResult } from "@vibestudio/shared/panel/panelLease";
 import {
   createPanelRuntimeLeaseRequest,
   formatPanelRuntimeLeaseDeniedMessage,
-} from "@vibez1/shared/panel/panelLease";
+} from "@vibestudio/shared/panel/panelLease";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -22,19 +22,19 @@ import type {
   SlotHistoryRow,
   SlotRow,
   WorkspaceStateClient,
-} from "@vibez1/shared/shell/workspaceStateClient";
+} from "@vibestudio/shared/shell/workspaceStateClient";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
-} from "@vibez1/shared/runtime/entitySpec";
-import type { RpcClient } from "@vibez1/rpc";
+} from "@vibestudio/shared/runtime/entitySpec";
+import type { RpcClient } from "@vibestudio/rpc";
 
 export interface PanelLoadInfo {
   panelUrl: string;
   contextId: string;
   source: string;
-  /** Bootstrap payload incl. connectionId — inject as __vibez1PanelInit. */
+  /** Bootstrap payload incl. connectionId — inject as __vibestudioPanelInit. */
   panelInit: Record<string, unknown>;
 }
 

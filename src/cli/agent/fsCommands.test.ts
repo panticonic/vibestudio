@@ -65,7 +65,7 @@ function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequ
 }
 
 function writeCredentials(tmpDir: string, url = "https://host.tailnet.ts.net"): void {
-  const dir = path.join(tmpDir, ".config", "vibez1");
+  const dir = path.join(tmpDir, ".config", "vibestudio");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
@@ -81,7 +81,7 @@ function writeCredentials(tmpDir: string, url = "https://host.tailnet.ts.net"): 
 }
 
 function writeSession(tmpDir: string, name = "default", serverUrl = "https://host.tailnet.ts.net") {
-  const dir = path.join(tmpDir, ".config", "vibez1", "agent-sessions");
+  const dir = path.join(tmpDir, ".config", "vibestudio", "agent-sessions");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `${name}.json`),
@@ -102,11 +102,11 @@ function jsonOutput(): unknown {
   return JSON.parse(lines[lines.length - 1]!);
 }
 
-describe("vibez1 fs commands", () => {
+describe("vibestudio fs commands", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-fs-cli-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-fs-cli-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
     vi.spyOn(console, "log").mockImplementation(() => {});

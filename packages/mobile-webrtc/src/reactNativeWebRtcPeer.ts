@@ -4,7 +4,7 @@
  * is the **mobile** sibling of the desktop/server adapter
  * (`src/main/webrtc/nodeDatachannelPeer.ts`): both wrap a native WebRTC stack
  * into the same `RtcPeerConnectionLike`/`RtcDataChannelLike` shape that the
- * transport (`@vibez1/rpc/transports/webrtcClient`) codes against, so the
+ * transport (`@vibestudio/rpc/transports/webrtcClient`) codes against, so the
  * transport carries no native dependency and stays unit-testable with fakes.
  *
  * Three impedance mismatches are handled at this boundary:
@@ -30,7 +30,7 @@
  *     fingerprint accessor. The pinned value is the `a=fingerprint:sha-256 …`
  *     line of the REMOTE SDP (`pc.remoteDescription.sdp`). We parse it and return
  *     the uppercase colon-hex form the QR pin uses (matches `normalizeFingerprint`
- *     in `@vibez1/shared/connect`). Null until the remote description is set, so
+ *     in `@vibestudio/shared/connect`). Null until the remote description is set, so
  *     the transport fails closed — it never completes an unpinned pipe.
  *
  * The native surface is described by the local `NativeRtc*` interfaces below
@@ -52,8 +52,8 @@ import type {
   RtcPeerConfig,
   RtcPeerConnectionLike,
   RtcSessionDescription,
-} from "@vibez1/rpc/transports/webrtcPeer";
-import { DEFAULT_CHUNK_SIZE, parseSdpFingerprint } from "@vibez1/rpc/transports/webrtcPeer";
+} from "@vibestudio/rpc/transports/webrtcPeer";
+import { DEFAULT_CHUNK_SIZE, parseSdpFingerprint } from "@vibestudio/rpc/transports/webrtcPeer";
 
 /**
  * React Native's data-channel stack has corrupted frames above the conservative

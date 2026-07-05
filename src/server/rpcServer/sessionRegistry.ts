@@ -1,5 +1,5 @@
-import type { RpcEnvelope, RpcResponse } from "@vibez1/rpc";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import type { RpcEnvelope, RpcResponse } from "@vibestudio/rpc";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 
 export type RelayInboxMessage = {
   envelope: RpcEnvelope;

@@ -1,10 +1,10 @@
 import type { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   panelRuntimeMethods,
   registerClientSchema,
   leaseRequestSchema,
-} from "@vibez1/shared/serviceSchemas/panelRuntime";
+} from "@vibestudio/shared/serviceSchemas/panelRuntime";
 import type { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 
 export function createPanelRuntimeService(deps: {

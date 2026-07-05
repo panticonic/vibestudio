@@ -50,28 +50,28 @@ const GMAIL_READ_AUTH: GmailOperationAuth = {
   requiredScopes: [GMAIL_READ_SCOPE],
   googleApis: [GMAIL_API],
   reconnectPrompt:
-    "Reconnect Google Workspace from the Gmail setup card so Vibez1 can request Gmail read/modify access.",
+    "Reconnect Google Workspace from the Gmail setup card so Vibestudio can request Gmail read/modify access.",
 };
 
 const GMAIL_WRITE_AUTH: GmailOperationAuth = {
   requiredScopes: [GMAIL_WRITE_SCOPE],
   googleApis: [GMAIL_API],
   reconnectPrompt:
-    "Reconnect Google Workspace from the Gmail setup card so Vibez1 can request Gmail read/modify access.",
+    "Reconnect Google Workspace from the Gmail setup card so Vibestudio can request Gmail read/modify access.",
 };
 
 const GMAIL_SEND_AS_AUTH: GmailOperationAuth = {
   requiredScopes: [GMAIL_READ_SCOPE, GMAIL_SETTINGS_SCOPE],
   googleApis: [GMAIL_API],
   reconnectPrompt:
-    "Reconnect Google Workspace from the Gmail setup card so Vibez1 can request Gmail and Gmail settings access.",
+    "Reconnect Google Workspace from the Gmail setup card so Vibestudio can request Gmail and Gmail settings access.",
 };
 
 const GMAIL_CONTACTS_AUTH: GmailOperationAuth = {
   requiredScopes: [GMAIL_READ_SCOPE, GOOGLE_CONTACTS_SCOPE, GOOGLE_OTHER_CONTACTS_SCOPE],
   googleApis: [GMAIL_API, PEOPLE_API],
   reconnectPrompt:
-    "Reconnect Google Workspace from the Gmail setup card so Vibez1 can request Gmail and Google contacts access.",
+    "Reconnect Google Workspace from the Gmail setup card so Vibestudio can request Gmail and Google contacts access.",
 };
 
 const SEARCH_SCHEMA = {

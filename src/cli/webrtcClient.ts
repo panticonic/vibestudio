@@ -2,7 +2,7 @@
  * WebRTC RPC client for the CLI.
  *
  * This is the Node/CLI binding for the shared paired-connection bootstrap used
- * by desktop and mobile. It dials the signaling room from a `vibez1://connect`
+ * by desktop and mobile. It dials the signaling room from a `vibestudio://connect`
  * link, pins the server DTLS fingerprint, opens the main shell session, and
  * exposes the same `call("service.method", args)` / `callTarget(...)` surface as
  * the HTTP CLI client.
@@ -13,13 +13,13 @@ import {
   createRpcClient,
   type RpcClient as CoreRpcClient,
   type RpcStreamOptions,
-} from "@vibez1/rpc";
+} from "@vibestudio/rpc";
 import {
   createPairedConnection,
   type PairedConnection,
-} from "@vibez1/rpc/transports/pairedConnection";
-import type { RecoveryKind } from "@vibez1/rpc/protocol/recoveryCoordinator";
-import type { ConnectPairing } from "@vibez1/shared/connect";
+} from "@vibestudio/rpc/transports/pairedConnection";
+import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
+import type { ConnectPairing } from "@vibestudio/shared/connect";
 
 export type CliWebRtcPairing = Omit<ConnectPairing, "code"> & { code?: string };
 
@@ -127,7 +127,7 @@ export class WebRtcRpcClient {
       getShellToken: this.config.getToken,
       connectionId: this.config.connectionId ?? randomUUID(),
       callerKind: "shell",
-      clientLabel: this.config.clientLabel ?? "Vibez1 CLI",
+      clientLabel: this.config.clientLabel ?? "Vibestudio CLI",
       clientPlatform: "headless",
       platform: "headless",
       logPrefix: this.config.logPrefix ?? "[cli-webrtc]",

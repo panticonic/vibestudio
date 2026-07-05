@@ -15,7 +15,7 @@ import {
 import type { WorkspaceConfig } from "./types.js";
 
 function tempWorkspace(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-remotes-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-remotes-"));
 }
 
 function initRepo(workspaceRoot: string, repoPath: string): void {
@@ -91,13 +91,13 @@ describe("workspace remotes", () => {
     const next = setDeclaredRemoteInConfig({ id: "test", git: {} }, "projects/bgkit", {
       name: "origin",
       url: "https://github.com/werg/bgkit.git",
-      branch: "vibez1-bridge",
+      branch: "vibestudio-bridge",
     });
 
     expect(next.git?.remotes?.["projects"]?.["bgkit"]).toEqual({
       origin: {
         url: "https://github.com/werg/bgkit.git",
-        branch: "vibez1-bridge",
+        branch: "vibestudio-bridge",
       },
     });
     expect(getDeclaredRemoteForRepo(next, "projects/bgkit")).toMatchObject({
@@ -106,7 +106,7 @@ describe("workspace remotes", () => {
       repoKey: "bgkit",
       name: "origin",
       url: "https://github.com/werg/bgkit.git",
-      branch: "vibez1-bridge",
+      branch: "vibestudio-bridge",
     });
   });
 
@@ -180,7 +180,7 @@ describe("workspace remotes", () => {
       }).trim()
     ).toBe("https://github.com/acme/chat-ci.git");
     expect(
-      execFileSync("git", ["config", "remote.origin.vibez1-managed"], {
+      execFileSync("git", ["config", "remote.origin.vibestudio-managed"], {
         cwd: repoDir,
         encoding: "utf-8",
       }).trim()

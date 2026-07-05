@@ -1,4 +1,4 @@
-import type { WsLike } from "@vibez1/rpc/protocol/wsAdapter";
+import type { WsLike } from "@vibestudio/rpc/protocol/wsAdapter";
 import { describe, expect, it } from "vitest";
 import { createServerWsTransport } from "./serverWsTransport.js";
 

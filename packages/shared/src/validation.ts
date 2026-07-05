@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createAIError } from "./errors.js";
-import type { AIToolDefinition } from "@vibez1/types";
+import type { AIToolDefinition } from "@vibestudio/types";
 
 /**
  * Zod-backed validation helpers for AI payloads.

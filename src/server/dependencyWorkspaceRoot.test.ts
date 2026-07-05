@@ -32,7 +32,7 @@ describe("resolveDependencyWorkspaceRoot", () => {
 
   async function writeWorkspaceConfig(dir: string): Promise<void> {
     await fsp.mkdir(path.join(dir, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(dir, "meta", "vibez1.yml"), "panels: []\n");
+    await fsp.writeFile(path.join(dir, "meta", "vibestudio.yml"), "panels: []\n");
   }
 
   it("uses the packaged workspace-template as the dependency root when it has dependency metadata", async () => {

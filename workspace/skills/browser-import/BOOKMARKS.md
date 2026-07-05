@@ -7,7 +7,7 @@ Browse, search, and organize imported bookmarks.
 Bookmark imports are incremental for a browser/profile. Re-running
 `startImport({ dataTypes: ["bookmarks"] })` updates existing source bookmarks
 and adds new ones instead of appending duplicates. Chrome/Firefox source ids are
-used when available; otherwise Vibez1 falls back to URL + folder.
+used when available; otherwise Vibestudio falls back to URL + folder.
 
 ## Bookmark Browser (Inline UI)
 

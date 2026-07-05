@@ -1,8 +1,8 @@
 # Extension Services
 
-> **Status:** v1 implemented. The `@vibez1/extension`, `@vibez1/extension-host` packages and the canary `image-service` and `typecheck-service` extensions are live; a few items in "Future work" remain deferred.
+> **Status:** v1 implemented. The `@vibestudio/extension`, `@vibestudio/extension-host` packages and the canary `image-service` and `typecheck-service` extensions are live; a few items in "Future work" remain deferred.
 
-Vibez1 extensions are **long-lived Node processes** that run alongside the server and expose RPC APIs to userland panels and workers. They extend the application itself — adding new RPC services, reacting to system events, and exposing callable surfaces to userland — in the spirit of VSCode extensions, not browser extensions.
+Vibestudio extensions are **long-lived Node processes** that run alongside the server and expose RPC APIs to userland panels and workers. They extend the application itself — adding new RPC services, reacting to system events, and exposing callable surfaces to userland — in the spirit of VSCode extensions, not browser extensions.
 
 Extensions are **trusted, first-party-installed Node code**. They get two ways to do work, and they choose which to use per call:
 
@@ -36,7 +36,7 @@ Extensions are workspace units like panels and workers. Each is its own git repo
 workspace/extensions/
 └── @acme/
     └── git-tools/
-        ├── package.json          # Manifest with vibez1.extension field
+        ├── package.json          # Manifest with vibestudio.extension field
         ├── index.ts              # Entry (TypeScript source)
         └── ...
 ```
@@ -79,7 +79,7 @@ A `BUILD_CACHE_VERSION` bump in buildV2 may change the cache **build key**, but 
   "version": "1.2.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Git Tools",
     "entry": "index.ts",
     "sourcemap": true,
@@ -93,19 +93,19 @@ A `BUILD_CACHE_VERSION` bump in buildV2 may change the cache **build key**, but 
 }
 ```
 
-The manifest follows the **shared workspace-unit shape**: top-level keys under `vibez1.*` are common to every unit kind, and a single kind-specific sub-block (`vibez1.extension`, `vibez1.worker`, `vibez1.panel`) declares what kind the unit is. A unit must have exactly one kind-specific sub-block.
+The manifest follows the **shared workspace-unit shape**: top-level keys under `vibestudio.*` are common to every unit kind, and a single kind-specific sub-block (`vibestudio.extension`, `vibestudio.worker`, `vibestudio.panel`) declares what kind the unit is. A unit must have exactly one kind-specific sub-block.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `vibez1.displayName` | string | package name | Human-readable name. Shared across all unit kinds. |
-| `vibez1.entry` | string | `index.ts` (extension), `index.tsx` (panel), `index.ts` (worker) | Entry source file. Shared across kinds. |
-| `vibez1.sourcemap` | boolean | `true` | Inline sourcemaps in the bundle. Shared across kinds (mandatory `true` for extensions in v1). |
-| `vibez1.extension.activationEvents` | string[] | `["*"]` | When to activate. `"*"` = eager at startup. Other values fail validation in v1. |
-The presence of `vibez1.extension` is what marks the unit as an extension to the package graph. Manifests are validated against a JSON schema at install time and again at boot; validation failures fail closed (extension is not activated and an error is recorded in the registry).
+| `vibestudio.displayName` | string | package name | Human-readable name. Shared across all unit kinds. |
+| `vibestudio.entry` | string | `index.ts` (extension), `index.tsx` (panel), `index.ts` (worker) | Entry source file. Shared across kinds. |
+| `vibestudio.sourcemap` | boolean | `true` | Inline sourcemaps in the bundle. Shared across kinds (mandatory `true` for extensions in v1). |
+| `vibestudio.extension.activationEvents` | string[] | `["*"]` | When to activate. `"*"` = eager at startup. Other values fail validation in v1. |
+The presence of `vibestudio.extension` is what marks the unit as an extension to the package graph. Manifests are validated against a JSON schema at install time and again at boot; validation failures fail closed (extension is not activated and an error is recorded in the registry).
 
 No `dist/` — extensions ship TypeScript source, the workspace build pipeline produces the runtime bundle. Cross-extension type sharing is not a first-class concern in v1.
 
-This shape is harmonized with workers and panels (today's panel manifests use a flat `vibez1.{title, entry, ...}` layout that should converge to the same `vibez1.*` shared + `vibez1.panel.*` kind-specific shape in a follow-up pass). See "Workspace-unit conventions" below for the broader contract.
+This shape is harmonized with workers and panels (today's panel manifests use a flat `vibestudio.{title, entry, ...}` layout that should converge to the same `vibestudio.*` shared + `vibestudio.panel.*` kind-specific shape in a follow-up pass). See "Workspace-unit conventions" below for the broader contract.
 
 ## Build pipeline integration
 
@@ -130,7 +130,7 @@ The stale `agent` build kind described in `BUILD_SYSTEM.md` was never actually i
 
 ```ts
 // workspace/extensions/@acme/git-tools/index.ts
-import type { ExtensionContext } from "@vibez1/extension";
+import type { ExtensionContext } from "@vibestudio/extension";
 
 export interface GitToolsApi {
   blame(path: string): Promise<BlameLine[]>;
@@ -349,7 +349,7 @@ If an extension process exits unexpectedly (non-zero exit, signal, ready-handsha
 
 ## Reaching extensions from userland
 
-Extensions have two callable surfaces. The **RPC** surface (the `extensions` dispatcher service) is the canonical one — every extension has it, and it's where the read/lifecycle methods (`list` / `reload`) live. Installing and enabling extensions is declarative — `meta/vibez1.yml` is the only surface (see [Declared extension set and management](#declared-extension-set-and-management)); there are no imperative `install` / `uninstall` / `setEnabled` / `update` RPCs. The **HTTP fetch** surface is optional: an extension that wants to be reachable like a worker can export a default `fetch` handler, and the gateway will route `/_r/ext/<name>/*` to it.
+Extensions have two callable surfaces. The **RPC** surface (the `extensions` dispatcher service) is the canonical one — every extension has it, and it's where the read/lifecycle methods (`list` / `reload`) live. Installing and enabling extensions is declarative — `meta/vibestudio.yml` is the only surface (see [Declared extension set and management](#declared-extension-set-and-management)); there are no imperative `install` / `uninstall` / `setEnabled` / `update` RPCs. The **HTTP fetch** surface is optional: an extension that wants to be reachable like a worker can export a default `fetch` handler, and the gateway will route `/_r/ext/<name>/*` to it.
 
 ### RPC: the `extensions` service
 
@@ -371,7 +371,7 @@ There is exactly one RPC entry point: the dispatcher service named `extensions`.
 }
 ```
 
-`invoke`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. `invoke` is still caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/vibez1.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
+`invoke`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. `invoke` is still caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/vibestudio.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
 
 Consumers — panels, workers, and other extensions — use the same thin client from `@workspace/runtime`:
 
@@ -406,7 +406,7 @@ interface ExtensionsClient {
   on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
   list(): Promise<RegistryEntry[]>;
 
-  // Lifecycle — install/enable is declarative (meta/vibez1.yml), not an API.
+  // Lifecycle — install/enable is declarative (meta/vibestudio.yml), not an API.
   reload(name: ExtensionName): Promise<void>;                    // restart active approved build
 }
 ```
@@ -416,7 +416,7 @@ interface ExtensionsClient {
 An extension can additionally expose an HTTP handler by including a default export with a `fetch` method, matching the worker convention. If present, the gateway routes matching requests to the extension process.
 
 ```ts
-import type { ExtensionContext, ExtensionFetchContext } from "@vibez1/extension";
+import type { ExtensionContext, ExtensionFetchContext } from "@vibestudio/extension";
 
 let ctx: ExtensionContext;
 
@@ -447,7 +447,7 @@ One route namespace is available to an extension that exposes `fetch`:
 - A request that arrives before the extension finishes `activate`, while it's in `pending-approval`, or while it's in `error` gets a 503 with a descriptive body. No queueing.
 - The fetch handler runs in the same process as `activate` — they share state, can call each other's helpers, can share connection pools. If you want a route to call into the extension's RPC API for free, just call your API methods directly inside `fetch`.
 
-The fetch handler is **optional**. Extensions without a default export `fetch` have no HTTP route registered. The RPC surface is the canonical one; fetch is for cases where another part of Vibez1 or a userland HTTP-shaped consumer wants fetch-call ergonomics.
+The fetch handler is **optional**. Extensions without a default export `fetch` have no HTTP route registered. The RPC surface is the canonical one; fetch is for cases where another part of Vibestudio or a userland HTTP-shaped consumer wants fetch-call ergonomics.
 
 Implementation note: the current `RouteRegistry` only owns `/_r/` worker/service dispatch. Extension fetch adds one entry to that layer:
 
@@ -457,7 +457,7 @@ Consumers reach the auto-prefix HTTP surface the same way they reach any interna
 
 ## Extension approvals — informed-consent UX
 
-Vibez1 already requests approval for git pushes. Extensions add one special case to that existing path: a push to an installed extension's active branch (`main` / `master` in v1) uses extension-specific copy and decision handling, because accepting that push changes trusted native code. No separate build-hash approval key is introduced.
+Vibestudio already requests approval for git pushes. Extensions add one special case to that existing path: a push to an installed extension's active branch (`main` / `master` in v1) uses extension-specific copy and decision handling, because accepting that push changes trusted native code. No separate build-hash approval key is introduced.
 
 Two extension-specific approval sub-kinds cover the non-git management cases:
 
@@ -603,10 +603,10 @@ This means **no source push to an active extension branch can land without expli
 
 ## Declared extension set and management
 
-The extensions a workspace uses are **declared** in `meta/vibez1.yml` under `extensions:`. That list is the single source of truth and the only install/enable/disable/uninstall surface — there is no imperative `extensions.install` / `setEnabled` / `uninstall` / `update` API. The registry remains server-managed operational state; the declared set drives it.
+The extensions a workspace uses are **declared** in `meta/vibestudio.yml` under `extensions:`. That list is the single source of truth and the only install/enable/disable/uninstall surface — there is no imperative `extensions.install` / `setEnabled` / `uninstall` / `update` API. The registry remains server-managed operational state; the declared set drives it.
 
 ```yaml
-# meta/vibez1.yml
+# meta/vibestudio.yml
 extensions:
   - source: extensions/@workspace-extensions/git-tools   # repo path or package name
     ref: main          # optional, defaults to "main"
@@ -616,7 +616,7 @@ extensions:
 The server **reconciles** the registry against the declared set at two moments:
 
 - **Workspace startup.** Already-approved declared extensions start immediately. Any declared extension that is not yet approved is surfaced in **one joint, elevated approval** listing every unapproved extension with a per-extension overview (source, version, EV, granted native capabilities). Boot does not block on the decision — the prompt is presented (desktop approval bar and mobile push), and each extension builds and activates when the set is approved. Denial leaves them pending until the next startup or meta edit.
-- **A push to `meta/`.** If the pushed `meta/vibez1.yml` adds extensions, the change is gated by a **single combined approval** that shows both the workspace-config write and the new-extension overview (the same prompt on desktop and mobile). Approving allows the push and activates the newly-trusted extensions without a second prompt; denying rejects the push. Removing an extension from the list stops and removes it on reconcile (storage retained); no approval is needed beyond the gated meta write itself.
+- **A push to `meta/`.** If the pushed `meta/vibestudio.yml` adds extensions, the change is gated by a **single combined approval** that shows both the workspace-config write and the new-extension overview (the same prompt on desktop and mobile). Approving allows the push and activates the newly-trusted extensions without a second prompt; denying rejects the push. Removing an extension from the list stops and removes it on reconcile (storage retained); no approval is needed beyond the gated meta write itself.
 
 The remaining userland surface is read/diagnostic only:
 
@@ -678,7 +678,7 @@ packages/extension-host/
 
 `childRuntime.ts` is the entry actually executed by the forked process. It reads the bundle path and gateway URL from `process.env`, opens the WebSocket, loads the ESM bundle with `await import(pathToFileURL(bundlePath).href)`, calls `module.activate(ctx)`, and serves invoke requests by looking up the returned API object. The user's bundle is loaded as a normal Node module — no `vm.createContext`, no sandbox — `vm.createContext` adds nothing once the process boundary is in place.
 
-The host runs in-process with the server. It mounts the `extensions` dispatcher service onto the existing dispatcher. The Electron main process consumes the same package — there is one extension host per running Vibez1 instance regardless of mode.
+The host runs in-process with the server. It mounts the `extensions` dispatcher service onto the existing dispatcher. The Electron main process consumes the same package — there is one extension host per running Vibestudio instance regardless of mode.
 
 `childRuntime.ts` also handles the fetch envelope frames described in "HTTP fetch (optional)" — when the host forwards an HTTP request, the child invokes the bundle's default-export `fetch`, awaits the Response, and frames the bytes back.
 
@@ -688,7 +688,7 @@ Extensions are one kind of **workspace unit**, alongside workers and panels. The
 
 ### Manifest shape
 
-Shared keys at `vibez1.*` (`displayName`, `entry`, `sourcemap`, …). One kind-specific sub-block (`vibez1.extension`, `vibez1.worker`, `vibez1.panel`) declares the kind. A unit has exactly one kind-specific sub-block. The discriminator is **block presence**, not a separate `kind` field.
+Shared keys at `vibestudio.*` (`displayName`, `entry`, `sourcemap`, …). One kind-specific sub-block (`vibestudio.extension`, `vibestudio.worker`, `vibestudio.panel`) declares the kind. A unit has exactly one kind-specific sub-block. The discriminator is **block presence**, not a separate `kind` field.
 
 Documented in the unit's `package.json`, validated at install/boot, lives in workspace git. See "Manifest" above for the extension-specific table.
 
@@ -779,7 +779,7 @@ In development mode each extension process is launched with `--inspect=0` (rando
 
 Workers expose workerd's inspector through the same `UnitStatus.inspectorUrl` field — different underlying protocol, same UI affordance. The user clicks "Open Inspector" and the host opens whichever URL is appropriate.
 
-In production mode (`VIBEZ1_PROD=1` or equivalent), `--inspect` is not enabled and `inspectorUrl` is `null`. This is purely a dev convenience.
+In production mode (`VIBESTUDIO_PROD=1` or equivalent), `--inspect` is not enabled and `inspectorUrl` is `null`. This is purely a dev convenience.
 
 ### Reload UX
 
@@ -862,7 +862,7 @@ Out of scope for v1, kept as forward-compat anchors:
 - **Cross-extension type sharing**: today consumers either define interfaces themselves or duplicate types. A generated aggregate `.d.ts` from active extensions becomes pressing once a few services migrate.
 - **Resource limits**: per-extension RSS caps and CPU quotas. The OS can enforce these via `setrlimit`-equivalents; not wired in v1.
 - **Extensions shipping panels**: deliberately out of scope. Extensions register RPC APIs and HTTP routes; a separate panel can call into the extension.
-- **Config schema in manifest**: `vibez1.extension.config: <jsonschema>` paired with a host-rendered generic config UI. Several migration candidates (push, browserData, image) have user-tweakable settings; shipping a panel per extension is heavy.
+- **Config schema in manifest**: `vibestudio.extension.config: <jsonschema>` paired with a host-rendered generic config UI. Several migration candidates (push, browserData, image) have user-tweakable settings; shipping a panel per extension is heavy.
 
 ## Related cleanup
 

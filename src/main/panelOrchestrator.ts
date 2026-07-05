@@ -6,7 +6,7 @@
  * only: server RPC → registry update → view management.
  */
 
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import { randomUUID } from "crypto";
 import type {
   Panel,
@@ -18,55 +18,55 @@ import type {
   PanelTreeSnapshot,
   PaletteCommand,
   ThemeConfig,
-} from "@vibez1/shared/types";
-import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
-import type { EventService } from "@vibez1/shared/eventsService";
+} from "@vibestudio/shared/types";
+import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ScopedServerCaller, ServerClient } from "./serverClient.js";
-import type { PanelManager } from "@vibez1/shared/shell/panelManager";
+import type { PanelManager } from "@vibestudio/shared/shell/panelManager";
 import type {
   PanelHost,
   PanelHostRegistration,
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
-} from "@vibez1/shared/panel/panelLease";
+} from "@vibestudio/shared/panel/panelLease";
 import {
   createPanelHostRegistration,
   createPanelRuntimeLeaseRequest,
   formatPanelRuntimeLeaseDeniedMessage,
-} from "@vibez1/shared/panel/panelLease";
-import { classifyRuntimeLeaseChange } from "@vibez1/shared/panel/leaseTracker";
+} from "@vibestudio/shared/panel/panelLease";
+import { classifyRuntimeLeaseChange } from "@vibestudio/shared/panel/leaseTracker";
 import type {
   BridgePanelLifecycle,
   PanelViewLike,
   PanelHttpServerLike,
   PanelCreateOptions,
-} from "@vibez1/shared/panelInterfaces";
-import { BROWSER_SESSION_PARTITION } from "@vibez1/shared/panelInterfaces";
-import { contextIdToPartition } from "@vibez1/shared/contextIdToPartition.js";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { panelRuntimeMethods } from "@vibez1/shared/serviceSchemas/panelRuntime";
-import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
-import type { PanelRestorePolicy } from "@vibez1/shared/workspace/types";
-import { buildPanelUrl } from "@vibez1/shared/panelFactory";
+} from "@vibestudio/shared/panelInterfaces";
+import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
+import { contextIdToPartition } from "@vibestudio/shared/contextIdToPartition.js";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { panelRuntimeMethods } from "@vibestudio/shared/serviceSchemas/panelRuntime";
+import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import type { PanelRestorePolicy } from "@vibestudio/shared/workspace/types";
+import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
 import {
   selectCapEvictionVictims,
   selectIdlePanelVictims,
   type LoadedPanelSnapshot,
-} from "@vibez1/shared/panel/panelGc";
+} from "@vibestudio/shared/panel/panelGc";
 import {
   PANEL_UI_IDLE_SWEEP_MS,
   PANEL_UI_IDLE_SWEEP_MS_HEADLESS,
   PANEL_UI_IDLE_UNLOAD_MS_HEADLESS,
   PANEL_UI_MAX_LOADED_HEADLESS,
-} from "@vibez1/shared/constants";
-import { asPanelSlotId } from "@vibez1/shared/panel/ids";
+} from "@vibestudio/shared/constants";
+import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
 import {
   getCurrentSnapshot,
   getPanelSource,
   getPanelContextId,
   getPanelRef,
-} from "@vibez1/shared/panel/accessors";
+} from "@vibestudio/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("PanelOrchestrator");
@@ -92,7 +92,7 @@ export interface PanelOrchestratorDeps {
 
   /**
    * Send an event to a panel. In IPC mode, this calls
-   * webContents.send("vibez1:event", event, payload).
+   * webContents.send("vibestudio:event", event, payload).
    */
   sendPanelEvent: (panelId: string, event: string, payload: unknown) => void;
   workspaceConfig?: WorkspaceConfig;

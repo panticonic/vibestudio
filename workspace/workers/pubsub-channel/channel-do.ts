@@ -78,7 +78,7 @@ const DEFAULT_POLICY_NAME = "agentic.conversation.v1";
 
 /** Service protocol the channel DO resolves for sibling channels (fork parent,
  *  lineage forwarding). */
-const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
+const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 /** Debounce window before a durable head advance fans out up the lineage. */
 const LINEAGE_REPORT_DEBOUNCE_MS = 500;
 /** Signal contentType for the ephemeral fork.head_changed lineage badge. */

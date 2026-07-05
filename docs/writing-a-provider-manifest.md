@@ -1,6 +1,6 @@
 # Provider Manifests Removed
 
-Vibez1 no longer uses server-owned provider manifests for credentials.
+Vibestudio no longer uses server-owned provider manifests for credentials.
 Provider setup lives in userland, with shared provider descriptors where useful.
 
 Userland should run provider-specific setup or OAuth, then store the resulting

@@ -5,7 +5,7 @@ description: Google Drive file browsing, uploads, permissions, shared drives, an
 
 # Google Drive Skill
 
-Use this skill when the user wants Vibez1 to work with Google Drive files,
+Use this skill when the user wants Vibestudio to work with Google Drive files,
 shared drives, permissions, exports, uploads, or change sync. This skill sits
 on top of the verified `google-workspace` connection and reuses the staged
 `google-drive` binding.

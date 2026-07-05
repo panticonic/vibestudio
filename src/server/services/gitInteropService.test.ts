@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import YAML from "yaml";
-import { createVerifiedCaller, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
@@ -12,7 +12,7 @@ const gitMocks = vi.hoisted(() => ({
   clone: vi.fn(async () => undefined),
 }));
 
-vi.mock("@vibez1/git", () => ({
+vi.mock("@vibestudio/git", () => ({
   GitClient: vi.fn().mockImplementation(() => ({
     clone: gitMocks.clone,
   })),
@@ -21,7 +21,7 @@ vi.mock("@vibez1/git", () => ({
 import { createGitInteropService } from "./gitInteropService.js";
 
 function tempWorkspace(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-git-interop-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-git-interop-"));
   fs.mkdirSync(path.join(root, "meta"), { recursive: true });
   return root;
 }
@@ -56,7 +56,7 @@ describe("gitInteropService", () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibez1.yml"),
+      path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
       "utf-8"
     );
@@ -74,30 +74,30 @@ describe("gitInteropService", () => {
           name: "origin",
           url: "https://github.com/werg/bgkit.git",
         },
-        branch: "vibez1-bridge",
+        branch: "vibestudio-bridge",
       },
     ]);
 
     expect(gitMocks.clone).toHaveBeenCalledWith({
       url: "https://github.com/werg/bgkit.git",
       dir: path.join(workspacePath, "projects", "bgkit"),
-      ref: "vibez1-bridge",
+      ref: "vibestudio-bridge",
     });
     const config = YAML.parse(
-      fs.readFileSync(path.join(workspacePath, "meta", "vibez1.yml"), "utf-8")
+      fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
     ) as WorkspaceConfig;
     expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toEqual({
       url: "https://github.com/werg/bgkit.git",
-      branch: "vibez1-bridge",
+      branch: "vibestudio-bridge",
     });
   });
 
-  it("uses one config-write approval before importing a project that edits vibez1.yml", async () => {
+  it("uses one config-write approval before importing a project that edits vibestudio.yml", async () => {
     gitMocks.clone.mockClear();
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibez1.yml"),
+      path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
       "utf-8"
     );
@@ -120,7 +120,7 @@ describe("gitInteropService", () => {
           name: "origin",
           url: "https://github.com/werg/bgkit.git",
         },
-        branch: "vibez1-bridge",
+        branch: "vibestudio-bridge",
       },
     ]);
 
@@ -134,7 +134,7 @@ describe("gitInteropService", () => {
         configWrite: {
           repoPath: "meta",
           summary:
-            "meta/vibez1.yml records origin=github.com/werg/bgkit.git for projects/bgkit on vibez1-bridge",
+            "meta/vibestudio.yml records origin=github.com/werg/bgkit.git for projects/bgkit on vibestudio-bridge",
         },
       })
     );
@@ -145,7 +145,7 @@ describe("gitInteropService", () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibez1.yml"),
+      path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
       "utf-8"
     );
@@ -169,7 +169,7 @@ describe("gitInteropService", () => {
             name: "origin",
             url: "https://github.com/werg/bgkit.git",
           },
-          branch: "vibez1-bridge",
+          branch: "vibestudio-bridge",
         },
       ])
     ).rejects.toThrow("Workspace config edit denied");
@@ -185,7 +185,7 @@ describe("gitInteropService", () => {
     const workspaceConfig: WorkspaceConfig = { id: "test" };
     const sourceChanged = vi.fn(async () => undefined);
     fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibez1.yml"),
+      path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
       "utf-8"
     );
@@ -209,17 +209,17 @@ describe("gitInteropService", () => {
             name: "origin",
             url: "https://github.com/werg/bgkit.git",
           },
-          branch: "vibez1-bridge",
+          branch: "vibestudio-bridge",
         },
       ])
     ).rejects.toThrow("network unavailable");
 
     const config = YAML.parse(
-      fs.readFileSync(path.join(workspacePath, "meta", "vibez1.yml"), "utf-8")
+      fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
     ) as WorkspaceConfig;
     expect(config.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toEqual({
       url: "https://github.com/werg/bgkit.git",
-      branch: "vibez1-bridge",
+      branch: "vibestudio-bridge",
     });
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
     expect(sourceChanged).toHaveBeenCalledWith(
@@ -239,7 +239,7 @@ describe("gitInteropService", () => {
             bgkit: {
               origin: {
                 url: "https://github.com/werg/bgkit.git",
-                branch: "vibez1-bridge",
+                branch: "vibestudio-bridge",
               },
             },
           },
@@ -248,7 +248,7 @@ describe("gitInteropService", () => {
     };
     const sourceChanged = vi.fn(async () => undefined);
     fs.writeFileSync(
-      path.join(workspacePath, "meta", "vibez1.yml"),
+      path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify(workspaceConfig),
       "utf-8"
     );
@@ -281,7 +281,7 @@ describe("gitInteropService", () => {
           remote: {
             name: "origin",
             url: "https://github.com/werg/bgkit.git",
-            branch: "vibez1-bridge",
+            branch: "vibestudio-bridge",
           },
         },
       ],
@@ -292,7 +292,7 @@ describe("gitInteropService", () => {
     expect(gitMocks.clone).toHaveBeenCalledWith({
       url: "https://github.com/werg/bgkit.git",
       dir: path.join(workspacePath, "projects", "bgkit"),
-      ref: "vibez1-bridge",
+      ref: "vibestudio-bridge",
     });
     expect(sourceChanged).toHaveBeenCalledWith(
       panelServiceContext(),
