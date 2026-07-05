@@ -332,7 +332,7 @@ import type { ParticipantDescriptor } from "@workspace/harness";
  * hooks below.
  *
  * The system prompt is composed from the Vibez1 base prompt,
- * workspace/meta/AGENTS.md, the generated skill index, and optional channel
+ * meta/AGENTS.md, the generated skill index, and optional channel
  * prompt config.
  */
 export class ${className} extends AgentWorkerBase {

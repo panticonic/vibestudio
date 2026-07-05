@@ -15,7 +15,7 @@
  *      and assert it exports a default component.
  *
  * Agent packages that register renderers should run this in their test suite
- * (see workspace/skills/gmail/renderers/pipeline-repro.test.ts for the
+ * (see skills/gmail/renderers/pipeline-repro.test.ts for the
  * reference usage).
  */
 

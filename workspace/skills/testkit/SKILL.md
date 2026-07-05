@@ -174,6 +174,6 @@ off long suites.
 | File | Content |
 | --- | --- |
 | examples.ts | Copy-paste eval snippets for every flow above |
-| @workspace/testkit (workspace/packages/testkit) | The SDK itself |
-| workspace/workers/testkit-driver | Driver DO for workspace-panel CDP |
-| workspace/panels/testbench | Test runner / profile viewer panel |
+| @workspace/testkit (packages/testkit) | The SDK itself |
+| workers/testkit-driver | Driver DO for workspace-panel CDP |
+| panels/testbench | Test runner / profile viewer panel |

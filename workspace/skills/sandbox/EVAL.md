@@ -413,7 +413,7 @@ eval({ code: `
 
 (For storage that other panels/workers need to read, define a Durable Object and
 use its `this.sql`, then call it over RPC. See the workers guide
-`workspace/workers/README.md` and `workspace-dev/WORKERS.md`. The eval `db` is
+`workers/README.md` and `workspace-dev/WORKERS.md`. The eval `db` is
 private to your EvalDO.)
 
 ## Filesystem Access
@@ -461,6 +461,12 @@ name as a string; do not call `help(workers)`.
 Launch, list, and retire workers through the **runtime entity API**
 (`runtime.createEntity` / `runtime.listEntities` / `runtime.retireEntity`). List
 launchable sources with `workers.listSources`.
+
+For prompts that say to stop, destroy, or clean up a worker instance, retire the
+single worker entity with `runtime.retireEntity({ id })` using the id returned by
+`runtime.createEntity` or `runtime.listEntities`. `runtime.cloneContext` and
+`runtime.destroyContext` are whole-context operations; do not use them just to
+create a disposable worker to destroy.
 
 ```
 eval({ code: `

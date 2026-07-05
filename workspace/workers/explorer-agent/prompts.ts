@@ -1,6 +1,6 @@
 /**
  * System prompt for the explorer agent. The detailed methodology lives in
- * `workspace/skills/explorer/SKILL.md` (auto-loaded into the skill index); this
+ * `skills/explorer/SKILL.md` (auto-loaded into the skill index); this
  * prompt sets the role + the load-bearing rules and points at the skill.
  */
 

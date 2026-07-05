@@ -10,7 +10,7 @@
  *
  * Contract: `workspace.getAgentsMd` returns the workspace AGENTS.md
  * as a string; `workspace.listSkills` returns an array of `SkillEntry`
- * descriptors (one per skill directory under `workspace/skills/`).
+ * descriptors (one per skill directory under `skills/`).
  */
 import type { RpcCaller } from "@vibez1/rpc";
 import { AgentWorkerError } from "./errors.js";
@@ -18,7 +18,7 @@ import { AgentWorkerError } from "./errors.js";
 export type { RpcCaller } from "@vibez1/rpc";
 
 export interface SkillEntry {
-  /** Skill identifier; matches the directory name under `workspace/skills/`. */
+  /** Skill identifier; matches the directory name under `skills/`. */
   name: string;
   /** Short human-readable description shown in the skill index. */
   description: string;
@@ -26,7 +26,7 @@ export interface SkillEntry {
   dirPath: string;
 }
 export interface Vibez1Resources {
-  /** Contents of `workspace/meta/AGENTS.md`. */
+  /** Contents of `meta/AGENTS.md`. */
   systemPrompt: string;
   /** Markdown-formatted skill index suitable for appending to the system prompt. */
   skillIndex: string;

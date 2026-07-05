@@ -9,7 +9,7 @@ into its `main` (a build-gated, ff-only `main`-head advance) is the dev signal.
 
 ## The flow
 
-1. Edit files under `workspace/extensions/<name>/` with the `edit`/`write`
+1. Edit files under `extensions/<name>/` with the `edit`/`write`
    tools — each edit lands on your context head as WORKING content. Nothing
    builds or restarts.
 2. Optionally dev-build your working content first:

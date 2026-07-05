@@ -77,7 +77,7 @@ Composable tools (generated from the worker's single operation table):
 With a generic `webhookIngress` Cloud Pub/Sub subscription targeting
 `workers/gmail-agent:GmailAgentWorker:gmail-push-router` and
 `googlePubSubTopicName` in the Gmail agent config (see
-`workspace/skills/google-workspace/SETUP.md`), the worker starts a
+`skills/google-workspace/SETUP.md`), the worker starts a
 `users.watch` on subscribe and renews it daily via its alarm. The server only
 verifies/decodes the generic webhook delivery; Gmail mailbox fanout happens in
 the Gmail worker. Pushes sync within seconds; polling stretches to a

@@ -1,5 +1,5 @@
 /**
- * Client for the testkit-driver DO (workspace/workers/testkit-driver).
+ * Client for the testkit-driver DO (workers/testkit-driver).
  *
  * Panel callers may not open CDP sessions to workspace panels directly
  * (panelCdp policy); the driver DO performs those operations as a DO caller

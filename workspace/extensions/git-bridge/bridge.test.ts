@@ -4,7 +4,7 @@
  *
  * Exercises the bridge core against the REAL gad-store DO (workerd
  * test-utils) with in-memory host bridges, mirroring the pattern of
- * `workspace/workers/gad-store/gadStoreVcs.test.ts`:
+ * `workers/gad-store/gadStoreVcs.test.ts`:
  *
  *  - `blobstore` — in-memory blob + tree store over the SHARED canonical
  *    hashing, so the import's mirror tripwire (`putTree(root).stateHash ===

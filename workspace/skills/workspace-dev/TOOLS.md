@@ -241,7 +241,9 @@ select the code build. Pass `ref: \`ctx:${ctx.contextId}\`` when launching a
 worker you just created or edited on the current context head. Omit `ref` only
 when you intentionally want the main workspace build.
 
-Launch/list/retire: `runtime.createEntity({ kind: "worker", source, key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `runtime.listEntities({ kind: "worker" })`; `runtime.retireEntity({ id })`. The `workers` binding exposes only service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`. To duplicate or tear down a whole context's durable state (every DO's storage + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability; the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for the service-resolution API.
+Launch/list/retire: `runtime.createEntity({ kind: "worker", source, key, contextId, env, stateArgs, ref? })` returns a handle (`{ id, targetId, … }`); `runtime.listEntities({ kind: "worker" })`; `runtime.retireEntity({ id })`. For prompts that say to stop, destroy, or clean up one worker, retire the worker entity by id. The `workers` binding exposes only service resolution — `listServices()`, `resolveService(...)`, `resolveDurableObject(...)`, `durableObjectService(...)`.
+
+To duplicate or tear down a whole context branch's durable state (userland worker/DO state + the file snapshot), use `runtime.cloneContext({ sourceContextId, include? })` → `{ contextId, entities }` and `runtime.destroyContext({ contextId })` — both gated by the context-boundary capability. These are context-level operations, not the normal way to stop a worker. Host-internal DOs are excluded from context cloning/storage teardown, and the low-level cloneDO/destroyDO primitives are server-internal. See [WORKERS.md](WORKERS.md) for the service-resolution API.
 
 #### Version control (GAD-native, edit → commit → push)
 

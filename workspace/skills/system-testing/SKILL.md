@@ -725,7 +725,7 @@ runtime API shape rather than guessing from filesystem terms:
 Pass a positional repo path to `vcs.status`; do not pass workspace roots, cwd
 values, or filesystem paths to `vcs.status` or `vcs.diff`.
 
-GAD VCS implementation files live under `src/server/services/vcsService.ts`,
+Host-checkout implementation files live under `src/server/services/vcsService.ts`,
 `src/server/gadVcs/`, and the runtime client
 `workspace/packages/runtime/src/shared/vcsClient.ts`. Do not look for
 `packages/runtime/src/server/vcs/vcs.ts`; that path is not part of this

@@ -9,7 +9,7 @@
  * caller that has a real `RuntimeFs` from `@workspace/runtime` can
  * pass it directly because TypeScript checks structural assignability.
  *
- * Mirrors the shape in `workspace/packages/runtime/src/types.ts`.
+ * Mirrors the shape in `packages/runtime/src/types.ts`.
  */
 
 import type { Buffer } from "node:buffer";

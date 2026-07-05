@@ -134,7 +134,7 @@ Guidelines:
 
 - Keep app-only UI in `apps/<name>`.
 - Put reusable cross-target logic in `packages/`.
-- Keep native host code outside `workspace/apps/mobile`; the workspace mobile
+- Keep native host code outside `apps/mobile`; the workspace mobile
   app should consume native host APIs through its service wrappers.
 - Do not import server/main internals from workspace app code.
 - Edit app source via the `edit`/`write` tools (which apply through `vcs.edit`):

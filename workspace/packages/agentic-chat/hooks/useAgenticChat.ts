@@ -1135,7 +1135,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
             },
           },
           // ui_prompt — serves Vibez1ExtensionUIContext (select/confirm/input/editor)
-          // from workspace/packages/harness. The agent worker forwards extension UI calls
+          // from packages/harness. The agent worker forwards extension UI calls
           // via ui_prompt { kind, ...params }; we render them through the
           // existing feedback_form (ActiveFeedbackSchema) machinery and return
           // primitive results (string | boolean | undefined) directly.

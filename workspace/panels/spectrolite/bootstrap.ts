@@ -1,7 +1,7 @@
 /**
  * Channel + agent bootstrap helpers for the Spectrolite panel.
  *
- * Mirrors `workspace/panels/chat/bootstrap.ts` and the bootstrap fragments
+ * Mirrors `panels/chat/bootstrap.ts` and the bootstrap fragments
  * inside `panels/chat/index.tsx`. The DO subscription pattern is identical;
  * only the system prompt and channel-name prefix differ.
  */

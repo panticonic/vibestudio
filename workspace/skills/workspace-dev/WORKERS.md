@@ -55,10 +55,12 @@ panel with context-branch code.
 ## Userland Services
 
 Worker package.json only carries `vibez1.durable.classes` (workerd binding).
-Workspace-level singletons, services, and HTTP routes live in
-`workspace/meta/vibez1.yml`. Resolve services by name/protocol through
-`workers.resolveService(...)`; do not hardcode `workers/foo`, DO class names,
-or `/_r/w/...` paths in callers.
+Workspace-level singletons, services, and HTTP routes are declared in the
+workspace manifest at `meta/vibez1.yml`. Runtime callers should normally
+discover services through `workers.listServices()` and resolve them by
+name/protocol through `workers.resolveService(...)`; read the manifest when you
+need to inspect or change declarations. Do not hardcode `workers/foo`, DO class
+names, or construct `/_r/w/...` paths in callers.
 
 Worker packages may declare simple string overrides in top-level `overrides`.
 BuildV2 forwards those overrides, plus overrides from transitive workspace
@@ -66,7 +68,8 @@ packages, into generated external-deps installs. Prefer package-local overrides
 for broken or missing transitive npm versions; changing an override invalidates
 the dependency cache.
 
-**Durable Object-backed service** — add to `workspace/meta/vibez1.yml`:
+**Durable Object-backed service** — when authoring service declarations, add to
+the workspace manifest (`meta/vibez1.yml`):
 
 ```yaml
 singletonObjects:
@@ -89,7 +92,8 @@ if (svc.kind !== "durable-object") throw new Error("Expected DO service");
 await rpc.call(svc.targetId, "methodName", [arg]);
 ```
 
-**Stateless worker service** — add to `workspace/meta/vibez1.yml`:
+**Stateless worker service** — when authoring service declarations, add to the
+workspace manifest (`meta/vibez1.yml`):
 
 ```yaml
 routes:

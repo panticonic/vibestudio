@@ -107,7 +107,7 @@ signal.
 ## Tests
 
 ```bash
-pnpm vitest run workspace/packages/harness/
+pnpm vitest run packages/harness/
 ```
 
 Covers all three extension factories and the UI context bridge.

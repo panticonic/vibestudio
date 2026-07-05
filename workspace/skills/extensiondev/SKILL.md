@@ -29,7 +29,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 
 ## Critical rules
 
-1. **`workspace/extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibez1.extension` (validated at install **and** boot — bad manifests fail closed).
+1. **`extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibez1.extension` (validated at install **and** boot — bad manifests fail closed).
 2. **`activate(ctx)` returns a plain object.** Its own enumerable function properties become RPC methods. Inherited methods, `then`, and non-function properties are skipped.
 3. **`ctx.fs` for an extension is unrestricted** — it covers the whole host filesystem. This is not a sandbox; it exists for _auditable_ writes. For silent ambient work, import `node:fs` directly. The install approval is the trust boundary.
 4. **Use `ctx.approvals.request(...)` only for extension-owned shared resources exposed to other userland callers.** Do not use it as a generic confirmation prompt or wrapper around ordinary filesystem/process/network work; the host/runtime APIs own those permission boundaries.
@@ -40,7 +40,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 ## Quick start
 
 ```ts
-// workspace/extensions/hello/package.json
+// extensions/hello/package.json
 {
   "name": "@workspace-extensions/hello",
   "version": "0.1.0",
@@ -56,7 +56,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 ```
 
 ```ts
-// workspace/extensions/hello/index.ts
+// extensions/hello/index.ts
 import type { ExtensionContext } from "@vibez1/extension";
 
 export async function activate(ctx: ExtensionContext) {
@@ -108,6 +108,6 @@ The declared set in `meta/vibez1.yml` is the single source of truth, reconciled 
 - [docs/extensions/generated-code.md](../../../docs/extensions/generated-code.md) — rules for code-generators emitting extensions
 - [docs/extensions/templates/](../../../docs/extensions/templates/) — four working scaffolds
 - Existing canary extensions (read these for working examples):
-  - `workspace/extensions/image-service/`
-  - `workspace/extensions/typecheck-service/`
-  - `workspace/extensions/browser-data/`
+  - `extensions/image-service/`
+  - `extensions/typecheck-service/`
+  - `extensions/browser-data/`

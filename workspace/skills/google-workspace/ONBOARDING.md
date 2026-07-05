@@ -101,7 +101,7 @@ If verification fails, consult [TROUBLESHOOTING.md](TROUBLESHOOTING.md). Do not
 continue onboarding until the live API call is valid.
 
 If the user is configuring Gmail, continue with
-`workspace/skills/gmail/ONBOARDING.md` once verification succeeds.
+`skills/gmail/ONBOARDING.md` once verification succeeds.
 
 ## Completion Criteria
 

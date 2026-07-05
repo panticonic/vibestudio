@@ -24,7 +24,7 @@ agents actually received.
 ### Directory Structure
 
 ```
-workspace/workers/my-agent/
+workers/my-agent/
   package.json       # manifest with durable class declarations
   index.ts           # entry point — exports DO class + default fetch handler
   my-agent-worker.ts # DO implementation extending AgentWorkerBase
@@ -78,9 +78,9 @@ keeping the same PubSub fan-out/replay API and the same UI reducer path.
 
 Worker package.json only declares DO classes (workerd binding) via
 `vibez1.durable.classes`. Workspace-level declarations — singletons,
-services, and HTTP routes — live in `workspace/meta/vibez1.yml`.
+services, and HTTP routes — live in `meta/vibez1.yml`.
 
-DO-backed service (in `workspace/meta/vibez1.yml`):
+DO-backed service (in `meta/vibez1.yml`):
 
 ```yaml
 singletonObjects:
@@ -189,7 +189,7 @@ The default reads from a per-channel `state` table key
 ### System prompt
 
 The final prompt is composed at `PiRunner` init from the Vibez1 base prompt,
-`workspace/meta/AGENTS.md`, the generated skill index, and optional
+`meta/AGENTS.md`, the generated skill index, and optional
 subscription config (`systemPrompt` / `systemPromptMode`). Model/runtime
 customization is via effective getters plus the `getDefault...()` hooks.
 
@@ -417,7 +417,7 @@ if (config?.model) {
 
 Subscription config can override `model`, `thinkingLevel`, `systemPrompt`, and
 `systemPromptMode` via `extraConfig`. The final prompt is composed from the
-Vibez1 base prompt, `workspace/meta/AGENTS.md`, the generated skill index,
+Vibez1 base prompt, `meta/AGENTS.md`, the generated skill index,
 and any subscription prompt override.
 
 ## 10. Event Flow
@@ -483,7 +483,7 @@ protected async onPostClone(
 }
 ```
 
-### Fork Worker (`workspace/workers/fork/`)
+### Fork Worker (`workers/fork/`)
 
 The fork worker is a stateless fetch handler that orchestrates the full fork sequence. It uses platform primitives via RPC:
 
@@ -519,7 +519,7 @@ import type { ChannelEvent, ParticipantDescriptor, TurnInput } from "@workspace/
 export class CodeReviewWorker extends AgentWorkerBase {
   static override schemaVersion = 3;
 
-  // The system prompt is composed from Vibez1 base + workspace/meta/AGENTS.md.
+  // The system prompt is composed from Vibez1 base + meta/AGENTS.md.
   // Override getDefaultModel() to select a specific model for code review:
   protected override getDefaultModel(): string {
     return "openai-codex:gpt-5.5";

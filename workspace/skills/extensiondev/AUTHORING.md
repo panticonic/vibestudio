@@ -3,13 +3,13 @@
 ## Workspace layout
 
 ```
-workspace/extensions/
+extensions/
 └── hello/
     ├── package.json                   # manifest with vibez1.extension
     └── index.ts                       # entry — exports activate(ctx)
 ```
 
-The directory layout matches `workspace/panels/` and `workspace/workers/`. Each extension is a workspace unit; the build graph discovers it via the `vibez1.extension` block in `package.json`.
+The directory layout matches `panels/` and `workers/`. Each extension is a workspace unit; the build graph discovers it via the `vibez1.extension` block in `package.json`.
 
 External extensions clone into the same tree at install time. There is no per-user installed/ directory.
 

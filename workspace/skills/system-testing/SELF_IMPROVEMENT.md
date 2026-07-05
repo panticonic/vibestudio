@@ -365,6 +365,11 @@ For each failure, determine the root cause category and act accordingly:
 
 ## Phase 4: Identify Files to Change
 
+The table below uses host-checkout paths relative to the Vibez1 source repo
+root. If you are using runtime workspace file tools against a materialized
+workspace context, drop the leading `workspace/` for files under the workspace
+source tree.
+
 | Symptom                       | Likely files                                                                                                    |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | fs operation failed           | `src/server/services/fsService.ts`, `workspace/packages/runtime/src/panel/fs.ts`                                |

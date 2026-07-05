@@ -3099,7 +3099,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         id: cardId,
         source: {
           type: "file",
-          path: "workspace/packages/agentic-chat/components/ModelCredentialRequiredCard.tsx",
+          path: "packages/agentic-chat/components/ModelCredentialRequiredCard.tsx",
         },
         props: {
           providerId,

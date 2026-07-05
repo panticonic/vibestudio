@@ -25,7 +25,7 @@ When in doubt, check `EXTENSIONS.md` § "Must stay in-host" — that list is can
 
 The canary migrations all follow the same shape:
 
-1. **Create the extension** at `workspace/extensions/<service-name>/`.
+1. **Create the extension** at `extensions/<service-name>/`.
    - Copy the existing service handler code into `activate(ctx)` and return the public methods.
    - Replace `ctx: ServiceContext` references with `ctx: ExtensionContext` and access to `ctx.invocation.current()` for caller info.
    - Move dependency wiring from the server bootstrap into top-level imports.
@@ -33,7 +33,7 @@ The canary migrations all follow the same shape:
 2. **Delete the in-host service**:
    - Remove `src/server/services/<service>.ts` and its test file.
    - Remove the registration in `src/server/index.ts` (or `panelRuntimeRegistration.ts`).
-   - Remove any `ctx.<name>` exposure from `workspace/packages/runtime/`.
+   - Remove any `ctx.<name>` exposure from `packages/runtime/`.
 
 3. **Codemod the consumers** — every `ctx.<name>.<method>(...)` (or `import { <name> } from "@workspace/runtime"`) becomes:
    ```ts
@@ -84,7 +84,7 @@ The canary migrations all follow the same shape:
 ## Migration checklist
 
 - [ ] Confirm the service is on the migration list (or you've justified adding it).
-- [ ] Create `workspace/extensions/<name>/` with manifest + `index.ts`.
+- [ ] Create `extensions/<name>/` with manifest + `index.ts`.
 - [ ] Copy handler logic, adjust `ctx` references.
 - [ ] Delete the in-host service and its registration.
 - [ ] Update every consumer (`ctx.<name>` → `extensions.use<ApiType>(name)`).

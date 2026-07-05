@@ -357,7 +357,7 @@ describe("MessageList typing indicators (roster-based)", () => {
             invocation: {
               id: "tool-1",
               name: "mcp__workspace__ListDirectory",
-              arguments: { path: "workspace/packages/agentic-chat", recursive: true },
+              arguments: { path: "packages/agentic-chat", recursive: true },
               execution: { status: "complete", description: "Listed agentic-chat package files" },
             },
             complete: true,

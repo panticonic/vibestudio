@@ -9,7 +9,7 @@ import { DurableObjectBase, rpc, type DurableObjectContext } from "@workspace/ru
  * fetch handler.
  *
  * For an end-to-end demonstration that round-trips through `this.sql`, see
- * `workspace/workers/sample-do/sampleDo.test.ts`, which uses `createTestDO`
+ * `workers/sample-do/sampleDo.test.ts`, which uses `createTestDO`
  * to drive `recordVisit` and `visitCount` against a real SQLite-backed DO.
  */
 export class SampleDO extends DurableObjectBase {

@@ -145,7 +145,7 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
     };
     void compileComponent(wrapped, {
       loadImport: sandbox.loadImport,
-      sourcePath: `workspace/panels/spectrolite/inline-jsx-${tagName === "*" ? "wild" : tagName}.tsx`,
+      sourcePath: `panels/spectrolite/inline-jsx-${tagName === "*" ? "wild" : tagName}.tsx`,
       imports: compileImports,
     }).then((result) => {
       if (cancelled) return;

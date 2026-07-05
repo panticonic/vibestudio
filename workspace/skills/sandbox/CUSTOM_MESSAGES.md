@@ -112,8 +112,8 @@ const weather = await client.getMessageType("weather");
 
 See the working example in:
 
-- `workspace/panels/chat/examples/weather-message-type.tsx` — the renderer (default, `reduce`).
-- `workspace/panels/chat/examples/weather-message-demo.ts` — registers + publishes + updates.
+- `panels/chat/examples/weather-message-type.tsx` — the renderer (default, `reduce`).
+- `panels/chat/examples/weather-message-demo.ts` — registers + publishes + updates.
 
 ## From sandbox code (eval / inline_ui / action_bar / feedback_custom)
 
@@ -168,7 +168,7 @@ context, so a shared types file needs no runtime presence. Value relative
 imports must exist in the panel's context like the renderer itself.
 
 ```tsx
-// workspace/panels/chat/examples/weather-message-type.tsx
+// panels/chat/examples/weather-message-type.tsx
 import { Badge, Card, Flex, Text } from "@radix-ui/themes";
 
 interface WeatherState {
@@ -334,7 +334,7 @@ await assertMessageTypesHealthy(MY_MESSAGE_TYPES, {
 });
 ```
 
-Reference usage: `workspace/skills/gmail/renderers/pipeline-repro.test.ts`.
+Reference usage: `skills/gmail/renderers/pipeline-repro.test.ts`.
 A type that fails the doctor would have shipped as a stuck spinner or a
 build-service stall in users' panels.
 

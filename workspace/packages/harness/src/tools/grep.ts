@@ -95,7 +95,7 @@ function warnFallbackOnce(): void {
     "[harness/grep] `re2` native binding not available — falling back to V8 RegExp. " +
       "Pattern length is capped and structural ReDoS shapes are rejected, but matching is " +
       "no longer guaranteed linear-time. Install build tooling (python3, make, g++) and " +
-      "re-run `pnpm install` in workspace/packages/harness to enable RE2."
+      "re-run `pnpm install` in packages/harness to enable RE2."
   );
 }
 
