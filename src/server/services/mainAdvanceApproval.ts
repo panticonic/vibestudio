@@ -634,18 +634,18 @@ async function approveWorkspaceMainAdvance(
       capability: WORKSPACE_REPO_WRITE_CAPABILITY,
       dedupKey: `workspace-source-change:main:${candidate.stateHash}`,
       resource: {
-        type: "vcs-head",
-        label: "Head",
-        value: "workspace main",
+        type: "workspace-version",
+        label: "Destination",
+        value: "workspace",
         key: "workspace-source-change:main",
       },
       operation: {
         kind: "workspace",
-        verb: "update workspace main",
+        verb: "publish new version to",
         object: {
-          type: "vcs-head",
-          label: "Head",
-          value: "workspace main",
+          type: "workspace-version",
+          label: "Destination",
+          value: "workspace",
         },
         groupKey: `workspace-source-change:main:${candidate.stateHash}`,
       },
@@ -653,11 +653,11 @@ async function approveWorkspaceMainAdvance(
       description: mainAdvanceDescription(candidate),
       details: mainAdvanceDetails(candidate),
       ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
-      deniedReason: "Workspace main update denied",
+      deniedReason: "Workspace publish denied",
     }
   );
   if (!authorization.allowed) {
-    throw new Error(authorization.reason ?? "Workspace main update denied");
+    throw new Error(authorization.reason ?? "Workspace publish denied");
   }
 }
 
@@ -731,21 +731,21 @@ function metaChangeDescription(units: UnitBatchEntry[]): string {
 }
 
 function mainAdvanceTitle(_candidate: MainAdvanceApprovalCandidate): string {
-  return "Update workspace main";
+  return "Publish new version to workspace";
 }
 
 function mainAdvanceDescription(candidate: MainAdvanceApprovalCandidate): string {
-  return `This advance moves workspace main and changes ${pathCountSummary(candidate.changedPaths)}.`;
+  return `This publishes the reviewed changes as the current workspace version, with ${pathCountSummary(candidate.changedPaths)} changed.`;
 }
 
 function mainAdvanceDetails(
   candidate: MainAdvanceApprovalCandidate
 ): Array<{ label: string; value: string }> {
   return [
-    { label: "Repo", value: candidate.repoPath },
+    { label: "Project", value: candidate.repoPath },
     ...(candidate.via ? [{ label: "Via", value: candidate.via }] : []),
-    ...(candidate.sourceHead ? [{ label: "Source", value: candidate.sourceHead }] : []),
-    { label: "State", value: candidate.stateHash },
+    ...(candidate.sourceHead ? [{ label: "Source version", value: candidate.sourceHead }] : []),
+    { label: "New version", value: candidate.stateHash },
     { label: "Changes", value: changedPathsSummary(candidate.changedPaths) },
     { label: "Built", value: candidate.buildStatusLine ?? "not validated" },
   ];

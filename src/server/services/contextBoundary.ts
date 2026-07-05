@@ -31,10 +31,12 @@ export interface ContextBoundaryDeps extends CapabilityPermissionDeps {
 export interface ContextBoundaryAction {
   /** Approval operation kind (matches existing approvalCopy switch values). */
   kind: "runtime" | "panel" | "worker-lifecycle";
-  /** Verb shown in the prompt, e.g. "Create panel", "Close", "Navigate", "Destroy". */
+  /** Verb shown in request details, e.g. "Create panel", "Close", "Navigate", "Retire entity". */
   verb: string;
   /** Optional subject/source label (e.g. the panel source) for the details list. */
   targetLabel?: string;
+  /** Optional human label for targetLabel. */
+  targetLabelName?: string;
   severity?: PendingCapabilityApproval["severity"];
   /** Coalesce duplicate prompts for the same logical operation. */
   groupKey?: string;
@@ -54,6 +56,63 @@ export interface ContextBoundaryRequest {
   /** The context being launched into / acted upon. */
   targetContextId: string;
   action: ContextBoundaryAction;
+}
+
+function cleanActionLabel(verb: string): string {
+  return verb.replace(/\s+in$/i, "").trim();
+}
+
+function lowerFirst(value: string): string {
+  return value.length === 0 ? value : `${value[0]!.toLowerCase()}${value.slice(1)}`;
+}
+
+function contextDescription(ownerLabel: string | undefined, targetContextId: string): string {
+  return ownerLabel
+    ? `the existing context owned by ${ownerLabel}`
+    : `existing context ${targetContextId}`;
+}
+
+function promptTitle(action: ContextBoundaryAction): string {
+  const actionLabel = cleanActionLabel(action.verb);
+  switch (actionLabel) {
+    case "Retire entity":
+      return "Retire runtime entity in another context";
+    case "Retire entity and remove context":
+      return "Retire runtime entity and remove its context";
+    case "Destroy context":
+      return "Destroy existing context";
+    case "Clone context":
+      return "Clone existing context";
+    case "Set up context":
+      return "Set up existing context";
+    case "Create subagent context":
+      return "Create subagent context";
+    default:
+      return `${actionLabel} in another context`;
+  }
+}
+
+function promptDescription(
+  action: ContextBoundaryAction,
+  ownerLabel: string | undefined,
+  targetContextId: string
+): string {
+  const target = contextDescription(ownerLabel, targetContextId);
+  const actionLabel = cleanActionLabel(action.verb);
+  switch (actionLabel) {
+    case "Retire entity":
+      return `This stops a runtime entity in ${target}. It does not delete worker, panel, or app source files.`;
+    case "Retire entity and remove context":
+      return `This stops a runtime entity in ${target} and removes that context if no live entity remains. It does not delete source files.`;
+    case "Destroy context":
+      return `This retires every runtime entity in ${target} and deletes that context's workspace state.`;
+    case "Clone context":
+      return `This copies durable runtime and workspace state from ${target}.`;
+    case "Create subagent context":
+      return `This creates a child runtime context from ${target}.`;
+    default:
+      return `This lets the requester ${lowerFirst(actionLabel)} in ${target}.`;
+  }
 }
 
 /**
@@ -83,8 +142,10 @@ export async function requireContextBoundaryPermission(
 
   const details: NonNullable<PendingCapabilityApproval["details"]> = [];
   if (ownerLabel) details.push({ label: "Owner", value: ownerLabel });
-  details.push({ label: "Target context", value: targetContextId });
-  if (action.targetLabel) details.push({ label: "Subject", value: action.targetLabel });
+  details.push({ label: "Context", value: targetContextId });
+  if (action.targetLabel) {
+    details.push({ label: action.targetLabelName ?? "Target", value: action.targetLabel });
+  }
 
   return requestCapabilityPermission(deps, {
     caller: subjectCaller,
@@ -99,10 +160,8 @@ export async function requireContextBoundaryPermission(
       object: { type: "context", label: "Context", value: target },
       ...(action.groupKey ? { groupKey: action.groupKey } : {}),
     },
-    title: `${action.verb} in ${ownerLabel ? `${ownerLabel}'s` : `context ${targetContextId}`}`,
-    description: `Runs code in / acts on ${
-      ownerLabel ? `${ownerLabel}'s` : `context ${targetContextId}`
-    } — another agent or panel's existing state.`,
+    title: promptTitle(action),
+    description: promptDescription(action, ownerLabel, targetContextId),
     details,
     deniedReason: `${action.verb} denied: ${target} is another agent or panel's existing state`,
   });

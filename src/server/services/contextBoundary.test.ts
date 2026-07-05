@@ -85,6 +85,13 @@ describe("requireContextBoundaryPermission", () => {
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         callerId: "panel:p1",
         grantResourceKey: contextBoundaryResourceKey("ctx-b", "panel:p1"),
+        title: "Create panel in another context",
+        description:
+          "This lets the requester create panel in the existing context owned by Agent X.",
+        details: [
+          { label: "Owner", value: "Agent X" },
+          { label: "Context", value: "ctx-b" },
+        ],
       })
     );
   });

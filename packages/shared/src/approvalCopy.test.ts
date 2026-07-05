@@ -163,8 +163,28 @@ describe("approvalCopy", () => {
         },
       },
       category: "Workspace source",
-      title: "Update panels/spectrolite",
-      summaryIncludes: "Updates workspace source",
+      title: "Publish changes to panels/spectrolite",
+      summaryIncludes: "Publishes workspace source changes",
+    },
+    {
+      name: "workspace publish",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "workspace-repo-write",
+        grantResourceKey: "workspace-source-change:main",
+        title: "Publish new version to workspace",
+        description:
+          "This publishes the reviewed changes as the current workspace version, with 1 path changed.",
+        resource: {
+          type: "workspace-version",
+          label: "Destination",
+          value: "workspace",
+        },
+      },
+      category: "Workspace source",
+      title: "Publish new version to workspace",
+      summaryIncludes: "current workspace version",
     },
     {
       name: "client-config",
@@ -279,6 +299,30 @@ describe("approvalCopy", () => {
       warning: "Approving runs native code with filesystem, network, and process access.",
       detailsOpen: true,
       risk: "danger",
+    },
+    {
+      name: "context boundary",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "context.boundary",
+        title: "Retire runtime entity in another context",
+        description:
+          "This stops a runtime entity in the existing context owned by Agent X. It does not delete source files.",
+        resource: {
+          type: "context",
+          label: "Context",
+          value: "Agent X",
+        },
+        details: [
+          { label: "Owner", value: "Agent X" },
+          { label: "Runtime entity", value: "do:workers/agent:AgentDO:headless" },
+        ],
+      },
+      category: "Capability request",
+      title: "Retire runtime entity in another context",
+      summaryIncludes: "stops a runtime entity",
+      warning: "This affects an existing runtime context owned by another agent or panel.",
     },
     {
       name: "userland",
@@ -416,9 +460,15 @@ describe("approvalCopy", () => {
       getStandardActionCopy(capability as Extract<PendingApproval, { kind: "capability" }>).once
         .label
     ).toBe("Open once");
-    expect(getStandardActionCopy(workspaceSourceChange).once.label).toBe("Commit once");
+    expect(getStandardActionCopy(workspaceSourceChange).once.label).toBe("Publish once");
     expect(getStandardActionCopy(workspaceSourceChange).session.description).toContain(
       "panels/spectrolite"
+    );
+    const workspacePublish = fixtures.find((fixture) => fixture.name === "workspace publish")!
+      .approval as Extract<PendingApproval, { kind: "capability" }>;
+    expect(getStandardActionCopy(workspacePublish).session.label).toBe("Publish this session");
+    expect(getStandardActionCopy(workspacePublish).repo.description).toContain(
+      "publish new workspace versions"
     );
     expect(getStandardActionCopy(networkEgress).once.label).toBe("Connect once");
     expect(getStandardActionCopy(networkEgress).session.label).toBe("Allow this origin");

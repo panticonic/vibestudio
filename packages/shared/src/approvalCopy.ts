@@ -310,24 +310,35 @@ export function getStandardActionCopy(
     );
     if (isWorkspaceSourceChange) {
       const destination = approval.resource?.value ?? "this workspace source tree";
+      const isWorkspacePublish = approval.grantResourceKey === "workspace-source-change:main";
       return {
         once: {
-          label: "Commit once",
-          description: "Allow this workspace source change once.",
+          label: "Publish once",
+          description: isWorkspacePublish
+            ? "Allow this workspace version to be published once."
+            : "Allow this workspace source change once.",
         },
         session: {
-          label: "Commit this session",
-          description: `Allow committed changes to ${destination} until Vibez1 restarts.`,
+          label: "Publish this session",
+          description: isWorkspacePublish
+            ? "Allow publishing new workspace versions until Vibez1 restarts."
+            : `Allow publishing changes to ${destination} until Vibez1 restarts.`,
         },
         version: {
           label: trustVersionLabel(approval),
-          description: `Allow ${trustSubject(approval)} to update ${destination}.`,
+          description: isWorkspacePublish
+            ? `Allow ${trustSubject(approval)} to publish new workspace versions.`
+            : `Allow ${trustSubject(approval)} to publish changes to ${destination}.`,
         },
         repo: {
           label: "Trust repo",
-          description: `Allow this workspace project to update ${destination}.`,
+          description: isWorkspacePublish
+            ? "Allow this workspace project to publish new workspace versions."
+            : `Allow this workspace project to publish changes to ${destination}.`,
         },
-        denyDescription: "Do not allow this workspace source change.",
+        denyDescription: isWorkspacePublish
+          ? "Do not publish this workspace version."
+          : "Do not allow this workspace source change.",
       };
     }
     const isMeta = approval.resource?.value === "meta";
@@ -614,9 +625,16 @@ export function getApprovalCopy(approval: PendingApproval): {
     if (approval.capability === "workspace-repo-write") {
       const destination = approval.resource?.value ?? "this repository";
       if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
+        const isWorkspacePublish = approval.grantResourceKey === "workspace-source-change:main";
         return {
-          title: `Update ${destination}`,
-          summary: `Updates workspace source in ${destination}.`,
+          title: isWorkspacePublish
+            ? approval.title || "Publish new version to workspace"
+            : `Publish changes to ${destination}`,
+          summary:
+            approval.description ??
+            (isWorkspacePublish
+              ? "Publishes the reviewed changes as the current workspace version."
+              : `Publishes workspace source changes to ${destination}.`),
         };
       }
       if (destination === "meta") {
@@ -676,13 +694,13 @@ export function getApprovalCopy(approval: PendingApproval): {
       const owner = approval.details?.find((d) => d.label === "Owner")?.value;
       const target =
         approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
-      const subject = owner ? `${owner}'s context` : `context ${target}`;
+      const subject = owner ? `the context owned by ${owner}` : `context ${target}`;
       return {
-        title: targetAwareGenericTitle(approval.title, `Act on ${subject}`),
+        title: targetAwareGenericTitle(approval.title, `Control ${subject}`),
         summary:
           approval.description ??
-          `Runs code in / acts on ${subject} — another agent or panel's existing state.`,
-        warning: "This runs code in, or acts on, another agent or panel's existing state.",
+          `Requests control over ${subject}, which already has runtime state.`,
+        warning: "This affects an existing runtime context owned by another agent or panel.",
       };
     }
     if (approval.capability === "client-config-delete") {

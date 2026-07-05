@@ -177,17 +177,18 @@ describe("createMainAdvanceApprovalGate", () => {
         effectiveVersion: "ev-panel",
         capability: "workspace-repo-write",
         grantResourceKey: "workspace-source-change:main",
-        title: "Update workspace main",
-        description: "This advance moves workspace main and changes 1 path.",
+        title: "Publish new version to workspace",
+        description:
+          "This publishes the reviewed changes as the current workspace version, with 1 path changed.",
         resource: {
-          type: "vcs-head",
-          label: "Head",
-          value: "workspace main",
+          type: "workspace-version",
+          label: "Destination",
+          value: "workspace",
         },
         details: [
-          { label: "Repo", value: "apps/shell" },
-          { label: "Source", value: "ctx:ctx-1" },
-          { label: "State", value: "state:next" },
+          { label: "Project", value: "apps/shell" },
+          { label: "Source version", value: "ctx:ctx-1" },
+          { label: "New version", value: "state:next" },
           { label: "Changes", value: "apps/shell/index.tsx" },
           { label: "Built", value: "not validated" },
         ],
@@ -320,7 +321,7 @@ describe("createMainAdvanceApprovalGate", () => {
           changedPaths: ["panels/spectrolite/index.tsx"],
         })
       )
-    ).rejects.toThrow("Workspace main update denied");
+    ).rejects.toThrow("Workspace publish denied");
   });
 
   describe("approveRepoDeletion", () => {
