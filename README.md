@@ -32,6 +32,16 @@ vibestudio --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, 
 On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
 DMG/AppImage/deb installers are published to GitHub Releases as they become available.
 
+Locally the desktop shell is a **paired device of a workspace server**, not an
+embedded child process. The bundled server runs as a detached OS process (spawned
+with `ELECTRON_RUN_AS_NODE`) that outlives the app; on launch the app attaches to a
+healthy recorded server (validated over the unauthenticated `GET /healthz`) or
+spawns a fresh one. Local and remote use the same auth model (device pairing +
+refresh credentials); only the transport differs — loopback WebSocket locally,
+WebRTC remotely. Quitting the app leaves the server running when background work is
+active (you are prompted, and the choice can be remembered); an idle detached server
+stops on its own. See [STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk files.
+
 ### Headless server (remote/home server; clients connect to it)
 
 ```bash

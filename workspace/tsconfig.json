@@ -47,6 +47,7 @@
         "workspace/about/browser-import-inspector/index.tsx"
       ],
       "@workspace-about/adblock": ["workspace/about/adblock/index.tsx"],
+      "@workspace-about/server-logs": ["workspace/about/server-logs/index.tsx"],
       "@workspace-about/help": ["workspace/about/help/index.tsx"],
       "@workspace-about/keyboard-shortcuts": ["workspace/about/keyboard-shortcuts/index.tsx"],
       "@workspace-about/credentials": ["workspace/about/credentials/index.tsx"],

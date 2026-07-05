@@ -27,6 +27,9 @@ export type EventName =
   | `vcs:working:${string}`
   | "workspace:unit-log"
   | "workspace:revision-bumped"
+  | "workspace:relaunch-requested"
+  | "credential:capture-request"
+  | "server-log:append"
   | "presence:panel-active"
   | "panel:runtimeLeaseChanged"
   | "panel-title-updated"
@@ -200,6 +203,40 @@ export interface EventPayloads {
   "host-target-launch:session-changed": HostTargetLaunchSessionSnapshot;
   "shell-approval:pending-changed": { pending: PendingApproval[] };
   "workspace:revision-bumped": { workspaceId: string; revision: number };
+  /** The server asks the attached desktop shell to relaunch into a workspace. */
+  "workspace:relaunch-requested": { name: string };
+  /**
+   * The server asks the attached desktop shell to run an interactive session
+   * credential capture (browser sign-in). The shell answers with
+   * `credentials.completeCapture(captureId, result)`.
+   */
+  "credential:capture-request": {
+    captureId: string;
+    kind: "cookies" | "saml";
+    signInUrl: string;
+    cookieNames?: string[];
+    origins?: string[];
+    browser?: string;
+    completionUrlPattern?: string;
+    maxTtlSeconds?: number;
+    spAudience?: string;
+    assertion?: boolean;
+  };
+  /**
+   * Live tail of the server host's own log stream (serverLog service).
+   * Batched; dedupe/catch up by record `seq` via `serverLog.query({sinceSeq})`.
+   */
+  "server-log:append": {
+    records: Array<{
+      seq: number;
+      timestamp: number;
+      level: "verbose" | "info" | "warn" | "error";
+      tag?: string;
+      message: string;
+      fields?: unknown[];
+      pid: number;
+    }>;
+  };
   "presence:panel-active": { panelId: string; ownerCallerId: string; updatedAt: number };
   [key: `extensions:${string}`]: unknown;
   [key: `apps:${string}`]: unknown;
@@ -249,6 +286,9 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "host-target-launch:session-changed",
   "shell-approval:pending-changed",
   "workspace:revision-bumped",
+  "workspace:relaunch-requested",
+  "credential:capture-request",
+  "server-log:append",
   "presence:panel-active",
 ];
 

@@ -24,6 +24,12 @@ export interface WsClientTransportConfig {
   ) => boolean;
   onServerEvent?: (event: string, payload: unknown) => void;
   onRecovery?: (kind: RecoveryKind) => void | Promise<void>;
+  /**
+   * Fired on a successful auth-result. Carries the optional `deviceCredential`
+   * the server issues only when this session authenticated by redeeming a
+   * one-time pairing code — the caller persists it to reconnect (`refresh:…`).
+   */
+  onAuthResult?: (msg: { deviceCredential?: { deviceId: string; refreshToken: string } }) => void;
   logPrefix?: string;
 }
 
@@ -143,6 +149,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         lastSeenBootId = nextBootId;
         reconnectAttempt = 0;
         setStatus("connected");
+        config.onAuthResult?.(msg);
         if (
           msg.sessionDirty === true ||
           (isReconnect && previousBootId && nextBootId && previousBootId !== nextBootId)

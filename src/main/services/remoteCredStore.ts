@@ -16,6 +16,13 @@
  */
 
 import type { ConnectPairing } from "@vibestudio/shared/connect";
+import {
+  createEncryptedJsonStore,
+  type EncryptedJsonStore,
+  type StoreCipher,
+} from "./encryptedJsonStore.js";
+
+export type { StoreCipher };
 
 /** The pairing material persisted for reconnect (no one-time `code`). */
 export type StoredPairing = Omit<ConnectPairing, "code">;
@@ -30,23 +37,18 @@ export interface StoredRemote {
   pairedAt: number;
 }
 
-/** Cipher seam — Electron `safeStorage` in production, identity in tests. */
-export interface StoreCipher {
-  encrypt(plaintext: string): Buffer;
-  decrypt(ciphertext: Buffer): string;
-  isAvailable(): boolean;
-}
+export type RemoteCredStore = EncryptedJsonStore<StoredRemote>;
 
-export interface RemoteCredStore {
-  load(): StoredRemote | null;
-  save(value: StoredRemote): void;
-  clear(): void;
+function isStoredRemote(value: unknown): value is StoredRemote {
+  const v = value as StoredRemote | null | undefined;
+  return !!v && !!v.deviceId && !!v.refreshToken && !!v.pairing?.room && !!v.pairing?.fp;
 }
 
 /**
  * Create a store backed by a single encrypted file. Reads tolerate a missing or
  * corrupt file (returns null — pair again) but never silently swallow a write
- * failure (the caller must know the credential did not persist).
+ * failure (the caller must know the credential did not persist). The refresh
+ * secret is the only durable client secret and is never written in plaintext.
  */
 export function createRemoteCredStore(deps: {
   filePath: string;
@@ -57,46 +59,9 @@ export function createRemoteCredStore(deps: {
   >;
   dirname: (p: string) => string;
 }): RemoteCredStore {
-  const { filePath, cipher, fs, dirname } = deps;
-  return {
-    load(): StoredRemote | null {
-      if (!fs.existsSync(filePath)) return null;
-      // We never write plaintext (see save), so without the cipher we cannot read a
-      // legitimately-stored credential — treat as unpaired rather than attempt a
-      // plaintext parse (which would only succeed on an insecure legacy file).
-      if (!cipher.isAvailable()) return null;
-      try {
-        const raw = fs.readFileSync(filePath);
-        const json = cipher.decrypt(raw);
-        const value = JSON.parse(json) as StoredRemote;
-        if (!value.deviceId || !value.refreshToken || !value.pairing?.room || !value.pairing?.fp) {
-          return null;
-        }
-        return value;
-      } catch {
-        // Corrupt / undecryptable (e.g. OS keychain reset) ⇒ treat as unpaired.
-        return null;
-      }
-    },
-    save(value: StoredRemote): void {
-      // Fail loud: the device refresh secret is the only durable client secret and
-      // MUST NOT be written in plaintext. If OS secure storage (safeStorage) is
-      // unavailable (a Linux box with no keyring, or headless), refuse to persist
-      // rather than silently writing the token in the clear. The caller surfaces
-      // this (the device re-pairs each launch) instead of leaking the secret.
-      if (!cipher.isAvailable()) {
-        throw new Error(
-          "Refusing to persist the device refresh credential: OS secure storage (safeStorage) " +
-            "is unavailable, and the refresh token must never be stored in plaintext."
-        );
-      }
-      const json = JSON.stringify(value);
-      const bytes = cipher.encrypt(json);
-      fs.mkdirSync(dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, bytes, { mode: 0o600 });
-    },
-    clear(): void {
-      if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
-    },
-  };
+  return createEncryptedJsonStore<StoredRemote>({
+    ...deps,
+    validate: isStoredRemote,
+    secretDescription: "the device refresh credential",
+  });
 }

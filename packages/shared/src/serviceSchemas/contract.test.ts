@@ -16,6 +16,8 @@ import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
 import { gitInteropMethods } from "./gitInterop.js";
+import { hostLifecycleMethods } from "./hostLifecycle.js";
+import { serverLogMethods } from "./serverLog.js";
 import { menuMethods } from "./menu.js";
 import { notificationMethods } from "./notification.js";
 import { paletteMethods } from "./palette.js";
@@ -58,6 +60,8 @@ const serviceTables: ServiceTable[] = [
   { service: "externalOpen", file: "externalOpen.ts", methods: externalOpenMethods },
   { service: "fs", file: "fs.ts", methods: fsMethods },
   { service: "gitInterop", file: "gitInterop.ts", methods: gitInteropMethods },
+  { service: "hostLifecycle", file: "hostLifecycle.ts", methods: hostLifecycleMethods },
+  { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
   { service: "palette", file: "palette.ts", methods: paletteMethods },

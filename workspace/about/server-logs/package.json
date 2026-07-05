@@ -1,0 +1,17 @@
+{
+  "name": "@workspace-about/server-logs",
+  "version": "0.1.0",
+  "private": true,
+  "vibestudio": {
+    "title": "Server Logs",
+    "description": "Live tail of the workspace server's host logs",
+    "hiddenInLauncher": false,
+    "autoArchiveWhenEmpty": true
+  },
+  "dependencies": {
+    "@workspace/about-shared": "workspace:*",
+    "@workspace/react": "workspace:*",
+    "@workspace/runtime": "workspace:*"
+  },
+  "type": "module"
+}

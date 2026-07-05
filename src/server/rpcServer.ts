@@ -336,6 +336,18 @@ class ConnectionRegistry {
     this.callerConnections.get(callerId)?.get(connectionId)?.ws.close(code, reason);
   }
 
+  countByKinds(kinds: ReadonlySet<CallerKind>): number {
+    let count = 0;
+    for (const callerClients of this.callerConnections.values()) {
+      for (const client of callerClients.values()) {
+        if (kinds.has(client.caller.runtime.kind) && client.ws.readyState === WebSocket.OPEN) {
+          count++;
+        }
+      }
+    }
+    return count;
+  }
+
   forEachControlPlane(fn: (client: WsClientState) => void): void {
     for (const callerClients of this.callerConnections.values()) {
       for (const client of callerClients.values()) {
@@ -1008,6 +1020,11 @@ export class RpcServer {
 
   getConnectionForPrincipal(principalId: string): WsClientState | null {
     return this.pickPrimary(principalId) ?? null;
+  }
+
+  /** Count live authenticated connections whose caller kind is in `kinds`. */
+  countConnectedClients(kinds: readonly CallerKind[]): number {
+    return this.connections.countByKinds(new Set(kinds));
   }
 
   getAuthorizingShell(principalId: string): WsClientState | null {

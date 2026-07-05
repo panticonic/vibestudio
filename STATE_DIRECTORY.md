@@ -107,6 +107,51 @@ Persisted effective version map — derived state, safe to delete (triggers full
 
 Per-unit commit SHAs used for cold-start diffing. Compared against current refs to determine which units need EV recomputation.
 
+### `data.json`
+
+Central desktop bookkeeping (`CentralDataManager`, `packages/shared/src/centralData.ts`).
+Besides the workspace list, each `WorkspaceEntry` may carry a `localServer`
+attachment record — `{ gatewayPort, pid, serverId, serverBootId, startedAt,
+version }` — describing the detached local workspace server the desktop last
+attached to. It is validated against `GET /healthz` (matching `serverId` +
+`workspaceId`) before reuse and pruned with the workspace entry. A top-level
+`keepServerOnQuit` boolean records the remembered "keep the server running on quit"
+choice. Both the desktop and the server may write this file; whole-file
+last-writer-wins is intentional for a single-user product.
+
+### `local-server-creds.json`
+
+Encrypted (Electron `safeStorage`) per-workspace device credentials for detached
+local servers (`src/main/services/localServerCredStore.ts`): a
+`Record<workspaceId, { deviceId, refreshToken, serverId, pairedAt }>`. Written after
+the shell redeems a startup pairing code over loopback; on later launches the shell
+reattaches with `refresh:<deviceId>:<refreshToken>` instead of re-pairing. Shares the
+encrypted-single-file mechanics (0600, fail-loud save, corrupt-tolerant load) with
+`webrtc-remote.json`.
+
+### `workspaces/{name}/state/server-ready.json`
+
+Ready file written by a freshly spawned detached workspace server once its gateway is
+listening (`src/server/index.ts`). Payload includes `gatewayPort`, the startup
+`pairingCode`, `serverId`, `serverBootId`, `pid`, and `version`. The desktop spawner
+polls for a write newer than spawn time, then pairs over the loopback WebSocket using
+the `pairingCode`.
+
+### `workspaces/{name}/state/logs/server.log`
+
+Combined stdout/stderr of the detached workspace server (`stdio` target of the
+spawn), truncated on each spawn. Server output no longer flows through the app, so
+this is the place to look for local server diagnostics.
+
+### `workspaces/{name}/state/logs/server-log.jsonl`
+
+Structured host-log records (`{seq, timestamp, level, tag, message, fields, pid}`)
+appended by the server's own log capture (`src/server/services/serverLogStore.ts`),
+one JSON object per line. Rotated to `.1` on each boot and at ~16 MB. The same
+records are queryable/streamable live through the `serverLog` RPC service (see
+`workspace/skills/server-logs/SKILL.md`); this file is the post-mortem copy for a
+server that already exited. Secrets (pairing codes, tokens) are redacted.
+
 ## Fallback Behavior
 
 If the platform-specific directory cannot be accessed (e.g., permissions issues), Vibestudio falls back to:

@@ -415,6 +415,11 @@ interface CredentialServiceDeps {
   credentialUseGrantStore?: CredentialUseGrantStoreLike;
   credentialLifecycle?: CredentialLifecycle;
   sessionCredentialCapture?: SessionCredentialCapture;
+  /**
+   * Completes a pending server→shell capture roundtrip (the
+   * `credential:capture-request` event). Wired from credentialCaptureBridge.
+   */
+  completeCapture?: (captureId: string, response: Record<string, unknown>) => void;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   runtimeInspector?: CredentialRuntimeInspector;
 }
@@ -4221,6 +4226,18 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           return proxyFetch(ctx, (args as [ProxyFetchParams])[0]);
         case "proxyGitHttp":
           return proxyGitHttp(ctx, (args as [ProxyGitHttpParams])[0]);
+        case "completeCapture": {
+          // Only the attached desktop shell may answer a capture request.
+          if (ctx.caller.runtime.kind !== "shell") {
+            throw new Error("credentials.completeCapture is shell-only");
+          }
+          if (!deps.completeCapture) {
+            throw new Error("Session credential capture is not configured on this server");
+          }
+          const [captureId, response] = args as [string, Record<string, unknown>];
+          deps.completeCapture(captureId, response);
+          return;
+        }
         case "audit":
           return audit((args as [AuditParams])[0]);
         default:

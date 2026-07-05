@@ -1,16 +1,19 @@
 /**
  * ServerSession — server connection establishment.
  *
- * Subsumes local spawn vs remote connect and workspace info fetch.
- * Returns a single SessionConnection
- * with everything needed to continue startup.
+ * Subsumes local attach-or-spawn vs remote connect and workspace info fetch.
+ * Returns a single SessionConnection with everything needed to continue
+ * startup. There is ONE auth model in all topologies: device pairing +
+ * refresh credentials. Locally the desktop is a paired device of a detached
+ * workspace server over loopback WS; remotely it is a paired device over the
+ * WebRTC pipe.
  */
 
 import { app } from "electron";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot } from "./paths.js";
-import { ServerProcessManager, type ServerPorts } from "./serverProcessManager.js";
+import { LocalServerManager } from "./localServerManager.js";
 import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
 import { createWebRtcServerClient } from "./webrtcServerClient.js";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
@@ -20,12 +23,13 @@ import {
   persistRotatedRemoteCredential,
   saveStoredRemote,
 } from "./services/remoteCredService.js";
+import { loadLocalServerCredential } from "./services/localServerCredStore.js";
 import type { StoredRemote } from "./services/remoteCredStore.js";
 import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
 import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
-import { workspaceRelaunchArgs, type ConnectedStartupMode } from "./startupMode.js";
+import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import { serverRpcWsUrl, type ConnectPairing } from "@vibestudio/shared/connect";
@@ -34,28 +38,39 @@ const log = createDevLogger("ServerSession");
 
 export interface SessionConnection {
   connectionMode: "local" | "remote";
+  /**
+   * Who controls the server process: "desktop-local" means this app manages a
+   * detached local workspace server (quit policy applies); "external" means
+   * someone else owns it (remote WebRTC server).
+   */
+  serverOwnership: "desktop-local" | "external";
   protocol: "http" | "https";
   gatewayPort: number;
   externalHost: string;
   gatewayConfig: { serverUrl: string };
-  adminToken: string;
-  shellToken: string;
   workerdPort: number;
   workspaceId: string;
   workspacePath: string;
   statePath: string;
   workspaceConfig: WorkspaceConfig;
   serverClient: ServerClient;
-  serverProcessManager: ServerProcessManager | null;
+  localServerManager: LocalServerManager | null;
   panelHttpServer: PanelHttpServerLike;
   serverInfo: ServerInfo;
+  /**
+   * Short-lived shell bearer for the CDP host's loopback socket (local only;
+   * remote runs the RPC-channel CDP path with no token). Refreshed from the
+   * device refresh credential via the loopback `/refresh-shell` route on every
+   * (re)connect.
+   */
+  getCdpAuthToken: () => string;
 }
 
 /**
- * Build the ServerInfo object that provides token management and RPC proxying.
+ * Build the ServerInfo object that provides RPC proxying and gateway wiring.
  */
 function buildServerInfo(
-  ports: ServerPorts,
+  gatewayPort: number,
   externalHost: string,
   protocol: "http" | "https",
   gatewayConfig: { serverUrl: string },
@@ -63,9 +78,9 @@ function buildServerInfo(
 ): ServerInfo {
   return {
     gatewayConfig,
-    workerdPort: ports.workerdPort ?? 0,
+    workerdPort: 0,
     externalHost,
-    gatewayPort: ports.gatewayPort,
+    gatewayPort,
     protocol,
     call: (service, method, args) => getClient().call(service, method, args),
   };
@@ -76,13 +91,6 @@ function buildServerInfo(
  * §8 deleted the direct-wss/TLS-pin path). The QR-pairing flow hands its parsed
  * `ConnectPairing` ({room, fp, code, sig, ice}) here, along with the shell-token
  * provider derived from the persisted device credential.
- *
- * Returns a `ServerClient` indistinguishable from the loopback-WS one
- * (`createServerClient`): the main `shell` principal and each Electron-hosted
- * `app` principal are logical sessions multiplexed over one DTLS pipe. The
- * device-credential → shell-token derivation is the pairing layer's concern
- * (`getShellToken`), exactly as the local path receives `ports.shellToken` from
- * its child server — the transport never sees a half-authenticated pipe.
  */
 export function connectRemoteViaWebRtc(
   pairing: ConnectPairing,
@@ -106,25 +114,13 @@ export function connectRemoteViaWebRtc(
  * Establish a server session. Three branches, in precedence order:
  *
  *   (a) FRESH pair — `args.pendingPairing` carries a pairing link the bootstrap
- *       chooser redeemed THIS launch. The single pairing connection authenticates
- *       with the one-time `code` and stays as the session; the device credential
- *       the server issues is persisted so the next launch reconnects via refresh.
- *       (No throwaway redeem-then-relaunch.)
- *   (b) Returning device — a pairing persisted on a prior launch. Re-dial it and
- *       re-authenticate with the refresh token (a RUNTIME branch, not a startup
- *       mode).
- *   (c) Local — spawn the local child server and connect over loopback WS.
- *
- * Remote topology is always WebRTC (`connectRemoteViaWebRtc`), never a direct
- * socket.
+ *       chooser redeemed THIS launch.
+ *   (b) Returning device — a pairing persisted on a prior launch (WebRTC).
+ *   (c) Local — attach to a healthy detached local workspace server, or spawn
+ *       one, and connect over loopback WS with device-pairing auth.
  */
 export async function establishServerSession(args: {
   mode: ConnectedStartupMode | null;
-  /**
-   * A pairing the bootstrap chooser redeemed this launch. When set, the pairing
-   * connection IS the session (branch (a) above) — it takes precedence over both
-   * a stored pairing and a local spawn.
-   */
   pendingPairing?: ConnectPairing;
   /**
    * Suppress returning-device auto-dial for this launch. Used by the chooser
@@ -135,110 +131,120 @@ export async function establishServerSession(args: {
   onServerEvent: (event: string, payload: unknown) => void;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
-  onIpcRequest?: (
-    type: string,
-    msg: Record<string, unknown>
-  ) => Promise<Record<string, unknown> | null>;
 }): Promise<SessionConnection> {
   const { mode, pendingPairing, skipStoredRemote, onServerEvent } = args;
 
   // (a) FRESH pair: the bootstrap chooser handed us a pairing link this launch.
-  // The pairing connection authenticates with the code and stays as the session.
   if (pendingPairing) {
     return establishFreshPairSession(pendingPairing, args);
   }
-  // (b) Returning device: a paired WebRTC remote persisted on a prior launch
-  // takes precedence over the local spawn. Here we just re-dial it.
+  // (b) Returning device: a paired WebRTC remote persisted on a prior launch.
   const storedRemote = skipStoredRemote ? null : loadStoredRemotePairing();
   if (storedRemote) {
     return establishRemoteSession(storedRemote, args);
   }
-  // (c) Local spawn.
+  // (c) Local attach-or-spawn.
   if (!mode) {
     throw new Error(
       "establishServerSession: no connected startup mode, fresh pairing, or stored remote pairing"
     );
   }
 
-  let serverClient: ServerClient;
-  let serverProcessManager: ServerProcessManager | null = null;
-  let ports: ServerPorts;
-  let gatewayConfig: { serverUrl: string };
-
-  // Local topology: spawn the server as a child process and connect over
-  // loopback WS. Remote topology is WebRTC (`establishRemoteSession`), never a
-  // direct socket — so the session is always http/localhost here.
   const protocol = "http" as const;
   const externalHost = "localhost";
-  {
-    serverProcessManager = new ServerProcessManager({
-      wsDir: mode.wsDir,
-      appRoot: getAppRoot(),
-      isEphemeral: mode.isEphemeral,
-      autoApproveStartupUnits: mode.autoApproveStartupUnits,
-      onCrash: (code) => {
-        console.error(`[App] Server process crashed with code ${code}`);
-        console.error(
-          "[App] Server process exited repeatedly and could not be recovered. Relaunching."
-        );
-        relaunchApp({ exitCode: 1 });
-      },
-      onRestart: (restartedPorts) => {
-        Object.assign(ports, restartedPorts);
-        gatewayConfig.serverUrl = `http://127.0.0.1:${ports.gatewayPort}`;
-        args.onConnectionStatusChanged?.("connecting");
-        log.info(`[Server] Child process restarted (Gateway: ${ports.gatewayPort})`);
-      },
-      onIpcRequest: async (type, msg) => {
-        if (type === "workspace-list-request") {
-          return { workspaces: args.centralData.listWorkspaces() };
-        }
-        const delegated = await args.onIpcRequest?.(type, msg);
-        if (delegated) return delegated;
-        return null;
-      },
-      onRelaunch: (name) => {
-        log.info(`[App] Relaunching into workspace "${name}"`);
-        relaunchApp({ args: workspaceRelaunchArgs(name) });
-      },
-    });
 
-    ports = await serverProcessManager.start();
-    const localGatewayPort = ports.gatewayPort;
-    log.info(`[Server] Child process started (Gateway: ${localGatewayPort})`);
-    gatewayConfig = { serverUrl: `http://127.0.0.1:${localGatewayPort}` };
+  const localServerManager = new LocalServerManager({
+    wsDir: mode.wsDir,
+    workspaceName: mode.workspaceName,
+    workspaceId: mode.workspaceId,
+    appRoot: getAppRoot(),
+    appVersion: app.getVersion(),
+    isEphemeral: mode.isEphemeral,
+    autoApproveStartupUnits: mode.autoApproveStartupUnits,
+    centralData: args.centralData,
+    onCrash: (code) => {
+      console.error(`[App] Local server died and could not be recovered (code ${code ?? "?"})`);
+      relaunchApp({ exitCode: 1 });
+    },
+  });
 
-    const shellToken = ports.shellToken;
-    if (!shellToken) {
-      throw new Error("Local server did not provide a shell caller token");
+  const target = await localServerManager.attachOrSpawn();
+  log.info(
+    `[Server] ${target.attached ? "Attached to" : "Spawned"} local server (Gateway: ${target.gatewayPort}, boot ${target.serverBootId})`
+  );
+  const gatewayConfig = { serverUrl: `http://127.0.0.1:${target.gatewayPort}` };
+
+  // Shell bearer for the CDP host socket, exchanged from the persisted refresh
+  // credential over loopback. Re-fetched on every transition into "connected"
+  // (a server restart invalidates the previous in-memory bearer).
+  let cdpAuthToken = "";
+  const refreshCdpAuthToken = async (): Promise<void> => {
+    const credential = loadLocalServerCredential(mode.workspaceId);
+    const port = localServerManager.getGatewayPort() ?? target.gatewayPort;
+    if (!credential) return;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/refresh-shell`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: credential.deviceId,
+          refreshToken: credential.refreshToken,
+        }),
+      });
+      if (!response.ok) {
+        log.warn(`[Server] /refresh-shell failed with ${response.status}`);
+        return;
+      }
+      const payload = (await response.json()) as { shellToken?: string };
+      if (payload.shellToken) cdpAuthToken = payload.shellToken;
+    } catch (error) {
+      log.warn(
+        `[Server] /refresh-shell error: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
-    serverClient = await createServerClient(localGatewayPort, shellToken, {
-      reconnect: true,
-      getWsUrl: () => {
-        const url = serverProcessManager?.getCurrentGatewayUrl();
-        return url ?? serverRpcWsUrl(`http://127.0.0.1:${ports.gatewayPort}`);
-      },
-      refreshAuthToken: async () => {
-        if (!ports.shellToken) {
-          throw new Error("Local server has not issued a replacement shell token yet");
-        }
-        return ports.shellToken;
-      },
-      onConnectionStatusChanged: (status) => {
-        args.onConnectionStatusChanged?.(status);
-      },
-      onRecovery: args.onRecovery,
-      onDisconnect: () => {
-        console.error("[App] Server process disconnected");
-      },
-      onServerEvent,
-    });
-  }
+  };
+
+  const serverClient = await createServerClient(target.gatewayPort, target.authToken, {
+    reconnect: true,
+    getWsUrl: () =>
+      localServerManager.getCurrentGatewayUrl() ??
+      serverRpcWsUrl(`http://127.0.0.1:${target.gatewayPort}`),
+    refreshAuthToken: async () => localServerManager.getAuthToken(),
+    // A fresh spawn pairs with the startup pairing code; the issued device
+    // credential is persisted so reconnects and future launches use
+    // refresh:<deviceId>:<token> — identical to the remote path.
+    onPaired: (credential) => {
+      localServerManager.persistPairedCredential(credential);
+      void refreshCdpAuthToken();
+    },
+    onConnectionStatusChanged: (status) => {
+      if (status === "connecting") {
+        // Supervision: probe the process behind a dropped socket; respawn if dead.
+        localServerManager.handleDisconnect();
+      }
+      if (status === "connected") {
+        void refreshCdpAuthToken();
+      }
+      args.onConnectionStatusChanged?.(status);
+    },
+    onRecovery: args.onRecovery,
+    onDisconnect: () => {
+      console.error("[App] Local server connection closed");
+    },
+    onServerEvent,
+  });
+  await refreshCdpAuthToken();
 
   log.info("[Server] Shell client connected");
 
   const getClient = () => serverClient;
-  const serverInfo = buildServerInfo(ports, externalHost, protocol, gatewayConfig, getClient);
+  const serverInfo = buildServerInfo(
+    target.gatewayPort,
+    externalHost,
+    protocol,
+    gatewayConfig,
+    getClient
+  );
 
   // Get workspace metadata from server
   const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (svc, m, a) =>
@@ -247,7 +253,7 @@ export async function establishServerSession(args: {
   const wsInfo = await workspaceClient.getInfo();
   log.info(`[Workspace] Server workspace: ${wsInfo.config.id}`);
 
-  const gatewayPort = ports.gatewayPort;
+  const gatewayPort = target.gatewayPort;
   const panelHttpServer: PanelHttpServerLike = {
     hasBuild: () => false,
     getBuildRevision: () => undefined,
@@ -257,22 +263,22 @@ export async function establishServerSession(args: {
 
   return {
     connectionMode: "local",
+    serverOwnership: "desktop-local",
     protocol,
     gatewayPort,
     externalHost,
     gatewayConfig,
-    workerdPort: ports.workerdPort ?? 0,
+    workerdPort: 0,
     workspaceId: wsInfo.config.id,
     workspacePath: wsInfo.path,
-    /** The local child server's own state directory (same host). */
+    /** The local server's own state directory (same host). */
     statePath: wsInfo.statePath,
     workspaceConfig: wsInfo.config,
-    adminToken: ports.adminToken,
-    shellToken: ports.shellToken ?? "",
     serverClient,
-    serverProcessManager,
+    localServerManager,
     panelHttpServer,
     serverInfo,
+    getCdpAuthToken: () => cdpAuthToken,
   };
 }
 
@@ -372,11 +378,10 @@ async function buildRemoteSessionConnection(
   const facade = await startPanelAssetFacade(serverClient, {
     stateDir: path.join(app.getPath("userData"), "panel-asset-facade"),
   });
-  const remotePorts: ServerPorts = { gatewayPort: facade.port, workerdPort: 0, adminToken: "" };
   const gatewayConfig = { serverUrl: `http://127.0.0.1:${facade.port}` };
 
   const serverInfo = buildServerInfo(
-    remotePorts,
+    facade.port,
     externalHost,
     protocol,
     gatewayConfig,
@@ -405,11 +410,12 @@ async function buildRemoteSessionConnection(
 
   return {
     connectionMode: "remote",
+    serverOwnership: "external",
     protocol,
-    gatewayPort: remotePorts.gatewayPort,
+    gatewayPort: facade.port,
     externalHost,
     gatewayConfig,
-    workerdPort: remotePorts.workerdPort ?? 0,
+    workerdPort: 0,
     workspaceId: wsInfo.config.id,
     // TODO(remote): wsInfo.path is the REMOTE host's tree — panel manifests are
     // not present locally. Full remote panel serving (manifests + assets over the
@@ -417,13 +423,11 @@ async function buildRemoteSessionConnection(
     workspacePath: wsInfo.path,
     statePath,
     workspaceConfig: wsInfo.config,
-    // TODO(remote): no local admin/shell token in remote mode — session auth is
-    // the device refresh credential, derived per session by connectRemoteViaWebRtc.
-    adminToken: "",
-    shellToken: "",
     serverClient,
-    serverProcessManager: null,
+    localServerManager: null,
     panelHttpServer,
     serverInfo,
+    // CDP over the pipe uses the RPC-channel socket, not a bearer.
+    getCdpAuthToken: () => "",
   };
 }

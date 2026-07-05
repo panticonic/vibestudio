@@ -22,8 +22,12 @@ standalone server from `src/server/index.ts`.
 pnpm server:live --help
 ```
 
-Electron local mode still uses the bundled `dist/server-electron.cjs`; rebuild
-after Electron or local-child-server changes.
+Electron local mode spawns the bundled `dist/server-electron.cjs` as a **detached
+workspace server** (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`, see
+`src/main/localServerManager.ts`); rebuild it after Electron or local-server
+changes. The desktop shell is a paired device of that server — it attaches to a
+healthy recorded server on launch and spawns a fresh one otherwise, so there is no
+separate Electron⇄server IPC mode.
 
 ## Install
 

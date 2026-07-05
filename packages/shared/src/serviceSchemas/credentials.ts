@@ -1169,6 +1169,13 @@ export const credentialsMethods = defineServiceMethods({
       { args: [{ url: "https://github.com/owner/repo.git/info/refs?service=git-upload-pack" }] },
     ],
   },
+  completeCapture: {
+    description:
+      "Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell.",
+    args: z.tuple([z.string(), z.record(z.string(), z.unknown())]),
+    returns: z.void(),
+    access: { sensitivity: "write" },
+  },
   audit: {
     description:
       "Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after).",

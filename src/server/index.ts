@@ -1,14 +1,10 @@
 /**
- * vibestudio-server — Headless and IPC entry point for Vibestudio.
+ * vibestudio-server — the standalone Vibestudio server entry point.
  *
  * Starts all headless-capable services (Build V2, Git, workspace services, RPC).
- *
- * Two runtime modes:
- * - **IPC mode** (utilityProcess or child_process.fork): receives config via
- *   env vars set by parent, reports ready via postMessage, listens for
- *   shutdown via postMessage.
- * - **Standalone mode**: parses CLI args, reports ready to stdout, listens
- *   for SIGTERM/SIGINT.
+ * Parses CLI args (config may also arrive via env vars from a spawning desktop
+ * shell), reports readiness to stdout + an optional --ready-file, and shuts
+ * down on SIGTERM/SIGINT (or the shell-gated hostLifecycle.shutdown RPC).
  *
  * Two-phase bootstrap: env vars are set synchronously first, then app
  * modules are loaded inside an async main() to avoid top-level await
@@ -18,6 +14,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import { execFile } from "node:child_process";
+import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { createHash, randomBytes } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
@@ -30,25 +27,6 @@ import { resolveDependencyWorkspaceRoot } from "./dependencyWorkspaceRoot.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
-
-// =============================================================================
-// IPC channel detection (synchronous — must run before main())
-// =============================================================================
-
-interface IpcChannel {
-  postMessage(msg: unknown): void;
-  on(event: string, handler: (msg: unknown) => void): void;
-  onDisconnect(handler: () => void): void;
-}
-
-interface ElectronParentPort {
-  postMessage(msg: unknown): void;
-  on(event: "message", handler: (envelope: unknown) => void): void;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
 
 type HeartbeatRegistryControlRow = {
   name: string;
@@ -95,102 +73,6 @@ function resolveHeartbeatRegistryRow(
     throw new Error(`Ambiguous heartbeat selector: ${JSON.stringify(selector)}`);
   }
   return matches[0] ?? null;
-}
-
-function detectServerIpcChannel(): IpcChannel | null {
-  // Electron utilityProcess: process.parentPort exists
-  const parentPort = (process as NodeJS.Process & { parentPort?: ElectronParentPort }).parentPort;
-  if (parentPort) {
-    return {
-      postMessage: (msg: unknown) => parentPort.postMessage(msg),
-      on: (_event: string, handler: (msg: unknown) => void) => {
-        parentPort.on("message", (envelope: unknown) => {
-          const record = asRecord(envelope);
-          handler(record && "data" in record ? record["data"] : envelope);
-        });
-      },
-      onDisconnect: (handler: () => void) => {
-        (
-          parentPort as unknown as {
-            on(event: "close", handler: () => void): void;
-          }
-        ).on("close", handler);
-        process.on("disconnect", handler);
-      },
-    };
-  }
-  // Node.js fork: process.send exists
-  if (typeof process.send === "function") {
-    return {
-      postMessage: (msg: unknown) => assertPresent(process.send)(msg),
-      on: (_event: string, handler: (msg: unknown) => void) => {
-        process.on("message", handler);
-      },
-      onDisconnect: (handler: () => void) => {
-        process.on("disconnect", handler);
-      },
-    };
-  }
-  return null;
-}
-
-const ipcChannel = detectServerIpcChannel();
-
-// =============================================================================
-// IPC request/response — bidirectional message correlation
-// =============================================================================
-// Extends the existing fire-and-forget IPC pattern (workspace-relaunch,
-// open-external, shutdown) with request/response support. The server sends
-// a typed request with a correlation ID; the parent (Electron main) returns
-// a response with the same ID. A single persistent listener routes all
-// responses to their pending promises.
-
-const pendingIpcResponses = new Map<string, (response: unknown) => void>();
-
-if (ipcChannel) {
-  ipcChannel.on("message", (msg: unknown) => {
-    const record = asRecord(msg);
-    const id = typeof record?.["id"] === "string" ? record["id"] : null;
-    if (id && pendingIpcResponses.has(id)) {
-      assertPresent(pendingIpcResponses.get(id))(msg);
-      pendingIpcResponses.delete(id);
-    }
-  });
-}
-
-/**
- * Send a typed request to the parent process and await a correlated response.
- * Returns null if no IPC channel or if the parent doesn't respond within 5s.
- */
-function ipcRequest<T = unknown>(
-  type: string,
-  payload?: Record<string, unknown>,
-  timeoutMs: number = 5_000,
-  signal?: AbortSignal
-): Promise<T | null> {
-  if (!ipcChannel) return Promise.resolve(null);
-  if (signal?.aborted) return Promise.resolve(null);
-  const id = randomBytes(8).toString("hex");
-  return new Promise<T | null>((resolve) => {
-    let settled = false;
-    const finish = (value: T | null) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      pendingIpcResponses.delete(id);
-      resolve(value);
-    };
-    const onAbort = () => finish(null);
-    const timeout = setTimeout(() => {
-      finish(null);
-    }, timeoutMs);
-    pendingIpcResponses.set(id, (response: unknown) => {
-      finish(response as T);
-    });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    ipcChannel.postMessage({ type, id, ...(payload ?? {}) });
-  });
 }
 
 // =============================================================================
@@ -406,21 +288,19 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
-let args: CliArgs = {};
-
-if (!ipcChannel) {
-  // Standalone mode: parse CLI args, set env vars
-  args = parseArgs(process.argv.slice(2));
-  if (args.help) {
-    printHelp();
-    process.exit(0);
-  }
-  process.env["VIBESTUDIO_APP_ROOT"] =
-    args.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
-  if (args.logLevel) process.env["VIBESTUDIO_LOG_LEVEL"] = args.logLevel;
-} else {
-  // IPC mode: env vars already set by parent via fork({ env: {...} })
+const args: CliArgs = parseArgs(process.argv.slice(2));
+if (args.help) {
+  printHelp();
+  process.exit(0);
 }
+// Capture the host's own log stream from the very start (before main() loads
+// app modules) so startup logs land in the serverLog service's ring buffer.
+const serverLogStore = createServerLogStore();
+const serverLogStartedAt = Date.now();
+serverLogStore.installConsoleCapture();
+process.env["VIBESTUDIO_APP_ROOT"] =
+  args.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
+if (args.logLevel) process.env["VIBESTUDIO_LOG_LEVEL"] = args.logLevel;
 
 // =============================================================================
 // Phase B: Async main — load app modules, initialize services
@@ -454,9 +334,13 @@ async function main() {
   // Electron and hub-managed child runtimes after a workspace has been selected.
 
   const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
-  const centralData = !ipcChannel ? new CentralDataManager() : null;
+  // The server always owns workspace metadata (~/.config/vibestudio/data.json).
+  // The desktop shell also writes it (chooser bookkeeping, attachment records);
+  // whole-file last-writer-wins is accepted for this single-user product.
+  const centralData = new CentralDataManager();
+  const isWorkspaceServer = process.env["VIBESTUDIO_FORCE_WORKSPACE_SERVER"] === "1";
 
-  if (!ipcChannel && process.env["VIBESTUDIO_FORCE_WORKSPACE_SERVER"] !== "1") {
+  if (!isWorkspaceServer) {
     const forbiddenWorkspaceSelection =
       args.workspaceName ||
       args.workspaceDir ||
@@ -487,25 +371,22 @@ async function main() {
       name: wsName,
       init: args.init,
       isDev: !!args.ephemeral,
-      requireExplicitSelection: !!ipcChannel,
+      requireExplicitSelection: isWorkspaceServer,
     });
     workspace = startup.resolved.workspace;
     workspaceName = startup.resolved.name;
     workspaceIsEphemeral =
       startup.isEphemeral || process.env["VIBESTUDIO_WORKSPACE_EPHEMERAL"] === "1";
   } catch (error) {
-    const msg = `Workspace resolution failed: ${error}`;
-    if (ipcChannel) {
-      ipcChannel.postMessage({ type: "error", message: msg });
-    } else {
-      console.error(msg);
-      if (!args.init) console.error("  Use --init to auto-create from template.");
-    }
+    console.error(`Workspace resolution failed: ${error}`);
+    if (!args.init) console.error("  Use --init to auto-create from template.");
     process.exit(1);
   }
 
   // Set user data path to workspace state dir for env-paths compatibility
   setUserDataPath(workspace.statePath);
+  // Structured host-log persistence next to the spawn-time stdout log.
+  serverLogStore.attachJsonlSink(path.join(workspace.statePath, "logs"));
 
   // Aliases — used throughout service init below
   const workspacePath = workspace.path;
@@ -608,6 +489,17 @@ async function main() {
     }));
   const connectionGrants = new ConnectionGrantService({ entityCache });
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
+  // Build version this server was launched from. The desktop spawner stamps
+  // VIBESTUDIO_APP_VERSION; attach-or-spawn compares it against the current app
+  // build and stops-and-respawns on mismatch (converge to current version).
+  const serverVersion = process.env["VIBESTUDIO_APP_VERSION"] ?? "0.1.0";
+  // Host-wide background-work registry (eval runs) — read by the idle-exit
+  // monitor so a detached server won't self-reap while work is in flight.
+  const { createActivityRegistry } = await import("./services/activityRegistry.js");
+  const activityRegistry = createActivityRegistry();
+  // Forward ref: the graceful shutdown fn is defined at the end of main();
+  // hostLifecycle.shutdown and the idle-exit monitor call through this.
+  let requestShutdown: () => void = () => process.exit(0);
   const { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } =
     await import("./services/deviceAuthStore.js");
   const authStorePath =
@@ -617,6 +509,7 @@ async function main() {
   // (post-startAll) so each invite gets a real per-invite room + deep link.
 
   const workerdGatewayToken = randomBytes(32).toString("hex");
+  serverLogStore.addSecret(workerdGatewayToken);
   const { CredentialStore } = await import("../../packages/shared/src/credentials/store.js");
   const { ClientConfigStore } =
     await import("../../packages/shared/src/credentials/clientConfigStore.js");
@@ -1156,16 +1049,9 @@ async function main() {
       name: "tokens",
       dependencies: ["tokenManager", "fsService"],
       async start() {
-        // Only persist the admin token centrally in standalone mode. In
-        // IPC/Electron-embedded mode the token is consumed by the parent
-        // process from the ready message, and writing it into the shared
-        // central config would leak into other workspaces.
-        const persistAdminToken = !ipcChannel
-          ? (token: string) => savePersistedAdminToken(token)
-          : undefined;
         tokensDefinition = createTokensService({
           tokenManager,
-          persistAdminToken,
+          persistAdminToken: (token: string) => savePersistedAdminToken(token),
         });
       },
       getServiceDefinition() {
@@ -1570,25 +1456,20 @@ async function main() {
   {
     const { createCredentialService } = await import("./services/credentialService.js");
     const { serviceWithHttpRoutes } = await import("./serviceWithHttpRoutes.js");
-    const captureSessionCredential = async <T extends Record<string, unknown>>(
+    // Server→shell capture roundtrip over the RPC plane: emit a
+    // credential:capture-request event to the attached shell, await its
+    // credentials.completeCapture. Fails fast when no shell is attached.
+    const { createCredentialCaptureBridge } = await import("./services/credentialCaptureBridge.js");
+    const captureBridge = createCredentialCaptureBridge({
+      eventService,
+      hasConnectedShell: () => (rpcServerForGateway?.countConnectedClients(["shell"]) ?? 0) > 0,
+    });
+    const captureSessionCredential = <T extends Record<string, unknown>>(
       payload: Record<string, unknown>,
       signal?: AbortSignal
-    ): Promise<T> => {
-      const response = await ipcRequest<T & { error?: unknown }>(
-        "credential-session-capture-request",
-        payload,
-        300_000,
-        signal
-      );
-      if (!response) {
-        throw new Error("Session credential capture timed out or is unavailable");
-      }
-      if (response.error) {
-        throw new Error(String(response.error));
-      }
-      return response;
-    };
+    ): Promise<T> => captureBridge.captureSessionCredential<T>(payload, signal);
     const credentialService = createCredentialService({
+      completeCapture: (captureId, response) => captureBridge.completeCapture(captureId, response),
       credentialStore,
       clientConfigStore,
       auditLog,
@@ -1707,6 +1588,30 @@ async function main() {
     );
   }
 
+  // ── serverLog service (host log inspection + live tail) ──
+  {
+    const { createServerLogService } = await import("./services/serverLogService.js");
+    container.registerRpc(
+      createServerLogService({
+        store: serverLogStore,
+        eventService,
+        workspaceId: workspace.config.id,
+        serverBootId,
+        startedAt: serverLogStartedAt,
+      })
+    );
+  }
+
+  // ── hostLifecycle service (shell-gated graceful shutdown) ──
+  {
+    const { createHostLifecycleService } = await import("./services/hostLifecycleService.js");
+    container.registerRpc(
+      createHostLifecycleService({
+        shutdown: () => requestShutdown(),
+      })
+    );
+  }
+
   // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
   {
     const { createEvalService } = await import("./services/evalService.js");
@@ -1723,6 +1628,7 @@ async function main() {
           doDispatch,
           entityStore: ensureEntityStore(doDispatch),
           tokenManager,
+          activity: activityRegistry,
         });
       },
       getServiceDefinition() {
@@ -1933,17 +1839,12 @@ async function main() {
   //   1. VIBESTUDIO_ADMIN_TOKEN env var (always overrides)
   //   2. Persisted token at ~/.config/vibestudio/admin-token (survives restarts)
   //   3. Generate a random one and persist it so remote clients can save it
-  //
-  // In IPC mode (Electron-embedded) we skip persistence: the Electron parent
-  // process consumes the token directly via the "ready" message, and writing
-  // a token for one workspace into the shared central config would leak into
-  // other workspaces.
   let adminToken: string;
   let tokenSource: "env" | "persisted" | "generated" = "generated";
   if (process.env["VIBESTUDIO_ADMIN_TOKEN"]) {
     adminToken = assertPresent(process.env["VIBESTUDIO_ADMIN_TOKEN"]);
     tokenSource = "env";
-  } else if (!ipcChannel) {
+  } else {
     const persisted = loadPersistedAdminToken();
     if (persisted) {
       adminToken = persisted;
@@ -1956,10 +1857,11 @@ async function main() {
         console.warn(`[Server] Failed to persist admin token at ${getAdminTokenPath()}:`, err);
       }
     }
-  } else {
-    adminToken = randomBytes(32).toString("hex");
   }
   tokenManager.setAdminToken(adminToken);
+  // Host logs echo the admin token (token file line, --print-credentials);
+  // keep it out of the userland-visible serverLog surface.
+  serverLogStore.addSecret(adminToken);
   let gatewayPortResolved: number | null = null;
   function getResolvedGatewayPort(context: string): number {
     if (!gatewayPortResolved) {
@@ -2717,21 +2619,6 @@ async function main() {
   });
 
   const { registerPanelServices } = await import("./panelRuntimeRegistration.js");
-  // Workspace relaunch is only meaningful when running under Electron's
-  // utility-process supervisor (IPC mode); in standalone mode there's no
-  // app to relaunch, so workspace.select becomes a no-op (the caller has
-  // to reconnect manually).
-  const requestRelaunch: ((name: string) => void) | undefined = ipcChannel
-    ? (name: string) => ipcChannel.postMessage({ type: "workspace-relaunch", name })
-    : undefined;
-  // In IPC mode, the workspace catalog lives in Electron main. Proxy list()
-  // requests through IPC so the server returns the real catalog, not [].
-  const requestWorkspaceList: (() => Promise<unknown[]>) | undefined = ipcChannel
-    ? async () => {
-        const resp = await ipcRequest<{ workspaces: unknown[] }>("workspace-list-request");
-        return resp?.workspaces ?? [];
-      }
-    : undefined;
   // Set once the container constructs the manager (registered before
   // startAll below); the commonDeps closure resolves it lazily.
   let headlessHostManager: import("./headlessHostManager.js").HeadlessHostManager | null = null;
@@ -2746,10 +2633,9 @@ async function main() {
     workspaceConfig,
     treeScanner,
     adminToken,
-    centralData: centralData ?? null,
+    centralData,
     args,
     hostConfig,
-    isIpcMode: !!ipcChannel,
     tokenManager,
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId: string, capability: AppCapability) =>
@@ -2764,8 +2650,6 @@ async function main() {
     },
     getGatewayPort: () => gatewayPortResolved,
     eventService,
-    requestRelaunch,
-    requestWorkspaceList,
     listWorkspaceUnits: () => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
       type WorkspaceUnitStatus = import("./services/workspaceService.js").WorkspaceUnitStatus;
@@ -3245,7 +3129,7 @@ async function main() {
     );
   }
 
-  if (!ipcChannel) {
+  {
     // Settings service for trusted remote hosts and mobile workspace apps.
     const { createSettingsServiceStandalone } =
       await import("./services/settingsServiceStandalone.js");
@@ -3371,11 +3255,13 @@ async function main() {
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
         workspaceId: workspace.config.id,
+        // In the base payload so attach-or-spawn can version-check without auth.
+        version: serverVersion,
+        pid: process.pid,
       };
       if (!detailed) return base;
       return {
         ...base,
-        version: "0.1.0",
         uptimeMs: Date.now() - startedAt,
         workerd: workerdManagerForGateway?.getPort() ? "running" : "stopped",
         tokenSource,
@@ -3569,12 +3455,17 @@ async function main() {
   // codes redeemable over the loopback gateway.
   const { mintPairingInvite } = await import("./services/auth/model.js");
   const startupInvites =
-    !ipcChannel && process.env["VIBESTUDIO_DISABLE_STARTUP_PAIRING"] !== "1"
+    process.env["VIBESTUDIO_DISABLE_STARTUP_PAIRING"] !== "1"
       ? [
           mintPairingInvite({ deviceAuthStore, pairing: webrtcPairing, ingress: webrtcIngress }),
           mintPairingInvite({ deviceAuthStore, pairing: webrtcPairing, ingress: webrtcIngress }),
         ]
       : [];
+  // A pairing code grants a shell principal — redact codes (and thereby the
+  // deep links embedding them) from the userland-visible serverLog surface.
+  for (const invite of startupInvites) {
+    serverLogStore.addSecret(invite.code);
+  }
   const startupInvite = startupInvites[0] ?? null;
   const startupQrInvite = startupInvites[1] ?? null;
   const startupPairingCodes = startupInvites.map((invite) => invite.code);
@@ -3800,18 +3691,7 @@ async function main() {
 
   const workerdMgr = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
 
-  if (ipcChannel) {
-    // Electron main is a host client over WS; the reserved caller id "shell"
-    // remains in-process only.
-    const shellToken = tokenManager.ensureToken("electron-main", "shell");
-    ipcChannel.postMessage({
-      type: "ready",
-      workerdPort: workerdMgr?.getPort() ?? 0,
-      gatewayPort,
-      adminToken,
-      shellToken,
-    });
-  } else {
+  {
     // Write admin token to a well-known file for scripting
     const tokenFilePath = path.join(statePath, "admin-token");
     try {
@@ -3891,6 +3771,8 @@ async function main() {
         tokenFilePath,
         gatewayPort,
         workerdPort: workerdMgr?.getPort() ?? 0,
+        pid: process.pid,
+        version: serverVersion,
       };
       try {
         fs.mkdirSync(path.dirname(args.readyFile), { recursive: true });
@@ -3945,7 +3827,7 @@ async function main() {
       .then(() => console.log("[Server] All services stopped"))
       .catch((e) => console.error("[Server] Service shutdown error:", e))
       .finally(() => {
-        if (!ipcChannel && workspaceIsEphemeral && centralData) {
+        if (workspaceIsEphemeral) {
           try {
             deleteWorkspaceDir(workspaceName);
             centralData.removeWorkspace(workspaceName);
@@ -3960,32 +3842,46 @@ async function main() {
       });
   }
 
-  if (ipcChannel) {
-    ipcChannel.on("message", (msg: unknown) => {
-      const record = asRecord(msg);
-      if (record?.["type"] === "shutdown") void shutdown();
+  requestShutdown = () => void shutdown();
+
+  // Pairing-TTL exit: a fresh spawn that no client ever redeemed cleans itself
+  // up (the natural GC for a spawn the desktop never managed to attach).
+  if (startupPairingCodes.length > 0) {
+    startupPairingExpiryTimer = setTimeout(() => {
+      const allStartupCodesStillPending = startupPairingCodes.every((code) =>
+        deviceAuthStore.hasPendingPairingCode(code)
+      );
+      if (!allStartupCodesStillPending) return;
+      console.warn(
+        `[Server] Startup pairing code expired after ${Math.round(
+          DEFAULT_PAIRING_CODE_TTL_MS / 60_000
+        )} minutes without being used; shutting down. Restart the pair command to print a fresh code.`
+      );
+      void shutdown();
+    }, DEFAULT_PAIRING_CODE_TTL_MS);
+    startupPairingExpiryTimer.unref?.();
+  }
+  process.on("SIGTERM", () => void shutdown());
+  process.on("SIGINT", () => void shutdown());
+
+  // Idle auto-exit (workspace-server mode only): the garbage collector for
+  // detached servers. No connected shell/app clients AND no active background
+  // runs, continuously for VIBESTUDIO_IDLE_EXIT_MS (default 30 min; 0 disables)
+  // → graceful shutdown.
+  if (isWorkspaceServer) {
+    const { startIdleExitMonitor, DEFAULT_IDLE_EXIT_MS } =
+      await import("./services/hostLifecycleService.js");
+    const idleExitEnv = process.env["VIBESTUDIO_IDLE_EXIT_MS"];
+    const parsedIdleExit = idleExitEnv === undefined ? Number.NaN : Number(idleExitEnv);
+    const idleExitMs = Number.isFinite(parsedIdleExit) ? parsedIdleExit : DEFAULT_IDLE_EXIT_MS;
+    startIdleExitMonitor({
+      activity: activityRegistry,
+      hasConnectedClients: () =>
+        (rpcServerForGateway?.countConnectedClients(["shell", "app"]) ?? 0) > 0,
+      shutdown: () => void shutdown(),
+      idleExitMs,
+      log: (message) => console.log(message),
     });
-    ipcChannel.onDisconnect(() => void shutdown());
-    process.on("SIGTERM", () => void shutdown());
-    process.on("SIGINT", () => void shutdown());
-  } else {
-    if (startupPairingCodes.length > 0) {
-      startupPairingExpiryTimer = setTimeout(() => {
-        const allStartupCodesStillPending = startupPairingCodes.every((code) =>
-          deviceAuthStore.hasPendingPairingCode(code)
-        );
-        if (!allStartupCodesStillPending) return;
-        console.warn(
-          `[Server] Startup pairing code expired after ${Math.round(
-            DEFAULT_PAIRING_CODE_TTL_MS / 60_000
-          )} minutes without being used; shutting down. Restart the pair command to print a fresh code.`
-        );
-        void shutdown();
-      }, DEFAULT_PAIRING_CODE_TTL_MS);
-      startupPairingExpiryTimer.unref?.();
-    }
-    process.on("SIGTERM", () => void shutdown());
-    process.on("SIGINT", () => void shutdown());
   }
 }
 
@@ -4030,9 +3926,6 @@ function parseGatewayAliases(value: string): string[] {
 }
 
 main().catch((err) => {
-  if (ipcChannel) {
-    ipcChannel.postMessage({ type: "error", message: String(err) });
-  }
   console.error("Fatal:", err);
   process.exit(1);
 });

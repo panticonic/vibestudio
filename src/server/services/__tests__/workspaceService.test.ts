@@ -101,7 +101,13 @@ function grantedApproval(): UserlandApprovalChoice {
   return { kind: "choice", choice: "allow" };
 }
 
-function makeService(opts: { requestRelaunch?: (name: string) => void } = {}) {
+function makeService(
+  opts: {
+    eventService?: {
+      emit: (event: "workspace:relaunch-requested", payload: { name: string }) => void;
+    };
+  } = {}
+) {
   return createWorkspaceService({
     workspace: makeWorkspace(),
     getConfig: () => makeConfig(),
@@ -109,7 +115,7 @@ function makeService(opts: { requestRelaunch?: (name: string) => void } = {}) {
     centralData: makeCentralData(),
     createWorkspace: vi.fn((name: string) => ({ name, lastOpened: Date.now() })),
     deleteWorkspaceDir: vi.fn(),
-    requestRelaunch: opts.requestRelaunch,
+    eventService: opts.eventService,
     approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
   });
 }
@@ -269,26 +275,6 @@ describe("workspace service handler", () => {
     const service = makeService();
     const result = await service.handler(panelCtx, "getActiveEntry", []);
     expect(result).toEqual({ name: "test-ws", lastOpened: 1000 });
-  });
-
-  it("getActiveEntry uses the proxied workspace list when the local catalog is unavailable", async () => {
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      centralData: null,
-      createWorkspace: vi.fn(),
-      deleteWorkspaceDir: vi.fn(),
-      requestWorkspaceList: vi.fn(async () => [
-        { name: "test-ws", lastOpened: 1234 },
-        { name: "other", lastOpened: 500 },
-      ]),
-      approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-    });
-
-    const result = await service.handler(panelCtx, "getActiveEntry", []);
-
-    expect(result).toEqual({ name: "test-ws", lastOpened: 1234 });
   });
 
   it("getActiveEntry returns a minimal active entry instead of null when no catalog entry exists", async () => {
@@ -539,11 +525,11 @@ describe("workspace service handler", () => {
   });
 });
 
-// ─── Select / relaunch: the only Electron-coupled path ───────────────────────
+// ─── Select / relaunch: shell-relaunch event ─────────────────────────────────
 
 describe("workspace.select", () => {
-  it("touches the catalog and invokes requestRelaunch with the target name", async () => {
-    const requestRelaunch = vi.fn();
+  it("touches the catalog and emits workspace:relaunch-requested with the target name", async () => {
+    const emit = vi.fn();
     const central = makeCentralData();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
@@ -552,17 +538,17 @@ describe("workspace.select", () => {
       centralData: central,
       createWorkspace: vi.fn(),
       deleteWorkspaceDir: vi.fn(),
-      requestRelaunch,
+      eventService: { emit },
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
     });
 
     await service.handler(panelCtx, "select", ["other"]);
 
     expect(central.touchWorkspace).toHaveBeenCalledWith("other");
-    expect(requestRelaunch).toHaveBeenCalledWith("other");
+    expect(emit).toHaveBeenCalledWith("workspace:relaunch-requested", { name: "other" });
   });
 
-  it("is a no-op (no error) when requestRelaunch is undefined (standalone mode)", async () => {
+  it("is a no-op (no error) when eventService is undefined", async () => {
     const central = makeCentralData();
     const service = createWorkspaceService({
       workspace: makeWorkspace(),
@@ -572,7 +558,7 @@ describe("workspace.select", () => {
       createWorkspace: vi.fn(),
       deleteWorkspaceDir: vi.fn(),
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-      // No requestRelaunch — standalone server has no Electron app to relaunch.
+      // No eventService — no shell attached to relaunch.
     });
 
     await expect(service.handler(panelCtx, "select", ["other"])).resolves.toBeUndefined();

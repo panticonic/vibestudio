@@ -56,6 +56,9 @@ export class CentralDataManager {
       if (lastWorkspaceTarget) {
         result.lastWorkspaceTarget = lastWorkspaceTarget;
       }
+      if (typeof parsed["keepServerOnQuit"] === "boolean") {
+        result.keepServerOnQuit = parsed["keepServerOnQuit"];
+      }
 
       return result;
     } catch (error) {
@@ -180,6 +183,54 @@ export class CentralDataManager {
     }
     if (pruned) this.save();
     return null;
+  }
+
+  /**
+   * Record the detached local workspace server the desktop last attached to.
+   * Creates the entry (like touchWorkspace) if the workspace exists on disk but
+   * is not yet registered; no-ops if there is no entry and the dir is missing.
+   */
+  setWorkspaceLocalServer(
+    name: string,
+    record: NonNullable<WorkspaceEntry["localServer"]>
+  ): void {
+    let workspace = this.data.workspaces.find((w) => w.name === name);
+    if (!workspace) {
+      const configPath = path.join(getWorkspaceDir(name), "source", "meta/vibestudio.yml");
+      if (!fs.existsSync(configPath)) return;
+      workspace = { name, lastOpened: Date.now() };
+      this.data.workspaces.unshift(workspace);
+    }
+    workspace.localServer = record;
+    this.save();
+  }
+
+  /** Forget the recorded local server attachment for a workspace. */
+  clearWorkspaceLocalServer(name: string): void {
+    const workspace = this.data.workspaces.find((w) => w.name === name);
+    if (!workspace?.localServer) return;
+    delete workspace.localServer;
+    this.save();
+  }
+
+  /**
+   * Read the recorded local server attachment for a workspace. Reloads from disk
+   * first because the server process also writes data.json, so a record written
+   * by another process must be observable here.
+   */
+  getWorkspaceLocalServer(name: string): WorkspaceEntry["localServer"] | null {
+    this.data = this.load();
+    return this.data.workspaces.find((w) => w.name === name)?.localServer ?? null;
+  }
+
+  /** Remembered quit-prompt choice (global). null = no remembered choice, ask. */
+  getKeepServerOnQuit(): boolean | null {
+    return this.data.keepServerOnQuit ?? null;
+  }
+
+  setKeepServerOnQuit(keep: boolean): void {
+    this.data.keepServerOnQuit = keep;
+    this.save();
   }
 
   markRemoteWorkspaceOpened(target: { url: string; workspaceName?: string }): void {

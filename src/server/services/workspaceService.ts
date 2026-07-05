@@ -13,11 +13,10 @@
  * `workspace.create("name")`, etc. without an intermediate proxy.
  *
  * The `select` (workspace switch) method needs Electron's `app.relaunch()`,
- * which lives in the Electron main process. The server signals the relaunch
- * by calling `requestRelaunch(name)` from this service's deps; in IPC mode
- * that callback posts a parent-port message that ServerProcessManager
- * forwards to its `onRelaunch` handler. In standalone (no Electron) mode the
- * callback is a no-op and the caller is expected to reconnect manually.
+ * which lives in the desktop shell. The server emits a
+ * `workspace:relaunch-requested` event; an attached shell subscribes and
+ * relaunches itself. With no shell attached the event goes nowhere and the
+ * caller is expected to reconnect manually.
  */
 
 import { randomUUID } from "node:crypto";
@@ -146,17 +145,11 @@ export interface WorkspaceServiceDeps {
   /** Delete a workspace directory from disk. */
   deleteWorkspaceDir: (name: string) => void;
   /**
-   * Signal the host (Electron main) to relaunch into a different workspace.
-   * In IPC mode this posts a parent-port message; in standalone mode it's
-   * a no-op (the caller is expected to reconnect manually).
+   * Event bus for `workspace:relaunch-requested`: an attached desktop shell
+   * subscribes and relaunches itself into the selected workspace. With no
+   * shell attached the event is a no-op (the caller reconnects manually).
    */
-  requestRelaunch?: (name: string) => void;
-  /**
-   * IPC proxy: fetch the workspace catalog from Electron main when
-   * centralData is null (IPC mode). This keeps workspace.list() consistent
-   * with workspace.getActive() regardless of runtime mode.
-   */
-  requestWorkspaceList?: () => Promise<unknown[]>;
+  eventService?: { emit(event: "workspace:relaunch-requested", payload: { name: string }): void };
   /** Workspace-unit operational status rows, including extension health. */
   listUnits?: () => Promise<WorkspaceUnitStatus[]> | WorkspaceUnitStatus[];
   /** Restart a workspace unit through the owning manager. */
@@ -504,10 +497,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           };
 
         case "list":
-          if (deps.centralData) return deps.centralData.listWorkspaces();
-          // IPC mode: proxy to Electron main which owns the catalog
-          if (deps.requestWorkspaceList) return deps.requestWorkspaceList();
-          return [];
+          return deps.centralData ? deps.centralData.listWorkspaces() : [];
 
         case "getActive":
           return deps.getConfig().id;
@@ -517,11 +507,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           const catalogEntry = deps.centralData?.getWorkspaceEntry(active);
           if (isWorkspaceEntry(catalogEntry)) return catalogEntry;
 
-          const entries = deps.centralData
-            ? deps.centralData.listWorkspaces()
-            : deps.requestWorkspaceList
-              ? await deps.requestWorkspaceList()
-              : [];
+          const entries = deps.centralData ? deps.centralData.listWorkspaces() : [];
           const listedEntry = entries.find(
             (entry): entry is { name: string; lastOpened: number } =>
               isWorkspaceEntry(entry) && entry.name === active
@@ -575,11 +561,10 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           });
           // Touch the catalog so the workspace is marked as recently opened.
           deps.centralData?.touchWorkspace(name);
-          // Signal the host to relaunch with the new workspace. In IPC mode
-          // this posts a parent-port message that ServerProcessManager forwards
-          // to Electron main, which calls app.relaunch(). In standalone mode
-          // requestRelaunch is undefined and the caller must reconnect manually.
-          deps.requestRelaunch?.(name);
+          // Signal any attached desktop shell to relaunch into the new
+          // workspace. With no shell attached the event goes nowhere and the
+          // caller must reconnect manually.
+          deps.eventService?.emit("workspace:relaunch-requested", { name });
           return;
         }
 

@@ -129,6 +129,13 @@ export interface ServerClientOptions {
   reconnect?: boolean;
   /** Refresh the caller token after an auth failure during reconnect. */
   refreshAuthToken?: () => Promise<string>;
+  /**
+   * Fired once when the main session paired a fresh device (a one-time pairing
+   * code was redeemed): the durable device credential to persist so reconnects
+   * can authenticate with `refresh:<deviceId>:<refreshToken>` instead of
+   * re-pairing. Mirrors the WebRTC client's `onPaired` (webrtcServerClient.ts).
+   */
+  onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
 }
 
 export async function createServerClient(
@@ -148,6 +155,9 @@ export async function createServerClient(
     logPrefix: "ServerClient",
     onServerEvent: options?.onServerEvent,
     onRecovery: options?.onRecovery,
+    onAuthResult: (msg) => {
+      if (msg.deviceCredential) options?.onPaired?.(msg.deviceCredential);
+    },
     adapter: {
       now: () => Date.now(),
       getAuthToken: async () => activeAuthToken,

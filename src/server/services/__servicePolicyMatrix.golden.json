@@ -67,6 +67,7 @@
     "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "audit": null,
+      "completeCapture": null,
       "configureClient": null,
       "connect": null,
       "deleteClientConfig": null,
@@ -144,7 +145,7 @@
     }
   },
   "gateway": {
-    "service": ["app", "panel", "shell"],
+    "service": ["app", "do", "panel", "shell", "worker"],
     "methods": {
       "fetch": null
     }
@@ -156,6 +157,12 @@
       "importProject": null,
       "removeSharedRemote": null,
       "setSharedRemote": null
+    }
+  },
+  "hostLifecycle": {
+    "service": ["server", "shell"],
+    "methods": {
+      "shutdown": null
     }
   },
   "notification": {
@@ -271,6 +278,14 @@
       "resolveContext": null,
       "retireEntity": null,
       "setTitle": ["app", "do", "panel", "worker"]
+    }
+  },
+  "serverLog": {
+    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "methods": {
+      "query": null,
+      "stats": null,
+      "tail": null
     }
   },
   "shellApproval": {

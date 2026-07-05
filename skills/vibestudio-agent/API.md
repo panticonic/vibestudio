@@ -116,6 +116,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
 | `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary, null when nothing matches, or a DeferredResult while a use-approval prompt is awaited. |
 | `credentials.proxyFetch` | Forward an outbound HTTP request through the egress proxy, injecting the resolved credential; returns status, ordered header pairs, final URL, and a base64 body. |
 | `credentials.proxyGitHttp` | Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded. |
+| `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
 
 ## `docs`
@@ -217,6 +218,16 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `gitInterop.removeSharedRemote` | Remove a named shared Git remote declaration for a workspace unit from meta/vibestudio.yml and sync the repo's git config; may prompt for capability approval. |
 | `gitInterop.importProject` | Clone an external Git project into the workspace at the requested path and record its remote in meta/vibestudio.yml; clones over the network and may prompt for config-write approval. |
 | `gitInterop.completeWorkspaceDependencies` | Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results. |
+
+## `hostLifecycle`
+
+Host-process graceful shutdown for attached shells
+
+Allowed callers: `shell`, `server`
+
+| Method | Description |
+|--------|-------------|
+| `hostLifecycle.shutdown` | Gracefully shut down the workspace server process (same path as SIGTERM). Shell-only. |
 
 ## `notification`
 
@@ -364,6 +375,18 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`
 | `runtime.listOwnedContexts` | List the contexts owned by a context via the relationship registry. `kind` scopes to 'lifecycle' (subagent children) or 'lineage' (fork provenance); omit to list both. Returns { contexts: [...] }. |
 | `runtime.recordContextEdge` | Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead. |
 | `runtime.createSubagentContext` | Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; the vessel must NOT hand-roll this. |
+
+## `serverLog`
+
+Server host log inspection and live tailing
+
+Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
+
+| Method | Description |
+|--------|-------------|
+| `serverLog.query` | Query the server host log ring buffer with filters (sinceSeq cursor, time range, min level, subsystem tag, substring). Returns the most recent matches in ascending seq order plus process metadata (workspaceId, serverBootId, pid, latestSeq). |
+| `serverLog.tail` | Return the last N server host log records (default 500) in ascending seq order — the starting snapshot for a live tail; then subscribe to the server-log:append event and dedupe by seq. |
+| `serverLog.stats` | Aggregate stats over the captured server host logs: buffer occupancy, total captured this boot, counts by level, and the top subsystem tags. |
 
 ## `shellApproval`
 

@@ -2,7 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { createServerEventBridge } from "./serverEventBridge.js";
 
-function createHarness(opts: { resolveAppAvailableEvent?: (payload: unknown) => unknown } = {}) {
+function createHarness(
+  opts: {
+    resolveAppAvailableEvent?: (payload: unknown) => unknown;
+    onWorkspaceRelaunchRequested?: (name: string) => void;
+    onCredentialCaptureRequest?: (
+      payload: Record<string, unknown>
+    ) => Promise<Record<string, unknown>>;
+  } = {}
+) {
   const eventService = { emit: vi.fn() };
   const panelOrchestrator = {
     applyBuildComplete: vi.fn(),
@@ -27,6 +35,8 @@ function createHarness(opts: { resolveAppAvailableEvent?: (payload: unknown) => 
     openExternal: vi.fn(async () => {}),
     onAppHostTargetChanged,
     resolveAppAvailableEvent: opts.resolveAppAvailableEvent,
+    onWorkspaceRelaunchRequested: opts.onWorkspaceRelaunchRequested,
+    onCredentialCaptureRequest: opts.onCredentialCaptureRequest,
     warn,
   });
   return {
@@ -67,6 +77,52 @@ describe("createServerEventBridge", () => {
 
     expect(panelOrchestrator.handleRuntimeLeaseChanged).toHaveBeenCalledWith(payload);
     expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("routes workspace:relaunch-requested to the relaunch handler instead of re-emitting", () => {
+    const onWorkspaceRelaunchRequested = vi.fn();
+    const { handle, eventService } = createHarness({ onWorkspaceRelaunchRequested });
+
+    handle("event:workspace:relaunch-requested", { name: "other-ws" });
+
+    expect(onWorkspaceRelaunchRequested).toHaveBeenCalledWith("other-ws");
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("answers credential:capture-request with credentials.completeCapture", async () => {
+    const onCredentialCaptureRequest = vi.fn(async () => ({ cookieHeader: "a=b" }));
+    const { handle, serverClient } = createHarness({ onCredentialCaptureRequest });
+
+    handle("event:credential:capture-request", {
+      captureId: "cap-1",
+      kind: "cookies",
+      signInUrl: "https://example.test/login",
+    });
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith("credentials", "completeCapture", [
+        "cap-1",
+        { cookieHeader: "a=b" },
+      ])
+    );
+    expect(onCredentialCaptureRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ captureId: "cap-1", kind: "cookies" })
+    );
+  });
+
+  it("reports a capture handler failure back as an error completion", async () => {
+    const onCredentialCaptureRequest = vi.fn(async () => {
+      throw new Error("browser unavailable");
+    });
+    const { handle, serverClient } = createHarness({ onCredentialCaptureRequest });
+
+    handle("event:credential:capture-request", { captureId: "cap-2", kind: "cookies" });
+
+    await vi.waitFor(() =>
+      expect(serverClient.call).toHaveBeenCalledWith("credentials", "completeCapture", [
+        "cap-2",
+        { error: "browser unavailable" },
+      ])
+    );
   });
 
   it("re-emits ordinary server EventService events as local shell events", () => {

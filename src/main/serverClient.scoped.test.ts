@@ -42,15 +42,20 @@ async function startRpcHarness() {
           const shell = msg.token === "shell-token";
           const app = msg.token === "app-grant";
           const panel = msg.token === "panel-grant";
+          // A pairing code redeems into a shell principal and rides the freshly
+          // issued device credential back on the auth-result (rpcServer.handleAuth).
+          const pairing = msg.token === "pairing-code";
           callerId = shell
             ? "electron-main"
             : app
               ? "@workspace-apps/shell"
               : panel
                 ? "panel:nav-current"
-                : "";
-          callerKind = shell ? "shell" : app ? "app" : panel ? "panel" : "";
-          const success = shell || app || panel;
+                : pairing
+                  ? "shell:device-1"
+                  : "";
+          callerKind = shell || pairing ? "shell" : app ? "app" : panel ? "panel" : "";
+          const success = shell || app || panel || pairing;
           ws.send(
             JSON.stringify({
               type: "ws:auth-result",
@@ -60,6 +65,9 @@ async function startRpcHarness() {
               connectionId: "conn",
               serverBootId: "boot",
               sessionDirty: false,
+              ...(pairing
+                ? { deviceCredential: { deviceId: "device-1", refreshToken: "refresh-secret" } }
+                : {}),
             })
           );
           if (app || panel) {
@@ -163,6 +171,31 @@ describe("ServerClient scoped runtime callers", () => {
       },
     ]);
     await expect.poll(() => events).toEqual([{ callerId: "@workspace-apps/shell" }]);
+  });
+
+  it("surfaces the auth-result deviceCredential via onPaired (pairing-code bootstrap)", async () => {
+    const harness = await startRpcHarness();
+    const paired: Array<{ deviceId: string; refreshToken: string }> = [];
+    const client = await createServerClient(harness.port, "pairing-code", {
+      onPaired: (credential) => paired.push(credential),
+    });
+    cleanup.push(() => client.close());
+
+    await expect
+      .poll(() => paired)
+      .toEqual([{ deviceId: "device-1", refreshToken: "refresh-secret" }]);
+  });
+
+  it("does not invoke onPaired when the auth-result carries no credential", async () => {
+    const harness = await startRpcHarness();
+    const paired: unknown[] = [];
+    const client = await createServerClient(harness.port, "shell-token", {
+      onPaired: (credential) => paired.push(credential),
+    });
+    cleanup.push(() => client.close());
+
+    expect(client.isConnected()).toBe(true);
+    expect(paired).toEqual([]);
   });
 
   it("fails closed for panel scoped callers", async () => {

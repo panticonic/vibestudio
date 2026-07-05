@@ -522,4 +522,9 @@ export interface CentralData {
   lastWorkspaceTarget?:
     | { kind: "local"; name: string; lastOpened: number }
     | { kind: "remote"; url: string; workspaceName?: string; lastOpened: number };
+  /**
+   * Remembered quit-prompt choice (global): keep the local workspace server
+   * running for background tasks when the app quits. Absent = ask each time.
+   */
+  keepServerOnQuit?: boolean;
 }

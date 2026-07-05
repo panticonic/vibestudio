@@ -83,7 +83,7 @@ import {
   setMenuEventService,
 } from "./menu.js";
 import { getAppRoot, getResourcesPath } from "./paths.js";
-import { loadCentralEnv, deleteWorkspaceDir } from "@vibestudio/shared/workspace/loader";
+import { loadCentralEnv } from "@vibestudio/shared/workspace/loader";
 import { resolveLocalWorkspaceStartup } from "@vibestudio/shared/workspace/startup";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import {
@@ -91,6 +91,7 @@ import {
   resolveStartupMode,
   shouldRequestSingleInstanceLock,
   getPendingUserDataDir,
+  workspaceRelaunchArgs,
   type StartupMode,
   type ConnectedStartupMode,
 } from "./startupMode.js";
@@ -127,7 +128,6 @@ import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
 import { startMemoryMonitor, setMemoryMonitorViewManager } from "./memoryMonitor.js";
 import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
-// ServerProcessManager and createServerClient are now used by serverSession.ts
 import { assertPresent } from "../lintHelpers";
 
 // =============================================================================
@@ -1840,6 +1840,12 @@ app.on("ready", async () => {
       approvalAttention?.handlePendingChanged(pending);
       retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
+    onWorkspaceRelaunchRequested: (name) => {
+      log.info(`[App] Relaunching into workspace "${name}"`);
+      relaunchApp({ args: workspaceRelaunchArgs(name) });
+    },
+    onCredentialCaptureRequest: (payload) =>
+      handleCredentialSessionCaptureRequest(payload as CredentialSessionCaptureRequest),
   });
 
   try {
@@ -1873,12 +1879,6 @@ app.on("ready", async () => {
         skipStoredRemote: skipRemotePairingLaunch,
         centralData,
         onServerEvent: handleServerEvent,
-        onIpcRequest: async (type, msg) => {
-          if (type === "credential-session-capture-request") {
-            return handleCredentialSessionCaptureRequest(msg);
-          }
-          return null;
-        },
         onConnectionStatusChanged: (status) => {
           eventService.emit("server-connection-changed", {
             status,
@@ -1929,6 +1929,8 @@ app.on("ready", async () => {
     serverEventSubscriptions.add("panel-title-updated");
     serverEventSubscriptions.add("panel:runtimeLeaseChanged");
     serverEventSubscriptions.add("shell-approval:pending-changed");
+    serverEventSubscriptions.add("workspace:relaunch-requested");
+    serverEventSubscriptions.add("credential:capture-request");
     await serverEventSubscriptions.replay({ force: true });
     // Seed badge/seen-set from approvals already pending at launch without
     // firing OS notifications for them — the bar shows them once the shell
@@ -2125,7 +2127,7 @@ app.on("ready", async () => {
     const cdpHostConnectionId = panelOrchestrator.getRuntimeClientSessionId();
     cdpHostProvider = new CdpHostProvider({
       serverUrl: conn.gatewayConfig.serverUrl,
-      authToken: () => conn.shellToken || conn.adminToken,
+      authToken: () => conn.getCdpAuthToken(),
       hostConnectionId: cdpHostConnectionId,
       getViewManager: () => viewManager,
       socketFactory:
@@ -2248,8 +2250,8 @@ app.on("ready", async () => {
     // truth, accessible to panels/workers/shell). The shell renderer's
     // `workspace.*` calls reach the server by default because only true
     // Electron-local services are routed here. Workspace.select (relaunch) is
-    // signalled from the server back to Electron main via
-    // ServerProcessManager.onRelaunch (wired in serverSession.ts).
+    // signalled from the server via the workspace:relaunch-requested event
+    // (handled by the server event bridge).
     electronContainer.registerRpc(createSettingsService({ serverClient: sc, getViewManager }));
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
     electronContainer.registerRpc(
@@ -2581,13 +2583,10 @@ app.on("ready", async () => {
           .catch((e) => console.error("[App] serverClient cleanup error:", e))
       );
     }
-    if (serverSession?.serverProcessManager) {
-      cleanupPromises.push(
-        serverSession.serverProcessManager
-          .shutdown()
-          .catch((e) => console.error("[App] serverProcess cleanup error:", e))
-      );
-    }
+    // Leave any spawned local server running: it is detached by design, the
+    // next launch reattaches to it, and the idle-exit monitor reaps it if no
+    // client ever comes back.
+    serverSession?.localServerManager?.detach();
     serverSession = null;
     if (cdpHostProvider) {
       cdpHostProvider.stop();
@@ -2604,6 +2603,53 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
+// ── Quit policy for the desktop-owned local server ──
+// The local server is a detached process that can outlive the app. On quit we
+// simply ASK whether to keep it running (so background work — e.g. an agent
+// mid-turn — finishes and the next launch reattaches instantly) or stop it.
+// No activity guessing: the user decides, and can persist that choice with
+// "Remember my choice" (cleared by re-toggling in Settings / deleting the
+// `keepServerOnQuit` field). Decided here, consumed by the will-quit cleanup.
+let serverQuitDecision: "stop" | "keep" | null = null;
+
+app.on("before-quit", (event) => {
+  if (serverQuitDecision !== null || isCleaningUp) return;
+  const conn = serverSession;
+  if (!conn || conn.serverOwnership !== "desktop-local" || !conn.localServerManager) {
+    // Remote/external server: nothing desktop-owned to stop.
+    serverQuitDecision = "keep";
+    return;
+  }
+  // Remembered choice: honor it without prompting.
+  const remembered = centralData.getKeepServerOnQuit();
+  if (remembered !== null) {
+    serverQuitDecision = remembered ? "keep" : "stop";
+    return;
+  }
+  event.preventDefault();
+  void (async () => {
+    const { response, checkboxChecked } = await dialog.showMessageBox({
+      type: "question",
+      buttons: ["Keep running", "Stop server"],
+      defaultId: 0,
+      // Escape / closing the dialog keeps the server — never kill work on a
+      // stray keypress.
+      cancelId: 0,
+      title: "Quit Vibestudio",
+      message: "Keep the workspace server running in the background?",
+      detail:
+        "The workspace server can keep running after you close the app so background " +
+        "tasks (like agent runs) finish and the next launch reattaches instantly — " +
+        "or stop it now. You can change this any time.",
+      checkboxLabel: "Remember my choice",
+    });
+    const keep = response === 0;
+    if (checkboxChecked) centralData.setKeepServerOnQuit(keep);
+    serverQuitDecision = keep ? "keep" : "stop";
+    app.quit();
+  })();
+});
+
 // Use will-quit with preventDefault to properly await async shutdown
 app.on("will-quit", (event) => {
   // Prevent re-entry - if we're already cleaning up, let the app exit
@@ -2611,86 +2657,74 @@ app.on("will-quit", (event) => {
     return;
   }
 
-  // Cleanup helper for ephemeral dev workspaces (called sync, after servers stop)
-  const isEphemeral = startupMode.kind === "local" && startupMode.isEphemeral;
-  const cleanupDevWorkspace = () => {
-    if (isEphemeral && startupMode.kind === "local") {
-      try {
-        deleteWorkspaceDir(startupMode.workspaceName);
-        centralData.removeWorkspace(startupMode.workspaceName);
-        console.log(`[App] Deleted ephemeral dev workspace "${startupMode.workspaceName}"`);
-      } catch (e) {
-        console.error("[App] Failed to delete dev workspace:", e);
-      }
-    }
-  };
-
   const hasResourcesToClean = serverSession || cdpHostProvider;
-  if (hasResourcesToClean) {
-    isCleaningUp = true;
-    event.preventDefault();
+  if (!hasResourcesToClean) return;
+  isCleaningUp = true;
+  event.preventDefault();
 
-    console.log("[App] Shutting down...");
+  console.log("[App] Shutting down...");
 
-    const stopPromises: Promise<void>[] = [];
+  const stopPromises: Promise<void>[] = [];
 
-    // Server client (caller-token WS connection) + server process
-    if (serverSession) {
-      // Run panel cleanup via server (archive childless shell panels),
-      // then close the connection and stop the server process.
-      const session = serverSession;
-      serverSession = null;
+  // Server client (device-paired WS connection) + the detached server process
+  if (serverSession) {
+    // Run panel cleanup via server (archive childless shell panels), then
+    // stop-or-detach the local server and close the connection.
+    const session = serverSession;
+    serverSession = null;
+    const stopServer =
+      session.serverOwnership === "desktop-local" &&
+      session.localServerManager !== null &&
+      serverQuitDecision !== "keep";
 
-      const cleanupThenClose = (async () => {
-        if (panelRegistry && shellCore) {
-          const livePanelIds = panelRegistry.listPanels().map((p) => asPanelSlotId(p.panelId));
-          await shellCore.panelManager
-            .shutdownCleanup(livePanelIds)
-            .catch((e: unknown) => console.error("[App] Failed to run shutdown cleanup:", e));
-        }
-        await panelOrchestrator
-          ?.unregisterRuntimeClient()
-          .catch((e: unknown) => console.error("[App] Failed to unregister runtime client:", e));
-        await session.serverClient
-          .close()
-          .catch((e) => console.error("[App] Server client close error:", e));
-      })();
-      stopPromises.push(cleanupThenClose);
-
-      if (session.serverProcessManager) {
-        stopPromises.push(
-          cleanupThenClose.then(() =>
-            assertPresent(session.serverProcessManager)
-              .shutdown()
-              .then(() => console.log("[App] Server process stopped"))
-              .catch((e) => console.error("[App] Server process shutdown error:", e))
-          )
-        );
+    const cleanupThenClose = (async () => {
+      if (panelRegistry && shellCore) {
+        const livePanelIds = panelRegistry.listPanels().map((p) => asPanelSlotId(p.panelId));
+        await shellCore.panelManager
+          .shutdownCleanup(livePanelIds)
+          .catch((e: unknown) => console.error("[App] Failed to run shutdown cleanup:", e));
       }
-    }
-
-    if (cdpHostProvider) {
-      cdpHostProvider.stop();
-      cdpHostProvider = null;
-    }
-
-    // Add a timeout to ensure we exit even if cleanup hangs
-    const shutdownTimeout = setTimeout(() => {
-      console.warn("[App] Shutdown timeout - forcing exit");
-      app.exit(1);
-    }, APP_SHUTDOWN_TIMEOUT_MS);
-
-    Promise.all(stopPromises).finally(() => {
-      shellCore?.shutdown?.();
-      shellCore = null;
-      clearTimeout(shutdownTimeout);
-      cleanupDevWorkspace();
-      console.log("[App] Shutdown complete");
-      app.exit(0);
-    });
-  } else {
-    cleanupDevWorkspace();
+      await panelOrchestrator
+        ?.unregisterRuntimeClient()
+        .catch((e: unknown) => console.error("[App] Failed to unregister runtime client:", e));
+      if (stopServer) {
+        await assertPresent(session.localServerManager)
+          .stop(async () => {
+            await session.serverClient.call("hostLifecycle", "shutdown", []);
+          })
+          .then(() => console.log("[App] Server stopped"))
+          .catch((e) => console.error("[App] Server stop error:", e));
+      } else {
+        // Keep: leave the detached process running; the attachment record stays
+        // so the next launch reattaches instantly.
+        session.localServerManager?.detach();
+        if (session.localServerManager) console.log("[App] Server left running (detached)");
+      }
+      await session.serverClient
+        .close()
+        .catch((e) => console.error("[App] Server client close error:", e));
+    })();
+    stopPromises.push(cleanupThenClose);
   }
+
+  if (cdpHostProvider) {
+    cdpHostProvider.stop();
+    cdpHostProvider = null;
+  }
+
+  // Add a timeout to ensure we exit even if cleanup hangs
+  const shutdownTimeout = setTimeout(() => {
+    console.warn("[App] Shutdown timeout - forcing exit");
+    app.exit(1);
+  }, APP_SHUTDOWN_TIMEOUT_MS);
+
+  Promise.all(stopPromises).finally(() => {
+    shellCore?.shutdown?.();
+    shellCore = null;
+    clearTimeout(shutdownTimeout);
+    console.log("[App] Shutdown complete");
+    app.exit(0);
+  });
 });
 
 app.on("activate", () => {

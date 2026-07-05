@@ -53,4 +53,68 @@ describe("CentralDataManager", () => {
     expect(manager.getWorkspaceEntry("missing")).toBeNull();
     expect(manager.listWorkspaces()).toEqual([]);
   });
+
+  function seedWorkspaceDir(name: string): void {
+    const configPath = path.join(
+      tempRoot,
+      "vibestudio",
+      "workspaces",
+      name,
+      "source",
+      "meta",
+      "vibestudio.yml"
+    );
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, `id: ${name}\n`, "utf8");
+  }
+
+  const localServer = {
+    gatewayPort: 4321,
+    pid: 999,
+    serverId: "srv-1",
+    serverBootId: "boot-1",
+    startedAt: 1234,
+    version: "1.0.0",
+  };
+
+  it("records, reads, and clears a workspace local server attachment", () => {
+    seedWorkspaceDir("client");
+    const manager = new CentralDataManager();
+
+    manager.setWorkspaceLocalServer("client", localServer);
+    expect(manager.getWorkspaceLocalServer("client")).toEqual(localServer);
+
+    manager.clearWorkspaceLocalServer("client");
+    expect(manager.getWorkspaceLocalServer("client")).toBeNull();
+  });
+
+  it("creates the entry when recording a local server for an on-disk-but-unregistered workspace", () => {
+    seedWorkspaceDir("client");
+    const manager = new CentralDataManager();
+    expect(manager.getWorkspaceEntry("client")).toBeNull();
+
+    manager.setWorkspaceLocalServer("client", localServer);
+
+    expect(manager.getWorkspaceEntry("client")).toMatchObject({ name: "client", localServer });
+  });
+
+  it("no-ops recording a local server for a missing workspace", () => {
+    const manager = new CentralDataManager();
+
+    manager.setWorkspaceLocalServer("missing", localServer);
+
+    expect(manager.getWorkspaceEntry("missing")).toBeNull();
+  });
+
+  it("sees a local server record written to disk by another process", () => {
+    seedWorkspaceDir("client");
+    const writer = new CentralDataManager();
+    writer.setWorkspaceLocalServer("client", localServer);
+
+    const reader = new CentralDataManager();
+    // Simulate a concurrent write from another process.
+    writer.setWorkspaceLocalServer("client", { ...localServer, pid: 4242 });
+
+    expect(reader.getWorkspaceLocalServer("client")).toMatchObject({ pid: 4242 });
+  });
 });

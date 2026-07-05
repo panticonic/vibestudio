@@ -885,7 +885,6 @@ export interface CommonDeps {
   adminToken: string;
   centralData: CentralDataManager | null;
   hostConfig: HostConfig;
-  isIpcMode: boolean;
   tokenManager?: import("@vibestudio/shared/tokenManager").TokenManager;
   eventService?: import("@vibestudio/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
@@ -905,9 +904,6 @@ export interface CommonDeps {
    */
   ensureDefaultHeadlessHost?: () => Promise<boolean>;
   getGatewayPort?: () => number | null;
-  requestRelaunch?: (name: string) => void;
-  /** IPC proxy: fetch workspace list from Electron main when centralData is null. */
-  requestWorkspaceList?: () => Promise<unknown[]>;
   listWorkspaceUnits?: () =>
     | Promise<import("./services/workspaceService.js").WorkspaceUnitStatus[]>
     | import("./services/workspaceService.js").WorkspaceUnitStatus[];
@@ -1099,8 +1095,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           return createAndRegisterWorkspace(name, centralData, opts);
         },
         deleteWorkspaceDir,
-        requestRelaunch: deps.requestRelaunch,
-        requestWorkspaceList: deps.requestWorkspaceList,
+        eventService: deps.eventService,
         listUnits: deps.listWorkspaceUnits,
         restartUnit: deps.restartWorkspaceUnit,
         listUnitLogs: deps.listWorkspaceUnitLogs,

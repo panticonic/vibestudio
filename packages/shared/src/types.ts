@@ -342,6 +342,18 @@ export interface Panel {
 export interface WorkspaceEntry {
   name: string;
   lastOpened: number;
+  /**
+   * Detached local workspace server the desktop last attached to. Pruned with
+   * the entry; validated against /healthz (serverId + workspaceId) before reuse.
+   */
+  localServer?: {
+    gatewayPort: number;
+    pid: number;
+    serverId: string;
+    serverBootId: string;
+    startedAt: number;
+    version?: string;
+  };
 }
 
 /**

@@ -23,6 +23,13 @@ export interface ServerEventBridgeDeps {
   onAppHostTargetChanged?(event: ServerHostTargetChangeEvent): void;
   /** Resolve server app artifact route references for this Electron connection. */
   resolveAppAvailableEvent?(payload: unknown): unknown | null;
+  /** The server asked the shell to relaunch into a different workspace. */
+  onWorkspaceRelaunchRequested?(name: string): void;
+  /**
+   * The server asked the shell to run an interactive session credential
+   * capture. The handler answers with `credentials.completeCapture`.
+   */
+  onCredentialCaptureRequest?(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
 export interface ServerHostTargetChangeEvent {
@@ -86,6 +93,39 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
           }`
         );
       });
+      return;
+    }
+
+    if (bareEvent === "workspace:relaunch-requested") {
+      const { name } = payload as { name?: unknown };
+      if (typeof name === "string") deps.onWorkspaceRelaunchRequested?.(name);
+      return;
+    }
+
+    if (bareEvent === "credential:capture-request") {
+      const request = payload as Record<string, unknown>;
+      const captureId = request["captureId"];
+      if (typeof captureId !== "string" || !deps.onCredentialCaptureRequest) return;
+      void (async () => {
+        let result: Record<string, unknown>;
+        try {
+          result = await deps.onCredentialCaptureRequest!(request);
+        } catch (err) {
+          result = { error: err instanceof Error ? err.message : String(err) };
+        }
+        const client = deps.getServerClient();
+        if (!client) {
+          deps.warn("[credentialCapture] no server client to complete capture");
+          return;
+        }
+        await client.call("credentials", "completeCapture", [captureId, result]).catch((err) => {
+          deps.warn(
+            `[credentialCapture] completeCapture failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        });
+      })();
       return;
     }
 

@@ -139,6 +139,12 @@ export function createEvalService(deps: {
    */
   entityStore: WorkspaceEntityStore;
   tokenManager: TokenManager;
+  /**
+   * Host-wide background-work registry (idle-exit monitor). Every held eval
+   * execution reports begin/end so a detached server won't idle-exit while
+   * background eval work is still running.
+   */
+  activity?: import("./activityRegistry.js").ActivityRegistry;
 }): ServiceDefinition {
   const store = deps.entityStore;
 
@@ -341,7 +347,13 @@ export function createEvalService(deps: {
         // Held synchronous run for connection-holding callers (panels over WS, CLI). The EvalDO
         // runs in a held handler; the caller holds its own leg. One request, one result.
         const { evalDoRef, assembledArgs } = await prepareRun((args[0] ?? {}) as EvalRunArgs);
-        return deps.doDispatch.dispatchHeld(evalDoRef, "run", assembledArgs);
+        const activityId = `eval:held:${randomUUID()}`;
+        deps.activity?.begin(activityId);
+        try {
+          return await deps.doDispatch.dispatchHeld(evalDoRef, "run", assembledArgs);
+        } finally {
+          deps.activity?.end(activityId);
+        }
       }
 
       if (method === "startRun") {
@@ -359,7 +371,14 @@ export function createEvalService(deps: {
         // already-`running`/`done` run must NOT spawn a second held executeRun (idempotent startRun
         // returns the existing status). A stuck `pending` (held task died pre-dispatch) is re-kicked.
         if (status === "pending") {
-          void runHeldAndDeliver(deps.doDispatch, evalDoRef, runId, agentRef, runArgs.channelId);
+          deps.activity?.begin(`eval:${runId}`);
+          void runHeldAndDeliver(
+            deps.doDispatch,
+            evalDoRef,
+            runId,
+            agentRef,
+            runArgs.channelId
+          ).finally(() => deps.activity?.end(`eval:${runId}`));
         }
         return { runId };
       }
