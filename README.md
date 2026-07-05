@@ -150,7 +150,7 @@ HTTP.
 npm install -g @vibestudio/server
 ```
 
-For development from a source checkout instead: `pnpm install && pnpm build`.
+For development from a source checkout instead: `pnpm bootstrap && pnpm build`.
 
 ### Running
 

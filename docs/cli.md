@@ -7,7 +7,7 @@
 For ongoing source checkout work, use the live TypeScript entrypoint:
 
 ```sh
-pnpm install
+pnpm bootstrap
 pnpm cli --help
 pnpm cli remote serve --port 3030
 pnpm cli mobile install --launch
