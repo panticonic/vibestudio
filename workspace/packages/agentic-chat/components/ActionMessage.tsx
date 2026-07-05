@@ -24,7 +24,7 @@ type StatusKey = "pending" | "complete" | "error" | "cancelled" | "abandoned";
 
 function getStatusKey(payload: InvocationCardPayload): StatusKey {
   const status = payload.execution.status;
-  if (status === "pending") return "pending";
+  if (status === "pending" || status === "running") return "pending";
   if (status === "cancelled") return "cancelled";
   if (status === "abandoned") return "abandoned";
   return payload.execution.isError || status === "error" ? "error" : "complete";

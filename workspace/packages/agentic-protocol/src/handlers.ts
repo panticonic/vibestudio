@@ -10,6 +10,7 @@ import type {
   ParticipantRef,
   ParticipantSelector,
   SandboxSourcePayload,
+  SubagentProgressUpdate,
   UsagePayload,
 } from "./events.js";
 import type { ApprovalId, InvocationId, MessageId, TurnId } from "./ids.js";
@@ -84,7 +85,13 @@ export interface ProjectedInvocation {
   request?: unknown;
   result?: unknown;
   outputs: unknown[];
-  progress: Array<{ at: string; message?: string; progress?: number; data?: unknown }>;
+  progress: Array<{
+    at: string;
+    message?: string;
+    progress?: number;
+    data?: unknown;
+    subagent?: SubagentProgressUpdate;
+  }>;
   requiresApproval?: boolean;
   userVisible?: boolean;
   startedAt?: string;
@@ -541,6 +548,8 @@ export function applyInvocationEvent(
             message: "message" in payload ? payload.message : undefined,
             progress: "progress" in payload ? payload.progress : undefined,
             data: "data" in payload ? payload.data : undefined,
+            subagent:
+              "subagent" in payload ? (payload.subagent as SubagentProgressUpdate) : undefined,
           },
         ],
       },

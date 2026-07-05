@@ -1670,6 +1670,86 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("projects subagent progress updates as a structured timestamped feed with running status", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "spawn_subagent",
+        request: { task: "audit the repo" },
+        subagent: {
+          runId: "inv-subagent",
+          mode: "fresh",
+          taskChannelId: "task-inv-subagent",
+          contextId: "ctx-inv-subagent",
+          label: "background audit",
+        },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const progressEvents: Array<AgenticEvent<"invocation.progress">> = [
+      {
+        kind: "invocation.progress",
+        actor: agent,
+        causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          subagent: { kind: "turn-started", messageSeq: 41 },
+        },
+        createdAt: "2026-05-20T12:00:02.000Z",
+      },
+      {
+        kind: "invocation.progress",
+        actor: agent,
+        causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          subagent: { kind: "tool-started", tool: "Read", messageSeq: 42 },
+        },
+        createdAt: "2026-05-20T12:00:03.000Z",
+      },
+      {
+        kind: "invocation.progress",
+        actor: agent,
+        causality: { invocationId: brandId<InvocationId>("inv-subagent") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          subagent: { kind: "said", text: "Found three issues so far.", messageSeq: 43, say: true },
+        },
+        createdAt: "2026-05-20T12:00:04.000Z",
+      },
+    ];
+
+    const state = [started, ...progressEvents]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
+      contentType: "invocation",
+      complete: false,
+      invocation: {
+        id: "inv-subagent",
+        subagent: { runId: "inv-subagent", label: "background audit" },
+        execution: {
+          status: "running",
+          progress: [
+            { kind: "turn-started", messageSeq: 41, at: "2026-05-20T12:00:02.000Z" },
+            { kind: "tool-started", tool: "Read", messageSeq: 42, at: "2026-05-20T12:00:03.000Z" },
+            {
+              kind: "said",
+              text: "Found three issues so far.",
+              messageSeq: 43,
+              say: true,
+              at: "2026-05-20T12:00:04.000Z",
+            },
+          ],
+        },
+      },
+    });
+  });
+
   it("preserves provider method names and streamed output across cross-participant invocation events", () => {
     const provider = { kind: "panel" as const, id: "provider-1", displayName: "Provider" };
     const started: AgenticEvent<"invocation.started"> = {

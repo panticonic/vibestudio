@@ -33,6 +33,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
   }),
 }));
 
+import type { ChatMessage, InvocationCardPayload } from "@workspace/agentic-core";
 import { MessageList } from "./MessageList.js";
 import { SubagentRunCard } from "./SubagentRunCard.js";
 
@@ -671,58 +672,92 @@ describe("MessageList typing indicators (roster-based)", () => {
 });
 
 describe("SubagentRunCard", () => {
-  it("is compact by default and expands the full progress feed on demand", () => {
+  function subagentMessage(overrides: {
+    id: string;
+    execution: InvocationCardPayload["execution"];
+    subagent: NonNullable<InvocationCardPayload["subagent"]>;
+    complete: boolean;
+  }): ChatMessage {
+    return {
+      id: `subagent-${overrides.id}`,
+      senderId: "agent-1",
+      content: "",
+      contentType: "invocation",
+      kind: "message",
+      complete: overrides.complete,
+      invocation: {
+        id: overrides.id,
+        name: "spawn_subagent",
+        arguments: {},
+        execution: overrides.execution,
+        subagent: overrides.subagent,
+      },
+    };
+  }
+
+  it("is compact by default and expands the structured timeline on demand", () => {
+    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
     render(
       React.createElement(SubagentRunCard, {
-        msg: makeMessage({
-          id: "subagent-run-1",
-          contentType: "invocation",
-          invocation: {
-            id: "run-1",
-            name: "spawn_subagent",
-            arguments: {},
-            execution: {
-              status: "pending",
-              description:
-                "Pilot-process one Google Drive PDF into a normalized poetry archive repo.",
-              consoleOutput: [
-                "Downloaded Judith Pickard poems.pdf",
-                "Extracted text from 12 pages",
-                "Writing normalized catalog",
-              ].join("\n"),
-            },
-            subagent: {
-              runId: "run-1",
-              mode: "fresh",
-              taskChannelId: "task-run-1",
-              contextId: "ctx-run-1",
-              childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-1",
-              label: "PDF poem extraction pilot",
-            },
+        msg: subagentMessage({
+          id: "run-1",
+          execution: {
+            status: "running",
+            description:
+              "Pilot-process one Google Drive PDF into a normalized poetry archive repo.",
+            progress: [
+              { kind: "turn-started", messageSeq: 1, at: at(300) },
+              { kind: "tool-started", tool: "Read", messageSeq: 2, at: at(120) },
+              {
+                kind: "said",
+                text: "Writing normalized catalog",
+                messageSeq: 3,
+                say: true,
+                at: at(30),
+              },
+            ],
           },
-          complete: true,
+          subagent: {
+            runId: "run-1",
+            mode: "fresh",
+            taskChannelId: "task-run-1",
+            contextId: "ctx-run-1",
+            childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-1",
+            label: "PDF poem extraction pilot",
+          },
+          complete: false,
         }),
-      } as never)
+      })
     );
 
     expect(screen.getByTestId("subagent-run-card")).toBeTruthy();
     expect(screen.getByText("PDF poem extraction pilot")).toBeTruthy();
-    expect(screen.getByText("Writing normalized catalog")).toBeTruthy();
-    expect(screen.queryByText("Downloaded Judith Pickard poems.pdf")).toBeNull();
-    expect(screen.queryByText("Extracted text from 12 pages")).toBeNull();
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("3 updates")).toBeTruthy();
+    // Collapsed: only the latest update, as a preview line.
+    expect(screen.getByText("Said: Writing normalized catalog")).toBeTruthy();
+    expect(screen.queryByText("Started working")).toBeNull();
     expect(
       screen.queryByText(
         "Pilot-process one Google Drive PDF into a normalized poetry archive repo."
       )
     ).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Show details"));
+    fireEvent.click(screen.getByLabelText("Expand run details"));
 
-    expect(screen.getByText("Downloaded Judith Pickard poems.pdf")).toBeTruthy();
-    expect(screen.getByText("Extracted text from 12 pages")).toBeTruthy();
+    expect(screen.getByText("Started working")).toBeTruthy();
+    expect(screen.getByText("Started Read")).toBeTruthy();
+    expect(screen.getByText("Writing normalized catalog")).toBeTruthy();
+    // Per-entry relative timestamps from the structured feed.
+    expect(screen.getByText("5m")).toBeTruthy();
+    expect(screen.getByText("2m")).toBeTruthy();
     expect(
       screen.getByText("Pilot-process one Google Drive PDF into a normalized poetry archive repo.")
     ).toBeTruthy();
+
+    // Identifiers stay behind their own disclosure until asked for.
+    expect(screen.queryByText("task-run-1")).toBeNull();
+    fireEvent.click(screen.getByText("Run identifiers"));
     expect(screen.getByText("task-run-1")).toBeTruthy();
     expect(screen.getByText("ctx-run-1")).toBeTruthy();
   });
@@ -730,37 +765,30 @@ describe("SubagentRunCard", () => {
   it("shows useful expanded details before the child has published progress", () => {
     render(
       React.createElement(SubagentRunCard, {
-        msg: makeMessage({
-          id: "subagent-run-2",
-          contentType: "invocation",
-          invocation: {
-            id: "run-2",
-            name: "spawn_subagent",
-            arguments: {},
-            execution: {
-              status: "pending",
-              description: "",
-            },
-            subagent: {
-              runId: "run-2",
-              mode: "fresh",
-              taskChannelId: "task-run-2",
-              contextId: "ctx-run-2",
-              childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-2",
-              label: "Drive helper fix",
-            },
+        msg: subagentMessage({
+          id: "run-2",
+          execution: { status: "pending", description: "" },
+          subagent: {
+            runId: "run-2",
+            mode: "fresh",
+            taskChannelId: "task-run-2",
+            contextId: "ctx-run-2",
+            childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-2",
+            label: "Drive helper fix",
           },
           complete: false,
         }),
-      } as never)
+      })
     );
 
     expect(screen.getByText("Waiting for the child agent to start")).toBeTruthy();
-    fireEvent.click(screen.getByLabelText("Show details"));
+    expect(screen.getByText("Pending")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Expand run details"));
 
+    expect(screen.getByText(/The child has not published progress yet/)).toBeTruthy();
+    fireEvent.click(screen.getByText("Run identifiers"));
     expect(screen.getByText("run-2")).toBeTruthy();
     expect(screen.getByText("task-run-2")).toBeTruthy();
     expect(screen.getByText("ctx-run-2")).toBeTruthy();
-    expect(screen.getByText(/The child has not published progress yet/)).toBeTruthy();
   });
 });

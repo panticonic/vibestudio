@@ -1012,13 +1012,12 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     });
 
     const progress = probe.channelStub.published.find(
-      (p) => p.event.kind === "invocation.output" && p.event.causality?.invocationId === "inv-1"
+      (p) => p.event.kind === "invocation.progress" && p.event.causality?.invocationId === "inv-1"
     );
     expect(progress?.event).toMatchObject({
-      kind: "invocation.output",
+      kind: "invocation.progress",
       payload: {
-        output: "Started working",
-        subagent: { kind: "turn-report", messageSeq: 42 },
+        subagent: { kind: "turn-started", messageSeq: 42 },
       },
     });
   });

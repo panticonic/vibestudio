@@ -28,6 +28,7 @@ import {
   type ChatParticipantMetadata,
   type ChatMessage,
   type DirtyRepoDetails,
+  type SubagentProgressEntry,
   unwrapChatMethodResult,
   type ChatMethodResult,
 } from "@workspace/agentic-core";
@@ -71,6 +72,7 @@ export interface SessionSnapshot {
     args?: unknown;
     result?: unknown;
     consoleOutput?: string;
+    progress?: SubagentProgressEntry[];
     error?: string;
   }>;
   debugEvents: readonly (AgentDebugPayload & { ts: number })[];
@@ -765,6 +767,7 @@ export class HeadlessSession {
         args: message.invocation!.arguments,
         result: message.invocation!.execution.result,
         consoleOutput: message.invocation!.execution.consoleOutput,
+        progress: message.invocation!.execution.progress,
         error: message.invocation!.execution.isError
           ? String(message.invocation!.execution.result ?? message.invocation!.execution.description ?? "Invocation failed")
           : undefined,

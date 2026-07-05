@@ -248,12 +248,33 @@ const invocationStartedPayloadSchema = z
   })
   .strict();
 
+const subagentProgressUpdateSchema = z
+  .object({
+    kind: z.enum([
+      "turn-started",
+      "turn-finished",
+      "tool-started",
+      "tool-progress",
+      "tool-completed",
+      "tool-failed",
+      "tool-cancelled",
+      "tool-abandoned",
+      "said",
+    ]),
+    tool: z.string().optional(),
+    text: z.string().optional(),
+    messageSeq: z.number().int().nonnegative(),
+    say: z.boolean().optional(),
+  })
+  .strict();
+
 const invocationProgressPayloadSchema = z
   .object({
     protocol: protocolSchema,
     message: z.string().optional(),
     progress: z.number().min(0).max(1).optional(),
     data: z.unknown().optional(),
+    subagent: subagentProgressUpdateSchema.optional(),
   })
   .strict();
 
@@ -262,13 +283,6 @@ const invocationOutputPayloadSchema = z
     protocol: protocolSchema,
     output: z.unknown(),
     channel: z.enum(["stdout", "stderr", "data"]).optional(),
-    subagent: z
-      .object({
-        kind: z.enum(["say", "turn-report"]),
-        messageSeq: z.number().int().nonnegative(),
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 

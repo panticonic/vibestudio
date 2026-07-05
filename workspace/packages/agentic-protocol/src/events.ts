@@ -378,6 +378,37 @@ export type InvocationFailurePayload =
 
 export type InvocationTerminalPayload = InvocationCompletedPayload | InvocationFailurePayload;
 
+/** What a subagent progress update reports. `tool-*` kinds carry the child's
+ *  own invocation lifecycle; `said` is a completed child message. */
+export type SubagentProgressKind =
+  | "turn-started"
+  | "turn-finished"
+  | "tool-started"
+  | "tool-progress"
+  | "tool-completed"
+  | "tool-failed"
+  | "tool-cancelled"
+  | "tool-abandoned"
+  | "said";
+
+/**
+ * One structured progress update relayed from a subagent's task channel onto
+ * the parent run, published as an `invocation.progress` payload facet. Every
+ * field is inline (fold-readable); the emitter bounds `text`.
+ */
+export interface SubagentProgressUpdate {
+  kind: SubagentProgressKind;
+  /** Child tool name, for the `tool-*` kinds. */
+  tool?: string;
+  /** Bounded human-readable body: say text, progress message, failure reason. */
+  text?: string;
+  /** Child task-channel envelope seq this update was folded from. */
+  messageSeq: number;
+  /** True when the child explicitly surfaced this (`saliency: "say"`) rather
+   *  than it being derived from routine turn traffic. */
+  say?: boolean;
+}
+
 export type InvocationPayload =
   | {
       protocol: "agentic.trajectory.v1";
@@ -399,14 +430,19 @@ export type InvocationPayload =
         label: string;
       };
     }
-  | { protocol: "agentic.trajectory.v1"; message?: string; progress?: number; data?: unknown }
+  | {
+      protocol: "agentic.trajectory.v1";
+      message?: string;
+      progress?: number;
+      data?: unknown;
+      /** Present when this progress entry is a relayed subagent update. Inline
+       *  and bounded by the emitter — the fold and the card read it directly. */
+      subagent?: SubagentProgressUpdate;
+    }
   | {
       protocol: "agentic.trajectory.v1";
       output: unknown;
       channel?: "stdout" | "stderr" | "data";
-      /** Present when this output is a relayed subagent envelope — an explicit
-       *  `say` or a turn report — with the child task-channel envelope seq. */
-      subagent?: { kind: "say" | "turn-report"; messageSeq: number };
     }
   | InvocationCompletedPayload
   | InvocationFailurePayload;

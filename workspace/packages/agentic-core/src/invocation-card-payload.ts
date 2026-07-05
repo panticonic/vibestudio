@@ -4,7 +4,10 @@
  * Channel envelopes carry typed invocation events. The chat projection derives
  * this card payload for the React transcript; it is not a channel protocol.
  */
-import type { InvocationOutcome } from "@workspace/agentic-protocol";
+import type { InvocationOutcome, SubagentProgressUpdate } from "@workspace/agentic-protocol";
+
+/** One timestamped subagent progress entry, ready for card rendering. */
+export type SubagentProgressEntry = SubagentProgressUpdate & { at: string };
 
 export interface InvocationCardPayload {
   id: string;
@@ -30,11 +33,13 @@ export interface SubagentRunState {
 }
 
 export interface ToolExecutionState {
-  status: "pending" | "complete" | "error" | "cancelled" | "abandoned";
+  status: "pending" | "running" | "complete" | "error" | "cancelled" | "abandoned";
   terminalOutcome?: InvocationOutcome;
   terminalReasonCode?: string;
   description: string;
   consoleOutput?: string;
+  /** Timestamped subagent progress feed (structured; subagent runs only). */
+  progress?: SubagentProgressEntry[];
   result?: unknown;
   isError?: boolean;
   resultTruncated?: boolean;
@@ -59,6 +64,7 @@ export function parseInvocationCardPayload(content: string): InvocationCardPaylo
   const status = exec["status"];
   if (
     status !== "pending" &&
+    status !== "running" &&
     status !== "complete" &&
     status !== "error" &&
     status !== "cancelled" &&

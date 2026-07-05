@@ -102,6 +102,8 @@ export type {
   SemanticParticipantKind,
   StatePayload,
   StoredAgenticEvent,
+  SubagentProgressKind,
+  SubagentProgressUpdate,
   SystemPayload,
   TrajectoryEvent,
   TurnPayload,

@@ -43,6 +43,7 @@ import {
   type AgenticEvent,
   type CustomMessageDisplayMode,
   type ParticipantRef,
+  type SubagentProgressUpdate,
 } from "@workspace/agentic-protocol";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import {
@@ -4021,34 +4022,54 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private trimSubagentProgress(text: string): string {
     const compact = text.replace(/\s+/g, " ").trim();
-    return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
+    return compact.length > 360 ? `${compact.slice(0, 357)}...` : compact;
   }
 
-  private subagentProgressLine(agentic: AgenticEvent | null): string | null {
+  /** Fold a child task-channel event into a structured, bounded progress
+   *  update for the parent card. Returns null for kinds we don't surface. */
+  private subagentProgressUpdate(
+    agentic: AgenticEvent | null,
+    messageSeq: number
+  ): SubagentProgressUpdate | null {
     const kind = (agentic as { kind?: string } | null)?.kind ?? "";
     const payload = ((agentic as { payload?: Record<string, unknown> } | null)?.payload ??
       {}) as Record<string, unknown>;
-    if (kind === "turn.opened") return "Started working";
-    if (kind === "turn.closed") return "Turn finished";
-    if (kind === "invocation.started") {
-      const name = typeof payload["name"] === "string" ? payload["name"] : "tool";
-      return `Started ${name}`;
-    }
+    const tool = typeof payload["name"] === "string" ? payload["name"] : undefined;
+    if (kind === "turn.opened") return { kind: "turn-started", messageSeq };
+    if (kind === "turn.closed") return { kind: "turn-finished", messageSeq };
+    if (kind === "invocation.started") return { kind: "tool-started", tool, messageSeq };
     if (kind === "invocation.progress") {
-      return typeof payload["message"] === "string" ? payload["message"] : "Progress update";
+      const message = typeof payload["message"] === "string" ? payload["message"] : undefined;
+      return {
+        kind: "tool-progress",
+        tool,
+        ...(message ? { text: this.trimSubagentProgress(message) } : {}),
+        messageSeq,
+      };
     }
-    if (kind === "invocation.completed") return "Tool completed";
-    if (kind === "invocation.failed") {
-      return typeof payload["reason"] === "string"
-        ? `Tool failed: ${payload["reason"]}`
-        : "Tool failed";
+    if (kind === "invocation.completed") return { kind: "tool-completed", tool, messageSeq };
+    if (
+      kind === "invocation.failed" ||
+      kind === "invocation.cancelled" ||
+      kind === "invocation.abandoned"
+    ) {
+      const reason = typeof payload["reason"] === "string" ? payload["reason"] : undefined;
+      return {
+        kind: kind.replace("invocation.", "tool-") as SubagentProgressUpdate["kind"],
+        tool,
+        ...(reason ? { text: this.trimSubagentProgress(reason) } : {}),
+        messageSeq,
+      };
     }
-    if (kind === "invocation.cancelled") return "Tool cancelled";
-    if (kind === "invocation.abandoned") return "Tool abandoned";
     if (kind === "message.completed") {
       const text = this.extractMessageText(agentic);
       if (!text) return null;
-      return `Said: ${this.trimSubagentProgress(text)}`;
+      return {
+        kind: "said",
+        text: this.trimSubagentProgress(text),
+        messageSeq,
+        ...(payload["saliency"] === "say" ? { say: true } : {}),
+      };
     }
     return null;
   }
@@ -4060,24 +4081,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<void> {
     const run = this.subagentRuns.getByTaskChannel(channelId);
     if (!run || event.senderId === this.participantId()) return;
-    const line = this.subagentProgressLine(agentic);
-    if (!line) return;
+    const messageSeq = Number.isFinite(event.id) ? (event.id as number) : 0;
+    const update = this.subagentProgressUpdate(agentic, messageSeq);
+    if (!update) return;
     const participantId =
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
     const actor = this.cardActor(run.parentChannelId, participantId);
-    const messageSeq = Number.isFinite(event.id) ? (event.id as number) : 0;
-    const progressEvent: AgenticEvent<"invocation.output"> = {
-      kind: "invocation.output",
+    const progressEvent: AgenticEvent<"invocation.progress"> = {
+      kind: "invocation.progress",
       actor,
       causality: { invocationId: run.runId as never },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        output: line,
-        channel: "stdout",
-        subagent: {
-          kind: "turn-report",
-          messageSeq,
-        },
+        subagent: update,
       },
       createdAt: new Date().toISOString(),
     };

@@ -40,7 +40,10 @@ import {
   readDiagnosticMetadata,
   summarizeMessageBlocks,
 } from "@workspace/agentic-protocol";
-import type { InvocationCardPayload } from "./invocation-card-payload.js";
+import type {
+  InvocationCardPayload,
+  SubagentProgressEntry,
+} from "./invocation-card-payload.js";
 
 type StoredValueRefPreview = { preview?: string };
 
@@ -679,6 +682,11 @@ function projectedApprovalToChatMessage(approval: ProjectedApproval): ChatMessag
 
 function projectedInvocationToChatMessage(invocation: ProjectedInvocation): ChatMessage {
   const status = invocationCardStatus(invocation);
+  // Structured subagent progress entries, stamped with the reducer's per-entry
+  // event time. Non-subagent progress (message/fraction) is not card-rendered.
+  const progress: SubagentProgressEntry[] = invocation.progress.flatMap((entry) =>
+    entry.subagent ? [{ ...entry.subagent, at: entry.at }] : []
+  );
   const inferred = inferInvocationDisplay(invocation.result);
   const name =
     meaningfulInvocationName(invocation.name) ??
@@ -715,6 +723,7 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
         invocation.outputs.length > 0
           ? invocation.outputs.map((output) => stringifyOutput(output)).join("\n")
           : undefined,
+      ...(progress.length > 0 ? { progress } : {}),
     },
     ...(invocation.subagent ? { subagent: invocation.subagent } : {}),
   };
@@ -724,7 +733,7 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
     content: JSON.stringify(payload),
     contentType: "invocation",
     kind: "message",
-    complete: status !== "pending",
+    complete: status !== "pending" && status !== "running",
     invocation: payload,
     senderMetadata: {
       name: invocation.actor.displayName ?? invocation.actor.id,
@@ -756,6 +765,7 @@ function invocationCardStatus(
         return invocation.status;
       }
       if (invocation.status === "completed") return "complete";
+      if (invocation.status === "running") return "running";
       return "pending";
   }
 }

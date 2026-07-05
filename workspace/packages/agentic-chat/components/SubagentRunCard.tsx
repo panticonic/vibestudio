@@ -1,9 +1,19 @@
-import { useMemo, useState, type MouseEvent } from "react";
-import { Badge, Box, Button, Card, Flex, IconButton, Text } from "@radix-ui/themes";
-import { ExternalLinkIcon, MagnifyingGlassIcon, UpdateIcon } from "@radix-ui/react-icons";
-import type { ChatMessage, SubagentRunState } from "@workspace/agentic-core";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { Badge, Box, Flex, IconButton, Text } from "@radix-ui/themes";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  MagnifyingGlassIcon,
+} from "@radix-ui/react-icons";
+import type {
+  ChatMessage,
+  SubagentProgressEntry,
+  SubagentRunState,
+  ToolExecutionState,
+} from "@workspace/agentic-core";
 import { useOptionalChatContext } from "../context/ChatContext";
-import { ExpandableChevron } from "./shared/Chevron";
 
 /**
  * SubagentRunCard — a standalone, richer render for an invocation that spawned a
@@ -12,20 +22,35 @@ import { ExpandableChevron } from "./shared/Chevron";
  * (child chat panel on the task channel) and "Review & pick" (diff overlay
  * against the subagent's context). Routed here from `MessageList.renderItem`.
  *
- * The live `say` / turn-report feed is relayed onto the run as `invocation.output`
- * subagent events and folded by the chat projection into `execution.consoleOutput`
- * (channel-chat-merge). We render those entries inline here so the supervisor sees
- * the subagent narrate without leaving the transcript; "Open" still shows the full
- * child channel.
+ * The child's activity arrives as structured `execution.progress` entries
+ * (SubagentProgressEntry: kind + tool + text + timestamp), relayed from the
+ * task channel via `invocation.progress` events and folded by the chat
+ * projection — no string parsing happens here.
+ *
+ * Everything is collapsed by default: the card shows a one-line summary plus
+ * the latest activity ticker. Expanding reveals the timestamped timeline (each
+ * entry individually expandable) and a further-collapsed "Run identifiers"
+ * disclosure with copy-to-clipboard.
  */
 
-const STATUS_COLOR: Record<string, "gray" | "green" | "red" | "amber" | "blue"> = {
-  pending: "blue",
+type CardStatus = ToolExecutionState["status"];
+
+const STATUS_COLOR: Record<CardStatus, "gray" | "green" | "red" | "amber" | "blue"> = {
+  pending: "gray",
   running: "blue",
   complete: "green",
   error: "red",
   cancelled: "amber",
   abandoned: "gray",
+};
+
+const STATUS_LABEL: Record<CardStatus, string> = {
+  pending: "Pending",
+  running: "Running",
+  complete: "Complete",
+  error: "Error",
+  cancelled: "Cancelled",
+  abandoned: "Abandoned",
 };
 
 const MERGE_LABEL: Record<
@@ -37,107 +62,196 @@ const MERGE_LABEL: Record<
   discarded: { label: "Discarded", color: "gray" },
 };
 
-function statusLabel(status: string): string {
-  return status.slice(0, 1).toUpperCase() + status.slice(1);
-}
-
-function updateLines(output: string | undefined): string[] {
-  return (output ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-}
-
 type ProgressTone = "blue" | "green" | "red" | "amber" | "gray";
 
-interface ProgressItem {
-  title: string;
-  body: string;
-  tone: ProgressTone;
+const PROGRESS_PRESENTATION: Record<
+  SubagentProgressEntry["kind"],
+  { title: (entry: SubagentProgressEntry) => string; tone: ProgressTone }
+> = {
+  "turn-started": { title: () => "Started working", tone: "blue" },
+  "turn-finished": { title: () => "Turn finished", tone: "green" },
+  "tool-started": { title: (e) => `Started ${e.tool ?? "tool"}`, tone: "blue" },
+  "tool-progress": { title: (e) => (e.tool ? `${e.tool} progress` : "Progress"), tone: "gray" },
+  "tool-completed": { title: (e) => `Finished ${e.tool ?? "tool"}`, tone: "green" },
+  "tool-failed": { title: (e) => `${e.tool ?? "Tool"} failed`, tone: "red" },
+  "tool-cancelled": { title: (e) => `${e.tool ?? "Tool"} cancelled`, tone: "amber" },
+  "tool-abandoned": { title: (e) => `${e.tool ?? "Tool"} abandoned`, tone: "amber" },
+  said: { title: () => "Said", tone: "blue" },
+};
+
+function progressTitle(entry: SubagentProgressEntry): string {
+  return PROGRESS_PRESENTATION[entry.kind].title(entry);
 }
 
-function stripMarkdownLabel(value: string): string {
-  return value.replace(/\*\*/g, "").trim();
+function progressPreview(entry: SubagentProgressEntry): string {
+  return entry.text ? `${progressTitle(entry)}: ${entry.text}` : progressTitle(entry);
 }
 
-function parseProgressLine(line: string): ProgressItem {
-  const said = /^Said:\s*(?:(?:\*\*([^*]+)\*\*)\s*)?(.*)$/i.exec(line);
-  if (said) {
-    return {
-      title: stripMarkdownLabel(said[1] || "Said"),
-      body: stripMarkdownLabel(said[2] || ""),
-      tone: "blue",
-    };
-  }
-  if (/^Started working$/i.test(line)) {
-    return { title: "Started working", body: "", tone: "blue" };
-  }
-  const started = /^Started\s+(.+)$/i.exec(line);
-  if (started) {
-    return { title: `Started ${stripMarkdownLabel(started[1] ?? "")}`, body: "", tone: "blue" };
-  }
-  if (/^Turn finished/i.test(line)) {
-    return {
-      title: "Turn finished",
-      body: stripMarkdownLabel(line.replace(/^Turn finished[:\s]*/i, "")),
-      tone: "green",
-    };
-  }
-  if (/^Tool completed/i.test(line)) {
-    return {
-      title: "Tool completed",
-      body: stripMarkdownLabel(line.replace(/^Tool completed[:\s]*/i, "")),
-      tone: "green",
-    };
-  }
-  if (/^Tool failed/i.test(line)) {
-    return {
-      title: "Tool failed",
-      body: stripMarkdownLabel(line.replace(/^Tool failed[:\s]*/i, "")),
-      tone: "red",
-    };
-  }
-  if (/cancelled|abandoned/i.test(line)) {
-    return { title: "Stopped", body: stripMarkdownLabel(line), tone: "amber" };
-  }
-  return { title: stripMarkdownLabel(line), body: "", tone: "gray" };
+/** Compact relative time: "now", "42s", "5m", "3h", "2d". */
+function formatRelativeTime(at: string, now: number): string | null {
+  const then = Date.parse(at);
+  if (!Number.isFinite(then)) return null;
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 10) return "now";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
-function progressPreview(item: ProgressItem): string {
-  return item.body ? `${item.title}: ${item.body}` : item.title;
+/** Ticking clock so relative timestamps stay honest while the run is live. */
+function useNow(live: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [live]);
+  return now;
 }
 
-function compactId(value: string | undefined): string | null {
-  if (!value) return null;
+function compactId(value: string): string {
   if (value.length <= 36) return value;
-  return `${value.slice(0, 18)}...${value.slice(-12)}`;
+  return `${value.slice(0, 18)}…${value.slice(-12)}`;
+}
+
+/** One identifier row with the full value on hover and one-click copy. */
+function DetailRow({ name, value }: { name: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = (event: MouseEvent) => {
+    event.stopPropagation();
+    void navigator.clipboard?.writeText(value).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <div className="subagent-detail-row">
+      <Text size="1" className="subagent-detail-name">
+        {name}
+      </Text>
+      <Flex align="center" gap="1" className="subagent-detail-value-wrap">
+        <Text size="1" className="subagent-detail-value" title={value}>
+          {compactId(value)}
+        </Text>
+        <IconButton
+          size="1"
+          variant="ghost"
+          color={copied ? "green" : "gray"}
+          className="subagent-copy-button"
+          onClick={copy}
+          title={copied ? "Copied" : `Copy ${name.toLowerCase()} id`}
+          aria-label={copied ? "Copied" : `Copy ${name.toLowerCase()} id`}
+        >
+          {copied ? <CheckIcon /> : <CopyIcon />}
+        </IconButton>
+      </Flex>
+    </div>
+  );
+}
+
+/** A single timeline entry; long bodies are clamped and expand on click.
+ *  Expandable entries are native buttons — no nested interactive content. */
+function TimelineItem({
+  entry,
+  isLast,
+  live,
+  now,
+}: {
+  entry: SubagentProgressEntry;
+  isLast: boolean;
+  live: boolean;
+  now: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const expandable = Boolean(entry.text);
+  const tone = PROGRESS_PRESENTATION[entry.kind].tone;
+  const time = formatRelativeTime(entry.at, now);
+  const content = (
+    <>
+      <span
+        className={`subagent-timeline-node${live && isLast ? " subagent-timeline-node-live" : ""}`}
+        aria-hidden="true"
+      />
+      <div className="subagent-timeline-content">
+        <Flex align="center" gap="1" className="subagent-timeline-title-row">
+          <Text size="1" weight="medium" className="subagent-timeline-title">
+            {progressTitle(entry)}
+          </Text>
+          {entry.say && (
+            <Badge size="1" variant="soft" color="blue" className="subagent-say-badge">
+              say
+            </Badge>
+          )}
+          {expandable && <ChevronDownIcon className="subagent-timeline-chevron" aria-hidden="true" />}
+          {time && (
+            <Text size="1" className="subagent-timeline-time" title={entry.at}>
+              {time}
+            </Text>
+          )}
+        </Flex>
+        {entry.text && (
+          <Text
+            size="1"
+            className={`subagent-timeline-body${open ? "" : " subagent-timeline-body-clamped"}`}
+          >
+            {entry.text}
+          </Text>
+        )}
+      </div>
+    </>
+  );
+  const className = [
+    "subagent-timeline-item",
+    `subagent-tone-${tone}`,
+    isLast ? "subagent-timeline-item-last" : "",
+    open ? "subagent-timeline-item-open" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (!expandable) {
+    return <div className={className}>{content}</div>;
+  }
+  return (
+    <button
+      type="button"
+      className={`${className} subagent-timeline-item-expandable`}
+      aria-expanded={open}
+      onClick={() => setOpen((o) => !o)}
+    >
+      {content}
+    </button>
+  );
 }
 
 export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const forkState = useOptionalChatContext()?.forkState;
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [idsOpen, setIdsOpen] = useState(false);
   const invocation = msg.invocation;
-  const sayFeed = useMemo(
-    () => updateLines(invocation?.execution.consoleOutput),
-    [invocation?.execution.consoleOutput]
+  const progressFeed = useMemo(
+    () => invocation?.execution.progress ?? [],
+    [invocation?.execution.progress]
   );
-  const progressFeed = useMemo(() => sayFeed.map(parseProgressLine), [sayFeed]);
   const subagent = invocation?.subagent;
+  const status = invocation?.execution.status ?? "pending";
+  const isLive = status === "pending" || status === "running";
+  const now = useNow(Boolean(invocation && subagent) && isLive);
   if (!invocation || !subagent) return null;
 
-  const status = invocation.execution.status;
   const label = subagent.label || invocation.name || "Subagent";
   const merge = subagent.merge ? MERGE_LABEL[subagent.merge] : undefined;
   const canOpen = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
   const canReview = Boolean(forkState && subagent.contextId);
-  // Live say / turn-report entries relayed onto the run, folded into
-  // `consoleOutput` (newline-joined) by the chat projection.
-  const latestProgress = progressFeed.length > 0 ? progressFeed[progressFeed.length - 1] : null;
-  const latestUpdate = latestProgress
-    ? progressPreview(latestProgress)
+  const latestEntry = progressFeed.length > 0 ? progressFeed[progressFeed.length - 1] : null;
+  const latestUpdate = latestEntry
+    ? progressPreview(latestEntry)
     : invocation.execution.description.trim() ||
-      (status === "pending" ? "Waiting for the child agent to start" : "No child updates yet");
-  const detailsLabel = detailsOpen ? "Hide details" : "Show details";
+      (isLive ? "Waiting for the child agent to start" : "No child updates yet");
+  const latestTime = latestEntry ? formatRelativeTime(latestEntry.at, now) : null;
+  const detailsLabel = detailsOpen ? "Collapse run details" : "Expand run details";
   const detailRows = [
     ["Run", subagent.runId],
     ["Task", subagent.taskChannelId],
@@ -155,37 +269,31 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
       forkState?.actions.reviewContext({ kind: "subagent", contextId: subagent.contextId, label });
     }
   };
-  const toggleDetails = () => setDetailsOpen((open) => !open);
-  const stopActionClick = (event: MouseEvent) => event.stopPropagation();
 
   return (
     <Box className="message-row message-row-agent">
-      <Card
-        className="message-card message-card-subagent"
+      <Box
+        className={`message-card-subagent subagent-status-${status}${detailsOpen ? " subagent-card-open" : ""}`}
         data-testid="subagent-run-card"
-        role="button"
-        tabIndex={0}
-        aria-expanded={detailsOpen}
-        onClick={toggleDetails}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            toggleDetails();
-          }
-        }}
       >
-        <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
+        <div className="subagent-summary">
           <Flex align="center" gap="2" className="subagent-card-header">
-            <span
-              className={`subagent-status-dot subagent-status-dot-${status}`}
-              aria-hidden="true"
-            />
-            <Flex align="center" gap="2" className="subagent-title-block">
+            <button
+              type="button"
+              className="subagent-summary-toggle"
+              aria-expanded={detailsOpen}
+              aria-label={detailsLabel}
+              onClick={() => setDetailsOpen((open) => !open)}
+            >
+              <span
+                className={`subagent-status-dot subagent-status-dot-${status}`}
+                aria-hidden="true"
+              />
               <Text className="subagent-title" size="2" weight="medium" truncate>
                 {label}
               </Text>
               {subagent.mode && (
-                <Badge className="subagent-mode-badge" size="1" variant="soft" color="gray">
+                <Badge className="subagent-mode-badge" size="1" variant="surface" color="gray">
                   {subagent.mode}
                 </Badge>
               )}
@@ -194,40 +302,33 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                   {merge.label}
                 </Badge>
               )}
-            </Flex>
-            <Flex align="center" gap="1" className="subagent-card-actions">
+              <span
+                className={`subagent-expand-chevron${detailsOpen ? " subagent-expand-chevron-open" : ""}`}
+                aria-hidden="true"
+              >
+                <ChevronDownIcon />
+              </span>
+            </button>
+            <Flex align="center" gap="2" className="subagent-card-actions">
+              {progressFeed.length > 0 && (
+                <Text size="1" className="subagent-update-count">
+                  {progressFeed.length} {progressFeed.length === 1 ? "update" : "updates"}
+                </Text>
+              )}
               <Badge
                 className="subagent-status-badge"
                 size="1"
                 variant="soft"
-                color={STATUS_COLOR[status] ?? "gray"}
+                color={STATUS_COLOR[status]}
               >
-                {statusLabel(status)}
+                {STATUS_LABEL[status]}
               </Badge>
-              <Button
-                className="subagent-details-toggle"
-                size="1"
-                variant="ghost"
-                color="gray"
-                title={detailsLabel}
-                aria-label={detailsLabel}
-                aria-expanded={detailsOpen}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  toggleDetails();
-                }}
-              >
-                <ExpandableChevron expanded={detailsOpen} />
-              </Button>
               <IconButton
                 size="1"
                 variant="ghost"
                 color="gray"
                 disabled={!canOpen}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleOpen();
-                }}
+                onClick={handleOpen}
                 title="Open subagent chat"
                 aria-label="Open subagent chat"
               >
@@ -237,10 +338,7 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                 size="1"
                 variant="ghost"
                 disabled={!canReview}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  handleReview();
-                }}
+                onClick={handleReview}
                 title="Review and pick changes"
                 aria-label="Review and pick changes"
               >
@@ -248,71 +346,70 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
               </IconButton>
             </Flex>
           </Flex>
-          {latestUpdate && (
+          {!detailsOpen && latestUpdate && (
             <Flex align="center" gap="2" className="subagent-update-preview">
-              <UpdateIcon aria-hidden="true" />
-              <Text size="1" color="gray" truncate className="subagent-activity-text">
+              <Text size="1" truncate className="subagent-activity-text">
                 {latestUpdate}
               </Text>
-              {sayFeed.length > 1 && (
-                <Badge size="1" variant="soft" color="gray">
-                  {sayFeed.length} updates
-                </Badge>
+              {latestTime && (
+                <Text size="1" className="subagent-timeline-time" title={latestEntry?.at}>
+                  {latestTime}
+                </Text>
               )}
             </Flex>
           )}
-          {detailsOpen && (
-            <Box className="subagent-details">
-              {detailRows.length > 0 && (
-                <Box className="subagent-detail-grid">
-                  {detailRows.map(([name, value]) => (
-                    <div className="subagent-detail-row" key={name}>
-                      <Text size="1" color="gray" className="subagent-detail-name">
-                        {name}
-                      </Text>
-                      <Text size="1" className="subagent-detail-value" title={value}>
-                        {compactId(value)}
-                      </Text>
-                    </div>
-                  ))}
-                </Box>
-              )}
-              {invocation.execution.description && (
-                <Text size="1" color="gray" className="subagent-description">
-                  {invocation.execution.description}
-                </Text>
-              )}
-              {progressFeed.length > 0 && (
-                <Box className="subagent-progress-feed" onClick={stopActionClick}>
-                  <Flex direction="column" gap="1">
-                    {progressFeed.map((item, i) => (
-                      <Box
-                        key={`${i}-${item.title}`}
-                        className={`subagent-progress-item subagent-progress-${item.tone}`}
-                      >
-                        <Text size="1" weight="medium" className="subagent-progress-title">
-                          {item.title}
-                        </Text>
-                        {item.body && (
-                          <Text size="1" className="subagent-progress-body">
-                            {item.body}
-                          </Text>
-                        )}
-                      </Box>
+        </div>
+        {detailsOpen && (
+          <Box className="subagent-details">
+            {invocation.execution.description && (
+              <Text size="1" className="subagent-description">
+                {invocation.execution.description}
+              </Text>
+            )}
+            {progressFeed.length > 0 ? (
+              <div className="subagent-timeline">
+                {progressFeed.map((entry, i) => (
+                  <TimelineItem
+                    key={`${entry.messageSeq}-${i}`}
+                    entry={entry}
+                    isLast={i === progressFeed.length - 1}
+                    live={isLive}
+                    now={now}
+                  />
+                ))}
+              </div>
+            ) : (
+              <Text size="1" color="gray" className="subagent-empty-feed">
+                The child has not published progress yet. Open the task chat to inspect the live
+                transcript.
+              </Text>
+            )}
+            {detailRows.length > 0 && (
+              <div className="subagent-ids-section">
+                <button
+                  type="button"
+                  className="subagent-ids-toggle"
+                  aria-expanded={idsOpen}
+                  onClick={() => setIdsOpen((open) => !open)}
+                >
+                  <ChevronDownIcon
+                    className={`subagent-ids-chevron${idsOpen ? " subagent-ids-chevron-open" : ""}`}
+                    aria-hidden="true"
+                  />
+                  Run identifiers
+                </button>
+                {idsOpen && (
+                  <Box className="subagent-detail-grid">
+                    {detailRows.map(([name, value]) => (
+                      <DetailRow key={name} name={name} value={value} />
                     ))}
-                  </Flex>
-                </Box>
-              )}
-              {progressFeed.length === 0 && (
-                <Text size="1" color="gray" className="subagent-empty-feed">
-                  The child has not published progress yet. Open the task chat to inspect the live
-                  transcript.
-                </Text>
-              )}
-            </Box>
-          )}
-        </Flex>
-      </Card>
+                  </Box>
+                )}
+              </div>
+            )}
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 }

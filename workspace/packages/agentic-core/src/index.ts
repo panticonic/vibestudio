@@ -131,7 +131,12 @@ export type {
 } from "./custom-message-types.js";
 
 // --- Invocation card payload (derived UI shape for invocation events) ---
-export type { InvocationCardPayload, ToolExecutionState, SubagentRunState } from "./invocation-card-payload.js";
+export type {
+  InvocationCardPayload,
+  SubagentProgressEntry,
+  SubagentRunState,
+  ToolExecutionState,
+} from "./invocation-card-payload.js";
 export { parseInvocationCardPayload } from "./invocation-card-payload.js";
 
 // --- Shared wire-event → ChatMessage merge helpers ---

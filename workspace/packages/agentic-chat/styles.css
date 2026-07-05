@@ -471,30 +471,82 @@
 }
 
 .message-card-subagent {
-  --card-padding: 5px 7px;
-  background-color: color-mix(in srgb, var(--gray-2) 88%, var(--accent-2));
-  border-color: var(--gray-a6);
-  border-radius: 7px;
-  box-shadow: none;
-  cursor: pointer;
+  position: relative;
+  border: 1px solid var(--gray-a5);
+  border-inline-start: 3px solid var(--gray-a7);
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-a2) 55%, transparent),
+      transparent 42px
+    ),
+    var(--gray-2);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.14);
+  overflow: hidden;
   transition:
-    background-color 120ms ease,
-    border-color 120ms ease;
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
-.message-card-subagent::before {
-  background: var(--accent-a5);
+.message-card-subagent:hover {
+  border-color: var(--gray-a7);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
 }
 
-.message-card-subagent:hover,
-.message-card-subagent:focus-visible {
-  background-color: color-mix(in srgb, var(--gray-3) 82%, var(--accent-3));
-  border-color: var(--accent-a6);
+.message-card-subagent.subagent-card-open {
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.22);
+}
+
+/* Status is echoed on the accent edge so a wall of cards scans at a glance.
+   Pending (queued, no child activity yet) stays gray; running is blue. */
+.message-card-subagent.subagent-status-running {
+  border-inline-start-color: var(--blue-9);
+}
+
+.message-card-subagent.subagent-status-complete {
+  border-inline-start-color: var(--green-9);
+}
+
+.message-card-subagent.subagent-status-error {
+  border-inline-start-color: var(--red-9);
+}
+
+.message-card-subagent.subagent-status-cancelled,
+.message-card-subagent.subagent-status-abandoned {
+  border-inline-start-color: var(--amber-9);
+}
+
+.subagent-summary {
+  padding: 7px 9px 6px;
+}
+
+/* The disclosure is a real button spanning the title block; action icons are
+   siblings, never nested inside it. */
+.subagent-summary-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+  border-radius: 5px;
+}
+
+.subagent-summary-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-a8);
 }
 
 .subagent-card-header,
-.subagent-update-preview,
-.subagent-title-block {
+.subagent-update-preview {
   min-inline-size: 0;
 }
 
@@ -503,34 +555,62 @@
   min-block-size: 22px;
 }
 
-.subagent-title-block {
-  flex: 1 1 auto;
-  gap: 6px;
-}
-
 .subagent-card-actions {
   flex: 0 0 auto;
   margin-inline-start: auto;
-  opacity: 0.72;
+}
+
+.subagent-card-actions .rt-IconButton {
+  opacity: 0.55;
   transition: opacity 120ms ease;
 }
 
-.message-card-subagent:hover .subagent-card-actions,
-.message-card-subagent:focus-within .subagent-card-actions {
+.message-card-subagent:hover .subagent-card-actions .rt-IconButton,
+.message-card-subagent:focus-within .subagent-card-actions .rt-IconButton {
   opacity: 1;
+}
+
+.subagent-update-count {
+  color: var(--gray-a10);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.subagent-expand-chevron {
+  display: inline-flex;
+  align-items: center;
+  color: var(--gray-a9);
+  transition: transform 160ms ease;
+}
+
+.subagent-expand-chevron-open {
+  transform: rotate(180deg);
+}
+
+.subagent-timeline-time {
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+  color: var(--gray-a9);
+  font-variant-numeric: tabular-nums;
+}
+
+.subagent-say-badge {
+  flex: 0 0 auto;
+  border-radius: 4px;
+  text-transform: none;
 }
 
 .subagent-status-dot {
   flex: 0 0 auto;
-  inline-size: 6px;
-  block-size: 6px;
+  inline-size: 7px;
+  block-size: 7px;
   border-radius: 999px;
   background: var(--gray-8);
 }
 
 .subagent-status-dot-pending {
-  background: var(--blue-9);
-  box-shadow: 0 0 0 3px var(--blue-a3);
+  background: var(--gray-8);
+  box-shadow: 0 0 0 3px var(--gray-a3);
 }
 
 .subagent-status-dot-running {
@@ -541,10 +621,12 @@
 
 .subagent-status-dot-complete {
   background: var(--green-9);
+  box-shadow: 0 0 0 3px var(--green-a3);
 }
 
 .subagent-status-dot-error {
   background: var(--red-9);
+  box-shadow: 0 0 0 3px var(--red-a3);
 }
 
 .subagent-status-dot-cancelled,
@@ -566,6 +648,7 @@
 
 .subagent-title {
   min-inline-size: 0;
+  letter-spacing: 0.01em;
 }
 
 .subagent-mode-badge,
@@ -577,38 +660,222 @@
 
 .subagent-update-preview {
   inline-size: 100%;
-  padding-inline-start: 14px;
-  color: var(--gray-10);
+  padding-inline-start: 15px;
+  color: var(--gray-a10);
   block-size: 18px;
-}
-
-.subagent-update-preview svg {
-  flex: 0 0 auto;
-  color: var(--gray-9);
-  inline-size: 12px;
-  block-size: 12px;
 }
 
 .subagent-activity-text {
   min-inline-size: 0;
+  font-style: italic;
+  color: var(--gray-a10);
 }
 
-.subagent-details-toggle {
-  padding-inline: 4px;
-}
+/* ----- expanded details ----- */
 
 .subagent-details {
-  margin-block-start: 4px;
-  padding-block-start: 6px;
-  padding-inline-start: 14px;
+  padding: 8px 10px 9px 12px;
   border-block-start: 1px solid var(--gray-a4);
+  background: var(--gray-a2);
+  cursor: default;
+}
+
+.subagent-description {
+  display: block;
+  margin-block-end: 8px;
+  color: var(--gray-11);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.subagent-empty-feed {
+  display: block;
+}
+
+/* Timeline: a continuous rail with tone-colored nodes per entry. */
+.subagent-timeline {
+  position: relative;
+  max-block-size: 260px;
+  overflow-y: auto;
+  padding-inline-start: 2px;
+}
+
+.subagent-timeline-item {
+  position: relative;
+  display: flex;
+  gap: 9px;
+  padding-block: 3px;
+  /* Expandable entries are native buttons — neutralize the UA button chrome. */
+  inline-size: 100%;
+  border: none;
+  background: none;
+  margin: 0;
+  padding-inline: 0;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+}
+
+.subagent-timeline-item::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 3px;
+  inset-block-start: 14px;
+  inset-block-end: -8px;
+  inline-size: 1px;
+  background: var(--gray-a5);
+}
+
+.subagent-timeline-item-last::before {
+  display: none;
+}
+
+.subagent-timeline-node {
+  flex: 0 0 auto;
+  margin-block-start: 6px;
+  inline-size: 7px;
+  block-size: 7px;
+  border-radius: 999px;
+  background: var(--gray-8);
+  box-shadow: 0 0 0 2px var(--gray-2);
+}
+
+.subagent-timeline-node-live {
+  animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.subagent-tone-blue .subagent-timeline-node {
+  background: var(--blue-9);
+}
+
+.subagent-tone-green .subagent-timeline-node {
+  background: var(--green-9);
+}
+
+.subagent-tone-red .subagent-timeline-node {
+  background: var(--red-9);
+}
+
+.subagent-tone-amber .subagent-timeline-node {
+  background: var(--amber-9);
+}
+
+.subagent-timeline-content {
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  border-radius: 5px;
+  padding: 2px 6px 3px;
+  margin-inline-start: -4px;
+}
+
+.subagent-timeline-item-expandable {
+  cursor: pointer;
+}
+
+.subagent-timeline-item-expandable:hover .subagent-timeline-content,
+.subagent-timeline-item-expandable:focus-visible .subagent-timeline-content {
+  background: var(--gray-a3);
+}
+
+.subagent-timeline-item:focus-visible {
+  outline: none;
+}
+
+.subagent-timeline-item:focus-visible .subagent-timeline-content {
+  box-shadow: inset 0 0 0 1px var(--accent-a8);
+}
+
+.subagent-timeline-title-row {
+  min-inline-size: 0;
+}
+
+.subagent-timeline-title {
+  color: var(--gray-12);
+  overflow-wrap: anywhere;
+}
+
+.subagent-tone-red .subagent-timeline-title {
+  color: var(--red-11);
+}
+
+.subagent-timeline-chevron {
+  flex: 0 0 auto;
+  inline-size: 11px;
+  block-size: 11px;
+  color: var(--gray-a8);
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    transform 160ms ease;
+}
+
+.subagent-timeline-item-expandable:hover .subagent-timeline-chevron,
+.subagent-timeline-item-open .subagent-timeline-chevron {
+  opacity: 1;
+}
+
+.subagent-timeline-item-open .subagent-timeline-chevron {
+  transform: rotate(180deg);
+}
+
+.subagent-timeline-body {
+  display: block;
+  color: var(--gray-11);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.subagent-timeline-body-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* ----- identifiers disclosure ----- */
+
+.subagent-ids-section {
+  margin-block-start: 8px;
+  padding-block-start: 6px;
+  border-block-start: 1px dashed var(--gray-a4);
+}
+
+.subagent-ids-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  margin-inline-start: -4px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: var(--font-size-1);
+  color: var(--gray-a10);
+  cursor: pointer;
+}
+
+.subagent-ids-toggle:hover {
+  color: var(--gray-12);
+  background: var(--gray-a3);
+}
+
+.subagent-ids-chevron {
+  inline-size: 11px;
+  block-size: 11px;
+  transition: transform 160ms ease;
+}
+
+.subagent-ids-chevron-open {
+  transform: rotate(180deg);
 }
 
 .subagent-detail-grid {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 3px 8px;
-  margin-block-end: 6px;
+  gap: 2px 10px;
+  margin-block-start: 5px;
+  padding-inline-start: 4px;
 }
 
 .subagent-detail-row {
@@ -617,6 +884,10 @@
 
 .subagent-detail-name {
   color: var(--gray-a10);
+}
+
+.subagent-detail-value-wrap {
+  min-inline-size: 0;
 }
 
 .subagent-detail-value {
@@ -628,94 +899,15 @@
   color: var(--gray-12);
 }
 
-.subagent-description {
-  display: block;
-  margin-block-end: 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.subagent-copy-button {
+  opacity: 0.5;
 }
 
-.subagent-empty-feed {
-  display: block;
-  margin-block-start: 4px;
+.subagent-detail-row:hover .subagent-copy-button,
+.subagent-copy-button:focus-visible {
+  opacity: 1;
 }
 
-.subagent-progress-feed,
-.subagent-say-feed {
-  max-block-size: 160px;
-  overflow-y: auto;
-  padding-inline-start: 2px;
-  cursor: default;
-}
-
-.subagent-progress-item {
-  position: relative;
-  display: grid;
-  gap: 1px;
-  padding: 4px 8px 4px 12px;
-  border-inline-start: 2px solid var(--gray-a5);
-}
-
-.subagent-progress-item::before {
-  content: "";
-  position: absolute;
-  inset-inline-start: -5px;
-  inset-block-start: 9px;
-  inline-size: 8px;
-  block-size: 8px;
-  border-radius: 999px;
-  background: var(--gray-8);
-  box-shadow: 0 0 0 2px var(--gray-2);
-}
-
-.subagent-progress-title,
-.subagent-progress-body,
-.subagent-say-line {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.subagent-progress-title {
-  color: var(--gray-12);
-}
-
-.subagent-progress-body,
-.subagent-say-line {
-  color: var(--gray-11);
-}
-
-.subagent-progress-blue {
-  border-color: var(--blue-a6);
-}
-
-.subagent-progress-blue::before {
-  background: var(--blue-9);
-}
-
-.subagent-progress-green {
-  border-color: var(--green-a6);
-}
-
-.subagent-progress-green::before {
-  background: var(--green-9);
-}
-
-.subagent-progress-red {
-  border-color: var(--red-a7);
-  background: var(--red-a2);
-}
-
-.subagent-progress-red::before {
-  background: var(--red-9);
-}
-
-.subagent-progress-amber {
-  border-color: var(--amber-a7);
-}
-
-.subagent-progress-amber::before {
-  background: var(--amber-9);
-}
 
 .supervision-action-summary {
   display: grid;
