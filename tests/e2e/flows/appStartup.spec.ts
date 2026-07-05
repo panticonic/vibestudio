@@ -1,7 +1,7 @@
 /**
  * App Startup E2E Tests
  *
- * Tests that the vibez1 app launches correctly and the shell initializes.
+ * Tests that the vibestudio app launches correctly and the shell initializes.
  */
 
 import { test, expect } from "@playwright/test";
@@ -45,7 +45,7 @@ test.describe("App Startup", () => {
     expect(content).toBeTruthy();
   });
 
-  test("test API is available when VIBEZ1_TEST_MODE=1", async () => {
+  test("test API is available when VIBESTUDIO_TEST_MODE=1", async () => {
     testApp = await launchTestApp();
 
     // The test API should be exposed on the global object

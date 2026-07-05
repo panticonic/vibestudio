@@ -147,7 +147,7 @@ eval({ code: `
 
 ## Browser History and Incremental Imports
 
-Imported history and Vibez1 browser-panel navigations are stored in the same
+Imported history and Vibestudio browser-panel navigations are stored in the same
 history system. Imported browser visits keep per-visit timestamps when Chrome,
 Firefox, or Safari expose them, and address-bar autocomplete ranks that unified
 history with open browser panels, bookmarks, typed counts, visit counts, and
@@ -177,10 +177,10 @@ Actions that intentionally append/create:
 - `getImportHistory()` returns the audit log, so every import attempt adds a row.
 - `openTabsAsPanels()` creates panels and is not idempotent.
 
-## Open Current Tabs as Vibez1 Panels
+## Open Current Tabs as Vibestudio Panels
 
 After choosing a browser/profile from `detectBrowsers()`, migrate the current
-Firefox/Chrome-family HTTP(S) tabs into Vibez1:
+Firefox/Chrome-family HTTP(S) tabs into Vibestudio:
 
 ```
 eval({ code: `

@@ -8,7 +8,7 @@ import {
 /**
  * Minimal synchronous SQL handle — matches a Durable Object's `ctx.storage.sql`
  * (`exec(query, ...bindings)` returning a cursor with `toArray()`). Declared locally
- * so `@workspace/eval` keeps no dependency on `@vibez1/durable`/`@workspace/runtime`.
+ * so `@workspace/eval` keeps no dependency on `@vibestudio/durable`/`@workspace/runtime`.
  */
 export interface SqlLike {
   exec(query: string, ...bindings: unknown[]): { toArray(): unknown[] };

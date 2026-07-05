@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
-import type { HostTargetLaunchResult } from "@vibez1/shared/hostTargets";
+import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
+import type { HostTargetLaunchResult } from "@vibestudio/shared/hostTargets";
 import { HostTargetLaunchCoordinator } from "./hostTargetLaunchCoordinator.js";
 import type { AppHost } from "./appHost.js";
 

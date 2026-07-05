@@ -3,11 +3,11 @@ import {
   createVerifiedCaller,
   ServiceDispatcher,
   type ServiceContext,
-} from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/serviceDispatcher";
 import {
   SingletonRegistry,
   type WorkspaceDeclarations,
-} from "@vibez1/shared/workspace/singletonRegistry";
+} from "@vibestudio/shared/workspace/singletonRegistry";
 import { createWorkerService } from "./workerService.js";
 
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };

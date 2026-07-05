@@ -1,12 +1,12 @@
 import { app, safeStorage } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
 import type { ViewManager } from "../viewManager.js";
 import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
-import { remoteCredMethods } from "@vibez1/shared/serviceSchemas/remoteCred";
+import { remoteCredMethods } from "@vibestudio/shared/serviceSchemas/remoteCred";
 import type { StartupMode } from "../startupMode.js";
 import { createServerClient, type ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
@@ -15,7 +15,7 @@ import {
   selectedWorkspaceNameFromUrl,
   parseConnectLink,
   createConnectDeepLink,
-} from "@vibez1/shared/connect";
+} from "@vibestudio/shared/connect";
 import {
   createRemoteCredStore,
   type RemoteCredStore,
@@ -53,7 +53,7 @@ function getStore(): RemoteCredStore {
 }
 
 function remoteCredentialPersistenceDisabled(): boolean {
-  const value = process.env["VIBEZ1_DISABLE_REMOTE_CRED_PERSISTENCE"];
+  const value = process.env["VIBESTUDIO_DISABLE_REMOTE_CRED_PERSISTENCE"];
   return value === "1" || value === "true";
 }
 
@@ -261,7 +261,7 @@ export function createRemoteCredService(deps: {
           // New model: there is NO separate redeem step — the WebRTC pipe
           // authenticates with the one-time code on connect (establishServerSession),
           // so this can't redeem in-process. Relaunch carrying the pairing as a
-          // `vibez1://` deep-link arg; the startup's enqueueFirstArgvLink →
+          // `vibestudio://` deep-link arg; the startup's enqueueFirstArgvLink →
           // getPendingConnectLink hands it to establishServerSession, which dials it
           // and KEEPS the pipe as the session (the issued device credential persists
           // on onPaired). The shell-reachable analogue of the bootstrap pair-remote IPC.
@@ -277,7 +277,7 @@ export function createRemoteCredService(deps: {
           const { kind: _kind, ...pairing } = parsed;
           const deepLink = createConnectDeepLink(pairing);
           // Drop any prior pairing arg so relaunches don't accumulate stale links.
-          const relaunchArgs = process.argv.slice(1).filter((a) => !a.startsWith("vibez1://"));
+          const relaunchArgs = process.argv.slice(1).filter((a) => !a.startsWith("vibestudio://"));
           relaunchArgs.push(deepLink);
           relaunchApp({ args: relaunchArgs });
           return { ok: true } satisfies TestConnectionResult; // unreachable; relaunchApp exits

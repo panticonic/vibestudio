@@ -41,10 +41,10 @@ describe("RemoteCdpHostProviderSocket", () => {
     const messagePromise = once<string>(socket, "message");
     controller.enqueue(
       new TextEncoder().encode(
-        `${JSON.stringify(JSON.stringify({ type: "vibez1:cdp-auth-ok" }))}\n`
+        `${JSON.stringify(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }))}\n`
       )
     );
-    await expect(messagePromise).resolves.toBe(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+    await expect(messagePromise).resolves.toBe(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
 
     const outbound = JSON.stringify({ type: "cdp:register", targetId: "panel-1", tabId: 1 });
     socket.send(outbound);

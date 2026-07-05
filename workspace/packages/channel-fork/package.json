@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@vibez1/rpc": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*"
   },
   "devDependencies": {

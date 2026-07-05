@@ -33,14 +33,18 @@ export function resolveSessionScope(inv: ParsedInvocation): SessionScope {
   }
   const session = loadAgentSession(name);
   if (!session) {
-    throw new CliError(`no session named ${name} — run \`vibez1 agent attach ${name}\` first`);
+    throw new CliError(`no session named ${name} — run \`vibestudio agent attach ${name}\` first`);
   }
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError('not paired — run `vibez1 remote pair "vibez1://connect?..."` first');
+    throw new AuthError(
+      'not paired — run `vibestudio remote pair "vibestudio://connect?..."` first'
+    );
   }
   if (!creds.workspaceName) {
-    throw new AuthError("no remote workspace selected — run `vibez1 remote select <workspace>`");
+    throw new AuthError(
+      "no remote workspace selected — run `vibestudio remote select <workspace>`"
+    );
   }
   if (session.serverUrl !== creds.url) {
     throw new StaleSessionError(

@@ -8,7 +8,7 @@ import type {
   VcsPushStatus,
   VcsRepoDivergence,
   VcsStatusResult,
-} from "@vibez1/shared/serviceSchemas/vcs";
+} from "@vibestudio/shared/serviceSchemas/vcs";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -17,7 +17,7 @@ import {
 } from "../commandTable.js";
 import { CliError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
 import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
-import { createVcsUserlandClient, type RpcCallerLike } from "@vibez1/shared/userlandServiceRpc";
+import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 import type { RpcClient } from "../rpcClient.js";
 
 interface VcsDeleteRepoResult {
@@ -49,7 +49,7 @@ function userlandRpcFor(client: RpcClient): RpcCallerLike {
 }
 
 /**
- * `vibez1 vcs ...` — per-repo GAD-native version control.
+ * `vibestudio vcs ...` — per-repo GAD-native version control.
  *
  * In the per-repo VCS model each workspace repo (`packages/foo`, `panels/chat`,
  * `projects/vault`, the flat `meta` repo) is a first-class versioned unit with
@@ -59,7 +59,7 @@ function userlandRpcFor(client: RpcClient): RpcCallerLike {
  *
  * The model is **edit → commit → push**. `vcs edit` records uncommitted working
  * changes (no build); `vcs commit -m` folds them into a messaged snapshot per
- * repo; `vibez1 vcs push --repo <p>` resolves the userland `vcs` service and
+ * repo; `vibestudio vcs push --repo <p>` resolves the userland `vcs` service and
  * build-gates that snapshot into `main` through the DO's `vcsPush`. A push that
  * comes back `build-failed` did NOT advance `main` (read the structured
  * diagnostics, fix the cited `file:line:col`, re-push); a push that comes back
@@ -90,7 +90,7 @@ const FORCE_FLAG: FlagSpec = {
 // ----- CLI-local response shapes -----
 // The push-contract types (BuildDiagnostic / RepoBuildReport / VcsPushResult,
 // incl. VcsRepoDivergence) are imported from the canonical zod schema in
-// @vibez1/shared/serviceSchemas/vcs so they cannot drift from the server.
+// @vibestudio/shared/serviceSchemas/vcs so they cannot drift from the server.
 
 interface RepoLogEntry {
   seq: number;
@@ -296,7 +296,7 @@ function renderDivergences(divergences: VcsRepoDivergence[]): void {
     }
   }
   console.error(
-    "\nReconcile with `vibez1 vcs merge --repo REPOPATH`, then push. " +
+    "\nReconcile with `vibestudio vcs merge --repo REPOPATH`, then push. " +
       "If the merge conflicts, resolve markers and commit before pushing."
   );
 }
@@ -409,7 +409,7 @@ async function log(inv: ParsedInvocation): Promise<number> {
     // defaults to `main`, matching the CLI shell caller's previous default.
     const service = await client.call<{ kind: string; targetId?: string }>(
       "workers.resolveService",
-      ["vibez1.vcs.v1", null]
+      ["vibestudio.vcs.v1", null]
     );
     if (service.kind !== "durable-object" || !service.targetId) {
       throw new CliError("workspace vcs service is not a durable-object service");
@@ -445,7 +445,7 @@ async function forkRepo(inv: ParsedInvocation): Promise<number> {
     const to = inv.positionals[1];
     if (!from || !to) {
       throw new UsageError(
-        "usage: vibez1 vcs fork-repo FROM_REPO TO_REPO (e.g. fork-repo panels/chat panels/mychat)"
+        "usage: vibestudio vcs fork-repo FROM_REPO TO_REPO (e.g. fork-repo panels/chat panels/mychat)"
       );
     }
     const { client } = resolveSessionScope(inv);
@@ -572,17 +572,17 @@ async function contextStatus(inv: ParsedInvocation): Promise<number> {
         }
         if (result.some((r) => r.uncommitted)) {
           console.log(
-            "\n`vibez1 vcs commit -m MESSAGE` to seal uncommitted edits (or `vcs discard`)."
+            "\n`vibestudio vcs commit -m MESSAGE` to seal uncommitted edits (or `vcs discard`)."
           );
         }
         if (result.some((r) => r.deleted)) {
           console.log(
             "\nA repo your context references was DELETED from the workspace — a push will be " +
-              "refused. Drop/rebase your context, or `vibez1 vcs restore-repo` to recover it."
+              "refused. Drop/rebase your context, or `vibestudio vcs restore-repo` to recover it."
           );
         }
         if (result.some((r) => r.behind)) {
-          console.log("\n`vibez1 vcs rebase` to pull latest main into your context.");
+          console.log("\n`vibestudio vcs rebase` to pull latest main into your context.");
         }
       },
     });
@@ -669,7 +669,7 @@ async function edit(inv: ParsedInvocation): Promise<number> {
           `recorded ${result.changedPaths.length} working change(s) (uncommitted, editSeq ${result.editSeq})`
         );
         for (const p of result.changedPaths) console.log(`  ${p}`);
-        console.log("seal with `vibez1 vcs commit -m MESSAGE`.");
+        console.log("seal with `vibestudio vcs commit -m MESSAGE`.");
       },
     });
     return 0;
@@ -705,7 +705,7 @@ async function commit(inv: ParsedInvocation): Promise<number> {
         committed.length === 0
           ? "commit produced no snapshots: no uncommitted VCS working edits were found. " +
               "Only edit/write/vcs.edit changes under workspace repo paths can be committed; " +
-              "scratch/direct fs writes under .tmp, .vibez1, node_modules, dist, etc. are outside VCS."
+              "scratch/direct fs writes under .tmp, .vibestudio, node_modules, dist, etc. are outside VCS."
           : `commit returned unchanged repo(s) (${unchanged.map((r) => r.repoPath).join(", ")}). ` +
               "This is treated as an error because commit should seal real working edits, not silently no-op."
       );
@@ -717,7 +717,7 @@ async function commit(inv: ParsedInvocation): Promise<number> {
           console.log(`committed ${r.repoPath} — ${r.editCount} edit(s)`);
           for (const p of r.changedPaths) console.log(`  ${p}`);
         }
-        console.log("\npush with `vibez1 vcs push --repo REPOPATH`.");
+        console.log("\npush with `vibestudio vcs push --repo REPOPATH`.");
       },
     });
     return 0;
@@ -818,7 +818,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "edit",
     summary: "Record uncommitted working edits on your context head (no commit, no build)",
-    usage: "vibez1 vcs edit [--repo REPOPATH] --edits '<json>'  (or pipe JSON on stdin)",
+    usage: "vibestudio vcs edit [--repo REPOPATH] --edits '<json>'  (or pipe JSON on stdin)",
     flags: [REPO_FLAG, EDITS_FLAG, SESSION_FLAG, JSON_FLAG],
     run: edit,
   },
@@ -826,7 +826,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "commit",
     summary: "Fold your context's uncommitted working edits into one messaged snapshot per repo",
-    usage: "vibez1 vcs commit -m MESSAGE [--repo REPOPATH ...]",
+    usage: "vibestudio vcs commit -m MESSAGE [--repo REPOPATH ...]",
     flags: [REPO_FLAG, MESSAGE_FLAG, SESSION_FLAG, JSON_FLAG],
     run: commit,
   },
@@ -834,7 +834,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "push",
     summary: "Build-gate a repo's context head into main (repeat --repo for an atomic group)",
-    usage: "vibez1 vcs push --repo REPOPATH [--repo REPOPATH ...] [-m MESSAGE]",
+    usage: "vibestudio vcs push --repo REPOPATH [--repo REPOPATH ...] [-m MESSAGE]",
     flags: [REPO_FLAG, MESSAGE_FLAG, SESSION_FLAG, JSON_FLAG],
     run: push,
   },
@@ -842,7 +842,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "merge",
     summary: "Pull main into your context head (reconcile divergence before re-pushing)",
-    usage: "vibez1 vcs merge --repo REPOPATH",
+    usage: "vibestudio vcs merge --repo REPOPATH",
     flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
     run: merge,
   },
@@ -850,7 +850,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "discard",
     summary: "Drop a repo's uncommitted working edits (and abort any in-progress merge)",
-    usage: "vibez1 vcs discard --repo REPOPATH",
+    usage: "vibestudio vcs discard --repo REPOPATH",
     flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
     run: discard,
   },
@@ -859,7 +859,7 @@ export const vcsCommands: CliCommand[] = [
     name: "push-status",
     aliases: ["pushstatus"],
     summary: "Show how many changes each repo has ahead of main (pre-push)",
-    usage: "vibez1 vcs push-status --repo REPOPATH [--repo REPOPATH ...]",
+    usage: "vibestudio vcs push-status --repo REPOPATH [--repo REPOPATH ...]",
     flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
     run: pushStatus,
   },
@@ -867,7 +867,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "status",
     summary: "Show a repo's unpushed changes (context head vs its main)",
-    usage: "vibez1 vcs status --repo REPOPATH",
+    usage: "vibestudio vcs status --repo REPOPATH",
     flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
     run: status,
   },
@@ -875,7 +875,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "diff",
     summary: "Show a name-status diff of a repo's unpushed changes",
-    usage: "vibez1 vcs diff --repo REPOPATH",
+    usage: "vibestudio vcs diff --repo REPOPATH",
     flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
     run: diff,
   },
@@ -883,7 +883,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "log",
     summary: "Show a single repo's push history",
-    usage: "vibez1 vcs log --repo REPOPATH [--limit N]",
+    usage: "vibestudio vcs log --repo REPOPATH [--limit N]",
     flags: [REPO_FLAG, LIMIT_FLAG, SESSION_FLAG, JSON_FLAG],
     run: log,
   },
@@ -891,7 +891,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "fork-repo",
     summary: "Fork a repo to a new path, preserving its history (edit on top of the fork)",
-    usage: "vibez1 vcs fork-repo FROM_REPO TO_REPO",
+    usage: "vibestudio vcs fork-repo FROM_REPO TO_REPO",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: forkRepo,
   },
@@ -900,7 +900,7 @@ export const vcsCommands: CliCommand[] = [
     name: "delete-repo",
     summary:
       "Permanently remove a repo from the workspace — archives its history, drops it from main (requires user approval; refuses if depended-on unless --force)",
-    usage: "vibez1 vcs delete-repo --repo REPOPATH [--force]",
+    usage: "vibestudio vcs delete-repo --repo REPOPATH [--force]",
     flags: [REPO_FLAG, FORCE_FLAG, SESSION_FLAG, JSON_FLAG],
     run: deleteRepo,
   },
@@ -909,7 +909,7 @@ export const vcsCommands: CliCommand[] = [
     name: "restore-repo",
     summary:
       "Recover a deleted repo from its archived history (fails if a different repo now occupies the path; requires user approval)",
-    usage: "vibez1 vcs restore-repo --repo REPOPATH",
+    usage: "vibestudio vcs restore-repo --repo REPOPATH",
     flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
     run: restoreRepo,
   },
@@ -917,7 +917,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "context-status",
     summary: "Show what your context has edited and how far it has drifted from main",
-    usage: "vibez1 vcs context-status",
+    usage: "vibestudio vcs context-status",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: contextStatus,
   },
@@ -925,7 +925,7 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "rebase",
     summary: "Pull latest main into your context (merge edited repos + re-pin base)",
-    usage: "vibez1 vcs rebase",
+    usage: "vibestudio vcs rebase",
     flags: [SESSION_FLAG, JSON_FLAG],
     run: rebase,
   },

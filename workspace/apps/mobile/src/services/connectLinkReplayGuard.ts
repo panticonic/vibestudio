@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const CONSUMED_CONNECT_LINK_KEY = "vibez1:connect:consumed-url";
+const CONSUMED_CONNECT_LINK_KEY = "vibestudio:connect:consumed-url";
 const CONSUMED_CONNECT_LINK_TTL_MS = 10 * 60 * 1000;
 
 interface ConsumedConnectLink {
@@ -39,7 +39,7 @@ export function isConnectLinkForStoredServer(
 }
 
 function isConnectLink(rawUrl: string): boolean {
-  return rawUrl.startsWith("vibez1://connect");
+  return rawUrl.startsWith("vibestudio://connect");
 }
 
 function parseConsumedConnectLink(raw: string | null): ConsumedConnectLink | null {

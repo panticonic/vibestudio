@@ -1,5 +1,5 @@
-import type { PendingCapabilityApproval } from "@vibez1/shared/approvals";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { PendingCapabilityApproval } from "@vibestudio/shared/approvals";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   requestCapabilityPermission,
   type CapabilityPermissionDeps,

@@ -4,12 +4,12 @@
   "type": "module",
   "exports": {
     "./favicon.svg": "./src/favicon.svg",
-    "./vibez1-dark.png": "./src/vibez1-dark.png",
-    "./vibez1-light.png": "./src/vibez1-light.png",
-    "./vibez1-mark.svg": "./src/vibez1-mark.svg",
-    "./vibez1-mark-black.svg": "./src/vibez1-mark-black.svg",
-    "./vibez1-mark-on-dark.png": "./src/vibez1-mark-on-dark.png",
-    "./vibez1-mark-on-light.png": "./src/vibez1-mark-on-light.png",
-    "./vibez1-mark-white.svg": "./src/vibez1-mark-white.svg"
+    "./vibestudio-dark.png": "./src/vibestudio-dark.png",
+    "./vibestudio-light.png": "./src/vibestudio-light.png",
+    "./vibestudio-mark.svg": "./src/vibestudio-mark.svg",
+    "./vibestudio-mark-black.svg": "./src/vibestudio-mark-black.svg",
+    "./vibestudio-mark-on-dark.png": "./src/vibestudio-mark-on-dark.png",
+    "./vibestudio-mark-on-light.png": "./src/vibestudio-mark-on-light.png",
+    "./vibestudio-mark-white.svg": "./src/vibestudio-mark-white.svg"
   }
 }

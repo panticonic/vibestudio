@@ -15,7 +15,7 @@ const mockResolveWorkspaceName = vi.fn(() => null as string | null);
 const mockIsDev = vi.fn(() => false);
 const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
   resolved: {
-    wsDir: "/tmp/vibez1-test-workspace",
+    wsDir: "/tmp/vibestudio-test-workspace",
     workspace: { config: { id: "test-workspace" } },
     name: "test-workspace",
     created: false,
@@ -23,14 +23,14 @@ const mockResolveLocalWorkspaceStartup = vi.fn((_opts?: unknown) => ({
   isEphemeral: false,
 }));
 
-vi.mock("@vibez1/shared/workspace/loader", () => ({
+vi.mock("@vibestudio/shared/workspace/loader", () => ({
   resolveWorkspaceName: () => mockResolveWorkspaceName(),
   resolveOrCreateWorkspace: () => {
     throw new Error("not used in these tests");
   },
 }));
 
-vi.mock("@vibez1/shared/workspace/startup", () => ({
+vi.mock("@vibestudio/shared/workspace/startup", () => ({
   resolveLocalWorkspaceStartup: (opts: unknown) => mockResolveLocalWorkspaceStartup(opts),
 }));
 
@@ -48,7 +48,7 @@ function setArgv(args: string[]) {
 }
 
 type LastWorkspaceTarget = ReturnType<
-  import("@vibez1/shared/centralData").CentralDataManager["getLastWorkspaceTarget"]
+  import("@vibestudio/shared/centralData").CentralDataManager["getLastWorkspaceTarget"]
 >;
 
 function testCentralData(lastTarget: LastWorkspaceTarget = null) {
@@ -85,7 +85,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
   it("launches the local workspace non-interactively (headless) when none is explicitly selected", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
       kind: "local",
-      wsDir: "/tmp/vibez1-test-workspace",
+      wsDir: "/tmp/vibestudio-test-workspace",
       workspaceId: "test-workspace",
     });
   });
@@ -106,7 +106,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
     setArgv([
       "--workspace",
       "default",
-      "vibez1://connect?room=room&fp=fp&code=code&sig=ws://127.0.0.1",
+      "vibestudio://connect?room=room&fp=fp&code=code&sig=ws://127.0.0.1",
     ]);
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toEqual({
@@ -116,11 +116,11 @@ describe("resolveStartupMode interactive desktop policy", () => {
   });
 
   it("does not treat WebRTC pairing deep links as a headless startup mode", () => {
-    setArgv(["vibez1://connect?room=room&fp=fp&code=code&sig=ws://127.0.0.1"]);
+    setArgv(["vibestudio://connect?room=room&fp=fp&code=code&sig=ws://127.0.0.1"]);
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: false })).toMatchObject({
       kind: "local",
-      wsDir: "/tmp/vibez1-test-workspace",
+      wsDir: "/tmp/vibestudio-test-workspace",
     });
   });
 
@@ -167,7 +167,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
       mod.workspaceRelaunchArgs("default", [
         "--foo",
         mod.DEV_WEBRTC_REMOTE_ARG,
-        "vibez1://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
+        "vibestudio://connect?room=room-1111&fp=bad&code=bad&sig=ws%3A%2F%2F127.0.0.1%3A8787",
       ])
     ).toEqual(["--foo", "--workspace", "default", mod.WORKSPACE_CREATE_IF_MISSING_ARG]);
   });
@@ -210,7 +210,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
-      wsDir: "/tmp/vibez1-test-workspace",
+      wsDir: "/tmp/vibestudio-test-workspace",
       workspaceId: "test-workspace",
     });
     expect(mockResolveLocalWorkspaceStartup).toHaveBeenLastCalledWith(
@@ -233,7 +233,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
   it("auto-approves startup units for a newly created default workspace", () => {
     mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
       resolved: {
-        wsDir: "/tmp/vibez1-default-workspace",
+        wsDir: "/tmp/vibestudio-default-workspace",
         workspace: { config: { id: "default-id" } },
         name: "default",
         created: true,

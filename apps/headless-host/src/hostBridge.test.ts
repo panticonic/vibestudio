@@ -21,9 +21,9 @@ class FakeBridgeServer {
       this.socket = ws;
       ws.on("message", (data) => {
         const message = JSON.parse(String(data)) as Record<string, unknown>;
-        if (message["type"] === "vibez1:cdp-auth") {
+        if (message["type"] === "vibestudio:cdp-auth") {
           if (message["token"] === this.authToken) {
-            ws.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+            ws.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
           } else {
             ws.close(4401);
           }
@@ -161,8 +161,8 @@ describe("CdpHostBridgeClient", () => {
       client.start();
       sockets[0]?.open();
       await Promise.resolve();
-      expect(sockets[0]?.sent[0]).toEqual({ type: "vibez1:cdp-auth", token: "good-token" });
-      sockets[0]?.receive({ type: "vibez1:cdp-auth-ok" });
+      expect(sockets[0]?.sent[0]).toEqual({ type: "vibestudio:cdp-auth", token: "good-token" });
+      sockets[0]?.receive({ type: "vibestudio:cdp-auth-ok" });
       client.registerTarget("panel-1", 7);
       expect(sockets[0]?.sent.at(-1)).toEqual({
         type: "cdp:register",
@@ -175,10 +175,10 @@ describe("CdpHostBridgeClient", () => {
       expect(sockets).toHaveLength(2);
       sockets[1]?.open();
       await Promise.resolve();
-      sockets[1]?.receive({ type: "vibez1:cdp-auth-ok" });
+      sockets[1]?.receive({ type: "vibestudio:cdp-auth-ok" });
 
       expect(sockets[1]?.sent).toEqual([
-        { type: "vibez1:cdp-auth", token: "good-token" },
+        { type: "vibestudio:cdp-auth", token: "good-token" },
         { type: "cdp:register", targetId: "panel-1", tabId: 7 },
       ]);
     } finally {
@@ -216,11 +216,11 @@ describe("CdpHostBridgeClient", () => {
       expect(diagnostics.map((d) => d.state)).toContain("authenticating");
       expect(diagnostics.at(-1)).toMatchObject({ state: "authenticating", authSent: true });
 
-      sockets[0]?.receive({ type: "vibez1:cdp-auth-ok" });
+      sockets[0]?.receive({ type: "vibestudio:cdp-auth-ok" });
       expect(diagnostics.at(-1)).toMatchObject({
         state: "authenticated",
         authenticated: true,
-        lastMessageType: "vibez1:cdp-auth-ok",
+        lastMessageType: "vibestudio:cdp-auth-ok",
       });
 
       sockets[0]?.close(4401, "Invalid CDP token");

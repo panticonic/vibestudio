@@ -1,9 +1,9 @@
-import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import {
   callerKindForPrincipalKind,
   isCodeIdentityCallerKind,
   type CodeIdentityCallerKind,
-} from "@vibez1/shared/principalKinds";
+} from "@vibestudio/shared/principalKinds";
 
 export interface ResolvedCodeIdentity {
   callerId: string;

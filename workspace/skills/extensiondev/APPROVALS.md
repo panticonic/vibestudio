@@ -98,11 +98,11 @@ The host doesn't impose a model — pick what matches the user's mental model of
 
 Prompt when:
 - The extension owns a shared service/resource and another panel, worker, DO, or extension asks to use it.
-- Vibez1 has no built-in permission model for that resource.
+- Vibestudio has no built-in permission model for that resource.
 - A remembered grant for a stable `subject.id` is meaningful to the user.
 
 Don't prompt when:
-- The caller or extension is doing ordinary filesystem, process, network, panel, git, browser, credential, or runtime work. Use the corresponding host/runtime API and let Vibez1's built-in permission flow handle sensitive resources.
+- The caller or extension is doing ordinary filesystem, process, network, panel, git, browser, credential, or runtime work. Use the corresponding host/runtime API and let Vibestudio's built-in permission flow handle sensitive resources.
 - The work is internal bookkeeping such as writing to `ctx.storage`, log records, health reports, cache files, scratch files, or temporary test directories.
 - You're calling another extension that will do its own prompting (`extensions.use(...)` calls do not propagate upstream attribution).
 
@@ -117,4 +117,4 @@ The prompt's **default action on dismissal is deny**. Don't write code that depe
 Grants persist in the userland-approval grant store across host restarts.
 
 - **Clearing grants** is only done programmatically, from a panel/worker or attributed extension: `runtime.approvals.revoke(subjectId)` / `ctx.approvals.revoke(subjectId)`.
-- **Undeclaring or stopping an extension** is separate and does **not** clear grants: removing it from `extensions:` in `meta/vibez1.yml` stops and removes the extension, but its grants and per-extension storage scratch are retained. Grants are namespaced by `(principal, extension)`, so re-declaring under the same name will see the same grants — revoke explicitly if you want them gone.
+- **Undeclaring or stopping an extension** is separate and does **not** clear grants: removing it from `extensions:` in `meta/vibestudio.yml` stops and removes the extension, but its grants and per-extension storage scratch are retained. Grants are namespaced by `(principal, extension)`, so re-declaring under the same name will see the same grants — revoke explicitly if you want them gone.

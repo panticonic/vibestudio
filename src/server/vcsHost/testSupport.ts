@@ -6,7 +6,7 @@
  * content store and protected-ref service fixtures.
  */
 
-import type { ManifestHashEntry } from "@vibez1/shared/contentTree/worktreeHash";
+import type { ManifestHashEntry } from "@vibestudio/shared/contentTree/worktreeHash";
 import { collectTreeFiles } from "./worktreeStore.js";
 import { getBytes, getTree, putBytes, putTree } from "../services/blobstoreService.js";
 import type { RefService } from "../services/refService.js";
@@ -31,9 +31,9 @@ export function pushToMain(
     message?: string;
     actor?: { id: string; kind: string };
   }
-): Promise<import("@vibez1/shared/serviceSchemas/vcs").VcsPushResult> {
+): Promise<import("@vibestudio/shared/serviceSchemas/vcs").VcsPushResult> {
   const instance = gad.instance as {
-    vcsPush: (i: unknown) => Promise<import("@vibez1/shared/serviceSchemas/vcs").VcsPushResult>;
+    vcsPush: (i: unknown) => Promise<import("@vibestudio/shared/serviceSchemas/vcs").VcsPushResult>;
   };
   return instance.vcsPush(input);
 }

@@ -5,7 +5,7 @@ const customStateProviders = new Map<string, () => unknown>();
 
 declare global {
   interface Window {
-    __vibez1AgentMode?: AgentDataMode;
+    __vibestudioAgentMode?: AgentDataMode;
   }
 }
 
@@ -49,8 +49,8 @@ export const agentApi = {
   },
   setMode(mode: AgentDataMode) {
     dataMode = mode;
-    window.__vibez1AgentMode = mode;
-    window.dispatchEvent(new CustomEvent("vibez1:agentModeChanged", { detail: mode }));
+    window.__vibestudioAgentMode = mode;
+    window.dispatchEvent(new CustomEvent("vibestudio:agentModeChanged", { detail: mode }));
     return { mode };
   },
   getMode() {

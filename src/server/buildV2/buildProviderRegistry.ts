@@ -1,4 +1,4 @@
-import type { BuildProvider, BuildProviderTarget } from "@vibez1/shared/buildProvider";
+import type { BuildProvider, BuildProviderTarget } from "@vibestudio/shared/buildProvider";
 
 const providers = new Map<BuildProviderTarget, BuildProvider>();
 const listeners = new Set<(event: BuildProviderRegistryEvent) => void>();

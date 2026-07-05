@@ -1,4 +1,4 @@
-import { validateStateArgs } from "@vibez1/shared/stateArgsValidator";
+import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
 
 describe("validateStateArgs", () => {
   it("rejects non-JSON-serializable input (function)", () => {

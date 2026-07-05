@@ -9,7 +9,7 @@ import type { PdfRenderedPage } from "./pdf/types.js";
 const tempRoots: string[] = [];
 
 async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "vibez1-pdf-ingest-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "vibestudio-pdf-ingest-"));
   tempRoots.push(root);
   return root;
 }

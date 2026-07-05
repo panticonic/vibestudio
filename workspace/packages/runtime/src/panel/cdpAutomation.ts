@@ -1,4 +1,4 @@
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import type {
   CdpAutomation,
   CdpEndpoint,
@@ -29,7 +29,7 @@ async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
     const message = error instanceof Error ? error.message : String(error);
     loadErrors.push(`${source}: ${message}`);
   };
-  const runtimeRequire = (globalThis as Record<string, unknown>)["__vibez1Require__"] as
+  const runtimeRequire = (globalThis as Record<string, unknown>)["__vibestudioRequire__"] as
     | ((id: string) => unknown)
     | undefined;
   if (runtimeRequire) {
@@ -37,13 +37,13 @@ async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
       const loaded = runtimeRequire(LIGHTWEIGHT_CDP_MODULE);
       if (isLightweightCdpClientModule(loaded)) return loaded;
     } catch (error) {
-      rememberLoadError("__vibez1Require__", error);
-      // Panels can lazily import npm packages via __vibez1RequireAsync__ below.
+      rememberLoadError("__vibestudioRequire__", error);
+      // Panels can lazily import npm packages via __vibestudioRequireAsync__ below.
       // Workers only have the sync module map, so a missing map entry should
       // fall through to the clearest environment-specific loader/error.
     }
   }
-  const runtimeLoadImport = (globalThis as Record<string, unknown>)["__vibez1LoadImport__"] as
+  const runtimeLoadImport = (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"] as
     | ((id: string, ref?: string) => Promise<unknown>)
     | undefined;
   if (runtimeLoadImport) {
@@ -51,19 +51,19 @@ async function loadLightweightClient(): Promise<LightweightCdpClientModule> {
       const loaded = await runtimeLoadImport(LIGHTWEIGHT_CDP_MODULE, "latest");
       if (isLightweightCdpClientModule(loaded)) return loaded;
     } catch (error) {
-      rememberLoadError("__vibez1LoadImport__", error);
+      rememberLoadError("__vibestudioLoadImport__", error);
       // Fall through to the legacy async loader/dynamic import paths.
     }
   }
   const runtimeRequireAsync = (globalThis as Record<string, unknown>)[
-    "__vibez1RequireAsync__"
+    "__vibestudioRequireAsync__"
   ] as ((id: string) => Promise<unknown>) | undefined;
   if (runtimeRequireAsync) {
     try {
       const loaded = await runtimeRequireAsync(LIGHTWEIGHT_CDP_MODULE);
       if (isLightweightCdpClientModule(loaded)) return loaded;
     } catch (error) {
-      rememberLoadError("__vibez1RequireAsync__", error);
+      rememberLoadError("__vibestudioRequireAsync__", error);
       // Fall through to dynamic import for non-runtime test/node environments.
     }
   }

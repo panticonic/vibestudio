@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { envelopeFromMessage } from "@vibez1/rpc";
+import { envelopeFromMessage } from "@vibestudio/rpc";
 import { SessionRegistry } from "./sessionRegistry.js";
 
 describe("SessionRegistry", () => {

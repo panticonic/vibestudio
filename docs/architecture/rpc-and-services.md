@@ -1,6 +1,6 @@
 # RPC And Userland Services
 
-Vibez1 has a small platform RPC layer and a userland-service pattern for
+Vibestudio has a small platform RPC layer and a userland-service pattern for
 stateful protocols. This is intentional: they solve different problems and are
 scoped to non-overlapping responsibilities. This doc fixes the boundary in
 writing so future contributors don't route stateful protocols through the
@@ -10,7 +10,7 @@ platform layer.
 
 | System | Shape | Use for |
 |---|---|---|
-| `@vibez1/rpc` | Stateless point-to-point method calls + HTTP-Response streaming | Service calls (`credentials.fetch`, `fs.read`, `blobstore.putText`), URL-bound credential proxying, model SDK fetches |
+| `@vibestudio/rpc` | Stateless point-to-point method calls + HTTP-Response streaming | Service calls (`credentials.fetch`, `fs.read`, `blobstore.putText`), URL-bound credential proxying, model SDK fetches |
 | Userland services | Workspace-declared workers and Durable Objects resolved by protocol | Stateful channels, durable conversation state, multi-participant flows, and any workspace-owned protocol |
 
 If you're routing a single call/response, possibly with a streaming body,
@@ -26,7 +26,7 @@ The systems evolved for different concerns and meet different invariants:
 a single value or a single `Response` (with optional `ReadableStream`
 body). Cancellation is one `AbortSignal`. Errors propagate to one
 caller. The streaming primitive added in
-`@vibez1/rpc/types#StreamingMethodHandler` is a sink-based
+`@vibestudio/rpc/types#StreamingMethodHandler` is a sink-based
 HEAD→DATA*→END frame stream, mirroring HTTP chunked transfer.
 
 **userland services can be conversation-shaped.** A call may have multiple
@@ -51,17 +51,17 @@ Response-based APIs work transparently.
 
 Some bits ARE shared and should stay shared:
 
-- **`@vibez1/rpc` `RpcCaller` interface** — the credentials
+- **`@vibestudio/rpc` `RpcCaller` interface** — the credentials
   client takes a `RpcCaller` (anything with `call` + `stream`).
   Runtime clients and service-derived adapters can satisfy it.
-- **`@vibez1/rpc/protocol/streamCodec`** — the binary frame
+- **`@vibestudio/rpc/protocol/streamCodec`** — the binary frame
   codec (HEAD/DATA/END/ERROR). Used by rpc for HTTP `/rpc/stream` and
   by `RpcClient.stream` over IPC/WS. Stateful service protocols
   can choose their own chunk shape.
 
 ## What does NOT need to change
 
-- **Duplicate base64 helpers** should live in `@vibez1/rpc/protocol/streamCodec`
+- **Duplicate base64 helpers** should live in `@vibestudio/rpc/protocol/streamCodec`
   or local transport internals only when the dependency boundary requires it.
 
 ## When unification becomes worth considering
@@ -87,7 +87,7 @@ Are you routing point-to-point with a single caller/target?
 │  ├─ Need a one-shot value?          → rpc.call
 │  └─ Need to expose a method?        → rpc.expose / exposeStreaming
 └─ No (one-to-many, or stateful conversation)
-   ├─ Declare a workspace service protocol in vibez1.yml
+   ├─ Declare a workspace service protocol in vibestudio.yml
    ├─ Resolve it with workers.resolveService
    └─ Call the returned worker or Durable Object target
 ```

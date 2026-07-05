@@ -1,7 +1,7 @@
 # Merge-rework handoff: provenance invariants the merge system carries
 
 Date: 2026-07-03. Audience: the agent reworking the merge system. Origin: the
-provenance-graph workstream (`2-vibez1`, `docs/gad-provenance-fibers-design.md`),
+provenance-graph workstream (`2-vibestudio`, `docs/gad-provenance-fibers-design.md`),
 which builds line-level blame directly on what merge commits record. The prior
 general handoff is `docs/gad-provenance-handoff-2026-07.md`; this note is the
 merge-specific contract. Blame here is **exact by invariant — there is no
@@ -101,7 +101,7 @@ coordinate so we don't collide in the same functions.
 
 ## Coordination
 
-The provenance branch (`claude/gad-system-review-6r1qpf` in `2-vibez1`) has
+The provenance branch (`claude/gad-system-review-6r1qpf` in `2-vibestudio`) has
 merged fabling and re-applied the file-mutation/observation cut (schema v23
 there). If your rework lands on top of fabling without that cut, the next
 merge re-creates the same conflicts — prefer building on the merged branch,

@@ -6,7 +6,7 @@ Date: 2026-04-23 · Branch: audit · Auditor: Claude (Opus 4.7 1M) · Mode: read
 
 Current note (2026-06-01): this report is historical. The legacy bridge API it
 describes has since been replaced by the unified `RpcClient` API in
-`@vibez1/rpc`, with envelope-based caller attribution and transport adapters
+`@vibestudio/rpc`, with envelope-based caller attribution and transport adapters
 shared across WebSocket, HTTP, Electron IPC, and in-process links. Historical
 findings below are retained for audit traceability.
 
@@ -14,11 +14,11 @@ findings below are retained for audit traceability.
 
 ## 1. Executive summary
 
-At audit time, the RPC framework in `@vibez1/rpc` was a transport-agnostic bridge that dispatched `request`/`response`/`event` messages, pushed argument validation into service definitions (`ServiceDispatcher`), and used a flat allow-list per service/method. That bridge has since been removed in favor of `createRpcClient`, but the transport-authorization findings are retained below. Transport security is built into the WebSocket server: all connections must send `ws:auth` within 10 s carrying a bearer token; tokens are 32-byte random hex stored only in memory (`TokenManager`); the server distinguishes `admin`/`panel`/`shell`/`worker`/`server`/`harness` caller kinds.
+At audit time, the RPC framework in `@vibestudio/rpc` was a transport-agnostic bridge that dispatched `request`/`response`/`event` messages, pushed argument validation into service definitions (`ServiceDispatcher`), and used a flat allow-list per service/method. That bridge has since been removed in favor of `createRpcClient`, but the transport-authorization findings are retained below. Transport security is built into the WebSocket server: all connections must send `ws:auth` within 10 s carrying a bearer token; tokens are 32-byte random hex stored only in memory (`TokenManager`); the server distinguishes `admin`/`panel`/`shell`/`worker`/`server`/`harness` caller kinds.
 
 However, the implementation has substantive gaps between the declared policy model and the effective enforcement surface. The most important findings:
 
-1. **Policy is not enforced on Electron IPC** (`src/main/index.ts` `vibez1:serviceCall` and `src/main/ipcDispatcher.ts`). `ServiceDispatcher.dispatch()` never calls `checkServiceAccess`; only the WS/HTTP RPC server does. In Electron mode panels can invoke Electron-local services with policies like `{ allowed: ["shell"] }` (app/panel/view/menu/adblock/settings services) simply by issuing `__vibez1Shell.serviceCall("app.xxx", …)`. The `callerKind` at dispatch is heuristically set to `"panel"` for non-shell webContents but the dispatcher ignores it.
+1. **Policy is not enforced on Electron IPC** (`src/main/index.ts` `vibestudio:serviceCall` and `src/main/ipcDispatcher.ts`). `ServiceDispatcher.dispatch()` never calls `checkServiceAccess`; only the WS/HTTP RPC server does. In Electron mode panels can invoke Electron-local services with policies like `{ allowed: ["shell"] }` (app/panel/view/menu/adblock/settings services) simply by issuing `__vibestudioShell.serviceCall("app.xxx", …)`. The `callerKind` at dispatch is heuristically set to `"panel"` for non-shell webContents but the dispatcher ignores it.
 
 2. **Several server services over-allow `panel` callers on privilege-sensitive methods.** Examples: `authTokens.getProviderToken` (any panel can read stored OAuth/API keys), `authTokens.persist` / `authTokens.logout` (any panel can overwrite/delete them), `auth.startOAuthLogin` / `auth.logout`, `credentials.revokeConsent` (destructive and unbounded), `credentials.renameConnection`, `workspace.setConfigField` (arbitrary config write by a panel), `workspace.select` (forces a workspace relaunch). The old `git.getTokenForPanel` / `git.revokeTokenForPanel` RPC surface has been removed.
 
@@ -34,7 +34,7 @@ However, the implementation has substantive gaps between the declared policy mod
 
 8. **Route registry auth is coarse.** Service-registered HTTP routes default to `auth: "public"` (`routeRegistry.ts:350`); the only gate is `"admin-token"`. There is no `"panel"` / `"shell"` / `"worker"` tier, no per-method scoping, and no integration with `TokenManager` for panel tokens on route requests.
 
-9. **Historical gateway header forwarding issue is remediated.** The gateway now strips inbound `Authorization`, cookies, and `x-vibez1-*` before workerd proxying, stamps a gateway-scoped upstream bearer, and dispatches git in-process after caller-token validation.
+9. **Historical gateway header forwarding issue is remediated.** The gateway now strips inbound `Authorization`, cookies, and `x-vibestudio-*` before workerd proxying, stamps a gateway-scoped upstream bearer, and dispatches git in-process after caller-token validation.
 
 10. **`panelHttpServer`'s management API uses a static bearer token and adds `Access-Control-Allow-Origin: *`** (`panelHttpServer.ts:506`). Because the `Authorization` header is not a cookie, CSRF is unlikely; but the `*` plus wildcard `Access-Control-Allow-Headers: Authorization` lets any site harvest `/api/panels` via `fetch(…, { headers: { Authorization } })` if it can obtain or brute-force the token.
 
@@ -58,7 +58,7 @@ Nothing in this report is a panic-level remote code execution, but several items
   - Incoming `request`: looks up the exposed handler, runs under `Promise.resolve().then(...)`, and sends a response.
   - Incoming `response`: resolves/rejects the pending request; optional error codes are preserved across boundaries.
   - Incoming `event`: fan-out to event listeners by event name.
-- Transport adapters are centralized under `@vibez1/rpc/transports/*`, with shared WebSocket protocol, stream framing, and recovery helpers under `@vibez1/rpc/protocol/*`.
+- Transport adapters are centralized under `@vibestudio/rpc/transports/*`, with shared WebSocket protocol, stream framing, and recovery helpers under `@vibestudio/rpc/protocol/*`.
 - The client relies on the envelope transport for provenance. Server-side WebSocket and relay paths must stamp or verify caller identity before delivering envelopes.
 
 ### 2.2 Caller kinds and tokens (`packages/shared/src/`)
@@ -127,13 +127,13 @@ Single-port front door:
 
 Two separate IPC surfaces:
 
-- **Hand-written handlers in `src/main/index.ts`** (registered in `app.whenReady`): `vibez1:getPanelInit`, `vibez1:bridge.*`, `vibez1:openFolderDialog`, `vibez1:openExternal`, `vibez1:serviceCall`, `vibez1:navigate`, etc. Caller identity is derived from `event.sender.id` via `viewManager.findViewIdByWebContentsId` (`resolveCallerId`), defaulting to `"shell"` for the shell webContents. For `vibez1:serviceCall` the kind is set as `callerKind = callerId === "shell" ? "shell" : "panel"`.
-- **`IpcDispatcher`** — a separate `ipcMain.on("vibez1:rpc:send", …)` handler used by the shell's IPC transport. This one hardcodes `callerKind: "shell"` (line 142) regardless of which webContents is talking. Because only the shell has `nodeIntegration: true` and only the shell preload is loaded into the shell webContents, this is safe in the current layout — but there is no runtime check that the sender actually is the shell.
+- **Hand-written handlers in `src/main/index.ts`** (registered in `app.whenReady`): `vibestudio:getPanelInit`, `vibestudio:bridge.*`, `vibestudio:openFolderDialog`, `vibestudio:openExternal`, `vibestudio:serviceCall`, `vibestudio:navigate`, etc. Caller identity is derived from `event.sender.id` via `viewManager.findViewIdByWebContentsId` (`resolveCallerId`), defaulting to `"shell"` for the shell webContents. For `vibestudio:serviceCall` the kind is set as `callerKind = callerId === "shell" ? "shell" : "panel"`.
+- **`IpcDispatcher`** — a separate `ipcMain.on("vibestudio:rpc:send", …)` handler used by the shell's IPC transport. This one hardcodes `callerKind: "shell"` (line 142) regardless of which webContents is talking. Because only the shell has `nodeIntegration: true` and only the shell preload is loaded into the shell webContents, this is safe in the current layout — but there is no runtime check that the sender actually is the shell.
 
 ### 2.8 Browser/mobile/panel transport (`src/preload/wsTransport.ts`, `src/server/browserTransportEntry.ts`)
 
 - `createWsTransport({viewId, wsPort, authToken, callerKind, wsUrl?})` opens a WebSocket, sends `ws:auth`, reconnects with jittered exponential backoff on non-terminal closes. `callerKind` in the config is ignored by the server — the server derives caller kind from the token's entry.
-- `browserTransportEntry.ts` exposes `globalThis.__vibez1Transport` into panel pages served by the gateway. It reads `__vibez1GatewayToken` / `__vibez1GatewayRpcWsUrl` that `configLoader.js` populates from sessionStorage or the `__vibez1Shell.getPanelInit()` IPC call.
+- `browserTransportEntry.ts` exposes `globalThis.__vibestudioTransport` into panel pages served by the gateway. It reads `__vibestudioGatewayToken` / `__vibestudioGatewayRpcWsUrl` that `configLoader.js` populates from sessionStorage or the `__vibestudioShell.getPanelInit()` IPC call.
 
 ---
 
@@ -142,12 +142,12 @@ Two separate IPC surfaces:
 | Assumption                                                                          | Where it is made                                                          | Where it is checked                                                       | Result                                                                                                                                                                                                       |
 | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | The bearer token only lives in authenticated panel pages and the Electron renderer. | `configLoader.ts` stores it in `sessionStorage`.                          | Not rechecked anywhere.                                                   | Any XSS on any panel page exfiltrates the token and impersonates that caller.                                                                                                                                |
-| `callerKind` in the `ServiceContext` is always produced by the transport.           | `rpcServer.ts handleAuth` uses the token entry.                           | `dispatcher.dispatch` never re-validates.                                 | In IPC mode, `vibez1:serviceCall` passes an attacker-friendly heuristic kind directly to dispatch.                                                                                                         |
+| `callerKind` in the `ServiceContext` is always produced by the transport.           | `rpcServer.ts handleAuth` uses the token entry.                           | `dispatcher.dispatch` never re-validates.                                 | In IPC mode, `vibestudio:serviceCall` passes an attacker-friendly heuristic kind directly to dispatch.                                                                                                         |
 | The WS frame has already been authenticated.                                        | `handleMessage` dispatches on `msg.type`.                                 | Yes — any message before `ws:auth` is discarded and the socket is closed. | OK.                                                                                                                                                                                                          |
 | The event `fromId` of relayed messages is trustworthy.                              | Consumers of `ws:routed`/`runtime:*` events treat `fromId` as the origin. | Neither WS nor HTTP relay paths overwrite `fromId` with the caller's id.  | Sender can impersonate any other caller on events.                                                                                                                                                           |
 | Legacy DO dispatch token envelope is required for DO calls.                         | Superseded architecture.                                                  | Removed from source.                                                      | DO calls now use unified RPC target IDs plus the server-owned workerd relay.                                                                                                                                 |
 | The gateway's admin token is opaque to downstream proxies.                          | `gateway.ts proxyRequest`.                                                | Headers are forwarded verbatim (`gateway.ts:240`).                        | `Authorization: Bearer <admin>` reaches workerd if a panel/worker route is visited with it.                                                                                                                  |
-| Only the shell IPC renderer hits `vibez1:rpc:send`.                               | `ipcDispatcher.ts:86`.                                                    | No `event.sender.id` check.                                               | In principle any webContents with `preload: "index.cjs"` (the shell preload) bypasses the callerKind heuristic — today only the shell has that preload, so it's a structural invariant, not an enforced one. |
+| Only the shell IPC renderer hits `vibestudio:rpc:send`.                               | `ipcDispatcher.ts:86`.                                                    | No `event.sender.id` check.                                               | In principle any webContents with `preload: "index.cjs"` (the shell preload) bypasses the callerKind heuristic — today only the shell has that preload, so it's a structural invariant, not an enforced one. |
 | Panels can only bind to their own context.                                          | `ensurePanelToken` registers the caller context.                          | `fs.bindContext` overrides with any string.                               | Cross-context fs access by pivoting `contextId`.                                                                                                                                                             |
 
 ---
@@ -215,7 +215,7 @@ same authenticated RPC relay used by other participants.
 - Snippet (`main/index.ts`):
 
   ```ts
-  ipcMain.handle("vibez1:serviceCall", async (event, method, args) => {
+  ipcMain.handle("vibestudio:serviceCall", async (event, method, args) => {
     const callerId = resolveCallerId(event);
     const parsed = parseServiceMethod(method);
     if (!parsed) throw new Error(...);
@@ -226,7 +226,7 @@ same authenticated RPC relay used by other participants.
 
   `dispatcher.dispatch` only validates zod args. There is no `checkServiceAccess` call on this path.
 
-- Attack path in Electron mode: sandboxed panel calls `__vibez1Shell.serviceCall("menu.X", …)` or `app.relaunch` or `settings.setModelRoles(...)`, or any service declared `{ allowed: ["shell"] }`. Even if the service handler `throw`s on unknown method, reaching the handler means policy was bypassed.
+- Attack path in Electron mode: sandboxed panel calls `__vibestudioShell.serviceCall("menu.X", …)` or `app.relaunch` or `settings.setModelRoles(...)`, or any service declared `{ allowed: ["shell"] }`. Even if the service handler `throw`s on unknown method, reaching the handler means policy was bypassed.
 - Remediation: add `checkServiceAccess(parsed.service, callerKind, dispatcher, parsed.method)` before `dispatcher.dispatch`. Ideally move the check inside `ServiceDispatcher.dispatch` itself so every transport inherits it (WS server can then stop calling it at the handler level).
 
 ### 4.6 HIGH — `IpcDispatcher` hard-codes `callerKind: "shell"`
@@ -235,7 +235,7 @@ same authenticated RPC relay used by other participants.
 - Snippet:
 
   ```ts
-  ipcMain.on("vibez1:rpc:send", (event, targetId, message) => {
+  ipcMain.on("vibestudio:rpc:send", (event, targetId, message) => {
     this.handleMessage(event.sender, "shell", targetId, message);
   });
   ```
@@ -243,7 +243,7 @@ same authenticated RPC relay used by other participants.
   `handleMessage` uses `callerKind: "shell" as const` for local dispatch and forwards to `serverClient.call` for server services (line 139) with no identity token attached.
 
 - Attack path: any webContents that happens to have the shell preload loaded (currently only the shell, but this is a convention, not an enforcement) can run any service as `shell`. There is no `event.sender.id === shellContents.id` check.
-- Remediation: guard `ipcMain.on("vibez1:rpc:send", …)` with `if (event.sender.id !== viewManager.getShellWebContents().id) return;`. Also consider not trusting a bare `"shell"` kind for server-side forwarding — the `serverClient.call` path should attach a bearer token that the server validates as admin/shell.
+- Remediation: guard `ipcMain.on("vibestudio:rpc:send", …)` with `if (event.sender.id !== viewManager.getShellWebContents().id) return;`. Also consider not trusting a bare `"shell"` kind for server-side forwarding — the `serverClient.call` path should attach a bearer token that the server validates as admin/shell.
 
 ### 4.7 HIGH — Event `fromId` spoofing in relay
 
@@ -297,7 +297,7 @@ are routed only by the server-owned workerd relay.
 ### 4.11 HIGH — Electron-local services declared `{ allowed: ["shell"] }` are reachable from panels via IPC
 
 - Files: `src/main/services/{menuService,settingsService,adblockService,appService,panelShellService,viewService,remoteCredService}.ts`, `src/main/index.ts:821`.
-- All of these declare `policy: { allowed: ["shell"] }`, but the `vibez1:serviceCall` handler never checks policy (see 4.5). Panels can invoke `settings.getData`, `view.*` (focus/blur/close panels), `menu.*`, `adblock.*`, `app.*`, `panel-shell.*`.
+- All of these declare `policy: { allowed: ["shell"] }`, but the `vibestudio:serviceCall` handler never checks policy (see 4.5). Panels can invoke `settings.getData`, `view.*` (focus/blur/close panels), `menu.*`, `adblock.*`, `app.*`, `panel-shell.*`.
 - Attack path: as 4.5. Specifically, `settings.getData()` can leak configured model role identifiers (which may include provider keys depending on the concrete implementation of `settingsService.ts` in main — worth re-checking outside this scope). `view.close` / `view.focus` let a panel influence the panel/shell UI tree, enabling a fake-UI phishing attack.
 - Remediation: enforce policy in the IPC dispatch surface (same patch as 4.5).
 
@@ -322,7 +322,7 @@ are routed only by the server-owned workerd relay.
   );
   ```
 
-- Current code strips `Authorization`, `Cookie`, `Proxy-Authorization`, and `x-vibez1-*` before forwarding to workerd, then injects a gateway-scoped workerd bearer. This finding is remediated in the gateway path.
+- Current code strips `Authorization`, `Cookie`, `Proxy-Authorization`, and `x-vibestudio-*` before forwarding to workerd, then injects a gateway-scoped workerd bearer. This finding is remediated in the gateway path.
 
 ### 4.13 MEDIUM — `panelHttpServer` management API is CORS-wide-open
 
@@ -356,7 +356,7 @@ are routed only by the server-owned workerd relay.
 ### 4.16 MEDIUM — `connection.json` and native-messaging hosts are world-readable by the user
 
 - File: `src/server/headlessServiceRegistration.ts:65-83`.
-- `writeFileSync(..., { mode: 0o600 })` is used for `connection.json` itself, which is correct. However, the browser-manifest JSON files (`getBrowserManifestTargets`) are written with default mode and point `path:` to the native-host script at `~/.config/vibez1/native-messaging-host.mjs`. Any process running as the user can read the admin token out of `connection.json` by running the native host.
+- `writeFileSync(..., { mode: 0o600 })` is used for `connection.json` itself, which is correct. However, the browser-manifest JSON files (`getBrowserManifestTargets`) are written with default mode and point `path:` to the native-host script at `~/.config/vibestudio/native-messaging-host.mjs`. Any process running as the user can read the admin token out of `connection.json` by running the native host.
 - Attack path: malware with user-level privilege (not a root escalation, but a classic "local malware steals tokens") gets a stable admin bearer. Rotating the admin token (`tokens.rotateAdmin`) persists the new token back to the same path, so malware that retains access continues to read.
 - Remediation: this is largely a property of storing long-lived tokens on disk for convenience. Consider:
   - Requiring the native host to do a user-interaction check (e.g., prompt) on each first read.
@@ -416,7 +416,7 @@ are routed only by the server-owned workerd relay.
 
 ### 4.23 LOW — `panelHttpServer` serves panel HTML that embeds an inline script if configured poorly
 
-- File: `src/server/panelHttpServer.ts:622-692`. The server serves `build.html` with no CSP header. Combined with `/__transport.js` served as `public, max-age=3600` and with `/__loader.js`, a panel page has full access to `__vibez1GatewayToken`.
+- File: `src/server/panelHttpServer.ts:622-692`. The server serves `build.html` with no CSP header. Combined with `/__transport.js` served as `public, max-age=3600` and with `/__loader.js`, a panel page has full access to `__vibestudioGatewayToken`.
 - Remediation: emit a strict CSP on panel HTML responses (`default-src 'none'; script-src 'self'; connect-src ws://externalHost:*;`). This reduces XSS → token exfil risk.
 
 ### 4.24 LOW — WS auth timeout is lenient
@@ -438,8 +438,8 @@ are routed only by the server-owned workerd relay.
 
 ### 4.27 LOW — Browser transport caches token in `sessionStorage`
 
-- File: `src/server/configLoader.ts`. `sessionStorage.setItem("__vibez1PanelInit", JSON.stringify(cfg))` stores the full panel init (including `gatewayConfig.token`) in the panel's sessionStorage. Any XSS on the panel exfiltrates it.
-- Remediation: avoid persisting the token: re-fetch via `__vibez1Shell.getPanelInit()` on each page load (already the code path when the shell is present). For gateway-served panels, consider a short-lived, HttpOnly cookie bound to the gateway origin plus a server-side mapping keyed by panelId, rather than injecting the bearer into JS globals.
+- File: `src/server/configLoader.ts`. `sessionStorage.setItem("__vibestudioPanelInit", JSON.stringify(cfg))` stores the full panel init (including `gatewayConfig.token`) in the panel's sessionStorage. Any XSS on the panel exfiltrates it.
+- Remediation: avoid persisting the token: re-fetch via `__vibestudioShell.getPanelInit()` on each page load (already the code path when the shell is present). For gateway-served panels, consider a short-lived, HttpOnly cookie bound to the gateway origin plus a server-side mapping keyed by panelId, rather than injecting the bearer into JS globals.
 
 ### 4.28 LOW — Legacy worker DO dispatch handler logs `doMethod` and `objectKey`
 
@@ -475,7 +475,7 @@ are routed only by the server-owned workerd relay.
 
 1. **Enforce policy inside `ServiceDispatcher.dispatch`.** Add a `ctx.callerKind` check against the resolved policy before invoking the handler. Every transport (WS, HTTP, Electron IPC, IpcDispatcher, serverClient forward) then inherits the check. Delete the redundant call in `rpcServer.handleRpc`.
 
-2. **Patch the IPC bypass.** `src/main/index.ts` `vibez1:serviceCall` handler must call `checkServiceAccess` (or drop into the unified dispatch path from #1). Similarly, sanity-check `event.sender.id === shellContents.id` in `IpcDispatcher`.
+2. **Patch the IPC bypass.** `src/main/index.ts` `vibestudio:serviceCall` handler must call `checkServiceAccess` (or drop into the unified dispatch path from #1). Similarly, sanity-check `event.sender.id === shellContents.id` in `IpcDispatcher`.
 
 3. **Re-audit each server service's method list** for panel-reachable destructive/credential methods. Specifically:
    - `authTokens.getProviderToken / persist / logout` → tighten to `shell/worker/server`.
@@ -497,7 +497,7 @@ are routed only by the server-owned workerd relay.
 
 9. **CSP on panel HTML.** `default-src 'none'; script-src 'self'; connect-src <gateway-url>; img-src 'self' data:; style-src 'self' 'unsafe-inline';` — at minimum `script-src 'self'` to frustrate token exfil via injected JS.
 
-10. **Stop persisting the bearer in `sessionStorage`.** The `configLoader` already re-fetches from `__vibez1Shell` when available; make that the only path. For gateway-served panels, issue a per-page ephemeral ticket that is swapped for the real bearer via a single-use XHR the panel JS can't re-read.
+10. **Stop persisting the bearer in `sessionStorage`.** The `configLoader` already re-fetches from `__vibestudioShell` when available; make that the only path. For gateway-served panels, issue a per-page ephemeral ticket that is swapped for the real bearer via a single-use XHR the panel JS can't re-read.
 
 11. **Rate-limit the RPC server.** Per-caller token bucket at the WS layer; tighter bucket on writes to `webhooks.subscribe`, `push.register`, `build.recompute`, and unified DO-target calls.
 
@@ -521,80 +521,80 @@ are routed only by the server-owned workerd relay.
 
 Bridge/transport core:
 
-- `/home/werg/vibez1/packages/rpc/src/types.ts`
-- `/home/werg/vibez1/packages/rpc/src/bridge.ts`
-- `/home/werg/vibez1/packages/rpc/src/transport-helpers.ts`
-- `/home/werg/vibez1/packages/rpc/src/index.ts`
-- `/home/werg/vibez1/packages/rpc/src/bridge.test.ts` (skimmed)
+- `/home/werg/vibestudio/packages/rpc/src/types.ts`
+- `/home/werg/vibestudio/packages/rpc/src/bridge.ts`
+- `/home/werg/vibestudio/packages/rpc/src/transport-helpers.ts`
+- `/home/werg/vibestudio/packages/rpc/src/index.ts`
+- `/home/werg/vibestudio/packages/rpc/src/bridge.test.ts` (skimmed)
 
 Server RPC:
 
-- `/home/werg/vibez1/src/server/rpcServer.ts`
-- `/home/werg/vibez1/src/server/wsServerTransport.ts`
-- `/home/werg/vibez1/src/server/rpcServer.test.ts`
-- `/home/werg/vibez1/src/server/rpcServer.httpRpc.test.ts`
-- `/home/werg/vibez1/src/server/workerdRpcRelay.ts`
+- `/home/werg/vibestudio/src/server/rpcServer.ts`
+- `/home/werg/vibestudio/src/server/wsServerTransport.ts`
+- `/home/werg/vibestudio/src/server/rpcServer.test.ts`
+- `/home/werg/vibestudio/src/server/rpcServer.httpRpc.test.ts`
+- `/home/werg/vibestudio/src/server/workerdRpcRelay.ts`
 
 Gateway / route registry / panel HTTP:
 
-- `/home/werg/vibez1/src/server/gateway.ts`
-- `/home/werg/vibez1/src/server/routeRegistry.ts`
-- `/home/werg/vibez1/src/server/routeRegistry.test.ts` (partial)
-- `/home/werg/vibez1/src/server/panelHttpServer.ts`
-- `/home/werg/vibez1/src/server/panelHttpServer.test.ts`
-- `/home/werg/vibez1/src/server/serviceWithHttpRoutes.ts`
-- `/home/werg/vibez1/src/server/browserTransportEntry.ts`
-- `/home/werg/vibez1/src/server/headlessServiceRegistration.ts`
-- `/home/werg/vibez1/src/server/panelRuntimeRegistration.ts`
-- `/home/werg/vibez1/src/server/configLoader.ts`
+- `/home/werg/vibestudio/src/server/gateway.ts`
+- `/home/werg/vibestudio/src/server/routeRegistry.ts`
+- `/home/werg/vibestudio/src/server/routeRegistry.test.ts` (partial)
+- `/home/werg/vibestudio/src/server/panelHttpServer.ts`
+- `/home/werg/vibestudio/src/server/panelHttpServer.test.ts`
+- `/home/werg/vibestudio/src/server/serviceWithHttpRoutes.ts`
+- `/home/werg/vibestudio/src/server/browserTransportEntry.ts`
+- `/home/werg/vibestudio/src/server/headlessServiceRegistration.ts`
+- `/home/werg/vibestudio/src/server/panelRuntimeRegistration.ts`
+- `/home/werg/vibestudio/src/server/configLoader.ts`
 
 Service policy / dispatcher / token manager:
 
-- `/home/werg/vibez1/packages/shared/src/servicePolicy.ts`
-- `/home/werg/vibez1/packages/shared/src/serviceDispatcher.ts`
-- `/home/werg/vibez1/packages/shared/src/serviceDefinition.ts`
-- `/home/werg/vibez1/packages/shared/src/tokenManager.ts`
-- `/home/werg/vibez1/packages/shared/src/managedService.ts`
-- `/home/werg/vibez1/packages/shared/src/serviceContainer.ts`
-- `/home/werg/vibez1/packages/shared/src/fsService.ts` (partial)
-- `/home/werg/vibez1/packages/shared/src/ws/protocol.ts`
-- `/home/werg/vibez1/packages/shared/src/db/databaseManager.ts`
-- `/home/werg/vibez1/src/main/servicePolicy.test.ts`
-- `/home/werg/vibez1/src/main/serviceDispatcher.test.ts`
-- `/home/werg/vibez1/src/main/serviceDefinition.test.ts`
-- `/home/werg/vibez1/src/main/ipc/dbHandlers.test.ts`
+- `/home/werg/vibestudio/packages/shared/src/servicePolicy.ts`
+- `/home/werg/vibestudio/packages/shared/src/serviceDispatcher.ts`
+- `/home/werg/vibestudio/packages/shared/src/serviceDefinition.ts`
+- `/home/werg/vibestudio/packages/shared/src/tokenManager.ts`
+- `/home/werg/vibestudio/packages/shared/src/managedService.ts`
+- `/home/werg/vibestudio/packages/shared/src/serviceContainer.ts`
+- `/home/werg/vibestudio/packages/shared/src/fsService.ts` (partial)
+- `/home/werg/vibestudio/packages/shared/src/ws/protocol.ts`
+- `/home/werg/vibestudio/packages/shared/src/db/databaseManager.ts`
+- `/home/werg/vibestudio/src/main/servicePolicy.test.ts`
+- `/home/werg/vibestudio/src/main/serviceDispatcher.test.ts`
+- `/home/werg/vibestudio/src/main/serviceDefinition.test.ts`
+- `/home/werg/vibestudio/src/main/ipc/dbHandlers.test.ts`
 
 Services sampled:
 
-- `/home/werg/vibez1/src/server/services/gitService.ts`
-- `/home/werg/vibez1/src/server/services/buildService.ts`
-- `/home/werg/vibez1/src/server/services/workspaceService.ts`
-- `/home/werg/vibez1/src/server/services/workerService.ts`
-- `/home/werg/vibez1/src/server/services/webhookService.ts`
-- `/home/werg/vibez1/src/server/services/pushService.ts`
-- `/home/werg/vibez1/src/server/services/settingsServiceStandalone.ts`
-- `/home/werg/vibez1/src/server/services/credentialService.ts`
-- `/home/werg/vibez1/src/server/services/authService.ts`
-- `/home/werg/vibez1/src/server/services/authFlowService.ts`
-- `/home/werg/vibez1/src/server/services/tokensService.ts`
-- `/home/werg/vibez1/src/server/services/metaService.ts`
-- `/home/werg/vibez1/src/server/services/workerLogService.ts`
-- `/home/werg/vibez1/src/server/services/imageService.ts` (partial)
+- `/home/werg/vibestudio/src/server/services/gitService.ts`
+- `/home/werg/vibestudio/src/server/services/buildService.ts`
+- `/home/werg/vibestudio/src/server/services/workspaceService.ts`
+- `/home/werg/vibestudio/src/server/services/workerService.ts`
+- `/home/werg/vibestudio/src/server/services/webhookService.ts`
+- `/home/werg/vibestudio/src/server/services/pushService.ts`
+- `/home/werg/vibestudio/src/server/services/settingsServiceStandalone.ts`
+- `/home/werg/vibestudio/src/server/services/credentialService.ts`
+- `/home/werg/vibestudio/src/server/services/authService.ts`
+- `/home/werg/vibestudio/src/server/services/authFlowService.ts`
+- `/home/werg/vibestudio/src/server/services/tokensService.ts`
+- `/home/werg/vibestudio/src/server/services/metaService.ts`
+- `/home/werg/vibestudio/src/server/services/workerLogService.ts`
+- `/home/werg/vibestudio/src/server/services/imageService.ts` (partial)
 - `docs/architecture/storage.md`
-- `/home/werg/vibez1/src/server/services/panelService.ts` (partial)
+- `/home/werg/vibestudio/src/server/services/panelService.ts` (partial)
 - Main-service policy headers: `menuService.ts`, `settingsService.ts`, `adblockService.ts`, `appService.ts`, `panelShellService.ts`, `viewService.ts`, `remoteCredService.ts`, `authService.ts`, `browserService.ts`, `browserDataService.ts` (policy lines only).
 
 Electron IPC:
 
-- `/home/werg/vibez1/src/main/ipcDispatcher.ts`
-- `/home/werg/vibez1/src/main/index.ts` (ipc handler region, lines ~680-860)
-- `/home/werg/vibez1/src/main/viewManager.ts` (preload region, lines ~120-260)
+- `/home/werg/vibestudio/src/main/ipcDispatcher.ts`
+- `/home/werg/vibestudio/src/main/index.ts` (ipc handler region, lines ~680-860)
+- `/home/werg/vibestudio/src/main/viewManager.ts` (preload region, lines ~120-260)
 
 Preload / browser transport:
 
-- `/home/werg/vibez1/src/preload/ipcTransport.ts`
-- `/home/werg/vibez1/src/preload/wsTransport.ts`
-- `/home/werg/vibez1/src/preload/panelPreload.ts`
-- `/home/werg/vibez1/src/preload/index.ts`
+- `/home/werg/vibestudio/src/preload/ipcTransport.ts`
+- `/home/werg/vibestudio/src/preload/wsTransport.ts`
+- `/home/werg/vibestudio/src/preload/panelPreload.ts`
+- `/home/werg/vibestudio/src/preload/index.ts`
 
-Out of scope but touched: workerd-runtime verifier surface (searched, confirmed no token verification); main/services tree (policy lines only); credential/audit/auth-flow (briefly, for policy surface); `/home/werg/vibez1/packages/shared/src/webhooks/*` (not inspected — flagged for the credential audit).
+Out of scope but touched: workerd-runtime verifier surface (searched, confirmed no token verification); main/services tree (policy lines only); credential/audit/auth-flow (briefly, for policy surface); `/home/werg/vibestudio/packages/shared/src/webhooks/*` (not inspected — flagged for the credential audit).

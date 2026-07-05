@@ -1,6 +1,6 @@
-import type { AppCapability } from "@vibez1/shared/unitManifest";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import { isAuthorizedChromeAppCaller } from "@vibez1/shared/chromeTrust";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import type { ViewManager } from "../viewManager.js";
 
 type AppViewInfo = NonNullable<ReturnType<ViewManager["getViewInfo"]>>;

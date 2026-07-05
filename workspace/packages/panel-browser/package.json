@@ -10,7 +10,7 @@
     "@workspace/runtime": "workspace:*"
   },
   "devDependencies": {
-    "@vibez1/rpc": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
     "typescript": "^5.9.3"
   }
 }

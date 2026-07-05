@@ -13,18 +13,18 @@ body,
   box-sizing: border-box;
 }
 
-.vibez1-terminal-host {
+.vibestudio-terminal-host {
   contain: layout paint;
 }
 
-.vibez1-terminal-host .xterm {
+.vibestudio-terminal-host .xterm {
   width: 100%;
   max-width: 100%;
   height: 100%;
 }
 
-.vibez1-terminal-host .xterm-screen,
-.vibez1-terminal-host .xterm-rows,
-.vibez1-terminal-host .xterm-rows > div {
+.vibestudio-terminal-host .xterm-screen,
+.vibestudio-terminal-host .xterm-rows,
+.vibestudio-terminal-host .xterm-rows > div {
   max-width: 100% !important;
 }

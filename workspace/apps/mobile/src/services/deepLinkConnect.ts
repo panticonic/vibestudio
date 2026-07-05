@@ -1,4 +1,4 @@
-// Parsing + validation for `vibez1://connect` WebRTC pairing deep links.
+// Parsing + validation for `vibestudio://connect` WebRTC pairing deep links.
 //
 // The deep-link flow is user-triggered onboarding (scan QR, tap link), which
 // means any installed Android app can fire one. Without validation, an attacker
@@ -16,7 +16,7 @@
 // still responsible for asking the user to confirm before overwriting
 // credentials — this module only decides whether the link is structurally safe.
 
-import { type ConnectLink, parseConnectLink } from "@vibez1/shared/connect";
+import { type ConnectLink, parseConnectLink } from "@vibestudio/shared/connect";
 
 export type ConnectDeepLinkResult = ConnectLink;
 

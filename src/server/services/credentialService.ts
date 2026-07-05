@@ -8,8 +8,8 @@ import {
   randomUUID,
 } from "node:crypto";
 import * as http from "node:http";
-import { createDevLogger } from "@vibez1/dev-log";
-import type { EventName, EventPayloads, EventService } from "@vibez1/shared/eventsService";
+import { createDevLogger } from "@vibestudio/dev-log";
+import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { AuditLog } from "../../../packages/shared/src/credentials/audit.js";
 import {
@@ -292,12 +292,12 @@ function resolveDefaultRedirectStrategy(
   if (requested) return requested;
   // The "public" default routes the IdP through the callback relay (parity: desktop
   // + mobile share it). But the relay is optional — `pnpm dev` sets no
-  // VIBEZ1_RELAY_OAUTH_BASE_URL — and "public" then throws redirect_unavailable on
+  // VIBESTUDIO_RELAY_OAUTH_BASE_URL — and "public" then throws redirect_unavailable on
   // every connect that doesn't pass an explicit redirect. Fall back to loopback when
   // no relay is configured so co-located dev OAuth works; production configures the
   // relay and keeps the parity path. (Remote sessions still need the relay set — a
   // server-loopback redirect is unreachable from a remote browser by design.)
-  const relay = process.env["VIBEZ1_RELAY_OAUTH_BASE_URL"];
+  const relay = process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"];
   return relay && relay.trim() ? "public" : "loopback";
 }
 
@@ -315,11 +315,11 @@ function resolveDefaultRedirectStrategy(
  * that no third party can reach.
  */
 function buildRelayOAuthCallbackUrl(): string {
-  const base = process.env["VIBEZ1_RELAY_OAUTH_BASE_URL"];
+  const base = process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"];
   if (!base || !base.trim()) {
     throw new OAuthConnectionError(
       "redirect_unavailable",
-      "OAuth callback relay is not configured — set VIBEZ1_RELAY_OAUTH_BASE_URL to the relay origin."
+      "OAuth callback relay is not configured — set VIBESTUDIO_RELAY_OAUTH_BASE_URL to the relay origin."
     );
   }
   return `${base.trim().replace(/\/+$/, "")}${PUBLIC_OAUTH_CALLBACK_PATH}`;

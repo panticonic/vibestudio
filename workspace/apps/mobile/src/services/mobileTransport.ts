@@ -4,7 +4,7 @@
  * After the native bootstrap pairs over WebRTC and reloads onto this workspace
  * app, the JS pipe is gone but the signaling room + the server answerer persist.
  * This client re-pairs to the SAME room with the stored shell credential
- * (`@vibez1/mobile-webrtc` `reconnectViaWebRtc`) and drives ALL RPC over that
+ * (`@vibestudio/mobile-webrtc` `reconnectViaWebRtc`) and drives ALL RPC over that
  * `WebRtcSession`. There is no WebSocket transport on mobile anymore — the
  * server is only reachable through the pinned, fail-closed DTLS pipe.
  */
@@ -15,21 +15,21 @@ import type {
   RpcConnectionStatus,
   RpcEventContext,
   RpcStreamOptions,
-} from "@vibez1/rpc";
-import type { RecoveryKind } from "@vibez1/rpc/protocol/recoveryCoordinator";
-import type { WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
-import type { PanelEntityId } from "@vibez1/shared/panel/ids";
-import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+} from "@vibestudio/rpc";
+import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
+import type { WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
+import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
+import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   loadShellCredential,
   reconnectViaWebRtc,
   type WebRtcConnection,
-} from "@vibez1/mobile-webrtc";
+} from "@vibestudio/mobile-webrtc";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
-  console.log(`[Vibez1MobileSmoke] phase=${phase}${suffix}`);
+  console.log(`[VibestudioMobileSmoke] phase=${phase}${suffix}`);
 }
 
 export type ConnectionStatus = RpcConnectionStatus;

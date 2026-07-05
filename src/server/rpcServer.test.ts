@@ -4,18 +4,23 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { RpcServer } from "./rpcServer.js";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WsClientState } from "./rpcServer.js";
-import { createVerifiedCaller, type ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityKind, EntityRecord } from "@vibez1/shared/runtime/entitySpec";
-import { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
-import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@vibez1/rpc";
-import { FRAME_DATA, FRAME_END, FRAME_ERROR, FRAME_HEAD } from "@vibez1/rpc/protocol/streamCodec";
+import { createVerifiedCaller, type ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityKind, EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
+import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
+import { envelopeFromMessage, type RpcEnvelope, type RpcMessage } from "@vibestudio/rpc";
+import {
+  FRAME_DATA,
+  FRAME_END,
+  FRAME_ERROR,
+  FRAME_HEAD,
+} from "@vibestudio/rpc/protocol/streamCodec";
 import {
   decodeControlFrame,
   encodeControlFrame,
   SESSION_NOT_OPEN_CLOSE_CODE,
   type SessionControlFrame,
-} from "@vibez1/rpc/protocol/sessionNegotiation";
+} from "@vibestudio/rpc/protocol/sessionNegotiation";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
 
 function makeRecord(
@@ -1480,7 +1485,7 @@ describe("RpcServer relay behavior", () => {
     // A connectionless DO participant (e.g. an EvalDO subscribed to a channel via
     // connectViaRpc) holds NO ws connection. Pre-fix, this event was silently dropped
     // (getCallerConnections empty → the WS loop no-ops), hanging the subscriber.
-    handleRoute(server, createClient(), "do:vibez1/internal:EvalDO:k", {
+    handleRoute(server, createClient(), "do:vibestudio/internal:EvalDO:k", {
       type: "event",
       fromId: "panel:nav-a",
       event: "channel:message",

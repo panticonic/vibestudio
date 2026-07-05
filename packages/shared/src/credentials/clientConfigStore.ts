@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { getCentralDataPath } from "@vibez1/env-paths";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   assertValidStoreIdentifier,
   EncryptedJsonStore,

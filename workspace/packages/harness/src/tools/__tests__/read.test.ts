@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { Value } from "@sinclair/typebox/value";
-import type { VcsProvItem, VcsProvenanceForFileResult } from "@vibez1/shared/serviceSchemas/vcs";
+import type { VcsProvItem, VcsProvenanceForFileResult } from "@vibestudio/shared/serviceSchemas/vcs";
 import { createReadTool, type ReadProvenanceDeps } from "../read.js";
 import { StubFs } from "./stub-fs.js";
 

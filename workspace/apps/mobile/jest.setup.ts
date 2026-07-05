@@ -83,7 +83,7 @@ jest.mock("react-native-safe-area-context", () => ({
 }));
 
 const { NativeModules } = jest.requireActual("react-native");
-NativeModules.Vibez1MobileHost = {
+NativeModules.VibestudioMobileHost = {
   firebaseConfigured: true,
   clearCredentials: jest.fn(async () => undefined),
   resetToNativeBootstrap: jest.fn(async () => ({ reloading: true })),
@@ -124,7 +124,7 @@ NativeModules.Vibez1MobileHost = {
     platform: "ios",
     url: "https://server.example/_a/rn-key/index.ios.bundle",
     path: "index.ios.bundle",
-    localPath: "/cache/vibez1-rn/rn-key/index.ios.bundle",
+    localPath: "/cache/vibestudio-rn/rn-key/index.ios.bundle",
   })),
   activatePreparedAppBundle: jest.fn(async () => ({ activated: false })),
 };

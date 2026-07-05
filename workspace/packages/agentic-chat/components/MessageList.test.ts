@@ -379,7 +379,7 @@ describe("MessageList typing indicators (roster-based)", () => {
   it("expands invocation details with full code arguments and flags unhydrated stored results", async () => {
     const longCode = "const answer = 42;\n".repeat(40);
     const storedResult = {
-      protocol: "vibez1.blob-ref.v1",
+      protocol: "vibestudio.blob-ref.v1",
       digest: "result-digest",
       size: 2048,
       encoding: "json",

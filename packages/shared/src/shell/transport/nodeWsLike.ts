@@ -1,5 +1,5 @@
 import type { WebSocket } from "ws";
-import type { WsLike } from "@vibez1/rpc/protocol/wsAdapter";
+import type { WsLike } from "@vibestudio/rpc/protocol/wsAdapter";
 
 /**
  * Adapt a Node `ws` WebSocket to the framework-agnostic WsLike interface that the RPC client

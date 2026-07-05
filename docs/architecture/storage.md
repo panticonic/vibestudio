@@ -1,6 +1,6 @@
 # Storage Architecture
 
-Vibez1 has one durable SQL primitive: workerd Durable Object storage. User
+Vibestudio has one durable SQL primitive: workerd Durable Object storage. User
 code that needs persistence should own a Durable Object and use `this.sql`
 inside that object. There is no userland database RPC service and no native
 SQLite module in the host process.
@@ -21,10 +21,10 @@ The host stores DO SQLite files under:
 <statePath>/.databases/workerd-do/<source_class_unique_key>/<object_hash>.sqlite
 ```
 
-## Internal Vibez1 DOs
+## Internal Vibestudio DOs
 
 Framework-owned storage is implemented as internal DO classes in
-`src/server/internalDOs/`, registered with source `vibez1/internal`.
+`src/server/internalDOs/`, registered with source `vibestudio/internal`.
 
 | Class | Service | Object key | Owns |
 |---|---|---|---|
@@ -40,7 +40,7 @@ behavior run against real workerd, not the `sql.js` unit harness.
 
 `src/server/internalDOs/internalDoLoader.ts` bundles the internal DO entrypoint
 with esbuild and gives it a stable content hash. `WorkerdManager` treats
-`vibez1/internal` as a reserved source, registers those classes alongside
+`vibestudio/internal` as a reserved source, registers those classes alongside
 workspace DO classes, and skips public route registration for them.
 
 To add another internal store:
@@ -68,7 +68,7 @@ directory, **outside the workspace source tree**:
 ```
 
 `<userData>` is the per-workspace user-data dir resolved via `getUserDataPath()`
-from `@vibez1/env-paths` (see [STATE_DIRECTORY.md](../../STATE_DIRECTORY.md)).
+from `@vibestudio/env-paths` (see [STATE_DIRECTORY.md](../../STATE_DIRECTORY.md)).
 Tmp leftovers are swept on service startup.
 
 ### API surface

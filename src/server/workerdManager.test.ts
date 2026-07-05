@@ -9,8 +9,8 @@ import {
   type WorkerdManagerDeps,
 } from "./workerdManager.js";
 import { spawn } from "child_process";
-import { findServicePort } from "@vibez1/port-utils";
-import { SingletonRegistry } from "@vibez1/shared/workspace/singletonRegistry";
+import { findServicePort } from "@vibestudio/port-utils";
+import { SingletonRegistry } from "@vibestudio/shared/workspace/singletonRegistry";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import { RouteRegistry } from "./routeRegistry.js";
 import * as fs from "node:fs";
@@ -53,7 +53,7 @@ vi.mock("child_process", () => ({
 }));
 
 // Mock port-utils
-vi.mock("@vibez1/port-utils", () => ({
+vi.mock("@vibestudio/port-utils", () => ({
   findServicePort: vi.fn(async (service: string) =>
     service === "workerdInspector" ? 49652 : 49552
   ),
@@ -617,11 +617,11 @@ describe("WorkerdManager", () => {
 
       expect(mgr.getPort()).toBe(49553);
       expect(fetchMock).toHaveBeenCalledWith(
-        "http://127.0.0.1:49552/__vibez1_workerd_ready",
+        "http://127.0.0.1:49552/__vibestudio_workerd_ready",
         expect.any(Object)
       );
       expect(fetchMock).toHaveBeenCalledWith(
-        "http://127.0.0.1:49553/__vibez1_workerd_ready",
+        "http://127.0.0.1:49553/__vibestudio_workerd_ready",
         expect.any(Object)
       );
     });
@@ -707,7 +707,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps({
         bindRuntimeImage,
         getBuildByKey: vi.fn(() => null),
-        statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-runtime-image-error-")),
+        statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-image-error-")),
       });
       const mgr = new WorkerdManager(deps);
 
@@ -915,7 +915,7 @@ describe("WorkerdManager", () => {
 
   describe("restart lifecycle hooks and boot generation", () => {
     it("skips restart hooks on initial start but emits them for real restarts", async () => {
-      const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-workerd-test-"));
+      const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-test-"));
       const mgr = new WorkerdManager(createMockDeps({ statePath }));
       const begin = vi.fn();
       const ready = vi.fn();
@@ -986,7 +986,7 @@ describe("WorkerdManager", () => {
           {
             headers: {
               Authorization: "Bearer mock-workerd-gateway-token",
-              "X-Vibez1-Dispatch-Secret": mgr.getDispatchSecret(),
+              "X-Vibestudio-Dispatch-Secret": mgr.getDispatchSecret(),
             },
           }
         ),

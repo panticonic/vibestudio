@@ -36,7 +36,7 @@
   --intent-consent-surface: var(--iris-a3);
   --intent-consent-border: var(--iris-a6);
 
-  /* Vibez1 brand language: monochrome mark, cool neutral surfaces, warm spark. */
+  /* Vibestudio brand language: monochrome mark, cool neutral surfaces, warm spark. */
   --brand-ink: var(--gray-12);
   --brand-ink-contrast: var(--gray-1);
   --brand-surface: var(--gray-12);
@@ -98,7 +98,7 @@
   --brand-tile-shadow: 0 8px 24px var(--gray-a4), 0 2px 8px var(--gray-a3);
 }
 
-.vibez1-logo {
+.vibestudio-logo {
   position: relative;
   display: inline-block;
   flex-shrink: 0;
@@ -106,18 +106,18 @@
   vertical-align: middle;
 }
 
-.vibez1-logo-tile {
+.vibestudio-logo-tile {
   border: 1px solid var(--brand-tile-border);
   border-radius: 22%;
   background: var(--surface-raised);
   box-shadow: var(--brand-tile-shadow);
 }
 
-.vibez1-logo-mark {
+.vibestudio-logo-mark {
   background: transparent;
 }
 
-.vibez1-logo-img {
+.vibestudio-logo-img {
   position: absolute;
   inset: 0;
   display: block;
@@ -126,23 +126,23 @@
   object-fit: contain;
 }
 
-.vibez1-logo-tile .vibez1-logo-img {
+.vibestudio-logo-tile .vibestudio-logo-img {
   object-fit: cover;
 }
 
-.radix-themes:where(.light, .light-theme) .vibez1-logo-img-dark,
-.radix-themes:where(.dark, .dark-theme) .vibez1-logo-img-light {
+.radix-themes:where(.light, .light-theme) .vibestudio-logo-img-dark,
+.radix-themes:where(.dark, .dark-theme) .vibestudio-logo-img-light {
   display: none;
 }
 
 @media (prefers-color-scheme: light) {
-  :root:not(.dark):not(.dark-theme) .vibez1-logo-img-dark {
+  :root:not(.dark):not(.dark-theme) .vibestudio-logo-img-dark {
     display: none;
   }
 }
 
 @media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.light-theme) .vibez1-logo-img-light {
+  :root:not(.light):not(.light-theme) .vibestudio-logo-img-light {
     display: none;
   }
 }

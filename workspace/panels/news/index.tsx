@@ -78,8 +78,8 @@ import {
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
 import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
-import { findMatchingUrlAudience } from "@vibez1/shared/credentials/urlAudience";
-import type { UrlAudience } from "@vibez1/shared/credentials/urlAudience";
+import { findMatchingUrlAudience } from "@vibestudio/shared/credentials/urlAudience";
+import type { UrlAudience } from "@vibestudio/shared/credentials/urlAudience";
 import {
   NEWS_DEEPDIVE_SIGNAL,
   type NewsDeepDiveRequested,

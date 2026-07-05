@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 /**
  * Guard: no workspace package may grab a host module via the per-isolate global
- * `globalThis["__vibez1Require__"]`.
+ * `globalThis["__vibestudioRequire__"]`.
  *
  * That's the PANEL convention — panels keep host modules (incl.
  * `@workspace/runtime`) in a per-isolate global module map. The eval sandbox is
@@ -28,10 +28,10 @@ const ALLOWLIST = new Set([
   "runtime/src/panel/cdpAutomation.ts", // panel-only lazy cdp-client loader (sync fast-path; cdp-client lives in the shared global map, not per-owner)
 ]);
 
-// The property-ACCESS form, `(...)["__vibez1Require__"]` — deliberately NOT a
-// bare `__vibez1Require__` mention, so prose comments and error-message
+// The property-ACCESS form, `(...)["__vibestudioRequire__"]` — deliberately NOT a
+// bare `__vibestudioRequire__` mention, so prose comments and error-message
 // strings that name the symbol don't trip the guard.
-const ACCESS = /\[\s*['"]__vibez1Require__['"]\s*\]/;
+const ACCESS = /\[\s*['"]__vibestudioRequire__['"]\s*\]/;
 
 // Anchored on this file's location (…/workspace/packages/runtime/src/shared)
 // rather than cwd, so the guard also runs from a package subdirectory.
@@ -48,7 +48,7 @@ function tsFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe("host-global access guard", () => {
-  it("workspace packages resolve host modules via imports, not globalThis.__vibez1Require__", () => {
+  it("workspace packages resolve host modules via imports, not globalThis.__vibestudioRequire__", () => {
     const offenders: string[] = [];
     for (const file of tsFiles(PACKAGES_ROOT)) {
       const rel = path.relative(PACKAGES_ROOT, file);
@@ -57,7 +57,7 @@ describe("host-global access guard", () => {
     }
     expect(
       offenders,
-      `These workspace packages reach for the global \`__vibez1Require__\` to resolve a host ` +
+      `These workspace packages reach for the global \`__vibestudioRequire__\` to resolve a host ` +
         `module — that breaks in the eval/DO per-object module map. Use a normal import instead ` +
         `(see @workspace/panel-browser). If the use is genuinely legitimate, add it to ALLOWLIST ` +
         `with a justification:\n  ${offenders.join("\n  ")}`

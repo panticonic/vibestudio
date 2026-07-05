@@ -1,7 +1,7 @@
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { PanelAccessOperation } from "@vibez1/shared/panelAccessPolicy";
-import { panelTreeMethods } from "@vibez1/shared/serviceSchemas/panelTree";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { PanelAccessOperation } from "@vibestudio/shared/panelAccessPolicy";
+import { panelTreeMethods } from "@vibestudio/shared/serviceSchemas/panelTree";
 import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,

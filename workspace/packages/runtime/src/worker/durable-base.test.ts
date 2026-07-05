@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rpc } from "@vibez1/rpc";
+import { rpc } from "@vibestudio/rpc";
 import initSqlJs from "sql.js";
 import { DurableObjectBase } from "./durable-base.js";
 import { createTestDO } from "./durable-test-utils.js";

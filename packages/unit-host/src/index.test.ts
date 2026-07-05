@@ -34,7 +34,7 @@ afterEach(() => {
 });
 
 function tempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-unit-registry-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-unit-registry-"));
   roots.push(root);
   return root;
 }

@@ -20,7 +20,7 @@ const STATE_C = `state:${"c".repeat(64)}`;
 const MANIFEST_D = `manifest:${"d".repeat(64)}`;
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-ref-service-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-ref-service-"));
 }
 
 function makeService(

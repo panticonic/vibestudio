@@ -1,10 +1,10 @@
-import { applyStateArgsSnapshot } from "@vibez1/shared/panel/applyStateArgsSnapshot";
-import type { PanelSlotId } from "@vibez1/shared/panel/ids";
+import { applyStateArgsSnapshot } from "@vibestudio/shared/panel/applyStateArgsSnapshot";
+import type { PanelSlotId } from "@vibestudio/shared/panel/ids";
 
-// Global injected by preload via --vibez1-state-args command line arg
+// Global injected by preload via --vibestudio-state-args command line arg
 declare global {
   interface Window {
-    __vibez1StateArgs?: Record<string, unknown>;
+    __vibestudioStateArgs?: Record<string, unknown>;
   }
 }
 
@@ -24,7 +24,7 @@ export function _initStateArgsRuntime(
  * Returns the stateArgs that were passed when the panel was created.
  */
 export function getStateArgs<T = Record<string, unknown>>(): T {
-  return (window.__vibez1StateArgs ?? {}) as T;
+  return (window.__vibestudioStateArgs ?? {}) as T;
 }
 
 /**

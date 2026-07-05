@@ -12,12 +12,12 @@
  *
  * Available to server, panel, and worker callers.
  */
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import {
   createDurableObjectServiceClient,
   type DurableObjectServiceClient,
   type ResolvedDurableObjectTarget,
-} from "@vibez1/shared/userlandServiceRpc";
+} from "@vibestudio/shared/userlandServiceRpc";
 
 export {
   GAD_WORKSPACE_SERVICE_PROTOCOL,
@@ -26,12 +26,12 @@ export {
   doTargetId,
   parseDoTargetId,
   resolveDurableObjectService,
-} from "@vibez1/shared/userlandServiceRpc";
+} from "@vibestudio/shared/userlandServiceRpc";
 export type {
   DORefParam,
   DurableObjectServiceClient,
   ResolvedDurableObjectTarget,
-} from "@vibez1/shared/userlandServiceRpc";
+} from "@vibestudio/shared/userlandServiceRpc";
 
 // ---------------------------------------------------------------------------
 // Types

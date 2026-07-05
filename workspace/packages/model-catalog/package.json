@@ -10,7 +10,7 @@
     "./providerConnect": "./src/providerConnect.ts"
   },
   "dependencies": {
-    "@vibez1/shared": "workspace:*"
+    "@vibestudio/shared": "workspace:*"
   },
   "devDependencies": {
     "vitest": "^3.2.4"

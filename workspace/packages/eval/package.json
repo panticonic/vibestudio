@@ -1,7 +1,7 @@
 {
   "name": "@workspace/eval",
   "version": "0.1.0-git.0fec5b5",
-  "description": "TypeScript/JSX code transformation and execution for Vibez1",
+  "description": "TypeScript/JSX code transformation and execution for Vibestudio",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -10,7 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "sucrase": "^3.35.0"
   },
   "devDependencies": {

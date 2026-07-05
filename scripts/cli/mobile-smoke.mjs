@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // End-to-end Android smoke test for a fresh internal app install accepting a
-// vibez1://connect QR/deep link, activating the served RN bundle, connecting
+// vibestudio://connect QR/deep link, activating the served RN bundle, connecting
 // the workspace app, and rendering a panel WebView.
 
 import fsp from "node:fs/promises";
@@ -32,9 +32,9 @@ const defaultApkPath = path.join(
   "internal",
   "app-internal.apk"
 );
-const defaultPackage = "com.vibez1.mobile.internal";
-const defaultActivity = "com.vibez1.mobile.MainActivity";
-const smokePrefix = "[Vibez1MobileSmoke]";
+const defaultPackage = "app.vibestudio.mobile.internal";
+const defaultActivity = "app.vibestudio.mobile.MainActivity";
+const smokePrefix = "[VibestudioMobileSmoke]";
 const screenshotDir = path.join(repoRoot, "test-results", "mobile-smoke");
 const defaultVisualFallbackAgentProbeMs = 45_000;
 
@@ -111,10 +111,10 @@ function parsePositiveInt(value, label) {
 }
 
 function printHelp() {
-  console.log(`vibez1 mobile smoke
+  console.log(`vibestudio mobile smoke
 
 Usage:
-  vibez1 mobile smoke [options]
+  vibestudio mobile smoke [options]
 
 Runner options:
   --avd <name>        Start this AVD if no adb device is connected.
@@ -140,10 +140,10 @@ Runner options:
   --help              Show this help message.
 
 By default, the smoke delegates APK build/install/reset/launcher startup to
-vibez1 mobile install --reset-app --launch. It then spawns the signaling worker
+vibestudio mobile install --reset-app --launch. It then spawns the signaling worker
 (wrangler dev apps/signaling), starts a disposable local server as a WebRTC
 answerer, reverses the signaling and gateway ports through adb, sends a
-vibez1://connect intent (carrying the signaling room, the server's DTLS
+vibestudio://connect intent (carrying the signaling room, the server's DTLS
 fingerprint, and a pairing code) to the launched internal app, confirms the Pair
 screen, then waits for native bundle activation, workspace connection, panel
 materialization, panel WebView load log markers, and the initial agent turn.
@@ -379,7 +379,7 @@ function buildConnectLinkFromLog(loggedLink) {
 
 function createServerArgs(readyFilePath) {
   // Loopback-only: the gateway binds 127.0.0.1; remote reach is the WebRTC pipe
-  // attached to the same RpcServer when VIBEZ1_WEBRTC_SIGNAL_URL is set.
+  // attached to the same RpcServer when VIBESTUDIO_WEBRTC_SIGNAL_URL is set.
   return [
     serverEntryArg(),
     "--app-root",
@@ -420,7 +420,7 @@ function hostLanIp() {
 
 // Local coturn relay for testing against an Android EMULATOR: QEMU's user-mode NAT
 // cannot hold a direct WebRTC pipe (ICE consent-freshness goes stale ~30-60s in),
-// so we relay through coturn and force `VIBEZ1_WEBRTC_ICE=relay`. Physical
+// so we relay through coturn and force `VIBESTUDIO_WEBRTC_ICE=relay`. Physical
 // devices on the LAN and desktop loopback don't need this. coturn must be on PATH
 // (`turnserver`). Returns the iceServer creds the signaling worker advertises to
 // BOTH peers, plus the managed child (caller pushes it to `children` for cleanup).
@@ -428,9 +428,9 @@ async function startLocalTurn() {
   const lanIp = hostLanIp();
   if (!lanIp) throw new Error("No 192.168.x LAN IP found for the local TURN relay");
   const port = 47000;
-  const user = "vibez1";
-  const pass = "vibez1pass";
-  const confPath = path.join(os.tmpdir(), `vibez1-coturn-${process.pid}.conf`);
+  const user = "vibestudio";
+  const pass = "vibestudiopass";
+  const confPath = path.join(os.tmpdir(), `vibestudio-coturn-${process.pid}.conf`);
   // relay-ip MUST be the LAN IP, not 127.0.0.1 — coturn returns 403 Forbidden on
   // CREATE_PERMISSION for a loopback relay address.
   await fsp.writeFile(
@@ -440,7 +440,7 @@ async function startLocalTurn() {
       `listening-ip=127.0.0.1`,
       `listening-ip=${lanIp}`,
       `relay-ip=${lanIp}`,
-      `realm=vibez1.local`,
+      `realm=vibestudio.local`,
       `lt-cred-mech`,
       `user=${user}:${pass}`,
       `no-tls`,
@@ -450,7 +450,7 @@ async function startLocalTurn() {
       `max-port=48100`,
       // Default pidfile is /var/run/turnserver.pid (needs root) — point it at a
       // writable temp path so coturn doesn't log a permission warning.
-      `pidfile=${path.join(os.tmpdir(), `vibez1-coturn-${process.pid}.pid`)}`,
+      `pidfile=${path.join(os.tmpdir(), `vibestudio-coturn-${process.pid}.pid`)}`,
       "",
     ].join("\n")
   );
@@ -473,10 +473,10 @@ async function startSignaling(port, turn = null) {
   if (turn) {
     // The signaling worker's mintIceServers returns this relay to both peers.
     vars.push(
-      "--var", `VIBEZ1_LOCAL_TURN_HOST:${turn.host}`,
-      "--var", `VIBEZ1_LOCAL_TURN_PORT:${turn.port}`,
-      "--var", `VIBEZ1_LOCAL_TURN_USER:${turn.user}`,
-      "--var", `VIBEZ1_LOCAL_TURN_PASS:${turn.pass}`
+      "--var", `VIBESTUDIO_LOCAL_TURN_HOST:${turn.host}`,
+      "--var", `VIBESTUDIO_LOCAL_TURN_PORT:${turn.port}`,
+      "--var", `VIBESTUDIO_LOCAL_TURN_USER:${turn.user}`,
+      "--var", `VIBESTUDIO_LOCAL_TURN_PASS:${turn.pass}`
     );
   }
   const child = spawnManaged(
@@ -500,14 +500,14 @@ async function startSignaling(port, turn = null) {
 }
 
 // Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
-// vibez1://connect?...` line. Attach this BEFORE the link can be printed so no
+// vibestudio://connect?...` line. Attach this BEFORE the link can be printed so no
 // chunk is missed.
 function waitForPairingLink(serverChild, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buffer = "";
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const match = buffer.match(/vibez1:\/\/connect\?\S+/);
+      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
       if (match) {
         cleanup();
         resolve(match[0]);
@@ -582,7 +582,7 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     } else if (
       line.includes("AndroidRuntime") ||
       line.includes("ReactNativeJS") ||
-      line.includes("Vibez1MobileHost")
+      line.includes("VibestudioMobileHost")
     ) {
       recentLines.push(line);
       if (recentLines.length > 200) recentLines.shift();
@@ -631,7 +631,7 @@ async function waitForLogcatReady(device, logcat) {
     "shell",
     "log",
     "-t",
-    "Vibez1MobileSmokeProbe",
+    "VibestudioMobileSmokeProbe",
     `${smokePrefix} phase=${phase}`
   );
   await logcat.waitForPhase(phase);
@@ -693,7 +693,7 @@ async function tapOptionalButtonByLabelPrefix(device, text, timeoutMs = 6_000) {
 }
 
 async function dumpWindowXml(device) {
-  const dumpPath = "/sdcard/vibez1-mobile-smoke-window.xml";
+  const dumpPath = "/sdcard/vibestudio-mobile-smoke-window.xml";
   await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
   const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
   return result?.stdout ?? "";
@@ -969,7 +969,7 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     if (options.rejectTestModelResponse && visualAgentTurn.hasTestModelStub) {
       throw new Error(
         "Real-model smoke saw the deterministic E2E model response; " +
-          "VIBEZ1_TEST_MODE is still reaching the model worker"
+          "VIBESTUDIO_TEST_MODE is still reaching the model worker"
       );
     }
     if (options.failOnCredentialSetup && visualAgentTurn.hasCredentialSetupPrompt) {
@@ -1200,7 +1200,7 @@ function assertNoBlockingPermissionDialog(xml) {
   }
   if (/Approve workspace extensions/i.test(text) || /Approve all/i.test(text)) {
     throw new Error(
-      "Vibez1 approval sheet is blocking the panel screenshot; expected the panel content to be visible"
+      "Vibestudio approval sheet is blocking the panel screenshot; expected the panel content to be visible"
     );
   }
   if (/Connection error/i.test(text) || /DO RPC relay failed/i.test(text)) {
@@ -1550,7 +1550,7 @@ async function main() {
   let emulatorChild = null;
   let launchedEmulator = false;
   let readyInfo = null;
-  const readyFilePath = path.join(os.tmpdir(), `vibez1-mobile-smoke-ready-${process.pid}.json`);
+  const readyFilePath = path.join(os.tmpdir(), `vibestudio-mobile-smoke-ready-${process.pid}.json`);
   const deadlineMs = Date.now() + options.timeoutMs;
 
   const cleanup = async () => {
@@ -1639,32 +1639,32 @@ async function main() {
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
     // 2. The disposable server, as a WebRTC answerer. The server mints the
-    //    per-invite room + pairing code itself and logs the vibez1://connect
+    //    per-invite room + pairing code itself and logs the vibestudio://connect
     //    link whose `fp` pins its persistent DTLS cert.
     const serverArgs = createServerArgs(readyFilePath);
     const serverInvocation = createServerInvocation(serverArgs);
     const serverEnv = {
       ...process.env,
       NODE_ENV: process.env.NODE_ENV ?? "development",
-      VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
+      VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
       // Force the single-workspace server path: `--serve-panels` with no workspace
       // otherwise boots the hub (no WebRTC answerer), so pairing never connects.
-      VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
+      VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
       // Auto-approve startup units so the declared react-native app BUILDS at
       // server startup instead of waiting for the post-pairing host-target
       // approval. That makes the launch fast, so the bundle starts streaming
       // seconds after pairing — on a fresh pipe — rather than ~75s in (by which
       // point the emulator's relay has degraded). See unitApprovalCoordinator.
-      VIBEZ1_AUTO_APPROVE_STARTUP_UNITS: "1",
+      VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1",
       // Emulator: force relay-only through the local coturn (a direct NAT'd pipe
       // can't hold ICE consent freshness). The answerer threads this into the
       // pairing link's `ice=relay`, which the client honors.
-      ...(turn ? { VIBEZ1_WEBRTC_ICE: "relay" } : {}),
+      ...(turn ? { VIBESTUDIO_WEBRTC_ICE: "relay" } : {}),
     };
     if (options.realModel) {
-      delete serverEnv.VIBEZ1_TEST_MODE;
+      delete serverEnv.VIBESTUDIO_TEST_MODE;
     } else {
-      serverEnv.VIBEZ1_TEST_MODE = "1";
+      serverEnv.VIBESTUDIO_TEST_MODE = "1";
     }
     const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
       cwd: repoRoot,

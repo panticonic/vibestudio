@@ -43,8 +43,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { serializeByKey } from "@vibez1/shared/keyedSerializer";
-import { normalizeWorkspaceRepoPath } from "@vibez1/shared/runtime/entitySpec";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 
 // ---------------------------------------------------------------------------

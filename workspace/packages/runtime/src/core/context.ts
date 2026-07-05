@@ -1,5 +1,5 @@
 /**
- * Context ID utilities for Vibez1 panels and workers.
+ * Context ID utilities for Vibestudio panels and workers.
  *
  * Context IDs use the format:
  *    ctx_{instanceId}

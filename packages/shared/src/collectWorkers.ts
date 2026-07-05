@@ -30,7 +30,7 @@ export interface CollectWorkersOptions {
  * Collect all worker declarations from a node_modules directory.
  *
  * Scans all installed packages (including scoped packages) for
- * vibez1.workers declarations in their package.json files.
+ * vibestudio.workers declarations in their package.json files.
  *
  * @example
  * ```ts

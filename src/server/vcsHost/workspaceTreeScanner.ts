@@ -8,9 +8,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import YAML from "yaml";
 
-import type { WorkspaceNode, WorkspaceTree } from "@vibez1/shared/types";
-import { WORKSPACE_SOURCE_DIRS } from "@vibez1/shared/workspace/sourceDirs";
-import { isAboutSource } from "@vibez1/shared/workspace/aboutNamespace";
+import type { WorkspaceNode, WorkspaceTree } from "@vibestudio/shared/types";
+import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
+import { isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
 import { discoverPackageGraph, type GraphNode } from "../buildV2/packageGraph.js";
 
 interface ScanCache {
@@ -94,12 +94,12 @@ export class WorkspaceTreeScanner {
         const pkg = JSON.parse(await fs.readFile(path.join(abs, "package.json"), "utf8")) as {
           name?: string;
           version?: string;
-          vibez1?: { title?: string; hiddenInLauncher?: boolean; shell?: unknown };
+          vibestudio?: { title?: string; hiddenInLauncher?: boolean; shell?: unknown };
         };
         if (pkg.name) {
           node.packageInfo = { name: pkg.name, ...(pkg.version ? { version: pkg.version } : {}) };
         }
-        this.applyManifestMetadata(node, unitRel, name, pkg.vibez1);
+        this.applyManifestMetadata(node, unitRel, name, pkg.vibestudio);
       } catch {
         // no package.json — may still be a skill
       }

@@ -38,10 +38,10 @@ interface ChatApi {
 
 function resolveBrowserHandoffPlatform(props: ModelCredentialRequiredCardProps): string | undefined {
   if (props.browserHandoffPlatform) return props.browserHandoffPlatform;
-  if ((globalThis as { __vibez1HostPlatform?: unknown }).__vibez1HostPlatform === "mobile") {
+  if ((globalThis as { __vibestudioHostPlatform?: unknown }).__vibestudioHostPlatform === "mobile") {
     return "mobile";
   }
-  if (typeof navigator !== "undefined" && /\bVibez1-Mobile\//.test(navigator.userAgent)) {
+  if (typeof navigator !== "undefined" && /\bVibestudio-Mobile\//.test(navigator.userAgent)) {
     return "mobile";
   }
   return undefined;

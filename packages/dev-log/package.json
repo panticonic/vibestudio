@@ -1,7 +1,7 @@
 {
-  "name": "@vibez1/dev-log",
+  "name": "@vibestudio/dev-log",
   "version": "0.1.0",
-  "description": "Development logging utility for Vibez1",
+  "description": "Development logging utility for Vibestudio",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -1,6 +1,6 @@
 # Transport Sessions And Recovery
 
-Vibez1 has two identity layers on every RPC transport:
+Vibestudio has two identity layers on every RPC transport:
 
 - `callerId` is durable application identity. Examples: `shell`, a panel ID, a
   worker ID. A caller ID may have zero, one, or many live connections.

@@ -24,7 +24,7 @@ const DEFAULT_THINKING_BUDGETS: Required<ThinkingBudgets> = {
 };
 
 /**
- * Vibez1 drives pi-ai's raw `stream()` API so Codex/OpenAI Responses can
+ * Vibestudio drives pi-ai's raw `stream()` API so Codex/OpenAI Responses can
  * request live reasoning summaries. Raw providers do not read the
  * provider-agnostic `reasoning` option uniformly, so this adapter mirrors
  * pi-ai's streamSimple mapping at our raw-stream boundary.

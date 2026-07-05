@@ -26,34 +26,34 @@ export interface WorkerTerminalConfig {
   viewport?: { columns: number; rows: number };
 }
 
-/** Read the `vibez1.terminal` block from a worker manifest, if present. */
+/** Read the `vibestudio.terminal` block from a worker manifest, if present. */
 export function workerTerminalConfig(
-  vibez1: Record<string, unknown> | undefined | null,
+  vibestudio: Record<string, unknown> | undefined | null,
 ): WorkerTerminalConfig | null {
-  const terminal = vibez1?.["terminal"];
+  const terminal = vibestudio?.["terminal"];
   if (!terminal || typeof terminal !== "object" || Array.isArray(terminal)) return null;
   const renderer = (terminal as Record<string, unknown>)["renderer"];
   if (renderer !== "ink") return null;
   return terminal as WorkerTerminalConfig;
 }
 
-/** A worker whose `vibez1.terminal.renderer` is "ink" renders inside workerd via Ink. */
+/** A worker whose `vibestudio.terminal.renderer` is "ink" renders inside workerd via Ink. */
 export function isTerminalWorker(
-  vibez1: Record<string, unknown> | undefined | null,
+  vibestudio: Record<string, unknown> | undefined | null,
 ): boolean {
-  return workerTerminalConfig(vibez1) !== null;
+  return workerTerminalConfig(vibestudio) !== null;
 }
 
 /**
- * A persistent (resident, non-hibernating) worker. Vibez1 runs workerd
+ * A persistent (resident, non-hibernating) worker. Vibestudio runs workerd
  * locally, so keeping a DO resident costs only host memory — used by terminal
  * session workers that hold a live Ink render tree that cannot be cheaply
  * rebuilt on every hibernation.
  */
 export function isPersistentWorker(
-  vibez1: Record<string, unknown> | undefined | null,
+  vibestudio: Record<string, unknown> | undefined | null,
 ): boolean {
-  return vibez1?.["persistent"] === true;
+  return vibestudio?.["persistent"] === true;
 }
 
 export const APP_CAPABILITIES_BY_TARGET = {
@@ -127,7 +127,7 @@ const KIND_BLOCKS = ["extension", "worker", "panel", "app"] as const;
 function assertRecord(value: unknown, label: string, options: UnitManifestValidationOptions): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new UnitManifestError(
-      `${label} ${options.unitName} is missing the vibez1 manifest block`,
+      `${label} ${options.unitName} is missing the vibestudio manifest block`,
       "MANIFEST_MISSING",
     );
   }
@@ -154,7 +154,7 @@ function assertNoForeignKindBlocks(
   const kindBlocks = KIND_BLOCKS.filter((key) => record[key] !== undefined && record[key] !== null);
   if (kindBlocks.length !== 1 || kindBlocks[0] !== descriptor.kind) {
     throw new UnitManifestError(
-      `${descriptor.label} ${options.unitName} must declare exactly one kind block: vibez1.${descriptor.kind} (found: ${
+      `${descriptor.label} ${options.unitName} must declare exactly one kind block: vibestudio.${descriptor.kind} (found: ${
         kindBlocks.length === 0 ? "none" : kindBlocks.join(", ")
       })`,
       "MANIFEST_KIND",
@@ -248,7 +248,7 @@ function validateAppBlock(
   const app = record["app"];
   if (!app || typeof app !== "object" || Array.isArray(app)) {
     throw new UnitManifestError(
-      `App ${options.unitName} vibez1.app must be an object`,
+      `App ${options.unitName} vibestudio.app must be an object`,
       "MANIFEST_APP_BLOCK",
     );
   }
@@ -276,13 +276,13 @@ function validateAppBlock(
   }
   if (target === "terminal" && appRecord["renderer"] !== undefined) {
     throw new UnitManifestError(
-      `Terminal app ${options.unitName} must use vibez1.app.entry instead of renderer`,
+      `Terminal app ${options.unitName} must use vibestudio.app.entry instead of renderer`,
       "MANIFEST_APP_TERMINAL_RENDERER",
     );
   }
   if (target !== "terminal" && appRecord["entry"] !== undefined) {
     throw new UnitManifestError(
-      `App ${options.unitName} vibez1.app.entry is only supported for terminal apps`,
+      `App ${options.unitName} vibestudio.app.entry is only supported for terminal apps`,
       "MANIFEST_APP_TERMINAL_ENTRY",
     );
   }
@@ -291,13 +291,13 @@ function validateAppBlock(
   if (appRecord["interactive"] !== undefined) {
     if (typeof appRecord["interactive"] !== "boolean") {
       throw new UnitManifestError(
-        `App ${options.unitName} vibez1.app.interactive must be a boolean`,
+        `App ${options.unitName} vibestudio.app.interactive must be a boolean`,
         "MANIFEST_APP_INTERACTIVE",
       );
     }
     if (target !== "terminal" && appRecord["interactive"] === true) {
       throw new UnitManifestError(
-        `App ${options.unitName} vibez1.app.interactive is only supported for terminal apps`,
+        `App ${options.unitName} vibestudio.app.interactive is only supported for terminal apps`,
         "MANIFEST_APP_INTERACTIVE_TARGET",
       );
     }
@@ -306,7 +306,7 @@ function validateAppBlock(
   for (const forbidden of ["main", "preload", "window"]) {
     if (appRecord[forbidden] !== undefined) {
       throw new UnitManifestError(
-        `App ${options.unitName} is pure-thin and must not declare vibez1.app.${forbidden}`,
+        `App ${options.unitName} is pure-thin and must not declare vibestudio.app.${forbidden}`,
         "MANIFEST_APP_NATIVE_FIELD",
       );
     }
@@ -352,7 +352,7 @@ function validateAppBlock(
 }
 
 /**
- * Validate a parsed `vibez1` block from a package.json.
+ * Validate a parsed `vibestudio` block from a package.json.
  */
 export function validateUnitManifest(
   descriptor: UnitManifestDescriptor,
@@ -371,7 +371,7 @@ export function validateUnitManifest(
 }
 
 /**
- * Read and validate the `vibez1` block from a package.json on disk.
+ * Read and validate the `vibestudio` block from a package.json on disk.
  */
 export function readAndValidateUnitManifest(
   descriptor: UnitManifestDescriptor,
@@ -409,7 +409,7 @@ export function readAndValidateUnitManifest(
     );
   }
 
-  const vibez1 = (parsed as { vibez1?: unknown }).vibez1;
-  validateUnitManifest(descriptor, vibez1 ?? {}, options);
-  return (vibez1 as Record<string, unknown>) ?? {};
+  const vibestudio = (parsed as { vibestudio?: unknown }).vibestudio;
+  validateUnitManifest(descriptor, vibestudio ?? {}, options);
+  return (vibestudio as Record<string, unknown>) ?? {};
 }

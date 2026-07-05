@@ -1,7 +1,7 @@
 import React from "react";
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { ApprovalSheet } from "./ApprovalSheet";
-import type { PendingApproval } from "@vibez1/shared/approvals";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 
 const base = {
   approvalId: "approval-1",

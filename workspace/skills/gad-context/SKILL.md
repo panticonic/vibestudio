@@ -1,6 +1,6 @@
 ---
 name: gad-context
-description: Query Vibez1's canonical trajectory model for conversation context, runtime events, channel envelopes, worktree states, file provenance, and semantic facts.
+description: Query Vibestudio's canonical trajectory model for conversation context, runtime events, channel envelopes, worktree states, file provenance, and semantic facts.
 ---
 
 # GAD Context

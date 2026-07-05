@@ -32,13 +32,13 @@ export function createConnectDeepLink(pairing) {
     `ice=${encodeURIComponent(pairing.ice ?? "all")}`,
   ];
   if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
-  return `vibez1://connect?${params.join("&")}`;
+  return `vibestudio://connect?${params.join("&")}`;
 }
 
 export function parseConnectLink(rawUrl) {
   if (typeof rawUrl !== "string") return { kind: "error", reason: "Deep link must be a string" };
-  if (!rawUrl.startsWith("vibez1://connect")) {
-    return { kind: "error", reason: "Not a vibez1://connect link" };
+  if (!rawUrl.startsWith("vibestudio://connect")) {
+    return { kind: "error", reason: "Not a vibestudio://connect link" };
   }
   const queryStart = rawUrl.indexOf("?");
   if (queryStart < 0) {
@@ -197,7 +197,7 @@ export function printConnectBanner({
   deepLink: providedDeepLink = null,
   qrDeepLink: providedQrDeepLink = null,
   deepLinkLabel = "Deep link",
-  instructions = "Open the QR code with the Android camera. Vibez1 will confirm and save the connection.",
+  instructions = "Open the QR code with the Android camera. Vibestudio will confirm and save the connection.",
 }) {
   const deepLink = providedDeepLink || createConnectDeepLink(pairing);
   const effectiveQrCode = qrPairingCode || pairing.code;

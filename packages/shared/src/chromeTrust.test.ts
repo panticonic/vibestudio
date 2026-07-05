@@ -10,7 +10,7 @@ import {
 } from "./chromeTrust.js";
 
 /**
- * Workspace app trust is manifest-declared (meta/vibez1.yml `trust.*`) and
+ * Workspace app trust is manifest-declared (meta/vibestudio.yml `trust.*`) and
  * seeded per process — nothing is hardcoded here. Seeded processes enforce the
  * declared lists strictly; a process that never loaded a manifest (remote thin
  * client) defers to the server-granted capability the check is conjoined with.

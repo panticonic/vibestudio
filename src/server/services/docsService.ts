@@ -7,11 +7,14 @@
  * while never advertising a method the caller cannot invoke — `index` applies
  * `isCatalogEntryVisible`, which mirrors the dispatcher's static gate.
  */
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { ServiceDispatcher, CallerKind } from "@vibez1/shared/serviceDispatcher";
-import type { RuntimeSurface } from "@vibez1/shared/runtimeSurface";
-import { checkServiceAccess } from "@vibez1/shared/servicePolicy";
-import { docsMethods, type SerializedServiceDefinition } from "@vibez1/shared/serviceSchemas/docs";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceDispatcher, CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { RuntimeSurface } from "@vibestudio/shared/runtimeSurface";
+import { checkServiceAccess } from "@vibestudio/shared/servicePolicy";
+import {
+  docsMethods,
+  type SerializedServiceDefinition,
+} from "@vibestudio/shared/serviceSchemas/docs";
 import { createCatalogIndex, type CatalogSearchOpts } from "./catalog/catalogIndex.js";
 import { serializeDef } from "./catalog/serialize.js";
 

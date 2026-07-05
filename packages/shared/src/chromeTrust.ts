@@ -5,7 +5,7 @@ import { WORKSPACE_APP_PACKAGE_SCOPE } from "./workspace/types.js";
  * (panel-hosting) and which may manage connections (pairing invites).
  *
  * The grants are NOT hardcoded here. They come from the workspace manifest
- * (`workspace/meta/vibez1.yml` → `trust.chromeApps` /
+ * (`workspace/meta/vibestudio.yml` → `trust.chromeApps` /
  * `trust.connectionManagementApps`), which is an approval-gated meta write —
  * so trust changes ride the existing main-advance approval flow.
  *
@@ -69,7 +69,7 @@ function deferToHostGrant(check: string): boolean {
     warnedUnseeded = true;
     console.warn(
       `[chromeTrust] ${check} checked before any workspace manifest was loaded in this process — ` +
-        `deferring to the server-granted capability (the server enforces meta/vibez1.yml trust.*).`
+        `deferring to the server-granted capability (the server enforces meta/vibestudio.yml trust.*).`
     );
   }
   return true;

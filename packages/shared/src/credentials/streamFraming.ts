@@ -13,11 +13,11 @@ export {
   parseEndFrame,
   parseErrorFrame,
   decodeFramedResponseToStreaming,
-} from "@vibez1/rpc/protocol/streamCodec";
+} from "@vibestudio/rpc/protocol/streamCodec";
 
 export type {
   FrameType,
   HeadFramePayload,
   EndFramePayload,
   ErrorFramePayload,
-} from "@vibez1/rpc/protocol/streamCodec";
+} from "@vibestudio/rpc/protocol/streamCodec";

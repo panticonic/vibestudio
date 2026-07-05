@@ -22,7 +22,7 @@ import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/testSupport.js";
-import { buildWorktreeManifest } from "@vibez1/shared/contentTree/worktreeHash";
+import { buildWorktreeManifest } from "@vibestudio/shared/contentTree/worktreeHash";
 import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";
 import { vcsContextHead } from "../../../src/server/vcsHost/paths.js";
@@ -99,7 +99,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     "panels/chat",
     "skills/onboarding",
     "meta",
-    "meta/vibez1.yml", // file → plain content hash
+    "meta/vibestudio.yml", // file → plain content hash
     "panels/chat/src", // nested dir inside a unit
     "panels/nope", // absent → null
   ];
@@ -118,7 +118,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     await write("panels/chat/src/index.tsx", "export const Chat = () => null;\n");
     await write("panels/chat/src/deep/util.ts", "export const u = 0;\n");
     await write("skills/onboarding/SKILL.md", "# Onboarding\n");
-    await write("meta/vibez1.yml", "name: test\n");
+    await write("meta/vibestudio.yml", "name: test\n");
     // An executable, so modes flow through both hash sources.
     const script = path.join(workspaceRoot, "packages/foo/run.sh");
     await fsp.writeFile(script, "#!/bin/sh\necho hi\n");
@@ -157,7 +157,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     // absent paths null — the exact values effectiveVersion.ts folds into EVs.
     expect(fromStore["packages/foo"]).toMatch(/^manifest:[0-9a-f]{64}$/);
     expect(fromStore["panels/chat/src"]).toMatch(/^manifest:[0-9a-f]{64}$/);
-    expect(fromStore["meta/vibez1.yml"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(fromStore["meta/vibestudio.yml"]).toMatch(/^[0-9a-f]{64}$/);
     expect(fromStore["panels/nope"]).toBeNull();
   });
 
@@ -204,7 +204,7 @@ describe("WorkspaceVcs.unitHashes — content store vs canonical reference equal
     expect(fromStore["packages/foo"]).toBe(hashesBefore["packages/foo"]);
     expect(fromStore["skills/onboarding"]).toBe(hashesBefore["skills/onboarding"]);
     expect(fromStore["meta"]).toBe(hashesBefore["meta"]);
-    expect(fromStore["meta/vibez1.yml"]).toBe(hashesBefore["meta/vibez1.yml"]);
+    expect(fromStore["meta/vibestudio.yml"]).toBe(hashesBefore["meta/vibestudio.yml"]);
   });
 
   it("bootstrap (pre-attach) unit hashes equal the post-attach reference hashes for the same tree", async () => {

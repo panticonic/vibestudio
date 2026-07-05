@@ -1,21 +1,21 @@
 ---
 name: github
-description: Set up broad GitHub access for Vibez1 with fine-grained or classic personal access tokens, staged local bindings, deep links, and verification helpers.
+description: Set up broad GitHub access for Vibestudio with fine-grained or classic personal access tokens, staged local bindings, deep links, and verification helpers.
 ---
 
 # GitHub Skill
 
-Use this skill when a user wants Vibez1 to connect to GitHub for repository
+Use this skill when a user wants Vibestudio to connect to GitHub for repository
 metadata, issues, pull requests, contents API calls, Actions-related reads, or
 to create the PAT needed for direct GitHub clone/pull/push support.
 
 ## Default Approach
 
 Use a GitHub fine-grained personal access token. This is the simplest approach
-that requires no centralized Vibez1 server, no app registration controlled by
-Vibez1, and no OAuth callback infrastructure. The default helper path is
+that requires no centralized Vibestudio server, no app registration controlled by
+Vibestudio, and no OAuth callback infrastructure. The default helper path is
 broad upstream access with local staging: a fine-grained PAT can be valid for
-All repositories, while Vibez1 stores separate bindings for user API,
+All repositories, while Vibestudio stores separate bindings for user API,
 repository API, release uploads, and git HTTPS. Repository API approvals stage
 to `/repos/{owner}/{repo}/`.
 
@@ -112,7 +112,7 @@ const stored = await requestGitHubTokenCredential({
 });
 ```
 
-For setup links, use Internal when the user wants to keep setup inside Vibez1;
+For setup links, use Internal when the user wants to keep setup inside Vibestudio;
 use External when their normal browser already has GitHub auth, passkeys, or
 password-manager state. The full workflow UI in `SETUP.md` is optional guidance,
 not the default happy path.
@@ -120,13 +120,13 @@ not the default happy path.
 The stored credential is URL-bound through staged bindings:
 `github-user`, `github-repos`, `github-uploads`, and `github-git-http`.
 API requests should use `credentials.fetch()`. Direct GitHub clone/pull/push
-should use `@vibez1/git` with `credentials.gitHttp()`. Vibez1's
+should use `@vibestudio/git` with `credentials.gitHttp()`. Vibestudio's
 host-mediated isomorphic-git HTTP adapter handles `https://github.com/...` git
 remotes without exposing the PAT to panels or workers.
 
 ```ts
 import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@vibez1/git";
+import { GitClient } from "@vibestudio/git";
 
 const client = new GitClient(fs, { http: credentials.gitHttp() });
 await client.clone({
@@ -140,7 +140,7 @@ For normal runtime code, use the host-mediated HTTP adapter:
 
 ```ts
 import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@vibez1/git";
+import { GitClient } from "@vibestudio/git";
 
 const client = new GitClient(fs, { http: credentials.gitHttp() });
 await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
@@ -152,7 +152,7 @@ only when raw isomorphic-git HEAD/WORKDIR/STAGE tuples are needed.
 
 To make a GitHub remote available to future workspace contexts, configure it as
 a shared remote instead of only editing the current context's `.git/config`.
-This records the declaration in `meta/vibez1.yml`:
+This records the declaration in `meta/vibestudio.yml`:
 
 ```ts
 import { git } from "@workspace/runtime";
@@ -198,11 +198,11 @@ await git.importProject({
 Supported parent directories are `panels`, `packages`, `workers`,
 `skills`, `about`, `templates`, and `projects`. `git.importProject()` uses one
 workspace config approval showing destination path, remote URL, and branch;
-then it records the shared remote in `meta/vibez1.yml`, clones into canonical
+then it records the shared remote in `meta/vibestudio.yml`, clones into canonical
 workspace source, and makes the repo available to future contexts. It may also
 prompt to use the selected GitHub credential for the clone.
 
-Repos declared in `meta/vibez1.yml` are imported automatically at startup.
+Repos declared in `meta/vibestudio.yml` are imported automatically at startup.
 Use `git.completeWorkspaceDependencies()` as an explicit retry/backfill when a
 configured workspace repo is still missing. For private repos, pass the GitHub
 credential id on this retry path because startup auto-import has no interactive
@@ -245,4 +245,4 @@ files.
 - Git clone or push is requested: use a friendly access level, or explicit
   `mode: "git"` / `mode: "api-and-git"` when creating the PAT. Verify a target
   remote with `verifyGitHubGitRemoteAccess(remoteUrl, credentialId)`. Git
-  transport should use `@vibez1/git` with `credentials.gitHttp()`.
+  transport should use `@vibestudio/git` with `credentials.gitHttp()`.

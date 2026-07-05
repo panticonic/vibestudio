@@ -1,5 +1,5 @@
 /**
- * Shared `__vibez1_autofill` bridge for browser-panel preloads.
+ * Shared `__vibestudio_autofill` bridge for browser-panel preloads.
  *
  * This global is registered by TWO preload entry points — browserPreload.ts and
  * autofillPreload.ts — but both attach to the SAME surface: browser panels
@@ -16,7 +16,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 export function exposeAutofillBridge(): void {
-  contextBridge.exposeInMainWorld("__vibez1_autofill", {
-    ping: () => ipcRenderer.send("vibez1:autofill:ping"),
+  contextBridge.exposeInMainWorld("__vibestudio_autofill", {
+    ping: () => ipcRenderer.send("vibestudio:autofill:ping"),
   });
 }

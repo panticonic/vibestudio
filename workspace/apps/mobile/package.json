@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "//dependencies": "Keep react-native-webview pinned with apps/mobile; 13.17.0 makes JSX props resolve to never under our TS/React setup.",
-  "vibez1": {
-    "displayName": "Vibez1 Mobile",
+  "vibestudio": {
+    "displayName": "Vibestudio Mobile",
     "app": {
       "target": "react-native",
       "renderer": "App.tsx",
-      "rnComponentName": "Vibez1",
+      "rnComponentName": "Vibestudio",
       "rnHostAbi": "rn-host-1",
       "capabilities": [
         "notifications",
@@ -21,10 +21,10 @@
     }
   },
   "dependencies": {
-    "@vibez1/browser-data": "workspace:*",
-    "@vibez1/mobile-webrtc": "workspace:*",
-    "@vibez1/rpc": "workspace:*",
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/browser-data": "workspace:*",
+    "@vibestudio/mobile-webrtc": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@notifee/react-native": "^9.1.8",
     "@react-native-community/netinfo": "^11.4.1",
     "@react-native-async-storage/async-storage": "^2.2.0",

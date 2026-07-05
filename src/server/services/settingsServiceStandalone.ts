@@ -5,11 +5,11 @@
  * Mirror of the Electron settingsService (src/main/services/settingsService.ts).
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { settingsMethods } from "@vibez1/shared/serviceSchemas/settings";
-import type { SettingsData, ModelRoleConfig } from "@vibez1/shared/types";
-import type { ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
-import { loadCentralConfig } from "@vibez1/shared/workspace/loader";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { settingsMethods } from "@vibestudio/shared/serviceSchemas/settings";
+import type { SettingsData, ModelRoleConfig } from "@vibestudio/shared/types";
+import type { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import { loadCentralConfig } from "@vibestudio/shared/workspace/loader";
 
 export function createSettingsServiceStandalone(_deps: {
   dispatcher: ServiceDispatcher;

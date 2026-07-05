@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/shared",
+  "name": "@vibestudio/shared",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,9 +12,9 @@
     "build": "echo 'source-only package, no build needed'"
   },
   "dependencies": {
-    "@vibez1/dev-log": "workspace:*",
-    "@vibez1/env-paths": "workspace:*",
-    "@vibez1/rpc": "workspace:*",
-    "@vibez1/types": "workspace:*"
+    "@vibestudio/dev-log": "workspace:*",
+    "@vibestudio/env-paths": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/types": "workspace:*"
   }
 }

@@ -2,7 +2,7 @@ name: WebRTC native e2e (nightly)
 
 # The real-native WebRTC end-to-end suites (plan §9.7): real `node-datachannel`
 # DTLS peers, the wrangler-dev signaling DO, the ingress pool, and the shared
-# `createPairedConnection` bootstrap. Gated behind VIBEZ1_RUN_WEBRTC_E2E=1 (the
+# `createPairedConnection` bootstrap. Gated behind VIBESTUDIO_RUN_WEBRTC_E2E=1 (the
 # `test:webrtc-e2e` script sets it), so the default CI run never opens UDP
 # sockets or loads the native binary.
 

@@ -1,5 +1,5 @@
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import {
   callerHasAppCapability,
   callerHasPlatformCapability,

@@ -11,7 +11,7 @@
  * Panel bundles are multiple MB. Requesting `gzip` on the wire + chunked transfer
  * keeps each payload inside react-native-webrtc's serialized-receive throughput
  * (the same constraint that forced gzip on the Part A native bundle stream). The
- * gateway marks a gzipped body with `x-vibez1-content-gzip` (NOT
+ * gateway marks a gzipped body with `x-vibestudio-content-gzip` (NOT
  * `Content-Encoding`, so the pipe's fetch never auto-inflates it); we translate
  * that to a real `Content-Encoding: gzip` and the webview inflates natively — the
  * façade never touches the bytes.
@@ -36,8 +36,8 @@ import {
   FORWARD_REQUEST_HEADERS,
   STRIP_RESPONSE_HEADERS,
   GZIP_MARKER_HEADER,
-} from "@vibez1/shared/panel/assetHeaders";
-import { checkPanelGatewayPath } from "@vibez1/shared/panel/assetPathPolicy";
+} from "@vibestudio/shared/panel/assetHeaders";
+import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
 import type { MobileRpcClient } from "./mobileTransport";
 
 declare const require: (moduleName: string) => unknown;
@@ -55,8 +55,8 @@ const MAX_REQUEST_HEAD_BYTES = 64 * 1024;
  * Mirrors the pipe's 8 MiB upload receive cap.
  */
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024;
-const CONTENT_DIGEST_HEADER = "x-vibez1-content-digest";
-const PERSISTED_PORT_KEY = "vibez1:panel-asset-facade:port";
+const CONTENT_DIGEST_HEADER = "x-vibestudio-content-digest";
+const PERSISTED_PORT_KEY = "vibestudio:panel-asset-facade:port";
 const MAX_CACHE_BYTES = 256 * 1024 * 1024; // 256 MiB in-memory LRU
 
 class MobileCachePopulationTooLargeError extends Error {
@@ -278,7 +278,7 @@ export async function startPanelAssetFacade(transport: MobileRpcClient): Promise
   if (port !== preferredPort) void writePersistedPort(port);
 
   console.log(
-    `[Vibez1MobileSmoke] phase=workspace-panel-facade-listening ${JSON.stringify({ port })}`
+    `[VibestudioMobileSmoke] phase=workspace-panel-facade-listening ${JSON.stringify({ port })}`
   );
   return {
     port,

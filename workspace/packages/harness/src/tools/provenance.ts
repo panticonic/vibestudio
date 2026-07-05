@@ -18,8 +18,8 @@ import type { AgentTool } from "@workspace/pi-core";
 import type {
   VcsProvenanceForFileResult,
   VcsProvenanceForSessionResult,
-} from "@vibez1/shared/serviceSchemas/vcs";
-import { splitRepoPath } from "@vibez1/shared/runtime/entitySpec";
+} from "@vibestudio/shared/serviceSchemas/vcs";
+import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { toVcsPath } from "./tool-vcs.js";
 import { renderProvenanceBlock } from "./provenance-format.js";
 

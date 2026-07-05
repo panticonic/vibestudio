@@ -30,7 +30,7 @@ describe("pinnedPanels store", () => {
   });
 
   it("ignores malformed persisted data", async () => {
-    await AsyncStorage.setItem("vibez1:workspace:wsX:pinned-panels", "{not json");
+    await AsyncStorage.setItem("vibestudio:workspace:wsX:pinned-panels", "{not json");
     expect(await loadPinnedPanelIds("wsX")).toEqual([]);
   });
 });

@@ -14,7 +14,7 @@
  * (switch in place / open in new panel / review overlay) is panel-supplied.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import { forkConversation } from "@workspace/channel-fork";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { ForkProjection, MessageBlockInput, ParticipantRef } from "@workspace/agentic-protocol";
@@ -29,7 +29,7 @@ import type {
 } from "../types";
 import { useChannelSignalMessages } from "./useChannelSignalMessages";
 
-const CHANNEL_SERVICE_PROTOCOL = "vibez1.channel.v1";
+const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 
 /** Ephemeral lineage-badge signal fanned by the fork-tree root (channel-do). */
 const FORK_HEAD_CHANGED_SIGNAL = "fork.head_changed";

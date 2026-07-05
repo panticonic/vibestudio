@@ -42,7 +42,7 @@ import { createRefService, type RefGateBatch } from "../../src/server/services/r
 import { createRefsService } from "../../src/server/services/refsService.js";
 import { VcsInvocationTable } from "../../src/server/services/vcsInvocationTable.js";
 import { isAuthorizedChrome } from "../../src/server/services/chromeTrust.js";
-import { createVerifiedCaller, type VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RefAdvanceGateContext } from "../../src/server/services/mainAdvanceApproval.js";
 
 const USER = { id: "user", kind: "user" };

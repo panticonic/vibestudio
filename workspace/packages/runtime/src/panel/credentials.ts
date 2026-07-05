@@ -1,4 +1,4 @@
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import {
   createCredentialClient,
   type ClientConfigStatus,

@@ -14,7 +14,7 @@ import type { RefGateBatch } from "../../../src/server/services/refService.js";
 import { createMainRefAdvanceGate } from "../../../src/server/services/mainAdvanceApproval.js";
 import type { RepoDeletionApprovalCandidate } from "../../../src/server/services/mainAdvanceApproval.js";
 import type { StateAdvancedEvent } from "../../../src/server/buildV2/stateTrigger.js";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -62,7 +62,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     await fsp.mkdir(path.join(workspaceRoot, "packages/bar"), { recursive: true });
     await fsp.writeFile(path.join(workspaceRoot, "packages/bar/index.ts"), "export const y = 1;\n");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: test\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibestudio.yml"), "name: test\n");
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
 

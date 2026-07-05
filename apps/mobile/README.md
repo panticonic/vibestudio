@@ -1,6 +1,6 @@
-# Vibez1 Mobile
+# Vibestudio Mobile
 
-The mobile app is a React Native shell for pairing with a Vibez1 server,
+The mobile app is a React Native shell for pairing with a Vibestudio server,
 rendering panels, and handling approval prompts in-app or through FCM/APNs push
 notifications.
 
@@ -11,11 +11,11 @@ Provision Firebase before testing notification actions:
 - Android: copy `android/app/google-services.template.json` to
   `android/app/google-services.json` and replace it with the real Firebase
   config.
-- iOS: copy `ios/Vibez1/GoogleService-Info.template.plist` to
-  `ios/Vibez1/GoogleService-Info.plist` and replace it with the real Firebase
+- iOS: copy `ios/Vibestudio/GoogleService-Info.template.plist` to
+  `ios/Vibestudio/GoogleService-Info.plist` and replace it with the real Firebase
   config.
-- Server: set `VIBEZ1_FIREBASE_SERVICE_ACCOUNT_PATH` or
-  `VIBEZ1_FIREBASE_SERVICE_ACCOUNT_JSON`.
+- Server: set `VIBESTUDIO_FIREBASE_SERVICE_ACCOUNT_PATH` or
+  `VIBESTUDIO_FIREBASE_SERVICE_ACCOUNT_JSON`.
 
 Full architecture, security notes, decision semantics, and native test steps
 are in [docs/approvals.md](../../docs/approvals.md).

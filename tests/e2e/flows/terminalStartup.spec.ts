@@ -163,7 +163,7 @@ async function approvePendingTerminalWork(app: ElectronApplication, window?: Pag
 
 function createTerminalOnlyWorkspace(): string {
   const workspace = createManagedTestWorkspace();
-  const configPath = path.join(workspace, "source", "meta", "vibez1.yml");
+  const configPath = path.join(workspace, "source", "meta", "vibestudio.yml");
   const config = (YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {}) as Record<
     string,
     unknown
@@ -437,9 +437,9 @@ test.describe("Terminal Startup", () => {
 
     await callTerminalPanel(app, terminalPanelId, "sendText", {
       sessionId: session.sessionId,
-      text: "echo vibez1-e2e-input\r",
+      text: "echo vibestudio-e2e-input\r",
     });
-    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibez1-e2e-input");
+    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibestudio-e2e-input");
 
     await expect
       .poll(async () => getPanelHtml(app, terminalPanelId), {
@@ -454,18 +454,18 @@ test.describe("Terminal Startup", () => {
         intervals: [100, 250, 500],
       })
       .toBe(terminalPanelId);
-    await typePanelText(app, terminalPanelId, "\u0015printf 'vibez1-keyboard-input\\n'\r");
-    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibez1-keyboard-input");
-    await expectRenderedToContain(app, terminalPanelId, session.sessionId, "vibez1-keyboard-input");
+    await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-keyboard-input\\n'\r");
+    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibestudio-keyboard-input");
+    await expectRenderedToContain(app, terminalPanelId, session.sessionId, "vibestudio-keyboard-input");
 
     const osTyped = await typeTerminalThroughOs(
       testApp,
       terminalPanelId,
-      "printf 'vibez1-os-keyboard-input\\n'"
+      "printf 'vibestudio-os-keyboard-input\\n'"
     );
     const osInputArrived = osTyped
       ? await expect
-          .poll(async () => scrollbackContains(app, terminalPanelId, session.sessionId, "vibez1-os-keyboard-input"), {
+          .poll(async () => scrollbackContains(app, terminalPanelId, session.sessionId, "vibestudio-os-keyboard-input"), {
             timeout: 3_000,
             intervals: [250, 500],
           })
@@ -474,16 +474,16 @@ test.describe("Terminal Startup", () => {
       : false;
     if (!osInputArrived) {
       await clickTerminalThroughWindow(testApp, terminalPanelId);
-      await typePanelText(app, terminalPanelId, "\u0015printf 'vibez1-os-keyboard-input\\n'\r");
+      await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-os-keyboard-input\\n'\r");
     }
-    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibez1-os-keyboard-input");
-    await expectRenderedToContain(app, terminalPanelId, session.sessionId, "vibez1-os-keyboard-input");
+    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibestudio-os-keyboard-input");
+    await expectRenderedToContain(app, terminalPanelId, session.sessionId, "vibestudio-os-keyboard-input");
 
-    await setElectronClipboardText(app, "printf 'vibez1-paste-input\\n'\n");
+    await setElectronClipboardText(app, "printf 'vibestudio-paste-input\\n'\n");
     const osPasteAttempted = await pressTerminalShortcutThroughOs(testApp, terminalPanelId, "v");
     const osPasteArrived = osPasteAttempted
       ? await expect
-          .poll(async () => scrollbackContains(app, terminalPanelId, session.sessionId, "vibez1-paste-input"), {
+          .poll(async () => scrollbackContains(app, terminalPanelId, session.sessionId, "vibestudio-paste-input"), {
             timeout: 3_000,
             intervals: [250, 500],
           })
@@ -492,9 +492,9 @@ test.describe("Terminal Startup", () => {
       : false;
     if (!osPasteArrived) {
       await clickTerminalThroughWindow(testApp, terminalPanelId);
-      await typePanelText(app, terminalPanelId, "\u0015printf 'vibez1-paste-input\\n'\r");
+      await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-paste-input\\n'\r");
     }
-    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibez1-paste-input");
+    await expectScrollbackToContain(app, terminalPanelId, session.sessionId, "vibestudio-paste-input");
 
     await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
     await expect
@@ -509,7 +509,7 @@ test.describe("Terminal Startup", () => {
         timeout: 5_000,
         intervals: [100, 250, 500],
       })
-      .toContain("vibez1-paste-input");
+      .toContain("vibestudio-paste-input");
 
     await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
     await expect
@@ -526,7 +526,7 @@ test.describe("Terminal Startup", () => {
       })
       .toContain('placeholder="Find"');
     expect(await clickPanelSelector(app, terminalPanelId, "input[placeholder='Find']")).toBe(true);
-    await typePanelText(app, terminalPanelId, "vibez1-paste-input");
+    await typePanelText(app, terminalPanelId, "vibestudio-paste-input");
     await expect
       .poll(async () => getPanelHtml(app, terminalPanelId), {
         timeout: 5_000,
@@ -544,10 +544,10 @@ test.describe("Terminal Startup", () => {
     expect(split.sessionId).toBeTruthy();
     await callTerminalPanel(app, terminalPanelId, "sendText", {
       sessionId: split.sessionId,
-      text: "printf 'vibez1-split-input\\n'\r",
+      text: "printf 'vibestudio-split-input\\n'\r",
     });
-    await expectScrollbackToContain(app, terminalPanelId, split.sessionId!, "vibez1-split-input");
-    await expectRenderedToContain(app, terminalPanelId, split.sessionId!, "vibez1-split-input");
+    await expectScrollbackToContain(app, terminalPanelId, split.sessionId!, "vibestudio-split-input");
+    await expectRenderedToContain(app, terminalPanelId, split.sessionId!, "vibestudio-split-input");
 
     const tab = await callTerminalPanel<{ sessionId: string | undefined }>(
       app,
@@ -558,9 +558,9 @@ test.describe("Terminal Startup", () => {
     expect(tab.sessionId).toBeTruthy();
     await callTerminalPanel(app, terminalPanelId, "sendText", {
       sessionId: tab.sessionId,
-      text: "printf 'vibez1-tab-input\\n'\r",
+      text: "printf 'vibestudio-tab-input\\n'\r",
     });
-    await expectScrollbackToContain(app, terminalPanelId, tab.sessionId!, "vibez1-tab-input");
+    await expectScrollbackToContain(app, terminalPanelId, tab.sessionId!, "vibestudio-tab-input");
 
     await callTerminalPanel(app, terminalPanelId, "focusSession", { sessionId: session.sessionId });
     await callTerminalPanel(app, terminalPanelId, "sendText", {
@@ -586,7 +586,7 @@ test.describe("Terminal Startup", () => {
 
     await callTerminalPanel(app, terminalPanelId, "sendText", {
       sessionId: session.sessionId,
-      text: "printf '\\033]633;E;vibez1-shell-integration\\007\\033]633;C\\007\\033]633;D;0\\007'\r",
+      text: "printf '\\033]633;E;vibestudio-shell-integration\\007\\033]633;C\\007\\033]633;D;0\\007'\r",
     });
     await expect
       .poll(async () => {
@@ -598,7 +598,7 @@ test.describe("Terminal Startup", () => {
       })
       .toMatchObject({
         status: "vscode",
-        commandLine: "vibez1-shell-integration",
+        commandLine: "vibestudio-shell-integration",
         commandRunning: false,
         lastExitCode: 0,
       });
@@ -641,9 +641,9 @@ test.describe("Terminal Startup", () => {
         intervals: [100, 250, 500],
       })
       .toBe(terminalPanelId);
-    await typePanelText(app, terminalPanelId, "\u0003\u0015printf 'vibez1-reloaded-keyboard-input\\n'\r");
-    await expectScrollbackToContain(app, terminalPanelId, reloadedSession.sessionId, "vibez1-reloaded-keyboard-input");
-    await expectRenderedToContain(app, terminalPanelId, reloadedSession.sessionId, "vibez1-reloaded-keyboard-input");
+    await typePanelText(app, terminalPanelId, "\u0003\u0015printf 'vibestudio-reloaded-keyboard-input\\n'\r");
+    await expectScrollbackToContain(app, terminalPanelId, reloadedSession.sessionId, "vibestudio-reloaded-keyboard-input");
+    await expectRenderedToContain(app, terminalPanelId, reloadedSession.sessionId, "vibestudio-reloaded-keyboard-input");
 
     expect(severePanelDiagnostics(await getPanelDiagnostics(app, terminalPanelId))).toEqual([]);
   });

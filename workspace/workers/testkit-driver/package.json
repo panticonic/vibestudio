@@ -2,7 +2,7 @@
   "name": "testkit-driver",
   "version": "0.0.0",
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "title": "Testkit Driver",
     "kind": "worker",
     "entry": "index.ts",

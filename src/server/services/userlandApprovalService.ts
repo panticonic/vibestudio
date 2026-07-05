@@ -10,15 +10,15 @@ import type {
   UserlandApprovalIssuer,
   UserlandApprovalOption,
   UserlandApprovalRequest,
-} from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvals";
 import {
   approvalPrincipalSchema,
   secretInputRequestSchema,
   userlandApprovalRequestSchema,
   userlandApprovalSubjectIdSchema,
-} from "@vibez1/shared/approvals";
-import { ServiceError, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+} from "@vibestudio/shared/approvals";
+import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
 
@@ -31,7 +31,7 @@ const BINARY_OPTIONS: UserlandApprovalOption[] = [
 function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOption[] {
   const identityScoped =
     principal.effectiveVersion === "internal" ||
-    principal.repoPath === "vibez1/internal" ||
+    principal.repoPath === "vibestudio/internal" ||
     principal.requesterCategory === "eval" ||
     principal.requesterCategory === "internal-service" ||
     principal.requester?.category === "eval" ||
@@ -46,7 +46,7 @@ function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOptio
     {
       value: "session",
       label: "Allow this session",
-      description: "Remember for this caller until Vibez1 restarts.",
+      description: "Remember for this caller until Vibestudio restarts.",
       tone: "neutral",
     },
     {

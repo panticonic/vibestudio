@@ -329,14 +329,14 @@ describe("PanelManager", () => {
   });
 
   it("coerces human-readable create names to panel id segments", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "named");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "named", vibez1: { title: "Named Panel" } })
+      JSON.stringify({ name: "named", vibestudio: { title: "Named Panel" } })
     );
 
     const registry = new PanelRegistry({});
@@ -354,7 +354,7 @@ describe("PanelManager", () => {
   });
 
   it("creates panel state locally, builds panel init, updates state args, and closes panels", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "example");
@@ -363,7 +363,7 @@ describe("PanelManager", () => {
       path.join(panelDir, "package.json"),
       JSON.stringify({
         name: "example",
-        vibez1: {
+        vibestudio: {
           title: "Example Panel",
           stateArgs: {
             type: "object",
@@ -454,14 +454,14 @@ describe("PanelManager", () => {
   });
 
   it("forwards explicit create refs to runtime entity creation", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "example");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "example", vibez1: { title: "Example Panel" } })
+      JSON.stringify({ name: "example", vibestudio: { title: "Example Panel" } })
     );
 
     const registry = new PanelRegistry({});
@@ -488,7 +488,7 @@ describe("PanelManager", () => {
   });
 
   it("marks shell manifest panels as privileged in snapshots and create results", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "about", "shell-panel");
@@ -497,7 +497,7 @@ describe("PanelManager", () => {
       path.join(panelDir, "package.json"),
       JSON.stringify({
         name: "shell-panel",
-        vibez1: {
+        vibestudio: {
           title: "Shell Panel",
           shell: true,
         },
@@ -520,14 +520,14 @@ describe("PanelManager", () => {
   });
 
   it("updates live navigation state and resolved URL through the shared manager", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "browserish");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "browserish", vibez1: { title: "Initial Title" } })
+      JSON.stringify({ name: "browserish", vibestudio: { title: "Initial Title" } })
     );
 
     const registry = new PanelRegistry({});
@@ -563,21 +563,21 @@ describe("PanelManager", () => {
   });
 
   it("builds remote bootstrap URLs with gateway-routed RPC", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "remote");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "remote", vibez1: { title: "Remote Panel" } })
+      JSON.stringify({ name: "remote", vibestudio: { title: "Remote Panel" } })
     );
 
     const { mem, deps } = makeManagerDeps(workspacePath);
     const manager = new PanelManager({
       registry: new PanelRegistry({}),
       ...deps,
-      serverInfo: { gatewayConfig: { serverUrl: "https://vibez1.example.com" } },
+      serverInfo: { gatewayConfig: { serverUrl: "https://vibestudio.example.com" } },
     });
 
     const created = await manager.create("panels/remote", {
@@ -592,13 +592,13 @@ describe("PanelManager", () => {
     const currentEntityId = slot?.current_entity_id;
     expect(currentEntityId).toBeTruthy();
     expect(init.gatewayConfig).toEqual({
-      serverUrl: "https://vibez1.example.com",
+      serverUrl: "https://vibestudio.example.com",
       token: `rpc-${currentEntityId}`,
     });
   });
 
   it("includes both parent slot and parent entity ids in child bootstrap config", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["root", "child"]) {
@@ -606,7 +606,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 
@@ -625,7 +625,7 @@ describe("PanelManager", () => {
   });
 
   it("persists recursive close for descendant slots", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["root", "child", "grandchild"]) {
@@ -633,7 +633,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 
@@ -658,7 +658,7 @@ describe("PanelManager", () => {
   });
 
   it("pushes navigation into history and traverses it via back/forward", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["first", "second"]) {
@@ -666,7 +666,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 
@@ -700,14 +700,14 @@ describe("PanelManager", () => {
   });
 
   it("navigates existing slots to URL-like sources as browser snapshots", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "chat");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "chat", vibez1: { title: "Chat" } })
+      JSON.stringify({ name: "chat", vibestudio: { title: "Chat" } })
     );
 
     const registry = new PanelRegistry({});
@@ -732,7 +732,7 @@ describe("PanelManager", () => {
   });
 
   it("keeps selected descendant path local while using collision-free sibling ranks", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["root", "first", "second"]) {
@@ -740,7 +740,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 
@@ -765,7 +765,7 @@ describe("PanelManager", () => {
   });
 
   it("restores roots with duplicate persisted ranks in creation order", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["first-root", "second-root"]) {
@@ -773,7 +773,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 
@@ -811,7 +811,7 @@ describe("PanelManager", () => {
   });
 
   it("persists append root insertion order across restart", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["first-root", "second-root"]) {
@@ -819,7 +819,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 
@@ -851,14 +851,14 @@ describe("PanelManager", () => {
   });
 
   it("persists focused panel and cached titles in local view state", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "chat");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "chat", vibez1: { title: "Actual Chat Title" } })
+      JSON.stringify({ name: "chat", vibestudio: { title: "Actual Chat Title" } })
     );
 
     const savedStates: unknown[] = [];
@@ -887,7 +887,7 @@ describe("PanelManager", () => {
   });
 
   it("restores focused panel and title from local view state when manifests are unavailable", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const seedRegistry = new PanelRegistry({});
@@ -927,7 +927,7 @@ describe("PanelManager", () => {
   });
 
   it("restores panel titles from server metadata when local manifests are unavailable", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const seedRegistry = new PanelRegistry({});
@@ -960,14 +960,14 @@ describe("PanelManager", () => {
   });
 
   it("restores persisted entity titles ahead of manifest titles when rebuilding the tree", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "chat");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "chat", vibez1: { title: "Manifest Chat Title" } })
+      JSON.stringify({ name: "chat", vibestudio: { title: "Manifest Chat Title" } })
     );
 
     const seedRegistry = new PanelRegistry({});
@@ -998,14 +998,14 @@ describe("PanelManager", () => {
   });
 
   it("does not resolve non-panel entity titles to panels by shared context", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     const panelDir = path.join(workspacePath, "panels", "chat");
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "chat", vibez1: { title: "Chat Panel" } })
+      JSON.stringify({ name: "chat", vibestudio: { title: "Chat Panel" } })
     );
 
     const registry = new PanelRegistry({});
@@ -1034,7 +1034,7 @@ describe("PanelManager", () => {
   });
 
   it("closes parent subtrees with one workspace close and retires every panel entity", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["root", "child"]) {
@@ -1042,7 +1042,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 
@@ -1065,7 +1065,7 @@ describe("PanelManager", () => {
   });
 
   it("restores persisted panel navigation history after a fresh manager sync", async () => {
-    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-manager-"));
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
     for (const name of ["first", "second"]) {
@@ -1073,7 +1073,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, vibez1: { title: `${name} Panel` } })
+        JSON.stringify({ name, vibestudio: { title: `${name} Panel` } })
       );
     }
 

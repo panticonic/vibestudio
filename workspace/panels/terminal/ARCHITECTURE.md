@@ -1,6 +1,6 @@
 # Terminal Architecture
 
-The terminal panel uses a vendored VS Code xterm layer for browser-side terminal behavior and keeps vibez1-specific process connectivity at the edge.
+The terminal panel uses a vendored VS Code xterm layer for browser-side terminal behavior and keeps vibestudio-specific process connectivity at the edge.
 
 ## Product Shape
 
@@ -13,7 +13,7 @@ Pane headers carry the compact controls that belong to an individual terminal su
 - `vscode-upstream/` stores the upstream VS Code source snapshots used while porting behavior.
 - `vscodeTerminalFrontend.ts` owns the xterm instance, addons, renderer lifecycle, clipboard, search, serialization, unicode mode, shell integration events, and line-data events.
 - `vscodeTerminalInstance.ts` owns lifecycle wiring between the frontend, process bridge, resize handling, scrollback bootstrap, and panel events.
-- `vscodeTerminalProcess.ts` and `shellAttach.ts` are the vibez1 connectivity boundary. They adapt the shell extension RPC API to the frontend without importing VS Code process management or workbench services.
+- `vscodeTerminalProcess.ts` and `shellAttach.ts` are the vibestudio connectivity boundary. They adapt the shell extension RPC API to the frontend without importing VS Code process management or workbench services.
 - `TerminalApp.tsx` owns the single split-tree state, startup/restore flow, command launcher, settings, and notification center.
 - `SplitTree.tsx`, `PaneView.tsx`, and `PaneHeader.tsx` render the active terminal tree and pane-level controls.
 

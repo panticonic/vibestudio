@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/mobile-webrtc",
+  "name": "@vibestudio/mobile-webrtc",
   "version": "0.1.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -10,7 +10,7 @@
     "./polyfills": "./src/polyfills.ts"
   },
   "dependencies": {
-    "@vibez1/rpc": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-community/netinfo": "^11.4.1",
     "react-native-keychain": "^9.2.2",

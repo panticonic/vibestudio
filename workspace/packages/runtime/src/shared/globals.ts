@@ -4,7 +4,7 @@
  * Both environments receive the same global names.
  */
 
-import type { PanelEntityId, PanelSlotId } from "@vibez1/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 
 export interface GatewayConfig {
   serverUrl: string;
@@ -17,27 +17,27 @@ export interface GatewayConfig {
  */
 declare global {
   /** Runtime entity ID for this panel or worker */
-  var __vibez1EntityId: string | undefined;
+  var __vibestudioEntityId: string | undefined;
   /** Stable workspace slot id for panel tree operations. */
-  var __vibez1SlotId: string | undefined;
+  var __vibestudioSlotId: string | undefined;
   /** Context ID for storage partition (format: {mode}_{type}_{identifier}) */
-  var __vibez1ContextId: string | undefined;
+  var __vibestudioContextId: string | undefined;
   /** Environment kind: "panel" or "shell" */
-  var __vibez1Kind: "panel" | "shell" | undefined;
+  var __vibestudioKind: "panel" | "shell" | undefined;
   /** Parent panel ID if this is a child panel/worker */
-  var __vibez1ParentId: string | null | undefined;
+  var __vibestudioParentId: string | null | undefined;
   /** Runtime entity ID for the parent panel, used for child-to-parent RPC. */
-  var __vibez1ParentEntityId: string | null | undefined;
+  var __vibestudioParentEntityId: string | null | undefined;
   /** Initial theme appearance */
-  var __vibez1InitialTheme: "light" | "dark" | undefined;
+  var __vibestudioInitialTheme: "light" | "dark" | undefined;
   /** Single gateway configuration for HTTP and RPC-derived clients. */
-  var __vibez1GatewayConfig: GatewayConfig | undefined;
+  var __vibestudioGatewayConfig: GatewayConfig | undefined;
   /** Source repo path for this endpoint */
-  var __vibez1SourceRepo: string | undefined;
+  var __vibestudioSourceRepo: string | undefined;
   /** Exact effective version for the source currently running. */
-  var __vibez1EffectiveVersion: string | null | undefined;
+  var __vibestudioEffectiveVersion: string | null | undefined;
   /** Environment variables */
-  var __vibez1Env: Record<string, string> | undefined;
+  var __vibestudioEnv: Record<string, string> | undefined;
 }
 
 export interface InjectedConfig {
@@ -56,17 +56,17 @@ export interface InjectedConfig {
 // Access globals via globalThis to support VM sandbox environments
 // where globals are set on the context object
 const g = globalThis as unknown as {
-  __vibez1EntityId?: string;
-  __vibez1SlotId?: string;
-  __vibez1ContextId?: string;
-  __vibez1Kind?: "panel" | "shell";
-  __vibez1ParentId?: string | null;
-  __vibez1ParentEntityId?: string | null;
-  __vibez1InitialTheme?: "light" | "dark";
-  __vibez1GatewayConfig?: GatewayConfig;
-  __vibez1SourceRepo?: string;
-  __vibez1EffectiveVersion?: string | null;
-  __vibez1Env?: Record<string, string>;
+  __vibestudioEntityId?: string;
+  __vibestudioSlotId?: string;
+  __vibestudioContextId?: string;
+  __vibestudioKind?: "panel" | "shell";
+  __vibestudioParentId?: string | null;
+  __vibestudioParentEntityId?: string | null;
+  __vibestudioInitialTheme?: "light" | "dark";
+  __vibestudioGatewayConfig?: GatewayConfig;
+  __vibestudioSourceRepo?: string;
+  __vibestudioEffectiveVersion?: string | null;
+  __vibestudioEnv?: Record<string, string>;
 };
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
@@ -99,38 +99,38 @@ function normalizeGatewayConfigForBrowser(config: GatewayConfig): GatewayConfig 
  * Get the injected configuration from globals.
  */
 export function getInjectedConfig(): InjectedConfig {
-  const entityId = g.__vibez1EntityId;
+  const entityId = g.__vibestudioEntityId;
   if (typeof entityId === "undefined" || !entityId) {
     throw new Error(
-      "Vibez1 runtime globals not found. Expected __vibez1EntityId to be defined."
+      "Vibestudio runtime globals not found. Expected __vibestudioEntityId to be defined."
     );
   }
-  if (!g.__vibez1GatewayConfig?.serverUrl || !g.__vibez1GatewayConfig?.token) {
+  if (!g.__vibestudioGatewayConfig?.serverUrl || !g.__vibestudioGatewayConfig?.token) {
     throw new Error(
-      "Vibez1 runtime globals not found. Expected __vibez1GatewayConfig with serverUrl and token."
+      "Vibestudio runtime globals not found. Expected __vibestudioGatewayConfig with serverUrl and token."
     );
   }
 
   const effectiveVersion =
-    g.__vibez1EffectiveVersion ?? g.__vibez1Env?.["__VIBEZ1_EFFECTIVE_VERSION"] ?? null;
-  const gatewayConfig = normalizeGatewayConfigForBrowser(g.__vibez1GatewayConfig);
+    g.__vibestudioEffectiveVersion ?? g.__vibestudioEnv?.["__VIBESTUDIO_EFFECTIVE_VERSION"] ?? null;
+  const gatewayConfig = normalizeGatewayConfigForBrowser(g.__vibestudioGatewayConfig);
 
   return {
     entityId: entityId as PanelEntityId,
-    slotId: g.__vibez1SlotId as PanelSlotId | undefined,
-    contextId: g.__vibez1ContextId ?? "",
-    kind: g.__vibez1Kind ?? "panel",
+    slotId: g.__vibestudioSlotId as PanelSlotId | undefined,
+    contextId: g.__vibestudioContextId ?? "",
+    kind: g.__vibestudioKind ?? "panel",
     parentId:
-      typeof g.__vibez1ParentId === "string" && g.__vibez1ParentId.length > 0
-        ? (g.__vibez1ParentId as PanelSlotId)
+      typeof g.__vibestudioParentId === "string" && g.__vibestudioParentId.length > 0
+        ? (g.__vibestudioParentId as PanelSlotId)
         : null,
     parentEntityId:
-      typeof g.__vibez1ParentEntityId === "string" && g.__vibez1ParentEntityId.length > 0
-        ? (g.__vibez1ParentEntityId as PanelEntityId)
+      typeof g.__vibestudioParentEntityId === "string" && g.__vibestudioParentEntityId.length > 0
+        ? (g.__vibestudioParentEntityId as PanelEntityId)
         : null,
-    initialTheme: g.__vibez1InitialTheme === "dark" ? "dark" : "light",
+    initialTheme: g.__vibestudioInitialTheme === "dark" ? "dark" : "light",
     gatewayConfig,
-    env: g.__vibez1Env ?? {},
+    env: g.__vibestudioEnv ?? {},
     effectiveVersion,
   };
 }

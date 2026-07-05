@@ -20,7 +20,7 @@ export async function copyDatabaseToTemp(dbPath: string): Promise<string> {
     );
   }
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-browser-import-"));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-browser-import-"));
   const dbName = path.basename(dbPath);
   const destPath = path.join(tmpDir, dbName);
 
@@ -76,7 +76,7 @@ export async function copyFileToTemp(filePath: string): Promise<string> {
     );
   }
 
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-browser-import-"));
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-browser-import-"));
   const destPath = path.join(tmpDir, path.basename(filePath));
 
   try {
@@ -107,7 +107,7 @@ export async function copyFileToTemp(filePath: string): Promise<string> {
 export function cleanupTempCopy(tempFilePath: string): void {
   try {
     const dir = path.dirname(tempFilePath);
-    if (dir.includes("vibez1-browser-import-")) {
+    if (dir.includes("vibestudio-browser-import-")) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   } catch {

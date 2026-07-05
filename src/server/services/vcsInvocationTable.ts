@@ -17,7 +17,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 export interface VcsInvocationRecord {
   token: string;

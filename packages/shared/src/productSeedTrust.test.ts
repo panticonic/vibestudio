@@ -13,14 +13,14 @@ const roots: string[] = [];
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-  delete process.env["VIBEZ1_PRODUCT_SEED_PRIVATE_KEY_PEM"];
-  delete process.env["VIBEZ1_PRODUCT_SEED_KEY_ID"];
-  delete process.env["VIBEZ1_PRODUCT_SEED_PUBLIC_KEYS_JSON"];
-  delete process.env["VIBEZ1_PROD"];
+  delete process.env["VIBESTUDIO_PRODUCT_SEED_PRIVATE_KEY_PEM"];
+  delete process.env["VIBESTUDIO_PRODUCT_SEED_KEY_ID"];
+  delete process.env["VIBESTUDIO_PRODUCT_SEED_PUBLIC_KEYS_JSON"];
+  delete process.env["VIBESTUDIO_PROD"];
 });
 
 function tempUnit(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-product-seed-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-product-seed-"));
   roots.push(root);
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "@workspace-apps/shell" }));
   fs.writeFileSync(path.join(root, "index.tsx"), "export default null;\n");
@@ -127,13 +127,13 @@ describe("product seed trust", () => {
   it("uses product Ed25519 signatures when signing keys are configured", () => {
     const unitDir = tempUnit();
     const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-    process.env["VIBEZ1_PRODUCT_SEED_PRIVATE_KEY_PEM"] = privateKey.export({
+    process.env["VIBESTUDIO_PRODUCT_SEED_PRIVATE_KEY_PEM"] = privateKey.export({
       type: "pkcs8",
       format: "pem",
     }).toString();
-    process.env["VIBEZ1_PRODUCT_SEED_KEY_ID"] = "vibez1-product-test-v1";
-    process.env["VIBEZ1_PRODUCT_SEED_PUBLIC_KEYS_JSON"] = JSON.stringify({
-      "vibez1-product-test-v1": publicKey.export({ type: "spki", format: "pem" }).toString(),
+    process.env["VIBESTUDIO_PRODUCT_SEED_KEY_ID"] = "vibestudio-product-test-v1";
+    process.env["VIBESTUDIO_PRODUCT_SEED_PUBLIC_KEYS_JSON"] = JSON.stringify({
+      "vibestudio-product-test-v1": publicKey.export({ type: "spki", format: "pem" }).toString(),
     });
 
     const record = writeProductSeedSourceRecord({
@@ -143,8 +143,8 @@ describe("product seed trust", () => {
       sourceRepo: "apps/shell",
     });
 
-    expect(record.signatureKeyId).toBe("vibez1-product-test-v1");
-    expect(record.signature).toMatch(/^vibez1-product-seed-ed25519:/);
+    expect(record.signatureKeyId).toBe("vibestudio-product-test-v1");
+    expect(record.signature).toMatch(/^vibestudio-product-seed-ed25519:/);
     expect(verifyProductSeedSource({
       unitDir,
       identity: {
@@ -153,7 +153,7 @@ describe("product seed trust", () => {
         source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
         effectiveVersion: "ev-seeded",
       },
-    })?.record.signatureKeyId).toBe("vibez1-product-test-v1");
+    })?.record.signatureKeyId).toBe("vibestudio-product-test-v1");
   });
 
   it("rejects development seed signatures in production mode", () => {
@@ -165,7 +165,7 @@ describe("product seed trust", () => {
       sourceRepo: "apps/shell",
     });
 
-    process.env["VIBEZ1_PROD"] = "1";
+    process.env["VIBESTUDIO_PROD"] = "1";
 
     expect(verifyProductSeedSource({
       unitDir,
@@ -179,13 +179,13 @@ describe("product seed trust", () => {
   });
 
   it("requires product signing keys when creating seed records in production mode", () => {
-    process.env["VIBEZ1_PROD"] = "1";
+    process.env["VIBESTUDIO_PROD"] = "1";
 
     expect(() => writeProductSeedSourceRecord({
       unitDir: tempUnit(),
       unitKind: "app",
       name: "@workspace-apps/shell",
       sourceRepo: "apps/shell",
-    })).toThrow(/VIBEZ1_PRODUCT_SEED_PRIVATE_KEY_PEM/);
+    })).toThrow(/VIBESTUDIO_PRODUCT_SEED_PRIVATE_KEY_PEM/);
   });
 });

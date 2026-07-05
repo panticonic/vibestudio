@@ -42,7 +42,7 @@ export function buildWorkspaceContext(contextId: string): WorkspaceContext {
 // Section taxonomy — the SINGLE source of truth for which workspace dirs are
 // repos and how (container sections = `section/<name>` is a repo; flat sections
 // = the section dir itself is one repo; content sections = container repos with
-// no build unit). Lives here in @vibez1/shared because every layer depends on
+// no build unit). Lives here in @vibestudio/shared because every layer depends on
 // it; `src/server/vcsHost/repoDiscovery.ts` and `workspace/remotes.ts` re-import
 // these rather than re-declaring them.
 

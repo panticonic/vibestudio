@@ -4,7 +4,7 @@
  * Packages can declare workers they need in their package.json:
  * ```json
  * {
- *   "vibez1": {
+ *   "vibestudio": {
  *     "workers": {
  *       "monaco/editor.worker.js": "monaco-editor/esm/vs/editor/editor.worker.js"
  *     }
@@ -47,10 +47,10 @@ function collectFromPackage(pkgDir, workers, log) {
     return; // Skip malformed package.json
   }
 
-  const vibez1Workers = pkg.vibez1?.workers;
+  const vibestudioWorkers = pkg.vibestudio?.workers;
 
-  if (vibez1Workers && typeof vibez1Workers === "object") {
-    for (const [outputPath, specifier] of Object.entries(vibez1Workers)) {
+  if (vibestudioWorkers && typeof vibestudioWorkers === "object") {
+    for (const [outputPath, specifier] of Object.entries(vibestudioWorkers)) {
       if (typeof specifier !== "string") continue;
 
       if (workers[outputPath] && workers[outputPath].specifier !== specifier) {
@@ -138,7 +138,7 @@ function scanNodeModules(nodeModulesDir, workers, visited, log) {
  * Collect all worker declarations from a node_modules directory.
  *
  * Scans all installed packages (including scoped packages and nested
- * node_modules for transitive dependencies) for vibez1.workers
+ * node_modules for transitive dependencies) for vibestudio.workers
  * declarations in their package.json files.
  *
  * @param {string} nodeModulesDir - Path to node_modules directory

@@ -266,7 +266,7 @@ async function upsertRemote(repoDir: string, remote: ResolvedWorkspaceGitRemote)
   } else {
     await gitConfig(repoDir, ["remote", "add", remote.name, remote.url]);
   }
-  await gitConfig(repoDir, ["config", `remote.${remote.name}.vibez1-managed`, "true"], true);
+  await gitConfig(repoDir, ["config", `remote.${remote.name}.vibestudio-managed`, "true"], true);
 }
 
 async function removeRemote(repoDir: string, name: string): Promise<void> {
@@ -277,12 +277,12 @@ async function listManagedRemoteNames(repoDir: string): Promise<string[]> {
   const result = await gitConfig(repoDir, [
     "config",
     "--get-regexp",
-    "^remote\\..*\\.vibez1-managed$",
+    "^remote\\..*\\.vibestudio-managed$",
   ]);
   if (!result.ok) return [];
   const names = new Set<string>();
   for (const line of result.stdout.split(/\r?\n/)) {
-    const match = line.match(/^remote\.(.+)\.vibez1-managed\s+true$/);
+    const match = line.match(/^remote\.(.+)\.vibestudio-managed\s+true$/);
     if (match?.[1]) names.add(match[1]);
   }
   return [...names];

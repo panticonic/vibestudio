@@ -49,7 +49,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     await fsp.mkdir(path.join(workspaceRoot, "packages/foo"), { recursive: true });
     await fsp.writeFile(path.join(workspaceRoot, "packages/foo/index.ts"), "export const x = 1;\n");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: test\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibestudio.yml"), "name: test\n");
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
 
@@ -125,7 +125,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       "export const b = 1;\n"
     );
     await fsp.mkdir(path.join(coldWorkspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(coldWorkspaceRoot, "meta/vibez1.yml"), "name: cold\n");
+    await fsp.writeFile(path.join(coldWorkspaceRoot, "meta/vibestudio.yml"), "name: cold\n");
 
     const coldGad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad-cold-attach" });
     const coldRefs = createRefService({
@@ -239,11 +239,11 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
 
     // A raw disk edit to the source dir does NOT change the main view: no scan
     // adopts it, and `main` advances only through the gated push path.
-    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: imported\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibestudio.yml"), "name: imported\n");
     await vcs.ensureRepoLogsFromDisk(); // skips repos that already have a main
     const after = await vcs.ensureFresh();
     expect(after.stateHash).toBe(fresh.stateHash);
-    expect((await vcs.readFile(VCS_MAIN_HEAD, "vibez1.yml", "meta"))?.content).toMatchObject({
+    expect((await vcs.readFile(VCS_MAIN_HEAD, "vibestudio.yml", "meta"))?.content).toMatchObject({
       kind: "text",
       text: "name: test\n",
     });
@@ -395,7 +395,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
         .catch(() => null)
     ).toContain("ActionBar");
     expect(
-      await fsp.readFile(path.join(dir, "meta/vibez1.yml"), "utf8").catch(() => null)
+      await fsp.readFile(path.join(dir, "meta/vibestudio.yml"), "utf8").catch(() => null)
     ).toContain("test");
   });
 

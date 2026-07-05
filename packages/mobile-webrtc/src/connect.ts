@@ -2,7 +2,7 @@
  * Shared React Native WebRTC shell-connection helper, used by BOTH the native
  * host bootstrap (`apps/mobile/index.js`) and the workspace app
  * (`workspace/apps/mobile`, after the RN reload). Both bundle through the same
- * `apps/mobile/metro.config.js`, which resolves `@vibez1/<name>` to its `src/`.
+ * `apps/mobile/metro.config.js`, which resolves `@vibestudio/<name>` to its `src/`.
  *
  * It builds the WebRTC pipe + a `shell` session and wraps it in an RPC client.
  * The pipe FAILS CLOSED if the observed DTLS fingerprint does not match the
@@ -13,23 +13,23 @@
  */
 
 // MUST be first: installs TextDecoder/ReadableStream on Hermes before any
-// `@vibez1/rpc` module (the streamCodec) loads, or it throws on init.
+// `@vibestudio/rpc` module (the streamCodec) loads, or it throws on init.
 import "./polyfills.js";
 import { AppState, type AppStateStatus } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Keychain from "react-native-keychain";
-import { createRpcClient } from "@vibez1/rpc";
-import type { RpcClient } from "@vibez1/rpc";
-import type { WebRtcTransport, WebRtcSession } from "@vibez1/rpc/transports/webrtcClient";
-import { createPairedConnection } from "@vibez1/rpc/transports/pairedConnection";
-import { DEFAULT_CHUNK_SIZE } from "@vibez1/rpc/transports/webrtcPeer";
+import { createRpcClient } from "@vibestudio/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
+import type { WebRtcTransport, WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
+import { createPairedConnection } from "@vibestudio/rpc/transports/pairedConnection";
+import { DEFAULT_CHUNK_SIZE } from "@vibestudio/rpc/transports/webrtcPeer";
 import { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 
 /** Legacy AsyncStorage key (plaintext) — kept only to migrate off it on load. */
-export const SHELL_CREDENTIAL_KEY = "vibez1:webrtc:shell-credential";
+export const SHELL_CREDENTIAL_KEY = "vibestudio:webrtc:shell-credential";
 /** OS Keychain/Keystore service the durable shell credential is stored under. */
-const KEYCHAIN_SERVICE = "vibez1:webrtc:shell-credential";
+const KEYCHAIN_SERVICE = "vibestudio:webrtc:shell-credential";
 
 function parseStoredCredential(raw: string | null | undefined): StoredShellCredential | null {
   if (!raw) return null;

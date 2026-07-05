@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import { GZIP_MARKER_HEADER } from "@vibez1/shared/panel/assetHeaders";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { GZIP_MARKER_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { createGatewayFetchService } from "./gatewayFetchService.js";
 
 interface CapturedRequest {

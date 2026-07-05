@@ -50,12 +50,12 @@ describe("WorkerdInspectorBridge", () => {
     bridge = new WorkerdInspectorBridge({
       getInspectorUrl: () => "http://127.0.0.1:9229",
       protocol: "https",
-      externalHost: "vibez1.local",
+      externalHost: "vibestudio.local",
       port: 4100,
     });
     const endpoint = bridge.getEndpoint("core:user/worker host", "panel:x");
     expect(endpoint?.wsEndpoint).toBe(
-      "wss://vibez1.local:4100/workerd-inspector/core%3Auser%2Fworker%20host"
+      "wss://vibestudio.local:4100/workerd-inspector/core%3Auser%2Fworker%20host"
     );
     expect(endpoint?.token).toMatch(/^[0-9a-f]{64}$/);
   });

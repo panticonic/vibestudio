@@ -4,12 +4,12 @@
  * (src/main/cdpHostProvider.ts) without the webContents specifics.
  *
  * Connects to ws(s)://server[/_workspace/name]/api/cdp-host?hostConnectionId=..., authenticates
- * with {"type":"vibez1:cdp-auth", token}, re-registers all targets on every
+ * with {"type":"vibestudio:cdp-auth", token}, re-registers all targets on every
  * auth-ok (reconnects), and dispatches server commands to injected handlers.
  */
 import { WebSocket } from "ws";
-import { createDevLogger } from "@vibez1/dev-log";
-import { serverCdpHostWsUrl } from "@vibez1/shared/connect";
+import { createDevLogger } from "@vibestudio/dev-log";
+import { serverCdpHostWsUrl } from "@vibestudio/shared/connect";
 
 const log = createDevLogger("HeadlessHost:bridge");
 
@@ -165,7 +165,7 @@ export class CdpHostBridgeClient {
       void (async () => {
         try {
           const token = await this.opts.getToken();
-          socket.send(JSON.stringify({ type: "vibez1:cdp-auth", token }));
+          socket.send(JSON.stringify({ type: "vibestudio:cdp-auth", token }));
           this.updateDiagnostic({ state: "authenticating", authSent: true });
         } catch (error) {
           const message = errorMessage(error);
@@ -220,7 +220,7 @@ export class CdpHostBridgeClient {
     }
     if (message.type) this.updateDiagnostic({ lastMessageType: message.type });
     switch (message.type) {
-      case "vibez1:cdp-auth-ok": {
+      case "vibestudio:cdp-auth-ok": {
         this.authenticated = true;
         this.updateDiagnostic({ state: "authenticated", authenticated: true });
         // Re-register every hosted target (initial connect and reconnects).

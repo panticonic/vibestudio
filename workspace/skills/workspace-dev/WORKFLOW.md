@@ -227,7 +227,7 @@ a clean empty history). `forkProject` is the workspace-dev helper that copies
 only trackable workspace source, skips platform/generated artifacts such as
 `.gad/`, and rewrites the obvious references. A non-dry run performs edit →
 commit → push for the new repo. The lower-level `vcs.forkRepo(fromPath, toPath)`
-/ `vibez1 vcs fork-repo FROM TO` preserves history and rewrites only the
+/ `vibestudio vcs fork-repo FROM TO` preserves history and rewrites only the
 `package.json` `name` leaf so the fork is build-valid, leaving deeper renames
 (component/class names, contract sources, DO class bindings) to you.
 

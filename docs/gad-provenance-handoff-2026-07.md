@@ -1,7 +1,7 @@
 # Provenance-graph handoff: constraints on the narrow-host VCS work
 
 Date: 2026-07-03. Audience: the agent implementing `docs/narrow-host-vcs-plan.md`
-in this tree. Origin: the provenance-graph workstream in the `2-vibez1` worktree
+in this tree. Origin: the provenance-graph workstream in the `2-vibestudio` worktree
 (branch `claude/gad-system-review-6r1qpf`, spec:
 `docs/gad-provenance-fibers-design.md`), which will merge FROM this tree and
 build directly on the substrate you are reshaping.

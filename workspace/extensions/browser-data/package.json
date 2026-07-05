@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Browser Data",
     "entry": "index.ts",
     "sourcemap": true,
@@ -12,7 +12,7 @@
     }
   },
   "dependencies": {
-    "@vibez1/browser-data": "workspace:*",
+    "@vibestudio/browser-data": "workspace:*",
     "@workspace/browser-data": "workspace:*"
   }
 }

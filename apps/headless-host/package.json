@@ -1,12 +1,12 @@
 {
-  "name": "@vibez1/headless-host",
+  "name": "@vibestudio/headless-host",
   "version": "0.1.0",
-  "description": "Standalone headless Chromium panel host — Vibez1's renderer of last resort",
+  "description": "Standalone headless Chromium panel host — Vibestudio's renderer of last resort",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "vibez1-headless-host": "./dist/main.js"
+    "vibestudio-headless-host": "./dist/main.js"
   },
   "exports": {
     ".": {
@@ -20,9 +20,9 @@
     "test": "cd ../.. && vitest run apps/headless-host/src/*.test.ts apps/headless-host/src/*/*.test.ts"
   },
   "dependencies": {
-    "@vibez1/dev-log": "workspace:*",
-    "@vibez1/rpc": "workspace:*",
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/dev-log": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@puppeteer/browsers": "^2.6.1",
     "ws": "^8.18.0",
     "zod": "^3.24.0"

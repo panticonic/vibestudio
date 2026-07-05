@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { canonicalKey } from "@vibez1/shared/canonicalKey";
+import { canonicalKey } from "@vibestudio/shared/canonicalKey";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 import type {
   ApprovalPrincipal,
@@ -9,7 +9,7 @@ import type {
   UserlandApprovalGrant,
   UserlandApprovalIssuer,
   UserlandApprovalSubject,
-} from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvals";
 
 interface UserlandApprovalGrantFile {
   grants: UserlandApprovalGrant[];
@@ -190,7 +190,7 @@ function grantAppliesToPrincipal(
 function userlandVersionGrantRequiresCaller(
   principal: Pick<UserlandApprovalGrant["principal"], "repoPath" | "effectiveVersion">
 ): boolean {
-  return principal.effectiveVersion === "internal" || principal.repoPath === "vibez1/internal";
+  return principal.effectiveVersion === "internal" || principal.repoPath === "vibestudio/internal";
 }
 
 function issuerMatches(

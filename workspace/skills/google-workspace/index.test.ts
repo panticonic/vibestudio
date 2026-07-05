@@ -152,7 +152,7 @@ describe("google-workspace skill facade", () => {
     const status = await getGoogleOnboardingStatus();
 
     expect(status.stage).toBe("error");
-    expect(status.error).toContain("Vibez1 credential runtime is unavailable");
+    expect(status.error).toContain("Vibestudio credential runtime is unavailable");
     expect(status.error).toContain("Original error");
   });
 

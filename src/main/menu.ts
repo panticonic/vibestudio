@@ -1,13 +1,13 @@
 import { app, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
-import type { EventService } from "@vibez1/shared/eventsService";
+import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
-import type { BridgePanelLifecycle } from "@vibez1/shared/panelInterfaces";
-import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
+import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
+import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { assertPresent } from "../lintHelpers";
 // These page ids identify workspace-provided units under `about/` that the menu
 // assumes exist. The `navigate-about` payload is a page id (not a source); the
 // shell resolves it to the `about/<page>` unit and creates a privileged panel.
-import { ABOUT_PAGES } from "@vibez1/shared/workspace/aboutNamespace";
+import { ABOUT_PAGES } from "@vibestudio/shared/workspace/aboutNamespace";
 
 // Set during initialization — always non-null after startup
 let _menuPanelLifecycle: BridgePanelLifecycle | null = null;
@@ -500,7 +500,7 @@ export function setupMenu(
           },
         },
         {
-          label: "About Vibez1",
+          label: "About Vibestudio",
           click: () => {
             eventService().emit("navigate-about", { page: ABOUT_PAGES.ABOUT });
           },

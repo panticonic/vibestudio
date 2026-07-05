@@ -2,7 +2,7 @@
 
 ## Overview
 
-Vibez1's agentic system is a 2-layer server-side architecture. Pi
+Vibestudio's agentic system is a 2-layer server-side architecture. Pi
 (`@mariozechner/pi-coding-agent`) runs **in-process** inside each agent
 worker DO — there is no harness child process layer.
 
@@ -79,7 +79,7 @@ Location: `workspace/packages/agentic-do/src/agent-worker-base.ts`
 | `buildTurnInput(event)`       | Extract content                                                          | Transform to TurnInput                                                                    |
 | `getParticipantInfo()`        | Generic agent                                                            | Channel identity + advertised methods                                                     |
 
-The final prompt is composed from the Vibez1 base prompt,
+The final prompt is composed from the Vibestudio base prompt,
 `workspace/meta/AGENTS.md`, the generated skill index, and optional
 subscription prompt config. Workspace skills live under `workspace/skills/`
 and are discovered through the `workspace.*` RPC service.
@@ -120,16 +120,16 @@ is no auto-discovery, extensions are wired inline by `PiRunner`:
 ```typescript
 new DefaultResourceLoader({
   cwd: contextFolderPath,
-  agentDir: piAgentDir,            // Vibez1-managed sandbox dir
+  agentDir: piAgentDir,            // Vibestudio-managed sandbox dir
   noExtensions: true,
   noSkills: true,
   noPromptTemplates: true,
   noThemes: true,
   additionalSkillPaths: [/* workspace skill paths resolved via workspace RPC */],
   extensionFactories: [
-    vibez1ApprovalGateFactory(...),
-    vibez1ChannelToolsFactory(...),
-    vibez1AskUserFactory(...),
+    vibestudioApprovalGateFactory(...),
+    vibestudioChannelToolsFactory(...),
+    vibestudioAskUserFactory(...),
   ],
 })
 ```
@@ -141,7 +141,7 @@ skill/extension auto-discovery.
 API keys are bridged via `AuthStorage.setRuntimeApiKey(provider, key)` —
 priority #1 in Pi's auth resolution chain, ahead of any file-based auth.
 
-## Vibez1 Pi extensions
+## Vibestudio Pi extensions
 
 Three extension factories supplied inline by the worker (closure-bound, not
 Pi-package-portable). Live in `workspace/packages/harness/src/extensions/`:
@@ -156,8 +156,8 @@ Pi-package-portable). Live in `workspace/packages/harness/src/extensions/`:
 - **`ask-user.ts`** — Single `ask_user` tool that routes to a feedback_form
   on the channel via the worker callback.
 
-The `Vibez1ExtensionUIContext` class
-(`workspace/packages/harness/src/vibez1-extension-context.ts`) implements Pi's
+The `VibestudioExtensionUIContext` class
+(`workspace/packages/harness/src/vibestudio-extension-context.ts`) implements Pi's
 `ExtensionUIContext`. Each UI primitive (`select`, `confirm`, `input`,
 `notify`, `setStatus`, etc.) routes through worker-supplied callbacks that
 turn the request into a channel `feedback_form`, ephemeral notify, or
@@ -184,21 +184,21 @@ read via the `workspace.*` RPC service:
 workspace/
 ├── meta/
 │   ├── AGENTS.md        # Workspace system prompt content
-│   └── vibez1.yml     # Init panels and workspace config
+│   └── vibestudio.yml     # Init panels and workspace config
 └── skills/              # Workspace skills (sandbox, workspace-dev, onboarding, etc.)
     └── ...
 ```
 
-Extensions are Vibez1-only and live in `workspace/packages/harness/src/extensions/`
+Extensions are Vibestudio-only and live in `workspace/packages/harness/src/extensions/`
 as TypeScript modules supplied inline (closure-bound to the worker). There
 is no workspace-level extensions directory — chat behavior is intrinsically
-Vibez1-bound.
+Vibestudio-bound.
 
 ## Package map
 
 | Package                      | Location                              | Contents                                                                                    |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Workspace agent runtime      | `workspace/packages/harness/`         | `PiRunner`, `Vibez1ExtensionUIContext`, three extension factories, channel boundary types |
+| Workspace agent runtime      | `workspace/packages/harness/`         | `PiRunner`, `VibestudioExtensionUIContext`, three extension factories, channel boundary types |
 | Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                |
 | `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                            |
 | `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager                      |

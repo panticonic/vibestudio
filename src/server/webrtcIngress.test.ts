@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { WebRtcAnswererPipe } from "@vibez1/rpc/transports/webrtcAnswerer";
-import type { RtcCandidateType } from "@vibez1/rpc/transports/webrtcPeer";
+import type { WebRtcAnswererPipe } from "@vibestudio/rpc/transports/webrtcAnswerer";
+import type { RtcCandidateType } from "@vibestudio/rpc/transports/webrtcPeer";
 import { DeviceAuthStore } from "./services/deviceAuthStore.js";
 import { startWebRtcIngress, type WebRtcIngress } from "./webrtcIngress.js";
 
@@ -193,7 +193,7 @@ describe("startWebRtcIngress (the pool, plan §2.1)", () => {
 
   it("arms one room per stored device on startup (rooms persisted at redemption)", async () => {
     const storePath = path.join(
-      fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-ingress-boot-")),
+      fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-ingress-boot-")),
       "devices.json"
     );
     {

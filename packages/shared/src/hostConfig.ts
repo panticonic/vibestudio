@@ -1,5 +1,5 @@
 /**
- * HostConfig — resolved host/port configuration for a Vibez1 server.
+ * HostConfig — resolved host/port configuration for a Vibestudio server.
  *
  * The gateway serves loopback HTTP only. Remote access is WebRTC (DTLS-encrypted,
  * paired by QR), so there is no HTTPS/TLS branch, no remote-server URL, and no
@@ -27,9 +27,9 @@ export interface HostConfig {
  * multiplexes panel HTTP, RPC, git, and workerd ingress on a single port.
  *
  * Environment variables:
- * - VIBEZ1_HOST / --host: external hostname (sets bindHost to "0.0.0.0")
- * - VIBEZ1_BIND_HOST / --bind-host: explicit bind address
- * - VIBEZ1_GATEWAY_PORT / --gateway-port: gateway ingress port
+ * - VIBESTUDIO_HOST / --host: external hostname (sets bindHost to "0.0.0.0")
+ * - VIBESTUDIO_BIND_HOST / --bind-host: explicit bind address
+ * - VIBESTUDIO_GATEWAY_PORT / --gateway-port: gateway ingress port
  */
 export function resolveHostConfig(opts: {
   workerdPort: number;
@@ -37,8 +37,8 @@ export function resolveHostConfig(opts: {
   host?: string;
   bindHost?: string;
 }): HostConfig {
-  const envHost = process.env["VIBEZ1_HOST"] ?? opts.host;
-  const envBindHost = process.env["VIBEZ1_BIND_HOST"] ?? opts.bindHost;
+  const envHost = process.env["VIBESTUDIO_HOST"] ?? opts.host;
+  const envBindHost = process.env["VIBESTUDIO_BIND_HOST"] ?? opts.bindHost;
 
   const externalHost = envHost ?? "localhost";
   const bindHost = envBindHost ?? (envHost ? "0.0.0.0" : "127.0.0.1");

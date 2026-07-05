@@ -7,7 +7,7 @@
  *   - inline JSX in the doc (rendered by `LiveJsxEditor`) can import the
  *     package immediately
  *   - Preview-mode compilation has the package already cached in the
- *     panel's module map (`__vibez1ModuleMap__`)
+ *     panel's module map (`__vibestudioModuleMap__`)
  *
  * Internally calls `executeSandbox` with a no-op body and the `imports`
  * field, which is the public API that triggers `loadImports` → bundle

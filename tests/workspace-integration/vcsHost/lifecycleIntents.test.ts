@@ -32,7 +32,7 @@ import { VCS_MAIN_HEAD, logIdForRepo, vcsContextHead } from "../../../src/server
 import type { GadCaller } from "../../../src/server/vcsHost/testSupport.js";
 import { createRefService } from "../../../src/server/services/refService.js";
 import type { RefGateBatch } from "../../../src/server/services/refService.js";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -88,13 +88,13 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
     await fsp.mkdir(path.join(workspaceRoot, "packages/foo"), { recursive: true });
     await fsp.writeFile(
       path.join(workspaceRoot, "packages/foo/package.json"),
-      `{\n  "name": "@w/foo",\n  "vibez1": {}\n}\n`
+      `{\n  "name": "@w/foo",\n  "vibestudio": {}\n}\n`
     );
     await fsp.writeFile(path.join(workspaceRoot, "packages/foo/index.ts"), "export const x = 1;\n");
     await fsp.mkdir(path.join(workspaceRoot, "packages/bar"), { recursive: true });
     await fsp.writeFile(path.join(workspaceRoot, "packages/bar/index.ts"), "export const y = 1;\n");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: test\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibestudio.yml"), "name: test\n");
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     caller = callerFor(gad);

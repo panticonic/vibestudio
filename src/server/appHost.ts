@@ -25,49 +25,49 @@ import {
   type UnitReconcileOptions,
   type UnitReconcileTrigger,
   type UnitRegistryEntryBase,
-} from "@vibez1/unit-host";
-import type { EventService } from "@vibez1/shared/eventsService";
-import type { EventName } from "@vibez1/shared/events";
+} from "@vibestudio/unit-host";
+import type { EventService } from "@vibestudio/shared/eventsService";
+import type { EventName } from "@vibestudio/shared/events";
 import {
   isAuthorizedChromeAppSource,
   isAuthorizedConnectionManagementAppSource,
   normalizeAppSourcePath,
-} from "@vibez1/shared/chromeTrust";
+} from "@vibestudio/shared/chromeTrust";
 import type {
   PendingApproval,
   PendingUnitBatchApproval,
   UnitBatchEntry,
-} from "@vibez1/shared/approvals";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import { filterBootstrapApprovalsForTarget } from "@vibez1/shared/bootstrapApprovals";
+} from "@vibestudio/shared/approvals";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredApps,
-} from "@vibez1/shared/workspace/configParser";
+} from "@vibestudio/shared/workspace/configParser";
 import {
   UnitManifestError,
   appUnitManifestDescriptor,
   readAndValidateUnitManifest,
   type AppCapability,
   type WorkspaceAppTarget,
-} from "@vibez1/shared/unitManifest";
+} from "@vibestudio/shared/unitManifest";
 import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetLaunchResult,
   HostTargetSelection,
   HostTargetSelectionInput,
-} from "@vibez1/shared/hostTargets";
-import { appArtifactRoute, appArtifactUrl } from "@vibez1/shared/appArtifacts";
-import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+} from "@vibestudio/shared/hostTargets";
+import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
 import type { BuildArtifactManifestEntry, BuildMetadata } from "./buildV2/buildStore.js";
 import {
   createCapabilityAuthorizer,
   type CapabilityAuthorizer,
 } from "./services/capabilityAuthorizer.js";
-import type { ConnectionGrantService } from "@vibez1/shared/connectionGrants";
+import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { TerminalAppRunner } from "./terminalAppRunner.js";
 
 const APP_UNIT_DESCRIPTOR: UnitDescriptor<"app"> = {
@@ -351,7 +351,7 @@ export interface AppHostDeps {
   onHostTargetChanged?(target: HostTarget, reason: string): void;
   /**
    * The manifest-declared preferred app (and its required extensions) for a
-   * host target — `hostTargets.<target>` in meta/vibez1.yml, resolved via
+   * host target — `hostTargets.<target>` in meta/vibestudio.yml, resolved via
    * `resolveHostTargetDecl`. Absent (or null for a target) ⇒ no preferred
    * app: selection falls back to generic declared/recommended candidates,
    * never to a hardcoded unit name.
@@ -446,7 +446,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
           id: `apps-unresolved-${encodeURIComponent(sources.join(","))}`,
           type: "error",
           title: "Unknown apps declared",
-          message: `meta/vibez1.yml declares apps that don't exist: ${sources.join(", ")}.`,
+          message: `meta/vibestudio.yml declares apps that don't exist: ${sources.join(", ")}.`,
         });
       },
       validateBeforeApproval: (node) => this.validateAppManifestAtPath(node.path, node.name),
@@ -641,7 +641,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       (candidate) => candidate.compatibility.selectable
     );
     const declared = candidates.filter((candidate) => candidate.declared);
-    // Manifest-declared preference (meta/vibez1.yml hostTargets.<target>.app);
+    // Manifest-declared preference (meta/vibestudio.yml hostTargets.<target>.app);
     // no declaration ⇒ no preferred source (generic fallbacks only).
     const preferredSource = this.declaredHostTargetAppSource(target);
     const selected =
@@ -938,7 +938,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     if (!declared) {
       return {
         ready: false,
-        reason: "Terminal app is not declared in meta/vibez1.yml",
+        reason: "Terminal app is not declared in meta/vibestudio.yml",
         details: [`Declare ${candidate.source} under apps: before terminal clients can launch.`],
       };
     }
@@ -1336,7 +1336,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         ready: false,
         source: candidate.source,
         appId: candidate.name,
-        reason: "React Native app is not declared in meta/vibez1.yml",
+        reason: "React Native app is not declared in meta/vibestudio.yml",
         details: [`Declare ${candidate.source} under apps: before mobile clients can pair.`],
       };
     }
@@ -1354,7 +1354,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       const orderingDetail =
         requiredExtensions.length > 0
           ? `The declared extensions must start ${requiredExtensions.join(", ")} before ${candidate.source} can build.`
-          : `A React Native build-provider extension must be declared (meta/vibez1.yml hostTargets.react-native.requiresExtensions) and running before ${candidate.source} can build.`;
+          : `A React Native build-provider extension must be declared (meta/vibestudio.yml hostTargets.react-native.requiresExtensions) and running before ${candidate.source} can build.`;
       return {
         ...missingProvider,
         reason: "React Native build provider is not active",
@@ -1456,7 +1456,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         ready: false,
         source: candidate.source,
         appId: candidate.name,
-        reason: "Electron app is not declared in meta/vibez1.yml",
+        reason: "Electron app is not declared in meta/vibestudio.yml",
         details: [`Declare ${candidate.source} under apps: before desktop clients can pair.`],
       };
     }
@@ -1483,7 +1483,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
                       : ""
                   }`
               )
-            : ["No apps with vibez1.app.target: electron were found."],
+            : ["No apps with vibestudio.app.target: electron were found."],
       };
     }
 
@@ -1564,7 +1564,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
                       : ""
                   }`
               )
-            : ["No apps with vibez1.app.target: react-native were found."],
+            : ["No apps with vibestudio.app.target: react-native were found."],
       };
     }
     const normalizedSource = normalizeRepoPath(resolvedSource);
@@ -2165,7 +2165,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
 
   /**
    * The manifest-declared preferred app source for a host target
-   * (meta/vibez1.yml hostTargets.<target>.app), canonicalized, or null when
+   * (meta/vibestudio.yml hostTargets.<target>.app), canonicalized, or null when
    * the manifest declares none.
    */
   private declaredHostTargetAppSource(target: HostTarget): string | null {
@@ -2577,7 +2577,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
 
   private async readDeclaredAppsFromCommit(commit: string): Promise<WorkspaceAppDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibez1.yml");
+      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibestudio.yml");
       if (!content) return [];
       return resolveDeclaredApps(parseWorkspaceConfigContentWithId(content, this.deps.workspaceId));
     } catch {
@@ -2606,7 +2606,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const manifestTarget = node.manifest.app?.target;
     if (!manifestTarget) {
       throw new UnitManifestError(
-        `App ${node.name} manifest must declare vibez1.app.target`,
+        `App ${node.name} manifest must declare vibestudio.app.target`,
         "MANIFEST_APP_TARGET"
       );
     }
@@ -3032,7 +3032,7 @@ function readPackageVersion(nodePath: string): string {
 }
 
 function appDevDiagnosticsEnabled(): boolean {
-  const override = process.env["VIBEZ1_APP_DEV_STATUS"];
+  const override = process.env["VIBESTUDIO_APP_DEV_STATUS"];
   if (override === "0" || override === "false") return false;
   if (override === "1" || override === "true") return true;
   return process.env["NODE_ENV"] === "development";

@@ -23,7 +23,7 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
-const defaultReadyFile = path.join(os.tmpdir(), `vibez1-dev-webrtc-ready-${process.pid}.json`);
+const defaultReadyFile = path.join(os.tmpdir(), `vibestudio-dev-webrtc-ready-${process.pid}.json`);
 
 const children = new Set();
 let cleanupStarted = false;
@@ -125,7 +125,7 @@ function validateSignalUrl(value, label) {
 }
 
 function printHelp() {
-  console.log(`vibez1 dev WebRTC remote harness
+  console.log(`vibestudio dev WebRTC remote harness
 
 Usage:
   pnpm dev:webrtc [options]
@@ -142,14 +142,14 @@ Options:
   --gateway-port <port>    Local server gateway port. Defaults to a free port.
   --ready-file <path>      Server ready-file path. Defaults to an OS temp path.
   --timeout-ms <ms>        Startup timeout. Defaults to 180000.
-  --auto-approve           Forward Vibez1 dev auto-approval to Electron.
+  --auto-approve           Forward Vibestudio dev auto-approval to Electron.
   --electron-arg <arg>     Forward one raw arg to scripts/run-electron.mjs.
                            Repeat for multiple args.
   --no-build               Skip the initial node build.mjs step.
   --no-type-check          Do not start the background pnpm type-check.
 
 The harness starts a local workspace server as a WebRTC answerer and launches
-Electron with a vibez1://connect link plus --skip-remote-pairing, so stored
+Electron with a vibestudio://connect link plus --skip-remote-pairing, so stored
 remote credentials do not take over this run. Fresh credentials from this dev
 pairing are not persisted.
 `);
@@ -324,7 +324,7 @@ function waitForPairingLink(serverChild, timeoutMs) {
     let buffer = "";
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const match = buffer.match(/vibez1:\/\/connect\?\S+/);
+      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
       if (match) {
         cleanup();
         resolve(match[0]);
@@ -421,8 +421,8 @@ async function main() {
   }
 
   let signalUrl =
-    options.signalUrl ?? process.env["VIBEZ1_DEV_WEBRTC_SIGNAL_URL"] ?? null;
-  validateSignalUrl(signalUrl, "VIBEZ1_DEV_WEBRTC_SIGNAL_URL");
+    options.signalUrl ?? process.env["VIBESTUDIO_DEV_WEBRTC_SIGNAL_URL"] ?? null;
+  validateSignalUrl(signalUrl, "VIBESTUDIO_DEV_WEBRTC_SIGNAL_URL");
   if (!signalUrl) {
     const signalPort = options.signalPort ?? (await findFreePort());
     await startSignaling(signalPort);
@@ -436,8 +436,8 @@ async function main() {
   const serverEnv = {
     ...process.env,
     NODE_ENV: "development",
-    VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
-    VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
+    VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
+    VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
   };
   const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
     cwd: repoRoot,
@@ -481,7 +481,7 @@ async function main() {
     env: {
       ...process.env,
       NODE_ENV: "development",
-      VIBEZ1_DISABLE_REMOTE_CRED_PERSISTENCE: "1",
+      VIBESTUDIO_DISABLE_REMOTE_CRED_PERSISTENCE: "1",
     },
     label: "electron",
     stdio: "inherit",

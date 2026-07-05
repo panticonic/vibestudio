@@ -16,5 +16,5 @@ Create the PAT with a friendly access level such as
 `mode: "api-and-git"` are still available for lower-level agent flows. Verify a
 specific remote with `verifyGitHubGitRemoteAccess(remoteUrl, credentialId)`.
 
-Direct clone, pull, push, or fork workflows should use `@vibez1/git` with
+Direct clone, pull, push, or fork workflows should use `@vibestudio/git` with
 `credentials.gitHttp()` so the PAT is not exposed to panels or workers.

@@ -1,6 +1,6 @@
 import { WebContentsView, ipcMain, type BaseWindow } from "electron";
-import { createDevLogger } from "@vibez1/dev-log";
-import type { ContentOverlayTheme } from "@vibez1/shared/serviceSchemas/view";
+import { createDevLogger } from "@vibestudio/dev-log";
+import type { ContentOverlayTheme } from "@vibestudio/shared/serviceSchemas/view";
 
 const log = createDevLogger("ShellContentOverlayView");
 
@@ -125,9 +125,9 @@ export class ShellContentOverlayView {
     /** Forward a surface intent to the owning shell chrome. */
     private readonly forwardIntent: (payload: unknown) => void
   ) {
-    ipcMain.on("vibez1:content-overlay:size", this.handleSize);
-    ipcMain.on("vibez1:content-overlay:intent", this.handleIntent);
-    ipcMain.on("vibez1:content-overlay:drag", this.handleDrag);
+    ipcMain.on("vibestudio:content-overlay:size", this.handleSize);
+    ipcMain.on("vibestudio:content-overlay:intent", this.handleIntent);
+    ipcMain.on("vibestudio:content-overlay:drag", this.handleDrag);
   }
 
   setWindow(window: BaseWindow): void {
@@ -184,7 +184,7 @@ export class ShellContentOverlayView {
     this.contentHeight = MIN_HEIGHT;
     this.pendingFocus = false;
     if (!this.view || this.view.webContents.isDestroyed()) return;
-    if (this.loaded) this.view.webContents.send("vibez1:content-overlay:clear");
+    if (this.loaded) this.view.webContents.send("vibestudio:content-overlay:clear");
     this.view.setVisible(false);
     this.view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
   }
@@ -202,9 +202,9 @@ export class ShellContentOverlayView {
 
   destroy(): void {
     this.cancelSnap();
-    ipcMain.removeListener("vibez1:content-overlay:size", this.handleSize);
-    ipcMain.removeListener("vibez1:content-overlay:intent", this.handleIntent);
-    ipcMain.removeListener("vibez1:content-overlay:drag", this.handleDrag);
+    ipcMain.removeListener("vibestudio:content-overlay:size", this.handleSize);
+    ipcMain.removeListener("vibestudio:content-overlay:intent", this.handleIntent);
+    ipcMain.removeListener("vibestudio:content-overlay:drag", this.handleDrag);
     if (this.view && !this.view.webContents.isDestroyed()) {
       if (this.window) this.window.contentView.removeChildView(this.view);
       this.view.webContents.close();
@@ -266,7 +266,7 @@ export class ShellContentOverlayView {
     if (!this.view || this.view.webContents.isDestroyed()) return;
     if (!this.loaded || !this.surface || !this.theme || !this.anchor) return;
     const maxHeight = Math.max(MIN_HEIGHT, Math.round(this.anchor.height - 2 * ANCHOR_MARGIN));
-    this.view.webContents.send("vibez1:content-overlay:render", {
+    this.view.webContents.send("vibestudio:content-overlay:render", {
       surface: this.surface,
       props: this.props,
       theme: this.theme,

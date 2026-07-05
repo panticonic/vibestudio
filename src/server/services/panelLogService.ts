@@ -14,10 +14,10 @@
  * history stays queryable per-panel via the CDP host).
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { panelLogMethods, type PanelLogRecord } from "@vibez1/shared/serviceSchemas/panelLog";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { panelLogMethods, type PanelLogRecord } from "@vibestudio/shared/serviceSchemas/panelLog";
 
-export type { PanelLogRecord } from "@vibez1/shared/serviceSchemas/panelLog";
+export type { PanelLogRecord } from "@vibestudio/shared/serviceSchemas/panelLog";
 
 export interface PanelLogServiceDeps {
   onRecords: (records: PanelLogRecord[]) => void;

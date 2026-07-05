@@ -1,5 +1,5 @@
 /**
- * Vibez1 callback relay — RelayRegistry Durable Object.
+ * Vibestudio callback relay — RelayRegistry Durable Object.
  *
  * This is the SHARED backhaul + multi-tenant registry both relay profiles
  * (plan §7) hang off of. There is exactly one global instance
@@ -23,8 +23,8 @@
  *    online, so a broken path fails loud and the user retries.
  *
  * Trust model. The per-server backhaul connection is the trust anchor, NOT the
- * shared `VIBEZ1_RELAY_SIGNING_SECRET` (one un-versioned key, too weak for
- * tenant isolation — it only gates "is this a Vibez1 server at all"). Webhook
+ * shared `VIBESTUDIO_RELAY_SIGNING_SECRET` (one un-versioned key, too weak for
+ * tenant isolation — it only gates "is this a Vibestudio server at all"). Webhook
  * ownership is FIRST-WRITER-WINS bound to the backhaul identity (`serverId`):
  * once a server registers a subscriptionId, no other server can claim it.
  */
@@ -39,12 +39,12 @@ import {
 export interface Env {
   ENVIRONMENT?: string;
   /** HMAC key — signs the relay envelope AND authenticates the backhaul. */
-  VIBEZ1_RELAY_SIGNING_SECRET?: string;
+  VIBESTUDIO_RELAY_SIGNING_SECRET?: string;
   /** Apple universal-link app IDs (`<teamId>.<bundleId>`), comma-separated. */
-  VIBEZ1_APPLE_APP_ID?: string;
+  VIBESTUDIO_APPLE_APP_ID?: string;
   /** Android App Links package + signing-cert fingerprints. */
-  VIBEZ1_ANDROID_PACKAGE_NAME?: string;
-  VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS?: string;
+  VIBESTUDIO_ANDROID_PACKAGE_NAME?: string;
+  VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS?: string;
   RELAY_REGISTRY: DurableObjectNamespace;
 }
 
@@ -140,7 +140,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 /**
  * Verify a backhaul WS-upgrade. The server presents `?serverId&ts&sig` where
  * `sig = v1=HMAC(secret, "<serverId>\n<ts>")`. This authenticates "a legitimate
- * Vibez1 server" and fails closed; it does NOT prove WHICH tenant — that is
+ * Vibestudio server" and fails closed; it does NOT prove WHICH tenant — that is
  * first-writer-wins on the (unguessable) subscriptionId, bound to `serverId`.
  */
 export async function verifyBackhaulAuth(
@@ -174,8 +174,8 @@ export class RelayRegistry {
   ) {}
 
   private secret(): string {
-    const secret = this.env.VIBEZ1_RELAY_SIGNING_SECRET;
-    if (!secret) throw new Error("VIBEZ1_RELAY_SIGNING_SECRET is not configured");
+    const secret = this.env.VIBESTUDIO_RELAY_SIGNING_SECRET;
+    if (!secret) throw new Error("VIBESTUDIO_RELAY_SIGNING_SECRET is not configured");
     return secret;
   }
 
@@ -201,7 +201,7 @@ export class RelayRegistry {
   }
 
   private async handleBackhaulUpgrade(url: URL): Promise<Response> {
-    if (!(await verifyBackhaulAuth(url.searchParams, this.env.VIBEZ1_RELAY_SIGNING_SECRET, this.now()))) {
+    if (!(await verifyBackhaulAuth(url.searchParams, this.env.VIBESTUDIO_RELAY_SIGNING_SECRET, this.now()))) {
       return new Response("unauthorized backhaul", { status: 401 });
     }
     const serverId = url.searchParams.get("serverId")!;
@@ -360,8 +360,8 @@ export class RelayRegistry {
       return json({ error: "subscription not registered", subscriptionId }, { status: 404 });
     }
 
-    if (!this.env.VIBEZ1_RELAY_SIGNING_SECRET) {
-      return json({ error: "VIBEZ1_RELAY_SIGNING_SECRET is not configured" }, { status: 500 });
+    if (!this.env.VIBESTUDIO_RELAY_SIGNING_SECRET) {
+      return json({ error: "VIBESTUDIO_RELAY_SIGNING_SECRET is not configured" }, { status: 500 });
     }
 
     const rawBody = await request.arrayBuffer();

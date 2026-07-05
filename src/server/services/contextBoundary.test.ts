@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import {
   CONTEXT_BOUNDARY_CAPABILITY,

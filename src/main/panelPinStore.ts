@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "fs";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("PanelPinStore");
 

@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/signaling",
+  "name": "@vibestudio/signaling",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",

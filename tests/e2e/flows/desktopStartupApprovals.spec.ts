@@ -126,7 +126,7 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
         version: "0.1.0",
         private: true,
         type: "module",
-        vibez1: {
+        vibestudio: {
           displayName: "E2E Approval Extension",
           entry: "index.ts",
           extension: { activationEvents: ["*"] },
@@ -149,7 +149,7 @@ async function makeWorkspaceExtensionRequireApproval(workspaceDir: string): Prom
     ].join("\n"),
     "utf8"
   );
-  const configPath = path.join(sourceRoot, "meta", "vibez1.yml");
+  const configPath = path.join(sourceRoot, "meta", "vibestudio.yml");
   const config = (YAML.parse(await fs.readFile(configPath, "utf8")) ?? {}) as {
     extensions?: unknown[];
   };
@@ -472,7 +472,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
   const agentDebugStates = [];
   for (const channelName of channelNames) {
     const resolved = await rpcCall(testApp, "workers", "resolveService", [
-      "vibez1.channel.v1",
+      "vibestudio.channel.v1",
       channelName,
     ]).catch((error: unknown) => ({
       error: error instanceof Error ? error.message : String(error),
@@ -490,7 +490,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `globalThis.__vibez1Require__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getParticipants", [])`
+            `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getParticipants", [])`
           ).catch((error: unknown) => ({
             error: error instanceof Error ? error.message : String(error),
           }))
@@ -500,7 +500,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
         ? await executePanelScript(
             testApp.app,
             firstPanelId,
-            `(() => globalThis.__vibez1Require__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [0]).then((replay) => ({
+            `(() => globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(targetId)}, "getReplayAfter", [0]).then((replay) => ({
               ready: replay?.ready,
               snapshots: replay?.snapshots,
               logEvents: (replay?.logEvents ?? []).map((event) => ({
@@ -532,7 +532,7 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
           ? await executePanelScript(
               testApp.app,
               firstPanelId,
-              `globalThis.__vibez1Require__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
+              `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
             ).catch((error: unknown) => ({
               error: error instanceof Error ? error.message : String(error),
             }))
@@ -601,7 +601,7 @@ async function collectStartupAgentCompletion(
   const errors: string[] = [];
   for (const channelName of channelNames) {
     const resolved = await rpcCall(testApp, "workers", "resolveService", [
-      "vibez1.channel.v1",
+      "vibestudio.channel.v1",
       channelName,
     ]).catch((error: unknown) => {
       errors.push(
@@ -634,7 +634,7 @@ async function collectStartupAgentCompletion(
       testApp.app,
       firstPanelId,
       `(() => {
-        const rpc = globalThis.__vibez1Require__("@workspace/runtime").rpc;
+        const rpc = globalThis.__vibestudioRequire__("@workspace/runtime").rpc;
         const normalize = (event) => {
           const outer = event?.payload;
           const agentic = outer?.kind === "agentic.event" ? outer.payload : (outer?.payload?.kind ? outer.payload : outer);
@@ -735,7 +735,7 @@ async function collectStartupAgentCompletion(
       const debugState = await executePanelScript(
         testApp.app,
         firstPanelId,
-        `globalThis.__vibez1Require__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
+        `globalThis.__vibestudioRequire__("@workspace/runtime").rpc.call(${JSON.stringify(agentId)}, "getDebugState", [${JSON.stringify(channelName)}])`
       ).catch((error: unknown) => {
         pendingWork.push(
           `${agentId}: debug unavailable: ${

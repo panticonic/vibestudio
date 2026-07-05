@@ -5,11 +5,11 @@
 ```
 workspace/extensions/
 └── hello/
-    ├── package.json                   # manifest with vibez1.extension
+    ├── package.json                   # manifest with vibestudio.extension
     └── index.ts                       # entry — exports activate(ctx)
 ```
 
-The directory layout matches `workspace/panels/` and `workspace/workers/`. Each extension is a workspace unit; the build graph discovers it via the `vibez1.extension` block in `package.json`.
+The directory layout matches `workspace/panels/` and `workspace/workers/`. Each extension is a workspace unit; the build graph discovers it via the `vibestudio.extension` block in `package.json`.
 
 External extensions clone into the same tree at install time. There is no per-user installed/ directory.
 
@@ -21,7 +21,7 @@ External extensions clone into the same tree at install time. There is no per-us
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "vibez1": {
+  "vibestudio": {
     "displayName": "Hello",
     "entry": "index.ts",
     "sourcemap": true,
@@ -48,10 +48,10 @@ External extensions clone into the same tree at install time. There is no per-us
 | `name` | Convention: `@workspace-extensions/<short-name>` for workspace-internal extensions. Used as the install key and the argument to `extensions.use(...)`. |
 | `type` | Must be `"module"`. Extensions are loaded as ESM. |
 | `private` | Must be `true`. Workspace-internal packages are not publishable. |
-| `vibez1.entry` | Source entry, default `index.ts`. The TypeScript source is what ships — the build produces the bundle. |
-| `vibez1.sourcemap` | Must be `true` in v1 (inline maps; the build refuses to disable them). |
-| `vibez1.extension` | Block presence marks the unit as an extension. Must be the only kind-block (no `vibez1.worker` or `vibez1.panel` alongside it). |
-| `vibez1.extension.activationEvents` | Only `["*"]` is accepted in v1 (eager activation). Other values fail validation. |
+| `vibestudio.entry` | Source entry, default `index.ts`. The TypeScript source is what ships — the build produces the bundle. |
+| `vibestudio.sourcemap` | Must be `true` in v1 (inline maps; the build refuses to disable them). |
+| `vibestudio.extension` | Block presence marks the unit as an extension. Must be the only kind-block (no `vibestudio.worker` or `vibestudio.panel` alongside it). |
+| `vibestudio.extension.activationEvents` | Only `["*"]` is accepted in v1 (eager activation). Other values fail validation. |
 
 ### Dependency overrides
 
@@ -68,12 +68,12 @@ a fresh install.
 
 | Field | Default | Notes |
 |-------|---------|-------|
-| `vibez1.displayName` | package name | Human-readable name shown in the units panel. |
-| `vibez1.extension.dependencyMode` | `"auto"` | `"auto"` bundles plain JS deps, externalizes native/WASM ones. `"bundle"` forces bundling. `"external"` forces runtime install + load. |
+| `vibestudio.displayName` | package name | Human-readable name shown in the units panel. |
+| `vibestudio.extension.dependencyMode` | `"auto"` | `"auto"` bundles plain JS deps, externalizes native/WASM ones. `"bundle"` forces bundling. `"external"` forces runtime install + load. |
 
 ### Validation
 
-The manifest is validated at three points (`@vibez1/shared/unitManifest`):
+The manifest is validated at three points (`@vibestudio/shared/unitManifest`):
 
 1. **Build** — refuse to produce a bundle if the manifest is malformed.
 2. **Install** — refuse to record a registry entry before asking the user to approve.
@@ -84,7 +84,7 @@ Validation failures throw `UnitManifestError` with a machine-readable `code` (e.
 ## `activate(ctx)`
 
 ```ts
-import type { ExtensionContext, Disposable } from "@vibez1/extension";
+import type { ExtensionContext, Disposable } from "@vibestudio/extension";
 
 export interface HelloApi {
   greet(name: string): Promise<string>;

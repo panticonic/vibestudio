@@ -8,7 +8,7 @@
 import {
   isManagedHost,
   parsePanelUrl as parseSharedPanelUrl,
-} from "@vibez1/shared/shell/urlParsing";
+} from "@vibestudio/shared/shell/urlParsing";
 
 export { isManagedHost };
 
@@ -21,15 +21,15 @@ export const LOOPBACK_PANEL_HOST = "127.0.0.1";
 /**
  * Host configuration extracted from the server URL.
  *
- * Example: serverUrl "https://vibez1.example.com:3000"
+ * Example: serverUrl "https://vibestudio.example.com:3000"
  *   -> protocol: "https"
- *   -> host: "vibez1.example.com"
+ *   -> host: "vibestudio.example.com"
  *   -> port: "3000" (or empty for default ports)
  */
 export interface HostConfig {
   /** Protocol without trailing colon (e.g. "https") */
   protocol: string;
-  /** Host without port (e.g. "vibez1.example.com") */
+  /** Host without port (e.g. "vibestudio.example.com") */
   host: string;
   /** Port string, or empty if using default port for protocol */
   port: string;
@@ -40,7 +40,7 @@ export interface HostConfig {
 /**
  * Parse a server URL into a HostConfig.
  *
- * @param serverUrl - Full server URL, e.g. "https://vibez1.example.com:3000"
+ * @param serverUrl - Full server URL, e.g. "https://vibestudio.example.com:3000"
  */
 export function parseHostConfig(serverUrl: string): HostConfig {
   // Manual parsing instead of `new URL()` — Hermes doesn't fully implement URL API

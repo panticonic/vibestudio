@@ -17,7 +17,7 @@
  * No timeouts/deadlines are used anywhere: recovery is via abort/forced-reset only.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createTestDO } from "@vibez1/durable/test-utils";
+import { createTestDO } from "@vibestudio/durable/test-utils";
 import { EvalDO } from "./evalDO.js";
 
 type RunResult = { success: boolean; console: string; returnValue?: unknown; error?: string };

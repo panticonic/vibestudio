@@ -1,2 +1,2 @@
-export { BrowserDataError } from "@vibez1/browser-data";
-export type { BrowserDataErrorCode } from "@vibez1/browser-data";
+export { BrowserDataError } from "@vibestudio/browser-data";
+export type { BrowserDataErrorCode } from "@vibestudio/browser-data";

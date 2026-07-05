@@ -3,7 +3,7 @@ import * as path from "path";
 import type {
   LocalPanelViewState,
   LocalPanelViewStateStore,
-} from "@vibez1/shared/shell/panelManager";
+} from "@vibestudio/shared/shell/panelManager";
 
 export function createElectronLocalViewStateStore(statePath: string): LocalPanelViewStateStore {
   const filePath = path.join(statePath, "local-view-state", "panels.json");

@@ -3,12 +3,12 @@ import { execute, defaultCompileFunction, type CompileFunction } from "./execute
 
 /**
  * The realm seam: realms where `new Function` is blocked (the workerd EvalDO kernel)
- * inject a compiler — via `ExecuteOptions.compileFunction` or the `__vibez1CompileFunction__`
+ * inject a compiler — via `ExecuteOptions.compileFunction` or the `__vibestudioCompileFunction__`
  * global. The default stays native `new Function` so panels/CLI are unaffected.
  */
 describe("compileFunction seam", () => {
   afterEach(() => {
-    delete (globalThis as Record<string, unknown>)["__vibez1CompileFunction__"];
+    delete (globalThis as Record<string, unknown>)["__vibestudioCompileFunction__"];
   });
 
   it("execute() routes through an injected compileFunction", () => {
@@ -25,14 +25,14 @@ describe("compileFunction seam", () => {
     expect(captured!.body).toContain("return 1 + 1;");
   });
 
-  it("defaultCompileFunction honors the __vibez1CompileFunction__ global override", () => {
+  it("defaultCompileFunction honors the __vibestudioCompileFunction__ global override", () => {
     let used = false;
     const override: CompileFunction = (argNames, body) => {
       used = true;
       // eslint-disable-next-line no-new-func
       return new Function(...argNames, body) as (...a: unknown[]) => unknown;
     };
-    (globalThis as Record<string, unknown>)["__vibez1CompileFunction__"] = override;
+    (globalThis as Record<string, unknown>)["__vibestudioCompileFunction__"] = override;
     const fn = defaultCompileFunction(["a"], "return a * 3;");
     expect(fn(7)).toBe(21);
     expect(used).toBe(true);

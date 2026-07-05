@@ -2,15 +2,15 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSetAtom } from "jotai";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import { Box, Button, Card, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
-import { Vibez1Logo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui";
 import { useIsMobile } from "@workspace/react/responsive";
 
 import type { LazyTitleNavigationData, LazyStatusNavigationData } from "./navigationTypes";
-import type { PanelContextMenuAction } from "@vibez1/shared/types";
+import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import type {
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
-} from "@vibez1/shared/panel/panelLease";
+} from "@vibestudio/shared/panel/panelLease";
 import {
   DEFAULT_SEARCH_TEMPLATE,
   applySearchTemplate,
@@ -18,14 +18,14 @@ import {
   getBrowserNavigationIntentForCommand,
   type AddressNavigationMode,
   type PanelCommandId,
-} from "@vibez1/shared/panelCommands";
+} from "@vibestudio/shared/panelCommands";
 import {
   buildPanelChromeState,
   isBrowserPanelSource,
   parseAddressInput,
   type AddressAction,
   type PanelChromeState,
-} from "@vibez1/shared/panelChrome";
+} from "@vibestudio/shared/panelChrome";
 import {
   useRootPanels,
   useFullPanel,
@@ -36,7 +36,7 @@ import {
 } from "../shell/hooks/PanelTreeContext";
 import { app, panel as panelService, view } from "../shell/client";
 import { pinMutationSeqAtom, pinnedPanelIdsAtom } from "../state/appModeAtoms";
-import { getCurrentSnapshot } from "@vibez1/shared/panel/accessors";
+import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { useNavigation } from "./NavigationContext";
 import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";
@@ -881,7 +881,7 @@ export function PanelStack({
         gap="3"
         style={{ flex: 1, height: "100%" }}
       >
-        <Vibez1Logo size={68} variant="mark" />
+        <VibestudioLogo size={68} variant="mark" />
         <Spinner size="3" />
         <Text>Initializing panels...</Text>
       </Flex>
@@ -897,7 +897,7 @@ export function PanelStack({
         gap="3"
         style={{ flex: 1, height: "100%", textAlign: "center" }}
       >
-        <Vibez1Logo size={72} variant="mark" />
+        <VibestudioLogo size={72} variant="mark" />
         <Text weight="medium">No panels available.</Text>
         <Text size="2" color="gray">
           Create a panel or choose another workspace to continue.
@@ -911,7 +911,7 @@ export function PanelStack({
     if (!visiblePanel) {
       return (
         <Flex direction="column" align="center" justify="center" gap="3" height="100%">
-          <Vibez1Logo size={56} variant="mark" />
+          <VibestudioLogo size={56} variant="mark" />
           <Spinner size="3" />
           <Text>Loading panel...</Text>
         </Flex>

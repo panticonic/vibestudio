@@ -8,10 +8,10 @@ import {
   type DeferrableRpcClient,
   type RpcEnvelope,
   type RpcRequest,
-} from "@vibez1/rpc";
+} from "@vibestudio/rpc";
 
 // Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
-export { rpc } from "@vibez1/rpc";
+export { rpc } from "@vibestudio/rpc";
 
 export interface DurableObjectContext {
   id: { toString(): string; name?: string };

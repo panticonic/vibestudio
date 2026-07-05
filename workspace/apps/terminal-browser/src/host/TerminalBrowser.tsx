@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text, useApp, useStdin } from "ink";
-import type { ApprovalDecisionId } from "@vibez1/shared/approvalContract";
-import type { PendingApproval } from "@vibez1/shared/approvals";
+import type { ApprovalDecisionId } from "@vibestudio/shared/approvalContract";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { SessionManager, type SessionSourceSpec } from "./SessionManager.js";
 import { classifyChord, parseNavKey } from "./inputRouter.js";
 import type { ApprovalsClient } from "../approvals/approvalsClient.js";

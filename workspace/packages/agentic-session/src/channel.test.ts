@@ -241,12 +241,12 @@ describe("subscribeHeadlessAgent — unified contract", () => {
       contextId: "ctx-1",
       extraConfig: {
         systemPrompt: "Headless prompt",
-        systemPromptMode: "replace-vibez1",
+        systemPromptMode: "replace-vibestudio",
       },
     });
 
     expect(captured.config!["systemPrompt"]).toBe("Headless prompt");
-    expect(captured.config!["systemPromptMode"]).toBe("replace-vibez1");
+    expect(captured.config!["systemPromptMode"]).toBe("replace-vibestudio");
   });
 
   it("preserves worker-specific extras on the subscription while stripping settings", async () => {

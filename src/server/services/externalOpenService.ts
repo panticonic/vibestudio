@@ -1,13 +1,13 @@
-import type { EventService } from "@vibez1/shared/eventsService";
-import { assertAllowedOAuthExternalUrl } from "@vibez1/shared/externalOpen";
-import type { OpenExternalOptions, OpenExternalResult } from "@vibez1/shared/externalOpen";
-import { externalOpenMethods } from "@vibez1/shared/serviceSchemas/externalOpen";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import type { EventService } from "@vibestudio/shared/eventsService";
+import { assertAllowedOAuthExternalUrl } from "@vibestudio/shared/externalOpen";
+import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
+import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { withCapability } from "./capabilityPermission.js";
-import type { DeferredResult } from "@vibez1/shared/serviceDispatcher";
+import type { DeferredResult } from "@vibestudio/shared/serviceDispatcher";
 
 const CAPABILITY = "external-browser-open";
 const OPEN_EXTERNAL_ALLOWED_SCHEMES = new Set(["http:", "https:", "mailto:"]);

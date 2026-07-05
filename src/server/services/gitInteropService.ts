@@ -4,11 +4,11 @@ import * as fsPromises from "fs/promises";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 import YAML from "yaml";
-import { GitClient } from "@vibez1/git";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { ServiceContext, VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
-import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "@vibez1/shared/workspace/types";
+import { GitClient } from "@vibestudio/git";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "@vibestudio/shared/workspace/types";
 import {
   getDeclaredRemoteForRepo,
   getDeclaredRemotesForRepo,
@@ -19,9 +19,9 @@ import {
   syncDeclaredRemoteForRepo,
   validateWorkspaceGitRemote,
   validateWorkspaceGitRemoteName,
-} from "@vibez1/shared/workspace/remotes";
-import { WORKSPACE_IMPORT_PARENT_DIRS } from "@vibez1/shared/workspace/sourceDirs";
-import { gitInteropMethods } from "@vibez1/shared/serviceSchemas/gitInterop";
+} from "@vibestudio/shared/workspace/remotes";
+import { WORKSPACE_IMPORT_PARENT_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
+import { gitInteropMethods } from "@vibestudio/shared/serviceSchemas/gitInterop";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { EgressProxy } from "./egressProxy.js";
@@ -424,7 +424,7 @@ async function workspaceConfigWouldChange(
   nextConfig: WorkspaceConfig
 ): Promise<boolean> {
   const metaDir = join(workspacePath, "meta");
-  const configPath = join(metaDir, "vibez1.yml");
+  const configPath = join(metaDir, "vibestudio.yml");
   const before = await readFile(configPath, "utf-8");
   const beforeParsed = YAML.parse(before) as Record<string, unknown>;
   const nextContent = YAML.stringify({ ...beforeParsed, ...nextConfig });
@@ -437,7 +437,7 @@ async function persistWorkspaceConfigChange(
   nextConfig: WorkspaceConfig
 ): Promise<boolean> {
   const metaDir = join(workspacePath, "meta");
-  const configPath = join(metaDir, "vibez1.yml");
+  const configPath = join(metaDir, "vibestudio.yml");
   const before = await readFile(configPath, "utf-8");
   const beforeParsed = YAML.parse(before) as Record<string, unknown>;
   const nextContent = YAML.stringify({ ...beforeParsed, ...nextConfig });
@@ -539,7 +539,7 @@ function displayRemoteUrl(value: string): string {
 
 function workspaceConfigImportSummary(unitPath: string, remote: WorkspaceGitRemoteConfig): string {
   const branch = remote.branch ? ` on ${remote.branch}` : "";
-  return `meta/vibez1.yml records ${remote.name}=${displayRemoteUrl(remote.url)} for ${unitPath}${branch}`;
+  return `meta/vibestudio.yml records ${remote.name}=${displayRemoteUrl(remote.url)} for ${unitPath}${branch}`;
 }
 
 function resolveWorkspaceRepoPath(

@@ -15,7 +15,7 @@
  * Related contracts that live elsewhere by necessity:
  *   - `packages/shared/src/workspace/extensionRegistry.ts` — the host-generated
  *     extensions-registry barrel delivered into the runtime SDK package
- *     ({@link RUNTIME_MODULE}). It lives in `@vibez1/shared` because the
+ *     ({@link RUNTIME_MODULE}). It lives in `@vibestudio/shared` because the
  *     generator is called from the server outside the build system; the sink
  *     is discovered by an in-file directive, not a hardcoded path.
  */
@@ -44,7 +44,7 @@
  *   - A named `fs` export: an object/Proxy of async Node-fs-shaped methods
  *     (`readFile`, `writeFile`, `readdir`, `stat`, ...) — the fs shim and the
  *     worker `fs` module-map registration destructure methods off it.
- *   - Its panel entry (condition `vibez1-panel`) self-initializes on load; its
+ *   - Its panel entry (condition `vibestudio-panel`) self-initializes on load; its
  *     worker entry (conditions `worker`/`workerd`) must NOT self-initialize.
  */
 export const RUNTIME_MODULE = "@workspace/runtime";
@@ -54,7 +54,7 @@ export const RUNTIME_MODULE = "@workspace/runtime";
  * tooling inside the eval sandbox.
  *
  * Why the host requires it: worker builds that expose {@link RUNTIME_MODULE}
- * force this module onto `__vibez1ModuleMap__` too, so sandboxed eval code can
+ * force this module onto `__vibestudioModuleMap__` too, so sandboxed eval code can
  * `require("@workspace/cdp-client")` without declaring it in the worker's own
  * manifest. The host registers the whole module namespace; no specific named
  * export is consumed by host code itself.
@@ -120,7 +120,7 @@ export const TERMINAL_SHIM_TERMINAL_SIZE = `${TERMINAL_SHIM_MODULE}/node/termina
  *     module namespace when `shouldAutoMount` returns true.
  *
  * A unit may substitute its own implementation of this contract via the
- * `vibez1.frameworkModule` manifest field (a bare specifier); the generated
+ * `vibestudio.frameworkModule` manifest field (a bare specifier); the generated
  * entry then imports the same two functions from that module instead.
  */
 export interface FrameworkModuleContract {

@@ -24,14 +24,14 @@ async function callShellView(testApp: TestApp, method: string, arg?: unknown): P
           // The hosted shell app is the one exposing the privileged app bridge
           // (the bootstrap gate does not).
           const isShell = await contents.executeJavaScript(
-            `!!(globalThis.__vibez1App && globalThis.__vibez1App.serviceCall)`,
+            `!!(globalThis.__vibestudioApp && globalThis.__vibestudioApp.serviceCall)`,
             true
           );
           if (!isShell) continue;
           const call =
             request.arg === undefined
-              ? `globalThis.__vibez1App.serviceCall(${JSON.stringify("view." + request.method)})`
-              : `globalThis.__vibez1App.serviceCall(${JSON.stringify("view." + request.method)}, ${JSON.stringify(request.arg)})`;
+              ? `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)})`
+              : `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)}, ${JSON.stringify(request.arg)})`;
           return await contents.executeJavaScript(call, true);
         } catch {
           // Try the next webContents.
@@ -87,7 +87,7 @@ async function probeOverlay(
       if (contents.isDestroyed()) continue;
       try {
         const isOverlay = await contents.executeJavaScript(
-          `!!globalThis.__vibez1ContentOverlay`,
+          `!!globalThis.__vibestudioContentOverlay`,
           true
         );
         if (!isOverlay) continue;
@@ -122,14 +122,14 @@ async function driveOverlayDrag(
       if (contents.isDestroyed()) continue;
       try {
         const isOverlay = await contents.executeJavaScript(
-          `!!(globalThis.__vibez1ContentOverlay && globalThis.__vibez1ContentOverlay.reportDrag)`,
+          `!!(globalThis.__vibestudioContentOverlay && globalThis.__vibestudioContentOverlay.reportDrag)`,
           true
         );
         if (!isOverlay) continue;
         await contents.executeJavaScript(
           `(() => {
             for (const s of ${JSON.stringify(gesture)}) {
-              globalThis.__vibez1ContentOverlay.reportDrag(s.phase, s.x, s.y);
+              globalThis.__vibestudioContentOverlay.reportDrag(s.phase, s.x, s.y);
             }
             return true;
           })()`,
@@ -153,7 +153,7 @@ async function dumpWebContents(testApp: TestApp): Promise<unknown> {
       try {
         const info = (await contents.executeJavaScript(
           `(() => ({
-            overlay: !!globalThis.__vibez1ContentOverlay,
+            overlay: !!globalThis.__vibestudioContentOverlay,
             cardLen: document.querySelectorAll(".approval-card").length,
           }))()`,
           true

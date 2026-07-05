@@ -13,16 +13,16 @@
  * Note: `openPanel(url)` (for opening external URL panels with CDP access)
  * is available from `@workspace/runtime`, not this package.
  */
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 // Resolve the host RPC client through the module system, NOT
-// `globalThis.__vibez1Require__`. A normal import is externalized by the build
+// `globalThis.__vibestudioRequire__`. A normal import is externalized by the build
 // and resolved via the bundle's own require — which maps to the panel runtime in
 // a panel and to the EvalDO's per-owner runtime in eval. Reaching for the global
 // require only works in panels (where `@workspace/runtime` sits in the per-isolate
 // global map); the eval sandbox keeps each owner's runtime in a per-object map, so
 // the global lookup misses there.
 import { rpc as runtimeRpc } from "@workspace/runtime";
-// ---- Types (mirrored from @vibez1/browser-data for browser context) ----
+// ---- Types (mirrored from @vibestudio/browser-data for browser context) ----
 export type BrowserName =
   | "firefox"
   | "zen"
@@ -425,7 +425,7 @@ export function createBrowserDataApi(rpc: Pick<RpcClient, "call" | "stream">): B
         const name = browserDataBrokerPackageName(config);
         if (!name) {
           throw new Error(
-            "browser-data: no broker extension is declared in meta/vibez1.yml (providers.browserData.extension) — browser data is unavailable"
+            "browser-data: no broker extension is declared in meta/vibestudio.yml (providers.browserData.extension) — browser data is unavailable"
           );
         }
         return name;

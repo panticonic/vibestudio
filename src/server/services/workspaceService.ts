@@ -23,11 +23,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { ServiceError, type ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
-import type { Workspace, WorkspaceConfig } from "@vibez1/shared/workspace/types";
-import type { ApprovalDetailFormat, ApprovalPrincipal } from "@vibez1/shared/approvals";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { Workspace, WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import type { ApprovalDetailFormat, ApprovalPrincipal } from "@vibestudio/shared/approvals";
 import type {
   HostTarget,
   HostTargetCandidate,
@@ -35,8 +35,8 @@ import type {
   HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
   HostTargetSelectionInput,
-} from "@vibez1/shared/hostTargets";
-import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+} from "@vibestudio/shared/hostTargets";
+import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import type {
   WorkspaceAppVersions,
   WorkspaceHeartbeatSelector,
@@ -46,7 +46,7 @@ import type {
   WorkspaceUnitDiagnostics,
   WorkspaceUnitLogRecord,
   WorkspaceUnitStatus,
-} from "@vibez1/shared/serviceSchemas/workspace";
+} from "@vibestudio/shared/serviceSchemas/workspace";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
@@ -64,7 +64,7 @@ export type {
   WorkspaceUnitDiagnostics,
   WorkspaceUnitLogRecord,
   WorkspaceUnitStatus,
-} from "@vibez1/shared/serviceSchemas/workspace";
+} from "@vibestudio/shared/serviceSchemas/workspace";
 
 /**
  * Minimal metadata for a skill directory under `<workspace>/skills/<name>/`.
@@ -187,7 +187,7 @@ export interface WorkspaceServiceDeps {
   listAppVersions?: (sourceOrName: string) => Promise<WorkspaceAppVersions> | WorkspaceAppVersions;
   /** Roll an app unit back to a previous active build. */
   rollbackAppVersion?: (sourceOrName: string, buildKey?: string) => Promise<unknown> | unknown;
-  /** List declarative scheduled jobs from meta/vibez1.yml with durable run state. */
+  /** List declarative scheduled jobs from meta/vibestudio.yml with durable run state. */
   listRecurringJobs?: () => Promise<WorkspaceRecurringJobStatus[]> | WorkspaceRecurringJobStatus[];
   listHeartbeats?: () => Promise<WorkspaceHeartbeatStatus[]> | WorkspaceHeartbeatStatus[];
   runHeartbeatNow?: (
@@ -604,7 +604,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           await requireWorkspaceApproval(deps, ctx, "setConfigField", {
             target: key,
             title: "Change workspace config?",
-            summary: "This panel or worker wants to write a field in meta/vibez1.yml.",
+            summary: "This panel or worker wants to write a field in meta/vibestudio.yml.",
             warning: "Changing workspace config can affect how the workspace starts and runs.",
             details: [
               { label: "Config key", value: key },

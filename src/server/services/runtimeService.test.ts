@@ -3,24 +3,24 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { createTestDO } from "@vibez1/durable/test-utils";
+import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createRuntimeService } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import {
   canonicalEntityId,
   type EntityRecord,
   type RuntimeEntityCreateSpec,
-} from "@vibez1/shared/runtime/entitySpec";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/runtime/entitySpec";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import type { DODispatch, DORef } from "../doDispatch.js";
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-runtime-svc-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-svc-"));
 }
 
 function approvalQueueMock(

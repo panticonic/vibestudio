@@ -6,7 +6,7 @@
  *
  * Features:
  * - Left: hamburger menu button to open the panel drawer
- * - Center: current panel title (or "Vibez1" if no panel selected)
+ * - Center: current panel title (or "Vibestudio" if no panel selected)
  * - Right: "+" button to create a new panel
  * - Uses safe area insets for status bar spacing
  */
@@ -31,8 +31,8 @@ import {
   splitTextByMatchRanges,
   type AddressAutocompleteItem,
   type TextMatchRange,
-} from "@vibez1/shared/panelChrome";
-import { Vibez1Logo } from "./Vibez1Logo";
+} from "@vibestudio/shared/panelChrome";
+import { VibestudioLogo } from "./VibestudioLogo";
 
 interface AppBarProps {
   /** Title to display in the center */
@@ -164,7 +164,7 @@ export function AppBar({
           </View>
         </Pressable>
 
-        <Vibez1Logo size={30} variant="mark" style={styles.brandLogo} />
+        <VibestudioLogo size={30} variant="mark" style={styles.brandLogo} />
 
         {/* Panel title */}
         <Text

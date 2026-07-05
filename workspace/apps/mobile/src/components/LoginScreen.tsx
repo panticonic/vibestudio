@@ -8,7 +8,7 @@ import {
   StoredCredentialsNeedRepairError,
   type Credentials,
 } from "../services/auth";
-import { loadShellCredential, clearShellCredential } from "@vibez1/mobile-webrtc";
+import { loadShellCredential, clearShellCredential } from "@vibestudio/mobile-webrtc";
 import { ShellClient } from "../services/shellClient";
 import {
   serverUrlAtom,
@@ -19,11 +19,11 @@ import {
 import { connectionStatusAtom } from "../state/connectionAtoms";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
-import { Vibez1Logo } from "./Vibez1Logo";
+import { VibestudioLogo } from "./VibestudioLogo";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
-  console.log(`[Vibez1MobileSmoke] phase=${phase}${suffix}`);
+  console.log(`[VibestudioMobileSmoke] phase=${phase}${suffix}`);
 }
 
 type LoginScreenNavigationProp = StackNavigationProp<RootStackParamList, "Login">;
@@ -34,9 +34,9 @@ interface LoginScreenProps {
 
 function missingWorkspaceMessage(credentials: Credentials | null): string {
   if (!credentials) {
-    return "No selected workspace is stored on this device. Scan a Vibez1 pairing QR code to choose a workspace.";
+    return "No selected workspace is stored on this device. Scan a Vibestudio pairing QR code to choose a workspace.";
   }
-  return "This device is paired with a server, but no workspace is selected. Scan a Vibez1 pairing QR code to choose a workspace.";
+  return "This device is paired with a server, but no workspace is selected. Scan a Vibestudio pairing QR code to choose a workspace.";
 }
 
 export function LoginScreen({ navigation }: LoginScreenProps) {
@@ -99,7 +99,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         smokePhase("workspace-login-credentials", { hasShellCredential: Boolean(stored) });
         if (!stored) {
           throw new Error(
-            "No Vibez1 pairing is stored on this device. Scan a pairing QR code from a trusted desktop or terminal."
+            "No Vibestudio pairing is stored on this device. Scan a pairing QR code from a trusted desktop or terminal."
           );
         }
         const credentials: Credentials = {
@@ -169,8 +169,8 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={styles.content}>
-        <Vibez1Logo size={84} variant="tile" style={styles.brandMark} />
-        <Text style={[styles.title, { color: colors.text }]}>Vibez1</Text>
+        <VibestudioLogo size={84} variant="tile" style={styles.brandMark} />
+        <Text style={[styles.title, { color: colors.text }]}>Vibestudio</Text>
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           Opening the selected workspace
         </Text>
@@ -179,7 +179,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           <View style={styles.loadingBlock}>
             <ActivityIndicator color={colors.primary} size="large" />
             <Text style={[styles.message, { color: colors.textSecondary }]}>
-              Connecting to your Vibez1 workspace...
+              Connecting to your Vibestudio workspace...
             </Text>
           </View>
         ) : null}

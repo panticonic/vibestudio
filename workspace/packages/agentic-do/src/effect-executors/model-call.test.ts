@@ -392,15 +392,15 @@ describe("modelCallExecutor", () => {
     });
   });
 
-  it("returns a deterministic OpenAI Codex response in VIBEZ1_TEST_MODE without credential lookup", async () => {
-    const previous = process.env["VIBEZ1_TEST_MODE"];
-    delete process.env["VIBEZ1_TEST_MODE"];
+  it("returns a deterministic OpenAI Codex response in VIBESTUDIO_TEST_MODE without credential lookup", async () => {
+    const previous = process.env["VIBESTUDIO_TEST_MODE"];
+    delete process.env["VIBESTUDIO_TEST_MODE"];
     try {
       mocks.getModel.mockReturnValue({ baseUrl: "https://chatgpt.com/backend-api" });
       const getApiKey = vi.fn(async () => ({ apiKey: "test-key" }));
       const inputDeps = deps();
       inputDeps.credentials.getApiKey = getApiKey;
-      inputDeps.env = { VIBEZ1_TEST_MODE: "1" };
+      inputDeps.env = { VIBESTUDIO_TEST_MODE: "1" };
       const inputDescriptor = descriptor();
       inputDescriptor.request.provider = "openai-codex";
       inputDescriptor.request.model = "gpt-5.3-codex-spark";
@@ -427,9 +427,9 @@ describe("modelCallExecutor", () => {
       });
     } finally {
       if (previous === undefined) {
-        delete process.env["VIBEZ1_TEST_MODE"];
+        delete process.env["VIBESTUDIO_TEST_MODE"];
       } else {
-        process.env["VIBEZ1_TEST_MODE"] = previous;
+        process.env["VIBESTUDIO_TEST_MODE"] = previous;
       }
     }
   });
@@ -504,7 +504,7 @@ describe("modelCallExecutor", () => {
       descriptor: inputDescriptor,
       state: initialAgentState({ channelId: "channel-1", config }),
       signal: new AbortController().signal,
-      deps: { ...deps(), env: { VIBEZ1_TEST_MODE: "1" } },
+      deps: { ...deps(), env: { VIBESTUDIO_TEST_MODE: "1" } },
       onEphemeral: () => {},
     });
     expect(info).not.toHaveBeenCalled();
@@ -513,7 +513,7 @@ describe("modelCallExecutor", () => {
       descriptor: inputDescriptor,
       state: initialAgentState({ channelId: "channel-1", config }),
       signal: new AbortController().signal,
-      deps: { ...deps(), env: { VIBEZ1_TEST_MODE: "1", VIBEZ1_MODEL_CALL_TRACE: "1" } },
+      deps: { ...deps(), env: { VIBESTUDIO_TEST_MODE: "1", VIBESTUDIO_MODEL_CALL_TRACE: "1" } },
       onEphemeral: () => {},
     });
     expect(info).toHaveBeenCalledWith(

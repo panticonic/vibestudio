@@ -8,7 +8,7 @@
  * `peer-left`). It NEVER inspects SDP/ICE content — security lives in the QR
  * DTLS-fingerprint pin, not in this box (plan §2/§6).
  *
- * These structural types are duplicated (not imported from `@vibez1/rpc`)
+ * These structural types are duplicated (not imported from `@vibestudio/rpc`)
  * because `apps/signaling` is a standalone Cloudflare Worker with its own build
  * boundary. The wire contract IS the JSON shape; it matches
  * `RtcSessionDescription`/`RtcIceCandidate`/`RtcIceServer` in

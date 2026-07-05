@@ -5,7 +5,7 @@
  * system browser to the provider's authorize URL with `redirect_uri`
  * pointing back at the app-identity-bound universal link / Android App Link:
  *
- *   https://auth.snugenv.com/oauth/callback/<provider>?code=…&state=…
+ *   https://vibestudio.app/oauth/callback/<provider>?code=…&state=…
  *
  * The OS will only deliver these to *this* app once the AASA /
  * assetlinks.json verification (served by apps/well-known/) has bound the
@@ -27,7 +27,7 @@
  */
 import { Linking, type EmitterSubscription } from "react-native";
 import type { ShellClient } from "./shellClient";
-const UNIVERSAL_LINK_HOST = "auth.snugenv.com";
+const UNIVERSAL_LINK_HOST = "vibestudio.app";
 const OAUTH_PATH_PREFIX = "/oauth/callback/";
 const DEDUPE_WINDOW_MS = 5 * 60 * 1000;
 const DEDUPE_MAX_ENTRIES = 32;
@@ -44,7 +44,7 @@ interface ParsedCallback {
  * link, e.g. /connect onboarding, will be handled elsewhere).
  */
 function parseCallback(rawUrl: string): ParsedCallback | null {
-    // Universal link: https://auth.snugenv.com/oauth/callback/<provider>?…
+    // Universal link: https://vibestudio.app/oauth/callback/<provider>?…
     if (rawUrl.startsWith("https://")) {
         const noScheme = rawUrl.slice("https://".length);
         const slash = noScheme.indexOf("/");

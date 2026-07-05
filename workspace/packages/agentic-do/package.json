@@ -15,7 +15,7 @@
     "@workspace/harness": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/pubsub": "workspace:*",
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@workspace/agent-loop": "workspace:*"
   },
   "overrides": {

@@ -5,21 +5,21 @@
  * (The bridge upgrade is rejected until registerClient exists server-side.)
  */
 import { randomUUID } from "crypto";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import type {
   PanelHost,
   PanelHostRegistration,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
-} from "@vibez1/shared/panel/panelLease";
-import { createPanelHostRegistration } from "@vibez1/shared/panel/panelLease";
-import { LeaseTracker, type LeaseIntent } from "@vibez1/shared/panel/leaseTracker";
-import { asPanelSlotId } from "@vibez1/shared/panel/ids";
+} from "@vibestudio/shared/panel/panelLease";
+import { createPanelHostRegistration } from "@vibestudio/shared/panel/panelLease";
+import { LeaseTracker, type LeaseIntent } from "@vibestudio/shared/panel/leaseTracker";
+import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
   selectCapEvictionVictims,
   selectIdlePanelVictims,
   type LoadedPanelSnapshot,
-} from "@vibez1/shared/panel/panelGc";
+} from "@vibestudio/shared/panel/panelGc";
 import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
 import { connectToServer } from "./serverConnection.js";
 import { PanelInitClient } from "./panelInitClient.js";

@@ -14,7 +14,7 @@ const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
 const mobileDir = path.join(repoRoot, "apps", "mobile");
 const androidDir = path.join(mobileDir, "android");
-const appPackage = "com.vibez1.mobile";
+const appPackage = "app.vibestudio.mobile";
 const appActivity = `${appPackage}/.MainActivity`;
 const metroPort = 8081;
 const apkPath = path.join(androidDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
@@ -76,10 +76,10 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`vibez1 mobile dev
+  console.log(`vibestudio mobile dev
 
 Usage:
-  vibez1 mobile dev [options]
+  vibestudio mobile dev [options]
 
 Runner options:
   --avd <name>      Start this AVD if no device is connected
@@ -238,14 +238,14 @@ async function startSignaling(port) {
 }
 
 // Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
-// vibez1://connect?...` line. Attach this BEFORE the link can be printed so no
+// vibestudio://connect?...` line. Attach this BEFORE the link can be printed so no
 // chunk is missed.
 function waitForPairingLink(serverChild, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buffer = "";
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const match = buffer.match(/vibez1:\/\/connect\?\S+/);
+      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
       if (match) {
         cleanup();
         resolve(match[0]);
@@ -385,7 +385,7 @@ async function main() {
   process.on("SIGINT", () => void cleanup(0));
   process.on("SIGTERM", () => void cleanup(0));
 
-  const readyFilePath = path.join(os.tmpdir(), `vibez1-mobile-ready-${process.pid}.json`);
+  const readyFilePath = path.join(os.tmpdir(), `vibestudio-mobile-ready-${process.pid}.json`);
 
   try {
     if (!await hasAdbDevice(options.device)) {
@@ -436,7 +436,7 @@ async function main() {
 
     // The server runs as a WebRTC answerer. It mints the per-invite room +
     // pairing code itself, presents its persistent DTLS cert, and logs the
-    // vibez1://connect link whose `fp` pins that cert.
+    // vibestudio://connect link whose `fp` pins that cert.
     const serverArgs = [
       serverEntryArg(),
       "--app-root",
@@ -451,7 +451,7 @@ async function main() {
       env: {
         ...process.env,
         NODE_ENV: process.env.NODE_ENV ?? "development",
-        VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
+        VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
       },
       label: "server",
     });

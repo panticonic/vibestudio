@@ -2,7 +2,7 @@
  * `serviceWithHttpRoutes` — ManagedService adapter for service factories that
  * expose both an RPC `ServiceDefinition` and HTTP `/_r/s/...` routes.
  *
- * Server-local because route concerns don't belong in `@vibez1/shared`.
+ * Server-local because route concerns don't belong in `@vibestudio/shared`.
  * Factories that need to expose HTTP routes (auth's OAuth callback, blobstore,
  * credentials; more later) return the `{ definition, routes? }` pair; bootstrap
  * wraps it with this helper so the RPC definition lands on the dispatcher (via
@@ -24,8 +24,8 @@
  * cascade, so routes unregister correctly.
  */
 
-import type { ManagedService } from "@vibez1/shared/managedService";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ManagedService } from "@vibestudio/shared/managedService";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { RouteRegistry, ServiceRouteDecl } from "./routeRegistry.js";
 
 export interface ServiceWithRoutes {

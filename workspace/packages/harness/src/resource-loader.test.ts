@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  loadVibez1Resources,
+  loadVibestudioResources,
   formatSkillIndex,
   type RpcCaller,
   type SkillEntry,
@@ -38,7 +38,7 @@ const SAMPLE_SKILLS: SkillEntry[] = [
   },
 ];
 
-describe("loadVibez1Resources", () => {
+describe("loadVibestudioResources", () => {
   it("fetches system prompt + skills via workspace.* RPC", async () => {
     const rpc = createMockRpc({
       "main:workspace.getAgentsMd": "System prompt content",
@@ -46,7 +46,7 @@ describe("loadVibez1Resources", () => {
     });
     const callSpy = rpc.call as ReturnType<typeof vi.fn>;
 
-    const resources = await loadVibez1Resources({ rpc });
+    const resources = await loadVibestudioResources({ rpc });
 
     expect(resources.systemPrompt).toBe("System prompt content");
     expect(resources.skills).toEqual(SAMPLE_SKILLS);
@@ -63,7 +63,7 @@ describe("loadVibez1Resources", () => {
     const callSpy = rpc.call as ReturnType<typeof vi.fn>;
     const controller = new AbortController();
 
-    await loadVibez1Resources({ rpc, signal: controller.signal });
+    await loadVibestudioResources({ rpc, signal: controller.signal });
 
     expect(callSpy).toHaveBeenCalledWith(
       "main",
@@ -91,7 +91,7 @@ describe("loadVibez1Resources", () => {
       stream: vi.fn(async () => new Response()) as unknown as RpcCaller["stream"],
     };
 
-    const loadPromise = loadVibez1Resources({ rpc, signal: controller.signal });
+    const loadPromise = loadVibestudioResources({ rpc, signal: controller.signal });
     await Promise.resolve();
     controller.abort(new Error("user interrupted"));
 
@@ -104,7 +104,7 @@ describe("loadVibez1Resources", () => {
       "main:workspace.listSkills": SAMPLE_SKILLS,
     });
 
-    const { skillIndex } = await loadVibez1Resources({ rpc });
+    const { skillIndex } = await loadVibestudioResources({ rpc });
 
     expect(skillIndex).toContain("## Available skills");
     expect(skillIndex).toContain(
@@ -123,7 +123,7 @@ describe("loadVibez1Resources", () => {
       "main:workspace.listSkills": [],
     });
 
-    const resources = await loadVibez1Resources({ rpc });
+    const resources = await loadVibestudioResources({ rpc });
 
     expect(resources.skills).toEqual([]);
     expect(resources.skillIndex).toBe("");
@@ -136,7 +136,7 @@ describe("loadVibez1Resources", () => {
       "main:workspace.listSkills": [],
     });
 
-    await expect(loadVibez1Resources({ rpc })).rejects.toMatchObject({
+    await expect(loadVibestudioResources({ rpc })).rejects.toMatchObject({
       name: "AgentWorkerError",
       code: "resource_loading",
       message: expect.stringContaining("workspace.getAgentsMd returned invalid resource shape"),
@@ -149,7 +149,7 @@ describe("loadVibez1Resources", () => {
       "main:workspace.listSkills": [{ name: "broken", description: 7, dirPath: "/broken" }],
     });
 
-    await expect(loadVibez1Resources({ rpc })).rejects.toMatchObject({
+    await expect(loadVibestudioResources({ rpc })).rejects.toMatchObject({
       name: "AgentWorkerError",
       code: "resource_loading",
       message: expect.stringContaining("workspace.listSkills[0] returned invalid resource shape"),
@@ -176,7 +176,7 @@ describe("loadVibez1Resources", () => {
       stream: vi.fn(async () => new Response()) as unknown as RpcCaller["stream"],
     };
 
-    const loadPromise = loadVibez1Resources({ rpc });
+    const loadPromise = loadVibestudioResources({ rpc });
     // Both calls should be in flight before either resolves.
     expect(call).toHaveBeenCalledTimes(2);
 

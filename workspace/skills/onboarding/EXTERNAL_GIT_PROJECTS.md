@@ -1,8 +1,8 @@
 # External Git Projects
 
-Vibez1 workspace source is GAD-backed, but external Git repositories can be
+Vibestudio workspace source is GAD-backed, but external Git repositories can be
 declared as workspace source entries. The durable representation is
-`meta/vibez1.yml`; checkouts are materialized from that declaration.
+`meta/vibestudio.yml`; checkouts are materialized from that declaration.
 
 ## When To Use This
 
@@ -12,7 +12,7 @@ while still tracking an upstream Git remote. Common examples:
 - a plain upstream repo under `projects/name`
 - a panel, worker, skill, package, template, plain project, or about page imported from
   another repository
-- a branch an agent is preparing for review outside the Vibez1 workspace repo
+- a branch an agent is preparing for review outside the Vibestudio workspace repo
 
 Supported parent directories are `panels`, `packages`, `workers`,
 `skills`, `about`, `templates`, and `projects`.
@@ -89,8 +89,8 @@ console.log(result.imported, result.skipped, result.failed);
 
 ## Startup Behavior
 
-On server startup, Vibez1 imports missing repos declared in
-`meta/vibez1.yml` before declared unit reconciliation. That means a declared
+On server startup, Vibestudio imports missing repos declared in
+`meta/vibestudio.yml` before declared unit reconciliation. That means a declared
 external panel, worker, skill, or package can be present before the normal
 startup build/reconcile path scans workspace source.
 
@@ -102,8 +102,8 @@ remote declaration.
 
 `git.importProject()` uses one workspace config approval. The prompt names the
 external import and shows the config edit details: destination path, remote
-name, remote URL, and branch when present. After approval, Vibez1 writes
-`meta/vibez1.yml` first, then clones. If the clone fails, the approved config
+name, remote URL, and branch when present. After approval, Vibestudio writes
+`meta/vibestudio.yml` first, then clones. If the clone fails, the approved config
 declaration remains so startup or `git.completeWorkspaceDependencies()` can
 retry later.
 
@@ -120,5 +120,5 @@ For private repos, prefer one of these paths:
   `git.completeWorkspaceDependencies({ credentialId })` as the retry path
 
 Do not expose PATs to userland code. For direct Git smart HTTP operations, use
-`@vibez1/git` with `credentials.gitHttp()` so credentials remain
+`@vibestudio/git` with `credentials.gitHttp()` so credentials remain
 host-mediated.

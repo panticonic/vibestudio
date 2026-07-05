@@ -20,16 +20,16 @@ import {
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 function replaceInitPanels(workspacePath: string, stateArgs: Record<string, unknown>): void {
-  const configPath = path.join(workspacePath, "source", "meta", "vibez1.yml");
+  const configPath = path.join(workspacePath, "source", "meta", "vibestudio.yml");
   const original = fs.readFileSync(configPath, "utf8");
   const marker = "# =============================================================================\n# Stable Durable Object singletons.";
   const markerIndex = original.indexOf(marker);
-  if (markerIndex < 0) throw new Error("Could not find vibez1.yml singleton marker");
+  if (markerIndex < 0) throw new Error("Could not find vibestudio.yml singleton marker");
   const indentedStateArgs = JSON.stringify(stateArgs, null, 2)
     .split("\n")
     .map((line) => `      ${line}`)
     .join("\n");
-  const replacement = `# Vibez1 Workspace Configuration
+  const replacement = `# Vibestudio Workspace Configuration
 # This file configures the workspace for deterministic Spectrolite E2E tests
 
 initPanels:
@@ -212,7 +212,7 @@ async function launchSpectroliteTestApp(workspacePath: string): Promise<TestApp>
   return launchTestApp({
     workspace: workspacePath,
     launchTimeout: 180000,
-    env: { VIBEZ1_AUTO_APPROVE: "1" },
+    env: { VIBESTUDIO_AUTO_APPROVE: "1" },
   });
 }
 

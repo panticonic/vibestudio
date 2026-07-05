@@ -14,10 +14,10 @@
  * invalid/expired/foreign token fails the advance closed.
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { ServiceAccessError } from "@vibez1/shared/serviceDispatcher";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import { refsMethods, updateMainsInputSchema } from "@vibez1/shared/serviceSchemas/refs";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { refsMethods, updateMainsInputSchema } from "@vibestudio/shared/serviceSchemas/refs";
 import type { RefService } from "./refService.js";
 import type { RefAdvanceGateContext } from "./mainAdvanceApproval.js";
 import type { VcsInvocationRecord, VcsInvocationTable } from "./vcsInvocationTable.js";

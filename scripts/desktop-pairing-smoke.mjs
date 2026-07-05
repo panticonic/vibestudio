@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // End-to-end desktop pairing smoke over WebRTC. Spawns the signaling worker
 // (`wrangler dev apps/signaling`), starts a disposable server as a WebRTC
-// answerer, parses the `vibez1://connect` pairing link it logs, then launches
+// answerer, parses the `vibestudio://connect` pairing link it logs, then launches
 // Electron with that deep link so the desktop shell connects to the server over
 // the encrypted WebRTC pipe (no Tailscale, no remote HTTP origin). It then
 // approves the Electron host-target launch gate and verifies the hosted desktop
@@ -27,15 +27,15 @@ import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 import { createConnectDeepLink, parseConnectLink } from "./cli/lib/connect-utils.mjs";
-import { resolveElectronExecutableForVibez1 } from "./branded-electron.mjs";
+import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
 
-const electronBinary = resolveElectronExecutableForVibez1();
+const electronBinary = resolveElectronExecutableForVibestudio();
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mainPath = path.join(repoRoot, "dist", "main.cjs");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
-const defaultReadyFile = path.join(os.tmpdir(), `vibez1-desktop-smoke-ready-${process.pid}.json`);
+const defaultReadyFile = path.join(os.tmpdir(), `vibestudio-desktop-smoke-ready-${process.pid}.json`);
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 
 function sleep(ms) {
@@ -79,7 +79,7 @@ function parsePositiveInt(value, label) {
 }
 
 function printHelp() {
-  console.log(`vibez1 desktop pairing smoke
+  console.log(`vibestudio desktop pairing smoke
 
 Usage:
   node scripts/desktop-pairing-smoke.mjs [options]
@@ -92,7 +92,7 @@ Runner options:
   --help                    Show this help message.
 
 The smoke spawns the signaling worker (wrangler dev apps/signaling), starts a
-disposable server as a WebRTC answerer, parses the vibez1://connect pairing
+disposable server as a WebRTC answerer, parses the vibestudio://connect pairing
 link it logs, and launches Electron with that deep link so the desktop shell
 connects over the encrypted WebRTC pipe. It then clicks the bootstrap launch
 approval and asserts the hosted shell loads.
@@ -183,7 +183,7 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs) {
 
 function createServerArgs(readyFilePath) {
   // Loopback-only: the gateway binds 127.0.0.1; remote reach is the WebRTC pipe
-  // attached to the same RpcServer when VIBEZ1_WEBRTC_SIGNAL_URL is set.
+  // attached to the same RpcServer when VIBESTUDIO_WEBRTC_SIGNAL_URL is set.
   return [
     serverEntryArg(),
     "--app-root",
@@ -235,7 +235,7 @@ async function startSignaling(port) {
 }
 
 // Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
-// vibez1://connect?...` line it logs once it has joined the signaling room and
+// vibestudio://connect?...` line it logs once it has joined the signaling room and
 // computed its DTLS fingerprint. Attach this BEFORE the link can be printed so no
 // chunk is missed.
 function waitForPairingLink(serverChild, timeoutMs) {
@@ -243,7 +243,7 @@ function waitForPairingLink(serverChild, timeoutMs) {
     let buffer = "";
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const match = buffer.match(/vibez1:\/\/connect\?\S+/);
+      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
       if (match) {
         cleanup();
         resolve(match[0]);
@@ -284,7 +284,7 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
   const env = {
     ...process.env,
     NODE_ENV: "development",
-    VIBEZ1_TEST_MODE: "1",
+    VIBESTUDIO_TEST_MODE: "1",
     ELECTRON_DISABLE_GPU: "1",
     ELECTRON_DISABLE_SANDBOX: "1",
     HOME: path.join(tempRoot, "home"),
@@ -296,10 +296,10 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs) {
 
   const userDataDir = path.join(tempRoot, "electron-user-data");
   console.log(`[desktop-smoke] Launching Electron with WebRTC pairing deep link`);
-  // The desktop shell ingests the pairing material via the vibez1://connect
+  // The desktop shell ingests the pairing material via the vibestudio://connect
   // deep link passed as an argv: protocolHandler.enqueueFirstArgvLink(process.argv)
   // (src/main/index.ts) scans argv on first launch, the bootstrap chooser drains
-  // it (vibez1:drain-pair-link), and the shell dials the server over the WebRTC
+  // it (vibestudio:drain-pair-link), and the shell dials the server over the WebRTC
   // pipe (serverSession.connectRemoteViaWebRtc with {room,fp,code,sig}).
   const app = await electron.launch({
     executablePath: electronBinary,
@@ -577,7 +577,7 @@ async function main() {
     try {
       await fsp.unlink(options.readyFile);
     } catch {}
-    tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibez1-desktop-smoke-"));
+    tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-"));
 
     // 1. Local signaling (Cloudflare local runtime) — the WebRTC rendezvous.
     const signalPort = await findFreePort();
@@ -586,7 +586,7 @@ async function main() {
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
     // 2. The disposable server, as a WebRTC answerer. The server mints the
-    //    per-invite room + pairing code itself and logs the vibez1://connect
+    //    per-invite room + pairing code itself and logs the vibestudio://connect
     //    link whose `fp` pins its persistent DTLS cert.
     const serverArgs = createServerArgs(options.readyFile);
     const serverInvocation = createServerInvocation(serverArgs);
@@ -599,8 +599,8 @@ async function main() {
         // answerer is the per-workspace pipe (hubServer.ts:820 "remote reach is the
         // per-workspace WebRTC pipe"), so the thing a client pairs with is a
         // workspace server. The hub→workspace remote-selection flow is separate.
-        VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
-        VIBEZ1_WEBRTC_SIGNAL_URL: signalUrl,
+        VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
+        VIBESTUDIO_WEBRTC_SIGNAL_URL: signalUrl,
       },
       label: "server",
     });

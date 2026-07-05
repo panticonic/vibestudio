@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Stage the two publishable npm packages from a completed `pnpm build`:
 //
-//   dist-packages/server  → @vibez1/server  (slim headless server, no electron)
-//   dist-packages/app     → @vibez1/app     (full Electron desktop app)
+//   dist-packages/server  → @vibestudio/server  (slim headless server, no electron)
+//   dist-packages/app     → @vibestudio/app     (full Electron desktop app)
 //
 // The monorepo root stays private; this script synthesizes each package.json and
-// assembles its file tree. Workspace (@vibez1/* + @workspace/*) packages are
+// assembles its file tree. Workspace (@vibestudio/* + @workspace/*) packages are
 // not on npm, so they are vendored: the server bundle already inlines all of
-// them except @vibez1/extension-host, which is vendored via a self-contained
+// them except @vibestudio/extension-host, which is vendored via a self-contained
 // publish build (so it resolves on any Node >=20 with no workspace:* / .ts at
 // runtime); the app vendors the whole workspace graph. Userland dependencies
 // include packages that require Node >=22.13, so the generated packages declare
@@ -41,7 +41,7 @@ const SERVER_EXTRA_DEPS = ["@puppeteer/browsers", "react-devtools-core"];
 
 // Workspace source dirs staged into the packaged template (the initial
 // workspace a fresh install ships with). This is a subset of the canonical
-// WORKSPACE_SOURCE_DIRS from @vibez1/shared/workspace/sourceDirs — `projects/`
+// WORKSPACE_SOURCE_DIRS from @vibestudio/shared/workspace/sourceDirs — `projects/`
 // is runtime-only content created per user and starts empty, so it is not
 // shipped. A drift guard (tests/workspaceTemplateDirs.drift.test.ts) asserts
 // this list stays in sync with the shared taxonomy. This module can't import
@@ -101,20 +101,20 @@ function assertBuilt() {
 }
 
 function buildSelfContainedExtensionHost() {
-  console.log("• Building self-contained @vibez1/extension-host (publish)…");
-  execFileSync("pnpm", ["--filter", "@vibez1/extension-host", "run", "build"], {
+  console.log("• Building self-contained @vibestudio/extension-host (publish)…");
+  execFileSync("pnpm", ["--filter", "@vibestudio/extension-host", "run", "build"], {
     cwd: repoRoot,
     stdio: "inherit",
-    env: { ...process.env, VIBEZ1_EXTHOST_PUBLISH: "1" },
+    env: { ...process.env, VIBESTUDIO_EXTHOST_PUBLISH: "1" },
   });
 }
 
 // ---------------------------------------------------------------------------
-// @vibez1/server
+// @vibestudio/server
 // ---------------------------------------------------------------------------
 function stageServer() {
   const root = path.join(outRoot, "server");
-  console.log("• Staging @vibez1/server…");
+  console.log("• Staging @vibestudio/server…");
   mkdirp(root);
 
   // Server runtime files (see paths.ts / internalDoLoader.ts / headlessHostManager.ts).
@@ -132,29 +132,29 @@ function stageServer() {
   stageWorkspaceTemplateSupport(root);
 
   // Bin shims.
-  copyFile("scripts/vibez1-launcher.mjs", path.join(root, "scripts/vibez1-launcher.mjs"));
-  copyFile("scripts/vibez1-server-shim.mjs", path.join(root, "scripts/vibez1-server-shim.mjs"));
+  copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
+  copyFile("scripts/vibestudio-server-shim.mjs", path.join(root, "scripts/vibestudio-server-shim.mjs"));
 
-  // Vendor the host's @vibez1/* packages under vendor/ (NOT node_modules). A
+  // Vendor the host's @vibestudio/* packages under vendor/ (NOT node_modules). A
   // partial node_modules shipped in the tarball perturbs npm's reify ordering —
   // it runs dependency postinstall scripts (e.g. electron's) against an
-  // incomplete tree. The package's own postinstall copies vendor/@vibez1 →
-  // node_modules/@vibez1 AFTER install, where the runtime build resolves them
+  // incomplete tree. The package's own postinstall copies vendor/@vibestudio →
+  // node_modules/@vibestudio AFTER install, where the runtime build resolves them
   // (getExistingAppNodeModulesRoots → builder.ts initBuilder). extension-host
   // ships self-contained; @workspace/* are NOT host deps (workspace's own build).
-  vendorvibez1Packages(root);
+  vendorVibestudioPackages(root);
   vendorExtensionHost(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
-    name: "@vibez1/server",
+    name: "@vibestudio/server",
     version: VERSION,
-    description: "Vibez1 headless server (build, git, channels, AI, agents) over WebSocket RPC.",
+    description: "Vibestudio headless server (build, git, channels, AI, agents) over WebSocket RPC.",
     type: "module",
     license: rootPkg.license ?? "MIT",
     bin: {
-      "vibez1-server": "scripts/vibez1-server-shim.mjs",
-      vibez1: "scripts/vibez1-launcher.mjs",
+      "vibestudio-server": "scripts/vibestudio-server-shim.mjs",
+      vibestudio: "scripts/vibestudio-launcher.mjs",
     },
     engines: { node: ">=22.13.0" },
     files: ["dist", "vendor", "workspace-template", "packages", "patches", "scripts"],
@@ -166,11 +166,11 @@ function stageServer() {
 }
 
 // ---------------------------------------------------------------------------
-// @vibez1/app
+// @vibestudio/app
 // ---------------------------------------------------------------------------
 function stageApp() {
   const root = path.join(outRoot, "app");
-  console.log("• Staging @vibez1/app…");
+  console.log("• Staging @vibestudio/app…");
   mkdirp(root);
 
   // Full host build (main + all preloads + server-electron + cli + headless-host).
@@ -180,8 +180,8 @@ function stageApp() {
   stageWorkspaceTemplate(path.join(root, "workspace"));
   stageWorkspaceTemplateSupport(root);
 
-  copyFile("scripts/vibez1-launcher.mjs", path.join(root, "scripts/vibez1-launcher.mjs"));
-  copyFile("scripts/vibez1-server-shim.mjs", path.join(root, "scripts/vibez1-server-shim.mjs"));
+  copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
+  copyFile("scripts/vibestudio-server-shim.mjs", path.join(root, "scripts/vibestudio-server-shim.mjs"));
   copyFile("scripts/branded-electron.mjs", path.join(root, "scripts/branded-electron.mjs"));
   if (fs.existsSync(path.join(repoRoot, "build-resources"))) {
     copyTree(
@@ -191,25 +191,25 @@ function stageApp() {
     );
   }
 
-  // Vendor the host's @vibez1/* packages under vendor/ (copied into node_modules
+  // Vendor the host's @vibestudio/* packages under vendor/ (copied into node_modules
   // by the postinstall — see the server staging note). The managed workspace's
   // @workspace/* packages are NOT host deps; they ship only as first-run template
   // content under workspace/ (above).
-  vendorvibez1Packages(root);
+  vendorVibestudioPackages(root);
   vendorExtensionHost(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
-    name: "@vibez1/app",
+    name: "@vibestudio/app",
     version: VERSION,
-    productName: rootPkg.productName ?? "Vibez1",
+    productName: rootPkg.productName ?? "Vibestudio",
     description: rootPkg.description,
     type: "module",
     license: rootPkg.license ?? "MIT",
     main: "dist/main.cjs",
     bin: {
-      vibez1: "scripts/vibez1-launcher.mjs",
-      "vibez1-server": "scripts/vibez1-server-shim.mjs",
+      vibestudio: "scripts/vibestudio-launcher.mjs",
+      "vibestudio-server": "scripts/vibestudio-server-shim.mjs",
     },
     engines: { node: ">=22.13.0" },
     files: ["dist", "vendor", "workspace", "packages", "patches", "scripts", "build-resources"],
@@ -227,11 +227,11 @@ function vendorExtensionHost(pkgRoot) {
   if (!fs.existsSync(distPublish)) {
     throw new Error("extension-host dist-publish/ missing — self-contained build did not run");
   }
-  const dest = path.join(pkgRoot, "vendor/@vibez1/extension-host");
+  const dest = path.join(pkgRoot, "vendor/@vibestudio/extension-host");
   rmrf(dest);
   copyTree(distPublish, path.join(dest, "dist"), () => false);
   writeJson(path.join(dest, "package.json"), {
-    name: "@vibez1/extension-host",
+    name: "@vibestudio/extension-host",
     version: VERSION,
     type: "module",
     main: "./dist/index.js",
@@ -242,31 +242,31 @@ function vendorExtensionHost(pkgRoot) {
   });
 }
 
-// Vendor the host's own @vibez1/* packages (from packages/) under vendor/, so
+// Vendor the host's own @vibestudio/* packages (from packages/) under vendor/, so
 // the package's postinstall can copy them into node_modules where the runtime
-// build system resolves the @vibez1 API surface that panels/workers import.
+// build system resolves the @vibestudio API surface that panels/workers import.
 // Excludes extension-host (vendored self-contained). @workspace/* are
 // intentionally NOT vendored — they belong to the managed workspace's own build.
-function vendorvibez1Packages(pkgRoot) {
+function vendorVibestudioPackages(pkgRoot) {
   const packagesDir = path.join(repoRoot, "packages");
   for (const entry of fs.readdirSync(packagesDir)) {
     const manifest = path.join(packagesDir, entry, "package.json");
     if (!fs.existsSync(manifest)) continue;
     const name = readJson(manifest).name;
-    if (!name || !name.startsWith("@vibez1/")) continue;
-    if (name === "@vibez1/extension-host") continue; // self-contained, vendored separately
-    const base = name.slice("@vibez1/".length);
-    const dest = path.join(pkgRoot, "vendor", "@vibez1", base);
+    if (!name || !name.startsWith("@vibestudio/")) continue;
+    if (name === "@vibestudio/extension-host") continue; // self-contained, vendored separately
+    const base = name.slice("@vibestudio/".length);
+    const dest = path.join(pkgRoot, "vendor", "@vibestudio", base);
     copyTree(path.join(packagesDir, entry), dest, defaultSkip);
     normalizeVendoredManifest(path.join(dest, "package.json"));
   }
 }
 
-// Normalize a vendored @vibez1 manifest. Critically, KEEP its workspace:*
-// specifiers for inter-@vibez1/@workspace deps: the runtime build system skips
+// Normalize a vendored @vibestudio manifest. Critically, KEEP its workspace:*
+// specifiers for inter-@vibestudio/@workspace deps: the runtime build system skips
 // workspace:* deps from its registry `npm install` and resolves them from the
 // app's node_modules (externalDeps.ts:47). Rewriting them to a concrete version
-// would make panel/worker builds try to fetch e.g. @vibez1/dev-log@0.1.0 from
+// would make panel/worker builds try to fetch e.g. @vibestudio/dev-log@0.1.0 from
 // the public registry (404). Drop dev-only fields that would otherwise trigger
 // lifecycle scripts or extra registry installs. (The package is listed at its
 // concrete version at the host package's top level for bundledDependencies.)
@@ -377,7 +377,7 @@ function resolveVersion(name) {
 
 // The dependency surface a host package needs to build the default template at
 // runtime: all public root.dependencies + the build-relevant root devDeps +
-// headless extras. The vendored @vibez1 packages are NOT listed here — they
+// headless extras. The vendored @vibestudio packages are NOT listed here — they
 // ship under vendor/ and are copied into node_modules by the postinstall. The
 // server omits electron; the app includes it. (Building panels needs the full
 // host dep surface, so the headless server is really "app minus electron".)

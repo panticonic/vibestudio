@@ -49,7 +49,7 @@ describe("WorkspaceVcs dev extraction (main → source dir)", () => {
     await fsp.mkdir(path.join(workspaceRoot, "packages/foo"), { recursive: true });
     await fsp.writeFile(path.join(workspaceRoot, "packages/foo/index.ts"), "export const x = 1;\n");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta/vibez1.yml"), "name: test\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta/vibestudio.yml"), "name: test\n");
 
     gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });

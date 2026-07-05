@@ -1,4 +1,4 @@
-# 00 — Vibez1 Security Audit: Cross-Cutting Summary
+# 00 — Vibestudio Security Audit: Cross-Cutting Summary
 
 **Branch:** `audit` · **Commit at audit time:** `bafe7bc8` · **Date:** 2026-04-23 / 2026-04-24
 **Auditor:** 8 parallel Claude Opus 4.7 (1M) agents, one per security layer.
@@ -45,7 +45,7 @@ a live web page) today has trivial paths to:
   `innerHTML` sink; `.git/hooks` symlink chain; unvalidated npm install).
 
 None of the gaps requires a 0-day in a transitive dependency, Electron, or
-Node. They are all logic errors and missing glue in Vibez1's own code.
+Node. They are all logic errors and missing glue in Vibestudio's own code.
 
 ## 2. Combined severity counts
 
@@ -68,16 +68,16 @@ Fix the pattern and most instances resolve at once.
 
 ### T1 — "Policy declared, never enforced"
 
-`@vibez1/shared`'s `ServiceDispatcher` and `servicePolicy` model is
+`@vibestudio/shared`'s `ServiceDispatcher` and `servicePolicy` model is
 sound. It is not called from most of the entry points that dispatch into
 services.
 
 | Source | What is bypassed | Impact |
 |---|---|---|
-| Electron IPC `vibez1:serviceCall` handler [01-C1, 04-4.5] | `ServiceDispatcher.dispatch()` never invokes `checkServiceAccess` | Any panel reaches every Electron-local service regardless of `{ allowed: ["shell"] }` |
+| Electron IPC `vibestudio:serviceCall` handler [01-C1, 04-4.5] | `ServiceDispatcher.dispatch()` never invokes `checkServiceAccess` | Any panel reaches every Electron-local service regardless of `{ allowed: ["shell"] }` |
 | `IpcDispatcher` [01-HIGH-1, 04-4.6] | Hard-codes `callerKind: "shell"` even when the sender is a sandboxed webContents | Same effect — panel impersonates shell |
-| `vibez1:rpc:send` [01-HIGH-1] | Hard-coded `callerKind: "shell"` | Relay to any target at shell privilege |
-| `vibez1:navigate`, `view.browserNavigate`, `view.setBounds`, `view.setVisible`, `view.setThemeCss`, `view.updateLayout`, `view.setShellOverlay` [01-C3, 01-MEDIUM-1] | `resolveCallerId(event)` only checks the caller is *some* known view — no ownership check against the target | Any panel steers the shell or any sibling panel to any URL / any layout |
+| `vibestudio:rpc:send` [01-HIGH-1] | Hard-coded `callerKind: "shell"` | Relay to any target at shell privilege |
+| `vibestudio:navigate`, `view.browserNavigate`, `view.setBounds`, `view.setVisible`, `view.setThemeCss`, `view.updateLayout`, `view.setShellOverlay` [01-C3, 01-MEDIUM-1] | `resolveCallerId(event)` only checks the caller is *some* known view — no ownership check against the target | Any panel steers the shell or any sibling panel to any URL / any layout |
 | Autofill overlay IPC (`overlay:select` / `overlay:dismiss`) [01-HIGH-2] | No sender attribution | Any webContents can force a credential fill into any other loaded panel |
 | Event relay `fromId` [04-4.7] | Caller-supplied source attribution forwarded unmodified | Any caller can spoof any other source on `runtime:*`, `credentials:*`, `notification:show` |
 
@@ -115,7 +115,7 @@ user-confirmed shell-only surface.
 The remote admin token goes through `safeStorage`. *Nothing else does.*
 
 - Third-party OAuth access + refresh tokens: plaintext JSON under
-  `~/.config/vibez1/credentials/…` [03-F-01].
+  `~/.config/vibestudio/credentials/…` [03-F-01].
 - `.secrets.yml` / central config: written without explicit `mode: 0o600`;
   relies on ancestor dir 0o700 which is not uniform across platforms
   [03-F-04, 07-F-17].
@@ -146,7 +146,7 @@ path:
   `net.connect(port, host)`. Reachable from any loopback process →
   `169.254.169.254:80` (IMDS), `127.0.0.1:22`, etc. [05-S2, 06-F-04]
 - **`PROXY_AUTH_TOKEN`** is minted and injected into worker bindings but
-  `egressProxy.ts` never validates it against the `X-Vibez1-Worker-Id`
+  `egressProxy.ts` never validates it against the `X-Vibestudio-Worker-Id`
   header [03-F-03]. Any loopback process can pick up any worker's
   consent-granted bearer.
 - `credential.expiresAt` is never checked before forwarding a bearer
@@ -244,7 +244,7 @@ per-call and per-context size limits.
 `defaultSession`. `src/renderer/index.tsx:30` assigns an error message
 into `innerHTML`. One controllable error string = full RCE.
 
-`__vibez1Transport` is exposed as a `globalThis` property on the
+`__vibestudioTransport` is exposed as a `globalThis` property on the
 non-isolated shell [01-LOW-3]. The test API can mutate the panel tree
 from the shell global [01-LOW-2]. TLS pinning is only installed on the
 default session, not on `persist:browser` / `persist:panel:*` partitions
@@ -291,13 +291,13 @@ Outside the runtime trust model:
 |---|---|---|---|
 | 1 | EgressProxy never instantiated — workers have unscoped outbound network | 05, 03 | Critical |
 | 2 | CONNECT-tunnel handler bypasses entire egress pipeline | 05, 06 | Critical |
-| 3 | Service policy not enforced in Electron IPC / `vibez1:serviceCall` | 01, 04 | Critical |
+| 3 | Service policy not enforced in Electron IPC / `vibestudio:serviceCall` | 01, 04 | Critical |
 | 4 | `browser-data` service gives any panel plaintext passwords / cookies | 01, 07 | Critical |
 | 5 | `authTokens.getProviderToken` reachable by panel → steal every OAuth/API token | 02, 03, 04 | Critical |
 | 6 | `authTokens.persist`/`logout` reachable by panel → silently replace user creds | 02, 04 | Critical |
 | 7 | `fs.bindContext` allows cross-context pivot | 04, 07 | Critical |
 | 8 | `db.exec` full SQLite (ATTACH, VACUUM INTO) to panels | 07 | Critical |
-| 9 | `vibez1:navigate` / `view.browserNavigate` no ownership check — shell + sibling steer | 01 | Critical |
+| 9 | `vibestudio:navigate` / `view.browserNavigate` no ownership check — shell + sibling steer | 01 | Critical |
 | 10 | OAuth tokens stored plaintext JSON | 03 | Critical |
 | 11 | `PROXY_AUTH_TOKEN` never validated — spoof worker identity | 03 | Critical |
 | 12 | Shell renderer `nodeIntegration: true` + `innerHTML` error sink | 01 | Critical |
@@ -307,7 +307,7 @@ Outside the runtime trust model:
 | 16 | `apps/mobile/src/services/oauthHandler.ts` missing from repo | 08 | Critical |
 | 17 | protobufjs < 7.5.5 RCE via transitive dep | 08 | Critical |
 | 18 | `ServiceDispatcher.dispatch` never calls `checkServiceAccess` | 01, 04 | High |
-| 19 | `IpcDispatcher` / `vibez1:rpc:send` hard-coded `callerKind:"shell"` | 01, 04 | High |
+| 19 | `IpcDispatcher` / `vibestudio:rpc:send` hard-coded `callerKind:"shell"` | 01, 04 | High |
 | 20 | Event `fromId` spoofing in relay | 04 | High |
 | 21 | `git.getTokenForPanel` / `revokeTokenForPanel` reachable by panel | 04 | Remediated |
 | 22 | Legacy worker DO dispatch facade reachable by panel | 04 | High |
@@ -335,7 +335,7 @@ Outside the runtime trust model:
 | 44 | Autofill overlay IPC accepts any sender | 01 | High |
 | 45 | TLS pinning only on default session, not panel/browser partitions | 01 | High |
 | 46 | URL-panel creation accepts arbitrary schemes beyond http(s) | 01 | High |
-| 47 | OAuth via `vibez1://` custom scheme — no app-identity binding | 08 | High |
+| 47 | OAuth via `vibestudio://` custom scheme — no app-identity binding | 08 | High |
 | 48 | Mobile `PanelWebView.handleMessage` no origin check | 08 | High |
 | 49 | Mobile shell token keychain missing `WhenUnlockedThisDeviceOnly` | 08 | High |
 | 50 | Mobile `allowFileAccess` enabled on every WebView | 08 | High |
@@ -390,7 +390,7 @@ finding(s) it closes.
    `network` service for every worker / DO. Remove the plain `network`
    service with `allow: ["public", "local"]`. Closes #1. [05]
 9. **Enforce `PROXY_AUTH_TOKEN` validation** in `egressProxy.handle*`
-   against `X-Vibez1-Worker-Id`. Closes #11. [03]
+   against `X-Vibestudio-Worker-Id`. Closes #11. [03]
 10. **Reject CONNECT unless** attributed, authorised, port-allowlisted.
     Closes #2. [05, 06]
 11. **Wire `WebhookVerifierRegistry` into real HTTP ingress**; enforce
@@ -424,15 +424,15 @@ finding(s) it closes.
     keystore password into `gradle.properties` (use Gradle credentials
     provider or read from env only at signing step). Closes #48, #50,
     #56, #57. [08]
-18. **Replace `vibez1://` OAuth callback with a universal link**
+18. **Replace `vibestudio://` OAuth callback with a universal link**
     bound to the app's associated domain. Closes #47. [08]
 
 ### P2 — Next cycle
 
 19. **Ownership invariants on cross-panel side-effect RPC**:
     `view.setBounds`, `view.setVisible`, `view.browserNavigate`,
-    `vibez1:navigate`, `vibez1:openExternal`,
-    `vibez1:openFolderDialog`, autofill `overlay:*` must verify the
+    `vibestudio:navigate`, `vibestudio:openExternal`,
+    `vibestudio:openFolderDialog`, autofill `overlay:*` must verify the
     caller *owns* the target. Closes #9, #43, #44. [01]
 20. **Default panel CSP to `script-src 'self'; object-src 'none'`**;
     forbid `unsafe-inline` / `unsafe-eval`; require panels that need
@@ -531,9 +531,9 @@ regresses, alarms should fire":
   findings are labelled "near-miss" or "latent" where exploitation
   requires a second primitive; those are flagged explicitly in each
   report.
-- Scope: the Vibez1 monorepo at commit `bafe7bc8`. The audit does *not*
+- Scope: the Vibestudio monorepo at commit `bafe7bc8`. The audit does *not*
   cover third-party provider endpoints (Slack, GitHub, Linear, Google,
-  Anthropic, OpenAI) themselves; only the code Vibez1 ships that
+  Anthropic, OpenAI) themselves; only the code Vibestudio ships that
   interacts with them.
 - Not yet covered in any report: `extension/` Chrome extension in
   depth; `dist/` build artifacts; Playwright e2e fixtures.

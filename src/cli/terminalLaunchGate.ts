@@ -4,21 +4,21 @@ import {
   formatLaunchGateForTerminal,
   targetLabel,
   type BootstrapDecision,
-} from "@vibez1/shared/bootstrapLaunchGate";
-import { createRpcClient } from "@vibez1/rpc";
-import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
-import { createServerWsTransport } from "@vibez1/shared/shell/transport/serverWsTransport";
+} from "@vibestudio/shared/bootstrapLaunchGate";
+import { createRpcClient } from "@vibestudio/rpc";
+import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
+import { createServerWsTransport } from "@vibestudio/shared/shell/transport/serverWsTransport";
 import { WebSocket } from "ws";
 import {
   HOST_TARGET_LAUNCH_SESSION_WAKE_EVENTS,
   isLaunchSessionEventForTarget,
-} from "@vibez1/shared/hostTargetLaunchGate";
+} from "@vibestudio/shared/hostTargetLaunchGate";
 import type {
   HostTarget,
   HostTargetLaunchResult,
   HostTargetLaunchSessionSnapshot,
-} from "@vibez1/shared/hostTargets";
-import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+} from "@vibestudio/shared/hostTargets";
+import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import { isWebRtcCredential } from "./credentialStore.js";
 import { typedClient } from "./typedClients.js";
 import { refreshShell, RpcClient, type DeviceCredential } from "./rpcClient.js";

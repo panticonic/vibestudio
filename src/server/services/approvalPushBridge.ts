@@ -4,9 +4,9 @@ import {
   NOTIFICATION_ACTION_IDS_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_STANDARD,
   type PushApprovalDataPayload,
-} from "@vibez1/shared/approvalContract";
-import { getApprovalCopy } from "@vibez1/shared/approvalCopy";
-import type { PendingApproval } from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvalContract";
+import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ApprovalQueueWithListeners } from "./approvalQueue.js";
 import type { PushServiceInternal } from "./pushService.js";
 import type { ShellPresenceInternal } from "./shellPresenceService.js";

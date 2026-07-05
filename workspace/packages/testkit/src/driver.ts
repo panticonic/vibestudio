@@ -12,7 +12,7 @@ import type { PanelHandle } from "@workspace/runtime";
 import { _registerDriverRoute, type RawCdpSession } from "./cdp.js";
 import type { ProfileRef } from "./profile-core.js";
 
-const DRIVER_PROTOCOL = "vibez1.testkit-driver.v1";
+const DRIVER_PROTOCOL = "vibestudio.testkit-driver.v1";
 const EVENT_POLL_INTERVAL_MS = 250;
 
 type DriverClient = { call<T = unknown>(method: string, ...args: unknown[]): Promise<T> };

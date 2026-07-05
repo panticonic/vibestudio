@@ -8,19 +8,19 @@
  * operate on the main workspace head.
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
-import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import { splitRepoPath } from "@vibez1/shared/runtime/entitySpec";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
   vcsMethods,
   vcsApplyEditsInputSchema,
   type VcsRecallInput,
   type VcsMergeSource,
   type VcsPick,
-} from "@vibez1/shared/serviceSchemas/vcs";
-import { normalizeWorkspaceRepoPath } from "@vibez1/shared/workspace/remotes";
+} from "@vibestudio/shared/serviceSchemas/vcs";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/workspace/remotes";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../vcsHost/paths.js";
@@ -168,7 +168,7 @@ function pathTrackingHint(filePath: string): string {
   const first = normalized.split("/")[0] ?? "";
   const platform = new Set([
     ".tmp",
-    ".vibez1",
+    ".vibestudio",
     ".testkit",
     ".git",
     ".gad",
@@ -232,7 +232,7 @@ function noUncommittedCommitMessage(head: string, repoPaths?: string[]): string 
   return (
     `vcs.commit refused to no-op: no uncommitted VCS working edits${scope} on ${head}. ` +
     `Only edits recorded through edit/write/vcs.edit are commit-able. Direct fs.writeFile, ` +
-    `fs.mktemp, .tmp, .vibez1, node_modules, dist, and other scratch/platform paths are ` +
+    `fs.mktemp, .tmp, .vibestudio, node_modules, dist, and other scratch/platform paths are ` +
     `outside VCS and will not be committed. Record a source edit under a repo path first, ` +
     `or use vcs.status/contextStatus to inspect the current head.`
   );
@@ -306,7 +306,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
   return {
     name: "vcs",
     description:
-      "Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibez1 vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.",
+      "Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibestudio vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.",
     policy: {
       allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"],
     },
@@ -381,7 +381,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           };
         }
         case "commit": {
-          const [input] = args as [import("@vibez1/shared/serviceSchemas/vcs").VcsCommitInput];
+          const [input] = args as [import("@vibestudio/shared/serviceSchemas/vcs").VcsCommitInput];
           if (!input.message || !input.message.trim()) {
             throw new Error("vcs.commit requires a message");
           }

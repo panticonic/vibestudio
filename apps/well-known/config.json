@@ -1,12 +1,12 @@
 {
   "apple": {
-    "_comment_teamId": "TODO(setup): fill the 10-character Apple Developer Team ID, or set VIBEZ1_APPLE_TEAM_ID in CI/deploy. Find it at https://developer.apple.com/account -> Membership -> Team ID.",
+    "_comment_teamId": "TODO(setup): fill the 10-character Apple Developer Team ID, or set VIBESTUDIO_APPLE_TEAM_ID in CI/deploy. Find it at https://developer.apple.com/account -> Membership -> Team ID.",
     "teamId": "TODO_TEAM_ID",
-    "bundleId": "com.vibez1.mobile"
+    "bundleId": "app.vibestudio.mobile"
   },
   "android": {
-    "packageName": "com.vibez1.mobile",
-    "_comment_sha256CertFingerprints": "TODO(setup): run `keytool -list -v -keystore <path-to-release.keystore> -alias <alias>` (typically the keystore referenced by RELEASE_STORE_FILE in apps/mobile/android/app/build.gradle) and paste the SHA256 fingerprint here, colon-separated, uppercase (e.g. `AA:BB:CC:...`), or set VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS as a comma-separated list in CI/deploy. For Play App Signing, include the upload-key fingerprint AND the Play-managed app-signing key fingerprint from Play Console -> Setup -> App integrity -> App signing.",
+    "packageName": "app.vibestudio.mobile",
+    "_comment_sha256CertFingerprints": "TODO(setup): run `keytool -list -v -keystore <path-to-release.keystore> -alias <alias>` (typically the keystore referenced by RELEASE_STORE_FILE in apps/mobile/android/app/build.gradle) and paste the SHA256 fingerprint here, colon-separated, uppercase (e.g. `AA:BB:CC:...`), or set VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS as a comma-separated list in CI/deploy. For Play App Signing, include the upload-key fingerprint AND the Play-managed app-signing key fingerprint from Play Console -> Setup -> App integrity -> App signing.",
     "sha256CertFingerprints": ["TODO_SHA256_FROM_KEYSTORE"]
   }
 }

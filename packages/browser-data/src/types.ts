@@ -64,7 +64,7 @@ export const HISTORY_TRANSITIONS = [
 
 export type HistoryTransition = (typeof HISTORY_TRANSITIONS)[number];
 
-export const HISTORY_VISIT_SOURCES = ["vibez1", "import"] as const;
+export const HISTORY_VISIT_SOURCES = ["vibestudio", "import"] as const;
 export type HistoryVisitSource = (typeof HISTORY_VISIT_SOURCES)[number];
 
 // ---- Normalized Data Types ----

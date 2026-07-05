@@ -10,7 +10,7 @@
  * The inspector socket binds loopback and is unreachable from userland
  * (workers egress through the proxy; panels are not server-local), so this
  * bridge is the only programmatic path. Clients authenticate with the same
- * first-message frame as the CDP bridge ({type:"vibez1:cdp-auth",token}),
+ * first-message frame as the CDP bridge ({type:"vibestudio:cdp-auth",token}),
  * redeeming single-use grants minted by the workerdInspector service after
  * its approval check. The client↔upstream protocol is plain V8 inspector
  * JSON, relayed verbatim.
@@ -18,8 +18,8 @@
 import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
-import { CdpGrantService } from "@vibez1/shared/cdpGrants";
-import { createDevLogger } from "@vibez1/dev-log";
+import { CdpGrantService } from "@vibestudio/shared/cdpGrants";
+import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("WorkerdInspectorBridge");
 
@@ -163,7 +163,7 @@ export class WorkerdInspectorBridge {
     };
 
     upstream.on("open", () => {
-      client.send(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+      client.send(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
       client.on("message", (data) => {
         if (upstream.readyState === WebSocket.OPEN) {
           upstream.send(typeof data === "string" ? data : data.toString());
@@ -194,7 +194,7 @@ export class WorkerdInspectorBridge {
         cleanup();
         try {
           const parsed = JSON.parse(String(data)) as { type?: string; token?: string };
-          if (parsed.type !== "vibez1:cdp-auth" || !parsed.token) {
+          if (parsed.type !== "vibestudio:cdp-auth" || !parsed.token) {
             resolve(false);
             return;
           }

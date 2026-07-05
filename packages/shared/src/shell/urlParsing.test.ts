@@ -6,14 +6,14 @@ import { isManagedHost, parsePanelUrl } from "./urlParsing.js";
 // ---------------------------------------------------------------------------
 
 describe("isManagedHost()", () => {
-  const host = "vibez1.example.com";
+  const host = "vibestudio.example.com";
 
   it("returns true for exact host match", () => {
-    expect(isManagedHost("https://vibez1.example.com/path", host)).toBe(true);
+    expect(isManagedHost("https://vibestudio.example.com/path", host)).toBe(true);
   });
 
   it("matches exact host regardless of port", () => {
-    expect(isManagedHost("https://vibez1.example.com:8080/path", host)).toBe(true);
+    expect(isManagedHost("https://vibestudio.example.com:8080/path", host)).toBe(true);
   });
 
   it("requires the port when the managed authority includes one", () => {
@@ -22,7 +22,7 @@ describe("isManagedHost()", () => {
   });
 
   it("returns false for subdomains", () => {
-    expect(isManagedHost("https://sub.vibez1.example.com:3000/path", host)).toBe(false);
+    expect(isManagedHost("https://sub.vibestudio.example.com:3000/path", host)).toBe(false);
   });
 
   it("returns false for completely different host", () => {
@@ -30,7 +30,7 @@ describe("isManagedHost()", () => {
   });
 
   it("returns false for partial hostname match that is not a subdomain", () => {
-    expect(isManagedHost("https://evilvibez1.example.com/path", host)).toBe(false);
+    expect(isManagedHost("https://evilvibestudio.example.com/path", host)).toBe(false);
   });
 
   it("returns false for invalid URL", () => {
@@ -42,15 +42,15 @@ describe("isManagedHost()", () => {
   });
 
   it("works with http scheme", () => {
-    expect(isManagedHost("http://vibez1.example.com/", host)).toBe(true);
+    expect(isManagedHost("http://vibestudio.example.com/", host)).toBe(true);
   });
 });
 
 describe("parsePanelUrl()", () => {
-  const host = "vibez1.example.com";
+  const host = "vibestudio.example.com";
 
   it("parses a basic panel URL with source path", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat", host);
 
     expect(result).not.toBeNull();
     expect(result!.source).toBe("panels/chat");
@@ -61,7 +61,7 @@ describe("parsePanelUrl()", () => {
   });
 
   it("parses URL with contextId query param", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?contextId=ctx-123", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?contextId=ctx-123", host);
 
     expect(result).not.toBeNull();
     expect(result!.source).toBe("panels/chat");
@@ -70,21 +70,21 @@ describe("parsePanelUrl()", () => {
   });
 
   it("parses URL with name query param", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?name=My%20Panel", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?name=My%20Panel", host);
 
     expect(result).not.toBeNull();
     expect(result!.options.name).toBe("My Panel");
   });
 
   it("parses URL with focus=true query param", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?focus=true", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?focus=true", host);
 
     expect(result).not.toBeNull();
     expect(result!.options.focus).toBe(true);
   });
 
   it("does not set focus for focus=false", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?focus=false", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?focus=false", host);
 
     expect(result).not.toBeNull();
     expect(result!.options.focus).toBeUndefined();
@@ -93,7 +93,7 @@ describe("parsePanelUrl()", () => {
   it("parses URL with valid stateArgs JSON", () => {
     const stateArgs = JSON.stringify({ key: "value", count: 42 });
     const result = parsePanelUrl(
-      `https://vibez1.example.com/panels/chat?stateArgs=${encodeURIComponent(stateArgs)}`,
+      `https://vibestudio.example.com/panels/chat?stateArgs=${encodeURIComponent(stateArgs)}`,
       host
     );
 
@@ -102,7 +102,7 @@ describe("parsePanelUrl()", () => {
   });
 
   it("handles invalid stateArgs JSON gracefully", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?stateArgs=not-json", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?stateArgs=not-json", host);
 
     expect(result).not.toBeNull();
     expect(result!.stateArgs).toBeUndefined();
@@ -114,32 +114,32 @@ describe("parsePanelUrl()", () => {
   });
 
   it("returns null for URL without two-segment path", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/single", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/single", host);
     expect(result).toBeNull();
   });
 
   it("returns null for root path", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/", host);
     expect(result).toBeNull();
   });
 
   it("returns null for URL with trailing path segments", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat/extra/segment", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat/extra/segment", host);
     expect(result).toBeNull();
   });
 
   it("returns null when _bk param is present", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?_bk=true", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?_bk=true", host);
     expect(result).toBeNull();
   });
 
   it("returns null when pid param is present", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?pid=abc", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?pid=abc", host);
     expect(result).toBeNull();
   });
 
   it("returns null when _fresh param is present", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat?_fresh=1", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat?_fresh=1", host);
     expect(result).toBeNull();
   });
 
@@ -154,14 +154,14 @@ describe("parsePanelUrl()", () => {
   });
 
   it("returns null for subdomain URLs", () => {
-    const result = parsePanelUrl("https://sub.vibez1.example.com/panels/chat", host);
+    const result = parsePanelUrl("https://sub.vibestudio.example.com/panels/chat", host);
 
     expect(result).toBeNull();
   });
 
   it("parses URL with multiple query params", () => {
     const result = parsePanelUrl(
-      "https://vibez1.example.com/panels/chat?contextId=ctx-1&name=Test&focus=true",
+      "https://vibestudio.example.com/panels/chat?contextId=ctx-1&name=Test&focus=true",
       host
     );
 
@@ -172,12 +172,12 @@ describe("parsePanelUrl()", () => {
   });
 
   it("returns null for URL with trailing slash on a 3-segment path", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat/extra/", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat/extra/", host);
     expect(result).toBeNull();
   });
 
   it("accepts URL with trailing slash on two-segment path", () => {
-    const result = parsePanelUrl("https://vibez1.example.com/panels/chat/", host);
+    const result = parsePanelUrl("https://vibestudio.example.com/panels/chat/", host);
 
     expect(result).not.toBeNull();
     expect(result!.source).toBe("panels/chat");

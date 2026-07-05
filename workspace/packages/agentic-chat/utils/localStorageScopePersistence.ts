@@ -6,7 +6,7 @@ import {
   type ScopeRowBackend,
 } from "@workspace/eval";
 
-const STORAGE_PREFIX = "vibez1:agentic-chat:scope:v1";
+const STORAGE_PREFIX = "vibestudio:agentic-chat:scope:v1";
 const ENTRY_PREFIX = `${STORAGE_PREFIX}:entry:`;
 
 function entryKey(id: string): string {

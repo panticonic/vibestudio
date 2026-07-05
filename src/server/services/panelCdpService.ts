@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { assertHttpUrl } from "@vibez1/shared/httpUrl";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
+import { assertHttpUrl } from "@vibestudio/shared/httpUrl";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type {
   PanelAccessPermissionDeps,
   PanelAccessPermissionTarget,

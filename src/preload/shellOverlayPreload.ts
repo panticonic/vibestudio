@@ -16,13 +16,13 @@ interface OverlayPayload {
   rows?: OverlayRow[];
 }
 
-contextBridge.exposeInMainWorld("__vibez1_shell_overlay", {
+contextBridge.exposeInMainWorld("__vibestudio_shell_overlay", {
   emit: emitOverlay,
-  hide: () => ipcRenderer.send("vibez1:shell-overlay:hide"),
+  hide: () => ipcRenderer.send("vibestudio:shell-overlay:hide"),
 });
 
 // Rows are pushed from the main process over IPC (the document is loaded once).
-ipcRenderer.on("vibez1:shell-overlay:render", (_event, payload: OverlayPayload) => {
+ipcRenderer.on("vibestudio:shell-overlay:render", (_event, payload: OverlayPayload) => {
   renderPayload(payload);
 });
 
@@ -107,7 +107,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 function emitOverlay(type: string, payload?: unknown): void {
-  ipcRenderer.send("vibez1:shell-overlay:event", { type, payload });
+  ipcRenderer.send("vibestudio:shell-overlay:event", { type, payload });
 }
 
 function appendMatchedText(
@@ -177,7 +177,7 @@ function iconText(kind: string): string {
 
 declare global {
   interface Window {
-    __vibez1_shell_overlay: {
+    __vibestudio_shell_overlay: {
       emit(type: string, payload?: unknown): void;
       hide(): void;
     };

@@ -11,13 +11,13 @@ import {
   type RpcConnectionStatus,
   type RpcEnvelope,
   type RpcStreamOptions,
-} from "@vibez1/rpc";
-import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
-import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
-import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { serverRpcWsUrl } from "@vibez1/shared/connect";
+} from "@vibestudio/rpc";
+import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
+import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
+import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 
 export type ConnectionStatus = RpcConnectionStatus;
 

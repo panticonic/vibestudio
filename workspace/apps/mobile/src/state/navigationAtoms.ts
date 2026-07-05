@@ -6,7 +6,7 @@
  */
 
 import { atom } from "jotai";
-import type { Panel } from "@vibez1/shared/types";
+import type { Panel } from "@vibestudio/shared/types";
 import { panelTreeAtom } from "./shellClientAtom";
 
 /** The ID of the currently active/focused panel */
@@ -29,7 +29,7 @@ export const activePanelAtom = atom<Panel | null>((get) => {
 /** Derived: title of the active panel, or fallback */
 export const activePanelTitleAtom = atom<string>((get) => {
   const panel = get(activePanelAtom);
-  return panel?.title ?? "Vibez1";
+  return panel?.title ?? "Vibestudio";
 });
 
 /** Derived: parent panel ID of the active panel (for Android back button) */

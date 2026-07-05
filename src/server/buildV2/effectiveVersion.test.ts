@@ -173,8 +173,8 @@ describe("effectiveVersion", () => {
     });
 
     it("does not invalidate workspace builds when host dist bundles change", () => {
-      const previousAppRoot = process.env["VIBEZ1_APP_ROOT"];
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-root-fingerprint-"));
+      const previousAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-root-fingerprint-"));
       const rootA = path.join(root, "a");
       const rootB = path.join(root, "b");
       try {
@@ -189,20 +189,20 @@ describe("effectiveVersion", () => {
         fs.writeFileSync(path.join(rootB, "dist", "server.mjs"), "console.log('new server');\n");
         fs.writeFileSync(path.join(rootB, "dist", "main.cjs"), "console.log('new main');\n");
 
-        process.env["VIBEZ1_APP_ROOT"] = rootA;
+        process.env["VIBESTUDIO_APP_ROOT"] = rootA;
         const first = computeBuildKey("unit-a", "ev1", true);
-        process.env["VIBEZ1_APP_ROOT"] = rootB;
+        process.env["VIBESTUDIO_APP_ROOT"] = rootB;
         expect(computeBuildKey("unit-a", "ev1", true)).toBe(first);
       } finally {
-        if (previousAppRoot === undefined) delete process.env["VIBEZ1_APP_ROOT"];
-        else process.env["VIBEZ1_APP_ROOT"] = previousAppRoot;
+        if (previousAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
+        else process.env["VIBESTUDIO_APP_ROOT"] = previousAppRoot;
         fs.rmSync(root, { recursive: true, force: true });
       }
     });
   });
 
   describe("root-dependency fingerprint (build-key hermeticity)", () => {
-    const previousAppRoot = process.env["VIBEZ1_APP_ROOT"];
+    const previousAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
     let root: string;
 
     function writeRootFiles(dir: string, pkg: string, lock: string, ws: string): void {
@@ -222,14 +222,14 @@ describe("effectiveVersion", () => {
     }
 
     beforeEach(() => {
-      root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-hermetic-"));
-      delete process.env["VIBEZ1_APP_ROOT"];
+      root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hermetic-"));
+      delete process.env["VIBESTUDIO_APP_ROOT"];
       setBuildRootConfig(null);
     });
 
     afterEach(() => {
-      if (previousAppRoot === undefined) delete process.env["VIBEZ1_APP_ROOT"];
-      else process.env["VIBEZ1_APP_ROOT"] = previousAppRoot;
+      if (previousAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
+      else process.env["VIBESTUDIO_APP_ROOT"] = previousAppRoot;
       setBuildRootConfig(null);
       fs.rmSync(root, { recursive: true, force: true });
     });
@@ -253,7 +253,7 @@ describe("effectiveVersion", () => {
       expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
     });
 
-    it("uses the injected app root when VIBEZ1_APP_ROOT is unset", () => {
+    it("uses the injected app root when VIBESTUDIO_APP_ROOT is unset", () => {
       const dirA = path.join(root, "a");
       const dirB = path.join(root, "b");
       writeRootFiles(dirA, '{"name":"a"}', "lockfileVersion: '9.0'\n", "packages: []\n");
@@ -286,14 +286,14 @@ describe("effectiveVersion", () => {
       expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
     });
 
-    it("lets VIBEZ1_APP_ROOT override the injected app root", () => {
+    it("lets VIBESTUDIO_APP_ROOT override the injected app root", () => {
       const injected = path.join(root, "injected");
       const overridden = path.join(root, "override");
       writeRootFiles(injected, '{"name":"injected"}', "lock\n", "ws\n");
       writeRootFiles(overridden, '{"name":"override"}', "lock\n", "ws\n");
 
       setBuildRootConfig({ appRoot: injected });
-      process.env["VIBEZ1_APP_ROOT"] = overridden;
+      process.env["VIBESTUDIO_APP_ROOT"] = overridden;
       const info = getRootDependencyFingerprintInfo();
       expect(info.rootSource).toBe("env");
       expect(info.root).toBe(overridden);

@@ -119,8 +119,8 @@ describe("WorkspaceVcs.indexRepoFiles marker discipline (A4)", () => {
 
   it("advances the marker and omits deliberately skipped files (oversized / binary)", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const previousLogLevel = process.env["VIBEZ1_LOG_LEVEL"];
-    process.env["VIBEZ1_LOG_LEVEL"] = "info";
+    const previousLogLevel = process.env["VIBESTUDIO_LOG_LEVEL"];
+    process.env["VIBESTUDIO_LOG_LEVEL"] = "info";
     try {
       const ok = await putBytes(blobsDir, Buffer.from("small text file", "utf8"));
       const oversized = await putBytes(blobsDir, Buffer.alloc(MAX_INDEXED_FILE_BYTES + 1, 0x61));
@@ -147,9 +147,9 @@ describe("WorkspaceVcs.indexRepoFiles marker discipline (A4)", () => {
       expect(warn).not.toHaveBeenCalled();
     } finally {
       if (previousLogLevel === undefined) {
-        delete process.env["VIBEZ1_LOG_LEVEL"];
+        delete process.env["VIBESTUDIO_LOG_LEVEL"];
       } else {
-        process.env["VIBEZ1_LOG_LEVEL"] = previousLogLevel;
+        process.env["VIBESTUDIO_LOG_LEVEL"] = previousLogLevel;
       }
     }
   });

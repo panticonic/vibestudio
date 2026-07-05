@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventsClient } from "./eventsClient.js";
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 
 // ---------------------------------------------------------------------------
 // Helpers

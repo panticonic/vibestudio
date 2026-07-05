@@ -1,9 +1,9 @@
-import { createRpcClient, type RpcClient } from "@vibez1/rpc";
-import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
-import { createServerWsTransport } from "@vibez1/shared/shell/transport/serverWsTransport";
-import { authMethods } from "@vibez1/shared/serviceSchemas/auth";
-import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
+import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
+import { createServerWsTransport } from "@vibestudio/shared/shell/transport/serverWsTransport";
+import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
+import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import WebSocket from "ws";
 
 export interface PairingInviteLike {
@@ -24,13 +24,13 @@ export function formatPairingInvite(invite: PairingInviteLike): string {
 }
 
 function printBootstrapSummary(): void {
-  console.log(`App id: ${requiredEnv("VIBEZ1_TERMINAL_APP_ID")}`);
-  console.log(`Source: ${process.env["VIBEZ1_TERMINAL_APP_SOURCE"] ?? "unknown"}`);
-  console.log(`Build: ${process.env["VIBEZ1_TERMINAL_APP_BUILD_KEY"] ?? "unknown"}`);
+  console.log(`App id: ${requiredEnv("VIBESTUDIO_TERMINAL_APP_ID")}`);
+  console.log(`Source: ${process.env["VIBESTUDIO_TERMINAL_APP_SOURCE"] ?? "unknown"}`);
+  console.log(`Build: ${process.env["VIBESTUDIO_TERMINAL_APP_BUILD_KEY"] ?? "unknown"}`);
   console.log(
-    `Effective version: ${process.env["VIBEZ1_TERMINAL_APP_EFFECTIVE_VERSION"] || "unknown"}`
+    `Effective version: ${process.env["VIBESTUDIO_TERMINAL_APP_EFFECTIVE_VERSION"] || "unknown"}`
   );
-  console.log(`Gateway: ${requiredEnv("VIBEZ1_TERMINAL_APP_GATEWAY_URL")}`);
+  console.log(`Gateway: ${requiredEnv("VIBESTUDIO_TERMINAL_APP_GATEWAY_URL")}`);
 }
 
 function requiredEnv(name: string): string {
@@ -40,17 +40,17 @@ function requiredEnv(name: string): string {
 }
 
 async function connect() {
-  const appId = requiredEnv("VIBEZ1_TERMINAL_APP_ID");
-  const token = requiredEnv("VIBEZ1_TERMINAL_APP_RPC_TOKEN");
-  const connectionId = requiredEnv("VIBEZ1_TERMINAL_APP_CONNECTION_ID");
+  const appId = requiredEnv("VIBESTUDIO_TERMINAL_APP_ID");
+  const token = requiredEnv("VIBESTUDIO_TERMINAL_APP_RPC_TOKEN");
+  const connectionId = requiredEnv("VIBESTUDIO_TERMINAL_APP_CONNECTION_ID");
   const transport = createServerWsTransport({
     selfId: appId,
-    serverUrl: requiredEnv("VIBEZ1_TERMINAL_APP_GATEWAY_URL"),
+    serverUrl: requiredEnv("VIBESTUDIO_TERMINAL_APP_GATEWAY_URL"),
     connectionId,
     logPrefix: "RemoteCli",
     getAuthMessageFields: () => ({
       connectionId,
-      clientLabel: "Vibez1 Remote CLI",
+      clientLabel: "Vibestudio Remote CLI",
       clientPlatform: "desktop",
     }),
     translateEvent: (event, payload, deliver) => {
@@ -96,7 +96,7 @@ export async function main(): Promise<void> {
   );
   printBootstrapSummary();
   const workspace = await workspaceClient.getInfo();
-  console.log(`Connected as ${requiredEnv("VIBEZ1_TERMINAL_APP_ID")}`);
+  console.log(`Connected as ${requiredEnv("VIBESTUDIO_TERMINAL_APP_ID")}`);
   console.log(`Workspace: ${workspace.config.id ?? "unknown"}`);
 
   const units = await workspaceClient.units.list();
@@ -107,7 +107,7 @@ export async function main(): Promise<void> {
     );
   }
 
-  const command = process.env["VIBEZ1_TERMINAL_APP_COMMAND"] ?? "invite";
+  const command = process.env["VIBESTUDIO_TERMINAL_APP_COMMAND"] ?? "invite";
   if (command === "status") return;
   if (command === "invite") {
     const invite = await authClient.createPairingInvite({ ttlMs: 10 * 60 * 1000 });
@@ -121,7 +121,7 @@ export async function main(): Promise<void> {
   });
 }
 
-if (process.env["VIBEZ1_TERMINAL_APP_GATEWAY_URL"]) {
+if (process.env["VIBESTUDIO_TERMINAL_APP_GATEWAY_URL"]) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.stack || error.message : String(error));
     process.exit(1);

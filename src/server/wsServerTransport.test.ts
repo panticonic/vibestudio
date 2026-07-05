@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createRpcClient, envelopeFromMessage, type RpcEnvelope } from "@vibez1/rpc";
+import { createRpcClient, envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
 import type { WebSocket } from "ws";
 import {
   createWsServerTransport,

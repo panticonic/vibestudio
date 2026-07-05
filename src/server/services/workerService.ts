@@ -7,9 +7,9 @@
  */
 
 import { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
-import type { WorkspaceDeclarations } from "@vibez1/shared/workspace/singletonRegistry";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { WorkspaceDeclarations } from "@vibestudio/shared/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { resolveUserlandService } from "../userlandServices.js";
 import { assertPresent } from "../../lintHelpers";

@@ -12,7 +12,7 @@
 import type { ManagedService } from "./managedService.js";
 import type { ServiceDefinition } from "./serviceDefinition.js";
 import type { ServiceDispatcher } from "./serviceDispatcher.js";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("ServiceContainer");
 

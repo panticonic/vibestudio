@@ -1,7 +1,7 @@
 # Extension Runtime Contract
 
-Vibez1 extensions are workspace packages under `workspace/extensions/` with a
-`vibez1.extension` manifest block. The build output is an ESM bundle that runs
+Vibestudio extensions are workspace packages under `workspace/extensions/` with a
+`vibestudio.extension` manifest block. The build output is an ESM bundle that runs
 in a Node child process, not in the browser or a workerd isolate.
 
 ## Manifest
@@ -12,7 +12,7 @@ in a Node child process, not in the browser or a workerd isolate.
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "vibez1": {
+  "vibestudio": {
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

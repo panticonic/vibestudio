@@ -26,7 +26,7 @@ import {
   PlusIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
-import { Vibez1Logo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -38,7 +38,7 @@ import {
   END_DROP_ZONE_ID,
   type FlattenedPanel,
 } from "../shell/hooks/index.js";
-import type { PanelContextMenuAction } from "@vibez1/shared/types";
+import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import { menu, panel } from "../shell/client.js";
 import {
   activeWorkspaceNameAtom,
@@ -814,7 +814,7 @@ export function LazyPanelTreeSidebar({
           px="4"
           style={{ flex: 1, textAlign: "center" }}
         >
-          <Vibez1Logo size={48} variant="mark" />
+          <VibestudioLogo size={48} variant="mark" />
           <Text size="2" weight="medium" style={{ color: "var(--gray-12)" }}>
             No panels yet
           </Text>

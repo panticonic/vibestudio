@@ -79,7 +79,7 @@ describe("transcript UX smoke", () => {
 
     await act(async () => {
       await appendTrajectoryEventsAndBroadcast(harness, [
-        assistantMessage("assistant-visible", "Welcome to Vibez1."),
+        assistantMessage("assistant-visible", "Welcome to Vibestudio."),
         invocationStarted("call-eval", "eval", { code: "read('skills/onboarding/SKILL.md')" }),
         invocationCompleted("call-eval", {
           toolCallId: "call-eval",
@@ -91,7 +91,7 @@ describe("transcript UX smoke", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Welcome to Vibez1.")).toBeTruthy();
+      expect(screen.getByText("Welcome to Vibestudio.")).toBeTruthy();
       expect(screen.getByText("Eval")).toBeTruthy();
       expect(document.body.textContent).toContain("code: SKILL.md')");
     });

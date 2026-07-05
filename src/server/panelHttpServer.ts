@@ -8,7 +8,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { WebSocketServer } from "ws";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import type {
   BuildArtifactManifestEntry,
   BuildResult,
@@ -44,7 +44,7 @@ function loadBrowserTransport(): string {
   }
 
   log.info(`[PanelHttpServer] Browser transport not found, using inline stub`);
-  return `console.warn("[Vibez1] Browser transport not available — panel RPC will not work.");`;
+  return `console.warn("[Vibestudio] Browser transport not available — panel RPC will not work.");`;
 }
 
 const BROWSER_TRANSPORT_JS = loadBrowserTransport();
@@ -72,7 +72,7 @@ const BRAND_FAVICON_ICO = loadBrandAsset("favicon.ico");
 const BRAND_FAVICON_PNG = loadBrandAsset("favicon-64.png");
 const BRAND_FAVICON_SVG = loadBrandAsset("favicon.svg");
 const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="6" fill="#111"/><path d="M7 25h18M14 25V13l-8 5M14 13l5-3M18 15l5 5M18 15l7-2" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`;
-const BRAND_MARK_WHITE_SVG = loadBrandAsset("vibez1-mark-white.svg");
+const BRAND_MARK_WHITE_SVG = loadBrandAsset("vibestudio-mark-white.svg");
 const DEFAULT_BRAND_MARK_WHITE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 904 904" fill="none"><path d="M116 805H788" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M496 805V350L204 536" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M155 608L496 392" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M280 238L414 372L179 519" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M302 184L430 312" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M338 88L510 278" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M265 127L291 153" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round"/><path d="M496 278L557 180C592 123 552 80 507 87C470 93 450 121 450 165V236" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M525 355L616 222C653 168 728 189 737 238C743 274 724 295 690 303L538 342L633 437" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/><path d="M554 578V431L709 579V394" stroke="#F8FAFC" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const BRAND_MARK_WHITE_DATA_URL = `data:image/svg+xml;base64,${(
   BRAND_MARK_WHITE_SVG ?? Buffer.from(DEFAULT_BRAND_MARK_WHITE_SVG)
@@ -127,9 +127,10 @@ function extractSourcePath(pathname: string): { source: string; resource: string
 }
 
 function shouldLogPanelResourceRequests(): boolean {
-  if (process.env["VIBEZ1_PANEL_RESOURCE_LOG"] === "0") return false;
+  if (process.env["VIBESTUDIO_PANEL_RESOURCE_LOG"] === "0") return false;
   return (
-    process.env["VIBEZ1_PANEL_RESOURCE_LOG"] === "1" || process.env["NODE_ENV"] === "development"
+    process.env["VIBESTUDIO_PANEL_RESOURCE_LOG"] === "1" ||
+    process.env["NODE_ENV"] === "development"
   );
 }
 
@@ -416,7 +417,7 @@ export class PanelHttpServer {
     res.once("finish", () => {
       const durationMs = Date.now() - startedAt;
       const client =
-        typeof userAgent === "string" && userAgent.includes("Vibez1-Mobile") ? "mobile" : "web";
+        typeof userAgent === "string" && userAgent.includes("Vibestudio-Mobile") ? "mobile" : "web";
       log.info(
         `Panel resource ${method} ${source}${resource} route=${routeLabel} ` +
           `status=${res.statusCode} durationMs=${durationMs} client=${client}`
@@ -566,7 +567,7 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Building — Vibez1</title>
+  <title>Building — Vibestudio</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
     body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
@@ -606,7 +607,7 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Build Error — Vibez1</title>
+  <title>Build Error — Vibestudio</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
     body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 4rem auto; padding: 0 1rem; text-align: center; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
@@ -659,7 +660,7 @@ export class PanelHttpServer {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
-      "X-Vibez1-Build-Revision": String(build.revision),
+      "X-Vibestudio-Build-Revision": String(build.revision),
     });
     res.end(build.htmlArtifact.content);
   }
@@ -688,7 +689,7 @@ export class PanelHttpServer {
         "Content-Type": artifact.contentType,
         "Content-Length": body.length,
         "Cache-Control": cacheControl,
-        "X-Vibez1-Build-Revision": String(revision),
+        "X-Vibestudio-Build-Revision": String(revision),
       });
       res.end(body);
       return;
@@ -696,7 +697,7 @@ export class PanelHttpServer {
     res.writeHead(200, {
       "Content-Type": artifact.contentType,
       "Cache-Control": cacheControl,
-      "X-Vibez1-Build-Revision": String(revision),
+      "X-Vibestudio-Build-Revision": String(revision),
     });
     res.end(artifact.content);
   }
@@ -720,7 +721,7 @@ export class PanelHttpServer {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vibez1 Panels</title>
+  <title>Vibestudio Panels</title>
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <style>
     body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; color: #f8fafc; background: radial-gradient(circle at top, #222834 0%, #0a0b0c 58%); }
@@ -742,7 +743,7 @@ export class PanelHttpServer {
 <body>
   <div class="brand-header">
     <div class="brand-mark"><img src="${BRAND_MARK_WHITE_DATA_URL}" alt="" aria-hidden="true"></div>
-    <h1>Vibez1 Panels</h1>
+    <h1>Vibestudio Panels</h1>
   </div>
   ${
     allEntries.length > 0

@@ -9,9 +9,9 @@
  * the DO composes it with those to hold all the VCS semantics itself.
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { ServiceAccessError } from "@vibez1/shared/serviceDispatcher";
-import { worktreeMethods } from "@vibez1/shared/serviceSchemas/worktree";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
+import { worktreeMethods } from "@vibestudio/shared/serviceSchemas/worktree";
 
 export interface WorktreeServiceDeps {
   /** The pure disk→CAS scan primitive (WorkspaceVcs.scanWorktree). */

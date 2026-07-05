@@ -1,6 +1,6 @@
 # Agent Debug Port
 
-Vibez1 agents expose a read-only debug method named `getDebugState`.
+Vibestudio agents expose a read-only debug method named `getDebugState`.
 
 Call it through the agent participant:
 

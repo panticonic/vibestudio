@@ -22,7 +22,7 @@ interface PanelRenderErrorDiagnosticRequest {
 }
 
 interface PanelErrorDiagnosticLauncherGlobal {
-  __vibez1PanelErrorDiagnostics?: (
+  __vibestudioPanelErrorDiagnostics?: (
     request: PanelRenderErrorDiagnosticRequest
   ) => Promise<{ panelId: string; title: string; prompt: string }>;
 }
@@ -38,20 +38,20 @@ describe("createReactPanelMount render error boundary", () => {
 
   afterEach(() => {
     delete (globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal)
-      .__vibez1PanelErrorDiagnostics;
+      .__vibestudioPanelErrorDiagnostics;
     vi.restoreAllMocks();
   });
 
   it("wraps auto-mounted React panels with diagnostic child-chat recovery", async () => {
     const launcher = vi.fn<
-      NonNullable<PanelErrorDiagnosticLauncherGlobal["__vibez1PanelErrorDiagnostics"]>
+      NonNullable<PanelErrorDiagnosticLauncherGlobal["__vibestudioPanelErrorDiagnostics"]>
     >(async () => ({
       panelId: "debug-chat",
       title: "Agentic Chat",
       prompt: "debug",
     }));
     (globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal)
-      .__vibez1PanelErrorDiagnostics = launcher;
+      .__vibestudioPanelErrorDiagnostics = launcher;
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const mount = createReactPanelMount(React, createRoot);

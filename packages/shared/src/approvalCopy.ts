@@ -30,7 +30,7 @@ function isIdentityScopedVersionApproval(approval: PendingApproval): boolean {
   ) {
     return true;
   }
-  return approval.effectiveVersion === "internal" || approval.repoPath === "vibez1/internal";
+  return approval.effectiveVersion === "internal" || approval.repoPath === "vibestudio/internal";
 }
 
 function trustVersionLabel(approval: PendingApproval, fallback = "Trust version"): string {
@@ -228,7 +228,7 @@ export function getStandardActionCopy(
         },
         session: {
           label: "Connect this session",
-          description: "Save and allow use until Vibez1 restarts.",
+          description: "Save and allow use until Vibestudio restarts.",
         },
         version: {
           label: trustVersionLabel(approval),
@@ -251,8 +251,8 @@ export function getStandardActionCopy(
         session: {
           label: isWrite ? "Push this session" : "Read this session",
           description: isWrite
-            ? "Allow git pushes to this remote until Vibez1 restarts."
-            : "Allow git reads from this remote until Vibez1 restarts.",
+            ? "Allow git pushes to this remote until Vibestudio restarts."
+            : "Allow git reads from this remote until Vibestudio restarts.",
         },
         version: {
           label: trustVersionLabel(approval),
@@ -276,7 +276,7 @@ export function getStandardActionCopy(
       },
       session: {
         label: "Use this session",
-        description: `Reuse ${formatCredentialUseTarget(approval)} until Vibez1 restarts.`,
+        description: `Reuse ${formatCredentialUseTarget(approval)} until Vibestudio restarts.`,
       },
       version: {
         label: trustVersionLabel(approval),
@@ -294,7 +294,7 @@ export function getStandardActionCopy(
       once: { label: "Connect once", description: "Open this sign-in flow once." },
       session: {
         label: "Connect this session",
-        description: "Allow this sign-in origin until Vibez1 restarts.",
+        description: "Allow this sign-in origin until Vibestudio restarts.",
       },
       version: {
         label: trustVersionLabel(approval),
@@ -317,7 +317,7 @@ export function getStandardActionCopy(
         },
         session: {
           label: "Commit this session",
-          description: `Allow committed changes to ${destination} until Vibez1 restarts.`,
+          description: `Allow committed changes to ${destination} until Vibestudio restarts.`,
         },
         version: {
           label: trustVersionLabel(approval),
@@ -339,8 +339,8 @@ export function getStandardActionCopy(
       session: {
         label: isMeta ? "Edit this session" : "Write this session",
         description: isMeta
-          ? "Allow config pushes until Vibez1 restarts."
-          : "Allow writes to this repository until Vibez1 restarts.",
+          ? "Allow config pushes until Vibestudio restarts."
+          : "Allow writes to this repository until Vibestudio restarts.",
       },
       version: {
         label: trustVersionLabel(approval),
@@ -362,7 +362,7 @@ export function getStandardActionCopy(
       once: { label: "Change once", description: "Allow this shared remote change once." },
       session: {
         label: "Change this session",
-        description: "Allow shared remote changes until Vibez1 restarts.",
+        description: "Allow shared remote changes until Vibestudio restarts.",
       },
       version: {
         label: trustVersionLabel(approval),
@@ -380,7 +380,7 @@ export function getStandardActionCopy(
       once: { label: "Import once", description: "Allow this project import once." },
       session: {
         label: "Import this session",
-        description: "Allow project imports until Vibez1 restarts.",
+        description: "Allow project imports until Vibestudio restarts.",
       },
       version: {
         label: trustVersionLabel(approval),
@@ -402,7 +402,7 @@ export function getStandardActionCopy(
       },
       session: {
         label: "Allow this origin",
-        description: `Allow network requests to ${destination} until Vibez1 restarts.`,
+        description: `Allow network requests to ${destination} until Vibestudio restarts.`,
       },
       version: {
         label: networkTrustLabel(approval),
@@ -425,7 +425,7 @@ export function getStandardActionCopy(
       },
       session: {
         label: "Read this origin",
-        description: `Allow cross-origin response reads from ${destination} until Vibez1 restarts.`,
+        description: `Allow cross-origin response reads from ${destination} until Vibestudio restarts.`,
       },
       version: {
         label: corsTrustLabel(approval),
@@ -444,7 +444,7 @@ export function getStandardActionCopy(
       once: { label: "Open once", description: "Open this browser action once." },
       session: {
         label: "Open this session",
-        description: "Allow this browser origin until Vibez1 restarts.",
+        description: "Allow this browser origin until Vibestudio restarts.",
       },
       version: {
         label: trustVersionLabel(approval),
@@ -459,7 +459,7 @@ export function getStandardActionCopy(
     once: { label: "Allow once", description: "Allow this request once." },
     session: {
       label: "Allow this session",
-      description: `Allow requests for ${target} until Vibez1 restarts.`,
+      description: `Allow requests for ${target} until Vibestudio restarts.`,
     },
     version: {
       label: trustVersionLabel(approval),

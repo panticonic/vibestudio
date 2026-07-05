@@ -1,6 +1,6 @@
 /**
  * Integration tests that verify the eval package works in scenarios
- * similar to how workers would use it (without __vibez1Require__).
+ * similar to how workers would use it (without __vibestudioRequire__).
  */
 import { describe, it, expect } from "vitest";
 import { transformCode, execute, validateRequires, createConsoleCapture, formatConsoleOutput } from "./index";

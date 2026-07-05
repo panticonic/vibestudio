@@ -12,7 +12,7 @@ interface PanelRenderErrorDiagnosticRequest {
 }
 
 interface PanelErrorDiagnosticLauncherGlobal {
-  __vibez1PanelErrorDiagnostics?: (
+  __vibestudioPanelErrorDiagnostics?: (
     request: PanelRenderErrorDiagnosticRequest
   ) => Promise<{ panelId: string; title: string; prompt: string }>;
 }
@@ -24,20 +24,20 @@ function ThrowingChild(): React.ReactElement {
 describe("ErrorBoundary", () => {
   afterEach(() => {
     delete (globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal)
-      .__vibez1PanelErrorDiagnostics;
+      .__vibestudioPanelErrorDiagnostics;
     vi.restoreAllMocks();
   });
 
   it("opens a diagnostic child chat from the render fallback", async () => {
     const launcher = vi.fn<
-      NonNullable<PanelErrorDiagnosticLauncherGlobal["__vibez1PanelErrorDiagnostics"]>
+      NonNullable<PanelErrorDiagnosticLauncherGlobal["__vibestudioPanelErrorDiagnostics"]>
     >(async () => ({
       panelId: "debug-chat",
       title: "Agentic Chat",
       prompt: "debug",
     }));
     (globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal)
-      .__vibez1PanelErrorDiagnostics = launcher;
+      .__vibestudioPanelErrorDiagnostics = launcher;
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     render(

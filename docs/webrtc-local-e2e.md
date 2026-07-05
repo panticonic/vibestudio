@@ -9,7 +9,7 @@ as a **real WebRTC answerer**, and a client dials it over a real
 
 ```bash
 pnpm rebuild node-datachannel   # one-time: build the native N-API binary
-pnpm test:webrtc-e2e            # VIBEZ1_RUN_WEBRTC_E2E=1 vitest run tests/webrtc-*.e2e.test.ts
+pnpm test:webrtc-e2e            # VIBESTUDIO_RUN_WEBRTC_E2E=1 vitest run tests/webrtc-*.e2e.test.ts
 ```
 
 Two suites run (both against the v2 stack — hello preamble `proto=2`, ingress
@@ -26,7 +26,7 @@ pool, per-invite rooms, the shared `createPairedConnection` bootstrap):
   `src/server/index.ts` boots it: it spawns `wrangler dev apps/signaling` (the
   real signaling DO under Miniflare), starts the **WebRTC ingress pool**
   (`startWebRtcIngress`) over the real `RpcServer`, mints invites with
-  **per-invite rooms** (`mintPairingInvite` → real `vibez1://connect` v=2 deep
+  **per-invite rooms** (`mintPairingInvite` → real `vibestudio://connect` v=2 deep
   links), and dials each with `createPairedConnection` (the one shared client
   bootstrap). Scenarios: fresh-device pairing over the pipe (`code` →
   `createPairingRedeemer` → credential on the auth-result `onPaired`) + RPC
@@ -55,12 +55,12 @@ They also run nightly in CI (`.github/workflows/webrtc-e2e-nightly.yml`).
 | Piece | Where |
 | --- | --- |
 | Signaling DO + `wrangler dev` | `apps/signaling/` (Miniflare-local) |
-| Signaling client | `@vibez1/rpc/transports/webrtcSignalingClient` (`ws` in Node; `role` required) |
+| Signaling client | `@vibestudio/rpc/transports/webrtcSignalingClient` (`ws` in Node; `role` required) |
 | Native peer adapter | `src/main/webrtc/nodeDatachannelPeer.ts` (lazy-loads `node-datachannel`) |
 | Persistent DTLS cert | `src/main/webrtc/cert.ts` (`ensurePersistentCert` → stable QR `fp`) |
-| Client transport | `@vibez1/rpc/transports/webrtcClient` |
-| Shared client bootstrap | `@vibez1/rpc/transports/pairedConnection` (`createPairedConnection` — desktop/mobile) |
-| Server answerer pipe | `@vibez1/rpc/transports/webrtcAnswerer` |
+| Client transport | `@vibestudio/rpc/transports/webrtcClient` |
+| Shared client bootstrap | `@vibestudio/rpc/transports/pairedConnection` (`createPairedConnection` — desktop/mobile) |
+| Server answerer pipe | `@vibestudio/rpc/transports/webrtcAnswerer` |
 | Server attach | `RpcServer.attachWebRtcPipe` + `src/server/webrtcSessionShim.ts` |
 | Server ingress pool | `src/server/webrtcIngress.ts` (`startWebRtcIngress`, wired env-gated in `index.ts`) |
 | Per-invite rooms | `src/server/services/auth/model.ts` (`mintPairingInvite` → room + deep link) |
@@ -68,7 +68,7 @@ They also run nightly in CI (`.github/workflows/webrtc-e2e-nightly.yml`).
 ## Running the REAL server as a WebRTC answerer
 
 The WebRTC ingress pool is **off by default** (loopback co-located mode is
-unchanged). Activate it by setting `VIBEZ1_WEBRTC_SIGNAL_URL` — rooms and
+unchanged). Activate it by setting `VIBESTUDIO_WEBRTC_SIGNAL_URL` — rooms and
 pairing codes are minted **per invite** by the server (there is no room or code
 env var; the per-server singleton room is gone, plan §2.1):
 
@@ -77,20 +77,20 @@ env var; the per-server singleton room is gone, plan §2.1):
 cd apps/signaling && wrangler dev --port 8787 --local &
 
 # 2. the server, with the ingress pool armed
-VIBEZ1_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 pnpm server
+VIBESTUDIO_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 pnpm server
 # → startup banner prints fresh invites:
-#      Pair URL:     vibez1://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all
+#      Pair URL:     vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all
 #   and the pool logs:  [webrtc-ingress] armed room <uuid> (invite)
 ```
 
 The server mints two startup invites (banner + ready file; disable with
-`VIBEZ1_DISABLE_STARTUP_PAIRING=1`); further invites come from
+`VIBESTUDIO_DISABLE_STARTUP_PAIRING=1`); further invites come from
 `auth.createPairingInvite`. Each invite arms a fresh signaling room on the
 pool; redemption persists the room onto the device record, so returning
 devices reconnect into their own room after a restart.
 
-Optional env: `VIBEZ1_WEBRTC_CERT` / `VIBEZ1_WEBRTC_KEY` (cert paths, default
-`<appRoot>/.vibez1/webrtc/server.{pem,key}`), `VIBEZ1_WEBRTC_ICE=relay` (force
+Optional env: `VIBESTUDIO_WEBRTC_CERT` / `VIBESTUDIO_WEBRTC_KEY` (cert paths, default
+`<appRoot>/.vibestudio/webrtc/server.{pem,key}`), `VIBESTUDIO_WEBRTC_ICE=relay` (force
 TURN). The server presents the persistent cert; its SHA-256 is the published `fp`.
 
 Observability (§9.8 relay alarm): every pipe connect logs
@@ -111,14 +111,14 @@ pnpm dev:webrtc
 
 The wrapper builds like `pnpm dev`, starts `wrangler dev apps/signaling`, starts a
 local workspace server as the WebRTC answerer, then launches Electron with the
-fresh `vibez1://connect` link. It passes `--skip-remote-pairing` so saved remote
+fresh `vibestudio://connect` link. It passes `--skip-remote-pairing` so saved remote
 credentials cannot steal the launch, and disables persistence for the fresh dev
 pairing so the next normal `pnpm dev` remains local.
 
 ## Notes
 
-- **The CLI uses the same paired bootstrap.** `vibez1 remote pair
-  "vibez1://connect?…"` dials the room with `createPairedConnection`, stores the
+- **The CLI uses the same paired bootstrap.** `vibestudio remote pair
+  "vibestudio://connect?…"` dials the room with `createPairedConnection`, stores the
   device refresh credential plus `room`/`fp`/`sig`, and later RPC calls present
   `refresh:<deviceId>:<refreshToken>` over the pipe.
 

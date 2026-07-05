@@ -30,7 +30,7 @@ import {
   putBytes,
   readFileAtTree,
 } from "../../../src/server/services/blobstoreService.js";
-import { EMPTY_STATE_HASH } from "@vibez1/shared/contentTree/worktreeHash";
+import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
 import { VCS_MAIN_HEAD, vcsContextHead } from "../../../src/server/vcsHost/paths.js";
 import { WorktreeStore } from "../../../src/server/vcsHost/worktreeStore.js";
 import { createRefService } from "../../../src/server/services/refService.js";

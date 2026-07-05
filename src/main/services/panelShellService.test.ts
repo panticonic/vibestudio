@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller, ServiceDispatcher } from "@vibez1/shared/serviceDispatcher";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createPanelShellService } from "./panelShellService.js";
 
 const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };

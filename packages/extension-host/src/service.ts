@@ -2,33 +2,33 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { extensionsMethods } from "@vibez1/shared/serviceSchemas/extensions";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
 import {
   ServiceError,
   type ServiceContext,
   type VerifiedCaller,
-} from "@vibez1/shared/serviceDispatcher";
-import type { TokenManager } from "@vibez1/shared/tokenManager";
-import type { EventName } from "@vibez1/shared/events";
-import type { NotificationPayload } from "@vibez1/shared/events";
-import type { EventService, Subscriber } from "@vibez1/shared/eventsService";
-import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibez1/shared/extensionRuntimeAbi";
+} from "@vibestudio/shared/serviceDispatcher";
+import type { TokenManager } from "@vibestudio/shared/tokenManager";
+import type { EventName } from "@vibestudio/shared/events";
+import type { NotificationPayload } from "@vibestudio/shared/events";
+import type { EventService, Subscriber } from "@vibestudio/shared/eventsService";
+import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 import type {
   BuildProvider,
   BuildProviderOutput,
   BuildProviderTarget,
-} from "@vibez1/shared/buildProvider";
-import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/buildProvider";
+import type { PendingUnitBatchApproval, UnitBatchEntry } from "@vibestudio/shared/approvals";
 import {
   parseWorkspaceConfigContentWithId,
   resolveDeclaredExtensions,
-} from "@vibez1/shared/workspace/configParser";
+} from "@vibestudio/shared/workspace/configParser";
 import {
   UnitManifestError,
   extensionUnitManifestDescriptor,
   readAndValidateUnitManifest,
-} from "@vibez1/shared/unitManifest";
+} from "@vibestudio/shared/unitManifest";
 import {
   UnitHost,
   UnitRegistry,
@@ -51,7 +51,7 @@ import {
   type UnitMetaChangeApprovalProvider,
   type UnitReconcileTrigger,
   type UnitWorkspaceStatus,
-} from "@vibez1/unit-host";
+} from "@vibestudio/unit-host";
 
 import { ExtensionProcessManager } from "./processManager.js";
 import {
@@ -331,7 +331,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           id: `extensions-unresolved-${encodeURIComponent(sources.join(","))}`,
           type: "error",
           title: "Unknown extensions declared",
-          message: `meta/vibez1.yml declares extensions that don't exist: ${sources.join(", ")}.`,
+          message: `meta/vibestudio.yml declares extensions that don't exist: ${sources.join(", ")}.`,
         });
       },
       validateBeforeApproval: (node) => this.validateExtensionManifestAtPath(node.path, node.name),
@@ -397,7 +397,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   /**
    * Reconcile the registry against the declared extension set from
-   * `meta/vibez1.yml`. This is the single entry point that installs or
+   * `meta/vibestudio.yml`. This is the single entry point that installs or
    * removes extensions. Called at boot and after a meta-state update (post-receive).
    * The declared set is authoritative: anything in the registry but not
    * declared is removed.
@@ -770,7 +770,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       return [
         `Extension is not installed: ${name}.`,
         `Workspace extension source exists at ${node.relativePath}, but it is not available in the active extension registry.${status}${activeBuild}`,
-        "To install it at runtime, declare it in meta/vibez1.yml under `extensions:`:",
+        "To install it at runtime, declare it in meta/vibestudio.yml under `extensions:`:",
         `  - source: ${node.relativePath}`,
         "Then commit/push the meta repo (or otherwise reconcile workspace config), approve the elevated native-code extension install/update prompt, and retry once `extensions.list` reports it as `running`.",
       ].join(" ");
@@ -778,7 +778,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       return [
         `Extension is not installed: ${name}.`,
         "No matching workspace extension unit was found in the build graph.",
-        "Check the extension package name/source path, or add the source under `extensions/<name>`, declare it in meta/vibez1.yml under `extensions:`, reconcile the workspace config, and approve the install.",
+        "Check the extension package name/source path, or add the source under `extensions/<name>`, declare it in meta/vibestudio.yml under `extensions:`, reconcile the workspace config, and approve the install.",
       ].join(" ");
     }
   }
@@ -1172,7 +1172,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
 
   private async readDeclaredExtensionsFromCommit(commit: string): Promise<UnitDeclaration[]> {
     try {
-      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibez1.yml");
+      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/vibestudio.yml");
       if (!content) return [];
       return resolveDeclaredExtensions(
         parseWorkspaceConfigContentWithId(content, this.deps.workspaceId)
@@ -1234,7 +1234,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       this.deps.registerBuildProvider({
         name: entry.name,
         target,
-        contractVersion: "vibez1-build-provider-v1",
+        contractVersion: "vibestudio-build-provider-v1",
         activeEv: entry.activeEv,
         activeBuildKey: entry.activeBundleKey,
         build: async (input) => {

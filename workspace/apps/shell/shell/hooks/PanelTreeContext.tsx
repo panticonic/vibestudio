@@ -33,8 +33,8 @@ import type {
   PanelNavigationState,
   PanelArtifacts,
   PanelTreeSnapshot,
-} from "@vibez1/shared/types";
-import { getPanelContextId, getPanelSource } from "@vibez1/shared/panel/accessors";
+} from "@vibestudio/shared/types";
+import { getPanelContextId, getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { assertPresent } from "../../utils/assertPresent";
 
 // Re-export types for consumers

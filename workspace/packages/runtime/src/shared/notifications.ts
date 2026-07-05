@@ -4,9 +4,9 @@
  * Allows callers to push notifications to the shell chrome area
  * (info toasts, errors, warnings, success confirmations).
  */
-import type { RpcCaller } from "@vibez1/rpc";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { eventsMethods } from "@vibez1/shared/serviceSchemas/events";
+import type { RpcCaller } from "@vibestudio/rpc";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
 
 type NotificationAction = {
     id?: string;

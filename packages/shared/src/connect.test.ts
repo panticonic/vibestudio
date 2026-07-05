@@ -51,7 +51,7 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     for (const stale of [
       createConnectDeepLink({ ...PAIR, v: 1 }),
       createConnectDeepLink({ ...PAIR, v: 3 }),
-      `vibez1://connect?room=${PAIR.room}&fp=${FP}&code=${PAIR.code}&sig=${encodeURIComponent(PAIR.sig)}`, // no v at all
+      `vibestudio://connect?room=${PAIR.room}&fp=${FP}&code=${PAIR.code}&sig=${encodeURIComponent(PAIR.sig)}`, // no v at all
     ]) {
       const parsed = parseConnectLink(stale);
       expect(parsed.kind).toBe("error");
@@ -71,13 +71,13 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     }
   });
 
-  it("does not rely on URL support for the vibez1 custom scheme (RN/Hermes)", () => {
-    // The parser must NOT call new URL() on a vibez1: link. Simulate a runtime
+  it("does not rely on URL support for the vibestudio custom scheme (RN/Hermes)", () => {
+    // The parser must NOT call new URL() on a vibestudio: link. Simulate a runtime
     // where URL throws for the custom scheme; parsing must still succeed (it only
-    // URL-parses the real `sig` endpoint, never the vibez1: link itself).
+    // URL-parses the real `sig` endpoint, never the vibestudio: link itself).
     const RealURL = URL;
     function StubURL(this: unknown, input: string | URL, base?: string | URL): URL {
-      if (String(input).startsWith("vibez1:")) throw new Error("URL protocol not implemented");
+      if (String(input).startsWith("vibestudio:")) throw new Error("URL protocol not implemented");
       return base === undefined ? new RealURL(input) : new RealURL(input, base);
     }
     const original = globalThis.URL;
@@ -90,8 +90,8 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
   });
 
   it("rejects a link missing required params", () => {
-    expect(parseConnectLink("vibez1://connect?room=abcdefgh&fp=" + FP).kind).toBe("error");
-    expect(parseConnectLink("vibez1://connect?room=abcdefgh").kind).toBe("error");
+    expect(parseConnectLink("vibestudio://connect?room=abcdefgh&fp=" + FP).kind).toBe("error");
+    expect(parseConnectLink("vibestudio://connect?room=abcdefgh").kind).toBe("error");
   });
 
   it("rejects a fingerprint that is not a SHA-256", () => {
@@ -180,7 +180,7 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     it("rejects the same malformed links the shared parser rejects", async () => {
       const mirror = await loadMirror();
       for (const bad of [
-        "vibez1://connect?room=abcdefgh&fp=" + FP,
+        "vibestudio://connect?room=abcdefgh&fp=" + FP,
         createConnectDeepLink({ ...PAIR, fp: "DE:AD:BE:EF" }),
         createConnectDeepLink({ ...PAIR, code: "short" }),
         createConnectDeepLink({ ...PAIR, sig: "ws://signal.example/" }),

@@ -5,9 +5,9 @@ import * as path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { getWorkspaceDir } from "@vibez1/env-paths";
-import { TokenManager } from "@vibez1/shared/tokenManager";
-import type { CentralDataManager } from "@vibez1/shared/centralData";
+import { getWorkspaceDir } from "@vibestudio/env-paths";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
+import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { DeviceAuthStore } from "./services/deviceAuthStore.js";
 import {
   buildWorkspaceChildEnv,
@@ -39,11 +39,11 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       PATH: "/usr/bin",
       // The hub's own paths must NOT leak into children (the old shared-store
       // wiring was a validated cross-process collision bug).
-      VIBEZ1_AUTH_STORE_PATH: "/hub/devices.json",
-      VIBEZ1_WEBRTC_CERT: "/hub/server.pem",
-      VIBEZ1_WEBRTC_KEY: "/hub/server.key",
-      VIBEZ1_GATEWAY_PORT: "3030",
-      VIBEZ1_WORKSPACE_DIR: "/somewhere",
+      VIBESTUDIO_AUTH_STORE_PATH: "/hub/devices.json",
+      VIBESTUDIO_WEBRTC_CERT: "/hub/server.pem",
+      VIBESTUDIO_WEBRTC_KEY: "/hub/server.key",
+      VIBESTUDIO_GATEWAY_PORT: "3030",
+      VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
     } as NodeJS.ProcessEnv,
     appRoot: "/app",
     hubUrl: "http://127.0.0.1:3030",
@@ -56,12 +56,16 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     const envB = buildWorkspaceChildEnv({ ...base, childWorkspaceName: "beta" });
 
     const stateA = path.join(getWorkspaceDir("alpha"), "state");
-    expect(envA["VIBEZ1_AUTH_STORE_PATH"]).toBe(path.join(stateA, "auth", "devices.json"));
-    expect(envA["VIBEZ1_WEBRTC_CERT"]).toBe(path.join(stateA, "webrtc", "server.pem"));
-    expect(envA["VIBEZ1_WEBRTC_KEY"]).toBe(path.join(stateA, "webrtc", "server.key"));
+    expect(envA["VIBESTUDIO_AUTH_STORE_PATH"]).toBe(path.join(stateA, "auth", "devices.json"));
+    expect(envA["VIBESTUDIO_WEBRTC_CERT"]).toBe(path.join(stateA, "webrtc", "server.pem"));
+    expect(envA["VIBESTUDIO_WEBRTC_KEY"]).toBe(path.join(stateA, "webrtc", "server.key"));
 
     // Distinct per child; never the hub's paths.
-    for (const key of ["VIBEZ1_AUTH_STORE_PATH", "VIBEZ1_WEBRTC_CERT", "VIBEZ1_WEBRTC_KEY"]) {
+    for (const key of [
+      "VIBESTUDIO_AUTH_STORE_PATH",
+      "VIBESTUDIO_WEBRTC_CERT",
+      "VIBESTUDIO_WEBRTC_KEY",
+    ]) {
       expect(envA[key]).not.toBe(envB[key]);
       expect(envA[key]).not.toBe(base.baseEnv[key]);
       expect(envB[key]).not.toBe(base.baseEnv[key]);
@@ -70,13 +74,13 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
 
   it("keeps the hub-child contract env (startup pairing off, hub URL, cleared ports)", () => {
     const env = buildWorkspaceChildEnv({ ...base, childWorkspaceName: "alpha", ephemeral: true });
-    expect(env["VIBEZ1_DISABLE_STARTUP_PAIRING"]).toBe("1");
-    expect(env["VIBEZ1_FORCE_WORKSPACE_SERVER"]).toBe("1");
-    expect(env["VIBEZ1_HUB_URL"]).toBe("http://127.0.0.1:3030");
-    expect(env["VIBEZ1_WORKSPACE"]).toBe("alpha");
-    expect(env["VIBEZ1_WORKSPACE_EPHEMERAL"]).toBe("1");
-    expect(env["VIBEZ1_GATEWAY_PORT"]).toBeUndefined();
-    expect(env["VIBEZ1_WORKSPACE_DIR"]).toBeUndefined();
+    expect(env["VIBESTUDIO_DISABLE_STARTUP_PAIRING"]).toBe("1");
+    expect(env["VIBESTUDIO_FORCE_WORKSPACE_SERVER"]).toBe("1");
+    expect(env["VIBESTUDIO_HUB_URL"]).toBe("http://127.0.0.1:3030");
+    expect(env["VIBESTUDIO_WORKSPACE"]).toBe("alpha");
+    expect(env["VIBESTUDIO_WORKSPACE_EPHEMERAL"]).toBe("1");
+    expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
+    expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
     expect(env["PATH"]).toBe("/usr/bin");
   });
 });
@@ -94,7 +98,7 @@ function fakeRuntime(port: number, ready: Record<string, unknown>): WorkspaceRun
 
 const CHILD_INVITE = {
   code: "C".repeat(24),
-  deepLink: `vibez1://connect?room=child-room&fp=${"AA".repeat(32)}&code=${"C".repeat(24)}&sig=wss%3A%2F%2Fsignal.example%2F&v=2&ice=all`,
+  deepLink: `vibestudio://connect?room=child-room&fp=${"AA".repeat(32)}&code=${"C".repeat(24)}&sig=wss%3A%2F%2Fsignal.example%2F&v=2&ice=all`,
   room: "child-room",
   expiresInMs: 60_000,
   expiresAt: 1_000_060_000,
@@ -159,7 +163,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
     tokenManager.setAdminToken("hub-admin");
     const shellToken = tokenManager.ensureToken("shell:test", "shell");
     const deviceAuthStore = new DeviceAuthStore(
-      path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-hub-test-")), "devices.json")
+      path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hub-test-")), "devices.json")
     );
     const state: HubRuntimeState = {
       appRoot: "/app",

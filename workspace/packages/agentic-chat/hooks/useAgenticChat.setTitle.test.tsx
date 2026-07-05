@@ -141,18 +141,18 @@ describe("useAgenticChat set_title", () => {
     });
 
     const result = await methods!["set_title"]!.execute(
-      { title: "Welcome to Vibez1" },
+      { title: "Welcome to Vibestudio" },
       {} as never
     );
 
     expect(result).toEqual({ ok: true });
-    expect(document.title).toBe("Welcome to Vibez1");
+    expect(document.title).toBe("Welcome to Vibestudio");
     expect(config.rpc.call).toHaveBeenCalledWith("main", "runtime.setTitle", [
-      "Welcome to Vibez1",
+      "Welcome to Vibestudio",
       { explicit: true },
     ]);
     expect(client.updateChannelConfig).toHaveBeenCalledWith({
-      title: "Welcome to Vibez1",
+      title: "Welcome to Vibestudio",
       titleExplicit: false,
     });
 
@@ -191,13 +191,13 @@ describe("useAgenticChat set_title", () => {
     });
 
     const result = await methods!["set_title"]!.execute(
-      { title: "Welcome to Vibez1" },
+      { title: "Welcome to Vibestudio" },
       {} as never
     );
 
     expect(result).toEqual({ ok: true, warnings: ["runtime unavailable"] });
     expect(client.updateChannelConfig).toHaveBeenCalledWith({
-      title: "Welcome to Vibez1",
+      title: "Welcome to Vibestudio",
       titleExplicit: false,
     });
     expect(warn).toHaveBeenCalledWith(

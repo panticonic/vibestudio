@@ -1,4 +1,4 @@
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 /**
  * Workspace service contract regression tests.
  *
@@ -32,13 +32,13 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { ELECTRON_LOCAL_SERVICE_NAMES } from "@vibez1/rpc";
-import type { RpcCaller } from "@vibez1/rpc";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@vibestudio/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import { createWorkspaceService } from "../workspaceService.js";
-import { createWorkspaceClient } from "@vibez1/shared/workspace/client";
-import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import type { UserlandApprovalChoice } from "@vibez1/shared/approvals";
+import { createWorkspaceClient } from "@vibestudio/shared/workspace/client";
+import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { UserlandApprovalChoice } from "@vibestudio/shared/approvals";
 
 /**
  * Build a recording RpcCaller that captures every (target, method, args) tuple
@@ -351,12 +351,15 @@ describe("workspace service handler", () => {
     });
 
     await expect(
-      service.handler(shellCtx, "units.bakeAppDist", ["apps/shell", { outDir: "/tmp/vibez1-dist" }])
+      service.handler(shellCtx, "units.bakeAppDist", [
+        "apps/shell",
+        { outDir: "/tmp/vibestudio-dist" },
+      ])
     ).resolves.toEqual({ build: { key: "app-key" } });
     await expect(service.handler(panelCtx, "units.bakeAppDist", ["apps/shell"])).rejects.toThrow(
       /not accessible to panel callers/
     );
-    expect(bakeAppDist).toHaveBeenCalledWith("apps/shell", { outDir: "/tmp/vibez1-dist" });
+    expect(bakeAppDist).toHaveBeenCalledWith("apps/shell", { outDir: "/tmp/vibestudio-dist" });
     expect(bakeAppDist).toHaveBeenCalledTimes(1);
   });
 
@@ -624,7 +627,7 @@ describe("workspace service agent resources", () => {
   }
 
   beforeAll(() => {
-    tmpRoot = mkdtempSync(path.join(tmpdir(), "vibez1-wsvc-"));
+    tmpRoot = mkdtempSync(path.join(tmpdir(), "vibestudio-wsvc-"));
   });
 
   afterAll(() => {

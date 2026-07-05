@@ -1,7 +1,7 @@
 /**
  * @workspace/react
  *
- * React bindings for Vibez1 panels. This provides:
+ * React bindings for Vibestudio panels. This provides:
  * - React hooks for panel state and RPC
  * - Auto-mount utilities for React panels
  * - React panel mounting helpers

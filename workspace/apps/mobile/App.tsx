@@ -9,7 +9,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
 import { setApprovedAppCapabilities } from "./src/services/appCapabilities";
@@ -117,6 +117,6 @@ function App() {
   );
 }
 
-AppRegistry.registerComponent("Vibez1", () => App);
+AppRegistry.registerComponent("Vibestudio", () => App);
 
 export default App;

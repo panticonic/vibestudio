@@ -218,11 +218,11 @@ export const GITHUB_ACCESS_LEVELS: Record<GitHubAccessLevel, {
 function getCredentialRuntime(): RuntimeCredentials {
   const api = credentials as Partial<RuntimeCredentials> | undefined;
   if (!api) {
-    throw new Error("Vibez1 credential runtime is unavailable: @workspace/runtime did not export credentials.");
+    throw new Error("Vibestudio credential runtime is unavailable: @workspace/runtime did not export credentials.");
   }
   for (const method of ["requestCredentialInput", "listStoredCredentials", "revokeCredential", "fetch"] as const) {
     if (typeof api[method] !== "function") {
-      throw new Error(`Vibez1 credential runtime is unavailable: credentials.${method} is missing.`);
+      throw new Error(`Vibestudio credential runtime is unavailable: credentials.${method} is missing.`);
     }
   }
   return api as RuntimeCredentials;
@@ -233,15 +233,15 @@ function normalizeCredentialRuntimeError(error: unknown): Error {
   const runtimeUnavailable =
     message.includes("undefined (reading 'call')") ||
     message.includes("Panel credentials have not been initialized") ||
-    message.includes("Vibez1 transport bridge is not available") ||
-    message.includes("__vibez1Transport") ||
+    message.includes("Vibestudio transport bridge is not available") ||
+    message.includes("__vibestudioTransport") ||
     message.includes("credential runtime is unavailable");
   if (!runtimeUnavailable) {
     return error instanceof Error ? error : new Error(message);
   }
   return new Error(
-    "Vibez1 credential runtime is unavailable in this context. " +
-      "GitHub helpers must run in a Vibez1 panel/eval/worker runtime with credentials initialized. " +
+    "Vibestudio credential runtime is unavailable in this context. " +
+      "GitHub helpers must run in a Vibestudio panel/eval/worker runtime with credentials initialized. " +
       `Original error: ${message}`
   );
 }
@@ -411,8 +411,8 @@ export function buildGitHubTokenSettingsUrl(opts: Omit<OpenGitHubTokenSettingsOp
 
   const access = GITHUB_ACCESS_LEVELS[opts.accessLevel ?? "collaborate"];
   const url = new URL(GITHUB_PAT_NEW_URL);
-  url.searchParams.set("name", opts.name ?? "Vibez1");
-  url.searchParams.set("description", opts.description ?? `${access.label} access for Vibez1`);
+  url.searchParams.set("name", opts.name ?? "Vibestudio");
+  url.searchParams.set("description", opts.description ?? `${access.label} access for Vibestudio`);
   url.searchParams.set("expires_in", opts.expiresIn === "none" ? "none" : String(opts.expiresIn ?? 90));
   if (opts.targetName) {
     url.searchParams.set("target_name", opts.targetName);
@@ -505,7 +505,7 @@ export async function verifyGitHubGitRemoteAccess(
   const normalizedRemoteUrl = normalizeGitHubRemoteUrl(remoteUrl);
   return withCredentialRuntime(async (api) => {
     if (typeof api.gitHttp !== "function") {
-      throw new Error("Vibez1 credential runtime is unavailable: credentials.gitHttp is missing.");
+      throw new Error("Vibestudio credential runtime is unavailable: credentials.gitHttp is missing.");
     }
     const verificationUrl = `${normalizedRemoteUrl}/info/refs?service=git-upload-pack`;
     const response = await api.gitHttp({ credentialId }).request({

@@ -8,12 +8,12 @@ import {
   GLOBAL_TYPE_DEFINITIONS,
   PATH_TYPE_DEFINITIONS,
   TS_LIB_FILES,
-} from "@vibez1/typecheck";
+} from "@vibestudio/typecheck";
 
 import { activate } from "./index.js";
 
 function tempPanel(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-extension-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-extension-"));
   fs.writeFileSync(
     path.join(dir, "package.json"),
     JSON.stringify({ name: "panel-under-test", version: "0.0.0" }),
@@ -28,7 +28,7 @@ async function api(
     contextId?: string;
     chainContextId?: string;
   },
-  contextsPath = path.join(os.tmpdir(), "vibez1-contexts"),
+  contextsPath = path.join(os.tmpdir(), "vibestudio-contexts"),
   workspaceRoot = process.cwd(),
 ) {
   const callerInfo = typeof caller === "string" ? { callerId: caller } : caller;
@@ -100,13 +100,13 @@ describe("@workspace-extensions/typecheck-service", () => {
       expect.arrayContaining([
         expect.objectContaining({ filePath: "file:///node_modules/fs/index.d.ts" }),
         expect.objectContaining({ filePath: "file:///node_modules/path/index.d.ts" }),
-        expect.objectContaining({ filePath: "file:///vibez1/globals.d.ts" }),
+        expect.objectContaining({ filePath: "file:///vibestudio/globals.d.ts" }),
       ]),
     );
   });
 
   it("resolves checkPanel against an explicit context", async () => {
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-contexts-"));
     const panelPath = path.join(contextsPath, "ctx-1", "panels", "my-app");
     fs.mkdirSync(panelPath, { recursive: true });
     fs.writeFileSync(
@@ -126,7 +126,7 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("infers checkPanel context from the current extension invocation", async () => {
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-contexts-"));
     const panelPath = path.join(contextsPath, "ctx-auto", "panels", "my-app");
     fs.mkdirSync(panelPath, { recursive: true });
     fs.writeFileSync(
@@ -146,8 +146,8 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("resolves workspace packages from the context tree", async () => {
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-source-"));
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-source-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-contexts-"));
     const contextRoot = path.join(contextsPath, "ctx-workspace");
     const sourcePackage = path.join(workspaceRoot, "packages", "shared");
     const contextPackage = path.join(contextRoot, "packages", "shared");
@@ -221,8 +221,8 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("resolves workspace packages from source/state layout without a workspace manifest", async () => {
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-source-"));
-    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-contexts-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-source-"));
+    const contextsPath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-contexts-"));
     const contextRoot = path.join(contextsPath, "ctx-source-layout");
     const sourceRuntime = path.join(workspaceRoot, "packages", "runtime");
     const contextRuntime = path.join(contextRoot, "packages", "runtime");
@@ -311,7 +311,7 @@ describe("@workspace-extensions/typecheck-service", () => {
   });
 
   it("resolves relative source panel paths without an invocation context", async () => {
-    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-typecheck-source-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-source-"));
     const runtimePackage = path.join(workspaceRoot, "packages", "runtime");
     const panelPath = path.join(workspaceRoot, "panels", "my-app");
 

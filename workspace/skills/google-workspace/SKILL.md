@@ -26,11 +26,11 @@ Use this order:
 5. If `stage === "verified"`, continue onboarding.
 
 `connectGoogle()` must be the connection path for Google Workspace. It requests
-Google offline access and opts into Vibez1 refresh-token persistence. If
+Google offline access and opts into Vibestudio refresh-token persistence. If
 status or verification reports `credential-expired`, replace the old credential
 with `connectGoogle({ force: true })`.
 
-Vibez1 intentionally asks Google for a broad Workspace bundle once, then
+Vibestudio intentionally asks Google for a broad Workspace bundle once, then
 stores separate local bindings: `google-gmail`, `google-calendar`,
 `google-drive`, `google-docs`, `google-sheets`, `google-slides`,
 `google-people`, and `google-identity`. Agents should use the service-specific
@@ -54,7 +54,7 @@ Gmail, Calendar, and Drive expire after 7 days.
 6. Run `configureGoogleOAuthClient()` and have the user enter
    `installed.client_id` and `installed.client_secret` in the trusted approval
    UI. Do not ask the user to paste client secrets into chat.
-7. Connect the account through Vibez1's credential flow.
+7. Connect the account through Vibestudio's credential flow.
 8. Verify a live Google API call succeeds.
 
 Deep-link every Google Console step where possible. Offer both:

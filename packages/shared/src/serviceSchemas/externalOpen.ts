@@ -2,7 +2,7 @@
  * externalOpen service schema — approval-gated opening of URLs in the host
  * OS browser. The server attaches the handler in
  * src/server/services/externalOpenService.ts. Data types live in
- * `@vibez1/shared/externalOpen`; the schema mirrors them type-checked.
+ * `@vibestudio/shared/externalOpen`; the schema mirrors them type-checked.
  */
 
 import { z } from "zod";

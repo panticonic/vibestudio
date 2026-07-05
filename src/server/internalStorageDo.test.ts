@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
 
-import { DurableObjectBase, rpc } from "@vibez1/durable";
-import { createTestDO } from "@vibez1/durable/test-utils";
+import { DurableObjectBase, rpc } from "@vibestudio/durable";
+import { createTestDO } from "@vibestudio/durable/test-utils";
 
 class MigrationProbeDO extends DurableObjectBase {
   static override schemaVersion = 2;

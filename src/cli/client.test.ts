@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createConnectDeepLink } from "@vibez1/shared/connect";
+import { createConnectDeepLink } from "@vibestudio/shared/connect";
 import { clearShellTokenCache } from "./rpcClient.js";
 
 const panelFacadeMock = vi.hoisted(() => ({
@@ -82,7 +82,7 @@ vi.mock("./webrtcClient.js", () => ({
           workspaceName: String(args[0] ?? "dev"),
           pairing: {
             deepLink:
-              `vibez1://connect?room=child-room&fp=${"BB".repeat(32)}` +
+              `vibestudio://connect?room=child-room&fp=${"BB".repeat(32)}` +
               `&code=${"C".repeat(24)}&sig=${encodeURIComponent("wss://signal.example/")}` +
               "&v=2&ice=all",
           },
@@ -122,9 +122,9 @@ vi.mock("./webrtcClient.js", () => ({
       webrtcMock.eventListeners.push(entry);
       (
         globalThis as unknown as {
-          __vibez1CliWebRtcEventListeners?: typeof webrtcMock.eventListeners;
+          __vibestudioCliWebRtcEventListeners?: typeof webrtcMock.eventListeners;
         }
-      ).__vibez1CliWebRtcEventListeners = webrtcMock.eventListeners;
+      ).__vibestudioCliWebRtcEventListeners = webrtcMock.eventListeners;
       return () => {
         const index = webrtcMock.eventListeners.indexOf(entry);
         if (index >= 0) webrtcMock.eventListeners.splice(index, 1);
@@ -138,9 +138,9 @@ vi.mock("./webrtcClient.js", () => ({
       webrtcMock.recoveryHandlers.push(entry);
       (
         globalThis as unknown as {
-          __vibez1CliWebRtcRecoveryHandlers?: typeof webrtcMock.recoveryHandlers;
+          __vibestudioCliWebRtcRecoveryHandlers?: typeof webrtcMock.recoveryHandlers;
         }
-      ).__vibez1CliWebRtcRecoveryHandlers = webrtcMock.recoveryHandlers;
+      ).__vibestudioCliWebRtcRecoveryHandlers = webrtcMock.recoveryHandlers;
       return () => {
         const index = webrtcMock.recoveryHandlers.indexOf(entry);
         if (index >= 0) webrtcMock.recoveryHandlers.splice(index, 1);
@@ -186,11 +186,11 @@ function rpcRequestMethod(body: unknown): string | undefined {
   return typeof method === "string" ? method : undefined;
 }
 
-describe("vibez1 CLI", () => {
+describe("vibestudio CLI", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-cli-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
     panelFacadeMock.starts.length = 0;
@@ -202,12 +202,12 @@ describe("vibez1 CLI", () => {
     webrtcMock.eventListeners.length = 0;
     webrtcMock.recoveryHandlers.length = 0;
     webrtcMock.activeWorkspace = "dev";
-    delete (globalThis as unknown as { __vibez1CliWebRtcEventListeners?: unknown })
-      .__vibez1CliWebRtcEventListeners;
-    delete (globalThis as unknown as { __vibez1CliWebRtcRecoveryHandlers?: unknown })
-      .__vibez1CliWebRtcRecoveryHandlers;
-    delete (globalThis as unknown as { __vibez1HeadlessHostMock?: unknown })
-      .__vibez1HeadlessHostMock;
+    delete (globalThis as unknown as { __vibestudioCliWebRtcEventListeners?: unknown })
+      .__vibestudioCliWebRtcEventListeners;
+    delete (globalThis as unknown as { __vibestudioCliWebRtcRecoveryHandlers?: unknown })
+      .__vibestudioCliWebRtcRecoveryHandlers;
+    delete (globalThis as unknown as { __vibestudioHeadlessHostMock?: unknown })
+      .__vibestudioHeadlessHostMock;
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
@@ -247,7 +247,7 @@ describe("vibez1 CLI", () => {
         platform: "desktop",
       },
     ]);
-    const filePath = path.join(tmpDir, ".config", "vibez1", "cli-credentials.json");
+    const filePath = path.join(tmpDir, ".config", "vibestudio", "cli-credentials.json");
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual({
       schemaVersion: 1,
       kind: "device",
@@ -261,14 +261,14 @@ describe("vibez1 CLI", () => {
     }
   });
 
-  it("pairs from a vibez1://connect link over WebRTC and stores the room credential", async () => {
+  it("pairs from a vibestudio://connect link over WebRTC and stores the room credential", async () => {
     const { main } = await import("./client.js");
     const link = createConnectDeepLink(pairing("A".repeat(24)));
     await expect(main(["remote", "pair", link, "--label", "CLI test", "--json"])).resolves.toBe(0);
     expect(webrtcMock.instances).toHaveLength(1);
     expect(webrtcMock.instances[0]?.config.getToken()).toBe("A".repeat(24));
 
-    const filePath = path.join(tmpDir, ".config", "vibez1", "cli-credentials.json");
+    const filePath = path.join(tmpDir, ".config", "vibestudio", "cli-credentials.json");
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({
       schemaVersion: 1,
       kind: "device",
@@ -289,7 +289,7 @@ describe("vibez1 CLI", () => {
 
   it("tightens an existing CLI credential file to 0600 when pairing", async () => {
     if (process.platform === "win32") return;
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     const filePath = path.join(credentialDir, "cli-credentials.json");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(filePath, "{}", { mode: 0o644 });
@@ -316,7 +316,7 @@ describe("vibez1 CLI", () => {
   });
 
   it("logs out by removing the CLI credential file", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     const filePath = path.join(credentialDir, "cli-credentials.json");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(filePath, "{}");
@@ -330,13 +330,13 @@ describe("vibez1 CLI", () => {
     const { main } = await import("./client.js");
     await expect(main(["--help"])).resolves.toBe(0);
 
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibez1 remote pair"));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibez1 mobile install"));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibez1 mobile smoke"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio remote pair"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio mobile install"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("vibestudio mobile smoke"));
     expect(console.log).not.toHaveBeenCalledWith(
-      expect.stringContaining(["vibez1", "remote", "start"].join(" "))
+      expect.stringContaining(["vibestudio", "remote", "start"].join(" "))
     );
-    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("vibez1-client"));
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("vibestudio-client"));
   });
 
   it("keeps remote pairing available under the unified command", async () => {
@@ -389,7 +389,7 @@ describe("vibez1 CLI", () => {
   });
 
   it("checks the stored device refresh credential for status", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -417,7 +417,9 @@ describe("vibez1 CLI", () => {
             })
           );
         }
-        return new Response(JSON.stringify({ ok: true, product: "vibez1", discoveryVersion: 1 }));
+        return new Response(
+          JSON.stringify({ ok: true, product: "vibestudio", discoveryVersion: 1 })
+        );
       })
     );
 
@@ -431,7 +433,7 @@ describe("vibez1 CLI", () => {
   });
 
   it("selects a workspace from a WebRTC hub credential and stores the child room", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -491,7 +493,7 @@ describe("vibez1 CLI", () => {
   });
 
   it("requires workspace selection before checking remote status", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -511,7 +513,7 @@ describe("vibez1 CLI", () => {
       .mocked(console.error)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("vibez1 remote select <workspace>");
+    expect(output).toContain("vibestudio remote select <workspace>");
   });
 
   it("reports missing credentials for status as an auth error (exit 3)", async () => {
@@ -526,7 +528,7 @@ describe("vibez1 CLI", () => {
   });
 
   it("creates a pairing invite using the stored device credential", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -592,7 +594,7 @@ describe("vibez1 CLI", () => {
   });
 
   it("requires a hub credential before creating pairing invites", async () => {
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -739,7 +741,7 @@ describe("vibez1 CLI", () => {
       "workspace.hostTargets.beginLaunch",
       "workspace.hostTargets.resolveLaunchSessionApproval",
     ]);
-    const filePath = path.join(tmpDir, ".config", "vibez1", "cli-credentials.json");
+    const filePath = path.join(tmpDir, ".config", "vibestudio", "cli-credentials.json");
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({
       schemaVersion: 1,
       kind: "device",
@@ -763,11 +765,11 @@ describe("vibez1 CLI", () => {
       .mocked(console.error)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("vibez1 terminal start --pair");
+    expect(output).toContain("vibestudio terminal start --pair");
   });
 
   function writeCredentials(content?: string): void {
-    const credentialDir = path.join(tmpDir, ".config", "vibez1");
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
     fs.mkdirSync(credentialDir, { recursive: true });
     fs.writeFileSync(
       path.join(credentialDir, "cli-credentials.json"),
@@ -832,13 +834,14 @@ describe("vibez1 CLI", () => {
       serverEvents: [] as Array<{ event: string; payload: unknown }>,
       resubscribes: 0,
     };
-    (globalThis as unknown as { __vibez1HeadlessHostMock: typeof state }).__vibez1HeadlessHostMock =
-      state;
+    (
+      globalThis as unknown as { __vibestudioHeadlessHostMock: typeof state }
+    ).__vibestudioHeadlessHostMock = state;
     const modulePath = path.join(tmpDir, `headless-host-mock-${Date.now()}.mjs`);
     fs.writeFileSync(
       modulePath,
       `
-const state = globalThis.__vibez1HeadlessHostMock;
+const state = globalThis.__vibestudioHeadlessHostMock;
 export class RemoteCdpHostBridgeSocket {
   constructor(options) {
     state.bridgeSockets.push(options);
@@ -873,10 +876,10 @@ export class HeadlessHost {
     await connection.rpc.call("main", "events.subscribe", ["panel:runtimeLeaseChanged"]);
     await connection.rpc.stream("main", "panelCdp.hostProvider.open", ["provider-session", this.config.clientSessionId]);
     this.config.bridgeSocketFactory("ws://ignored");
-    for (const entry of globalThis.__vibez1CliWebRtcEventListeners ?? []) {
+    for (const entry of globalThis.__vibestudioCliWebRtcEventListeners ?? []) {
       if (entry.event === "panel:runtimeLeaseChanged") entry.listener({ slotId: "panel-1" }, "main");
     }
-    for (const entry of globalThis.__vibez1CliWebRtcRecoveryHandlers ?? []) {
+    for (const entry of globalThis.__vibestudioCliWebRtcRecoveryHandlers ?? []) {
       await entry.handler("resubscribe");
     }
     if (state.failStartMessage) throw new Error(state.failStartMessage);
@@ -896,7 +899,7 @@ export class HeadlessHost {
   it("runs remote host over WebRTC using the injected RPC connection and CDP bridge stream", async () => {
     writeWebRtcCredentials("refresh_secret_for_host_123456");
     const headless = writeHeadlessHostMock();
-    vi.stubEnv("VIBEZ1_HEADLESS_HOST_ENTRY", headless.path);
+    vi.stubEnv("VIBESTUDIO_HEADLESS_HOST_ENTRY", headless.path);
 
     const { main } = await import("./client.js");
     await expect(
@@ -905,7 +908,9 @@ export class HeadlessHost {
 
     expect(panelFacadeMock.starts).toHaveLength(1);
     expect(panelFacadeMock.starts[0]?.options).toMatchObject({
-      stateDir: expect.stringContaining(path.join("vibez1", "headless-host", "panel-asset-facade")),
+      stateDir: expect.stringContaining(
+        path.join("vibestudio", "headless-host", "panel-asset-facade")
+      ),
     });
     expect(panelFacadeMock.closes).toBe(1);
     expect(headless.state.starts).toBe(1);
@@ -961,7 +966,7 @@ export class HeadlessHost {
     const headless = writeHeadlessHostMock(
       `failed with refresh:dev_cli:${refreshToken} and Bearer abcdef1234567890`
     );
-    vi.stubEnv("VIBEZ1_HEADLESS_HOST_ENTRY", headless.path);
+    vi.stubEnv("VIBESTUDIO_HEADLESS_HOST_ENTRY", headless.path);
 
     const { main } = await import("./client.js");
     await expect(main(["remote", "host"])).resolves.toBe(1);
@@ -989,7 +994,7 @@ export class HeadlessHost {
       .mocked(console.log)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("vibez1 remote invite [--ttl-ms <milliseconds>]");
+    expect(output).toContain("vibestudio remote invite [--ttl-ms <milliseconds>]");
     expect(output).toContain("--ttl-ms <value>");
     expect(output).toContain("--json");
     expect(output).toContain("Emit JSON");

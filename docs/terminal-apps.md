@@ -1,6 +1,6 @@
 # Terminal-renderable workers + the terminal browser
 
-Vibez1 can run **userland terminal apps inside the workerd sandbox**, rendering
+Vibestudio can run **userland terminal apps inside the workerd sandbox**, rendering
 with [Ink](https://github.com/vadimdemedes/ink), while a single trusted
 **terminal-browser** app owns the real TTY and mediates all terminal I/O,
 approvals, and session lifecycle.
@@ -31,7 +31,7 @@ Declare it in `package.json`:
 
 ```jsonc
 {
-  "vibez1": {
+  "vibestudio": {
     "entry": "worker.tsx",
     "durable": { "classes": [{ "className": "MyTerminalWorker" }] },
     "terminal": { "renderer": "ink" }, // marks it terminal-renderable
@@ -112,7 +112,7 @@ re-render the same way the hooks do.
 
 ## Interactive launch
 
-Terminal apps that render a TUI declare `vibez1.app.interactive: true`. The
+Terminal apps that render a TUI declare `vibestudio.app.interactive: true`. The
 runner then launches them with stdio `"inherit"` (the process-adapter gained a
 `stdio` option), giving the app the real terminal (stdin/stdout/stderr) while
 keeping the IPC channel for graceful shutdown. This yields a usable TTY only
@@ -130,7 +130,7 @@ merges same-styled runs, and renders them as Ink `<Text>` spans.
 ## Caller-verified session ownership (RPC caller context)
 
 There is one canonical inbound-caller type, `AuthenticatedCaller
-{ callerId; callerKind }` (in `@vibez1/rpc`), used by the unified
+{ callerId; callerKind }` (in `@vibestudio/rpc`), used by the unified
 context-object handler surface. `callerId`/`callerKind` are gateway-verified
 identity from the `RpcEnvelope.delivery.caller`, never the self-reported
 `fromId`. `req.origin` is the distinct root principal from the envelope
@@ -159,8 +159,8 @@ RPC-exposing sites migrate to the same vocabulary: DOs/workers through
 `req.caller`, server services through `VerifiedCaller`, and extension-host
 through gateway-attested invocation provenance.
 
-`CallerKind` is now defined once: canonically in `@vibez1/rpc`, re-exported by
-`@vibez1/shared/principalKinds` (which keeps the richer per-kind registry) behind a
+`CallerKind` is now defined once: canonically in `@vibestudio/rpc`, re-exported by
+`@vibestudio/shared/principalKinds` (which keeps the richer per-kind registry) behind a
 compile-time parity guard that fails the build if the two ever drift.
 
 ## Known limitations / follow-ups

@@ -44,7 +44,7 @@ eval({ code: `
 - Use static imports for runtime APIs, workspace packages, and workspace skills.
   `await import(...)` bypasses the eval loader's static dependency planning and
   is not the supported way to load `@workspace/*`, `@workspace-skills/*`, or
-  `@vibez1/*` modules.
+  `@vibestudio/*` modules.
 - `fs` paths are rooted at the current context folder. `panels` and `/panels`
   resolve to the same workspace source directory; prefer `panels` in docs and
   examples so agents do not mistake it for a host absolute path.
@@ -82,7 +82,7 @@ Key directories:
 
 After the workspace overview, ask what the user wants to do first. In the
 template workspace, the chat panel loads [ActionBar.tsx](ActionBar.tsx) through
-`actionBarFile` in `meta/vibez1.yml`, so these choices are already pinned
+`actionBarFile` in `meta/vibestudio.yml`, so these choices are already pinned
 above the chat history before the first agent reply:
 
 - **Google Workspace** — set up Google provider integration
@@ -112,7 +112,7 @@ concise plain-text list:
    does not require importing browser data.
 2. **Import browser data** — bring in cookies, bookmarks, passwords, history,
    and optionally current open tabs from Chrome/Firefox/etc. when they want
-   local browser state in Vibez1. Repeat imports are incremental for the same
+   local browser state in Vibestudio. Repeat imports are incremental for the same
    browser/profile.
 3. **Build something** — scaffold and launch a panel app.
 4. **Organize workspaces** — create, fork, or switch workspaces.

@@ -2,8 +2,8 @@
   "name": "@workspace-about/about",
   "version": "0.1.0",
   "private": true,
-  "vibez1": {
-    "title": "About Vibez1",
+  "vibestudio": {
+    "title": "About Vibestudio",
     "description": "Version info and credits",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true

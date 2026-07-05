@@ -1,10 +1,10 @@
 /**
  * Form Schema - Data-driven UI definition system
  *
- * Types are defined in @vibez1/types. Runtime functions live here.
+ * Types are defined in @vibestudio/types. Runtime functions live here.
  */
 
-import type { FieldCondition, FieldValue, FieldDefinition, FieldWarning, PrimitiveFieldValue } from "@vibez1/types";
+import type { FieldCondition, FieldValue, FieldDefinition, FieldWarning, PrimitiveFieldValue } from "@vibestudio/types";
 
 /**
  * Evaluate a single condition against current form values

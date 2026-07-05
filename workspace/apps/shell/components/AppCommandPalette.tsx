@@ -52,7 +52,7 @@ export function AppCommandPalette() {
   useShellEvent("open-command-palette", openPalette);
 
   useEffect(() => {
-    const electron = (globalThis as { __vibez1Shell?: unknown }).__vibez1Shell;
+    const electron = (globalThis as { __vibestudioShell?: unknown }).__vibestudioShell;
     if (electron) return; // menu accelerator handles it
     const onKey = (e: KeyboardEvent) => {
       if (

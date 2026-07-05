@@ -1,5 +1,5 @@
-appId: com.vibez1.app
-productName: Vibez1
+appId: app.vibestudio.app
+productName: Vibestudio
 
 directories:
   output: release
@@ -21,7 +21,7 @@ asarUnpack:
   # node_modules on the real filesystem so package resolution and native
   # executables do not cross ASAR virtual paths.
   - "node_modules/**/*"
-  # @vibez1 packages need to be unpacked for panel builds.
+  # @vibestudio packages need to be unpacked for panel builds.
   - "packages/**/*"
 
 extraResources:
@@ -130,12 +130,12 @@ nsis:
   installerIcon: build-resources/icon.ico
   uninstallerIcon: build-resources/icon.ico
   installerHeaderIcon: build-resources/icon.ico
-  shortcutName: Vibez1
+  shortcutName: Vibestudio
 
 # Linux configuration
 linux:
   synopsis: Stacked panel workspace for agentic workflows
-  description: Vibez1 is a branded desktop and mobile workspace for horizontally stacked panels, local runtime surfaces, and secure paired workspace access.
+  description: Vibestudio is a branded desktop and mobile workspace for horizontally stacked panels, local runtime surfaces, and secure paired workspace access.
   target:
     - target: AppImage
       arch:
@@ -150,5 +150,5 @@ linux:
 publish:
   provider: github
   owner: werg
-  repo: vibez1
+  repo: vibestudio
   releaseType: release

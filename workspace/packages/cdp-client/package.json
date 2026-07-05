@@ -2,12 +2,12 @@
   "name": "@workspace/cdp-client",
   "version": "0.1.0-git.67fa4b3-dirty.41ae7e46b385",
   "type": "module",
-  "description": "Standalone lightweight CDP client for Vibez1 panel targets",
+  "description": "Standalone lightweight CDP client for Vibestudio panel targets",
   "license": "Apache-2.0",
   "exports": {
     ".": {
       "types": "./index.d.ts",
-      "vibez1-panel": "./src/browser.ts",
+      "vibestudio-panel": "./src/browser.ts",
       "worker": "./src/worker.ts",
       "workerd": "./src/worker.ts",
       "default": "./src/index.ts"

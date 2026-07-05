@@ -3,7 +3,7 @@
  *
  * Worker and Node.js factories live in @workspace/agentic-session.
  */
-import { createBuildServiceClient, createEvalImportLoader } from "@vibez1/shared/evalImportLoader";
+import { createBuildServiceClient, createEvalImportLoader } from "@vibestudio/shared/evalImportLoader";
 import type { SandboxConfig } from "./types.js";
 interface RpcLike {
     call(target: string, method: string, args: unknown[]): Promise<unknown>;

@@ -3,7 +3,7 @@ import {
   isPrincipalKind,
   type CallerKind,
   type PrincipalKind,
-} from "@vibez1/shared/principalKinds";
+} from "@vibestudio/shared/principalKinds";
 
 export type ElectronViewCallerKind = Extract<CallerKind, "shell" | "panel" | "app">;
 

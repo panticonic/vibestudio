@@ -950,7 +950,7 @@ describe("chatMessagesFromChannelView", () => {
       actor: {
         ...agent,
         metadata: {
-          vibez1Diagnostic: {
+          vibestudioDiagnostic: {
             type: "lifecycle_recovery",
             status: "interrupted",
             title: "Restart interrupted the response",
@@ -1488,14 +1488,14 @@ describe("chatMessagesFromChannelView", () => {
 
   it("rejects stored refs before semantic chat projection", () => {
     const storedResult = {
-      protocol: "vibez1.blob-ref.v1" as const,
+      protocol: "vibestudio.blob-ref.v1" as const,
       digest: "digest-result",
       size: 1024,
       encoding: "json" as const,
       originalBytes: 1024,
     };
     const storedRequest = {
-      protocol: "vibez1.blob-ref.v1" as const,
+      protocol: "vibestudio.blob-ref.v1" as const,
       digest: "digest-request",
       size: 512,
       encoding: "json" as const,
@@ -2058,7 +2058,7 @@ describe("chatMessagesFromChannelView", () => {
 
   it("rejects sync UI executable sources that still contain stored refs", () => {
     const storedSource = {
-      protocol: "vibez1.blob-ref.v1",
+      protocol: "vibestudio.blob-ref.v1",
       digest: "ui-source-digest",
       size: 1024,
       encoding: "json",

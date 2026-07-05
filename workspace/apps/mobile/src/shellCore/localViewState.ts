@@ -1,7 +1,7 @@
 import type {
   LocalPanelViewState,
   LocalPanelViewStateStore,
-} from "@vibez1/shared/shell/panelManager";
+} from "@vibestudio/shared/shell/panelManager";
 
 declare const require: (moduleName: string) => unknown;
 
@@ -22,7 +22,7 @@ function getAsyncStorage(): AsyncStorageLike | null {
 }
 
 export function createMobileLocalViewStateStore(workspaceId: string): LocalPanelViewStateStore {
-  const key = `vibez1:workspace:${workspaceId}:local-view-state`;
+  const key = `vibestudio:workspace:${workspaceId}:local-view-state`;
   return {
     async load() {
       const storage = getAsyncStorage();

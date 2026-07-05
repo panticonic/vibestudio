@@ -2,7 +2,7 @@
  * `@workspace/pubsub` — stateful pub/sub channels with structured
  * method calls, participant presence, replay, and chat-shaped binary
  * attachments. For point-to-point fetch-shaped
- * RPC (with streaming bodies) use `@vibez1/rpc` instead. See
+ * RPC (with streaming bodies) use `@vibestudio/rpc` instead. See
  * `docs/architecture/rpc-and-services.md` for the boundary.
  *
  * Provides real-time messaging between panels and workers via RPC

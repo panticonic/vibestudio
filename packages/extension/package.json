@@ -1,7 +1,7 @@
 {
-  "name": "@vibez1/extension",
+  "name": "@vibestudio/extension",
   "version": "0.1.0",
-  "description": "Vibez1 extension authoring types",
+  "description": "Vibestudio extension authoring types",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,8 +15,8 @@
     "build": "tsc --project tsconfig.build.json"
   },
   "dependencies": {
-    "@vibez1/shared": "workspace:*",
-    "@vibez1/unit-host": "workspace:*"
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/unit-host": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

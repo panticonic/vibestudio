@@ -126,7 +126,7 @@ describe("agent-loop core lifecycle", () => {
     resolveEffect(s, ids.invocationEffect("tc-1"), {
       kind: "tool",
       result: {
-        protocol: "vibez1.blob-ref.v1",
+        protocol: "vibestudio.blob-ref.v1",
         digest: "d1",
         size: 3,
         encoding: "json",

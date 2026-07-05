@@ -17,7 +17,7 @@ describe("terminal notification parser", () => {
     ]);
   });
 
-  it("parses vibez1 snug OSC parameters", () => {
+  it("parses vibestudio snug OSC parameters", () => {
     expect(parseNotifications("\x1b]1337;snug;sev=waiting;title=Agent+blocked;msg=Needs+input\x07")).toEqual([
       { severity: "waiting", title: "Agent blocked", message: "Needs input", source: "snug" },
     ]);

@@ -159,11 +159,11 @@ describe("ViewManager", () => {
       vm.destroy();
 
       expect(ipcMain.removeListener).toHaveBeenCalledWith(
-        "vibez1:content-overlay:size",
+        "vibestudio:content-overlay:size",
         expect.any(Function)
       );
       expect(ipcMain.removeListener).toHaveBeenCalledWith(
-        "vibez1:content-overlay:intent",
+        "vibestudio:content-overlay:intent",
         expect.any(Function)
       );
     });

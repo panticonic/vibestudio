@@ -207,7 +207,7 @@ describe("collectWorkspaceFindings — workspace-host-import category", () => {
 
   it("allows shared package imports and workspace-local imports", () => {
     const text = [
-      `import { x } from "@vibez1/shared/foo";`,
+      `import { x } from "@vibestudio/shared/foo";`,
       `import { y } from "@workspace/runtime";`,
       `import { z } from "../packages/runtime/src/shared/vcsClient.js";`,
     ].join("\n");

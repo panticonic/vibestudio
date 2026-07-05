@@ -31,10 +31,10 @@ import {
   type DeferrableRpcClient,
   type RpcEnvelope,
   type RpcRequest,
-} from "@vibez1/rpc";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { workerLogMethods } from "@vibez1/shared/serviceSchemas/workerLog";
-import type { OpenExternalOptions, OpenExternalResult } from "@vibez1/shared/externalOpen";
+} from "@vibestudio/rpc";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { workerLogMethods } from "@vibestudio/shared/serviceSchemas/workerLog";
+import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
 import { fs, _initFsWithRpc } from "./fs.js";
 import type { WebhookIngressClient } from "../shared/webhooks.js";
 import {
@@ -118,7 +118,7 @@ export type {
 export type * from "../shared/gad.js";
 export { DurableObjectBase } from "./durable-base.js";
 // `@rpc` exposure decorator — mark a DO method as reachable over RPC (opt-in / default-deny).
-export { rpc } from "@vibez1/rpc";
+export { rpc } from "@vibestudio/rpc";
 export type {
   DurableObjectContext,
   SqlStorage,
@@ -197,7 +197,7 @@ function installWorkerConsoleBridge(rpc: Pick<DeferrableRpcClient, "call">): voi
       forwarding = false;
     }
   };
-  const source = (globalThis as { __vibez1WorkerSource?: string }).__vibez1WorkerSource;
+  const source = (globalThis as { __vibestudioWorkerSource?: string }).__vibestudioWorkerSource;
   console.log = (...args: unknown[]) => forward("log", args, source);
   console.info = (...args: unknown[]) => forward("info", args, source);
   console.warn = (...args: unknown[]) => forward("warn", args, source);
@@ -235,7 +235,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   }
 
   const selfId = `worker:${workerId}`;
-  (globalThis as { __vibez1WorkerSource?: string }).__vibez1WorkerSource =
+  (globalThis as { __vibestudioWorkerSource?: string }).__vibestudioWorkerSource =
     typeof env["WORKER_SOURCE"] === "string" ? env["WORKER_SOURCE"] : undefined;
   const parentId = (env.PARENT_ID as string) || null;
   const parentEntityId = (env.PARENT_ENTITY_ID as string) || parentId;

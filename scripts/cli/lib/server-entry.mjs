@@ -1,7 +1,7 @@
 import { createPnpmInvocation } from "./package-manager.mjs";
 
 export function serverEntryArg() {
-  return process.env.VIBEZ1_SERVER_ENTRY === "live" ? "src/server/index.ts" : "dist/server.mjs";
+  return process.env.VIBESTUDIO_SERVER_ENTRY === "live" ? "src/server/index.ts" : "dist/server.mjs";
 }
 
 export function createServerInvocation(serverArgs) {

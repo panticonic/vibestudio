@@ -3,7 +3,7 @@ import { APP_THEME } from "@workspace/ui";
 
 export type ThemeMode = "light" | "dark" | "system";
 
-/** The live, user-editable theme identity (mirrors @vibez1/shared ThemeConfig). */
+/** The live, user-editable theme identity (mirrors @vibestudio/shared ThemeConfig). */
 export type ThemeConfigValue = {
   accentColor: string;
   grayColor: string;

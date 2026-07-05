@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import { RemoteCdpHostBridgeSocket } from "./remoteCdpHostBridgeSocket.js";
 
 function once<T>(
@@ -44,10 +44,10 @@ describe("RemoteCdpHostBridgeSocket", () => {
     const messagePromise = once<string>(socket, "message");
     controller.enqueue(
       new TextEncoder().encode(
-        `${JSON.stringify(JSON.stringify({ type: "vibez1:cdp-auth-ok" }))}\n`
+        `${JSON.stringify(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }))}\n`
       )
     );
-    await expect(messagePromise).resolves.toBe(JSON.stringify({ type: "vibez1:cdp-auth-ok" }));
+    await expect(messagePromise).resolves.toBe(JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
 
     const outbound = JSON.stringify({ type: "cdp:register", targetId: "panel-1", tabId: 1 });
     socket.send(outbound);

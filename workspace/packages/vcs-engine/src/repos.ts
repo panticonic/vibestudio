@@ -1,6 +1,6 @@
 /**
  * Repo taxonomy — the USERLAND twin of the host's section taxonomy
- * (`@vibez1/shared/runtime/entitySpec`; consumed host-side through
+ * (`@vibestudio/shared/runtime/entitySpec`; consumed host-side through
  * `src/server/vcsHost/repoDiscovery.ts`). Kept semantically identical, like
  * the edit-boundary path policy in `./paths.ts`: workspace code never imports
  * host packages, so the classification is declared twice and pinned by the

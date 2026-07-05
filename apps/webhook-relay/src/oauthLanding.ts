@@ -1,5 +1,5 @@
 /**
- * Vibez1 callback relay — OAuth profile (dumb, ephemeral landing +
+ * Vibestudio callback relay — OAuth profile (dumb, ephemeral landing +
  * universal-link host). Plan §7.
  *
  * The relay is deliberately harmless here: PKCE keeps the `codeVerifier` on the
@@ -67,7 +67,7 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
   const registration = deps.lookup(transactionId);
   if (!registration || now > registration.expiresAt) {
     // Unknown or expired transaction — fail loud (covers replayed / stale links).
-    return htmlError(404, "Unknown sign-in", "This sign-in link is unknown or has expired. Start the connection again from Vibez1.");
+    return htmlError(404, "Unknown sign-in", "This sign-in link is unknown or has expired. Start the connection again from Vibestudio.");
   }
 
   if (registration.platform === "mobile") {
@@ -76,8 +76,8 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
     // relay backhaul. (Fail loud, no silent second path.)
     return htmlError(
       200,
-      "Open the Vibez1 app",
-      "This sign-in should have opened the Vibez1 app automatically. Make sure the app is installed, then start the connection again.",
+      "Open the Vibestudio app",
+      "This sign-in should have opened the Vibestudio app automatically. Make sure the app is installed, then start the connection again.",
     );
   }
 
@@ -90,10 +90,10 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
     error,
   });
   if (!delivered) {
-    return htmlError(503, "Server offline", "Could not reach your Vibez1 server to finish signing in. Make sure it is running, then start the connection again.");
+    return htmlError(503, "Server offline", "Could not reach your Vibestudio server to finish signing in. Make sure it is running, then start the connection again.");
   }
   deps.consume(transactionId);
-  return htmlPage(200, "Sign-in complete", "You can close this window and return to Vibez1.");
+  return htmlPage(200, "Sign-in complete", "You can close this window and return to Vibestudio.");
 }
 
 // ---- Universal-link host (Apple App Site Association / Android assetlinks) ---
@@ -107,14 +107,14 @@ export interface UniversalLinkConfig {
 }
 
 export function universalLinkConfigFromEnv(env: {
-  VIBEZ1_APPLE_APP_ID?: string;
-  VIBEZ1_ANDROID_PACKAGE_NAME?: string;
-  VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS?: string;
+  VIBESTUDIO_APPLE_APP_ID?: string;
+  VIBESTUDIO_ANDROID_PACKAGE_NAME?: string;
+  VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS?: string;
 }): UniversalLinkConfig {
   return {
-    appleAppIds: splitList(env.VIBEZ1_APPLE_APP_ID),
-    androidPackageName: env.VIBEZ1_ANDROID_PACKAGE_NAME?.trim() || undefined,
-    androidFingerprints: splitList(env.VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS).map((f) => f.toUpperCase()),
+    appleAppIds: splitList(env.VIBESTUDIO_APPLE_APP_ID),
+    androidPackageName: env.VIBESTUDIO_ANDROID_PACKAGE_NAME?.trim() || undefined,
+    androidFingerprints: splitList(env.VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS).map((f) => f.toUpperCase()),
   };
 }
 

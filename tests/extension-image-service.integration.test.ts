@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { envelopeFromMessage } from "@vibez1/rpc";
+import { envelopeFromMessage } from "@vibestudio/rpc";
 import { afterEach, describe, expect, it } from "vitest";
 
 interface ReadyPayload {
@@ -13,7 +13,7 @@ interface ReadyPayload {
   isEphemeral: boolean;
 }
 
-const RUN_SERVER_INTEGRATION = process.env["VIBEZ1_RUN_SERVER_INTEGRATION"] === "1";
+const RUN_SERVER_INTEGRATION = process.env["VIBESTUDIO_RUN_SERVER_INTEGRATION"] === "1";
 const serverPath = path.resolve(process.cwd(), "dist", "server.mjs");
 const maybeDescribe =
   RUN_SERVER_INTEGRATION && fs.existsSync(serverPath) ? describe : describe.skip;
@@ -41,7 +41,7 @@ afterEach(async () => {
 
 maybeDescribe("image-service extension server smoke", () => {
   it("approves declared extensions then invokes image-service through the server RPC surface", async () => {
-    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extension-server-smoke-"));
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-server-smoke-"));
     const readyFile = path.join(tempRoot, "ready.json");
     proc = spawn(
       process.execPath,
@@ -51,7 +51,7 @@ maybeDescribe("image-service extension server smoke", () => {
         env: {
           ...process.env,
           NODE_ENV: "development",
-          VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
+          VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
@@ -70,7 +70,7 @@ maybeDescribe("image-service extension server smoke", () => {
     const ready = await waitForReadyFile(readyFile, proc, () => serverOutput);
     const shellToken = await issueShellToken(ready);
 
-    // Extensions are declared in meta/vibez1.yml; the startup reconcile raises
+    // Extensions are declared in meta/vibestudio.yml; the startup reconcile raises
     // one joint approval. Approve it as the shell would, then wait for the
     // image-service process to come up.
     const approvalId = await waitForUnitBatchApproval(ready, shellToken);

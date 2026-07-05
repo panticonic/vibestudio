@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveWithinContext, validateFilePathWithinRoot } from "@vibez1/shared/contextPaths";
+import { resolveWithinContext, validateFilePathWithinRoot } from "@vibestudio/shared/contextPaths";
 
 describe("resolveWithinContext", () => {
   const root = "/workspace/.contexts/abc";

@@ -8,18 +8,18 @@ describe("executeSandbox", () => {
   let originalLoadImport: unknown;
 
   beforeEach(() => {
-    originalModuleMap = (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"];
-    originalRequire = (globalThis as Record<string, unknown>)["__vibez1Require__"];
-    originalPreload = (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"];
-    originalLoadImport = (globalThis as Record<string, unknown>)["__vibez1LoadImport__"];
+    originalModuleMap = (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"];
+    originalRequire = (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
+    originalPreload = (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"];
+    originalLoadImport = (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
 
     const moduleMap: Record<string, unknown> = {};
-    (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"] = moduleMap;
-    (globalThis as Record<string, unknown>)["__vibez1Require__"] = (id: string) => {
+    (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] = moduleMap;
+    (globalThis as Record<string, unknown>)["__vibestudioRequire__"] = (id: string) => {
       if (id in moduleMap) return moduleMap[id];
       throw new Error(`Module not found: ${id}`);
     };
-    (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"] = async (ids: string[]) => (
+    (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"] = async (ids: string[]) => (
       ids.map((id) => {
         if (id in moduleMap) return moduleMap[id];
         throw new Error(`Module not found: ${id}`);
@@ -28,14 +28,14 @@ describe("executeSandbox", () => {
   });
 
   afterEach(() => {
-    if (originalModuleMap === undefined) delete (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"];
-    else (globalThis as Record<string, unknown>)["__vibez1ModuleMap__"] = originalModuleMap;
-    if (originalRequire === undefined) delete (globalThis as Record<string, unknown>)["__vibez1Require__"];
-    else (globalThis as Record<string, unknown>)["__vibez1Require__"] = originalRequire;
-    if (originalPreload === undefined) delete (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"];
-    else (globalThis as Record<string, unknown>)["__vibez1PreloadModules__"] = originalPreload;
-    if (originalLoadImport === undefined) delete (globalThis as Record<string, unknown>)["__vibez1LoadImport__"];
-    else (globalThis as Record<string, unknown>)["__vibez1LoadImport__"] = originalLoadImport;
+    if (originalModuleMap === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"];
+    else (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] = originalModuleMap;
+    if (originalRequire === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioRequire__"];
+    else (globalThis as Record<string, unknown>)["__vibestudioRequire__"] = originalRequire;
+    if (originalPreload === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"];
+    else (globalThis as Record<string, unknown>)["__vibestudioPreloadModules__"] = originalPreload;
+    if (originalLoadImport === undefined) delete (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"];
+    else (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"] = originalLoadImport;
   });
 
   it("settles a pending async eval when its signal is aborted", async () => {
@@ -90,7 +90,7 @@ describe("executeSandbox", () => {
 
   it("exposes a lazy import loader to runtime helpers during eval", async () => {
     const result = await executeSandbox(
-      "const loaded = await globalThis.__vibez1LoadImport__('lazy-package', 'latest'); return loaded.answer;",
+      "const loaded = await globalThis.__vibestudioLoadImport__('lazy-package', 'latest'); return loaded.answer;",
       {
         syntax: "typescript",
         loadImport: async (specifier, ref, externals) => {
@@ -104,6 +104,6 @@ describe("executeSandbox", () => {
 
     expect(result.success).toBe(true);
     expect(result.returnValue).toBe(42);
-    expect((globalThis as Record<string, unknown>)["__vibez1LoadImport__"]).toBeUndefined();
+    expect((globalThis as Record<string, unknown>)["__vibestudioLoadImport__"]).toBeUndefined();
   });
 });

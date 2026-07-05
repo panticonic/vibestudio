@@ -7,7 +7,7 @@
  * Shared between panels and workers — no Node.js or browser-specific dependencies.
  */
 import { Buffer } from "buffer";
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import type {
     RuntimeFs,
     FileStats,

@@ -11,7 +11,7 @@ There is no legacy trajectory compatibility layer. The store starts from the cle
 
 ## Stored Values
 
-SQLite rows are indexes, not blob containers. Any protocol field that can grow without a strict product bound is encoded as a `vibez1.blob-ref.v1` stored value before it reaches GAD. Producers call the shared `encodeAgenticEventStoredValues` / `encodeChannelPayloadStoredValues` helpers with a blobstore writer; GAD rejects raw unbounded fields such as invocation `request`, invocation `result`, approval `details`, system `details`, custom `update`, UI `props`, and message type `source`.
+SQLite rows are indexes, not blob containers. Any protocol field that can grow without a strict product bound is encoded as a `vibestudio.blob-ref.v1` stored value before it reaches GAD. Producers call the shared `encodeAgenticEventStoredValues` / `encodeChannelPayloadStoredValues` helpers with a blobstore writer; GAD rejects raw unbounded fields such as invocation `request`, invocation `result`, approval `details`, system `details`, custom `update`, UI `props`, and message type `source`.
 
 Trajectory and channel tables therefore use `*_ref_json` columns. These columns contain bounded payloads, previews, and content-addressed blob references. GAD also maintains `trajectory_blob_refs` and `channel_blob_refs` indexes so diagnostics, hydration tools, and blob lifetime management can find every referenced digest. Full bytes are read through blobstore APIs; default trajectory/channel reads stay ref-only unless a caller explicitly hydrates a stored value.
 

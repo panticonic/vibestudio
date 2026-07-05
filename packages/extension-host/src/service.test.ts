@@ -1,4 +1,4 @@
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -10,7 +10,7 @@ import { ExtensionHost } from "./service.js";
 import type { ExtensionHostDeps } from "./service.js";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-extension-host-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-host-"));
 }
 
 function panelCtx(callerId = "panel-1") {
@@ -81,7 +81,7 @@ function makeHost(
     JSON.stringify({
       name: extensionNode.name,
       version: "1.0.0",
-      vibez1: {
+      vibestudio: {
         displayName: "Git Tools",
         extension: {
           activationEvents: ["*"],
@@ -101,9 +101,9 @@ function makeHost(
       "git",
       [
         "-c",
-        "user.name=Vibez1 Test",
+        "user.name=Vibestudio Test",
         "-c",
-        "user.email=test@vibez1.local",
+        "user.email=test@vibestudio.local",
         "commit",
         "-q",
         "-m",
@@ -406,7 +406,7 @@ describe("ExtensionHost reconcileDeclared", () => {
 
     const approval = await host.metaChangeApprovalForCommit("state:next");
 
-    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/vibez1.yml");
+    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/vibestudio.yml");
     expect(approval.units).toEqual([
       expect.objectContaining({
         unitKind: "extension",

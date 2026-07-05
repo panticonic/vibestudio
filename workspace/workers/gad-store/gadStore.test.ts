@@ -26,7 +26,7 @@ function event<K extends AgenticEvent["kind"]>(
 
 function blobRef(digest: string, encoded = "{}") {
   return {
-    protocol: "vibez1.blob-ref.v1" as const,
+    protocol: "vibestudio.blob-ref.v1" as const,
     digest,
     size: encoded.length,
     encoding: "json" as const,
@@ -2640,7 +2640,7 @@ describe("stored-value refs (§3.14)", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               result: {
-                protocol: "vibez1.blob-ref.v1",
+                protocol: "vibestudio.blob-ref.v1",
                 digest: "abc123",
                 size: 42,
                 encoding: "json",
@@ -2746,7 +2746,7 @@ describe("stored-value refs (§3.14)", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               result: {
-                protocol: "vibez1.blob-ref.v1",
+                protocol: "vibestudio.blob-ref.v1",
                 digest: "kept-digest",
                 size: 20,
                 encoding: "json",
@@ -2969,7 +2969,7 @@ describe("lineage queries over causality edges (§3.15)", () => {
     ]);
     expect(JSON.stringify(privateLineage.branchEvents)).not.toContain("keep this out of PubSub");
     expect(privateLineage.branchEvents[0].payload.details).toMatchObject({
-      protocol: "vibez1.blob-ref.v1",
+      protocol: "vibestudio.blob-ref.v1",
       digest: "details-side",
     });
 

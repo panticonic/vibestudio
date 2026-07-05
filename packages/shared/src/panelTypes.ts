@@ -23,7 +23,7 @@ export type LoadedPanelManifest = PackageManifest & { title: string };
  *
  * The TypeScript type (`PackageManifest`) is shared with workers, so all fields
  * are optional. This loader enforces panel-specific runtime requirements: a
- * `vibez1` block must exist and `title` must be set. It also merges top-level
+ * `vibestudio` block must exist and `title` must be set. It also merges top-level
  * `dependencies` into the manifest for the panel runtime's downstream use.
  */
 export function loadPanelManifest(panelPath: string): LoadedPanelManifest {
@@ -39,17 +39,17 @@ export function loadPanelManifest(panelPath: string): LoadedPanelManifest {
   const packageContent = fs.readFileSync(packageJsonPath, "utf-8");
   const packageJson = JSON.parse(packageContent) as Record<string, unknown>;
 
-  if (!packageJson["vibez1"]) {
-    throw new Error(`package.json in ${panelPath} must include a 'vibez1' field`);
+  if (!packageJson["vibestudio"]) {
+    throw new Error(`package.json in ${panelPath} must include a 'vibestudio' field`);
   }
 
-  const manifest = packageJson["vibez1"] as PackageManifest;
+  const manifest = packageJson["vibestudio"] as PackageManifest;
 
   if (!manifest.title) {
-    throw new Error("vibez1.title must be specified in package.json");
+    throw new Error("vibestudio.title must be specified in package.json");
   }
 
-  // Merge package.json dependencies with vibez1.dependencies
+  // Merge package.json dependencies with vibestudio.dependencies
   const pkgDeps = packageJson["dependencies"] as Record<string, string> | undefined;
   if (pkgDeps) {
     manifest.dependencies = {

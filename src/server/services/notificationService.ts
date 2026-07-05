@@ -7,10 +7,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { EventService } from "@vibez1/shared/eventsService";
-import type { NotificationPayload } from "@vibez1/shared/events";
-import { notificationMethods } from "@vibez1/shared/serviceSchemas/notification";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { EventService } from "@vibestudio/shared/eventsService";
+import type { NotificationPayload } from "@vibestudio/shared/events";
+import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notification";
 
 /**
  * Internal interface for server-side code to push notifications

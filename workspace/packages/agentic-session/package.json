@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@vibez1/shared": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/pubsub": "workspace:*",

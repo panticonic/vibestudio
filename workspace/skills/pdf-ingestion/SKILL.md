@@ -1,6 +1,6 @@
 ---
 name: pdf-ingestion
-description: Ingest local PDF documents in Vibez1 with the @workspace-extensions/pdf-ingest extension. Use when extracting text, layout, OCR, page images, metadata, or poem/stanza-preserving structure from PDFs in workspace files or user-provided binary data.
+description: Ingest local PDF documents in Vibestudio with the @workspace-extensions/pdf-ingest extension. Use when extracting text, layout, OCR, page images, metadata, or poem/stanza-preserving structure from PDFs in workspace files or user-provided binary data.
 ---
 
 # PDF Ingestion

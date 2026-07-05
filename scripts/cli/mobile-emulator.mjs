@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 
 function parseArgs(argv) {
   const options = {
-    avd: process.env.VIBEZ1_ANDROID_AVD ?? "Vibez1_Test",
+    avd: process.env.VIBESTUDIO_ANDROID_AVD ?? "Vibestudio_Test",
     help: false,
     emulatorArgs: [],
   };
@@ -25,17 +25,17 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`vibez1 mobile emulator
+  console.log(`vibestudio mobile emulator
 
 Usage:
-  vibez1 mobile emulator
-  vibez1 mobile emulator --avd <name>
-  vibez1 mobile emulator -- <extra emulator args>
+  vibestudio mobile emulator
+  vibestudio mobile emulator --avd <name>
+  vibestudio mobile emulator -- <extra emulator args>
 
 Defaults:
-  AVD: Vibez1_Test
+  AVD: Vibestudio_Test
 
-Set VIBEZ1_ANDROID_AVD=<name> to change the default.
+Set VIBESTUDIO_ANDROID_AVD=<name> to change the default.
 `);
 }
 

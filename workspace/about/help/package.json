@@ -2,7 +2,7 @@
   "name": "@workspace-about/help",
   "version": "0.1.0",
   "private": true,
-  "vibez1": {
+  "vibestudio": {
     "title": "Help",
     "description": "Documentation and getting started",
     "hiddenInLauncher": false,

@@ -26,7 +26,7 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
 const servicesDir = fileURLToPath(new URL(".", import.meta.url));
 const goldenPath = join(servicesDir, "__servicePolicyMatrix.golden.json");

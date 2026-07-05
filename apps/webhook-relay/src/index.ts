@@ -1,5 +1,5 @@
 /**
- * Vibez1 callback relay (Cloudflare Worker) — SHARED two-profile relay.
+ * Vibestudio callback relay (Cloudflare Worker) — SHARED two-profile relay.
  *
  * Plan §7: one public edge serving two profiles on one backhaul.
  *

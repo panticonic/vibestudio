@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS history_visits (
   visit_time INTEGER NOT NULL,
   transition TEXT DEFAULT 'link',
   from_visit_id INTEGER REFERENCES history_visits(id),
-  source TEXT NOT NULL DEFAULT 'vibez1',
+  source TEXT NOT NULL DEFAULT 'vibestudio',
   source_browser TEXT NOT NULL DEFAULT '',
   source_profile_path TEXT NOT NULL DEFAULT '',
   panel_id TEXT NOT NULL DEFAULT '',

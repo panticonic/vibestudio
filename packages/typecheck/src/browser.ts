@@ -7,7 +7,7 @@ import { TS_LIB_FILES } from "./lib/typescript-libs.js";
 
 export const MONACO_FS_TYPE_DEFINITIONS_PATH = "file:///node_modules/fs/index.d.ts";
 export const MONACO_PATH_TYPE_DEFINITIONS_PATH = "file:///node_modules/path/index.d.ts";
-export const MONACO_GLOBAL_TYPE_DEFINITIONS_PATH = "file:///vibez1/globals.d.ts";
+export const MONACO_GLOBAL_TYPE_DEFINITIONS_PATH = "file:///vibestudio/globals.d.ts";
 export const MONACO_TYPESCRIPT_LIB_ROOT = "file:///node_modules/typescript/lib";
 
 export interface BrowserTypeDefinitionFile {

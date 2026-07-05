@@ -65,10 +65,10 @@ export interface MessageTypeDoctorIssue {
 export function installDoctorHostModules(modules: Record<string, unknown>): void {
   const globals = globalThis as Record<string, unknown>;
   const map: Record<string, unknown> =
-    (globals["__vibez1ModuleMap__"] as Record<string, unknown>) ?? {};
+    (globals["__vibestudioModuleMap__"] as Record<string, unknown>) ?? {};
   for (const [specifier, mod] of Object.entries(modules)) map[specifier] = mod;
-  globals["__vibez1ModuleMap__"] = map;
-  globals["__vibez1Require__"] ??= (id: string) => {
+  globals["__vibestudioModuleMap__"] = map;
+  globals["__vibestudioRequire__"] ??= (id: string) => {
     const mod = map[id];
     if (mod) return mod;
     throw new Error(`Module "${id}" not available in doctor host module map`);

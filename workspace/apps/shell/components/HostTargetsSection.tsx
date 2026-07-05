@@ -6,8 +6,8 @@ import type {
   HostTargetCandidate,
   HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
-} from "@vibez1/shared/hostTargets";
-import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/hostTargets";
+import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 import {
   formatCapabilities,
   launchCopy,
@@ -18,7 +18,7 @@ import {
   unitReviewRows,
   unitSourceLabel,
   unitSummaryChips,
-} from "@vibez1/shared/bootstrapLaunchGate";
+} from "@vibestudio/shared/bootstrapLaunchGate";
 import { workspace } from "../shell/client";
 
 const HOST_TARGETS: HostTarget[] = ["electron", "react-native", "terminal"];

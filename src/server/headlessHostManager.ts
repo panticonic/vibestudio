@@ -14,9 +14,9 @@
 import { fork, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createDevLogger } from "@vibez1/dev-log";
-import type { ClientSession } from "@vibez1/shared/panel/panelLease";
-import type { TokenManager } from "@vibez1/shared/tokenManager";
+import { createDevLogger } from "@vibestudio/dev-log";
+import type { ClientSession } from "@vibestudio/shared/panel/panelLease";
+import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 
 const log = createDevLogger("HeadlessHostManager");
@@ -72,7 +72,7 @@ export interface HeadlessHostManagerDeps {
 }
 
 function defaultEntryPath(): string {
-  const override = process.env["VIBEZ1_HEADLESS_HOST_ENTRY"];
+  const override = process.env["VIBESTUDIO_HEADLESS_HOST_ENTRY"];
   if (override) return override;
 
   const baseDirs = new Set<string>();
@@ -365,7 +365,7 @@ export class HeadlessHostManager {
       this.disabled = true;
       log.warn(
         `headless host failed ${this.consecutiveFailures} times in 5 minutes — auto-spawn disabled ` +
-          `until server restart (run \`vibez1 remote host\` manually or fix the host build)`
+          `until server restart (run \`vibestudio remote host\` manually or fix the host build)`
       );
       return;
     }

@@ -16,12 +16,12 @@ process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
 import { isDev } from "./utils.js";
 import { maybeNotifyNpmUpdate } from "./updateCheck.js";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import {
   createConnectDeepLink,
   parseConnectLink,
   type ConnectPairing,
-} from "@vibez1/shared/connect";
+} from "@vibestudio/shared/connect";
 import {
   enqueueFirstArgvLink,
   getPendingConnectLink,
@@ -32,10 +32,10 @@ import {
 } from "./protocolHandler.js";
 
 const log = createDevLogger("App");
-const APP_NAME = "Vibez1";
+const APP_NAME = "Vibestudio";
 const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
 const IS_HEADLESS_HOST =
-  process.env["VIBEZ1_HEADLESS_HOST"] === "1" || process.argv.includes("--headless-host");
+  process.env["VIBESTUDIO_HEADLESS_HOST"] === "1" || process.argv.includes("--headless-host");
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -49,7 +49,7 @@ function logSuppressedErrorDialog(title: string, content: string): void {
 }
 
 // Electron's default main-process exception handling can show a blocking
-// "A JavaScript Error Occurred in the main process" alert. Vibez1 should log
+// "A JavaScript Error Occurred in the main process" alert. Vibestudio should log
 // these errors instead of interrupting the user with generic native dialogs.
 process.on("uncaughtException", (error) => {
   console.error("[App] Uncaught exception in main process:", formatUnknownError(error));
@@ -61,16 +61,16 @@ dialog.showErrorBox = logSuppressedErrorDialog;
 
 app.setName(APP_NAME);
 
-import { PanelRegistry } from "@vibez1/shared/panelRegistry";
-import { asPanelSlotId } from "@vibez1/shared/panel/ids";
-import { getPanelSource } from "@vibez1/shared/panel/accessors";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { panelLogMethods } from "@vibez1/shared/serviceSchemas/panelLog";
-import { corsApprovalMethods } from "@vibez1/shared/serviceSchemas/corsApproval";
-import { externalOpenMethods } from "@vibez1/shared/serviceSchemas/externalOpen";
+import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { getPanelSource } from "@vibestudio/shared/panel/accessors";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { panelLogMethods } from "@vibestudio/shared/serviceSchemas/panelLog";
+import { corsApprovalMethods } from "@vibestudio/shared/serviceSchemas/corsApproval";
+import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelPinStore } from "./panelPinStore.js";
-import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibez1/shared/constants";
+import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
 import { PanelView } from "./panelView.js";
 import { AppOrchestrator, type AppAvailableEvent } from "./appOrchestrator.js";
 import { resolveElectronViewCaller } from "./callerResolution.js";
@@ -83,9 +83,9 @@ import {
   setMenuEventService,
 } from "./menu.js";
 import { getAppRoot, getResourcesPath } from "./paths.js";
-import { loadCentralEnv, deleteWorkspaceDir } from "@vibez1/shared/workspace/loader";
-import { resolveLocalWorkspaceStartup } from "@vibez1/shared/workspace/startup";
-import { CentralDataManager } from "@vibez1/shared/centralData";
+import { loadCentralEnv, deleteWorkspaceDir } from "@vibestudio/shared/workspace/loader";
+import { resolveLocalWorkspaceStartup } from "@vibestudio/shared/workspace/startup";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
 import {
   DEV_WEBRTC_REMOTE_ARG,
   resolveStartupMode,
@@ -100,17 +100,17 @@ import { relaunchApp } from "./relaunchApp.js";
 import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { RemoteCdpHostProviderSocket } from "./remoteCdpHostProviderSocket.js";
-import { EventService } from "@vibez1/shared/eventsService";
-import type { EventName } from "@vibez1/shared/events";
-import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@vibez1/shared/hostTargetLaunchGate";
-import { resolveGatewayRouteUrl } from "@vibez1/shared/appArtifacts";
+import { EventService } from "@vibestudio/shared/eventsService";
+import type { EventName } from "@vibestudio/shared/events";
+import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@vibestudio/shared/hostTargetLaunchGate";
+import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
 import { createServerEventBridge, type ServerHostTargetChangeEvent } from "./serverEventBridge.js";
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
-import type { PendingApproval } from "@vibez1/shared/approvals";
-import { filterBootstrapApprovalsForTarget } from "@vibez1/shared/bootstrapApprovals";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
+import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
-import { BROWSER_SESSION_PARTITION } from "@vibez1/shared/panelInterfaces";
+import { BROWSER_SESSION_PARTITION } from "@vibestudio/shared/panelInterfaces";
 
 const eventService = new EventService();
 import { ViewManager } from "./viewManager.js";
@@ -119,10 +119,10 @@ import {
   ServiceDispatcher,
   parseServiceMethod,
   type ServiceContext,
-} from "@vibez1/shared/serviceDispatcher";
-import { autofillMethods } from "@vibez1/shared/serviceSchemas/autofill";
-import { ServiceContainer } from "@vibez1/shared/serviceContainer";
-import { createEventsServiceDefinition } from "@vibez1/shared/eventsService";
+} from "@vibestudio/shared/serviceDispatcher";
+import { autofillMethods } from "@vibestudio/shared/serviceSchemas/autofill";
+import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
+import { createEventsServiceDefinition } from "@vibestudio/shared/eventsService";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
 import { startMemoryMonitor, setMemoryMonitorViewManager } from "./memoryMonitor.js";
@@ -131,12 +131,12 @@ import { callerHasPlatformCapability, viewHasAppCapability } from "./services/ap
 import { assertPresent } from "../lintHelpers";
 
 // =============================================================================
-// Early Diagnostics (enabled via VIBEZ1_DEBUG_PATHS=1)
+// Early Diagnostics (enabled via VIBESTUDIO_DEBUG_PATHS=1)
 // =============================================================================
 
-if (process.env["VIBEZ1_DEBUG_PATHS"] === "1") {
+if (process.env["VIBESTUDIO_DEBUG_PATHS"] === "1") {
   console.log("=".repeat(60));
-  console.log("[diagnostics] Vibez1 startup diagnostics");
+  console.log("[diagnostics] Vibestudio startup diagnostics");
   console.log("[diagnostics] process.platform:", process.platform);
   console.log("[diagnostics] process.arch:", process.arch);
   console.log("[diagnostics] process.cwd():", process.cwd());
@@ -163,7 +163,7 @@ if (process.env["VIBEZ1_DEBUG_PATHS"] === "1") {
 // Configuration Initialization
 // =============================================================================
 
-// Load central environment variables first (.env from ~/.config/vibez1/)
+// Load central environment variables first (.env from ~/.config/vibestudio/)
 loadCentralEnv();
 
 const centralData = new CentralDataManager();
@@ -296,7 +296,7 @@ let browserDataStoreForCredentialCapture: {
   };
 } | null = null;
 
-type AppCapability = import("@vibez1/shared/unitManifest").AppCapability;
+type AppCapability = import("@vibestudio/shared/unitManifest").AppCapability;
 
 const APP_FS_READ_METHODS = new Set([
   "readFile",
@@ -401,7 +401,7 @@ function sendIncomingPairLink(link: unknown): void {
   if (!viewManager) return;
   const shellContents = viewManager.getShellWebContents();
   if (shellContents && !shellContents.isDestroyed()) {
-    shellContents.send("vibez1:incoming-pair-link", link);
+    shellContents.send("vibestudio:incoming-pair-link", link);
   }
   for (const viewId of viewManager.getViewIds()) {
     if (viewId === "shell") continue;
@@ -414,7 +414,7 @@ function sendIncomingPairLink(link: unknown): void {
     }
     const contents = viewManager.getWebContents(viewId);
     if (contents && !contents.isDestroyed()) {
-      contents.send("vibez1:incoming-pair-link", link);
+      contents.send("vibestudio:incoming-pair-link", link);
     }
   }
 }
@@ -933,7 +933,7 @@ function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
     url,
     ...(artifactRoute ? { artifactRoute } : {}),
     capabilities: Array.isArray(launch.capabilities)
-      ? (launch.capabilities as import("@vibez1/shared/unitManifest").AppCapability[])
+      ? (launch.capabilities as import("@vibestudio/shared/unitManifest").AppCapability[])
       : [],
     buildKey: typeof launch.buildKey === "string" ? launch.buildKey : null,
     effectiveVersion: typeof launch.effectiveVersion === "string" ? launch.effectiveVersion : null,
@@ -1240,7 +1240,7 @@ type BootstrapConnectionState = {
   lastLocalWorkspaceName: string | null;
   isDev: boolean;
   /**
-   * The `vibez1://connect` link the app was opened with (deep link / argv), if
+   * The `vibestudio://connect` link the app was opened with (deep link / argv), if
    * any — so the chooser can auto-pair instead of waiting for a paste+click.
    */
   pendingPairLink: string | null;
@@ -1309,8 +1309,8 @@ function normalizeBootstrapWorkspaceName(rawName: unknown): string {
 }
 
 function installBootstrapConnectionHandlers(): void {
-  ipcMain.handle("vibez1:bootstrap:get-state", (event) => {
-    requireBootstrapShellSender(event, "vibez1:bootstrap:get-state");
+  ipcMain.handle("vibestudio:bootstrap:get-state", (event) => {
+    requireBootstrapShellSender(event, "vibestudio:bootstrap:get-state");
     return getBootstrapConnectionState();
   });
 
@@ -1318,16 +1318,16 @@ function installBootstrapConnectionHandlers(): void {
   // The pending startup path (app.on("ready")) awaits `chooserChoice` and falls
   // through to the connected setup in the SAME process — no app.relaunch, no
   // throwaway exchange, no orphan windows.
-  ipcMain.handle("vibez1:bootstrap:launch-local-workspace", (event, workspaceName?: string) => {
-    requireBootstrapShellSender(event, "vibez1:bootstrap:launch-local-workspace");
+  ipcMain.handle("vibestudio:bootstrap:launch-local-workspace", (event, workspaceName?: string) => {
+    requireBootstrapShellSender(event, "vibestudio:bootstrap:launch-local-workspace");
     const name = normalizeBootstrapWorkspaceName(workspaceName);
     log.info(`[bootstrap] Launching local workspace "${name}" by user request`);
     resolveChooserChoice({ kind: "local", name, ephemeral: false });
     return { ok: true };
   });
 
-  ipcMain.handle("vibez1:bootstrap:launch-ephemeral-workspace", (event) => {
-    requireBootstrapShellSender(event, "vibez1:bootstrap:launch-ephemeral-workspace");
+  ipcMain.handle("vibestudio:bootstrap:launch-ephemeral-workspace", (event) => {
+    requireBootstrapShellSender(event, "vibestudio:bootstrap:launch-ephemeral-workspace");
     if (!isDev()) {
       throw new Error("Ephemeral workspaces are only available in development mode");
     }
@@ -1337,8 +1337,8 @@ function installBootstrapConnectionHandlers(): void {
     return { ok: true };
   });
 
-  ipcMain.handle("vibez1:bootstrap:pair-remote", (event, payload: unknown) => {
-    requireBootstrapShellSender(event, "vibez1:bootstrap:pair-remote");
+  ipcMain.handle("vibestudio:bootstrap:pair-remote", (event, payload: unknown) => {
+    requireBootstrapShellSender(event, "vibestudio:bootstrap:pair-remote");
     const p = (payload ?? {}) as { link?: unknown };
     const link = typeof p.link === "string" ? p.link : "";
     const parsed = parseConnectLink(link);
@@ -1371,7 +1371,7 @@ function attachWorkspaceWindowServices(): void {
     sendPanelEvent: (panelId, event, payload) => {
       const wc = viewManager?.getWebContents(panelId);
       if (wc && !wc.isDestroyed()) {
-        wc.send("vibez1:event", event, payload);
+        wc.send("vibestudio:event", event, payload);
       }
     },
     autofillManager: autofillManager ?? undefined,
@@ -1444,7 +1444,7 @@ function createWindow(): void {
     width: 1200,
     height: 600,
     show: false,
-    icon: path.join(__dirname, "assets", "brand", "vibez1-icon-512.png"),
+    icon: path.join(__dirname, "assets", "brand", "vibestudio-icon-512.png"),
     skipTaskbar: IS_HEADLESS_HOST,
     // Paint the window's native backdrop in the greyed chrome base so any
     // pre-paint gap shows calm grey rather than a white/black flash.
@@ -1480,10 +1480,10 @@ function createWindow(): void {
   // Set native window title for OS taskbar / window switcher (Alt+Tab / dock)
   mainWindow.setTitle(
     startupMode.kind === "pending"
-      ? "Vibez1 - Connect"
+      ? "Vibestudio - Connect"
       : IS_HEADLESS_HOST
-        ? `Vibez1 Headless Host — ${workspaceId}`
-        : `Vibez1 — ${workspaceId}`
+        ? `Vibestudio Headless Host — ${workspaceId}`
+        : `Vibestudio — ${workspaceId}`
   );
 
   mainWindow.on("focus", () => approvalAttention?.handleWindowFocus());
@@ -1541,7 +1541,7 @@ function createWindow(): void {
 app.on("ready", async () => {
   performance.mark("startup:ready");
 
-  ipcMain.handle("vibez1:drain-pair-link", (event) => {
+  ipcMain.handle("vibestudio:drain-pair-link", (event) => {
     if (!canAccessIncomingPairLinks(event.sender.id)) {
       throw new Error("Incoming pairing links require app capability 'incoming-pair-links'");
     }
@@ -1555,7 +1555,7 @@ app.on("ready", async () => {
   });
   installBootstrapConnectionHandlers();
   // npm-channel update notice — no-ops unless launched from a global npm install
-  // (the launcher sets VIBEZ1_NPM_CHANNEL); notification-first, never self-updates.
+  // (the launcher sets VIBESTUDIO_NPM_CHANNEL); notification-first, never self-updates.
   void maybeNotifyNpmUpdate();
 
   // Default to browser CORS. For panel fetch/XHR responses, relax CORS only
@@ -1604,7 +1604,7 @@ app.on("ready", async () => {
 
   const capabilityForElectronPermission = (
     permission: string
-  ): import("@vibez1/shared/unitManifest").AppCapability | null => {
+  ): import("@vibestudio/shared/unitManifest").AppCapability | null => {
     switch (permission) {
       case "notifications":
         return "notifications";
@@ -1940,7 +1940,7 @@ app.on("ready", async () => {
     performance.mark("startup:server-connected");
 
     if (mainWindow) {
-      mainWindow.setTitle(`Vibez1 — ${workspaceId}`);
+      mainWindow.setTitle(`Vibestudio — ${workspaceId}`);
     }
 
     // The shell always spawns its own loopback server (ServerProcessManager
@@ -2052,7 +2052,7 @@ app.on("ready", async () => {
       sendPanelEvent: (panelId, event, payload) => {
         const wc = viewManager?.getWebContents(panelId);
         if (wc && !wc.isDestroyed()) {
-          wc.send("vibez1:event", event, payload);
+          wc.send("vibestudio:event", event, payload);
         }
       },
       workspaceConfig: conn.workspaceConfig,
@@ -2083,7 +2083,7 @@ app.on("ready", async () => {
     const panelLogClient = createTypedServiceClient("panelLog", panelLogMethods, (svc, m, a) =>
       conn.serverClient.call(svc, m, a)
     );
-    const panelLogQueue: import("@vibez1/shared/serviceSchemas/panelLog").PanelLogRecord[] = [];
+    const panelLogQueue: import("@vibestudio/shared/serviceSchemas/panelLog").PanelLogRecord[] = [];
     let panelLogFlushTimer: ReturnType<typeof setTimeout> | null = null;
     const flushPanelLog = () => {
       panelLogFlushTimer = null;
@@ -2177,7 +2177,7 @@ app.on("ready", async () => {
     });
     cdpHostProvider.start();
 
-    // Set up test API for E2E testing (only when VIBEZ1_TEST_MODE=1)
+    // Set up test API for E2E testing (only when VIBESTUDIO_TEST_MODE=1)
     setupTestApi(panelOrchestrator, panelRegistry, null);
     setMenuPanelLifecycle(panelOrchestrator);
     setMenuPanelRegistry(panelRegistry);
@@ -2205,7 +2205,7 @@ app.on("ready", async () => {
     const { createSettingsService } = await import("./services/settingsService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
     // FS and git-local services removed — server owns these via panel service
-    const { createBrowserDataRpcClient } = await import("@vibez1/browser-data");
+    const { createBrowserDataRpcClient } = await import("@vibestudio/browser-data");
 
     const electronContainer = new ServiceContainer(dispatcher);
 
@@ -2347,7 +2347,7 @@ app.on("ready", async () => {
     dispatcher.markInitialized();
 
     // =========================================================================
-    // Register ipcMain.handle handlers for __vibez1Shell (panel preload)
+    // Register ipcMain.handle handlers for __vibestudioShell (panel preload)
     // =========================================================================
     // These handlers service panel IPC calls. Caller identity is resolved
     // via ViewManager's findViewIdByWebContentsId (which tracks the
@@ -2431,34 +2431,34 @@ app.on("ready", async () => {
       throw new Error(`Channel '${channel}' requires app capability '${capability}'`);
     };
 
-    ipcMain.handle("vibez1:getPanelInit", async (event) => {
+    ipcMain.handle("vibestudio:getPanelInit", async (event) => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;
       return panelOrchestrator?.getBootstrapConfig(callerId);
     });
 
-    ipcMain.handle("vibez1:focusPanel", async (event, panelId: string) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "vibez1:focusPanel");
+    ipcMain.handle("vibestudio:focusPanel", async (event, panelId: string) => {
+      requireAppCapabilityForIpc(event, "panel-hosting", "vibestudio:focusPanel");
       assertPresent(panelOrchestrator).focusPanel(panelId);
     });
-    ipcMain.handle("vibez1:bridge.getInfo", async (event) => {
+    ipcMain.handle("vibestudio:bridge.getInfo", async (event) => {
       const callerId = resolveCallerId(event);
       return shellCore?.panelManager.getInfo(asPanelSlotId(callerId));
     });
-    ipcMain.handle("vibez1:getBootstrapConfig", async (event) => {
+    ipcMain.handle("vibestudio:getBootstrapConfig", async (event) => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;
       return panelOrchestrator?.getBootstrapConfig(callerId);
     });
 
     // Electron-native
-    ipcMain.handle("vibez1:openDevtools", async (event) => {
+    ipcMain.handle("vibestudio:openDevtools", async (event) => {
       const callerId = resolveCallerId(event);
       if (!viewManager) throw new Error("ViewManager not initialized");
       viewManager.openDevTools(callerId);
     });
-    ipcMain.handle("vibez1:openFolderDialog", async (event, opts?: { title?: string }) => {
-      requireShellSender(event, "vibez1:openFolderDialog");
+    ipcMain.handle("vibestudio:openFolderDialog", async (event, opts?: { title?: string }) => {
+      requireShellSender(event, "vibestudio:openFolderDialog");
       const result = await dialog.showOpenDialog({
         properties: ["openDirectory", "createDirectory"],
         title: opts?.title ?? "Select Folder",
@@ -2466,12 +2466,12 @@ app.on("ready", async () => {
       return result.canceled ? null : (result.filePaths[0] ?? null);
     });
     ipcMain.handle(
-      "vibez1:openFileDialog",
+      "vibestudio:openFileDialog",
       async (
         event,
         opts?: { title?: string; filters?: { name: string; extensions: string[] }[] }
       ) => {
-        requireShellSender(event, "vibez1:openFileDialog");
+        requireShellSender(event, "vibestudio:openFileDialog");
         const result = await dialog.showOpenDialog({
           properties: ["openFile"],
           title: opts?.title ?? "Select File",
@@ -2480,7 +2480,7 @@ app.on("ready", async () => {
         return result.canceled ? null : (result.filePaths[0] ?? null);
       }
     );
-    ipcMain.handle("vibez1:openExternal", async (event, url: string, options?: unknown) => {
+    ipcMain.handle("vibestudio:openExternal", async (event, url: string, options?: unknown) => {
       const caller = resolveCaller(event);
       if (caller.callerKind === "shell") {
         const externalOpen = createTypedServiceClient(
@@ -2490,7 +2490,7 @@ app.on("ready", async () => {
         );
         await externalOpen.openExternal(
           url,
-          options as import("@vibez1/shared/externalOpen").OpenExternalOptions | undefined
+          options as import("@vibestudio/shared/externalOpen").OpenExternalOptions | undefined
         );
       } else {
         throw new Error("Panel openExternal must use its authenticated RPC transport");
@@ -2500,7 +2500,7 @@ app.on("ready", async () => {
     // Generic Electron service dispatch — lets panels call Electron-local
     // services (browser-data, autofill, etc.) directly via IPC instead of
     // going through the server, which may be remote.
-    ipcMain.handle("vibez1:serviceCall", async (event, method: string, args: unknown[]) => {
+    ipcMain.handle("vibestudio:serviceCall", async (event, method: string, args: unknown[]) => {
       // CallerKind is derived from the IPC sender's webContents id (shell vs
       // panel), and ServiceDispatcher.dispatch now enforces the per-service
       // policy at the choke point — see audit findings #3 / #18 / #19.

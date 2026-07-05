@@ -9,7 +9,7 @@
     "./utils/trackAsyncErrors": "./src/utils/trackAsyncErrors.ts"
   },
   "dependencies": {
-    "@vibez1/types": "workspace:*",
+    "@vibestudio/types": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",

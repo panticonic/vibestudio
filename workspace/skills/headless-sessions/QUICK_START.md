@@ -29,7 +29,7 @@ This automatically:
 - Creates a unique channel and subscribes the DO agent
 - Configures full-auto approval (no human in the loop)
 - Registers the default `set_title` method on the client
-- Uses the worker's normal Vibez1 prompt and tool surface — UI tools like
+- Uses the worker's normal Vibestudio prompt and tool surface — UI tools like
   inline_ui, load_action_bar, and feedback_form simply aren't advertised, so the agent naturally
   falls back to plain message replies
 

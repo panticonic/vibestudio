@@ -8,7 +8,7 @@ import type {
   PendingClientConfigApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
-} from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvals";
 import { ApprovalCard } from "./ApprovalCard";
 import { resolveCallerInfo, type ApprovalCardIntent } from "./approvalCardModel";
 import { ApprovalCardSurface } from "../overlay/ApprovalCardSurface";

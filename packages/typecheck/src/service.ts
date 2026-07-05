@@ -1,5 +1,5 @@
 /**
- * TypeScript type checking service for Vibez1 projects.
+ * TypeScript type checking service for Vibestudio projects.
  *
  * Runs TypeScript's language service against on-disk sources with:
  *   - Workspace-package discovery (pnpm-workspace.yaml → name→dir map)
@@ -661,7 +661,7 @@ export class TypeCheckService {
 
   /**
    * Hardcoded fallback options — used when no tsconfig.json is found.
-   * Tuned for the modern Vibez1 code shape (ESM, ES2023+, JSX, disposable
+   * Tuned for the modern Vibestudio code shape (ESM, ES2023+, JSX, disposable
    * resources).
    */
   private getDefaultCompilerOptions(): ts.CompilerOptions {

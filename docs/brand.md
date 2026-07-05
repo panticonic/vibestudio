@@ -1,13 +1,13 @@
-# Vibez1 Brand Assets
+# Vibestudio Brand Assets
 
-Vibez1 uses a single monochrome palm/tree mark with light and dark source tiles.
+Vibestudio uses a single monochrome palm/tree mark with light and dark source tiles.
 Do not hand-edit generated output files unless you are testing locally and plan
 to regenerate the suite afterward.
 
 ## Canonical Sources
 
-- `build-resources/brand/source/vibez1-light.png`
-- `build-resources/brand/source/vibez1-dark.png`
+- `build-resources/brand/source/vibestudio-light.png`
+- `build-resources/brand/source/vibestudio-dark.png`
 
 These cropped PNGs are the canonical raster sources. Generated output is written
 to desktop, web, workspace, mobile host, Android, and iOS asset locations.
@@ -37,22 +37,22 @@ Generated surfaces include:
 - `build-resources/icon.ico`
 - `build-resources/dmg-background.png`
 - `build-resources/brand/favicon-*`
-- `build-resources/brand/vibez1-mark*.svg`
+- `build-resources/brand/vibestudio-mark*.svg`
 - `workspace/packages/brand-assets/src/*`
 - `workspace/apps/mobile/src/assets/*`
 - `apps/mobile/assets/*`
 - `apps/mobile/android/app/src/main/res/mipmap-*`
 - `apps/mobile/android/app/src/main/res/drawable/launch_screen.xml`
-- `apps/mobile/ios/Vibez1/Images.xcassets/AppIcon.appiconset`
-- `apps/mobile/ios/Vibez1/Images.xcassets/LaunchLogo.imageset`
+- `apps/mobile/ios/Vibestudio/Images.xcassets/AppIcon.appiconset`
+- `apps/mobile/ios/Vibestudio/Images.xcassets/LaunchLogo.imageset`
 
 ## Usage Rules
 
 Use the shared components instead of importing PNGs directly in product UI:
 
-- Web/workspace UI: `Vibez1Logo` from `@workspace/ui`
-- Workspace mobile app: `Vibez1Logo` from `workspace/apps/mobile/src/components/Vibez1Logo`
-- Shipped native host fallback: `Vibez1Logo` from `apps/mobile/Vibez1Logo.js`
+- Web/workspace UI: `VibestudioLogo` from `@workspace/ui`
+- Workspace mobile app: `VibestudioLogo` from `workspace/apps/mobile/src/components/VibestudioLogo`
+- Shipped native host fallback: `VibestudioLogo` from `apps/mobile/VibestudioLogo.js`
 
 The web component imports assets from the declared `@workspace/brand-assets`
 package. Do not add filesystem escapes such as `../../../assets/...` to

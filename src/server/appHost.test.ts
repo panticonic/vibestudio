@@ -3,24 +3,24 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import { setWorkspaceAppTrust } from "@vibez1/shared/chromeTrust";
-import { writeProductSeedSourceRecord } from "@vibez1/shared/productSeedTrust";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { PendingApproval } from "@vibez1/shared/approvals";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
+import { writeProductSeedSourceRecord } from "@vibestudio/shared/productSeedTrust";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { AppHost } from "./appHost.js";
 import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 
 const roots: string[] = [];
-const originalAppDevStatus = process.env["VIBEZ1_APP_DEV_STATUS"];
+const originalAppDevStatus = process.env["VIBESTUDIO_APP_DEV_STATUS"];
 const REACT_NATIVE_PROVIDER = {
   name: "@workspace-extensions/react-native",
   activeEv: "ev-provider",
   activeBuildKey: "provider-build",
-  contractVersion: "vibez1-build-provider-v1",
+  contractVersion: "vibestudio-build-provider-v1",
 };
 
-// App trust is manifest-declared (meta/vibez1.yml trust.*) and seeded per
+// App trust is manifest-declared (meta/vibestudio.yml trust.*) and seeded per
 // process by the workspace loader / server startup. Seed the shipped default
 // grants here so the AppHost's trust filtering is exercised the way a live
 // server sees it.
@@ -34,12 +34,12 @@ beforeEach(() => {
 afterEach(() => {
   setWorkspaceAppTrust(null);
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
-  if (originalAppDevStatus === undefined) delete process.env["VIBEZ1_APP_DEV_STATUS"];
-  else process.env["VIBEZ1_APP_DEV_STATUS"] = originalAppDevStatus;
+  if (originalAppDevStatus === undefined) delete process.env["VIBESTUDIO_APP_DEV_STATUS"];
+  else process.env["VIBESTUDIO_APP_DEV_STATUS"] = originalAppDevStatus;
 });
 
 function tempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-app-host-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-host-"));
   roots.push(root);
   return root;
 }
@@ -65,7 +65,7 @@ function makeHarness(
     JSON.stringify({
       name: "@workspace-apps/shell",
       version: "1.0.0",
-      vibez1: {
+      vibestudio: {
         displayName: "Shell App",
         app: {
           target: "electron",
@@ -203,7 +203,7 @@ function makeHarness(
       opts.reactNativeAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
     getTerminalAppArtifactBaseUrl: () => opts.terminalAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
     // Manifest-declared preferred app per host target (mirrors the shipped
-    // meta/vibez1.yml hostTargets seed). Preferences come from the manifest,
+    // meta/vibestudio.yml hostTargets seed). Preferences come from the manifest,
     // never from hardcoded unit names in the host.
     getHostTargetDecl: (target) =>
       target === "electron"
@@ -275,7 +275,7 @@ function createAppGraphNode(
     JSON.stringify({
       name: opts.name,
       version: "1.0.0",
-      vibez1: {
+      vibestudio: {
         displayName: opts.displayName ?? opts.name,
         app: {
           target: opts.target,
@@ -316,7 +316,7 @@ function setAppManifestTarget(
         ? {
             target,
             renderer: "index.tsx",
-            rnComponentName: "Vibez1Mobile",
+            rnComponentName: "VibestudioMobile",
             rnHostAbi: "rn-host-1",
             capabilities,
           }
@@ -326,7 +326,7 @@ function setAppManifestTarget(
     JSON.stringify({
       name: node.name,
       version: "1.0.0",
-      vibez1: {
+      vibestudio: {
         displayName: node.manifest.displayName,
         app: appBlock,
       },
@@ -422,7 +422,7 @@ describe("AppHost", () => {
 
     const approval = await host.metaChangeApprovalForCommit("state:next");
 
-    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/vibez1.yml");
+    expect(readWorkspaceFileAtCommit).toHaveBeenCalledWith("state:next", "meta/vibestudio.yml");
     expect(approval.units).toEqual([
       expect.objectContaining({
         unitKind: "app",
@@ -1215,7 +1215,7 @@ describe("AppHost", () => {
   });
 
   it("emits a development app status diagnostic", async () => {
-    process.env["VIBEZ1_APP_DEV_STATUS"] = "1";
+    process.env["VIBESTUDIO_APP_DEV_STATUS"] = "1";
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
     const { host } = makeHarness();
 
@@ -1406,7 +1406,7 @@ describe("AppHost", () => {
       JSON.stringify({
         name: "@workspace-apps/shell",
         version: "1.0.0",
-        vibez1: {
+        vibestudio: {
           displayName: "Remote CLI",
           app: {
             target: "terminal",
@@ -1730,14 +1730,14 @@ describe("AppHost", () => {
       target: "react-native",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-old:provider-build-old:vibez1-build-provider-v1",
+          "ev-provider-old:provider-build-old:vibestudio-build-provider-v1",
       },
     });
     const provider = {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider-new",
       activeBuildKey: "provider-build-new",
-      contractVersion: "vibez1-build-provider-v1",
+      contractVersion: "vibestudio-build-provider-v1",
     };
     buildSystem.getBuildProviderDetails.mockReturnValue(provider);
     const approval = await host.metaChangeApprovalForCommit("state:provider-change");
@@ -1748,7 +1748,7 @@ describe("AppHost", () => {
         provider,
         externalDeps: expect.objectContaining({
           "build-provider:@workspace-extensions/react-native":
-            "ev-provider-new:provider-build-new:vibez1-build-provider-v1",
+            "ev-provider-new:provider-build-new:vibestudio-build-provider-v1",
         }),
       }),
     ]);
@@ -1821,7 +1821,7 @@ describe("AppHost", () => {
       activeBundleKey: "rn-app-key",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-new:provider-build-new:vibez1-build-provider-v1",
+          "ev-provider-new:provider-build-new:vibestudio-build-provider-v1",
       },
     });
     expect(eventService.emit).toHaveBeenCalledWith(
@@ -1889,20 +1889,20 @@ describe("AppHost", () => {
       target: "react-native",
       activeExternalDeps: {
         "build-provider:@workspace-extensions/react-native":
-          "ev-provider-old:provider-build-old:vibez1-build-provider-v1",
+          "ev-provider-old:provider-build-old:vibestudio-build-provider-v1",
       },
     });
     const oldProvider = {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider-old",
       activeBuildKey: "provider-build-old",
-      contractVersion: "vibez1-build-provider-v1",
+      contractVersion: "vibestudio-build-provider-v1",
     };
     const newProvider = {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider-new",
       activeBuildKey: "provider-build-new",
-      contractVersion: "vibez1-build-provider-v1",
+      contractVersion: "vibestudio-build-provider-v1",
     };
     buildSystem.getBuildProviderDetails.mockReturnValue(oldProvider);
     const declaration = {
@@ -1935,7 +1935,7 @@ describe("AppHost", () => {
         provider: newProvider,
         externalDeps: expect.objectContaining({
           "build-provider:@workspace-extensions/react-native":
-            "ev-provider-new:provider-build-new:vibez1-build-provider-v1",
+            "ev-provider-new:provider-build-new:vibestudio-build-provider-v1",
         }),
       }),
     ]);
@@ -2055,7 +2055,7 @@ describe("AppHost", () => {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider",
       activeBuildKey: "provider-build",
-      contractVersion: "vibez1-build-provider-v1",
+      contractVersion: "vibestudio-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(
@@ -2124,7 +2124,7 @@ describe("AppHost", () => {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider",
       activeBuildKey: "provider-build",
-      contractVersion: "vibez1-build-provider-v1",
+      contractVersion: "vibestudio-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-ready-key"),
@@ -2185,7 +2185,7 @@ describe("AppHost", () => {
       name: "@workspace-extensions/react-native",
       activeEv: "ev-provider",
       activeBuildKey: "provider-build",
-      contractVersion: "vibez1-build-provider-v1",
+      contractVersion: "vibestudio-build-provider-v1",
     };
     const rnBuild = {
       dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "rn-delayed-key"),

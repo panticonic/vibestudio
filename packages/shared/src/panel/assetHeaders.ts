@@ -52,4 +52,4 @@ export const STRIP_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
  * façade can re-derive `Content-Encoding: gzip` for the webview after stripping the
  * upstream encoding header.
  */
-export const GZIP_MARKER_HEADER = "x-vibez1-content-gzip";
+export const GZIP_MARKER_HEADER = "x-vibestudio-content-gzip";

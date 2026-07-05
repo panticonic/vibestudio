@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 
 import { resolveCodeIdentity } from "./principalIdentity.js";
 

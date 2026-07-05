@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import type { Panel } from "@vibez1/shared/types";
+import type { Panel } from "@vibestudio/shared/types";
 import { PanelView } from "./panelView.js";
 
 function makePanel(id: string, source = "about/new"): Panel {

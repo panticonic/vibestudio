@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibez1/shared/runtime/entitySpec";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { DODispatch } from "./doDispatch.js";
 import { WorkspaceEntityStore } from "./workspaceEntityStore.js";
 
 const RECORD: EntityRecord = {
-  id: "do:vibez1/internal:EvalDO:abc",
+  id: "do:vibestudio/internal:EvalDO:abc",
   kind: "do",
-  source: { repoPath: "vibez1/internal", effectiveVersion: "internal" },
+  source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
   contextId: "ctx-1",
   key: "abc",
   createdAt: 1,

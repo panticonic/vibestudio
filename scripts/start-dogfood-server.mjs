@@ -8,17 +8,17 @@ import * as YAML from "yaml";
 import { printPairHelp, runPairServer } from "./cli/lib/pair-server.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const projectPath = process.env.VIBEZ1_DOGFOOD_PROJECT || "projects/vibez1";
+const projectPath = process.env.VIBESTUDIO_DOGFOOD_PROJECT || "projects/vibestudio";
 
 export function platformDefault() {
   const home = os.homedir();
   switch (process.platform) {
     case "win32":
-      return path.join(process.env.APPDATA ?? path.join(home, "AppData", "Roaming"), "vibez1");
+      return path.join(process.env.APPDATA ?? path.join(home, "AppData", "Roaming"), "vibestudio");
     case "darwin":
-      return path.join(home, "Library", "Application Support", "vibez1");
+      return path.join(home, "Library", "Application Support", "vibestudio");
     default:
-      return path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "vibez1");
+      return path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, ".config"), "vibestudio");
   }
 }
 
@@ -59,7 +59,7 @@ function copyWorkspaceTemplate(wsDir) {
     path.join(repoRoot, "workspace"),
   ];
   const templateDir = candidates.find((candidate) =>
-    fs.existsSync(path.join(candidate, "meta", "vibez1.yml"))
+    fs.existsSync(path.join(candidate, "meta", "vibestudio.yml"))
   );
   if (!templateDir) {
     throw new Error(`Workspace template not found under ${repoRoot}`);
@@ -147,7 +147,7 @@ function writeDogfoodRemoteConfig(wsDir, remoteUrl) {
   if (!section || !repoKey) {
     throw new Error(`Invalid dogfood project path: ${projectPath}`);
   }
-  const configPath = path.join(wsDir, "source", "meta", "vibez1.yml");
+  const configPath = path.join(wsDir, "source", "meta", "vibestudio.yml");
   const config = YAML.parse(fs.readFileSync(configPath, "utf8")) ?? {};
   config.git ??= {};
   config.git.remotes ??= {};
@@ -161,7 +161,7 @@ function writeDogfoodRemoteConfig(wsDir, remoteUrl) {
 
 export function bootstrapWorkspace(name, opts = {}) {
   const wsDir = workspaceDir(name);
-  const configPath = path.join(wsDir, "source", "meta", "vibez1.yml");
+  const configPath = path.join(wsDir, "source", "meta", "vibestudio.yml");
   if (!fs.existsSync(configPath)) {
     console.log(`[dogfood] Creating workspace "${name}" at ${wsDir}`);
     copyWorkspaceTemplate(wsDir);
@@ -281,10 +281,10 @@ export function createDogfoodPairHooks({ workspaceName }) {
       const dogfoodGatewayAlias = `http://${selectedHost.address}:${options.port}`;
       return {
         ...baseEnv,
-        VIBEZ1_DOGFOOD: "1",
-        VIBEZ1_DOGFOOD_SOURCE_ROOT: repoRoot,
-        VIBEZ1_DOGFOOD_PROJECT: projectPath,
-        VIBEZ1_GATEWAY_ALIASES: JSON.stringify([dogfoodGatewayAlias]),
+        VIBESTUDIO_DOGFOOD: "1",
+        VIBESTUDIO_DOGFOOD_SOURCE_ROOT: repoRoot,
+        VIBESTUDIO_DOGFOOD_PROJECT: projectPath,
+        VIBESTUDIO_GATEWAY_ALIASES: JSON.stringify([dogfoodGatewayAlias]),
       };
     },
     spawnServer({ serverArgs, env }) {
@@ -332,15 +332,15 @@ export function runDogfoodServer(argv = process.argv.slice(2)) {
   const config = {
     commandName: "dogfood-server",
     logPrefix: "dogfood",
-    portEnv: ["VIBEZ1_DOGFOOD_PORT", "VIBEZ1_GATEWAY_PORT", "VIBEZ1_PAIR_PORT"],
-    devEnv: "VIBEZ1_DOGFOOD_DEV",
+    portEnv: ["VIBESTUDIO_DOGFOOD_PORT", "VIBESTUDIO_GATEWAY_PORT", "VIBESTUDIO_PAIR_PORT"],
+    devEnv: "VIBESTUDIO_DOGFOOD_DEV",
     restartCommand: "pnpm dev:self:server",
     usage: ["pnpm dev:self:server", "pnpm dev:self:server --port 3030"],
     startupHint:
       "[dogfood] Self-update mirroring is unsupported under GAD VCS; workspace edits stay in the managed workspace.",
     additionalHelp:
-      "Dogfood mode always uses a persistent managed workspace. Set VIBEZ1_DOGFOOD_WORKSPACE to change the seeded workspace name.",
-    bannerTitle: "Vibez1 dogfood server",
+      "Dogfood mode always uses a persistent managed workspace. Set VIBESTUDIO_DOGFOOD_WORKSPACE to change the seeded workspace name.",
+    bannerTitle: "Vibestudio dogfood server",
     deepLinkLabel: "Pair URL",
     instructions: "Scan the QR or open the Pair URL above to pair a client over WebRTC.",
   };
@@ -348,7 +348,7 @@ export function runDogfoodServer(argv = process.argv.slice(2)) {
     printPairHelp(config);
     return;
   }
-  const workspaceName = process.env.VIBEZ1_DOGFOOD_WORKSPACE || "dogfood";
+  const workspaceName = process.env.VIBESTUDIO_DOGFOOD_WORKSPACE || "dogfood";
   runPairServer(config, argv, createDogfoodPairHooks({ workspaceName }));
 }
 

@@ -4,13 +4,13 @@ const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
-const workspaceAppRoot = process.env.VIBEZ1_WORKSPACE_APP_ROOT
-  ? path.resolve(process.env.VIBEZ1_WORKSPACE_APP_ROOT)
+const workspaceAppRoot = process.env.VIBESTUDIO_WORKSPACE_APP_ROOT
+  ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_APP_ROOT)
   : path.resolve(monorepoRoot, "workspace", "apps", "mobile");
 const nativeBoundary = createNativeBoundary(workspaceAppRoot);
 
 /**
- * Metro bundler configuration for Vibez1 mobile.
+ * Metro bundler configuration for Vibestudio mobile.
  *
  * Extends the default React Native config to resolve workspace packages
  * and handle a few Metro resolution quirks:
@@ -66,7 +66,7 @@ const config = {
         }
       }
 
-      // 0a. Shim Node builtins pulled in transitively by @vibez1/shared.
+      // 0a. Shim Node builtins pulled in transitively by @vibestudio/shared.
       //     shell lifecycle imports trickle down into panelTypes/panelIdUtils
       //     which assume a Node runtime. Mobile-safe replacements live in
       //     src/nodeShims — unused APIs throw if accidentally reached.
@@ -80,20 +80,20 @@ const config = {
         return { type: "sourceFile", filePath: path.resolve(workspaceAppRoot, "src/nodeShims/crypto.ts") };
       }
 
-      // 0b. Resolve @vibez1/* packages to their TypeScript source.
+      // 0b. Resolve @vibestudio/* packages to their TypeScript source.
       //     These packages export "main": "./dist/index.js" for Node/esbuild,
       //     but dist/ may not exist (it's built by the desktop build pipeline).
       //     Metro can bundle .ts directly, so point to src/index.ts instead.
-      if (moduleName.startsWith("@vibez1/") && !moduleName.startsWith("@vibez1/shared/")) {
+      if (moduleName.startsWith("@vibestudio/") && !moduleName.startsWith("@vibestudio/shared/")) {
         const pkgName = moduleName.split("/").slice(0, 2).join("/");
         const subpath = moduleName.slice(pkgName.length);
-        const pkgDir = path.resolve(monorepoRoot, "packages", pkgName.replace("@vibez1/", ""));
+        const pkgDir = path.resolve(monorepoRoot, "packages", pkgName.replace("@vibestudio/", ""));
         if (subpath) {
-          // Subpath import like @vibez1/rpc/types
+          // Subpath import like @vibestudio/rpc/types
           const resolved = path.resolve(pkgDir, "src", subpath.slice(1));
           return context.resolveRequest(context, resolved, platform);
         }
-        // Bare import like @vibez1/rpc -> packages/rpc/src/index.ts
+        // Bare import like @vibestudio/rpc -> packages/rpc/src/index.ts
         const srcEntry = path.resolve(pkgDir, "src", "index.ts");
         return { type: "sourceFile", filePath: srcEntry };
       }

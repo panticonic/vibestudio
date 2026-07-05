@@ -16,7 +16,7 @@ import type {
 } from "react-native-webview/lib/WebViewTypes";
 import { isManagedHost, parsePanelUrl, LOOPBACK_PANEL_HOST } from "../services/panelUrls";
 import { openExternalUrl } from "../services/nativeCapabilities";
-import { Vibez1Logo } from "./Vibez1Logo";
+import { VibestudioLogo } from "./VibestudioLogo";
 
 export interface PanelNavigationEvent {
   type: "panel-switch";
@@ -32,7 +32,7 @@ export interface PanelWebViewHandle {
   dispatchHostEvent: (event: string, payload: unknown) => void;
   /**
    * Deliver one inbound RPC envelope the host demuxed for this panel's logical
-   * session (host → panel). Pairs with the injected `__vibez1Shell.onEnvelope`.
+   * session (host → panel). Pairs with the injected `__vibestudioShell.onEnvelope`.
    * (Host seam: the mobile shell must call this with envelopes it receives for
    * this panel off the pipe.)
    */
@@ -71,7 +71,7 @@ export interface PanelWebViewProps {
   };
 }
 
-const VIBEZ1_USER_AGENT = `Vibez1-Mobile/1.0 (${Platform.OS}; ${Platform.Version})`;
+const VIBESTUDIO_USER_AGENT = `Vibestudio-Mobile/1.0 (${Platform.OS}; ${Platform.Version})`;
 const MANAGED_PANEL_STALLED_TIMEOUT_MS = 45_000;
 const MANAGED_PANEL_MAX_LOAD_TIMEOUT_MS = 120_000;
 const MANAGED_PANEL_TIMEOUT_CHECK_MS = 5_000;
@@ -112,7 +112,7 @@ const RANDOM_UUID_POLYFILL_SCRIPT = `
 `;
 
 function smokePhase(phase: string, extra?: Record<string, unknown>): void {
-  console.log(`[Vibez1MobileSmoke] phase=${phase}`, extra ?? "");
+  console.log(`[VibestudioMobileSmoke] phase=${phase}`, extra ?? "");
 }
 
 function serializeForInjection(value: unknown): string {
@@ -149,7 +149,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         if (!enableDebug) return;
         try {
           window.ReactNativeWebView.postMessage(JSON.stringify({
-            __vibez1Debug: true,
+            __vibestudioDebug: true,
             level,
             args: Array.isArray(args) ? args.map(function (value) {
               if (value instanceof Error) {
@@ -183,7 +183,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
           lastDocumentTitle = title;
           if (!shouldForwardTitle(title)) return;
           window.ReactNativeWebView.postMessage(JSON.stringify({
-            __vibez1Title: true,
+            __vibestudioTitle: true,
             title,
           }));
         } catch (_) {}
@@ -266,10 +266,10 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
 
       // Inbound RPC envelopes the host demuxes for this panel's logical session.
       // Bridge-stream messages (§1.6 upload hop: response head/chunk/end/error)
-      // ride the same injection channel tagged __vibez1BridgeStream and demux to
+      // ride the same injection channel tagged __vibestudioBridgeStream and demux to
       // the stream listeners instead.
       function deliverEnvelope(envelope) {
-        if (envelope && envelope.__vibez1BridgeStream === true) {
+        if (envelope && envelope.__vibestudioBridgeStream === true) {
           for (const handler of streamListeners) {
             try { handler(envelope.msg); } catch (_) {}
           }
@@ -285,7 +285,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
           const id = "bridge-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
           pending.set(id, { resolve, reject });
           window.ReactNativeWebView.postMessage(JSON.stringify({
-            __vibez1Bridge: true,
+            __vibestudioBridge: true,
             id,
             method,
             args: Array.isArray(args) ? args : [],
@@ -294,11 +294,11 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
       }
 
       try {
-        globalThis.__vibez1PanelInit = panelInit;
-        globalThis.__vibez1HostPlatform = "mobile";
+        globalThis.__vibestudioPanelInit = panelInit;
+        globalThis.__vibestudioHostPlatform = "mobile";
         if (panelInit !== null) {
-          sessionStorage.setItem("__vibez1PanelInit", JSON.stringify(panelInit));
-          sessionStorage.setItem("__vibez1PanelInit:" + location.href, JSON.stringify(panelInit));
+          sessionStorage.setItem("__vibestudioPanelInit", JSON.stringify(panelInit));
+          sessionStorage.setItem("__vibestudioPanelInit:" + location.href, JSON.stringify(panelInit));
         }
       } catch (_) {}
 
@@ -318,11 +318,11 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
           envelopeListeners.add(handler);
           return () => envelopeListeners.delete(handler);
         },
-        // §1.6 upload hop (see @vibez1/rpc bridgeStream.ts): the postMessage
+        // §1.6 upload hop (see @vibestudio/rpc bridgeStream.ts): the postMessage
         // bridge is string-only, so body chunks cross as base64 (~256 KiB).
         // streamBodyChunk resolves via the host's resolvePending ack — awaiting
         // it is the pump's backpressure. Response messages arrive through
-        // deliverEnvelope tagged __vibez1BridgeStream → onStreamMessage.
+        // deliverEnvelope tagged __vibestudioBridgeStream → onStreamMessage.
         streamChunkFormat: "base64",
         streamOpen: (msg) => callHost("streamOpen", [msg]),
         streamBodyChunk: (msg) => callHost("streamBodyChunk", [msg]),
@@ -359,12 +359,12 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         },
       };
 
-      globalThis.__vibez1MobileHost = {
+      globalThis.__vibestudioMobileHost = {
         resolvePending,
         dispatchEventToListeners,
         deliverEnvelope,
       };
-      globalThis.__vibez1Shell = shell;
+      globalThis.__vibestudioShell = shell;
     })();
     true;
   `;
@@ -426,7 +426,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
     (event: string, payload: unknown) => {
       if (!managed) return;
       webViewRef.current?.injectJavaScript(
-        `window.__vibez1MobileHost&&window.__vibez1MobileHost.dispatchEventToListeners(${JSON.stringify(event)}, ${serializeForInjection(payload)}); true;`
+        `window.__vibestudioMobileHost&&window.__vibestudioMobileHost.dispatchEventToListeners(${JSON.stringify(event)}, ${serializeForInjection(payload)}); true;`
       );
     },
     [managed]
@@ -436,7 +436,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
     (envelope: unknown) => {
       if (!managed) return;
       webViewRef.current?.injectJavaScript(
-        `window.__vibez1MobileHost&&window.__vibez1MobileHost.deliverEnvelope(${serializeForInjection(envelope)}); true;`
+        `window.__vibestudioMobileHost&&window.__vibestudioMobileHost.deliverEnvelope(${serializeForInjection(envelope)}); true;`
       );
     },
     [managed]
@@ -505,7 +505,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
       setHasError(true);
       setErrorMessage(
         `Timed out loading the panel after ${seconds}s.\n\n` +
-          `Check that the phone can reach the Vibez1 server and retry.\n\n${stalledUrl}`
+          `Check that the phone can reach the Vibestudio server and retry.\n\n${stalledUrl}`
       );
     }, MANAGED_PANEL_TIMEOUT_CHECK_MS);
 
@@ -592,10 +592,10 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
 
       try {
         const message = JSON.parse(event.nativeEvent.data) as {
-          __vibez1Bridge?: boolean;
-          __vibez1Debug?: boolean;
-          __vibez1DomSnapshot?: boolean;
-          __vibez1Title?: boolean;
+          __vibestudioBridge?: boolean;
+          __vibestudioDebug?: boolean;
+          __vibestudioDomSnapshot?: boolean;
+          __vibestudioTitle?: boolean;
           id?: string;
           method?: string;
           args?: unknown[];
@@ -604,7 +604,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
           childCount?: number;
           title?: string;
         };
-        if (message.__vibez1Debug) {
+        if (message.__vibestudioDebug) {
           if (!diagnosticsEnabled && !__DEV__) return;
           const level = message.level ?? "log";
           const parts = Array.isArray(message.args) ? message.args : [];
@@ -614,14 +614,14 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
           console[level](`[PanelWebView:${panelId}] ${text}`);
           return;
         }
-        if (message.__vibez1DomSnapshot) {
+        if (message.__vibestudioDomSnapshot) {
           if (!diagnosticsEnabled && !__DEV__) return;
           console.log(
             `[PanelWebView:${panelId}] DOM title=${message.title ?? ""} childCount=${message.childCount ?? 0} text=${message.text ?? ""}`
           );
           return;
         }
-        if (message.__vibez1Title) {
+        if (message.__vibestudioTitle) {
           const title = typeof message.title === "string" ? message.title.trim() : "";
           if (title.length > 0) {
             onTitleChange?.(panelId, title);
@@ -629,17 +629,17 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
           return;
         }
         if (!onBridgeCall) return;
-        if (!message.__vibez1Bridge || !message.id || !message.method) return;
+        if (!message.__vibestudioBridge || !message.id || !message.method) return;
 
         try {
           const result = await onBridgeCall(panelId, message.method, message.args ?? []);
           webViewRef.current?.injectJavaScript(
-            `window.__vibez1MobileHost&&window.__vibez1MobileHost.resolvePending(${JSON.stringify(message.id)}, true, ${serializeForInjection(result)}); true;`
+            `window.__vibestudioMobileHost&&window.__vibestudioMobileHost.resolvePending(${JSON.stringify(message.id)}, true, ${serializeForInjection(result)}); true;`
           );
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           webViewRef.current?.injectJavaScript(
-            `window.__vibez1MobileHost&&window.__vibez1MobileHost.resolvePending(${JSON.stringify(message.id)}, false, ${serializeForInjection(errorMessage)}); true;`
+            `window.__vibestudioMobileHost&&window.__vibestudioMobileHost.resolvePending(${JSON.stringify(message.id)}, false, ${serializeForInjection(errorMessage)}); true;`
           );
         }
       } catch {
@@ -713,14 +713,14 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
               .slice(0, 500);
             const childCount = document.body ? document.body.children.length : 0;
             window.ReactNativeWebView.postMessage(JSON.stringify({
-              __vibez1DomSnapshot: true,
+              __vibestudioDomSnapshot: true,
               title: document.title || "",
               childCount,
               text,
             }));
           } catch (error) {
             window.ReactNativeWebView.postMessage(JSON.stringify({
-              __vibez1Debug: true,
+              __vibestudioDebug: true,
               level: "error",
               args: ["DOM snapshot failed", error instanceof Error ? error.message : String(error)],
             }));
@@ -789,7 +789,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
             colors?.background != null && { backgroundColor: colors.background },
           ]}
         >
-          <Vibez1Logo size={72} variant="mark" style={styles.logo} />
+          <VibestudioLogo size={72} variant="mark" style={styles.logo} />
           <Text style={[styles.errorTitle, colors?.text != null && { color: colors.text }]}>
             Failed to load panel
           </Text>
@@ -826,7 +826,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
             colors?.background != null && { backgroundColor: colors.background + "E6" },
           ]}
         >
-          <Vibez1Logo size={64} variant="mark" style={styles.logo} />
+          <VibestudioLogo size={64} variant="mark" style={styles.logo} />
           <ActivityIndicator size="large" color={colors?.primary ?? "#1a73e8"} />
           <Text
             style={[
@@ -843,7 +843,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
         key={panelId}
         source={{ uri: url }}
         style={styles.webView}
-        userAgent={VIBEZ1_USER_AGENT}
+        userAgent={VIBESTUDIO_USER_AGENT}
         cacheEnabled={!managed}
         cacheMode={managed ? "LOAD_NO_CACHE" : "LOAD_DEFAULT"}
         onShouldStartLoadWithRequest={handleShouldStartLoad}

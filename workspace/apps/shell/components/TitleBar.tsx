@@ -13,7 +13,7 @@ import {
   StopIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
-import { Vibez1Logo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui";
 import {
   useCallback,
   useEffect,
@@ -39,7 +39,7 @@ import type {
   PanelAncestor,
   DescendantSiblingGroup,
 } from "./navigationTypes";
-import type { PanelContextMenuAction } from "@vibez1/shared/types";
+import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import {
   buildAddressAutocompleteItems,
   type AddressAutocompleteItem,
@@ -48,8 +48,8 @@ import {
   type PanelAddressOptions,
   type PanelChromeState,
   type PanelSourceSuggestion,
-} from "@vibez1/shared/panelChrome";
-import { getAddressNavigationModeFromModifiers } from "@vibez1/shared/panelCommands";
+} from "@vibestudio/shared/panelChrome";
+import { getAddressNavigationModeFromModifiers } from "@vibestudio/shared/panelCommands";
 import {
   menu,
   panel,
@@ -145,7 +145,7 @@ export function TitleBar({
               <HamburgerMenuIcon />
             </IconButton>
 
-            <Vibez1Logo size={26} variant="mark" className="app-titlebar-brand" />
+            <VibestudioLogo size={26} variant="mark" className="app-titlebar-brand" />
 
             <Tooltip content={navigationMode === "tree" ? "Close panel tree" : "Open panel tree"}>
               <IconButton
@@ -269,7 +269,7 @@ export function TitleBar({
           {/* macOS: reserve the native traffic-light cluster and hover target. */}
           {isMac && <Box style={{ width: MACOS_TITLEBAR_CONTROL_RESERVE_PX, flexShrink: 0 }} />}
 
-          <Vibez1Logo size={20} variant="mark" className="app-titlebar-brand" />
+          <VibestudioLogo size={20} variant="mark" className="app-titlebar-brand" />
 
           <IconButton variant="ghost" size="1" onClick={handleHamburgerClick}>
             <HamburgerMenuIcon />

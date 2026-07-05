@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseConnectLink } from "@vibez1/shared/connect";
+import { parseConnectLink } from "@vibestudio/shared/connect";
 import { DeviceAuthStore } from "../deviceAuthStore.js";
 import {
   createPairingInviteResponse,
@@ -16,7 +16,7 @@ const SEAM: ConnectPairingSeam = { fp: FP, sig: "wss://signal.example/", ice: "a
 
 function makeStore(): DeviceAuthStore {
   return new DeviceAuthStore(
-    path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-auth-model-")), "devices.json")
+    path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-model-")), "devices.json")
   );
 }
 

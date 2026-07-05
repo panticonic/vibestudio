@@ -1,7 +1,7 @@
 /**
  * Type-check helper methods used by the typecheck service extension.
  *
- * Runs TypeScript's language service (via @vibez1/typecheck) directly
+ * Runs TypeScript's language service (via @vibestudio/typecheck) directly
  * against the disk. No external type fetching, no install-on-demand, no
  * callbacks — workspace packages resolve through the workspace context map
  * and everything else flows through standard `node_modules` walking.
@@ -31,9 +31,9 @@ import {
   type TypeCheckDiagnostic,
   discoverWorkspaceContext,
   type WorkspaceContext,
-} from "@vibez1/typecheck";
-import { getUserDataPath } from "@vibez1/env-paths";
-import { runNpmInstall } from "@vibez1/shared/npmInstaller";
+} from "@vibestudio/typecheck";
+import { getUserDataPath } from "@vibestudio/env-paths";
+import { runNpmInstall } from "@vibestudio/shared/npmInstaller";
 
 /** Per-panel TypeCheckService cache — keyed by absolute panel path. */
 const typeCheckServiceCache = new Map<string, TypeCheckService>();

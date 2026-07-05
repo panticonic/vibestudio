@@ -28,8 +28,8 @@ export function getUserDataPath(): string {
 }
 
 /**
- * Get the central Vibez1 config directory (shared across all workspaces).
- * Always returns ~/.config/vibez1/ (or platform equivalent).
+ * Get the central Vibestudio config directory (shared across all workspaces).
+ * Always returns ~/.config/vibestudio/ (or platform equivalent).
  * Never returns Electron's app.getPath('userData') — that may point to a workspace.
  */
 export function getCentralDataPath(): string {
@@ -46,23 +46,23 @@ export function getWorkspaceDir(name: string): string {
   return path.join(getWorkspacesDir(), name);
 }
 
-/** Platform-conventional config directory for Vibez1. */
+/** Platform-conventional config directory for Vibestudio. */
 function platformDefault(): string {
   const home = os.homedir();
   try {
     switch (process.platform) {
       case "win32": {
         const appData = process.env["APPDATA"] ?? path.join(home, "AppData", "Roaming");
-        return path.join(appData, "vibez1");
+        return path.join(appData, "vibestudio");
       }
       case "darwin":
-        return path.join(home, "Library", "Application Support", "vibez1");
+        return path.join(home, "Library", "Application Support", "vibestudio");
       default: {
         const xdgConfig = process.env["XDG_CONFIG_HOME"] ?? path.join(home, ".config");
-        return path.join(xdgConfig, "vibez1");
+        return path.join(xdgConfig, "vibestudio");
       }
     }
   } catch {
-    return path.join(os.tmpdir(), "vibez1");
+    return path.join(os.tmpdir(), "vibestudio");
   }
 }

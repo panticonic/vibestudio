@@ -27,7 +27,7 @@ import {
   EMPTY_STATE_HASH,
   type ManifestHashEntry,
   type WorktreeManifest,
-} from "@vibez1/shared/contentTree/worktreeHash";
+} from "@vibestudio/shared/contentTree/worktreeHash";
 import {
   blobPath,
   ensureLayout,
@@ -347,7 +347,7 @@ export class WorktreeStore {
    * Scan + hash a working directory entirely locally (blobs enter the CAS,
    * nothing touches the DO). The returned state/subtree hashes are
    * byte-identical to what `ingestWorktreeState` would compute — the shared
-   * implementation lives in @vibez1/shared/contentTree/worktreeHash (kept
+   * implementation lives in @vibestudio/shared/contentTree/worktreeHash (kept
    * byte-identical to the gad-store DO's copy via golden-vector tests).
    * This is the bootstrap path: builds can be content-addressed before the
    * gad store is reachable.

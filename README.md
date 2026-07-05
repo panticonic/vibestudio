@@ -1,12 +1,12 @@
-# vibez1
+# vibestudio
 
 ## A personal vibe computer
 
-Vibez1 is a browser and light-weight sandbox for agents and personalized AI-built apps that blurs the line between using and building software.
+Vibestudio is a browser and light-weight sandbox for agents and personalized AI-built apps that blurs the line between using and building software.
 It's an environment in which you can combine agentic workflows similar to OpenClaw or Hermes Agent with an app build system for creating and modifying personal software, where the AI is always available to refine your personal software to meet your needs.
-Unlike many other agentic systems, vibez1 is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
+Unlike many other agentic systems, vibestudio is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
 
-The vibez1 sandbox:
+The vibestudio sandbox:
 - has a browser-style out-of-band approval system (similar to camera, microphone or storage access in normal browsers) and credential store for external providers.
 - includes a context-isolated file system per app / agent instance.
 - has facilities for building and debugging software within the system, including agents, apps and reusable packages.
@@ -24,9 +24,9 @@ Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
 Installs the GUI and the bundled server:
 
 ```bash
-npm install -g @vibez1/app
-vibez1             # launch the desktop app
-vibez1 --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
+npm install -g @vibestudio/app
+vibestudio             # launch the desktop app
+vibestudio --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
 ```
 
 On macOS this runs cert-free for now (npm-delivered, non-quarantined); signed
@@ -35,11 +35,11 @@ DMG/AppImage/deb installers are published to GitHub Releases as they become avai
 ### Headless server (remote/home server; clients connect to it)
 
 ```bash
-npm install -g @vibez1/server
-export VIBEZ1_WEBRTC_SIGNAL_URL=wss://vibez1-signaling.<account>.workers.dev
-vibez1 remote serve --port 3030
+npm install -g @vibestudio/server
+export VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev
+vibestudio remote serve --port 3030
 # quick one-off (no global install):
-npx -p @vibez1/server vibez1 remote serve --signal-url wss://vibez1-signaling.<account>.workers.dev --port 3030
+npx -p @vibestudio/server vibestudio remote serve --signal-url wss://vibestudio-signaling.<account>.workers.dev --port 3030
 ```
 
 The server installs with no compiler (workerd/esbuild ship prebuilt binaries) and
@@ -76,7 +76,7 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 
 ## How It Works
 
-Each panel in vibez1 is a browser session that can have child panels. This creates a tree structure where you can:
+Each panel in vibestudio is a browser session that can have child panels. This creates a tree structure where you can:
 
 1. **Navigate down**: Click "Add Child Browser" to create a nested browser panel
 2. **Navigate up**: Use ancestor breadcrumbs to go back to parent panels
@@ -101,7 +101,7 @@ pnpm dev:webrtc
 ```
 
 `pnpm dev:webrtc` starts local signaling, starts a local workspace server as a
-WebRTC answerer, and launches Electron with a fresh `vibez1://connect` link.
+WebRTC answerer, and launches Electron with a fresh `vibestudio://connect` link.
 Use `pnpm dev:webrtc -- --ephemeral` for a disposable workspace, or
 `pnpm dev:webrtc -- --workspace <name>` to force a specific workspace.
 
@@ -111,19 +111,19 @@ You can enable lightweight memory logging to identify which panel/worker is grow
 
 ```bash
 # Log a snapshot every 60s
-VIBEZ1_MEMORY_LOG_MS=60000 pnpm dev
+VIBESTUDIO_MEMORY_LOG_MS=60000 pnpm dev
 
 # Log only if any view exceeds the threshold (MB)
-VIBEZ1_MEMORY_LOG_THRESHOLD_MB=1500 pnpm dev
+VIBESTUDIO_MEMORY_LOG_THRESHOLD_MB=1500 pnpm dev
 
 # Log a single snapshot at startup
-VIBEZ1_MEMORY_LOG_ONCE=1 pnpm dev
+VIBESTUDIO_MEMORY_LOG_ONCE=1 pnpm dev
 ```
 
 To temporarily increase the renderer V8 heap limit in dev:
 
 ```bash
-VIBEZ1_RENDERER_MAX_OLD_SPACE_MB=4096 pnpm dev
+VIBESTUDIO_RENDERER_MAX_OLD_SPACE_MB=4096 pnpm dev
 ```
 
 ## Building for Production
@@ -137,7 +137,7 @@ pnpm start
 
 ## Headless Server
 
-Vibez1 can run without Electron as a standalone Node.js server. All core
+Vibestudio can run without Electron as a standalone Node.js server. All core
 services — build, git, channels, AI, agents, tokens — are available over
 WebSocket RPC. Persistent storage lives inside workerd Durable Objects (each
 DO owns its own SQLite-backed `this.sql`); the server has no native module
@@ -147,7 +147,7 @@ HTTP.
 ### Prerequisites
 
 ```bash
-npm install -g @vibez1/server
+npm install -g @vibestudio/server
 ```
 
 For development from a source checkout instead: `pnpm install && pnpm build`.
@@ -155,20 +155,20 @@ For development from a source checkout instead: `pnpm install && pnpm build`.
 ### Running
 
 ```bash
-export VIBEZ1_WEBRTC_SIGNAL_URL=wss://vibez1-signaling.<account>.workers.dev
-vibez1 remote serve --port 3030
+export VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev
+vibestudio remote serve --port 3030
 # from a source checkout:
-pnpm cli remote serve --signal-url wss://vibez1-signaling.<account>.workers.dev --port 3030
+pnpm cli remote serve --signal-url wss://vibestudio-signaling.<account>.workers.dev --port 3030
 ```
 
 The installed launcher pins the app root to the package, so it works from any
 directory. On startup the pairing server prints a QR/deep-link:
 
 ```
-Pair a Vibez1 device
+Pair a Vibestudio device
   Room:        ...
   Fingerprint: ...
-  Pair URL:    vibez1://connect?room=...&fp=...&code=...&sig=...
+  Pair URL:    vibestudio://connect?room=...&fp=...&code=...&sig=...
 ```
 
 ### CLI Flags
@@ -182,7 +182,7 @@ Pair a Vibez1 device
 The gateway binds loopback only; remote clients reach it over WebRTC (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
 decommissioned with remote-mode public ingress. OAuth/webhook routes resolve
-through the callback relay (`VIBEZ1_RELAY_OAUTH_BASE_URL`).
+through the callback relay (`VIBESTUDIO_RELAY_OAUTH_BASE_URL`).
 
 The public server is always a hub. Clients pair with the hub, choose a
 workspace, and then connect to `/_workspace/<name>`. Workspace flags are
@@ -195,12 +195,12 @@ Pairing is over WebRTC (signaling room + DTLS fingerprint) — no Tailscale/VPN 
 HTTPS serve setup:
 
 ```bash
-vibez1 mobile install --launch
+vibestudio mobile install --launch
 pnpm build
-vibez1 mobile pair --port 3030
+vibestudio mobile pair --port 3030
 ```
 
-Scan the printed `vibez1://connect?room=…&fp=…&code=…&sig=…` QR. See
+Scan the printed `vibestudio://connect?room=…&fp=…&code=…&sig=…` QR. See
 [docs/webrtc-local-e2e.md](docs/webrtc-local-e2e.md) for the WebRTC pairing +
 local setup. Use the desktop app's bootstrap screen to pair a laptop without
 copying an admin token. After one desktop client is connected, use **Remote

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { clearShellTokenCache } from "../rpcClient.js";
 
 /**
- * `vibez1 eval` drives the server-side `eval` service (eval.run / eval.reset)
+ * `vibestudio eval` drives the server-side `eval` service (eval.run / eval.reset)
  * over the CLI's Bearer /rpc transport. These tests stub that HTTP surface
  * (same wire shape as rpcServer.ts: {method,args} → {result|error}) and assert
  * the command builds the right calls and shapes its output/exit codes.
@@ -83,7 +83,7 @@ function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequ
 }
 
 function writeCredentials(tmpDir: string, url = "https://host.tailnet.ts.net"): void {
-  const dir = path.join(tmpDir, ".config", "vibez1");
+  const dir = path.join(tmpDir, ".config", "vibestudio");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
@@ -99,7 +99,7 @@ function writeCredentials(tmpDir: string, url = "https://host.tailnet.ts.net"): 
 }
 
 function writeSession(tmpDir: string, name = "default", serverUrl = "https://host.tailnet.ts.net") {
-  const dir = path.join(tmpDir, ".config", "vibez1", "agent-sessions");
+  const dir = path.join(tmpDir, ".config", "vibestudio", "agent-sessions");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `${name}.json`),
@@ -132,11 +132,11 @@ function jsonErrorOutput(): Record<string, unknown> {
   return JSON.parse(lines[lines.length - 1]!) as Record<string, unknown>;
 }
 
-describe("vibez1 eval commands", () => {
+describe("vibestudio eval commands", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-eval-cli-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-eval-cli-"));
     vi.stubEnv("HOME", tmpDir);
     clearShellTokenCache();
     vi.spyOn(console, "log").mockImplementation(() => {});

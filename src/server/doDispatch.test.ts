@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TokenManager } from "@vibez1/shared/tokenManager";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { doRefKey, doRefUrl, encodeUniversalKey, DODispatch, type DORef } from "./doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 
@@ -183,7 +183,7 @@ describe("DODispatch", () => {
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: "Bearer workerd-gateway-token",
-            "X-Vibez1-Dispatch-Secret": "dispatch-secret",
+            "X-Vibestudio-Dispatch-Secret": "dispatch-secret",
           }),
         })
       );

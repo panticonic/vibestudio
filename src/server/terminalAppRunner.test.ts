@@ -9,7 +9,7 @@ const processMocks = vi.hoisted(() => ({
   createProcessAdapter: vi.fn(),
 }));
 
-vi.mock("@vibez1/process-adapter", () => ({
+vi.mock("@vibestudio/process-adapter", () => ({
   createProcessAdapter: processMocks.createProcessAdapter,
 }));
 
@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 function tempBuild() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-terminal-runner-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-runner-"));
   roots.push(root);
   const dir = path.join(root, "build");
   fs.mkdirSync(dir, { recursive: true });
@@ -86,13 +86,13 @@ describe("TerminalAppRunner", () => {
     expect(processMocks.createProcessAdapter).toHaveBeenCalledWith(
       expect.stringMatching(/index\.mjs$/),
       expect.objectContaining({
-        VIBEZ1_TERMINAL_APP_ID: "@workspace-apps/remote-cli",
-        VIBEZ1_TERMINAL_APP_SOURCE: "apps/remote-cli",
-        VIBEZ1_TERMINAL_APP_BUILD_KEY: "build-cli",
-        VIBEZ1_TERMINAL_APP_EFFECTIVE_VERSION: "ev-cli",
-        VIBEZ1_TERMINAL_APP_GATEWAY_URL: "http://127.0.0.1:1234",
-        VIBEZ1_TERMINAL_APP_RPC_TOKEN: "grant-token",
-        VIBEZ1_TERMINAL_APP_CONNECTION_ID: "terminal:@workspace-apps/remote-cli:build-cli",
+        VIBESTUDIO_TERMINAL_APP_ID: "@workspace-apps/remote-cli",
+        VIBESTUDIO_TERMINAL_APP_SOURCE: "apps/remote-cli",
+        VIBESTUDIO_TERMINAL_APP_BUILD_KEY: "build-cli",
+        VIBESTUDIO_TERMINAL_APP_EFFECTIVE_VERSION: "ev-cli",
+        VIBESTUDIO_TERMINAL_APP_GATEWAY_URL: "http://127.0.0.1:1234",
+        VIBESTUDIO_TERMINAL_APP_RPC_TOKEN: "grant-token",
+        VIBESTUDIO_TERMINAL_APP_CONNECTION_ID: "terminal:@workspace-apps/remote-cli:build-cli",
       }),
       { preferNode: true, stdio: "pipe" }
     );

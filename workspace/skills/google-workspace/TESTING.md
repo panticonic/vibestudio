@@ -1,6 +1,6 @@
 # Testing Google Workspace
 
-After saving the Google OAuth client setup, verify the setup in a Vibez1
+After saving the Google OAuth client setup, verify the setup in a Vibestudio
 panel or eval context.
 
 ## Check Configuration And Stored Connection

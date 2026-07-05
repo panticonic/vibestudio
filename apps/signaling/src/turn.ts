@@ -23,10 +23,10 @@ export interface TurnEnv {
    * `mintIceServers` returns this relay instead of Cloudflare. Env-guarded:
    * production / desktop / physical-device runs set none of these.
    */
-  VIBEZ1_LOCAL_TURN_HOST?: string;
-  VIBEZ1_LOCAL_TURN_PORT?: string;
-  VIBEZ1_LOCAL_TURN_USER?: string;
-  VIBEZ1_LOCAL_TURN_PASS?: string;
+  VIBESTUDIO_LOCAL_TURN_HOST?: string;
+  VIBESTUDIO_LOCAL_TURN_PORT?: string;
+  VIBESTUDIO_LOCAL_TURN_USER?: string;
+  VIBESTUDIO_LOCAL_TURN_PASS?: string;
 }
 
 /** Free Cloudflare STUN — always usable, no credentials required. */
@@ -51,15 +51,15 @@ export async function mintIceServers(
 ): Promise<{ iceServers: RtcIceServer[]; turn: boolean }> {
   // Local-dev coturn (emulator NAT testing) takes precedence — both peers fetch
   // `/ice-servers`, so returning this here reaches the answerer AND the client,
-  // and `VIBEZ1_WEBRTC_ICE=relay` forces the pipe through it.
-  if (env.VIBEZ1_LOCAL_TURN_HOST && env.VIBEZ1_LOCAL_TURN_USER && env.VIBEZ1_LOCAL_TURN_PASS) {
-    const port = env.VIBEZ1_LOCAL_TURN_PORT ?? "3478";
+  // and `VIBESTUDIO_WEBRTC_ICE=relay` forces the pipe through it.
+  if (env.VIBESTUDIO_LOCAL_TURN_HOST && env.VIBESTUDIO_LOCAL_TURN_USER && env.VIBESTUDIO_LOCAL_TURN_PASS) {
+    const port = env.VIBESTUDIO_LOCAL_TURN_PORT ?? "3478";
     return {
       iceServers: [
         {
-          urls: `turn:${env.VIBEZ1_LOCAL_TURN_HOST}:${port}?transport=udp`,
-          username: env.VIBEZ1_LOCAL_TURN_USER,
-          credential: env.VIBEZ1_LOCAL_TURN_PASS,
+          urls: `turn:${env.VIBESTUDIO_LOCAL_TURN_HOST}:${port}?transport=udp`,
+          username: env.VIBESTUDIO_LOCAL_TURN_USER,
+          credential: env.VIBESTUDIO_LOCAL_TURN_PASS,
         },
       ],
       turn: true,

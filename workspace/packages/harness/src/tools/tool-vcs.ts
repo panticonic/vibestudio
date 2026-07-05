@@ -10,7 +10,7 @@
 import {
   createVcsUserlandClient,
   type RpcCallerLike,
-} from "@vibez1/shared/userlandServiceRpc";
+} from "@vibestudio/shared/userlandServiceRpc";
 
 import { resolveToCwd } from "./path-utils.js";
 

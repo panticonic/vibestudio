@@ -2,8 +2,8 @@
  * Cache configuration with centralized defaults
  */
 
-import { loadCentralConfig } from "@vibez1/shared/workspace/loader";
-import type { CacheConfig } from "@vibez1/shared/workspace/types";
+import { loadCentralConfig } from "@vibestudio/shared/workspace/loader";
+import type { CacheConfig } from "@vibestudio/shared/workspace/types";
 
 /**
  * Default cache configuration values

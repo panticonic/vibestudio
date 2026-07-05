@@ -2,15 +2,15 @@
  * workerdInspector service — approval-gated userland access to the workerd
  * V8 inspector for profiling workers and Durable Objects.
  *
- * Not dev-gated: Vibez1 is a continuous-development system, so the
+ * Not dev-gated: Vibestudio is a continuous-development system, so the
  * inspector stays available; the approvals flow (capability
  * "workerd.inspector", grantable per caller) is the access control, matching
  * the panelCdp model. The inspector socket itself binds loopback and is only
  * reachable through the WorkerdInspectorBridge with a single-use grant token.
  */
 import { z } from "zod";
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
 import {
   requestCapabilityPermission,
@@ -88,7 +88,7 @@ export function createWorkerdInspectorService(
           const endpoint = deps.getEndpoint(targetPath, caller.runtime.id);
           if (!endpoint) {
             throw new Error(
-              "Workerd inspector is unavailable (disabled via VIBEZ1_DISABLE_WORKERD_INSPECTOR or workerd not running)"
+              "Workerd inspector is unavailable (disabled via VIBESTUDIO_DISABLE_WORKERD_INSPECTOR or workerd not running)"
             );
           }
           return endpoint;

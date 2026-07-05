@@ -58,7 +58,7 @@ function AboutPage() {
           <BrandMark size={84} />
 
           <Flex direction="column" align="center" gap="1">
-            <Heading size="7">Vibez1</Heading>
+            <Heading size="7">Vibestudio</Heading>
             <Text color="gray" size="2" align="center">
               A composable desktop application framework
             </Text>
@@ -99,7 +99,7 @@ function AboutPage() {
           </DataList.Root>
 
           <Text size="1" color="gray">
-            Copyright 2024–{new Date().getFullYear()} Vibez1 Contributors
+            Copyright 2024–{new Date().getFullYear()} Vibestudio Contributors
           </Text>
         </Flex>
       </Card>

@@ -1,6 +1,6 @@
 /**
  * Resource loader — fetches the system prompt and skill index from the
- * Vibez1 workspace via RPC.
+ * Vibestudio workspace via RPC.
  *
  * PiRunner uses this at session startup to inject `AGENTS.md` content and
  * a formatted skill index into the agent's system prompt. The skill index
@@ -12,10 +12,10 @@
  * as a string; `workspace.listSkills` returns an array of `SkillEntry`
  * descriptors (one per skill directory under `workspace/skills/`).
  */
-import type { RpcCaller } from "@vibez1/rpc";
+import type { RpcCaller } from "@vibestudio/rpc";
 import { AgentWorkerError } from "./errors.js";
 
-export type { RpcCaller } from "@vibez1/rpc";
+export type { RpcCaller } from "@vibestudio/rpc";
 
 export interface SkillEntry {
   /** Skill identifier; matches the directory name under `workspace/skills/`. */
@@ -25,7 +25,7 @@ export interface SkillEntry {
   /** Absolute path to the skill directory (informational; not used by LLM). */
   dirPath: string;
 }
-export interface Vibez1Resources {
+export interface VibestudioResources {
   /** Contents of `workspace/meta/AGENTS.md`. */
   systemPrompt: string;
   /** Markdown-formatted skill index suitable for appending to the system prompt. */
@@ -39,9 +39,9 @@ export interface ResourceLoaderDeps {
 }
 /**
  * Fetches the workspace system prompt and skill list in parallel and
- * returns a `Vibez1Resources` bundle for PiRunner to consume.
+ * returns a `VibestudioResources` bundle for PiRunner to consume.
  */
-export async function loadVibez1Resources(deps: ResourceLoaderDeps): Promise<Vibez1Resources> {
+export async function loadVibestudioResources(deps: ResourceLoaderDeps): Promise<VibestudioResources> {
   throwIfAborted(deps.signal);
   const [systemPromptRaw, skillsRaw] = await Promise.all([
     abortable(callWorkspace<unknown>(deps, "workspace.getAgentsMd"), deps.signal),

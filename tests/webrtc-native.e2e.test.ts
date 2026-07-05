@@ -16,41 +16,41 @@
  * harness builds on (it only swaps the in-process signaling for the real
  * signaling DO).
  *
- * Gated behind VIBEZ1_RUN_WEBRTC_E2E=1 (opens real UDP sockets + loads the
+ * Gated behind VIBESTUDIO_RUN_WEBRTC_E2E=1 (opens real UDP sockets + loads the
  * native binary), like the other integration tests.
  *
- *   VIBEZ1_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-native.e2e.test.ts
+ *   VIBESTUDIO_RUN_WEBRTC_E2E=1 npx vitest run tests/webrtc-native.e2e.test.ts
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import type { RpcEnvelope } from "@vibez1/rpc";
+import type { RpcEnvelope } from "@vibestudio/rpc";
 import {
   createWebRtcTransport,
   FINGERPRINT_MISMATCH_CODE,
-} from "@vibez1/rpc/transports/webrtcClient";
-import { createWebRtcAnswererPipe } from "@vibez1/rpc/transports/webrtcAnswerer";
+} from "@vibestudio/rpc/transports/webrtcClient";
+import { createWebRtcAnswererPipe } from "@vibestudio/rpc/transports/webrtcAnswerer";
 import type {
   RtcCandidateType,
   RtcIceCandidate,
   RtcIceServer,
   RtcSessionDescription,
-} from "@vibez1/rpc/transports/webrtcPeer";
-import type { SignalingClient } from "@vibez1/rpc/transports/webrtcSignaling";
-import { FRAME_DATA, FRAME_END } from "@vibez1/rpc/protocol/streamCodec";
+} from "@vibestudio/rpc/transports/webrtcPeer";
+import type { SignalingClient } from "@vibestudio/rpc/transports/webrtcSignaling";
+import { FRAME_DATA, FRAME_END } from "@vibestudio/rpc/protocol/streamCodec";
 import type {
   CallerKind,
   ServiceContext,
   ServiceDispatcher,
-} from "@vibez1/shared/serviceDispatcher";
-import { TokenManager } from "@vibez1/shared/tokenManager";
-import { EntityCache } from "@vibez1/shared/runtime/entityCache";
+} from "@vibestudio/shared/serviceDispatcher";
+import { TokenManager } from "@vibestudio/shared/tokenManager";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { RpcServer } from "../src/server/rpcServer.js";
 import { createNodeDatachannelProvider } from "../src/main/webrtc/nodeDatachannelPeer.js";
 import { ensurePersistentCert } from "../src/main/webrtc/cert.js";
 
-const RUN = process.env["VIBEZ1_RUN_WEBRTC_E2E"] === "1";
+const RUN = process.env["VIBESTUDIO_RUN_WEBRTC_E2E"] === "1";
 const TURN_ICE_SERVERS = turnIceServersFromEnv();
 
 /** Candidate types a loopback pair may legitimately select (never TURN). */
@@ -152,13 +152,13 @@ function makeServer(): {
 }
 
 function turnIceServersFromEnv(): RtcIceServer[] {
-  const urls = (process.env["VIBEZ1_TEST_TURN_URLS"] ?? process.env["VIBEZ1_TEST_TURN_URL"] ?? "")
+  const urls = (process.env["VIBESTUDIO_TEST_TURN_URLS"] ?? process.env["VIBESTUDIO_TEST_TURN_URL"] ?? "")
     .split(",")
     .map((url) => url.trim())
     .filter(Boolean);
   if (urls.length === 0) return [];
-  const username = process.env["VIBEZ1_TEST_TURN_USERNAME"];
-  const credential = process.env["VIBEZ1_TEST_TURN_CREDENTIAL"];
+  const username = process.env["VIBESTUDIO_TEST_TURN_USERNAME"];
+  const credential = process.env["VIBESTUDIO_TEST_TURN_CREDENTIAL"];
   return [
     {
       urls: urls.length === 1 ? urls[0]! : urls,
@@ -243,7 +243,7 @@ async function connect(opts: {
 }
 
 describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-rtc-e2e-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rtc-e2e-"));
   const cert = ensurePersistentCert({
     certificatePemFile: path.join(tmp, "server.pem"),
     keyPemFile: path.join(tmp, "server.key"),

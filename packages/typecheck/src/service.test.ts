@@ -181,17 +181,17 @@ describe("TypeCheckService extension registry propagation", () => {
   // Mirrors the real chain: a panel imports `@workspace/runtime`, whose
   // extensions surface re-exports the generated registry barrel, which
   // type-only re-exports each extension's `Api`. That pulls the extension's
-  // `declare module "@vibez1/extension"` augmentation into the panel's
+  // `declare module "@vibestudio/extension"` augmentation into the panel's
   // program, so `extensions.use("...")` resolves — without the panel importing
   // the extension directly.
   function buildRuntimeWorkspace(opts: { withBarrel: boolean }): { root: string; panelFile: string } {
     const root = createTempDir("typecheck-registry-");
     writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - 'packages/*'\n  - 'extensions/*'\n");
 
-    // @vibez1/extension: empty registry + use() keyed on it.
+    // @vibestudio/extension: empty registry + use() keyed on it.
     writeFile(
       path.join(root, "packages", "extension", "package.json"),
-      JSON.stringify({ name: "@vibez1/extension", type: "module", exports: { ".": "./index.ts" } }),
+      JSON.stringify({ name: "@vibestudio/extension", type: "module", exports: { ".": "./index.ts" } }),
     );
     writeFile(
       path.join(root, "packages", "extension", "index.ts"),
@@ -213,7 +213,7 @@ describe("TypeCheckService extension registry propagation", () => {
       path.join(root, "extensions", "foo", "index.ts"),
       [
         "export type Api = { greet(): string };",
-        'declare module "@vibez1/extension" {',
+        'declare module "@vibestudio/extension" {',
         '  interface WorkspaceExtensions { "@ext/foo": Api }',
         "}",
       ].join("\n"),
@@ -231,7 +231,7 @@ describe("TypeCheckService extension registry propagation", () => {
     writeFile(
       path.join(root, "packages", "runtime", "src", "index.ts"),
       [
-        'export { use } from "@vibez1/extension";',
+        'export { use } from "@vibestudio/extension";',
         ...(opts.withBarrel ? ['export type * from "./registry.js";'] : []),
       ].join("\n"),
     );

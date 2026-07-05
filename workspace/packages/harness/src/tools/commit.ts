@@ -137,7 +137,7 @@ export function createCommitTool(
           committed.length === 0
             ? "commit produced no snapshots: no uncommitted VCS working edits were found. " +
                 "Only edit/write/vcs.edit changes under workspace repo paths can be committed; " +
-                "scratch/direct fs writes under .tmp, .vibez1, node_modules, dist, etc. are outside VCS."
+                "scratch/direct fs writes under .tmp, .vibestudio, node_modules, dist, etc. are outside VCS."
             : `commit returned unchanged repo(s) (${unchangedRepos}). This is treated as an error ` +
                 "because a commit tool call should seal real working edits, not silently no-op."
         );

@@ -1,66 +1,66 @@
-import type { PanelRegistry } from "@vibez1/shared/panelRegistry";
-import type { Panel, ThemeAppearance } from "@vibez1/shared/types";
-import type { WorkspaceConfig } from "@vibez1/shared/workspace/types";
+import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import type { Panel, ThemeAppearance } from "@vibestudio/shared/types";
+import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import { Appearance } from "react-native";
-import { WorkspaceClient } from "@vibez1/shared/shell/workspaceClient";
-import { SettingsClient } from "@vibez1/shared/shell/settingsClient";
-import { EventsClient } from "@vibez1/shared/shell/eventsClient";
-import { createRecoveryCoordinator } from "@vibez1/shared/shell/recoveryCoordinator";
-import type { RecoveryCoordinator } from "@vibez1/shared/shell/recoveryCoordinator";
-import type { PanelManager } from "@vibez1/shared/shell/panelManager";
+import { WorkspaceClient } from "@vibestudio/shared/shell/workspaceClient";
+import { SettingsClient } from "@vibestudio/shared/shell/settingsClient";
+import { EventsClient } from "@vibestudio/shared/shell/eventsClient";
+import { createRecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
+import type { RecoveryCoordinator } from "@vibestudio/shared/shell/recoveryCoordinator";
+import type { PanelManager } from "@vibestudio/shared/shell/panelManager";
 import type {
   PanelHost,
   PanelHostRegistration,
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
-} from "@vibez1/shared/panel/panelLease";
+} from "@vibestudio/shared/panel/panelLease";
 import {
   createPanelHostRegistration,
   createPanelRuntimeLeaseRequest,
-} from "@vibez1/shared/panel/panelLease";
-import { asPanelSlotId, asPanelEntityId, type PanelEntityId } from "@vibez1/shared/panel/ids";
+} from "@vibestudio/shared/panel/panelLease";
+import { asPanelSlotId, asPanelEntityId, type PanelEntityId } from "@vibestudio/shared/panel/ids";
 import {
   getSharedBrowserAddressOptions,
   getSharedPanelAddressOptions,
   type BrowserAddressOptions,
   type PanelAddressOptions,
   type PanelRepoState,
-} from "@vibez1/shared/panelChrome";
+} from "@vibestudio/shared/panelChrome";
 import {
   createBrowserDataRpcClient,
   type BrowserDataClient,
   type RecordHistoryVisitRequest,
   type UpdateHistoryTitleRequest,
-} from "@vibez1/browser-data/client";
+} from "@vibestudio/browser-data/client";
 import { createBridgeAdapter } from "./bridgeAdapter";
 import { MobileRpcClient, type ConnectionStatus } from "./mobileTransport";
 import { createMobileShellCore } from "../shellCore/createMobileShellCore";
 import { startPanelAssetFacade, type PanelAssetFacade } from "./panelAssetFacade";
 import type { Credentials } from "./auth";
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
-import { panelRuntimeMethods } from "@vibez1/shared/serviceSchemas/panelRuntime";
-import { credentialsMethods } from "@vibez1/shared/serviceSchemas/credentials";
-import { pushMethods } from "@vibez1/shared/serviceSchemas/push";
-import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
+import { panelRuntimeMethods } from "@vibestudio/shared/serviceSchemas/panelRuntime";
+import { credentialsMethods } from "@vibestudio/shared/serviceSchemas/credentials";
+import { pushMethods } from "@vibestudio/shared/serviceSchemas/push";
+import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import {
   vcsMethods,
   type VcsPushInput,
   type VcsPushResult,
-} from "@vibez1/shared/serviceSchemas/vcs";
-import { createVcsUserlandClient } from "@vibez1/shared/userlandServiceRpc";
+} from "@vibestudio/shared/serviceSchemas/vcs";
+import { createVcsUserlandClient } from "@vibestudio/shared/userlandServiceRpc";
 import {
   HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
   isLaunchSessionEventFor,
-} from "@vibez1/shared/hostTargetLaunchGate";
-import type { HostTargetLaunchSessionSnapshot } from "@vibez1/shared/hostTargets";
-import type { PendingUnitBatchApproval } from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/hostTargetLaunchGate";
+import type { HostTargetLaunchSessionSnapshot } from "@vibestudio/shared/hostTargets";
+import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
-  console.log(`[Vibez1MobileSmoke] phase=${phase}${suffix}`);
+  console.log(`[VibestudioMobileSmoke] phase=${phase}${suffix}`);
 }
 
 export interface ShellClientConfig {

@@ -1,7 +1,7 @@
 {
-  "name": "@vibez1/port-utils",
+  "name": "@vibestudio/port-utils",
   "version": "0.1.0",
-  "description": "Service port allocation for Vibez1",
+  "description": "Service port allocation for Vibestudio",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

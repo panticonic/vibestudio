@@ -4,13 +4,13 @@ import type {
   ApprovalResourceScope,
   DiffReviewEntry,
   PendingCapabilityApproval,
-} from "@vibez1/shared/approvals";
+} from "@vibestudio/shared/approvals";
 import type {
   VerifiedCaller,
   ServiceContext,
   DeferredResult,
-} from "@vibez1/shared/serviceDispatcher";
-import { deferIfNeeded } from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/serviceDispatcher";
+import { deferIfNeeded } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 

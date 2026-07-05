@@ -4,7 +4,7 @@
  *  1. fork-IPC init message {type:"init", token, serverUrl, idleExitMs?}
  *     (server auto-spawn path — keeps the token out of env/argv)
  *  2. CLI flags (--url, --token, ...)
- *  3. env (VIBEZ1_SERVER_URL, VIBEZ1_HEADLESS_TOKEN, ...)
+ *  3. env (VIBESTUDIO_SERVER_URL, VIBESTUDIO_HEADLESS_TOKEN, ...)
  */
 import { resolveConfig, type ConfigOverrides } from "./config.js";
 import { HeadlessHost } from "./headlessHost.js";

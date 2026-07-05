@@ -22,7 +22,7 @@ import {
 } from "@radix-ui/react-icons";
 import { useShellEvent } from "../shell/useShellEvent";
 import { app, notification, workspaceUnits } from "../shell/client";
-import type { NotificationPayload } from "@vibez1/shared/events";
+import type { NotificationPayload } from "@vibestudio/shared/events";
 import { assertPresent } from "../utils/assertPresent";
 
 /** Default TTLs by notification type (ms). 0 = no auto-dismiss. */

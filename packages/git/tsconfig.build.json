@@ -5,7 +5,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "paths": {
-      "@vibez1/types": ["../types/dist/index.d.ts"]
+      "@vibestudio/types": ["../types/dist/index.d.ts"]
     }
   },
   "exclude": ["**/*.test.ts", "**/*.spec.ts"]

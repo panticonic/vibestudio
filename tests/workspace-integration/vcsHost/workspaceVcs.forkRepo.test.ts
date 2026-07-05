@@ -73,7 +73,7 @@ describe("WorkspaceVcs.forkRepo (history-preserving)", () => {
         {
           kind: "create",
           path: "package.json",
-          content: text(`{\n  "name": "@workspace-panels/chat",\n  "vibez1": {}\n}\n`),
+          content: text(`{\n  "name": "@workspace-panels/chat",\n  "vibestudio": {}\n}\n`),
         },
         { kind: "create", path: "index.tsx", content: text("export const Chat = () => null;\n") },
       ],

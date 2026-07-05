@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
 import "@radix-ui/themes/styles.css";
 import "@workspace/ui/tokens.css";
 import { Theme, Flex, Box, Heading, Text, Card } from "@radix-ui/themes";
-import { Vibez1Logo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui";
 import { useAppTheme } from "@workspace/ui/panel";
 import { useIsMobile, usePanelTheme } from "@workspace/react";
 
@@ -26,9 +26,9 @@ export function AboutThemeRoot({ children }: { children: ReactNode }) {
   );
 }
 
-/** Theme-aware Vibez1 logo mark. */
+/** Theme-aware Vibestudio logo mark. */
 export function BrandMark({ size = 48 }: { size?: number }) {
-  return <Vibez1Logo size={size} variant="tile" />;
+  return <VibestudioLogo size={size} variant="tile" />;
 }
 
 /** Small gradient bubble wrapping a page icon. */

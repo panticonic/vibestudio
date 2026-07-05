@@ -61,7 +61,7 @@ GAD provenance rows in Pi context.
 17. `gad_events` is the canonical sidecar audit/replay log. Typed GAD tables are
     projections from it.
 18. Approvals are their own sidecar domain, not a dispatch kind.
-19. The durable object's SQLite database is already scoped to one vibez1
+19. The durable object's SQLite database is already scoped to one vibestudio
     workspace. The target schema therefore does not carry a `workspace_id`
     tenant column.
 20. If the same database ever needs to represent multiple repo roots or working
@@ -70,7 +70,7 @@ GAD provenance rows in Pi context.
 
 ## Scope And Naming
 
-`workspace` is a vibez1 deployment/runtime boundary. The durable object and
+`workspace` is a vibestudio deployment/runtime boundary. The durable object and
 its SQLite database are already scoped to that workspace, so the schema does not
 store a workspace tenant key.
 
@@ -80,7 +80,7 @@ The git-like file model in this document is called the worktree model:
 - `gad_state_transitions` stores edges between worktree states.
 - file paths are relative to the tracked worktree root.
 
-If one vibez1 workspace later needs multiple independent tracked roots, add a
+If one vibestudio workspace later needs multiple independent tracked roots, add a
 separate project dimension:
 
 ```sql

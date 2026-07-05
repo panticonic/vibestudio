@@ -1,14 +1,14 @@
 /**
- * @vibez1/mobile-webrtc — shared React Native WebRTC shell connection.
+ * @vibestudio/mobile-webrtc — shared React Native WebRTC shell connection.
  *
  * Resolved to `src/` by `apps/mobile/metro.config.js` (the rule that maps a
- * `@vibez1/<name>` import to its package source), so both the native host
+ * `@vibestudio/<name>` import to its package source), so both the native host
  * bootstrap and the workspace app bundle it from source. RN-only
  * (`react-native-webrtc` + AsyncStorage).
  */
 
 // MUST be first: installs the Hermes web-API polyfills the WebRTC codec needs
-// before any `@vibez1/rpc` module loads (TextDecoder/ReadableStream).
+// before any `@vibestudio/rpc` module loads (TextDecoder/ReadableStream).
 import "./polyfills.js";
 
 export { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";

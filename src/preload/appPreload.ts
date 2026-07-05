@@ -16,11 +16,11 @@ const activeListeners = new Map<
 const appTransport = createIpcTransport();
 
 const serviceCall = (method: string, ...args: unknown[]) =>
-  ipcRenderer.invoke("vibez1:serviceCall", method, args);
+  ipcRenderer.invoke("vibestudio:serviceCall", method, args);
 
-const vibez1App = {
-  getBootstrapConfig: () => ipcRenderer.invoke("vibez1:getPanelInit"),
-  getInfo: () => ipcRenderer.invoke("vibez1:bridge.getInfo"),
+const vibestudioApp = {
+  getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
+  getInfo: () => ipcRenderer.invoke("vibestudio:bridge.getInfo"),
   serviceCall,
   native: {
     menu: {
@@ -43,39 +43,39 @@ const vibez1App = {
     const listener = (_e: IpcRendererEvent, event: string, payload: unknown) =>
       handler(event, payload);
     activeListeners.set(id, listener);
-    ipcRenderer.on("vibez1:event", listener);
+    ipcRenderer.on("vibestudio:event", listener);
     return id;
   },
   removeEventListener: (id: number) => {
     const listener = activeListeners.get(id);
     if (listener) {
-      ipcRenderer.off("vibez1:event", listener);
+      ipcRenderer.off("vibestudio:event", listener);
       activeListeners.delete(id);
     }
   },
 };
 
-contextBridge.exposeInMainWorld("__vibez1App", vibez1App);
-contextBridge.exposeInMainWorld("__vibez1Transport", appTransport);
-contextBridge.exposeInMainWorld("__vibez1ShellOverlay", {
+contextBridge.exposeInMainWorld("__vibestudioApp", vibestudioApp);
+contextBridge.exposeInMainWorld("__vibestudioTransport", appTransport);
+contextBridge.exposeInMainWorld("__vibestudioShellOverlay", {
   on(handler: (event: unknown) => void) {
     const listener = (_event: IpcRendererEvent, payload: unknown) => handler(payload);
-    ipcRenderer.on("vibez1:shell-overlay:event", listener);
-    return () => ipcRenderer.off("vibez1:shell-overlay:event", listener);
+    ipcRenderer.on("vibestudio:shell-overlay:event", listener);
+    return () => ipcRenderer.off("vibestudio:shell-overlay:event", listener);
   },
 });
 // Intents forwarded from the content-overlay surface (a separate WebContents)
 // back to the hosted shell that owns the surface's state + RPC.
-contextBridge.exposeInMainWorld("__vibez1ContentOverlayHost", {
+contextBridge.exposeInMainWorld("__vibestudioContentOverlayHost", {
   on(handler: (payload: unknown) => void) {
     const listener = (_event: IpcRendererEvent, payload: unknown) => handler(payload);
-    ipcRenderer.on("vibez1:content-overlay:forward", listener);
-    return () => ipcRenderer.off("vibez1:content-overlay:forward", listener);
+    ipcRenderer.on("vibestudio:content-overlay:forward", listener);
+    return () => ipcRenderer.off("vibestudio:content-overlay:forward", listener);
   },
 });
-contextBridge.exposeInMainWorld("__vibez1IncomingPairLink", {
+contextBridge.exposeInMainWorld("__vibestudioIncomingPairLink", {
   getPending() {
-    return ipcRenderer.invoke("vibez1:drain-pair-link") as Promise<{
+    return ipcRenderer.invoke("vibestudio:drain-pair-link") as Promise<{
       url: string;
       code: string;
     } | null>;
@@ -83,7 +83,7 @@ contextBridge.exposeInMainWorld("__vibez1IncomingPairLink", {
   onLink(handler: (link: { url: string; code: string }) => void) {
     const listener = (_event: IpcRendererEvent, payload: { url: string; code: string }) =>
       handler(payload);
-    ipcRenderer.on("vibez1:incoming-pair-link", listener);
-    return () => ipcRenderer.off("vibez1:incoming-pair-link", listener);
+    ipcRenderer.on("vibestudio:incoming-pair-link", listener);
+    return () => ipcRenderer.off("vibestudio:incoming-pair-link", listener);
   },
 });

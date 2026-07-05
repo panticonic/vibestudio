@@ -6,5 +6,5 @@ import type { ContentOverlayBridge } from "./types";
  * full-app document which has no such preload).
  */
 export function getContentOverlayBridge(): ContentOverlayBridge | null {
-  return globalThis.__vibez1ContentOverlay ?? null;
+  return globalThis.__vibestudioContentOverlay ?? null;
 }

@@ -10,7 +10,7 @@
  */
 
 import * as path from "node:path";
-import { normalizeWorkspaceRepoPath } from "@vibez1/shared/runtime/entitySpec";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 
 export const VCS_MAIN_HEAD = "main";
 
@@ -92,7 +92,7 @@ export const ALWAYS_IGNORED_DIRS = new Set([
   ".cache",
   ".parcel-cache",
   ".pnpm-store",
-  ".vibez1",
+  ".vibestudio",
   ".turbo",
   ".vite",
   ".tmp",
@@ -186,7 +186,7 @@ export async function assertWritableVcsPath(p: string): Promise<void> {
   // callers to a concrete writable location rather than just naming the rejected one.
   const hint =
     "VCS tracks workspace source — write to a non-ignored path (e.g. projects/…, panels/…, packages/…), " +
-    "not a platform-ignored dir (.vibez1, .git, .gad, .tmp, node_modules, dist) or ignored file (.env, *.log).";
+    "not a platform-ignored dir (.vibestudio, .git, .gad, .tmp, node_modules, dist) or ignored file (.env, *.log).";
   const segs = p.split("/");
   for (const seg of segs.slice(0, -1)) {
     if (ALWAYS_IGNORED_DIRS.has(seg)) {

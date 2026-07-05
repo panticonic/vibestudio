@@ -18,7 +18,7 @@ import {
   type ApprovalQueueInfo,
   type BlobResult,
 } from "../components/approvalCardModel";
-import type { PendingApproval } from "@vibez1/shared/approvals";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { OverlaySurfaceComponentProps } from "./types";
 
 export interface ApprovalCardSurfaceProps {

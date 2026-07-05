@@ -15,9 +15,9 @@
  *   [server] [workerLog] [do:workers/example-store:ExampleStoreDO:ctx-...] warn: <message>
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import { workerLogMethods } from "@vibez1/shared/serviceSchemas/workerLog";
-import { createDevLogger } from "@vibez1/dev-log";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { workerLogMethods } from "@vibestudio/shared/serviceSchemas/workerLog";
+import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("workerLog");
 

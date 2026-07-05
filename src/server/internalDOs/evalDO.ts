@@ -1,25 +1,25 @@
-import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibez1/durable";
-import type { AuthenticatedCaller } from "@vibez1/rpc";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@vibestudio/durable";
+import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import {
   createBuildServiceClient,
   createEvalImportLoader,
   requireBuildBundleResult,
   type BuildServiceClient,
   type EvalImportLoader,
-} from "@vibez1/shared/evalImportLoader";
-import { eventsMethods } from "@vibez1/shared/serviceSchemas/events";
-import { externalOpenMethods } from "@vibez1/shared/serviceSchemas/externalOpen";
-import { fsMethods } from "@vibez1/shared/serviceSchemas/fs";
-import { blobstoreMethods } from "@vibez1/shared/serviceSchemas/blobstore";
-import { docsMethods } from "@vibez1/shared/serviceSchemas/docs";
-import { EVAL_AMBIENT_ONLY } from "@vibez1/shared/runtimeSurface.eval";
+} from "@vibestudio/shared/evalImportLoader";
+import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
+import { externalOpenMethods } from "@vibestudio/shared/serviceSchemas/externalOpen";
+import { fsMethods } from "@vibestudio/shared/serviceSchemas/fs";
+import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
+import { docsMethods } from "@vibestudio/shared/serviceSchemas/docs";
+import { EVAL_AMBIENT_ONLY } from "@vibestudio/shared/runtimeSurface.eval";
 import { buildOwnerBindings } from "./evalOwnerBindings.js";
 import { ConsoleStreamer } from "./consoleStreamer.js";
 import { describeEvalBindingSurface, invalidHelpArgumentResponse } from "./evalSurfaceHelp.js";
 import {
   createTypedServiceClient,
   type TypedServiceClient,
-} from "@vibez1/shared/typedServiceClient";
+} from "@vibestudio/shared/typedServiceClient";
 
 /**
  * EvalDO — the blessed, per-owner unsafe-eval kernel.
@@ -27,12 +27,12 @@ import {
  * An internal Durable Object (alongside WorkspaceDO/BrowserDataDO) that runs the agent
  * `eval` capability server-side. It:
  *  - dynamically loads the manifest-declared eval engine + runtime units at runtime
- *    (meta/vibez1.yml `providers.evalEngine` / `providers.evalRuntime`, injected as
+ *    (meta/vibestudio.yml `providers.evalEngine` / `providers.evalRuntime`, injected as
  *    env bindings — NOTHING workspace-owned is statically bundled here: keeps the
  *    internal bundle lean, lets the volatile engine update without a kernel rebuild,
  *    and keeps host code free of hardcoded workspace unit names),
  *  - compiles via the workerd `UNSAFE_EVAL` binding (`new Function` is blocked in workerd;
- *    we install `__vibez1CompileFunction__` so the engine's two codegen sites route
+ *    we install `__vibestudioCompileFunction__` so the engine's two codegen sites route
  *    through `env.UNSAFE_EVAL.newFunction`),
  *  - persists REPL scope rows in its own SQLite via `SqlScopePersistence` and spills large values
  *    to the workspace blobstore,
@@ -102,7 +102,7 @@ interface EvalEngine {
 /**
  * Minimal structural mirrors of the runtime provider's surface. The REAL
  * implementations live in the manifest-declared runtime unit
- * (`providers.evalRuntime` in meta/vibez1.yml) and are loaded dynamically via
+ * (`providers.evalRuntime` in meta/vibestudio.yml) and are loaded dynamically via
  * the build service — the host bundle carries NO static import of workspace
  * code. These types describe only what the EvalDO itself touches.
  */
@@ -281,7 +281,7 @@ export class EvalDO extends DurableObjectBase {
 
   /**
    * Per-OBJECT module registry passed to the engine on every run. Many owners' EvalDOs share
-   * one workerd isolate, so the engine's per-isolate global `__vibez1ModuleMap__` would leak
+   * one workerd isolate, so the engine's per-isolate global `__vibestudioModuleMap__` would leak
    * one owner's loaded `imports` into another (and dedup-by-specifier could hand owner B owner
    * A's *version*). A per-object map keeps each owner's modules isolated. Persists across this
    * DO's runs for import continuity (a module loaded in one run is reusable by the next).
@@ -473,7 +473,7 @@ export class EvalDO extends DurableObjectBase {
    * Per-object runtime id so the server resolves THIS EvalDO's registered entity (and thus
    * the owner's context) for fs/git/vcs — the shared `do-service:<source>:<class>` id can't
    * distinguish owners. Authorized by the internal-DO service bearer, which covers the
-   * `do:vibez1/internal:EvalDO:*` prefix (rpcServer.isRuntimeIdForServiceToken).
+   * `do:vibestudio/internal:EvalDO:*` prefix (rpcServer.isRuntimeIdForServiceToken).
    */
   protected override get rpcSelfId(): string {
     const source = String(this.env["WORKER_SOURCE"] ?? "");
@@ -1114,7 +1114,7 @@ export class EvalDO extends DurableObjectBase {
 
   /**
    * A manifest-declared provider source from an env binding. The server derives
-   * these bindings from `workspace/meta/vibez1.yml`'s `providers.*` slots when
+   * these bindings from `workspace/meta/vibestudio.yml`'s `providers.*` slots when
    * it generates the internal-DO workerd config — the EvalDO itself carries no
    * workspace unit names.
    */
@@ -1127,7 +1127,7 @@ export class EvalDO extends DurableObjectBase {
     const source = this.declaredProviderSource(binding);
     if (!source) {
       throw new Error(
-        `eval: no \`providers.${slot}\` is declared in meta/vibez1.yml for this workspace — eval is disabled`
+        `eval: no \`providers.${slot}\` is declared in meta/vibestudio.yml for this workspace — eval is disabled`
       );
     }
     return source;
@@ -1142,10 +1142,10 @@ export class EvalDO extends DurableObjectBase {
     const g = globalThis as GlobalBag;
     const unsafeEval = this.env["UNSAFE_EVAL"] as UnsafeEvalBinding | undefined;
     if (!unsafeEval) throw new Error("EvalDO: UNSAFE_EVAL binding not configured");
-    g["__vibez1CompileFunction__"] = (argNames: string[], body: string) =>
+    g["__vibestudioCompileFunction__"] = (argNames: string[], body: string) =>
       unsafeEval.newFunction(body, "eval", ...argNames);
-    const moduleMap = (g["__vibez1ModuleMap__"] ??= {}) as Record<string, unknown>;
-    g["__vibez1Require__"] = (id: string): unknown => {
+    const moduleMap = (g["__vibestudioModuleMap__"] ??= {}) as Record<string, unknown>;
+    g["__vibestudioRequire__"] = (id: string): unknown => {
       const mod = moduleMap[id];
       if (mod) return mod;
       throw new Error(`Module "${id}" not available in EvalDO. Use the imports parameter for npm.`);
@@ -1175,14 +1175,14 @@ export class EvalDO extends DurableObjectBase {
         built,
         `EvalDO: build.getBuild did not return a library bundle for ${specifier}`
       );
-      const compile = g["__vibez1CompileFunction__"] as (
+      const compile = g["__vibestudioCompileFunction__"] as (
         a: string[],
         b: string
       ) => (...args: unknown[]) => unknown;
       const exports: Record<string, unknown> = {};
       const module = { exports };
       const fn = compile(["require", "exports", "module"], bundle);
-      fn(g["__vibez1Require__"], exports, module);
+      fn(g["__vibestudioRequire__"], exports, module);
       moduleMap[specifier] = module.exports;
     }
     return moduleMap[specifier];
@@ -1190,7 +1190,7 @@ export class EvalDO extends DurableObjectBase {
 
   /**
    * Dynamically load the manifest-declared eval engine
-   * (`providers.evalEngine` in meta/vibez1.yml — injected as the
+   * (`providers.evalEngine` in meta/vibestudio.yml — injected as the
    * `EVAL_ENGINE_SOURCE` binding). It is NOT statically bundled here — keeps
    * the internal bundle lean, lets the volatile engine update without a kernel
    * rebuild, and keeps host code free of hardcoded workspace unit names.
@@ -1414,7 +1414,7 @@ export class EvalDO extends DurableObjectBase {
       if (!this.warnedNoCdpProvider) {
         this.warnedNoCdpProvider = true;
         console.warn(
-          "[eval] run references CDP but no `providers.cdpClient` is declared in meta/vibez1.yml — CDP module not preloaded"
+          "[eval] run references CDP but no `providers.cdpClient` is declared in meta/vibestudio.yml — CDP module not preloaded"
         );
       }
       return;
@@ -1435,7 +1435,7 @@ export class EvalDO extends DurableObjectBase {
     // Seed BOTH maps: the per-object map backs `import {…} from "<declared cdp client>"`
     // (engine resolution); the global map (seeded by loadLibraryModule) backs
     // `handle.cdp`'s `loadLightweightClient`, which resolves via the global
-    // `__vibez1Require__`.
+    // `__vibestudioRequire__`.
     this.moduleMap[cdpSource] = loaded;
     this.cdpLoaded = true;
   }

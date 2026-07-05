@@ -2,12 +2,12 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import { app } from "electron";
-import { getCentralDataPath } from "@vibez1/env-paths";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   createRuntimeLayout,
   getPhysicalAppPath as getSharedPhysicalAppPath,
   getPlatformPackageBinaryPath,
-} from "@vibez1/shared/runtimePaths";
+} from "@vibestudio/shared/runtimePaths";
 import { isDev } from "./utils.js";
 
 // Derive __dirname in a way that works in CJS builds
@@ -19,7 +19,7 @@ declare const __injected_dirname__: string | undefined;
 declare const __injected_filename__: string | undefined;
 
 const __dirnameResolved: string = (() => {
-  const DEBUG = process.env["VIBEZ1_DEBUG_PATHS"] === "1";
+  const DEBUG = process.env["VIBESTUDIO_DEBUG_PATHS"] === "1";
 
   // Check for bundler-injected __dirname first (CJS context)
   if (typeof __dirname === "string" && __dirname) {
@@ -62,13 +62,13 @@ const __dirnameResolved: string = (() => {
 })();
 
 /**
- * Get the central Vibez1 config directory based on the platform.
+ * Get the central Vibestudio config directory based on the platform.
  * This directory is used for app-wide configuration.
  *
  * Platform-specific paths:
- * - Linux: ~/.config/vibez1
- * - macOS: ~/Library/Application Support/vibez1
- * - Windows: %APPDATA%/vibez1
+ * - Linux: ~/.config/vibestudio
+ * - macOS: ~/Library/Application Support/vibestudio
+ * - Windows: %APPDATA%/vibestudio
  *
  * Falls back to OS-conventional locations derived from environment variables,
  * then finally to a temp directory if the platform directory cannot be used.
@@ -83,7 +83,7 @@ export function getCentralConfigDirectory(): string {
     return ensureDir(getCentralDataPath());
   } catch (error) {
     console.warn("Failed to create config directory, using temp dir:", error);
-    return ensureDir(path.join(os.tmpdir(), "vibez1"));
+    return ensureDir(path.join(os.tmpdir(), "vibestudio"));
   }
 }
 
@@ -92,9 +92,9 @@ export function getCentralConfigDirectory(): string {
  * Always stored in the central config location, not workspace-specific.
  *
  * Location: <userData>/build-artifacts/
- * - Linux: ~/.config/vibez1/build-artifacts/
- * - macOS: ~/Library/Application Support/vibez1/build-artifacts/
- * - Windows: %APPDATA%/vibez1/build-artifacts/
+ * - Linux: ~/.config/vibestudio/build-artifacts/
+ * - macOS: ~/Library/Application Support/vibestudio/build-artifacts/
+ * - Windows: %APPDATA%/vibestudio/build-artifacts/
  */
 export function getBuildArtifactsDirectory(): string {
   const centralConfigDir = getCentralConfigDirectory();
@@ -135,14 +135,14 @@ export function getContextScopePath(workspaceId: string, contextId: string): str
 }
 
 /**
- * Get the Vibez1 application root directory.
+ * Get the Vibestudio application root directory.
  * This is where packages/, node_modules/, and src/ exist.
  *
  * In development: The monorepo root (derived from __dirname)
  * In production: App resources location
  */
 export function getAppRoot(): string {
-  const DEBUG = process.env["VIBEZ1_DEBUG_PATHS"] === "1";
+  const DEBUG = process.env["VIBESTUDIO_DEBUG_PATHS"] === "1";
 
   if (isDev()) {
     // Development: __dirnameResolved is dist/ (where main.cjs lives), walk up to monorepo root
@@ -191,13 +191,16 @@ export function getAppRoot(): string {
     return appPath;
   } catch {
     // Not in Electron — use env-var (required for headless production mode)
-    if (process.env["VIBEZ1_APP_ROOT"]) {
+    if (process.env["VIBESTUDIO_APP_ROOT"]) {
       if (DEBUG)
-        console.log("[paths] getAppRoot (production/headless):", process.env["VIBEZ1_APP_ROOT"]);
-      return process.env["VIBEZ1_APP_ROOT"];
+        console.log(
+          "[paths] getAppRoot (production/headless):",
+          process.env["VIBESTUDIO_APP_ROOT"]
+        );
+      return process.env["VIBESTUDIO_APP_ROOT"];
     }
     throw new Error(
-      "getAppRoot(): VIBEZ1_APP_ROOT must be set when running without Electron in production mode"
+      "getAppRoot(): VIBESTUDIO_APP_ROOT must be set when running without Electron in production mode"
     );
   }
 }
@@ -255,7 +258,7 @@ export function getPhysicalAppPath(relativePath: string): string {
 }
 
 /**
- * Entry point used to start the managed Vibez1 server process.
+ * Entry point used to start the managed Vibestudio server process.
  *
  * The main process forks the bundled server directly from `dist/` in both
  * development and packaged builds.
@@ -338,7 +341,7 @@ export function getPrebuiltAboutPagesDir(): string | null {
 let _packagesDirCache: string | null | undefined;
 
 /**
- * Get the Vibez1 packages directory for @workspace/* types.
+ * Get the Vibestudio packages directory for @workspace/* types.
  * Returns null if packages directory doesn't exist (e.g., external workspace).
  * Result is cached since packages directory existence won't change at runtime.
  */

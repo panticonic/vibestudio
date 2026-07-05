@@ -8,7 +8,7 @@
 //     interfaces.
 //   - WORKSPACE code must never import host-private implementation roots
 //     (`src/`, `apps/`, `scripts/`, or root `tests/`). Shared public packages
-//     such as `@vibez1/shared` are intentionally not host-private.
+//     such as `@vibestudio/shared` are intentionally not host-private.
 //
 // Three finding categories are produced:
 //

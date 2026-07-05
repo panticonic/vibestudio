@@ -6,7 +6,7 @@ import {
   createVerifiedCaller,
   type ServiceContext,
   type VerifiedCaller,
-} from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/serviceDispatcher";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { CONTEXT_BOUNDARY_CAPABILITY, contextBoundaryResourceKey } from "./contextBoundary.js";
 import {
@@ -16,7 +16,7 @@ import {
 import type { ApprovalQueue } from "./approvalQueue.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-panel-access-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-access-"));
 }
 
 function approvalQueueMock(

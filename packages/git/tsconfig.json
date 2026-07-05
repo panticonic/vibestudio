@@ -15,7 +15,7 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@vibez1/types": ["../types/src/index.ts"]
+      "@vibestudio/types": ["../types/src/index.ts"]
     }
   },
   "include": ["src/**/*"],

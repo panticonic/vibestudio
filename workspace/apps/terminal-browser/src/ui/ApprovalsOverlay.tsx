@@ -1,10 +1,10 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { PendingApproval } from "@vibez1/shared/approvals";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
 import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
-} from "@vibez1/shared/approvalMarkdown";
+} from "@vibestudio/shared/approvalMarkdown";
 
 export interface ApprovalsOverlayProps {
   pending: PendingApproval[];

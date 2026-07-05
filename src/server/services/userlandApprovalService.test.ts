@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { ELECTRON_LOCAL_SERVICE_NAMES } from "@vibez1/rpc";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@vibestudio/rpc";
 import {
   createVerifiedCaller,
   ServiceAccessError,
   ServiceDispatcher,
   ServiceError,
-} from "@vibez1/shared/serviceDispatcher";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
+} from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createUserlandApprovalService } from "./userlandApprovalService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import type { UserlandApprovalGrant } from "@vibez1/shared/approvals";
+import type { UserlandApprovalGrant } from "@vibestudio/shared/approvals";
 
 function createDeps() {
   const queued = vi.fn<ApprovalQueue["requestUserland"]>(async () => ({

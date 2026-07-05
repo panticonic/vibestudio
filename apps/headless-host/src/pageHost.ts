@@ -10,7 +10,7 @@
  *    and detached on cdp:detach, so automation clients get fresh CDP domain
  *    state per attach, mirroring Electron's webContents.debugger lifecycle.
  */
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import { CdpConnection } from "./browser/cdpConnection.js";
 import {
   ConsoleHistoryStore,
@@ -108,7 +108,7 @@ export class PageHost {
     };
     this.pages.set(input.slotId, page);
 
-    const initScript = `globalThis.__vibez1PanelInit = ${JSON.stringify(input.panelInit)}; globalThis.__vibez1HostPlatform = "headless";`;
+    const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(input.panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
     await this.cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: initScript }, mgmtSessionId);
     await Promise.allSettled([
       this.cdp.send("Page.enable", undefined, mgmtSessionId),
@@ -130,7 +130,7 @@ export class PageHost {
   async reloadPanel(slotId: string, panelUrl: string, panelInit: unknown): Promise<void> {
     const page = this.requirePage(slotId);
     page.panelUrl = panelUrl;
-    const initScript = `globalThis.__vibez1PanelInit = ${JSON.stringify(panelInit)}; globalThis.__vibez1HostPlatform = "headless";`;
+    const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
     await this.cdp.send(
       "Page.addScriptToEvaluateOnNewDocument",
       { source: initScript },

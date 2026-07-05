@@ -10,25 +10,25 @@ import {
   type RpcClient,
   type RpcEnvelope,
   type RpcEventContext,
-} from "@vibez1/rpc";
-import { RPC_METHODS } from "@vibez1/shared/approvalContract";
-import { appMethods } from "@vibez1/shared/serviceSchemas/app";
-import { eventsMethods } from "@vibez1/shared/serviceSchemas/events";
-import { menuMethods } from "@vibez1/shared/serviceSchemas/menu";
-import { notificationMethods } from "@vibez1/shared/serviceSchemas/notification";
-import { panelMethods } from "@vibez1/shared/serviceSchemas/panel";
-import { panelTreeMethods } from "@vibez1/shared/serviceSchemas/panelTree";
-import { paletteMethods } from "@vibez1/shared/serviceSchemas/palette";
-import { remoteCredMethods } from "@vibez1/shared/serviceSchemas/remoteCred";
-import { settingsMethods } from "@vibez1/shared/serviceSchemas/settings";
-import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
-import { autofillMethods } from "@vibez1/shared/serviceSchemas/autofill";
-import { blobstoreMethods } from "@vibez1/shared/serviceSchemas/blobstore";
-import { tokensMethods } from "@vibez1/shared/serviceSchemas/tokens";
-import { viewMethods } from "@vibez1/shared/serviceSchemas/view";
-import { workspaceMethods } from "@vibez1/shared/serviceSchemas/workspace";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
-import type { ConnectPairing } from "@vibez1/shared/connect";
+} from "@vibestudio/rpc";
+import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
+import { appMethods } from "@vibestudio/shared/serviceSchemas/app";
+import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
+import { menuMethods } from "@vibestudio/shared/serviceSchemas/menu";
+import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notification";
+import { panelMethods } from "@vibestudio/shared/serviceSchemas/panel";
+import { panelTreeMethods } from "@vibestudio/shared/serviceSchemas/panelTree";
+import { paletteMethods } from "@vibestudio/shared/serviceSchemas/palette";
+import { remoteCredMethods } from "@vibestudio/shared/serviceSchemas/remoteCred";
+import { settingsMethods } from "@vibestudio/shared/serviceSchemas/settings";
+import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
+import { autofillMethods } from "@vibestudio/shared/serviceSchemas/autofill";
+import { blobstoreMethods } from "@vibestudio/shared/serviceSchemas/blobstore";
+import { tokensMethods } from "@vibestudio/shared/serviceSchemas/tokens";
+import { viewMethods } from "@vibestudio/shared/serviceSchemas/view";
+import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import type { ConnectPairing } from "@vibestudio/shared/connect";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -39,13 +39,13 @@ type IncomingPairLinkBridge = {
   onLink: (handler: (link: ConnectPairing) => void) => () => void;
 };
 const g = globalThis as unknown as {
-  __vibez1Transport?: ShellTransportBridge;
-  __vibez1IncomingPairLink?: IncomingPairLinkBridge;
+  __vibestudioTransport?: ShellTransportBridge;
+  __vibestudioIncomingPairLink?: IncomingPairLinkBridge;
 };
-if (!g.__vibez1Transport) throw new Error("Shell transport not available");
+if (!g.__vibestudioTransport) throw new Error("Shell transport not available");
 const transport: EnvelopeRpcTransport = {
-  send: (envelope) => assertPresent(g.__vibez1Transport).send(envelope),
-  onMessage: (handler) => assertPresent(g.__vibez1Transport).onMessage(handler),
+  send: (envelope) => assertPresent(g.__vibestudioTransport).send(envelope),
+  onMessage: (handler) => assertPresent(g.__vibestudioTransport).onMessage(handler),
   status: () => "connected",
   ready: () => Promise.resolve(),
   onStatusChange: () => () => {},
@@ -122,14 +122,14 @@ import type {
   ThemeConfig,
   MovePanelRequest,
   PaletteCommand,
-} from "@vibez1/shared/types";
-import type { BrowserNavigationIntent } from "@vibez1/shared/panelCommands";
+} from "@vibestudio/shared/types";
+import type { BrowserNavigationIntent } from "@vibestudio/shared/panelCommands";
 import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetSelection,
   HostTargetSelectionInput,
-} from "@vibez1/shared/hostTargets";
+} from "@vibestudio/shared/hostTargets";
 // =============================================================================
 // App Service
 // =============================================================================
@@ -349,9 +349,9 @@ export const nativeShellOverlay = {
   on: (handler: (event: NativeShellOverlayEvent) => void) => {
     const bridge = (
       globalThis as unknown as {
-        __vibez1ShellOverlay?: NativeShellOverlayBridge;
+        __vibestudioShellOverlay?: NativeShellOverlayBridge;
       }
-    ).__vibez1ShellOverlay;
+    ).__vibestudioShellOverlay;
     if (!bridge) return () => {};
     return bridge.on(handler);
   },
@@ -368,17 +368,17 @@ export const contentOverlay = {
   on: (handler: (payload: unknown) => void) => {
     const bridge = (
       globalThis as unknown as {
-        __vibez1ContentOverlayHost?: ContentOverlayHostBridge;
+        __vibestudioContentOverlayHost?: ContentOverlayHostBridge;
       }
-    ).__vibez1ContentOverlayHost;
+    ).__vibestudioContentOverlayHost;
     if (!bridge) return () => {};
     return bridge.on(handler);
   },
 };
 export const incomingPairLink = {
-  getPending: () => g.__vibez1IncomingPairLink?.getPending() ?? Promise.resolve(null),
+  getPending: () => g.__vibestudioIncomingPairLink?.getPending() ?? Promise.resolve(null),
   onLink: (handler: (link: ConnectPairing) => void) =>
-    g.__vibez1IncomingPairLink?.onLink(handler) ?? (() => {}),
+    g.__vibestudioIncomingPairLink?.onLink(handler) ?? (() => {}),
 };
 // =============================================================================
 // Menu Service
@@ -459,7 +459,7 @@ export interface TestConnectionResult {
   serverVersion?: string;
 }
 export interface ExchangePairingCodeArgs {
-  /** A `vibez1://connect?...` pairing link carrying the WebRTC pairing material. */
+  /** A `vibestudio://connect?...` pairing link carrying the WebRTC pairing material. */
   link: string;
   label?: string;
 }
@@ -519,8 +519,8 @@ export const blobstore = {
 // Events Service
 // =============================================================================
 // Re-export event types from shared module
-export type { EventName, EventPayloads } from "@vibez1/shared/events";
-import type { EventName } from "@vibez1/shared/events";
+export type { EventName, EventPayloads } from "@vibestudio/shared/events";
+import type { EventName } from "@vibestudio/shared/events";
 export const events = {
   subscribe: (event: EventName) => eventsClient.subscribe(event),
   unsubscribe: (event: EventName) => eventsClient.unsubscribe(event),
@@ -529,7 +529,7 @@ export const events = {
 // =============================================================================
 // Notification Service
 // =============================================================================
-import type { NotificationPayload } from "@vibez1/shared/events";
+import type { NotificationPayload } from "@vibestudio/shared/events";
 export const notification = {
   show: (
     opts: Omit<NotificationPayload, "id"> & {
@@ -566,7 +566,7 @@ export const workspaceUnits = {
 // =============================================================================
 // Shell Approval Service (consent approval queue)
 // =============================================================================
-import type { ApprovalDecision } from "@vibez1/shared/approvals";
+import type { ApprovalDecision } from "@vibestudio/shared/approvals";
 import { assertPresent } from "../utils/assertPresent";
 export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>

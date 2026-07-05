@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createProcessAdapter, type ProcessAdapter } from "@vibez1/process-adapter";
+import { createProcessAdapter, type ProcessAdapter } from "@vibestudio/process-adapter";
 
 import type { ExtensionHealth, ExtensionProcessState } from "./types.js";
 
@@ -63,12 +63,12 @@ export class ExtensionProcessManager {
       childRuntime,
       {
         ...process.env,
-        VIBEZ1_EXTENSION_NAME: state.name,
-        VIBEZ1_EXTENSION_VERSION: state.version,
-        VIBEZ1_EXTENSION_BUNDLE_PATH: state.bundlePath,
-        VIBEZ1_EXTENSION_STORAGE_DIR: state.storageDir,
-        VIBEZ1_EXTENSION_GATEWAY_URL: state.gatewayUrl,
-        VIBEZ1_EXTENSION_RPC_TOKEN: state.rpcToken,
+        VIBESTUDIO_EXTENSION_NAME: state.name,
+        VIBESTUDIO_EXTENSION_VERSION: state.version,
+        VIBESTUDIO_EXTENSION_BUNDLE_PATH: state.bundlePath,
+        VIBESTUDIO_EXTENSION_STORAGE_DIR: state.storageDir,
+        VIBESTUDIO_EXTENSION_GATEWAY_URL: state.gatewayUrl,
+        VIBESTUDIO_EXTENSION_RPC_TOKEN: state.rpcToken,
       },
       {
         execArgv: extensionRuntimeExecArgv(),
@@ -317,7 +317,7 @@ export function extensionRuntimeExecArgv(): string[] | undefined {
 }
 
 function extensionInspectorEnabled(): boolean {
-  return process.env["VIBEZ1_PROD"] !== "1" && process.env["NODE_ENV"] !== "production";
+  return process.env["VIBESTUDIO_PROD"] !== "1" && process.env["NODE_ENV"] !== "production";
 }
 
 function parseInspectorUrl(line: string): string | null {

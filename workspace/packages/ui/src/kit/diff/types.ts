@@ -44,7 +44,7 @@ export interface DiffStat {
  *  `newState` is `null` for a delete entry (all files `removed`); `truncated`
  *  marks a `changedFiles` list capped by the host past its per-entry limit
  *  (`filesChanged` still exact). Field shapes mirror the canonical
- *  `@vibez1/shared/approvals` `DiffReviewEntry` (this package stays free of a
+ *  `@vibestudio/shared/approvals` `DiffReviewEntry` (this package stays free of a
  *  shared-package dependency). */
 export interface DiffReviewEntry {
   repoPath: string;

@@ -98,7 +98,7 @@ Key facts:
 ```
 import { listUnits, unitDiagnostics, callDO, ensureWorker, restartUnit } from "@workspace/testkit";
 await ensureWorker("workers/my-worker");          // create-if-missing + wait running
-await callDO("vibez1.my-store.v1", "method", [args]);
+await callDO("vibestudio.my-store.v1", "method", [args]);
 await unitDiagnostics("my-worker", { sinceSeq: 0 });  // exact-resume log cursor
 ```
 
@@ -133,13 +133,13 @@ Workerd (V8 inspector, approval-gated via the `workerdInspector` service):
 import { listWorkerdTargets, profileWorkerd, profileDO } from "@workspace/testkit";
 const targets = await listWorkerdTargets();   // what workerd actually exposes
 const ref = await profileWorkerd("worker-host", async () => { /* workload */ });
-const doRef = await profileDO("vibez1.gad.workspace.v1", async () => { /* DO calls */ });
+const doRef = await profileDO("vibestudio.gad.workspace.v1", async () => { /* DO calls */ });
 ```
 
 Caveats:
 - First `getEndpoint` per caller raises a one-time `workerd.inspector`
   approval. The inspector is always on (loopback-bound; disable with
-  `VIBEZ1_DISABLE_WORKERD_INSPECTOR=1`).
+  `VIBESTUDIO_DISABLE_WORKERD_INSPECTOR=1`).
 - Regular workers share the `worker-host` isolate-loader service — a profile
   of that target may include sibling workers. Per-source DO services are
   precise. Use `listWorkerdTargets()` to see real granularity.

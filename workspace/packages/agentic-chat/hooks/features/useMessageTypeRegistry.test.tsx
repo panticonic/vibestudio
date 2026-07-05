@@ -47,11 +47,11 @@ describe("useMessageTypeRegistry", () => {
     // blocked a recompile — a permanent "compiling" spinner).
     let latest: MessageTypeRegistryState | undefined;
     const globals = globalThis as Record<string, unknown>;
-    globals["__vibez1ModuleMap__"] = globals["__vibez1ModuleMap__"] ?? {};
-    globals["__vibez1Require__"] =
-      globals["__vibez1Require__"] ??
+    globals["__vibestudioModuleMap__"] = globals["__vibestudioModuleMap__"] ?? {};
+    globals["__vibestudioRequire__"] =
+      globals["__vibestudioRequire__"] ??
       ((id: string) => {
-        const mod = (globals["__vibez1ModuleMap__"] as Record<string, unknown>)[id];
+        const mod = (globals["__vibestudioModuleMap__"] as Record<string, unknown>)[id];
         if (mod) return mod;
         throw new Error(`Module "${id}" not available`);
       });

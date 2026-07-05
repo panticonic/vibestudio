@@ -1,6 +1,6 @@
 # Self-Improvement Workflow
 
-When system tests reveal bugs in Vibez1, follow this workflow to fix them.
+When system tests reveal bugs in Vibestudio, follow this workflow to fix them.
 
 ## Priority: Fix Infrastructure First
 
@@ -399,31 +399,31 @@ For `apps/` bugs, read `skills/appdev/SKILL.md` before
 editing. App fixes can require target-specific validation: Electron host chrome,
 mobile native bootstrap and principal grants, or terminal process supervision.
 
-### Vibez1 Application Source
+### Vibestudio Application Source
 
-If the bug is in the Vibez1 application itself, such as `src/server/`,
+If the bug is in the Vibestudio application itself, such as `src/server/`,
 `src/main/`, or root `packages/*`, use a plain project checkout under
-`projects/vibez1`.
+`projects/vibestudio`.
 
 #### Dogfood Server Mode
 
-When the operator launched Vibez1 with:
+When the operator launched Vibestudio with:
 
 ```bash
 pnpm dev:self:server
 ```
 
 the active workspace is a managed dogfood workspace. The launcher creates or
-reuses `~/.config/vibez1/workspaces/dogfood/source/projects/vibez1` and
+reuses `~/.config/vibestudio/workspaces/dogfood/source/projects/vibestudio` and
 writes `meta/dogfood.json`.
 
-In this mode, `projects/vibez1` is still a plain project, not a Build V2
+In this mode, `projects/vibestudio` is still a plain project, not a Build V2
 runtime unit, but it is a **self-edit target**:
 
 - Host-checkout mirroring is unavailable under GAD VCS.
-- Changes in `projects/vibez1` prepare an external Git branch or patch; they
-  do not hot-patch the running Vibez1 server.
-- Verification requires restarting Vibez1 from that checkout, applying the
+- Changes in `projects/vibestudio` prepare an external Git branch or patch; they
+  do not hot-patch the running Vibestudio server.
+- Verification requires restarting Vibestudio from that checkout, applying the
   patch in the host checkout, or handing the branch to a developer.
 
 Userland code can detect this mode by reading `meta/dogfood.json`:
@@ -439,26 +439,26 @@ async function getDogfoodInfo() {
 }
 
 const dogfood = await getDogfoodInfo();
-if (dogfood?.schemaVersion === 1 && dogfood.project === "projects/vibez1") {
+if (dogfood?.schemaVersion === 1 && dogfood.project === "projects/vibestudio") {
   console.log("Dogfood server mode:", dogfood.sourceRoot);
 }
 ```
 
-Do not rely on `VIBEZ1_DOGFOOD` from userland. That environment variable is a
+Do not rely on `VIBESTUDIO_DOGFOOD` from userland. That environment variable is a
 server launcher detail; `meta/dogfood.json` is the workspace-visible marker.
 
 #### Normal Project Mode
 
 When the server is not running in dogfood mode, plain projects are editable
-repos, not runtime units. Changing `projects/vibez1` prepares a branch/patch,
-but it does not hot-patch the running Vibez1 server. Verification may require
-restarting Vibez1 from that checkout or handing the branch to a developer.
+repos, not runtime units. Changing `projects/vibestudio` prepares a branch/patch,
+but it does not hot-patch the running Vibestudio server. Verification may require
+restarting Vibestudio from that checkout or handing the branch to a developer.
 
-Prefer an existing `projects/vibez1` workspace repo when it exists. If it
+Prefer an existing `projects/vibestudio` workspace repo when it exists. If it
 does not exist yet and the workspace is not dogfood-managed, import it with
 `git.importProject()`. That uses one workspace config approval showing the
 destination path, remote URL, and branch; records the shared remote in
-`meta/vibez1.yml`; clones into canonical workspace source; and propagates the
+`meta/vibestudio.yml`; clones into canonical workspace source; and propagates the
 repo into contexts. The same API can import panels, packages, skills, workers,
 templates, about pages, and plain projects by choosing the destination
 path.
@@ -467,7 +467,7 @@ path.
 eval({
   code: `
     // In eval, fs is injected and the git client maps to the gitInterop service.
-    const dir = "projects/vibez1";
+    const dir = "projects/vibestudio";
     try {
       await fs.stat(dir);
       console.log(dir + " already exists");
@@ -476,7 +476,7 @@ eval({
         path: dir,
         remote: {
           name: "origin",
-          url: "https://github.com/YOUR_ORG/vibez1.git",
+          url: "https://github.com/YOUR_ORG/vibestudio.git",
           branch: "main",
         },
         branch: "main",
@@ -493,7 +493,7 @@ eval({
 
 ```typescript
 const branchName = `fix/system-test-${failedTestName}`;
-import { GitClient } from "@vibez1/git";
+import { GitClient } from "@vibestudio/git";
 import { credentials, fs } from "@workspace/runtime";
 const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
 await externalGit.createBranch(scope.checkoutDir, branchName);
@@ -502,13 +502,13 @@ await externalGit.checkout(scope.checkoutDir, branchName);
 
 ## Phase 6: Edit and Fix
 
-Edit source files in the checkout using fs operations. For a Vibez1
-application checkout, paths are relative to `projects/vibez1/`:
+Edit source files in the checkout using fs operations. For a Vibestudio
+application checkout, paths are relative to `projects/vibestudio/`:
 
 ```typescript
-const content = await fs.readFile("projects/vibez1/src/server/services/fsService.ts", "utf-8");
+const content = await fs.readFile("projects/vibestudio/src/server/services/fsService.ts", "utf-8");
 // ... modify content ...
-await fs.writeFile("projects/vibez1/src/server/services/fsService.ts", fixedContent);
+await fs.writeFile("projects/vibestudio/src/server/services/fsService.ts", fixedContent);
 ```
 
 **Fix checklist:**
@@ -535,20 +535,20 @@ not tracked and has no effect on the VCS.
 // // push is ff-only: if it returns { status: "diverged" }, reconcile with
 // // vcs.merge(repoPath) + vcs.commit(message), then re-push.
 
-// For plain external project repos, use @vibez1/git with credentials.gitHttp():
+// For plain external project repos, use @vibestudio/git with credentials.gitHttp():
 // const externalGit = new GitClient(fs, { http: credentials.gitHttp() });
 // await externalGit.addAll(scope.checkoutDir);
 // await externalGit.commit(scope.checkoutDir, `fix: describe the change`);
 // await externalGit.push(scope.checkoutDir, { remote: "origin", ref: branchName });
 
 // Then rebuild if the fix touched workspace runtime units. Plain projects
-// such as projects/vibez1 are not Build V2 live inputs.
+// such as projects/vibestudio are not Build V2 live inputs.
 if (!scope.checkoutDir.startsWith("projects/")) {
   const buildResult = await chat.rpc.call("main", "build.recompute", []);
   console.log("Build recomputed:", buildResult);
 }
 
-// If checkoutDir is projects/vibez1, this is an external project edit. It
+// If checkoutDir is projects/vibestudio, this is an external project edit. It
 // does not hot-patch the running server under GAD VCS; restart from that
 // checkout or hand off the branch/patch before re-testing server changes.
 

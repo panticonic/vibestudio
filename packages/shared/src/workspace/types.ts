@@ -1,14 +1,14 @@
 /**
- * Configuration types for Vibez1.
+ * Configuration types for Vibestudio.
  *
  * Configuration is split between:
- * 1. Central config (~/.config/vibez1/ or equivalent):
+ * 1. Central config (~/.config/vibestudio/ or equivalent):
  *    - config.yml: Model roles and app-wide settings
  *    - .secrets.yml: API keys (format: `providername: secret`)
  *    - .env: Environment variables
  *
  * 2. Workspace (project directory):
- *    - meta/vibez1.yml: Init panels and shared git remotes
+ *    - meta/vibestudio.yml: Init panels and shared git remotes
  *    - meta/AGENTS.md: Agent system prompt
  *    - panels/: Panel source code
  *    - apps/: Trusted workspace-owned frontend apps
@@ -91,7 +91,7 @@ export interface CacheConfig {
 }
 
 /**
- * Central application configuration from ~/.config/vibez1/config.yml
+ * Central application configuration from ~/.config/vibestudio/config.yml
  * This is shared across all workspaces.
  */
 export interface CentralConfig {
@@ -170,7 +170,7 @@ export type WorkspaceServiceCallerKind =
   | "extension";
 
 /**
- * A stable Durable Object singleton declared in `workspace/meta/vibez1.yml`.
+ * A stable Durable Object singleton declared in `workspace/meta/vibestudio.yml`.
  * Every workspace `services[]` / `routes[]` entry that targets a DO class must
  * resolve to one of these via `(source, className)`.
  */
@@ -185,7 +185,7 @@ export interface WorkspaceSingletonObjectDecl {
   contextId?: string;
 }
 
-/** Userland service declaration in `workspace/meta/vibez1.yml`. */
+/** Userland service declaration in `workspace/meta/vibestudio.yml`. */
 export type WorkspaceServiceDecl = {
   source: string;
   name: string;
@@ -199,7 +199,7 @@ export type WorkspaceServiceDecl = {
 );
 
 /**
- * One declarative scheduled job ("cron") in `workspace/meta/vibez1.yml`'s
+ * One declarative scheduled job ("cron") in `workspace/meta/vibestudio.yml`'s
  * `recurring:` section. The server's RecurringRegistry dispatches `method` on
  * the target DO on schedule. Editing the list is a gated meta write: newly
  * declared or changed jobs surface in the meta-push approval as scheduled-job
@@ -252,7 +252,7 @@ export interface WorkspaceHeartbeatDecl {
 }
 
 /**
- * Extension declaration in `workspace/meta/vibez1.yml`. The declared list is
+ * Extension declaration in `workspace/meta/vibestudio.yml`. The declared list is
  * the single source of truth for which extensions a workspace uses and the only
  * install/remove surface. Editing it (a gated meta write) triggers the joint
  * unit approval and registry reconciliation.
@@ -270,7 +270,7 @@ export interface WorkspaceExtensionDecl {
 }
 
 /**
- * App declaration in `workspace/meta/vibez1.yml`. Apps are the frontend
+ * App declaration in `workspace/meta/vibestudio.yml`. Apps are the frontend
  * counterpart to extensions: privileged, workspace-coupled units that are
  * build-gated, approval-gated, and hot-loaded onto a shipped host.
  */
@@ -369,7 +369,7 @@ export type WorkspaceHostTargetsDecl = Partial<
   Record<WorkspaceHostTargetName, WorkspaceHostTargetDecl>
 >;
 
-/** HTTP route declaration in `workspace/meta/vibez1.yml`. */
+/** HTTP route declaration in `workspace/meta/vibestudio.yml`. */
 export interface WorkspaceRouteDecl {
   source: string;
   path: string;
@@ -382,7 +382,7 @@ export interface WorkspaceRouteDecl {
 }
 
 /**
- * Workspace configuration from meta/vibez1.yml
+ * Workspace configuration from meta/vibestudio.yml
  * This is specific to each workspace/project.
  */
 export interface WorkspaceConfig {
@@ -462,11 +462,11 @@ export interface WorkspaceConfig {
  * Resolved workspace with computed paths.
  *
  * Directory layout:
- *   workspaces/{name}/source/   ← path (workspace source root, meta/vibez1.yml)
+ *   workspaces/{name}/source/   ← path (workspace source root, meta/vibestudio.yml)
  *   workspaces/{name}/state/    ← statePath (Electron userData + runtime state)
  */
 export interface Workspace {
-  /** Absolute path to workspace source directory (meta/vibez1.yml and unit source trees) */
+  /** Absolute path to workspace source directory (meta/vibestudio.yml and unit source trees) */
   path: string;
   /** Absolute path to state directory (Electron userData, databases, cache) */
   statePath: string;
@@ -513,7 +513,7 @@ export type { WorkspaceEntry, SettingsData } from "../types.js";
 import type { WorkspaceEntry } from "../types.js";
 
 /**
- * Central data persisted in ~/.config/vibez1/data.json
+ * Central data persisted in ~/.config/vibestudio/data.json
  */
 export interface CentralData {
   /** Managed workspaces (sorted by lastOpened desc) */

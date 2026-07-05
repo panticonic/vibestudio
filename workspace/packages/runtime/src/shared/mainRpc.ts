@@ -1,4 +1,4 @@
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 
 export type MainCaller = <T>(method: string, ...args: unknown[]) => Promise<T>;
 

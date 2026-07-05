@@ -24,13 +24,13 @@
 
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import type { DODispatch } from "./doDispatch.js";
-import type { EntityCache } from "@vibez1/shared/runtime/entityCache";
-import type { EntityKind, EntityRecord, EntitySource } from "@vibez1/shared/runtime/entitySpec";
+import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import type { EntityKind, EntityRecord, EntitySource } from "@vibestudio/shared/runtime/entitySpec";
 import type {
   ContextEdge,
   ContextEdgeByChild,
   ContextEdgeKind,
-} from "@vibez1/shared/runtime/contextEdges";
+} from "@vibestudio/shared/runtime/contextEdges";
 
 const WORKSPACE_DO_CLASS = "WorkspaceDO";
 

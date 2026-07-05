@@ -1,11 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { unitChangeSessionGrantKey, type UnitMetaChangeApprovalProvider } from "@vibez1/unit-host";
-import type { DiffReviewEntry, DiffReviewFile, UnitBatchEntry } from "@vibez1/shared/approvals";
-import type { VerifiedCaller } from "@vibez1/shared/serviceDispatcher";
-import type { AppCapability } from "@vibez1/shared/unitManifest";
-import { EMPTY_STATE_HASH } from "@vibez1/shared/contentTree/worktreeHash";
-import { countLines, countLineDiff } from "@vibez1/shared/lineDiff";
+import {
+  unitChangeSessionGrantKey,
+  type UnitMetaChangeApprovalProvider,
+} from "@vibestudio/unit-host";
+import type { DiffReviewEntry, DiffReviewFile, UnitBatchEntry } from "@vibestudio/shared/approvals";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { EMPTY_STATE_HASH } from "@vibestudio/shared/contentTree/worktreeHash";
+import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
 import { joinRepoPrefix } from "../vcsHost/paths.js";
 import type { ApprovalQueue } from "./approvalQueue.js";

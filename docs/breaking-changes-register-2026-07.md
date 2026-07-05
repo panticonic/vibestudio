@@ -4,7 +4,7 @@ Everything below changed an existing expectation. Pre-release, no backward compa
 
 ## A. Decisions wanted
 
-1. **DECIDE — `@vibez1/typecheck` Monaco infra**: `FS/PATH/GLOBAL_TYPE_DEFINITIONS` + `shared-types.ts` are public exports with zero repo consumers — unwired in-browser-TS infrastructure (a comment claims a panel consumer that doesn't exist). Wire it or delete it.
+1. **DECIDE — `@vibestudio/typecheck` Monaco infra**: `FS/PATH/GLOBAL_TYPE_DEFINITIONS` + `shared-types.ts` are public exports with zero repo consumers — unwired in-browser-TS infrastructure (a comment claims a panel consumer that doesn't exist). Wire it or delete it.
 2. **DECIDE — GC subsystem**: `WorkspaceVcs.runGc` + DO `runGadGcMark`/`runGadGcSweep` form a coherent, tested GC pipeline that has never been wired to a scheduler. Related open point: GC roots for content-store tree nodes (incl. server-minted composed views) are unowned. Wire GC (recommended — the content store now accretes tree nodes) or delete it deliberately.
 3. **DECIDE — `vscode-shell-integration` copy in `build.mjs`**: confirmed vestigial-but-packaged. Options: drop after verifying packaged-app terminal behavior, or vendor under `build-resources/`. Loud comment at the copy site.
 4. **DECIDE — tsconfig program split**: host still type-checks with workspace path mappings via `extends`. The boundary is enforced by the checker now; splitting requires relocating the ~25 allowlisted DO-integration test imports (all under `src/server/vcsHost/*` tests). Worth doing; needs a policy for where those tests live.
@@ -14,12 +14,12 @@ Everything below changed an existing expectation. Pre-release, no backward compa
 ## B. Boundary & platform (first cleanup wave)
 
 7. Boundary checker v2 gates `quality:check`: all `@workspace-*` scopes, `require()`, string literals, `build.mjs`/`tests/` scanned; allowlist at `scripts/host-boundary-allowlist.json` (50 entries: DO-integration test imports + documented contract points in `sourceDirs.ts`/`platformModules.ts` + smoke tooling).
-8. Trust/providers are manifest-declared (`providers:`/`trust:`/`hostTargets:` in `workspace/meta/vibez1.yml`): a workspace without declarations gets those features disabled with diagnostics — no hardcoded fallbacks. Shipped manifest seeded to preserve behavior. (`providers.vcsStore` later deleted again — see §E.)
-9. `__vibez1Electron` deleted repo-wide; mobile injects `__vibez1Shell`. The mobile injection line has no covering test.
+8. Trust/providers are manifest-declared (`providers:`/`trust:`/`hostTargets:` in `workspace/meta/vibestudio.yml`): a workspace without declarations gets those features disabled with diagnostics — no hardcoded fallbacks. Shipped manifest seeded to preserve behavior. (`providers.vcsStore` later deleted again — see §E.)
+9. `__vibestudioElectron` deleted repo-wide; mobile injects `__vibestudioShell`. The mobile injection line has no covering test.
 10. `native.tray`/`native.globalShortcut` removed from the app preload surface (were unreachable throw-stubs).
 11. `isAboutSource("about/")` (empty page) no longer counts as privileged.
-12. Host writes the generated extensions-registry only into files carrying the `// @vibez1-extension-registry-sink` directive; removing the directive opts out of generation.
-13. New optional panel manifest field `vibez1.frameworkModule`.
+12. Host writes the generated extensions-registry only into files carrying the `// @vibestudio-extension-registry-sink` directive; removing the directive opts out of generation.
+13. New optional panel manifest field `vibestudio.frameworkModule`.
 14. `BUILD_CACHE_VERSION` 16 → 17 (root-fingerprint derivation change; one-time rebuild). Cache keys were then proven stable across the whole migration — no further bumps.
 15. Approval schema: `\n` allowed in `summary`/`detail.value`/secret-input `description` (fixes shell-extension approvals that were being rejected in production); all other control chars still rejected. Titles/labels stay single-line.
 16. Preloads: dual autofill registration deduped through one shared bridge module.
@@ -60,7 +60,7 @@ Everything below changed an existing expectation. Pre-release, no backward compa
 ## G. VCS semantics in userland (P5b + P5c + P5d)
 
 38. The merge engine (diff3 + MergeEngine + EditEngine) lives in `@workspace/vcs-engine`; the gad DO computes merges/edits/commits/reverts internally, reading/writing through host `blobstore.*` RPC — the DO now has host-service dependencies and mirrored states are written by the DO principal.
-39. `vcs` is a userland manifest service (protocol `vibez1.vcs.v1`): history reads, status (`vcsStatus`/`vcsPushStatus`), push (`vcsPush`), ctx merges (`vcsMerge`/`vcsAbortMerge`), and context semantics (pin/view/status/rebase/drop) are DO methods — several admitting panel/shell callers (deliberate widening). Host `vcs.*` keeps fork/delete/restore orchestration, projection, and the slim read surface (readFile/listFiles/diff/resolveHead — pure content-store+ref reads, justified host-side); host `vcs.push` and `vcs.adoptImportedRepo` are not public surfaces.
+39. `vcs` is a userland manifest service (protocol `vibestudio.vcs.v1`): history reads, status (`vcsStatus`/`vcsPushStatus`), push (`vcsPush`), ctx merges (`vcsMerge`/`vcsAbortMerge`), and context semantics (pin/view/status/rebase/drop) are DO methods — several admitting panel/shell callers (deliberate widening). Host `vcs.*` keeps fork/delete/restore orchestration, projection, and the slim read surface (readFile/listFiles/diff/resolveHead — pure content-store+ref reads, justified host-side); host `vcs.push` and `vcs.adoptImportedRepo` are not public surfaces.
 40. `vcs.merge` rejects non-`ctx:`/non-`main` targets (previously attempted arbitrary heads). Main-target merges dispatch through gad and publish via the same `refs.updateMains` path as pushes.
 41. `vcs.log` head-defaulting is client-side (runtime clients default to their own ctx head; CLI reads main). `vcs.recall` scoping is solely the DO's query pushdown.
 42. Rebase side-effects: DO records first, host projections/events follow (previously interleaved); crash mid-rebase heals via re-materialization invariants.

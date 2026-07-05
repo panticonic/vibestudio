@@ -4,12 +4,12 @@
  * device credentials, and event subscription for lease changes.
  */
 import { WebSocket } from "ws";
-import { createRpcClient, type RpcClient } from "@vibez1/rpc";
-import { wsClientTransport } from "@vibez1/rpc/transports/wsClient";
-import { NodeWsLike } from "@vibez1/shared/shell/transport/nodeWsLike";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createRpcClient, type RpcClient } from "@vibestudio/rpc";
+import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
+import { NodeWsLike } from "@vibestudio/shared/shell/transport/nodeWsLike";
+import { createDevLogger } from "@vibestudio/dev-log";
 import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
-import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibez1/shared/connect";
+import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
 
 const log = createDevLogger("HeadlessHost:rpc");
 

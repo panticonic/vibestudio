@@ -16,7 +16,7 @@
 import * as fs from "fs/promises";
 import { accessSync } from "fs";
 import * as path from "path";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 
 const log = createDevLogger("ContextFolderManager");
 

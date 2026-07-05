@@ -10,7 +10,7 @@ import {
   runImportPipeline,
 } from "@workspace/browser-data";
 import type { PreviewResult } from "@workspace/browser-data";
-import { resolveProfilePath } from "@vibez1/browser-data";
+import { resolveProfilePath } from "@vibestudio/browser-data";
 import type {
   BrowserOpenTabsRequest,
   ImportDataType,
@@ -30,7 +30,7 @@ import type {
   OpenTabsAsPanelsResult,
   RecordHistoryVisitRequest,
   UpdateHistoryTitleRequest,
-} from "@vibez1/browser-data";
+} from "@vibestudio/browser-data";
 
 interface InvocationLike {
   current(): {
@@ -45,7 +45,7 @@ interface ApprovalDetailLike {
   format?: "plain" | "markdown" | "code";
 }
 
-/** Mirrors `UserlandApprovalRequest` from `@vibez1/extension` (inlined to avoid a type-only dependency). */
+/** Mirrors `UserlandApprovalRequest` from `@vibestudio/extension` (inlined to avoid a type-only dependency). */
 interface UserlandApprovalRequestLike {
   subject: { id: string; label?: string };
   title: string;
@@ -57,7 +57,7 @@ interface UserlandApprovalRequestLike {
   promptOptions?: "scoped" | "choices";
 }
 
-/** Mirrors `UserlandApprovalChoice` from `@vibez1/extension`. */
+/** Mirrors `UserlandApprovalChoice` from `@vibestudio/extension`. */
 type UserlandApprovalChoiceLike =
   | { kind: "choice"; choice: string }
   | { kind: "dismissed" }
@@ -83,7 +83,7 @@ interface ExtensionContextLike {
   emit(event: string, payload: unknown): void;
 }
 
-const DO_SOURCE = "vibez1/internal";
+const DO_SOURCE = "vibestudio/internal";
 const DO_CLASS = "BrowserDataDO";
 const DO_KEY = "global";
 
@@ -196,7 +196,7 @@ const METHOD_LABELS: Record<string, string> = {
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@vibez1/extension" {
+declare module "@vibestudio/extension" {
   interface WorkspaceExtensions {
     "@workspace-extensions/browser-data": Api;
   }
@@ -672,7 +672,7 @@ function validateHistoryVisit(request: RecordHistoryVisitRequest): RecordHistory
     visitTime: request.visitTime ?? Date.now(),
     transition: request.transition ?? "link",
     typed: Boolean(request.typed),
-    source: request.source ?? "vibez1",
+    source: request.source ?? "vibestudio",
     panelId: request.panelId?.trim() || undefined,
   };
 }

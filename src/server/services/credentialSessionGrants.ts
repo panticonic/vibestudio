@@ -1,4 +1,4 @@
-import type { CredentialGrantAction } from "@vibez1/shared/credentials/types";
+import type { CredentialGrantAction } from "@vibestudio/shared/credentials/types";
 
 export interface CredentialSessionGrantScope {
   callerId: string;

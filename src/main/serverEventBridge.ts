@@ -1,10 +1,10 @@
-import type { EventService } from "@vibez1/shared/eventsService";
-import { isValidEventName, type EventName } from "@vibez1/shared/events";
-import type { PanelTreeSnapshot } from "@vibez1/shared/types";
-import type { PanelRuntimeLeaseChangedEvent } from "@vibez1/shared/panel/panelLease";
-import type { PendingApproval } from "@vibez1/shared/approvals";
-import { credentialsMethods } from "@vibez1/shared/serviceSchemas/credentials";
-import { createTypedServiceClient } from "@vibez1/shared/typedServiceClient";
+import type { EventService } from "@vibestudio/shared/eventsService";
+import { isValidEventName, type EventName } from "@vibestudio/shared/events";
+import type { PanelTreeSnapshot } from "@vibestudio/shared/types";
+import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
+import { credentialsMethods } from "@vibestudio/shared/serviceSchemas/credentials";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { AppOrchestrator, AppAvailableEvent } from "./appOrchestrator.js";

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 
 function tempStatePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-runtime-diagnostics-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-diagnostics-"));
 }
 
 describe("RuntimeDiagnosticsStore", () => {

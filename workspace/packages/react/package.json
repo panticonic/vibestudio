@@ -7,7 +7,7 @@
     "./responsive": "./src/responsive.ts"
   },
   "dependencies": {
-    "@vibez1/types": "workspace:*",
+    "@vibestudio/types": "workspace:*",
     "@workspace/core": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@radix-ui/react-icons": "^1.3.2",

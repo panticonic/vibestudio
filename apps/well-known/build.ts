@@ -1,10 +1,9 @@
 /**
  * Build the static `.well-known/` payload served by the Cloudflare Pages
  * site at `apps/well-known/`. This output is reachable at every host the
- * Pages project is bound to — currently the production apex `snugenv.com`
- * and the dedicated OAuth-callback sub-host `auth.snugenv.com` (the latter
- * is what `applinks:` / `assetlinks.json` actually anchor on; see
- * `apps/mobile/ios/Vibez1/Vibez1.entitlements` and
+ * Pages project is bound to — currently the production host `vibestudio.app`,
+ * which is what `applinks:` / `assetlinks.json` anchor on; see
+ * `apps/mobile/ios/Vibestudio/Vibestudio.entitlements` and
  * `apps/mobile/android/app/src/main/AndroidManifest.xml`).
  *
  * Two files are emitted (both are static JSON):
@@ -13,7 +12,7 @@
  *     the generated `_headers` file below.
  *   - `/.well-known/assetlinks.json` — Android App Links verification.
  *
- * Run `pnpm --filter @vibez1/well-known build:site` to regenerate.
+ * Run `pnpm --filter @vibestudio/well-known build:site` to regenerate.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -60,12 +59,12 @@ function stripComments(obj: unknown): unknown {
 const config = resolveConfig(stripComments(rawConfig) as Config);
 
 function resolveConfig(fileConfig: Config): Config {
-  const teamId = process.env.VIBEZ1_APPLE_TEAM_ID?.trim() || fileConfig.apple.teamId;
-  const bundleId = process.env.VIBEZ1_IOS_BUNDLE_ID?.trim() || fileConfig.apple.bundleId;
+  const teamId = process.env.VIBESTUDIO_APPLE_TEAM_ID?.trim() || fileConfig.apple.teamId;
+  const bundleId = process.env.VIBESTUDIO_IOS_BUNDLE_ID?.trim() || fileConfig.apple.bundleId;
   const packageName =
-    process.env.VIBEZ1_ANDROID_PACKAGE_NAME?.trim() || fileConfig.android.packageName;
+    process.env.VIBESTUDIO_ANDROID_PACKAGE_NAME?.trim() || fileConfig.android.packageName;
   const fingerprints =
-    parseFingerprintEnv(process.env.VIBEZ1_ANDROID_SHA256_CERT_FINGERPRINTS) ??
+    parseFingerprintEnv(process.env.VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS) ??
     fileConfig.android.sha256CertFingerprints;
 
   validateConfig({
@@ -201,6 +200,6 @@ writeFileSync(path.join(distDir, "_headers"), headers, "utf8");
 // Tiny landing page so a GET to `/` doesn't 404 in browser sanity checks.
 writeFileSync(
   path.join(distDir, "index.html"),
-  `<!doctype html><meta charset="utf-8"><title>snugenv</title><p>Vibez1 universal-link verification host.</p>`,
+  `<!doctype html><meta charset="utf-8"><title>vibestudio</title><p>Vibestudio universal-link verification host.</p>`,
   "utf8",
 );

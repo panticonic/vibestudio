@@ -27,7 +27,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { treeHashDigest } from "@vibez1/shared/contentTree/treeObjects";
+import { treeHashDigest } from "@vibestudio/shared/contentTree/treeObjects";
 import { attachLocalHostBridges, pushToMain } from "../../../src/server/vcsHost/testSupport.js";
 import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
 import { WorkspaceVcs } from "../../../src/server/vcsHost/workspaceVcs.js";

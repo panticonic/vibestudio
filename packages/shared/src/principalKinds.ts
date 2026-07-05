@@ -1,4 +1,4 @@
-import type { CallerKind as RpcCallerKind } from "@vibez1/rpc";
+import type { CallerKind as RpcCallerKind } from "@vibestudio/rpc";
 
 export const PRINCIPAL_KIND_REGISTRY = {
   panel: {
@@ -34,7 +34,7 @@ export const PRINCIPAL_KIND_REGISTRY = {
 export type PrincipalKind = keyof typeof PRINCIPAL_KIND_REGISTRY;
 
 /**
- * `CallerKind` is canonically defined in `@vibez1/rpc` (the lowest layer).
+ * `CallerKind` is canonically defined in `@vibestudio/rpc` (the lowest layer).
  * We re-export it here so the registry, server, and bridge share one type. The
  * registry below remains the runtime source for richer per-kind metadata
  * (currently code identity); the compile-time guard keeps the two in

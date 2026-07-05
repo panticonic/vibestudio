@@ -20,7 +20,7 @@ export const VCS_IGNORED_DIRS: ReadonlySet<string> = new Set([
   ".cache",
   ".parcel-cache",
   ".pnpm-store",
-  ".vibez1",
+  ".vibestudio",
   ".turbo",
   ".vite",
   ".tmp",
@@ -107,7 +107,7 @@ function segmentIgnored(segment: string): boolean {
 export function assertWritableVcsEditPath(p: string): void {
   const hint =
     "VCS tracks workspace source — write to a non-ignored path (e.g. projects/…, panels/…, packages/…), " +
-    "not a platform-ignored dir (.vibez1, .git, .gad, .tmp, node_modules, dist) or ignored file (.env, *.log).";
+    "not a platform-ignored dir (.vibestudio, .git, .gad, .tmp, node_modules, dist) or ignored file (.env, *.log).";
   const segs = p.split("/");
   for (const seg of segs.slice(0, -1)) {
     if (VCS_IGNORED_DIRS.has(seg) || segmentIgnored(seg)) {

@@ -4,7 +4,7 @@
  * Wraps events-related server RPC calls for subscribing to and
  * unsubscribing from shell events (panel-tree-updated, theme changes, etc.).
  */
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import type { EventName } from "../events.js";
 import { eventsMethods } from "../serviceSchemas/events.js";
 import { createTypedServiceClient, type TypedServiceClient } from "../typedServiceClient.js";

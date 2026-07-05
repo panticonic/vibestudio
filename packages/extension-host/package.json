@@ -1,7 +1,7 @@
 {
-  "name": "@vibez1/extension-host",
+  "name": "@vibestudio/extension-host",
   "version": "0.1.0",
-  "description": "Vibez1 extension host, registry, and child runtime",
+  "description": "Vibestudio extension host, registry, and child runtime",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -19,11 +19,11 @@
     "build": "node build.mjs"
   },
   "dependencies": {
-    "@vibez1/extension": "workspace:*",
-    "@vibez1/process-adapter": "workspace:*",
-    "@vibez1/rpc": "workspace:*",
-    "@vibez1/shared": "workspace:*",
-    "@vibez1/unit-host": "workspace:*",
+    "@vibestudio/extension": "workspace:*",
+    "@vibestudio/process-adapter": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
+    "@vibestudio/unit-host": "workspace:*",
     "yaml": "^2.8.1",
     "zod": "^3.24.1"
   },

@@ -16,10 +16,10 @@
     "lib": ["ES2022", "DOM"],
     "jsx": "react-jsx",
     "paths": {
-      "@vibez1/dev-log": ["../dev-log/src/index.ts"],
-      "@vibez1/env-paths": ["../env-paths/src/index.ts"],
-      "@vibez1/rpc": ["../rpc/src/index.ts"],
-      "@vibez1/types": ["../types/src/index.ts"]
+      "@vibestudio/dev-log": ["../dev-log/src/index.ts"],
+      "@vibestudio/env-paths": ["../env-paths/src/index.ts"],
+      "@vibestudio/rpc": ["../rpc/src/index.ts"],
+      "@vibestudio/types": ["../types/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts"],

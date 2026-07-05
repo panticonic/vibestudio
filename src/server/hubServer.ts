@@ -5,17 +5,17 @@ import * as path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
-import { getCentralConfigPaths } from "@vibez1/shared/workspace/loader";
-import { CentralDataManager } from "@vibez1/shared/centralData";
-import { getWorkspaceDir } from "@vibez1/env-paths";
-import { TokenManager, constantTimeStringEqual } from "@vibez1/shared/tokenManager";
-import { resolveHostConfig } from "@vibez1/shared/hostConfig";
-import { selectedWorkspaceUrl, WORKSPACE_ROUTE_PREFIX } from "@vibez1/shared/connect";
+import { getCentralConfigPaths } from "@vibestudio/shared/workspace/loader";
+import { CentralDataManager } from "@vibestudio/shared/centralData";
+import { getWorkspaceDir } from "@vibestudio/env-paths";
+import { TokenManager, constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
+import { resolveHostConfig } from "@vibestudio/shared/hostConfig";
+import { selectedWorkspaceUrl, WORKSPACE_ROUTE_PREFIX } from "@vibestudio/shared/connect";
 import {
   getAdminTokenPath,
   loadPersistedAdminToken,
   savePersistedAdminToken,
-} from "@vibez1/shared/centralAuth";
+} from "@vibestudio/shared/centralAuth";
 import { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } from "./services/deviceAuthStore.js";
 import { shellCallerId } from "./services/auth/model.js";
 import { authError } from "./services/auth/errors.js";
@@ -197,7 +197,7 @@ function isRuntimeRunning(state: HubRuntimeState, name: string): boolean {
 }
 
 function workspaceConfigExists(name: string): boolean {
-  return fs.existsSync(path.join(getWorkspaceDir(name), "source", "meta/vibez1.yml"));
+  return fs.existsSync(path.join(getWorkspaceDir(name), "source", "meta/vibestudio.yml"));
 }
 
 function normalizeWorkspaceName(raw: unknown): string {
@@ -314,7 +314,7 @@ async function handleAuthRoute(
         label:
           typeof body["label"] === "string" && body["label"].trim()
             ? body["label"].trim()
-            : "Vibez1 client",
+            : "Vibestudio client",
         platform: typeof body["platform"] === "string" ? body["platform"] : undefined,
       });
       sendJson(res, 200, responseForCredential(state, credential));
@@ -346,7 +346,7 @@ async function handleAuthRoute(
         label:
           typeof body["label"] === "string" && body["label"].trim()
             ? body["label"].trim()
-            : "Vibez1 client",
+            : "Vibestudio client",
         platform: typeof body["platform"] === "string" ? body["platform"] : undefined,
       });
       sendJson(res, 200, responseForCredential(state, credential));
@@ -746,9 +746,9 @@ async function ensureWorkspaceRuntime(
  *
  * §5 isolation: every child gets its OWN device-auth store and DTLS identity
  * under its per-workspace state dir. The old wiring shared the hub's
- * `VIBEZ1_AUTH_STORE_PATH` across hub + all children (in-memory pairing codes
+ * `VIBESTUDIO_AUTH_STORE_PATH` across hub + all children (in-memory pairing codes
  * and device rows collided across processes — a validated bug), and left the
- * WebRTC cert paths to their shared `<appRoot>/.vibez1/webrtc` default (every
+ * WebRTC cert paths to their shared `<appRoot>/.vibestudio/webrtc` default (every
  * child would present the SAME DTLS fingerprint). Children mint their own
  * invites and redeem their own pairing codes in-process.
  */
@@ -763,28 +763,28 @@ export function buildWorkspaceChildEnv(input: {
   const childStateDir = path.join(getWorkspaceDir(input.childWorkspaceName), "state");
   const env: NodeJS.ProcessEnv = {
     ...input.baseEnv,
-    VIBEZ1_APP_ROOT: input.appRoot,
-    VIBEZ1_HOST: "127.0.0.1",
-    VIBEZ1_BIND_HOST: "127.0.0.1",
-    VIBEZ1_WORKSPACE: input.childWorkspaceName,
-    VIBEZ1_AUTH_STORE_PATH: path.join(childStateDir, "auth", "devices.json"),
-    VIBEZ1_WEBRTC_CERT: path.join(childStateDir, "webrtc", "server.pem"),
-    VIBEZ1_WEBRTC_KEY: path.join(childStateDir, "webrtc", "server.key"),
-    VIBEZ1_DISABLE_STARTUP_PAIRING: "1",
-    VIBEZ1_FORCE_WORKSPACE_SERVER: "1",
-    VIBEZ1_HUB_URL: input.hubUrl,
+    VIBESTUDIO_APP_ROOT: input.appRoot,
+    VIBESTUDIO_HOST: "127.0.0.1",
+    VIBESTUDIO_BIND_HOST: "127.0.0.1",
+    VIBESTUDIO_WORKSPACE: input.childWorkspaceName,
+    VIBESTUDIO_AUTH_STORE_PATH: path.join(childStateDir, "auth", "devices.json"),
+    VIBESTUDIO_WEBRTC_CERT: path.join(childStateDir, "webrtc", "server.pem"),
+    VIBESTUDIO_WEBRTC_KEY: path.join(childStateDir, "webrtc", "server.key"),
+    VIBESTUDIO_DISABLE_STARTUP_PAIRING: "1",
+    VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
+    VIBESTUDIO_HUB_URL: input.hubUrl,
   };
-  delete env["VIBEZ1_GATEWAY_PORT"];
-  delete env["VIBEZ1_WORKSPACE_DIR"];
+  delete env["VIBESTUDIO_GATEWAY_PORT"];
+  delete env["VIBESTUDIO_WORKSPACE_DIR"];
   if (input.ephemeral) {
-    env["VIBEZ1_WORKSPACE_EPHEMERAL"] = "1";
+    env["VIBESTUDIO_WORKSPACE_EPHEMERAL"] = "1";
   } else {
-    delete env["VIBEZ1_WORKSPACE_EPHEMERAL"];
+    delete env["VIBESTUDIO_WORKSPACE_EPHEMERAL"];
   }
   if (input.autoApproveStartupUnits) {
-    env["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"] = "1";
+    env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = "1";
   } else {
-    delete env["VIBEZ1_AUTO_APPROVE_STARTUP_UNITS"];
+    delete env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
   }
   return env;
 }
@@ -801,7 +801,9 @@ async function startWorkspaceRuntime(
   const childWorkspaceName = isEphemeralDevWorkspace
     ? `dev-${randomBytes(4).toString("hex")}`
     : advertisedName;
-  const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), `vibez1-workspace-${advertisedName}-`));
+  const readyDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), `vibestudio-workspace-${advertisedName}-`)
+  );
   const readyFile = path.join(readyDir, "ready.json");
   const publicUrl = workspaceEndpointUrl(state, advertisedName);
   const childArgs = [
@@ -887,7 +889,7 @@ async function waitForReadyFile(
 }
 
 function resolveAdminToken(): { adminToken: string; tokenSource: HubRuntimeState["tokenSource"] } {
-  const envToken = process.env["VIBEZ1_ADMIN_TOKEN"];
+  const envToken = process.env["VIBESTUDIO_ADMIN_TOKEN"];
   if (envToken) return { adminToken: envToken, tokenSource: "env" };
   const persisted = loadPersistedAdminToken();
   if (persisted) return { adminToken: persisted, tokenSource: "persisted" };
@@ -909,13 +911,13 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   tokenManager.setAdminToken(adminToken);
   const centralPaths = getCentralConfigPaths();
   const authStorePath =
-    process.env["VIBEZ1_AUTH_STORE_PATH"] ??
+    process.env["VIBESTUDIO_AUTH_STORE_PATH"] ??
     path.join(centralPaths.configDir, "server-auth", "devices.json");
   const deviceAuthStore = new DeviceAuthStore(authStorePath);
   const startupPairingCode = deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS);
   const startupQrPairingCode = deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS);
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
-  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBEZ1_GATEWAY_PORT");
+  const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
   const hostConfig = resolveHostConfig({
     workerdPort: 0,
     gatewayPort: requestedGatewayPort ?? 0,
@@ -1020,7 +1022,7 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
     shuttingDown: false,
   };
 
-  console.log("vibez1-server hub ready:");
+  console.log("vibestudio-server hub ready:");
   console.log(`  Gateway:     ${gatewayUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);
   console.log(`  Pairing code: ${startupPairingCode}`);
@@ -1053,9 +1055,9 @@ export async function runHubServer(input: { args: HubServerArgs; appRoot: string
   }
 
   if (args.printCredentials) {
-    console.log(`\nVIBEZ1_ADMIN_TOKEN=${adminToken}`);
-    console.log(`VIBEZ1_PAIRING_CODE=${startupPairingCode}`);
-    console.log(`VIBEZ1_QR_PAIRING_CODE=${startupQrPairingCode}`);
+    console.log(`\nVIBESTUDIO_ADMIN_TOKEN=${adminToken}`);
+    console.log(`VIBESTUDIO_PAIRING_CODE=${startupPairingCode}`);
+    console.log(`VIBESTUDIO_QR_PAIRING_CODE=${startupQrPairingCode}`);
   }
 
   async function shutdown(): Promise<void> {

@@ -1,8 +1,8 @@
 import { app, Notification } from "electron";
 import type { BaseWindow } from "electron";
-import type { PendingApproval } from "@vibez1/shared/approvals";
-import { getApprovalAttribution, getApprovalCopy } from "@vibez1/shared/approvalCopy";
-import { filterRuntimeApprovals } from "@vibez1/shared/bootstrapApprovals";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
+import { getApprovalAttribution, getApprovalCopy } from "@vibestudio/shared/approvalCopy";
+import { filterRuntimeApprovals } from "@vibestudio/shared/bootstrapApprovals";
 
 export interface ApprovalAttention {
   /** Apply the latest pending list: badge count, frame flash, OS notification. */
@@ -20,7 +20,7 @@ export interface ApprovalAttention {
 
 /**
  * OS-level attention for pending approvals. The in-shell ConsentApprovalBar
- * is only visible when the Vibez1 window is; this module covers the rest:
+ * is only visible when the Vibestudio window is; this module covers the rest:
  * dock/launcher badge count, taskbar frame flash (dock bounce on macOS), and
  * a native notification that focuses the shell on click.
  */

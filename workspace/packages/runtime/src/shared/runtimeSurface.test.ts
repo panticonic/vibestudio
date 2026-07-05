@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import type { RpcClient } from "@vibez1/rpc";
+import type { RpcClient } from "@vibestudio/rpc";
 import { helpfulNamespace } from "./helpfulNamespace.js";
 import { createHostedRuntime, type RuntimeHost } from "./hostedRuntime.js";
 import { createWorkerRuntime } from "../worker/index.js";
-import { panelRuntimeSurface } from "@vibez1/shared/runtimeSurface.panel";
-import { workerRuntimeSurface } from "@vibez1/shared/runtimeSurface.worker";
-import { coreRuntimeSurface } from "@vibez1/shared/runtimeSurface.core";
+import { panelRuntimeSurface } from "@vibestudio/shared/runtimeSurface.panel";
+import { workerRuntimeSurface } from "@vibestudio/shared/runtimeSurface.worker";
+import { coreRuntimeSurface } from "@vibestudio/shared/runtimeSurface.core";
 import {
   EVAL_AMBIENT_ONLY,
   evalImportableSurface,
-} from "@vibez1/shared/runtimeSurface.eval";
-import { PORTABLE_KEYS } from "@vibez1/shared/runtimeSurface.portable";
+} from "@vibestudio/shared/runtimeSurface.eval";
+import { PORTABLE_KEYS } from "@vibestudio/shared/runtimeSurface.portable";
 
 /**
  * Execution-based cross-target parity gates. Instead of grepping source, we
@@ -119,15 +119,15 @@ describe("runtimeSurface manifests", () => {
     const G = globalThis as Record<string, unknown>;
     const saved: Record<string, unknown> = {};
     const PANEL_GLOBALS = {
-      __vibez1EntityId: "panel:test-entity",
-      __vibez1SlotId: "panel:test-slot",
-      __vibez1ContextId: "ctx_test",
-      __vibez1Kind: "panel",
-      __vibez1InitialTheme: "light",
-      __vibez1Env: {},
-      __vibez1GatewayConfig: { serverUrl: "http://server.test", token: "tok" },
+      __vibestudioEntityId: "panel:test-entity",
+      __vibestudioSlotId: "panel:test-slot",
+      __vibestudioContextId: "ctx_test",
+      __vibestudioKind: "panel",
+      __vibestudioInitialTheme: "light",
+      __vibestudioEnv: {},
+      __vibestudioGatewayConfig: { serverUrl: "http://server.test", token: "tok" },
       // Minimal shell bridge so createPanelTransport() doesn't throw on import.
-      __vibez1Shell: {
+      __vibestudioShell: {
         postEnvelope: async () => {},
         onEnvelope: () => () => {},
         onRecovery: () => () => {},

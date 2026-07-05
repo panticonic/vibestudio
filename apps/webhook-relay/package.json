@@ -1,5 +1,5 @@
 {
-  "name": "@vibez1/webhook-relay",
+  "name": "@vibestudio/webhook-relay",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",

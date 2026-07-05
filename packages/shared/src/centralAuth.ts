@@ -3,7 +3,7 @@
  *
  * Extracted from `workspace/loader.ts` because the admin token is a
  * *central* concept (one token per machine, not per workspace): it lives
- * under `~/.config/vibez1/admin-token` alongside `config.yml`, `.secrets.yml`,
+ * under `~/.config/vibestudio/admin-token` alongside `config.yml`, `.secrets.yml`,
  * and `remote-credentials.json`. Keeping it in `workspace/loader.ts`
  * conflated "workspace configuration" with "credential storage for the
  * local machine."
@@ -11,7 +11,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { getCentralDataPath } from "@vibez1/env-paths";
+import { getCentralDataPath } from "@vibestudio/env-paths";
 
 const ADMIN_TOKEN_FILE = "admin-token";
 

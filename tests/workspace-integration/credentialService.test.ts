@@ -1,4 +1,4 @@
-import { createVerifiedCaller } from "@vibez1/shared/serviceDispatcher";
+import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as http from "node:http";
 import { generateKeyPairSync } from "node:crypto";
@@ -29,8 +29,8 @@ import type {
 } from "../../packages/shared/src/credentials/types.js";
 import type { ClientConfigRecord } from "../../packages/shared/src/credentials/clientConfigStore.js";
 import { createCredentialService } from "../../src/server/services/credentialService.js";
-import type { ServiceContext } from "@vibez1/shared/serviceDispatcher";
-import { DEFERRED_RESULT, isDeferredResult } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import { DEFERRED_RESULT, isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import { CredentialSessionGrantStore } from "../../src/server/services/credentialSessionGrants.js";
 import { createApprovalQueue } from "../../src/server/services/approvalQueue.js";
 
@@ -318,13 +318,13 @@ async function deliverOAuthCallback(redirectUri: string, params: URLSearchParams
 describe("credentialService", () => {
   // OAuth callbacks are now relay-hosted for every platform (plan §7); the
   // `public` default redirect_uri is built from this origin (buildRelayOAuthCallbackUrl).
-  const ORIGINAL_RELAY = process.env["VIBEZ1_RELAY_OAUTH_BASE_URL"];
+  const ORIGINAL_RELAY = process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"];
   beforeEach(() => {
-    process.env["VIBEZ1_RELAY_OAUTH_BASE_URL"] = "https://relay.test";
+    process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"] = "https://relay.test";
   });
   afterEach(() => {
-    if (ORIGINAL_RELAY === undefined) delete process.env["VIBEZ1_RELAY_OAUTH_BASE_URL"];
-    else process.env["VIBEZ1_RELAY_OAUTH_BASE_URL"] = ORIGINAL_RELAY;
+    if (ORIGINAL_RELAY === undefined) delete process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"];
+    else process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"] = ORIGINAL_RELAY;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -1242,7 +1242,7 @@ describe("credentialService", () => {
     // contrast, falls back to loopback when no relay is set (see
     // resolveDefaultRedirectStrategy) so co-located `pnpm dev` OAuth still works.
     // This is the negative the harness previously masked by stubbing the relay env.
-    delete process.env["VIBEZ1_RELAY_OAUTH_BASE_URL"];
+    delete process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"];
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
     const service = createCredentialService({
@@ -2080,7 +2080,7 @@ describe("credentialService", () => {
         },
         redirect: {
           type: "client-forwarded",
-          callbackUri: "https://auth.snugenv.com/oauth/callback/example",
+          callbackUri: "https://vibestudio.app/oauth/callback/example",
         },
       },
     ]) as Promise<StoredCredentialSummary>;
@@ -2093,7 +2093,7 @@ describe("credentialService", () => {
     );
     const authorizeUrl = new URL(emit.mock.calls[0]![1].url);
     expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
-      "https://auth.snugenv.com/oauth/callback/example"
+      "https://vibestudio.app/oauth/callback/example"
     );
     const state = authorizeUrl.searchParams.get("state")!;
 
@@ -2102,7 +2102,7 @@ describe("credentialService", () => {
       "forwardOAuthCallback",
       [
         {
-          url: `https://auth.snugenv.com/oauth/callback/example?code=code-1&state=${state}`,
+          url: `https://vibestudio.app/oauth/callback/example?code=code-1&state=${state}`,
         },
       ]
     );
@@ -2293,7 +2293,7 @@ describe("credentialService", () => {
         },
         redirect: {
           type: "client-forwarded",
-          callbackUri: "https://auth.snugenv.com/oauth/callback/example",
+          callbackUri: "https://vibestudio.app/oauth/callback/example",
         },
       },
     ]) as Promise<StoredCredentialSummary>;

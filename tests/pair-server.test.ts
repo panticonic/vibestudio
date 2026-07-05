@@ -22,9 +22,9 @@ const config = {
   commandName: "pair-test",
   usage: ["pair-test"],
   logPrefix: "pair-test",
-  hostEnv: ["VIBEZ1_PAIR_TEST_HOST"],
-  portEnv: ["VIBEZ1_PAIR_TEST_PORT"],
-  devEnv: "VIBEZ1_PAIR_TEST_DEV",
+  hostEnv: ["VIBESTUDIO_PAIR_TEST_HOST"],
+  portEnv: ["VIBESTUDIO_PAIR_TEST_PORT"],
+  devEnv: "VIBESTUDIO_PAIR_TEST_DEV",
   restartCommand: "pnpm pair-test",
   bannerTitle: "Pair Test",
   deepLinkLabel: "Deep link",
@@ -38,7 +38,7 @@ afterEach(() => {
 
 describe("pair-server runner", () => {
   beforeEach(() => {
-    vi.stubEnv("VIBEZ1_WEBRTC_SIGNAL_URL", "wss://signal.test");
+    vi.stubEnv("VIBESTUDIO_WEBRTC_SIGNAL_URL", "wss://signal.test");
   });
 
   it("prints the WebRTC pairing banner from the structured ready file", async () => {
@@ -58,7 +58,7 @@ describe("pair-server runner", () => {
               pairing: {
                 room: "room-ready-7f3a9c2b",
                 fp: "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a",
-                sig: "wss://signal.vibez1.dev",
+                sig: "wss://signal.vibestudio.dev",
               },
               pairingCode: "PAIRING_READY_CODE_123",
               qrPairingCode: "PAIRING_QR_CODE_123",
@@ -80,14 +80,14 @@ describe("pair-server runner", () => {
       "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a"
     );
     expect(output).toContain("Signaling:");
-    expect(output).toContain("wss://signal.vibez1.dev");
+    expect(output).toContain("wss://signal.vibestudio.dev");
     expect(output).toMatch(/Pair code:\s+PAIRING_READY_CODE_123/);
     expect(output).toMatch(/QR code:\s+PAIRING_QR_CODE_123/);
     expect(output).toContain(
-      "vibez1://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_READY_CODE_123&sig=wss%3A%2F%2Fsignal.vibez1.dev&v=2&ice=all"
+      "vibestudio://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_READY_CODE_123&sig=wss%3A%2F%2Fsignal.vibestudio.dev&v=2&ice=all"
     );
     expect(output).toContain(
-      "vibez1://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_QR_CODE_123&sig=wss%3A%2F%2Fsignal.vibez1.dev&v=2&ice=all"
+      "vibestudio://connect?room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=PAIRING_QR_CODE_123&sig=wss%3A%2F%2Fsignal.vibestudio.dev&v=2&ice=all"
     );
     expect(output).toContain("Pair from test.");
 
@@ -99,7 +99,7 @@ describe("pair-server runner", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const child = new FakeChild();
-    const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibez1-pair-custom-"));
+    const readyDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-custom-"));
     const readyFile = path.join(readyDir, "server-ready.json");
     try {
       runPairServer(config, ["--port", "3456"], {
@@ -130,7 +130,7 @@ describe("pair-server runner", () => {
       const output = logText(logSpy);
       expect(output).toMatch(/Pair code:\s+PAIRING_CUSTOM_CODE_123/);
       expect(output).toContain(
-        "vibez1://connect?room=room-custom-1a2b3c4d&fp=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66&code=PAIRING_CUSTOM_CODE_123&sig=ws%3A%2F%2F127.0.0.1%3A8787&v=2&ice=all"
+        "vibestudio://connect?room=room-custom-1a2b3c4d&fp=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66&code=PAIRING_CUSTOM_CODE_123&sig=ws%3A%2F%2F127.0.0.1%3A8787&v=2&ice=all"
       );
       child.emit("exit", 0, null);
       expect(fs.existsSync(readyDir)).toBe(true);
@@ -148,7 +148,7 @@ describe("pair-server runner", () => {
     runPairServer(
       {
         ...config,
-        commandName: "vibez1 remote serve",
+        commandName: "vibestudio remote serve",
         requireMobileReady: true,
         requireElectronReady: true,
       },
@@ -185,10 +185,10 @@ describe("pair-server runner", () => {
     expect(output).toContain("wss://signal.example.org");
     expect(output).toMatch(/Pair code:\s+PAIRING_REMOTE_CODE_123/);
     expect(output).toContain(
-      "vibez1://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_CODE_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
+      "vibestudio://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_CODE_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
     );
     expect(output).toContain(
-      "vibez1://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_QR_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
+      "vibestudio://connect?room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=PAIRING_REMOTE_QR_123&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all"
     );
 
     child.emit("exit", 0, null);
@@ -205,24 +205,24 @@ describe("pair-server runner", () => {
   });
 
   it("fails before spawning when the WebRTC signaling endpoint is missing", () => {
-    vi.stubEnv("VIBEZ1_WEBRTC_SIGNAL_URL", "");
+    vi.stubEnv("VIBESTUDIO_WEBRTC_SIGNAL_URL", "");
     const spawnServer = vi.fn(() => new FakeChild());
 
     expect(() => runPairServer(config, ["--port", "3456"], { spawnServer })).toThrow(
-      /Missing WebRTC signaling endpoint.*VIBEZ1_WEBRTC_SIGNAL_URL.*--signal-url/
+      /Missing WebRTC signaling endpoint.*VIBESTUDIO_WEBRTC_SIGNAL_URL.*--signal-url/
     );
     expect(spawnServer).not.toHaveBeenCalled();
   });
 
   it("passes the validated signaling endpoint through to the server env", () => {
-    vi.stubEnv("VIBEZ1_WEBRTC_SIGNAL_URL", "wss://configured.signal.test");
+    vi.stubEnv("VIBESTUDIO_WEBRTC_SIGNAL_URL", "wss://configured.signal.test");
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const child = new FakeChild();
 
     runPairServer(config, ["--port", "3456"], {
       spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
-        expect(env.VIBEZ1_WEBRTC_SIGNAL_URL).toBe("wss://configured.signal.test/");
+        expect(env.VIBESTUDIO_WEBRTC_SIGNAL_URL).toBe("wss://configured.signal.test/");
         setTimeout(() => child.emit("exit", 0, null), 10);
         return child;
       },
@@ -231,14 +231,14 @@ describe("pair-server runner", () => {
   });
 
   it("lets --signal-url override the signaling env and validates cleartext loopback use", () => {
-    vi.stubEnv("VIBEZ1_WEBRTC_SIGNAL_URL", "wss://env.signal.test");
+    vi.stubEnv("VIBESTUDIO_WEBRTC_SIGNAL_URL", "wss://env.signal.test");
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const child = new FakeChild();
 
     runPairServer(config, ["--port", "3456", "--signal-url", "ws://127.0.0.1:8787"], {
       spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
-        expect(env.VIBEZ1_WEBRTC_SIGNAL_URL).toBe("ws://127.0.0.1:8787/");
+        expect(env.VIBESTUDIO_WEBRTC_SIGNAL_URL).toBe("ws://127.0.0.1:8787/");
         setTimeout(() => child.emit("exit", 0, null), 10);
         return child;
       },
@@ -266,11 +266,11 @@ describe("pair-server runner", () => {
     runPairServer(config, ["--port", "3456"], {
       spawnServer() {
         setTimeout(() => {
-          child.stdout.write("VIBEZ1_PAIRING_ROOM=room-stdout-5q6r7s8t\n");
+          child.stdout.write("VIBESTUDIO_PAIRING_ROOM=room-stdout-5q6r7s8t\n");
           child.stdout.write(
-            "VIBEZ1_PAIRING_FP=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb\n"
+            "VIBESTUDIO_PAIRING_FP=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb\n"
           );
-          child.stdout.write("VIBEZ1_PAIRING_SIG=wss://signal.stdout.test\n");
+          child.stdout.write("VIBESTUDIO_PAIRING_SIG=wss://signal.stdout.test\n");
           // The QR-specific code arrives before the primary code; the banner only
           // prints once room/fp/sig + a pairing code are all present, so by then
           // both deep links carry their respective codes.
@@ -285,17 +285,17 @@ describe("pair-server runner", () => {
     await waitFor(() => logText(logSpy).includes("PAIRING_STDOUT_QR_123"));
     const output = logText(logSpy);
     expect(output).toContain(
-      "vibez1://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_CODE_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
+      "vibestudio://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_CODE_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
     );
     expect(output).toContain(
-      "vibez1://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_QR_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
+      "vibestudio://connect?room=room-stdout-5q6r7s8t&fp=deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb&code=PAIRING_STDOUT_QR_123&sig=wss%3A%2F%2Fsignal.stdout.test&v=2&ice=all"
     );
 
     child.emit("exit", 0, null);
   });
 
   it("uses the live TypeScript server entry when requested", async () => {
-    vi.stubEnv("VIBEZ1_SERVER_ENTRY", "live");
+    vi.stubEnv("VIBESTUDIO_SERVER_ENTRY", "live");
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const child = new FakeChild();

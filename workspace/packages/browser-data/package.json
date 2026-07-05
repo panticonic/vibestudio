@@ -10,7 +10,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@vibez1/browser-data": "workspace:*",
+    "@vibestudio/browser-data": "workspace:*",
     "bplist-parser": "^0.3.2",
     "sql.js": "^1.14.0"
   },

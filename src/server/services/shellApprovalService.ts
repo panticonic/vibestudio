@@ -9,11 +9,11 @@
  * transport caller kind as the source label.
  */
 
-import type { ServiceDefinition } from "@vibez1/shared/serviceDefinition";
-import type { ApprovalDecision } from "@vibez1/shared/approvals";
-import { shellApprovalMethods } from "@vibez1/shared/serviceSchemas/shellApproval";
-import { isBootstrapUnitApproval } from "@vibez1/shared/bootstrapApprovals";
-import { ServiceError } from "@vibez1/shared/serviceDispatcher";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { ApprovalDecision } from "@vibestudio/shared/approvals";
+import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
+import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
+import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
 

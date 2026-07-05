@@ -1,7 +1,7 @@
 {
   "name": "@workspace/harness",
   "version": "0.1.0",
-  "description": "Shared type definitions for the Vibez1 agentic harness messaging system",
+  "description": "Shared type definitions for the Vibestudio agentic harness messaging system",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
@@ -12,8 +12,8 @@
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
     "@mozilla/readability": "^0.6.0",
-    "@vibez1/extension": "workspace:*",
-    "@vibez1/rpc": "workspace:*",
+    "@vibestudio/extension": "workspace:*",
+    "@vibestudio/rpc": "workspace:*",
     "@sinclair/typebox": "^0.27.8",
     "@workspace/pi-core": "workspace:*",
     "diff": "^7.0.0",

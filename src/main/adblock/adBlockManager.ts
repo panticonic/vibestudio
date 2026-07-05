@@ -16,7 +16,7 @@ import * as path from "path";
 import { session, ipcMain } from "electron";
 import { parse } from "tldts";
 import { getCentralConfigDirectory } from "../paths.js";
-import { createDevLogger } from "@vibez1/dev-log";
+import { createDevLogger } from "@vibestudio/dev-log";
 import { deleteDynamicProperty } from "../../lintHelpers";
 
 const log = createDevLogger("AdBlock");
@@ -78,8 +78,8 @@ const FILTER_LIST_URLS = {
 /**
  * IPC channel names for cosmetic filtering.
  */
-const IPC_INJECT_COSMETICS = "vibez1:adblock:inject-cosmetics";
-const IPC_MUTATION_OBSERVER = "vibez1:adblock:mutation-observer-enabled";
+const IPC_INJECT_COSMETICS = "vibestudio:adblock:inject-cosmetics";
+const IPC_MUTATION_OBSERVER = "vibestudio:adblock:mutation-observer-enabled";
 
 /**
  * Update interval for filter lists (24 hours in milliseconds).

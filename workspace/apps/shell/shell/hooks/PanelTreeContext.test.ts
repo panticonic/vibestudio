@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Panel } from "@vibez1/shared/types";
+import type { Panel } from "@vibestudio/shared/types";
 import { coercePanelTreeUpdate } from "./panelTreeRevision";
 
 function panel(id: string): Panel {

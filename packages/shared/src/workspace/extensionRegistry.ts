@@ -3,7 +3,7 @@
  *
  * Extensions augment a global type registry: each extension's `index.ts`
  * declares `interface WorkspaceExtensions { "@scope/name": Api }` via
- * `declare module "@vibez1/extension"`. That augmentation is only active in a
+ * `declare module "@vibestudio/extension"`. That augmentation is only active in a
  * TypeScript program that actually contains the extension's `index.ts`. The
  * repo-wide `tsc` gets this for free through `include: workspace/**`, but
  * scoped programs (the per-panel typecheck service, Monaco) only contain a
@@ -59,15 +59,15 @@ export const EXTENSION_REGISTRY_SINK_FILENAME = "extensions-registry.ts";
  * first line of the file. Generated output always starts with it, so a sink
  * stays a sink across regenerations.
  */
-export const EXTENSION_REGISTRY_SINK_DIRECTIVE = "// @vibez1-extension-registry-sink";
+export const EXTENSION_REGISTRY_SINK_DIRECTIVE = "// @vibestudio-extension-registry-sink";
 
 interface ExtensionManifest {
   name?: string;
-  vibez1?: { extension?: unknown; entry?: unknown };
+  vibestudio?: { extension?: unknown; entry?: unknown };
 }
 
-/** Matches an extension's `declare module "@vibez1/extension" { ... }` block. */
-const REGISTRY_AUGMENTATION = /declare\s+module\s+["']@vibez1\/extension["']/;
+/** Matches an extension's `declare module "@vibestudio/extension" { ... }` block. */
+const REGISTRY_AUGMENTATION = /declare\s+module\s+["']@vibestudio\/extension["']/;
 
 /** Directory names never descended into while scanning for sinks. */
 const SINK_SCAN_SKIP_DIRS = new Set(["node_modules", "dist", "lib", "build", "out"]);
@@ -79,9 +79,9 @@ function aliasFor(packageName: string): string {
 function isExtensionManifest(pkg: ExtensionManifest | null): pkg is ExtensionManifest & { name: string } {
   return Boolean(
     pkg?.name &&
-      pkg.vibez1 &&
-      typeof pkg.vibez1 === "object" &&
-      "extension" in pkg.vibez1,
+      pkg.vibestudio &&
+      typeof pkg.vibestudio === "object" &&
+      "extension" in pkg.vibestudio,
   );
 }
 
@@ -101,7 +101,7 @@ function readManifest(dir: string): ExtensionManifest | null {
  * typecheck-service) are excluded, so their type graph never enters panels.
  */
 function selfRegisters(dir: string, manifest: ExtensionManifest): boolean {
-  const entry = typeof manifest.vibez1?.entry === "string" ? manifest.vibez1.entry : "index.ts";
+  const entry = typeof manifest.vibestudio?.entry === "string" ? manifest.vibestudio.entry : "index.ts";
   try {
     return REGISTRY_AUGMENTATION.test(fs.readFileSync(path.join(dir, entry), "utf-8"));
   } catch {
@@ -192,15 +192,15 @@ export function renderExtensionRegistry(packageNames: Iterable<string>): string 
   const sorted = [...new Set(packageNames)].sort();
   const header =
     `${EXTENSION_REGISTRY_SINK_DIRECTIVE}\n` +
-    "// Workspace-owned registry sink — the Vibez1 host rewrites everything below the\n" +
+    "// Workspace-owned registry sink — the Vibestudio host rewrites everything below the\n" +
     "// directive line whenever the workspace extension set changes (generator:\n" +
-    "// @vibez1/shared/workspace/extensionRegistry). Keep the directive to stay\n" +
+    "// @vibestudio/shared/workspace/extensionRegistry). Keep the directive to stay\n" +
     "// subscribed; remove it (or delete the file) to opt out; move the file to\n" +
     "// relocate the registry. The committed contents are the fallback used when the\n" +
     "// host has not (re)generated the registry.\n" +
     "//\n" +
     "// Type-only re-exports that pull each workspace extension's module into the\n" +
-    '// type-check program so its `declare module "@vibez1/extension"` registry\n' +
+    '// type-check program so its `declare module "@vibestudio/extension"` registry\n' +
     "// augmentation is active. Re-exported from the runtime SDK's extensions\n" +
     '// surface, so any panel that imports `@workspace/runtime` can type-check\n' +
     '// `extensions.use("...")` against the full registry — the same set the\n' +

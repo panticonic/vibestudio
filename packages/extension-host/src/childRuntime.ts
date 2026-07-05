@@ -11,14 +11,14 @@ import {
   type RpcClient,
   type RpcEnvelope,
   type StreamingMethodFrame,
-} from "@vibez1/rpc";
-import type { WsClientMessage, WsServerMessage } from "@vibez1/shared/ws/protocol";
-import { serverRpcWsUrl } from "@vibez1/shared/connect";
+} from "@vibestudio/rpc";
+import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
+import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import {
   createExtensionProxy,
   type ExtensionsClient,
   type RegistryEntry,
-} from "@vibez1/extension";
+} from "@vibestudio/extension";
 
 import type { ExtensionInvocation } from "./types.js";
 import {
@@ -365,9 +365,9 @@ function createFsClient() {
 }
 
 function createContext() {
-  const name = requiredEnv("VIBEZ1_EXTENSION_NAME");
-  const version = requiredEnv("VIBEZ1_EXTENSION_VERSION");
-  const storageRoot = requiredEnv("VIBEZ1_EXTENSION_STORAGE_DIR");
+  const name = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
+  const version = requiredEnv("VIBESTUDIO_EXTENSION_VERSION");
+  const storageRoot = requiredEnv("VIBESTUDIO_EXTENSION_STORAGE_DIR");
   const normalizedRoot = path.resolve(storageRoot);
   const rootWithSep = normalizedRoot.endsWith(path.sep)
     ? normalizedRoot
@@ -497,12 +497,12 @@ function getRuntimeBridge(): RpcClient {
 }
 
 function gatewayWebSocketUrl(): string {
-  return serverRpcWsUrl(requiredEnv("VIBEZ1_EXTENSION_GATEWAY_URL"));
+  return serverRpcWsUrl(requiredEnv("VIBESTUDIO_EXTENSION_GATEWAY_URL"));
 }
 
 async function connectRuntimeBridge(): Promise<RpcClient> {
-  const token = requiredEnv("VIBEZ1_EXTENSION_RPC_TOKEN");
-  const extensionName = requiredEnv("VIBEZ1_EXTENSION_NAME");
+  const token = requiredEnv("VIBESTUDIO_EXTENSION_RPC_TOKEN");
+  const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
   const ws = new WebSocket(gatewayWebSocketUrl());
   const listeners = new Set<(envelope: RpcEnvelope) => void>();
   const transport: EnvelopeRpcTransport = {
@@ -735,8 +735,8 @@ function settleWaitUntil(waitUntil: Promise<unknown>[]): void {
 
 async function main(): Promise<void> {
   runtimeBridge = await connectRuntimeBridge();
-  const bundlePath = requiredEnv("VIBEZ1_EXTENSION_BUNDLE_PATH");
-  const extensionName = requiredEnv("VIBEZ1_EXTENSION_NAME");
+  const bundlePath = requiredEnv("VIBESTUDIO_EXTENSION_BUNDLE_PATH");
+  const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
   installCommonJsGlobals(bundlePath);
   let mod: Awaited<ReturnType<typeof importExtensionModule>>;
   try {

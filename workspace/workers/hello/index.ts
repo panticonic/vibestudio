@@ -1,5 +1,5 @@
 /**
- * Hello Worker — sample workerd worker demonstrating Vibez1 runtime integration.
+ * Hello Worker — sample workerd worker demonstrating Vibestudio runtime integration.
  *
  * Shows: fs access, workspace tree, and basic HTTP handling.
  */
@@ -36,7 +36,7 @@ export default {
       }
     }
 
-    return new Response(`Hello from Vibez1 Worker!\n\nRoutes:\n  /tree - workspace tree\n  /readfile?path=/package.json - read a file\n`, {
+    return new Response(`Hello from Vibestudio Worker!\n\nRoutes:\n  /tree - workspace tree\n  /readfile?path=/package.json - read a file\n`, {
       headers: { "Content-Type": "text/plain" },
     });
   },

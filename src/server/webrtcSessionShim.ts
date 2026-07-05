@@ -21,9 +21,9 @@
  * WebRTC answerer is a translation layer, not a parallel server.
  */
 
-import { FRAME_END, FRAME_ERROR } from "@vibez1/rpc/protocol/streamCodec";
-import type { StreamFrameType } from "@vibez1/rpc/protocol/bulkMux";
-import { isTerminalCloseCode } from "@vibez1/rpc/protocol/closeCodes";
+import { FRAME_END, FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
+import type { StreamFrameType } from "@vibestudio/rpc/protocol/bulkMux";
+import { isTerminalCloseCode } from "@vibestudio/rpc/protocol/closeCodes";
 import {
   encodeControlFrame,
   SESSION_CLOSED,
@@ -34,9 +34,9 @@ import {
   SESSION_ROUTED_RESPONSE_ERROR,
   SESSION_RPC,
   type SessionControlFrame,
-} from "@vibez1/rpc/protocol/sessionNegotiation";
-import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
-import type { WsClientMessage, WsServerMessage } from "@vibez1/shared/ws/protocol";
+} from "@vibestudio/rpc/protocol/sessionNegotiation";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 
 /** Lane key for pipe-level control frames (no owning session). */
 export const PIPE_LANE = "__pipe";
