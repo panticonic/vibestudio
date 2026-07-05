@@ -10,6 +10,10 @@ type TesseractModule = {
   version?: string;
 };
 
+type TesseractImport = Partial<TesseractModule> & {
+  default?: Partial<TesseractModule>;
+};
+
 type TesseractWorker = {
   recognize(image: Buffer | Uint8Array): Promise<{ data?: TesseractData }>;
   terminate(): Promise<void>;
@@ -42,7 +46,7 @@ export async function recognizePageWithTesseract(
     };
   }
 
-  const tesseract = (await import("tesseract.js")) as unknown as TesseractModule;
+  const tesseract = resolveTesseractModule(await import("tesseract.js"));
   const worker = await tesseract.createWorker(languages.join("+"), 1, {
     langPath,
     cacheMethod: "readOnly",
@@ -67,7 +71,7 @@ export async function recognizePageWithTesseract(
 
 export async function tesseractEngineStatus(languages = ["eng"]): Promise<PdfEngineStatus> {
   try {
-    const tesseract = (await import("tesseract.js")) as unknown as TesseractModule;
+    const tesseract = resolveTesseractModule(await import("tesseract.js"));
     const langPath = await bundledLanguageDataPath(languages);
     return {
       id: "tesseract-ocr",
@@ -90,6 +94,22 @@ export async function tesseractEngineStatus(languages = ["eng"]): Promise<PdfEng
       detail: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+export function resolveTesseractModule(raw: unknown): TesseractModule {
+  const mod = raw && typeof raw === "object" ? (raw as TesseractImport) : {};
+  const candidate =
+    typeof mod.createWorker === "function"
+      ? mod
+      : typeof mod.default?.createWorker === "function"
+        ? mod.default
+        : null;
+
+  if (!candidate) {
+    throw new Error("tesseract.js did not expose createWorker");
+  }
+
+  return candidate as TesseractModule;
 }
 
 async function bundledLanguageDataPath(languages: string[]): Promise<string | null> {

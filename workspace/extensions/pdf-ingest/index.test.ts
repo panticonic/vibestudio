@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { activate } from "./index.js";
 import { createArtifactStoreFromStorage } from "./pdf/artifacts.js";
+import { resolveTesseractModule } from "./pdf/ocr.js";
 import type { PdfRenderedPage } from "./pdf/types.js";
 
 const tempRoots: string[] = [];
@@ -147,6 +148,13 @@ describe("@workspace-extensions/pdf-ingest", () => {
         expect.objectContaining({ id: "poppler-vendor", bundled: false }),
       ])
     );
+  });
+
+  it("accepts both direct and default-wrapped Tesseract module shapes", () => {
+    const createWorker = vi.fn();
+
+    expect(resolveTesseractModule({ createWorker }).createWorker).toBe(createWorker);
+    expect(resolveTesseractModule({ default: { createWorker } }).createWorker).toBe(createWorker);
   });
 });
 
