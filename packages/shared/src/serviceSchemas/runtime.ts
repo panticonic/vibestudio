@@ -234,7 +234,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   retireEntity: {
     description:
-      "Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context.",
+      "Retire a single runtime entity, such as stopping/destroying one worker instance, and fire cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context.",
     args: z.tuple([
       z.object({
         id: z.string().describe("Canonical id of the entity to retire."),
@@ -320,7 +320,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   cloneContext: {
     description:
-      "Clone a context's durable state — every worker/DO's storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Returns the new contextId and the source→clone entity/context maps. With `recursive`, the whole LIFECYCLE subtree is cloned (never following lineage edges); with `targetKey`, the clone is idempotent (a retry returns the same child). The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point, re-homing pending calls) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them.",
+      "Clone a context's durable state — userland worker/DO storage plus the VCS working snapshot (committed + uncommitted) — into a fresh, isolated context. Internal host DOs are not cloned. Returns the new contextId and the source→clone entity/context maps. With `recursive`, the whole LIFECYCLE subtree is cloned (never following lineage edges); with `targetKey`, the clone is idempotent (a retry returns the same child). The caller drives any per-entity rewiring (e.g. a fork re-rooting logs at a point, re-homing pending calls) on the returned clones; the clones are launched parented to the caller, so the caller may freely destroyContext them.",
     args: z.tuple([
       z.object({
         sourceContextId: z.string().describe("Context whose durable state is cloned."),
@@ -328,7 +328,7 @@ export const runtimeMethods = defineServiceMethods({
           .array(z.string())
           .optional()
           .describe(
-            "Canonical ids of the worker/DO entities to clone; applies to the ROOT context only (recursive descendants always clone in full). Omit to clone every durable entity. (The file/VCS snapshot is always the whole context.)"
+            "Canonical ids of the userland worker/DO entities to clone; applies to the ROOT context only (recursive descendants always clone in full). Internal host DOs are excluded. Omit to clone every userland durable entity. (The file/VCS snapshot is always the whole context.)"
           ),
         recursive: z
           .boolean()
@@ -364,7 +364,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   destroyContext: {
     description:
-      "Retire every entity in a context and delete its folder + VCS state. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context.",
+      "Destroy a whole logical context branch: retire every entity in that context and delete its folder + VCS state. Do not use this to stop one worker; use runtime.retireEntity for a single worker/entity. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context.",
     args: z.tuple([
       z.object({
         contextId: z.string().describe("Context to destroy (all its entities are retired)."),

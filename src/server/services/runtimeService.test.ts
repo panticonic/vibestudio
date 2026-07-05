@@ -753,6 +753,57 @@ describe("runtimeService.retireEntity", () => {
     // entityCleanupComplete dispatch should NOT have been issued.
     expect(spy.mock.calls.some((c) => c[1] === "entityCleanupComplete")).toBe(false);
   });
+
+  it("does not prompt when an eval retires the entity it launched into an isolated context", async () => {
+    const { service, approvalQueue, instance } = await buildDeps();
+    const caller = evalDoCaller();
+    const handle = (await service.handler({ caller }, "createEntity", [
+      doCreateSpec({
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "headless-eval",
+        contextId: "ctx-eval-isolated",
+      }),
+    ])) as { id: string };
+    expect(instance.entityResolve(handle.id)?.parentId).toBe(caller.runtime.id);
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.handler({ caller }, "retireEntity", [{ id: handle.id }]);
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(instance.entityResolve(handle.id)?.status).toBe("retired");
+  });
+
+  it("prompts with retire-specific copy when a caller retires a foreign entity", async () => {
+    const { service, approvalQueue } = await buildDeps({ approvalDecision: "session" });
+    const owner = evalDoCaller("do:vibez1/internal:EvalDO:owner");
+    const handle = (await service.handler({ caller: owner }, "createEntity", [
+      doCreateSpec({
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "foreign-headless",
+        contextId: "ctx-foreign-retire",
+      }),
+    ])) as { id: string };
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.handler({ caller: panelCaller("panel:other") }, "retireEntity", [
+      { id: handle.id },
+    ]);
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "context.boundary",
+        title: "Retire runtime entity in another context",
+        description: expect.stringContaining("This stops a runtime entity"),
+        operation: expect.objectContaining({ kind: "runtime", verb: "Retire entity" }),
+        details: expect.arrayContaining([
+          { label: "Runtime entity", value: handle.id },
+          { label: "Context", value: "ctx-foreign-retire" },
+        ]),
+      })
+    );
+  });
 });
 
 describe("runtimeService singleton DO + cross-panel sharing", () => {
@@ -1075,6 +1126,14 @@ const workerCaller = (id = "worker:workers/fork:fork", _ctx = "ctx-fork") =>
     effectiveVersion: "v1",
   });
 
+const evalDoCaller = (id = "do:vibez1/internal:EvalDO:eval-1") =>
+  createVerifiedCaller(id, "do", {
+    callerId: id,
+    callerKind: "do",
+    repoPath: "vibez1/internal",
+    effectiveVersion: "internal",
+  });
+
 /** Seed a channel + agent DO in `contextId` (parented to `parent`). */
 async function seedConversation(
   service: Awaited<ReturnType<typeof buildDeps>>["service"],
@@ -1105,6 +1164,18 @@ async function seedDO(
 ) {
   return (await service.handler({ caller: parent }, "createEntity", [
     { kind: "do", source: "workers/agent", className: "AgentDO", key, contextId },
+  ])) as { id: string };
+}
+
+/** Seed one host-internal EvalDO in `contextId`. */
+async function seedInternalEvalDO(
+  service: Awaited<ReturnType<typeof buildDeps>>["service"],
+  contextId: string,
+  key = "eval-1",
+  parent = serverCaller
+) {
+  return (await service.handler({ caller: parent }, "createEntity", [
+    { kind: "do", source: "vibez1/internal", className: "EvalDO", key, contextId },
   ])) as { id: string };
 }
 
@@ -1192,6 +1263,37 @@ describe("runtimeService.cloneContext", () => {
     expect(result.entities[0]!.sourceId).toBe(ch.id);
     // Only the channel's storage was cloned (the agent was not in `include`).
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips host-internal DOs when cloning a context", async () => {
+    const { service, cloneDurableStorage } = await buildDeps();
+    const { ch, agent } = await seedConversation(service, "ctx-with-internal");
+    const internal = await seedInternalEvalDO(service, "ctx-with-internal");
+
+    const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
+      { sourceContextId: "ctx-with-internal" },
+    ])) as { entities: CloneEntity[] };
+
+    expect(result.entities.map((e) => e.sourceId).sort()).toEqual([agent.id, ch.id].sort());
+    expect(result.entities.some((e) => e.sourceId === internal.id)).toBe(false);
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
+    expect(cloneDurableStorage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: "vibez1/internal" })
+    );
+  });
+
+  it("treats a context with only host-internal DOs as having no clonable entities", async () => {
+    const forkContext = vi.fn(async () => {});
+    const { service, contextFolders } = await buildDeps({ vcsContexts: { forkContext } });
+    await seedInternalEvalDO(service, "ctx-internal-only");
+
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [
+        { sourceContextId: "ctx-internal-only" },
+      ])
+    ).rejects.toThrow(/no clonable/i);
+    expect(forkContext).not.toHaveBeenCalled();
+    expect(contextFolders.ensureContextFolder).not.toHaveBeenCalled();
   });
 
   it("parents the clones to the caller", async () => {
@@ -1399,6 +1501,26 @@ describe("runtimeService.destroyContext", () => {
     expect(destroyDurableStorage).toHaveBeenCalledTimes(2);
     expect(dropContext).toHaveBeenCalledWith("ctx-dead");
     expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-dead");
+  });
+
+  it("retires host-internal DOs without deleting internal DO storage", async () => {
+    const { service, instance, destroyDurableStorage } = await buildDeps();
+    const userland = await seedDO(service, "ctx-mixed-dead", "agent-1");
+    const internal = await seedInternalEvalDO(service, "ctx-mixed-dead");
+
+    await service.handler({ caller: serverCaller }, "destroyContext", [
+      { contextId: "ctx-mixed-dead" },
+    ]);
+
+    expect(instance.entityResolve(userland.id)?.status).toBe("retired");
+    expect(instance.entityResolve(internal.id)?.status).toBe("retired");
+    expect(destroyDurableStorage).toHaveBeenCalledTimes(1);
+    expect(destroyDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "workers/agent", className: "AgentDO", key: "agent-1" })
+    );
+    expect(destroyDurableStorage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ source: "vibez1/internal" })
+    );
   });
 
   it("is free to destroy a context you fully own (every entity parented to you)", async () => {

@@ -35,6 +35,7 @@ import {
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
+import { isInternalDOSource } from "../internalDOs/internalDoLoader.js";
 
 export interface RuntimeEntityHooks {
   /** Prepare runtime resources for a "do" entity. Returns targetId + effectiveVersion. */
@@ -210,6 +211,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   function requireTrustedRuntimeHost(caller: VerifiedCaller, method: string): void {
     if (isTrustedRuntimeHost(caller)) return;
     throw new Error(`runtime.${method} is restricted to trusted host callers`);
+  }
+
+  function callerOwnsEntity(caller: VerifiedCaller, entity: EntityRecord): boolean {
+    return caller.runtime.id === entity.id || entity.parentId === caller.runtime.id;
   }
 
   async function resolveContextPolicy(
@@ -451,12 +456,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     // Gate BEFORE mutating. Resolve the target's context via the DURABLE store
     // (the active cache may already be evicting it). A null/unknown/already-
     // retired target ⇒ the retire below no-ops ⇒ allow.
-    const targetContextId = await store.resolveContext(id);
-    if (targetContextId != null) {
-      await gateContextLaunch(caller, targetContextId, {
+    const target = await store.resolveRecord(id);
+    if (target?.status === "active" && !callerOwnsEntity(caller, target)) {
+      await gateContextLaunch(caller, target.contextId, {
         kind: "runtime",
-        verb: "Destroy",
+        verb: removeContext ? "Retire entity and remove context" : "Retire entity",
         targetLabel: id,
+        targetLabelName: "Runtime entity",
         ...(removeContext ? { severity: "severe" as const } : {}),
       });
     }
@@ -503,14 +509,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     };
   }
 
+  function isCloneableDurableEntity(e: EntityRecord): boolean {
+    if (e.kind === "worker") return true;
+    return e.kind === "do" && !isInternalDOSource(e.source.repoPath);
+  }
+
   /**
    * Clone a whole context's durable substrate into a fresh, isolated context:
-   * every worker/DO's storage (server-internal cloneDO) + a VCS snapshot of the
-   * source's working files. Returns the new contextId + source→clone map. Does NOT
-   * invoke the cloned DOs — server→DO calls are out of band; a caller that needs to
-   * "activate" clones (re-root logs, rebind the channel) drives that via the clones'
-   * own methods (the fork's `postClone`). Gated on the SOURCE: cloning your own
-   * context is free; cloning a foreign existing one prompts.
+   * userland worker/DO state + a VCS snapshot of the source's working files.
+   * Host-internal DOs are part of the runtime substrate, not userland state, and
+   * are deliberately excluded. Returns the new contextId + source→clone map. Does
+   * NOT invoke the cloned DOs — server→DO calls are out of band; a caller that
+   * needs to "activate" clones (re-root logs, rebind the channel) drives that via
+   * the clones' own methods (the fork's `postClone`). Gated on the SOURCE:
+   * cloning your own context is free; cloning a foreign existing one prompts.
    */
   async function cloneContext(
     caller: VerifiedCaller,
@@ -593,7 +605,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       allActive.filter(
         (e) =>
           e.contextId === srcCtx &&
-          (e.kind === "do" || e.kind === "worker") &&
+          isCloneableDurableEntity(e) &&
           (include ? include.has(e.id) : true)
       );
     if (clonableIn(sourceContextId, rootInclude).length === 0) {
@@ -708,12 +720,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   }
 
   /**
-   * Tear a whole context down: retire every entity, reclaim each DO's SQLite
-   * storage, then drop the VCS state + folder. Free for your own context or one you
-   * fully own (every active entity launched by you — e.g. a context you just cloned);
-   * gated (severe) when destroying another agent or panel's existing context.
-   */
-  /**
    * Tear down ONE context: retire its entities, reclaim each DO's storage, drop
    * its edge rows + VCS state + folder. `gate` is true only for the destroy
    * ROOT — lifecycle descendants reached via cascade are owned by construction.
@@ -742,7 +748,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       const rec = await retireRecord(e.id);
       // DO storage is NOT reclaimed by retire (kept for re-attach) — a full context
       // destroy is the one path that deletes it.
-      if (rec && rec.kind === "do" && rec.className) {
+      if (rec && rec.kind === "do" && rec.className && !isInternalDOSource(rec.source.repoPath)) {
         await deps.hooks
           .destroyDurableStorage?.({
             source: rec.source.repoPath,
