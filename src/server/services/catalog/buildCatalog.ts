@@ -54,6 +54,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         argsSchema: ser.argsSchema,
         ...("returnsSchema" in ser ? { returnsSchema: ser.returnsSchema } : {}),
         ...(method.examples ? { examples: method.examples } : {}),
+        ...(method.docs ? { docs: method.docs } : {}),
       });
     }
   }
@@ -98,4 +99,12 @@ export function isCatalogEntryVisible(entry: CatalogEntry, callerKind: CallerKin
   if (callers.includes(callerKind)) return true;
   if (callerKind === "do" && callers.includes("worker")) return true;
   return false;
+}
+
+export function isCatalogEntryDiscoverable(
+  entry: CatalogEntry,
+  opts?: { includeInternal?: boolean }
+): boolean {
+  if (opts?.includeInternal) return true;
+  return entry.docs?.visibility !== "internal";
 }

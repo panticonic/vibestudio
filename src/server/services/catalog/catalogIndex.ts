@@ -13,11 +13,17 @@
 import type { CallerKind } from "@vibez1/shared/serviceDispatcher";
 import type { RuntimeSurface } from "@vibez1/shared/runtimeSurface";
 import type { CatalogEntry, CatalogHit, CatalogSurface } from "@vibez1/shared/serviceSchemas/docs";
-import { buildCatalog, isCatalogEntryVisible, type BuildCatalogDeps } from "./buildCatalog.js";
+import {
+  buildCatalog,
+  isCatalogEntryDiscoverable,
+  isCatalogEntryVisible,
+  type BuildCatalogDeps,
+} from "./buildCatalog.js";
 
 export interface CatalogSearchOpts {
   surface?: CatalogSurface;
   limit?: number;
+  includeInternal?: boolean;
 }
 
 export interface CatalogIndex {
@@ -50,6 +56,10 @@ function serviceSourceKey(def: CatalogServiceDefinition): string {
         method.policy?.allowed.join(",") ?? "",
         method.access?.sensitivity ?? "",
         method.description ?? "",
+        method.docs?.visibility ?? "",
+        method.docs?.audience?.join(",") ?? "",
+        method.docs?.preferred ?? "",
+        method.docs?.reason ?? "",
       ].join(":")
     )
     .sort()
@@ -136,6 +146,7 @@ export function createCatalogIndex(load: () => BuildCatalogDeps): CatalogIndex {
       const limit = opts?.limit ?? 20;
       return entries()
         .filter((e) => isCatalogEntryVisible(e, callerKind))
+        .filter((e) => isCatalogEntryDiscoverable(e, opts))
         .filter((e) => (opts?.surface ? e.surface === opts.surface : true))
         .map((e) => ({ e, s: score(e, terms) }))
         .filter((x) => x.s > 0)
@@ -158,6 +169,7 @@ export function createCatalogIndex(load: () => BuildCatalogDeps): CatalogIndex {
       const counts = new Map<CatalogSurface, number>();
       for (const e of entries()) {
         if (!isCatalogEntryVisible(e, callerKind)) continue;
+        if (!isCatalogEntryDiscoverable(e)) continue;
         counts.set(e.surface, (counts.get(e.surface) ?? 0) + 1);
       }
       return [...counts].map(([surface, count]) => ({ surface, count }));

@@ -17,6 +17,16 @@ import { defineServiceMethods } from "../typedServiceClient.js";
 export const catalogSurfaceSchema = z.enum(["service", "runtime"]);
 export type CatalogSurface = z.infer<typeof catalogSurfaceSchema>;
 
+export const docsVisibilitySchema = z.enum(["public", "advanced", "internal"]);
+export type DocsVisibility = z.infer<typeof docsVisibilitySchema>;
+
+const methodDocsSchema = z.object({
+  visibility: docsVisibilitySchema.optional(),
+  audience: z.array(z.enum(["runtime-user", "raw-rpc", "runtime-implementer"])).optional(),
+  preferred: z.string().optional(),
+  reason: z.string().optional(),
+});
+
 /** Serialized access descriptor (loose; typed home is MethodAccessDescriptor). */
 const catalogAccessSchema = z.record(z.unknown());
 
@@ -37,6 +47,7 @@ export const catalogEntrySchema = z.object({
   /** Namespace member names (runtime surface entries). */
   members: z.array(z.string()).optional(),
   examples: z.array(z.unknown()).optional(),
+  docs: methodDocsSchema.optional(),
 });
 export type CatalogEntry = z.infer<typeof catalogEntrySchema>;
 
@@ -54,6 +65,7 @@ const searchOptsSchema = z
   .object({
     surface: catalogSurfaceSchema.optional(),
     limit: z.number().int().positive().max(100).optional(),
+    includeInternal: z.boolean().optional(),
   })
   .optional();
 
@@ -77,6 +89,7 @@ export const serializedServiceMethodSchema = z.object({
   errors: z.array(z.unknown()).optional(),
   seeAlso: z.array(z.string()).optional(),
   deprecated: z.record(z.unknown()).optional(),
+  docs: methodDocsSchema.optional(),
   argsSchema: z.record(z.unknown()),
   returnsSchema: z.record(z.unknown()).optional(),
 });
@@ -92,7 +105,7 @@ export type SerializedServiceDefinition = z.infer<typeof serializedServiceSchema
 export const docsMethods = defineServiceMethods({
   search: {
     description:
-      "Search the capability catalog (services and runtime APIs) by keyword. Results are filtered to what the calling kind may invoke. Use docs.describe(id) for the full typed schema, access rules, and examples.",
+      "Search the capability catalog (services and runtime APIs) by keyword. Results are filtered to what the calling kind may invoke and hide internal wire methods unless includeInternal is true. Use docs.describe(id) for the full typed schema, access rules, and examples.",
     args: z.tuple([z.string(), searchOptsSchema]),
     returns: z.array(catalogHitSchema),
     access: READONLY_ACCESS,
@@ -100,7 +113,7 @@ export const docsMethods = defineServiceMethods({
   },
   describe: {
     description:
-      "Return the full catalog entry for an id (typed args/returns schema, access/restrictedness, examples). Returns null if unknown or not visible to the caller.",
+      "Return the full catalog entry for an id (typed args/returns schema, access/restrictedness, examples, docs metadata). Returns null if unknown or not visible to the caller.",
     args: z.tuple([z.string()]),
     returns: catalogEntrySchema.nullable(),
     access: READONLY_ACCESS,

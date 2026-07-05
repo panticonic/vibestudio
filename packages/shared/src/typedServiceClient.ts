@@ -43,6 +43,18 @@ export interface MethodDeprecation {
   reason?: string;
 }
 
+export interface MethodDocsMetadata {
+  /**
+   * Documentation visibility is separate from invocation policy. Internal wire
+   * methods can remain callable by wrappers while staying out of default agent
+   * discovery.
+   */
+  visibility?: "public" | "advanced" | "internal";
+  audience?: Array<"runtime-user" | "raw-rpc" | "runtime-implementer">;
+  preferred?: string;
+  reason?: string;
+}
+
 /**
  * Pure-data schema for one RPC method (no handler — that's server-side).
  *
@@ -72,6 +84,8 @@ export interface MethodSchema {
   seeAlso?: string[];
   /** Deprecation marker. */
   deprecated?: MethodDeprecation;
+  /** Agent-facing docs controls, distinct from service access policy. */
+  docs?: MethodDocsMetadata;
 }
 
 export type ServiceMethodSchemas = Record<string, MethodSchema>;

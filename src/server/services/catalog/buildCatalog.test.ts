@@ -26,6 +26,11 @@ const demo: ServiceDefinition = {
       policy: { allowed: ["do", "worker"] },
       access: { sensitivity: "read" },
     },
+    wire: {
+      description: "Internal wire method.",
+      args: z.tuple([]),
+      docs: { visibility: "internal", preferred: "Use demo.get instead." },
+    },
   },
   handler: async () => undefined,
 };
@@ -71,6 +76,11 @@ describe("buildCatalog", () => {
     expect(get.description).toBe("Get a value.");
     const wipe = byId(entries, "service:demo.admin.wipe");
     expect(wipe.returnsSchema).toBeUndefined();
+    const wire = byId(entries, "service:demo.wire");
+    expect(wire.docs).toMatchObject({
+      visibility: "internal",
+      preferred: "Use demo.get instead.",
+    });
   });
 
   it("derives access.callers with method > service precedence", () => {

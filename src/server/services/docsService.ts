@@ -14,6 +14,7 @@ import { checkServiceAccess } from "@vibez1/shared/servicePolicy";
 import { docsMethods, type SerializedServiceDefinition } from "@vibez1/shared/serviceSchemas/docs";
 import { createCatalogIndex, type CatalogSearchOpts } from "./catalog/catalogIndex.js";
 import { serializeDef } from "./catalog/serialize.js";
+import { isCatalogEntryDiscoverable } from "./catalog/buildCatalog.js";
 
 export function createDocsService(deps: {
   dispatcher: ServiceDispatcher;
@@ -35,6 +36,19 @@ export function createDocsService(deps: {
     for (const name of Object.keys(full.methods)) {
       try {
         checkServiceAccess(def.name, kind, deps.dispatcher, name);
+        const sourceMethod = def.methods[name];
+        if (
+          sourceMethod &&
+          !isCatalogEntryDiscoverable({
+            id: `service:${def.name}.${name}`,
+            surface: "service",
+            qualifiedName: `${def.name}.${name}`,
+            title: `${def.name}.${name}`,
+            docs: sourceMethod.docs,
+          })
+        ) {
+          continue;
+        }
         const method = full.methods[name];
         if (method) methods[name] = method;
       } catch {

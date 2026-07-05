@@ -25,11 +25,24 @@ const blobstore: ServiceDefinition = {
       args: z.tuple([]),
       policy: { allowed: ["server"] },
     },
+    "wire.handle": {
+      description: "Internal wire method",
+      args: z.tuple([]),
+      docs: {
+        visibility: "internal",
+        preferred: "Use blobstore.putText instead.",
+      },
+    },
   },
   handler: async () => undefined,
 };
 
-const dispatcher = { getServiceDefinitions: () => [blobstore] } as unknown as ServiceDispatcher;
+const dispatcher = {
+  getServiceDefinitions: () => [blobstore],
+  getPolicy: (service: string) => (service === "blobstore" ? blobstore.policy : undefined),
+  getMethodPolicy: (service: string, method: string) =>
+    service === "blobstore" ? blobstore.methods[method]?.policy : undefined,
+} as unknown as ServiceDispatcher;
 const emptySurface = (target: "panel" | "workerRuntime"): RuntimeSurface => ({
   target,
   description: "",
@@ -62,6 +75,20 @@ describe("docs service (caller-aware)", () => {
     expect(serverHits.find((h) => h.id === "service:blobstore.admin.wipe")).toBeTruthy();
   });
 
+  it("hides internal docs from default search but allows explicit opt-in", async () => {
+    const defaultHits = (await svc.handler(ctx("panel"), "search", [
+      "wire internal",
+      undefined,
+    ])) as CatalogHit[];
+    expect(defaultHits.find((h) => h.id === "service:blobstore.wire.handle")).toBeUndefined();
+
+    const internalHits = (await svc.handler(ctx("panel"), "search", [
+      "wire internal",
+      { includeInternal: true },
+    ])) as CatalogHit[];
+    expect(internalHits.find((h) => h.id === "service:blobstore.wire.handle")).toBeTruthy();
+  });
+
   it("describe returns null for hidden entries, the entry for allowed callers", async () => {
     expect(
       await svc.handler(ctx("panel"), "describe", ["service:blobstore.admin.wipe"])
@@ -71,6 +98,17 @@ describe("docs service (caller-aware)", () => {
     ])) as CatalogEntry;
     expect(entry.qualifiedName).toBe("blobstore.admin.wipe");
     expect((entry.access as { callers?: string[] }).callers).toEqual(["server"]);
+  });
+
+  it("describe can open an exact internal entry with docs guidance", async () => {
+    const entry = (await svc.handler(ctx("panel"), "describe", [
+      "service:blobstore.wire.handle",
+    ])) as CatalogEntry;
+    expect(entry.qualifiedName).toBe("blobstore.wire.handle");
+    expect(entry.docs).toMatchObject({
+      visibility: "internal",
+      preferred: "Use blobstore.putText instead.",
+    });
   });
 
   it("getSchema returns args/returns JSON Schema for visible methods", async () => {
@@ -93,6 +131,15 @@ describe("docs service (caller-aware)", () => {
       count: number;
     }>;
     expect(surfaces.find((s) => s.surface === "service")?.count).toBeGreaterThan(0);
+  });
+
+  it("describeService omits internal methods from broad per-service docs", async () => {
+    const def = (await svc.handler(ctx("panel"), "describeService", ["blobstore"])) as {
+      methods: Record<string, unknown>;
+    };
+
+    expect(def.methods["putText"]).toBeTruthy();
+    expect(def.methods["wire.handle"]).toBeUndefined();
   });
 
   it("search filters runtime entries to the caller's runtime target", async () => {

@@ -15,7 +15,7 @@
 
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "../servicePolicy.js";
-import { defineServiceMethods } from "../typedServiceClient.js";
+import { defineServiceMethods, type MethodDocsMetadata } from "../typedServiceClient.js";
 
 // Access descriptors shared across the read / write / destructive method
 // groups. The caller-kind gate stays on the service-level `policy` (see
@@ -30,6 +30,20 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
 };
 const DESTRUCTIVE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "destructive",
+};
+const FS_OPEN_RUNTIME_DOCS: MethodDocsMetadata = {
+  audience: ["runtime-user", "raw-rpc"],
+  preferred:
+    "In eval/runtime, use `const handle = await fs.open(path, flags);` and call `handle.read(...)`, `handle.write(...)`, `handle.stat()`, or `handle.close()`.",
+  reason:
+    "The raw RPC method returns a server-tracked handle id; the runtime binding wraps it as a FileHandle.",
+};
+const FS_HANDLE_WIRE_DOCS: MethodDocsMetadata = {
+  visibility: "internal",
+  audience: ["runtime-implementer", "raw-rpc"],
+  preferred:
+    "In eval/runtime, use the FileHandle returned by `fs.open(...)` (`handle.read`, `handle.write`, `handle.stat`, `handle.close`) instead of calling `fs.handle*` directly.",
+  reason: "Low-level wire method used by runtime wrappers to manage server-tracked handle ids.",
 };
 
 export const fsBinaryEnvelopeSchema = z.object({
@@ -334,7 +348,7 @@ export const fsMethods = defineServiceMethods({
   // File handles
   open: {
     description:
-      "Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle.",
+      "Raw RPC: open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId. In eval/runtime, this is wrapped as a FileHandle with read/write/stat/close methods. Handles are caller-scoped and auto-close after 5 minutes idle.",
     args: z.union([
       z.tuple([z.string(), z.string().optional(), z.number().optional()]),
       z.tuple([z.string(), z.string(), z.string().optional(), z.number().optional()]),
@@ -346,6 +360,7 @@ export const fsMethods = defineServiceMethods({
       sensitivity: "write",
     },
     examples: [{ args: ["/data.bin", "r"] }],
+    docs: FS_OPEN_RUNTIME_DOCS,
   },
   handleRead: {
     description:
@@ -360,6 +375,7 @@ export const fsMethods = defineServiceMethods({
     }),
     access: READ_ACCESS,
     examples: [{ args: [1, 4096, null] }],
+    docs: FS_HANDLE_WIRE_DOCS,
   },
   handleWrite: {
     description:
@@ -370,6 +386,7 @@ export const fsMethods = defineServiceMethods({
     ]),
     returns: z.object({ bytesWritten: z.number().describe("Number of bytes written.") }),
     access: WRITE_ACCESS,
+    docs: FS_HANDLE_WIRE_DOCS,
   },
   handleClose: {
     description:
@@ -379,6 +396,7 @@ export const fsMethods = defineServiceMethods({
     access: {
       sensitivity: "write",
     },
+    docs: FS_HANDLE_WIRE_DOCS,
   },
   handleStat: {
     description:
@@ -386,6 +404,7 @@ export const fsMethods = defineServiceMethods({
     args: z.union([z.tuple([z.number()]), z.tuple([z.string(), z.number()])]),
     returns: statSchema,
     access: READ_ACCESS,
+    docs: FS_HANDLE_WIRE_DOCS,
   },
   // Tmp files
   mktemp: {
