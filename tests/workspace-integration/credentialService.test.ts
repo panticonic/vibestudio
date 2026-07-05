@@ -1721,6 +1721,118 @@ describe("credentialService", () => {
     await pending;
   });
 
+  it("credentials.connect infers the owning panel handoff for direct DO OAuth connects", async () => {
+    const emit = vi.fn();
+    const eventService = targetedOpenEventService(emit);
+    const getAuthorizingShell = vi.fn((principalId: string) =>
+      principalId === "panel:owner"
+        ? {
+            caller: { runtime: { id: "shell:owner", kind: "shell" } },
+            connectionId: "owner-conn",
+          }
+        : null
+    );
+    const resolvePanelSlotByEntity = vi.fn(async (entityId: string) =>
+      entityId === "panel:owner" ? "panel:tree/owner" : null
+    );
+    const service = createCredentialService({
+      credentialStore: new MemoryCredentialStore() as never,
+      eventService: eventService as never,
+      connectionLookup: { getAuthorizingShell },
+      runtimeInspector: {
+        listActiveEntities: () => [
+          {
+            id: "panel:owner",
+            kind: "panel",
+            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            contextId: "ctx-owner",
+            key: "owner",
+            createdAt: Date.now(),
+            status: "active",
+            cleanupComplete: true,
+          },
+          {
+            id: "worker:/owner:jobs",
+            kind: "worker",
+            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            contextId: "ctx-owner",
+            key: "jobs",
+            parentId: "panel:owner",
+            createdAt: Date.now(),
+            status: "active",
+            cleanupComplete: true,
+          },
+          {
+            id: "do:/owner:Agent:main",
+            kind: "do",
+            source: { repoPath: "/owner", effectiveVersion: "hash-1" },
+            contextId: "ctx-owner",
+            className: "Agent",
+            key: "main",
+            parentId: "worker:/owner:jobs",
+            createdAt: Date.now(),
+            status: "active",
+            cleanupComplete: true,
+          },
+        ],
+        resolvePanelSlotByEntity,
+      },
+      approvalQueue: approvingQueue() as never,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: "token",
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          )
+      )
+    );
+
+    const { pending, redirectUri, state } = await startOAuthConnection(
+      service,
+      emit,
+      { caller: verifiedTestCaller("do:/owner:Agent:main", "do") },
+      {
+        flow: {
+          type: "oauth2-auth-code-pkce",
+          authorizeUrl: "https://auth.example.test/oauth/authorize",
+          tokenUrl: "https://auth.example.test/oauth/token",
+          clientId: "client-1",
+        },
+        credential: {
+          label: "Example OAuth",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+        },
+      }
+    );
+
+    expect(getAuthorizingShell).toHaveBeenCalledWith("panel:owner");
+    expect(resolvePanelSlotByEntity).toHaveBeenCalledWith("panel:owner");
+    expect(eventService.emitToConnection).toHaveBeenCalledWith(
+      "shell:owner",
+      "owner-conn",
+      "external-open:open",
+      expect.objectContaining({
+        callerId: "do:/owner:Agent:main",
+        callerKind: "do",
+      })
+    );
+    await deliverOAuthCallback(
+      redirectUri,
+      new URLSearchParams({
+        code: "code-1",
+        state,
+      })
+    );
+    await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
+  });
+
   it("credentials.connect can open OAuth externally for a worker-requested app handoff", async () => {
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);

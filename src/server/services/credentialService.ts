@@ -524,10 +524,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     );
   }
 
-  function resolveBrowserHandoffTarget(
+  async function resolveBrowserHandoffTarget(
     ctx: ServiceContext,
     handoffTarget?: { callerId: string; callerKind: BrowserHandoffCallerKind }
-  ): BrowserHandoffResolution {
+  ): Promise<BrowserHandoffResolution> {
     const targetCallerId = handoffTarget?.callerId ?? ctx.caller.runtime.id;
     const targetCallerKind = handoffTarget?.callerKind ?? ctx.caller.runtime.kind;
     const diagnosticsBase = {
@@ -572,38 +572,86 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       );
     }
     if (targetCallerKind === "panel") {
-      const shellConnection = connectionLookup?.getAuthorizingShell(targetCallerId);
-      if (!shellConnection) {
-        const ownerCallerId = !connectionLookup ? targetCallerId : undefined;
-        if (!ownerCallerId) {
-          return {
-            target: null,
-            diagnostics: { ...diagnosticsBase, ownerLookup: "missing" },
-          };
-        }
-        return resolved(
-          {
-            deliveryCallerId: ownerCallerId,
-            deliveryCallerKind: "shell",
-            parentPanelId: targetCallerId,
-          },
-          "not-configured"
-        );
-      }
-      return resolved(
-        {
-          deliveryCallerId: shellConnection.caller.runtime.id,
-          deliveryCallerKind: "shell",
-          deliveryConnectionId: shellConnection.connectionId,
-          parentPanelId: targetCallerId,
-        },
-        "found"
-      );
+      return resolvePanelBrowserHandoffTarget(targetCallerId, diagnosticsBase, targetCallerId);
+    }
+    if (!handoffTarget && (targetCallerKind === "worker" || targetCallerKind === "do")) {
+      return resolveRuntimeParentBrowserHandoffTarget(ctx, diagnosticsBase);
     }
     return {
       target: null,
       diagnostics: { ...diagnosticsBase, ownerLookup: "unsupported-kind" },
     };
+  }
+
+  async function resolveRuntimeParentBrowserHandoffTarget(
+    ctx: ServiceContext,
+    diagnosticsBase: Omit<
+      BrowserHandoffDiagnostics,
+      "ownerLookup" | "deliveryCallerId" | "deliveryCallerKind" | "deliveryConnectionId"
+    >
+  ): Promise<BrowserHandoffResolution> {
+    const runtimeIndex = await buildCredentialRuntimeIndex();
+    const entity = runtimeIndex.entitiesById.get(ctx.caller.runtime.id) ?? null;
+    const panelEntity = entity ? findNearestCredentialPanelEntity(entity, runtimeIndex) : null;
+    if (!panelEntity) {
+      return {
+        target: null,
+        diagnostics: { ...diagnosticsBase, ownerLookup: "missing" },
+      };
+    }
+    const parentPanelId =
+      (await resolvePanelSlotForCredentialEntity(panelEntity.id, runtimeIndex)) ?? panelEntity.id;
+    return resolvePanelBrowserHandoffTarget(panelEntity.id, diagnosticsBase, parentPanelId);
+  }
+
+  function resolvePanelBrowserHandoffTarget(
+    targetCallerId: string,
+    diagnosticsBase: Omit<
+      BrowserHandoffDiagnostics,
+      "ownerLookup" | "deliveryCallerId" | "deliveryCallerKind" | "deliveryConnectionId"
+    >,
+    parentPanelId: string
+  ): BrowserHandoffResolution {
+    const resolved = (
+      target: BrowserHandoffTarget,
+      ownerLookup: BrowserHandoffOwnerLookupStatus
+    ): BrowserHandoffResolution => ({
+      target,
+      diagnostics: {
+        ...diagnosticsBase,
+        ownerLookup,
+        deliveryCallerId: target.deliveryCallerId,
+        deliveryCallerKind: target.deliveryCallerKind,
+        deliveryConnectionId: target.deliveryConnectionId,
+      },
+    });
+    const shellConnection = connectionLookup?.getAuthorizingShell(targetCallerId);
+    if (!shellConnection) {
+      const ownerCallerId = !connectionLookup ? targetCallerId : undefined;
+      if (!ownerCallerId) {
+        return {
+          target: null,
+          diagnostics: { ...diagnosticsBase, ownerLookup: "missing" },
+        };
+      }
+      return resolved(
+        {
+          deliveryCallerId: ownerCallerId,
+          deliveryCallerKind: "shell",
+          parentPanelId,
+        },
+        "not-configured"
+      );
+    }
+    return resolved(
+      {
+        deliveryCallerId: shellConnection.caller.runtime.id,
+        deliveryCallerKind: "shell",
+        deliveryConnectionId: shellConnection.connectionId,
+        parentPanelId,
+      },
+      "found"
+    );
   }
 
   function emitToBrowserTarget<E extends EventName>(
@@ -2121,7 +2169,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         Date.now() + Math.max(1, request.flow.expiresInSeconds ?? device.expiresInSeconds) * 1000,
       oauthTokenOrigin: new URL(request.flow.tokenUrl).origin,
     });
-    const browserResolution = resolveBrowserHandoffTarget(ctx);
+    const browserResolution = await resolveBrowserHandoffTarget(ctx);
     const browserDelivery = browserResolution.target
       ? emitToBrowserTarget(browserResolution.target, "external-open:open", {
           url: verificationUrl,
@@ -2286,7 +2334,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       callback?.expectState(stateParam);
       const authorizeUrl = new URL(request.flow.authorizeUrl);
       authorizeUrl.searchParams.set("oauth_token", requestToken.token);
-      const browserResolution = resolveBrowserHandoffTarget(ctx, handoffTarget);
+      const browserResolution = await resolveBrowserHandoffTarget(ctx, handoffTarget);
       const browserDelivery = browserResolution.target
         ? emitToBrowserTarget(browserResolution.target, "external-open:open", {
             url: authorizeUrl.toString(),
@@ -2443,7 +2491,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           "client-loopback OAuth requires an external browser"
         );
       }
-      const browserResolution = resolveBrowserHandoffTarget(ctx, explicitHandoffTarget);
+      const browserResolution = await resolveBrowserHandoffTarget(ctx, explicitHandoffTarget);
       const browserTarget = browserResolution.target;
       if (!browserTarget) {
         throw new OAuthConnectionError(
