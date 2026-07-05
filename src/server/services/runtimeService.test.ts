@@ -195,6 +195,14 @@ const appCaller = (id = "app:apps/shell:desktop", _contextId = "ctx-caller") =>
     effectiveVersion: "v1",
   });
 
+const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
+  createVerifiedCaller(id, "do", {
+    callerId: id,
+    callerKind: "do",
+    repoPath: "vibestudio/internal",
+    effectiveVersion: "v1",
+  });
+
 const shellCaller = createVerifiedCaller("shell", "shell");
 const serverCaller = createVerifiedCaller("server", "server");
 
@@ -752,6 +760,57 @@ describe("runtimeService.retireEntity", () => {
     expect(rec?.cleanupComplete).toBe(false);
     // entityCleanupComplete dispatch should NOT have been issued.
     expect(spy.mock.calls.some((c) => c[1] === "entityCleanupComplete")).toBe(false);
+  });
+
+  it("does not prompt when an eval retires the entity it launched into an isolated context", async () => {
+    const { service, approvalQueue, instance } = await buildDeps();
+    const caller = evalDoCaller();
+    const handle = (await service.handler({ caller }, "createEntity", [
+      doCreateSpec({
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "headless-eval",
+        contextId: "ctx-eval-isolated",
+      }),
+    ])) as { id: string };
+    expect(instance.entityResolve(handle.id)?.parentId).toBe(caller.runtime.id);
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.handler({ caller }, "retireEntity", [{ id: handle.id }]);
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(instance.entityResolve(handle.id)?.status).toBe("retired");
+  });
+
+  it("prompts with retire-specific copy when a caller retires a foreign entity", async () => {
+    const { service, approvalQueue } = await buildDeps({ approvalDecision: "session" });
+    const owner = evalDoCaller("do:vibestudio/internal:EvalDO:owner");
+    const handle = (await service.handler({ caller: owner }, "createEntity", [
+      doCreateSpec({
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "foreign-headless",
+        contextId: "ctx-foreign-retire",
+      }),
+    ])) as { id: string };
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    await service.handler({ caller: panelCaller("panel:other") }, "retireEntity", [
+      { id: handle.id },
+    ]);
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "context.boundary",
+        title: "Retire runtime entity in another context",
+        description: expect.stringContaining("This stops a runtime entity"),
+        operation: expect.objectContaining({ kind: "runtime", verb: "Retire entity" }),
+        details: expect.arrayContaining([
+          { label: "Runtime entity", value: handle.id },
+          { label: "File context", value: "ctx-foreign-retire" },
+        ]),
+      })
+    );
   });
 });
 
@@ -1607,6 +1666,29 @@ describe("runtimeService.createSubagentContext", () => {
     )) as { contextId: string };
 
     expect(forkContext).toHaveBeenCalledWith("ctx-parent-do", out.contextId);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("allows the owner DO to create an entity inside its lifecycle child context without approval", async () => {
+    const forkContext = vi.fn(async () => {});
+    const { service, approvalQueue } = await buildDeps({ vcsContexts: { forkContext } });
+    const owner = await seedDO(service, "ctx-parent-attach", "owner");
+    const caller = createVerifiedCaller(owner.id, "do");
+
+    const childContext = (await service.handler({ caller }, "createSubagentContext", [
+      {
+        parentContextId: "ctx-parent-attach",
+        ownerEntityId: owner.id,
+        targetKey: "run:attach",
+      },
+    ])) as { contextId: string };
+    (approvalQueue.request as ReturnType<typeof vi.fn>).mockClear();
+
+    const child = (await service.handler({ caller }, "createEntity", [
+      doCreateSpec({ key: "child-agent", contextId: childContext.contextId }),
+    ])) as { contextId: string };
+
+    expect(child.contextId).toBe(childContext.contextId);
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 

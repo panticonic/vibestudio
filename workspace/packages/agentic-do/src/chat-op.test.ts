@@ -572,6 +572,7 @@ async function makeGateProbe(): Promise<EvalGateProbe> {
 
 class SubagentSpawnProbe extends TestVessel {
   rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
+  gadLogHead: Record<string, unknown> | null = null;
   readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {});
   protected override async ensurePromptArtifacts(): Promise<void> {}
   protected override get driver(): AgentLoopDriver {
@@ -594,6 +595,22 @@ class SubagentSpawnProbe extends TestVessel {
             id: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
             targetId: "do:workers/agent-worker:AiChatWorker:subagent-inv-1",
           };
+        }
+        if (target === "main" && method === "workers.resolveService") {
+          return {
+            kind: "durable-object",
+            source: "workers/gad-store",
+            className: "GadWorkspaceDO",
+            objectKey: "workspace-main",
+            targetId: "gad",
+          };
+        }
+        if (target === "gad" && method === "getLogHead") {
+          return this.gadLogHead;
+        }
+        if (target === "gad" && method === "forkLog") {
+          const input = args[0] as { atSeq?: number };
+          return { forkSeq: input.atSeq ?? 0, forkHash: "fork-hash", inherited: 0 };
         }
         return { ok: true, participantId: "participant-child" };
       },
@@ -731,6 +748,43 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
 });
 
 describe("AgentVesselBase.runDeferredSpawn", () => {
+  it("reuses an existing child trajectory fork point when a forked spawn is retried", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    const parentLogId = ids.logIdForChannel(CHANNEL);
+    const taskChannelId = "task-inv-1";
+    const childLogId = ids.logIdForChannel(taskChannelId);
+    probe.gadLogHead = {
+      logId: childLogId,
+      head: childLogId,
+      logKind: "trajectory",
+      seq: 12,
+      hash: "child-head",
+      envelopeId: null,
+      parentLogId,
+      parentHead: parentLogId,
+      forkSeq: 7,
+      forkHash: "parent-seq-7",
+    };
+
+    await probe.initFromTrajectoryFork({
+      parentLogId,
+      seq: 99,
+      taskChannelId,
+      contextId: "ctx-child",
+    });
+
+    const forkCall = probe.rpcCalls.find(
+      (call) => call.target === "gad" && call.method === "forkLog"
+    );
+    expect(forkCall?.args[0]).toMatchObject({
+      fromLogId: parentLogId,
+      fromHead: parentLogId,
+      toLogId: childLogId,
+      toHead: childLogId,
+      atSeq: 7,
+    });
+  });
+
   it("launches the child and returns a run handle immediately instead of parking the tool call", async () => {
     const probe = await makeSubagentSpawnProbe();
 

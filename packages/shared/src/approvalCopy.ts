@@ -676,13 +676,17 @@ export function getApprovalCopy(approval: PendingApproval): {
       const owner = approval.details?.find((d) => d.label === "Owner")?.value;
       const target =
         approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
-      const subject = owner ? `${owner}'s context` : `context ${target}`;
+      const subject = owner ? `the file context owned by ${owner}` : `file context ${target}`;
+      const fallbackTitle = contextBoundaryFallbackTitle(
+        approval.operation?.verb ?? approval.title,
+        subject
+      );
       return {
-        title: targetAwareGenericTitle(approval.title, `Act on ${subject}`),
+        title: targetAwareGenericTitle(approval.title, fallbackTitle),
         summary:
           approval.description ??
-          `Runs code in / acts on ${subject} — another agent or panel's existing state.`,
-        warning: "This runs code in, or acts on, another agent or panel's existing state.",
+          `Requests access to ${subject}, which may include files or running work owned by another agent or panel.`,
+        warning: "This can affect files or running work owned by another agent or panel.",
       };
     }
     if (approval.capability === "client-config-delete") {
@@ -827,6 +831,32 @@ function genericCapabilityTarget(approval: PendingCapabilityApproval): string {
   );
 }
 
+function contextBoundaryFallbackTitle(verb: string | undefined, subject: string): string {
+  const normalized = verb?.trim().toLowerCase();
+  if (normalized === "create do" || normalized === "create do in another context") {
+    return "Launch background process with different file access";
+  }
+  if (normalized === "create worker" || normalized === "create worker in another context") {
+    return "Launch background process with different file access";
+  }
+  if (normalized === "create panel" || normalized === "create panel in another context") {
+    return "Open panel with different file access";
+  }
+  if (normalized === "open panel" || normalized === "open panel in another context") {
+    return "Open panel with different file access";
+  }
+  if (normalized === "navigate panel" || normalized === "navigate panel in another context") {
+    return "Navigate panel with different file access";
+  }
+  if (normalized === "create app" || normalized === "create app in another context") {
+    return "Launch app with different file access";
+  }
+  if (normalized === "create session" || normalized === "create session in another context") {
+    return "Start session with different file access";
+  }
+  return `Control ${subject}`;
+}
+
 function targetAwareGenericTitle(title: string | undefined, fallback: string): string {
   if (!title) return fallback;
   const normalized = title.trim().toLowerCase();
@@ -834,6 +864,13 @@ function targetAwareGenericTitle(title: string | undefined, fallback: string): s
     "allow network access",
     "allow cross-origin response access",
     "create runtime entity in another context",
+    "create do in another context",
+    "create worker in another context",
+    "create panel in another context",
+    "open panel in another context",
+    "navigate panel in another context",
+    "create app in another context",
+    "create session in another context",
     "disable service configuration",
     "profile workers via the workerd inspector",
   ]);

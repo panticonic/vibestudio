@@ -3249,12 +3249,23 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const to = ids.logIdForChannel(opts.taskChannelId);
     // `seq` is already a TRAJECTORY seq (the parent's folded head), not a channel
     // seq — no resolveTrajectorySeqForChannelSeq indirection needed.
+    const existing = await this.callGad<{
+      parentLogId: string | null;
+      parentHead: string | null;
+      forkSeq: number | null;
+    } | null>("getLogHead", { logId: to, head: to });
+    const atSeq =
+      existing?.parentLogId === opts.parentLogId &&
+      existing.parentHead === opts.parentLogId &&
+      existing.forkSeq != null
+        ? existing.forkSeq
+        : opts.seq;
     await this.callGad("forkLog", {
       fromLogId: opts.parentLogId,
       fromHead: opts.parentLogId,
       toLogId: to,
       toHead: to,
-      atSeq: opts.seq,
+      atSeq,
     });
     // Subscribe to the task channel; the first task message drives the first turn
     // via the normal intake path (no explicit driver.wake here).

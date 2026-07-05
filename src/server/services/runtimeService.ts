@@ -192,6 +192,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   ): Promise<void> {
     if (isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })) return;
     const originContextId = await store.resolveContext(caller.runtime.id);
+    if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return;
     const result = await requireContextBoundaryPermission(deps.contextBoundary, {
       subjectCaller: caller,
       originContextId,
@@ -212,6 +213,27 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     throw new Error(`runtime.${method} is restricted to trusted host callers`);
   }
 
+  function callerOwnsEntity(caller: VerifiedCaller, entity: EntityRecord): boolean {
+    return caller.runtime.id === entity.id || entity.parentId === caller.runtime.id;
+  }
+
+  async function callerOwnsLifecycleContext(
+    caller: VerifiedCaller,
+    originContextId: string | null,
+    targetContextId: string
+  ): Promise<boolean> {
+    if (!originContextId) return false;
+    const edges = await store.listContextEdgesByOwner({
+      ownerContextId: originContextId,
+      kind: "lifecycle",
+    });
+    const edge = edges.find((candidate) => candidate.contextId === targetContextId);
+    if (!edge?.ownerEntityId) return false;
+    if (edge.ownerEntityId === caller.runtime.id) return true;
+    const owner = await store.resolveRecord(edge.ownerEntityId);
+    return owner ? callerOwnsEntity(caller, owner) : false;
+  }
+
   async function resolveContextPolicy(
     caller: VerifiedCaller,
     requested: string | null | undefined,
@@ -225,6 +247,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       kind: "runtime",
       verb: `Create ${spec.kind}`,
       targetLabel: spec.source,
+      targetLabelName: "Source",
       groupKey: `context-boundary:${requested}:${spec.source}`,
     });
     return requested;
@@ -451,12 +474,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     // Gate BEFORE mutating. Resolve the target's context via the DURABLE store
     // (the active cache may already be evicting it). A null/unknown/already-
     // retired target ⇒ the retire below no-ops ⇒ allow.
-    const targetContextId = await store.resolveContext(id);
-    if (targetContextId != null) {
-      await gateContextLaunch(caller, targetContextId, {
+    const target = await store.resolveRecord(id);
+    if (target?.status === "active" && !callerOwnsEntity(caller, target)) {
+      await gateContextLaunch(caller, target.contextId, {
         kind: "runtime",
-        verb: "Destroy",
+        verb: removeContext ? "Retire entity and remove context" : "Retire entity",
         targetLabel: id,
+        targetLabelName: "Runtime entity",
         ...(removeContext ? { severity: "severe" as const } : {}),
       });
     }
@@ -529,6 +553,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       kind: "runtime",
       verb: "Clone context",
       targetLabel: sourceContextId,
+      targetLabelName: "Source context",
     });
 
     // Resolve the source contexts to clone: the root, plus (recursive) its
@@ -734,6 +759,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           kind: "runtime",
           verb: "Destroy context",
           targetLabel: contextId,
+          targetLabelName: "Context",
           severity: "severe",
         });
       }
@@ -853,6 +879,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       kind: "runtime",
       verb: "Create subagent context",
       targetLabel: args.ownerEntityId,
+      targetLabelName: "Owner entity",
       groupKey: `context-boundary:subagent:${args.parentContextId}:${args.ownerEntityId}`,
     });
 

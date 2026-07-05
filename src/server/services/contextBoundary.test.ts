@@ -85,6 +85,13 @@ describe("requireContextBoundaryPermission", () => {
         capability: CONTEXT_BOUNDARY_CAPABILITY,
         callerId: "panel:p1",
         grantResourceKey: contextBoundaryResourceKey("ctx-b", "panel:p1"),
+        title: "Open panel with different file access",
+        description:
+          "This lets the requester open a panel that can use files in the file context owned by Agent X. That file context belongs to another agent or panel.",
+        details: [
+          { label: "Owner", value: "Agent X" },
+          { label: "File context", value: "ctx-b" },
+        ],
       })
     );
   });
@@ -122,6 +129,22 @@ describe("requireContextBoundaryPermission", () => {
     });
     expect(deps.request).toHaveBeenCalledWith(
       expect.objectContaining({ callerId: "panel:anchor", callerKind: "panel" })
+    );
+  });
+
+  it("renders durable-object launches without the raw do kind label", async () => {
+    const deps = makeDeps();
+    await requireContextBoundaryPermission(deps, {
+      subjectCaller: subjectCaller(),
+      originContextId: "ctx-a",
+      targetContextId: "ctx-b",
+      action: { kind: "runtime", verb: "Create do" },
+    });
+    expect(deps.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Launch background process with different file access",
+        description: expect.stringContaining("start a background process"),
+      })
     );
   });
 });
