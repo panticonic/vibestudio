@@ -91,6 +91,14 @@ export interface EgressProxyDeps {
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialUseGrantStore?: CredentialUseGrantStoreLike;
   credentialLifecycle?: Pick<CredentialLifecycle, "refreshIfNeeded" | "refreshCredential">;
+  preauthorizeInternalEgress?: (
+    targetUrl: URL,
+    context: {
+      caller: VerifiedCaller;
+      method: string;
+      transport: "http" | "connect" | "websocket";
+    }
+  ) => boolean;
 }
 
 interface RequestAttribution extends ResolvedCodeIdentity {
@@ -797,6 +805,7 @@ export class EgressProxy {
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
     credentialId?: string;
     credentialUse?: CredentialBindingUse;
+    preauthorizedInternalEgress?: boolean;
     initialBytesOut?: number;
     maxRetries?: number;
     retryStatuses?: boolean;
@@ -825,6 +834,7 @@ export class EgressProxy {
         method: params.method,
         credentialId: params.credentialId,
         credentialUse: params.credentialUse ?? "fetch",
+        preauthorizedInternalEgress: params.preauthorizedInternalEgress,
       });
       const executionKey = executionPolicyKey(authorization, params.targetUrl);
       let maxAttempts =
@@ -930,10 +940,20 @@ export class EgressProxy {
     method: string;
     credentialId?: string;
     credentialUse: CredentialBindingUse;
+    preauthorizedInternalEgress?: boolean;
   }): Promise<Authorization> {
     const caller = params.caller;
     const attribution = caller ? this.resolveAttribution(caller, params.credentialId) : null;
     if (!params.credentialId) {
+      if (caller && attribution && params.preauthorizedInternalEgress) {
+        return {
+          attribution,
+          credential: null,
+          binding: null,
+          connectionId: null,
+          scopes: [],
+        };
+      }
       const credential = attribution
         ? await this.resolveCredentialForRequest(
             params.targetUrl,
@@ -1485,6 +1505,12 @@ export class EgressProxy {
       this.rejectUpgrade(socket, 400, "WebSocket egress target URL is invalid");
       return;
     }
+    const preauthorizedInternalEgress =
+      this.deps.preauthorizeInternalEgress?.(targetUrl, {
+        caller,
+        method: "GET",
+        transport: "websocket",
+      }) === true;
 
     try {
       await this.executeAuthorizedRequest({
@@ -1493,6 +1519,7 @@ export class EgressProxy {
         targetUrl: policyUrl,
         inputHeaders,
         credentialUse: "fetch",
+        preauthorizedInternalEgress,
         replaySafe: false,
         maxRetries: DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS,
         retryStatuses: false,

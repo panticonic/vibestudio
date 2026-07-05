@@ -567,6 +567,114 @@ describe("EgressProxy", () => {
     }
   });
 
+  it.each([
+    ["CDP", "/cdp/panel%3Atest"],
+    ["workerd inspector", "/workerd-inspector/core%3Auser%3Aworker-host"],
+  ])(
+    "does not request raw network approval for preauthorized internal %s WebSockets",
+    async (_name, path) => {
+      const auditLog = new MemoryAuditLog();
+      const approvalQueue = createApprovalQueueMock("deny");
+      const preauthorizeInternalEgress = vi.fn(
+        (targetUrl: URL, context: { transport: string; method: string }) =>
+          context.transport === "websocket" &&
+          context.method === "GET" &&
+          (targetUrl.pathname.startsWith("/cdp/") ||
+            targetUrl.pathname.startsWith("/workerd-inspector/"))
+      );
+      const upstreamServer = createServer();
+      const wss = new WebSocketServer({ noServer: true });
+      const upstreamPort = await new Promise<number>((resolve) => {
+        upstreamServer.listen(0, "127.0.0.1", () => {
+          resolve((upstreamServer.address() as AddressInfo).port);
+        });
+      });
+      const proxy = new EgressProxy({
+        credentialStore: new MemoryCredentialStore(),
+        auditLog: auditLog as never,
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        preauthorizeInternalEgress,
+      });
+      proxy.setCallerResolver((callerId) =>
+        callerId === "worker:test" ? workerCaller(callerId) : null
+      );
+      const proxyPort = await proxy.startShared("secret");
+
+      upstreamServer.on("upgrade", (req, socket, head) => {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          ws.close(1000, "done");
+        });
+      });
+
+      try {
+        const response = await requestWebSocketUpgradeThroughProxy({
+          proxyPort,
+          targetUrl: `ws://127.0.0.1:${upstreamPort}${path}`,
+          headers: {
+            "X-Vibez1-Egress-Caller": "worker:test",
+            "X-Vibez1-Egress-Secret": "secret",
+          },
+        });
+
+        expect(response.status).toBe(101);
+        const [targetArg, contextArg] = preauthorizeInternalEgress.mock.calls[0] ?? [];
+        expect(targetArg?.pathname).toBe(path);
+        expect(contextArg).toMatchObject({ method: "GET", transport: "websocket" });
+        expect(approvalQueue.request).not.toHaveBeenCalled();
+        expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+          callerId: "worker:test",
+          method: "GET",
+          status: 101,
+        });
+      } finally {
+        await proxy.stop();
+        wss.close();
+        await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+      }
+    }
+  );
+
+  it("still requests raw network approval for arbitrary localhost WebSockets", async () => {
+    const approvalQueue = createApprovalQueueMock("deny");
+    const preauthorizeInternalEgress = vi.fn(() => false);
+    const proxy = new EgressProxy({
+      credentialStore: new MemoryCredentialStore(),
+      auditLog: new MemoryAuditLog() as never,
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      preauthorizeInternalEgress,
+    });
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: "ws://127.0.0.1:9/not-cdp",
+        headers: {
+          "X-Vibez1-Egress-Caller": "worker:test",
+          "X-Vibez1-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(403);
+      expect(preauthorizeInternalEgress).toHaveBeenCalled();
+      expect(approvalQueue.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          capability: "external-network-fetch",
+          resource: expect.objectContaining({
+            value: "http://127.0.0.1:9",
+          }),
+        })
+      );
+    } finally {
+      await proxy.stop();
+    }
+  });
+
   it("logs sanitized upstream WebSocket upgrade rejections", async () => {
     const auditLog = new MemoryAuditLog();
     const upstreamServer = createServer((_req, res) => {

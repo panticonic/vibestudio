@@ -675,6 +675,36 @@ async function main() {
     credentialStore,
     clientConfigStore,
   });
+  let gatewayPortResolved: number | null = null;
+  // These endpoints are minted by approval-gated services as one-time local
+  // bridge sockets. Do not ask the generic raw-network gate for them again.
+  const isPreauthorizedGatewayWebSocketTarget = (targetUrl: URL): boolean => {
+    if (targetUrl.protocol !== "ws:" && targetUrl.protocol !== "wss:") return false;
+    const isBridgePath =
+      (targetUrl.pathname.startsWith("/cdp/") && targetUrl.pathname.length > "/cdp/".length) ||
+      (targetUrl.pathname.startsWith("/workerd-inspector/") &&
+        targetUrl.pathname.length > "/workerd-inspector/".length);
+    if (!isBridgePath) {
+      return false;
+    }
+    const gatewayPort = gatewayPortResolved;
+    if (!gatewayPort) return false;
+    const targetPort = targetUrl.port
+      ? Number.parseInt(targetUrl.port, 10)
+      : targetUrl.protocol === "wss:"
+        ? 443
+        : 80;
+    if (targetPort !== gatewayPort) return false;
+    const hostname = targetUrl.hostname.toLowerCase();
+    const externalHost = hostConfig.externalHost.toLowerCase();
+    return (
+      hostname === externalHost ||
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]"
+    );
+  };
 
   const egressProxy = createEgressProxy({
     credentialStore,
@@ -683,6 +713,10 @@ async function main() {
     grantStore: capabilityGrantStore,
     sessionGrantStore: credentialSessionGrantStore,
     credentialLifecycle,
+    preauthorizeInternalEgress: (targetUrl, context) =>
+      context.transport === "websocket" &&
+      context.method === "GET" &&
+      isPreauthorizedGatewayWebSocketTarget(targetUrl),
   });
   let panelRuntimeCoordinatorForCleanup:
     | import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator
@@ -1955,7 +1989,6 @@ async function main() {
     adminToken = randomBytes(32).toString("hex");
   }
   tokenManager.setAdminToken(adminToken);
-  let gatewayPortResolved: number | null = null;
   function getResolvedGatewayPort(context: string): number {
     if (!gatewayPortResolved) {
       throw new Error(`Gateway port not finalized before ${context}`);
