@@ -9,6 +9,7 @@
 import { z } from "zod";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
 import type { WorkspaceDeclarations } from "@vibestudio/shared/workspace/singletonRegistry";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { resolveUserlandService } from "../userlandServices.js";
@@ -186,8 +187,7 @@ function assertUserlandServiceAccess(
     err.code = "EACCES";
     throw err;
   }
-  const effectiveKinds: CallerKind[] = callerKind === "do" ? ["do", "worker"] : [callerKind];
-  if (!effectiveKinds.some((kind) => allowed.includes(kind))) {
+  if (!callerKindAllowedByPolicy(callerKind, allowed)) {
     const err = new Error(
       `Caller kind '${callerKind}' cannot resolve userland service '${serviceName}'`
     ) as NodeJS.ErrnoException;

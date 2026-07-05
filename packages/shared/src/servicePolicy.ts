@@ -86,6 +86,17 @@ export interface PolicyRegistry {
   getMethodPolicy?(service: string, method: string): ServicePolicy | undefined;
 }
 
+export function callerKindAllowedByPolicy(
+  callerKind: CallerKind,
+  allowed: readonly CallerKind[]
+): boolean {
+  if (allowed.includes(callerKind)) return true;
+  // Durable Objects run userland code. Agent/Eval DOs should retain access to
+  // APIs exposed to panels and workers unless a handler performs a narrower
+  // identity/state check.
+  return callerKind === "do" && (allowed.includes("worker") || allowed.includes("panel"));
+}
+
 /**
  * Check if a caller kind can access a service.
  * Throws an error if access is denied.
@@ -112,10 +123,7 @@ export function checkServiceAccess(
     throw new Error(`Unknown service '${service}'`);
   }
 
-  if (!policy.allowed.includes(callerKind)) {
-    // DOs run worker code and retain access to services that already admit
-    // worker runtimes unless a method explicitly includes/excludes `do`.
-    if (callerKind === "do" && policy.allowed.includes("worker")) return;
+  if (!callerKindAllowedByPolicy(callerKind, policy.allowed)) {
     throw new Error(`Service '${service}' is not accessible to ${callerKind} callers`);
   }
 }

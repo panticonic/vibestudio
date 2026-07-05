@@ -48,6 +48,10 @@ describe("checkServiceAccess", () => {
     expect(() => checkServiceAccess("bridge", "server", registry)).not.toThrow();
   });
 
+  it("allows DO callers through panel-allowed policies", () => {
+    expect(() => checkServiceAccess("fs", "do", registry)).not.toThrow();
+  });
+
   it("allows server to access tokens and denies others", () => {
     expect(() => checkServiceAccess("tokens", "server", registry)).not.toThrow();
     expect(() => checkServiceAccess("tokens", "shell", registry)).toThrow(

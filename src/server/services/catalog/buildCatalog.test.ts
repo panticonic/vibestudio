@@ -107,19 +107,22 @@ describe("isCatalogEntryVisible", () => {
     expect(isCatalogEntryVisible(wipe, "panel")).toBe(false); // server-only hidden from panel
     expect(isCatalogEntryVisible(wipe, "server")).toBe(true);
     expect(isCatalogEntryVisible(get, "panel")).toBe(true);
-    expect(isCatalogEntryVisible(get, "do")).toBe(false); // panel/server only
+    expect(isCatalogEntryVisible(get, "do")).toBe(true); // DO inherits panel userland access
   });
 
-  it("applies the do→worker inheritance rule", () => {
+  it("applies the DO userland inheritance rule", () => {
     expect(isCatalogEntryVisible(probe, "do")).toBe(true); // explicit do
     // a worker-only method is visible to do
     const workerOnly: CatalogEntry = { ...probe, access: { callers: ["worker"] } };
     expect(isCatalogEntryVisible(workerOnly, "do")).toBe(true);
+    const panelOnly: CatalogEntry = { ...probe, access: { callers: ["panel"] } };
+    expect(isCatalogEntryVisible(panelOnly, "do")).toBe(true);
   });
 
   it("filters runtime surfaces by target caller", () => {
     expect(isCatalogEntryVisible(runtimeFoo, "panel")).toBe(true);
     expect(isCatalogEntryVisible(runtimeFoo, "worker")).toBe(false);
+    expect(isCatalogEntryVisible(runtimeFoo, "do")).toBe(false);
     expect(isCatalogEntryVisible(runtimeFoo, "extension")).toBe(false);
     expect(isCatalogEntryVisible(runtimeBar, "worker")).toBe(true);
     expect(isCatalogEntryVisible(runtimeBar, "do")).toBe(true);

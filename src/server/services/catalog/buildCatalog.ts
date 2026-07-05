@@ -10,6 +10,7 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { RuntimeSurface, RuntimeSurfaceTarget } from "@vibestudio/shared/runtimeSurface";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
 import type { CatalogEntry } from "@vibestudio/shared/serviceSchemas/docs";
 import { serializeMethod } from "./serialize.js";
 
@@ -87,15 +88,18 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
 /**
  * Whether a catalog entry is visible to a caller kind. Mirrors the dispatcher's
  * static gate (`checkServiceAccess`): the `access.callers` array, with the
- * `do`→`worker` inheritance rule. Runtime entries also carry target-specific
- * callers so panels only see panel runtime APIs, and workers/DOs see worker
+ * DO userland inheritance rule for service entries. Runtime entries carry
+ * target-specific callers because module exports are availability, not service
+ * authorization: panels see panel runtime APIs, and workers/DOs see worker
  * runtime APIs. Conditional `restrictedTo` gates are surfaced as metadata, not
  * used to hide the entry.
  */
 export function isCatalogEntryVisible(entry: CatalogEntry, callerKind: CallerKind): boolean {
   const callers = (entry.access as { callers?: CallerKind[] } | undefined)?.callers;
   if (!callers) return true;
-  if (callers.includes(callerKind)) return true;
-  if (callerKind === "do" && callers.includes("worker")) return true;
-  return false;
+  if (entry.surface === "runtime") {
+    if (callers.includes(callerKind)) return true;
+    return callerKind === "do" && callers.includes("worker");
+  }
+  return callerKindAllowedByPolicy(callerKind, callers);
 }

@@ -26,6 +26,13 @@ function createDeps() {
         durableObject: { className: "ExampleStoreDO" },
       },
       {
+        source: "workers/example-store",
+        name: "panel-channel",
+        protocols: ["example.panel-store.v1"],
+        policy: { allowed: ["panel"] },
+        durableObject: { className: "ExampleStoreDO" },
+      },
+      {
         source: "workers/stateless-api",
         name: "stateless-api",
         protocols: ["example.stateless.v1"],
@@ -79,6 +86,13 @@ describe("workerService userland service resolution", () => {
         name: "channel",
         kind: "durable-object",
         protocols: ["example.store.v1"],
+        source: "workers/example-store",
+        className: "ExampleStoreDO",
+      }),
+      expect.objectContaining({
+        name: "panel-channel",
+        kind: "durable-object",
+        protocols: ["example.panel-store.v1"],
         source: "workers/example-store",
         className: "ExampleStoreDO",
       }),
@@ -176,6 +190,25 @@ describe("workerService userland service resolution", () => {
       source: "workers/example-store",
       className: "ExampleStoreDO",
       objectKey: "chat-1",
+    });
+  });
+
+  it("lets DO callers use panel-allowed durable services", async () => {
+    const deps = createDeps();
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(createWorkerService(deps as never));
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("do:workers/agent-worker:AiChatWorker:agent-1", "do") },
+        "workers",
+        "resolveService",
+        ["example.panel-store.v1", "chat-1"]
+      )
+    ).resolves.toMatchObject({
+      kind: "durable-object",
+      targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
     });
   });
 });

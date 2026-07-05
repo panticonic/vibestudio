@@ -22,9 +22,11 @@
  * inside the descriptor — the schema is strict, so a stale caller still sending
  * `body`/`bodyBase64` fails loudly instead of having its body silently dropped.
  *
- * Callers are the trusted desktop principals (`shell`, Electron-hosted `app`) and
- * panels (the panel runtime tunnels its gateway-relative asset fetches here);
- * workers/DOs are server-co-located and fetch the loopback gateway directly.
+ * Callers are the trusted desktop principals (`shell`, Electron-hosted `app`),
+ * panels, workers, and DOs. Panels normally tunnel their gateway-relative asset
+ * fetches here; server-side worker/DO runtimes usually fetch the loopback gateway
+ * directly, but the RPC surface is kept available for caller-kind parity and
+ * raw-service use.
  *
  * Content digest for the façade's content-addressed cache (plan §6): the façades
  * key their on-disk cache by a content digest. Build artifacts ARE digest-addressed
@@ -86,15 +88,16 @@ export function createGatewayFetchService(deps: {
     description: "Loopback panel-asset fetch bridge (remote shells)",
     // Reachable by the trusted desktop principals (remote shells call as `shell`
     // via the WebRtcServerClient main session; Electron-hosted runtimes call as
-    // `app`) AND by panels — the panel runtime's gatewayFetch tunnels here as the
-    // panel principal to load gateway-relative workspace assets. The path is forced
-    // absolute, checked against the panel-origin allowlist (assetPathPolicy — panel
-    // assets, /_r/w/ worker routes, /_a/ app artifacts; NEVER /_r/s/ management
-    // routes or /rpc), and appended to the loopback gateway (no external origin),
-    // and a panel already has fs access to the same workspace, so this grants
-    // nothing new.
-    // (Workers/DOs are server-co-located and fetch the loopback gateway directly.)
-    policy: { allowed: ["shell", "app", "panel"] },
+    // `app`) and all userland runtimes. The panel runtime's gatewayFetch tunnels
+    // here as the panel principal to load gateway-relative workspace assets.
+    // Worker/DO runtimes are server-co-located and normally fetch directly, but
+    // allowing the RPC method keeps raw service access and docs aligned with
+    // panel rights. The path is forced absolute, checked against the panel-origin
+    // allowlist (assetPathPolicy — panel assets, /_r/w/ worker routes, /_a/ app
+    // artifacts; NEVER /_r/s/ management routes or /rpc), and appended to the
+    // loopback gateway (no external origin), so this grants nothing beyond the
+    // same gateway-relative assets.
+    policy: { allowed: ["shell", "app", "panel", "worker", "do"] },
     methods: {
       fetch: {
         description:

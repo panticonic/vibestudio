@@ -71,15 +71,19 @@ describe("dispatcher: access descriptor + JIT errors", () => {
 
   it("enriches access-denied errors with declared restrictions/approval", async () => {
     const d = makeDispatcher();
-    // 'do' ∉ restricted.callers [panel,server], and worker∉callers so no do→worker inheritance.
-    const p = d.dispatch(ctx("do"), "demo", "restricted", []);
+    // Worker is outside the panel/server service policy, so the JIT access hint
+    // should surface the method's declared restrictions and approval metadata.
+    const p = d.dispatch(ctx("worker"), "demo", "restricted", []);
     await expect(p).rejects.toThrow(/host-managed/);
-    await expect(d.dispatch(ctx("do"), "demo", "restricted", [])).rejects.toThrow(/needs grant/);
+    await expect(d.dispatch(ctx("worker"), "demo", "restricted", [])).rejects.toThrow(
+      /needs grant/
+    );
   });
 
-  it("applies the do→worker inheritance rule through policy", async () => {
+  it("applies the DO userland inheritance rule through policy", async () => {
     const d = makeDispatcher();
     await expect(d.dispatch(ctx("do"), "demo", "workerOnly", [])).resolves.toBe("ok");
+    await expect(d.dispatch(ctx("do"), "demo", "put", ["x"])).resolves.toBe("ok");
   });
 
   it("read-only mode allows readonly methods and blocks the rest (default-deny)", async () => {

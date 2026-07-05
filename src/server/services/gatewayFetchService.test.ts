@@ -69,6 +69,11 @@ function streamOf(text: string): ReadableStream<Uint8Array> {
 }
 
 describe("gatewayFetchService — §1.6 upload path", () => {
+  it("keeps the RPC bridge available to panels, workers, and DOs", () => {
+    const service = createGatewayFetchService({ getGatewayPort: () => 1 });
+    expect(service.policy.allowed).toEqual(["shell", "app", "panel", "worker", "do"]);
+  });
+
   it("forwards ctx.body as the loopback request body (streamed, not base64)", async () => {
     const gateway = await startFakeGateway();
     const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
