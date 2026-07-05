@@ -349,7 +349,7 @@ export class DODispatch {
   /**
    * Like `dispatch`, but for a HELD long-running handler (the EvalDO's `executeRun`): the server→DO
    * fetch uses a no-`headersTimeout` dispatcher so it isn't reaped at undici's ~300s while the DO
-   * holds the response. Pair with the DO disabling its own `respond` reaper (`respondTimeoutMs`).
+   * holds the response.
    */
   async dispatchHeld(ref: DORef, method: string, ...args: unknown[]): Promise<unknown> {
     // A held call is INTENTIONALLY long (the eval runs for its whole duration), so warn at a coarse

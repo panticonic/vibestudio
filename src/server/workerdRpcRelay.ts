@@ -67,7 +67,8 @@ export interface DurableObjectRelayDeps {
   /**
    * Held-connection call (the EvalDO's `executeRun`): use a no-`headersTimeout` undici dispatcher so
    * the fetch isn't reaped at undici's ~300s default while the DO holds the response for a long run.
-   * The DO side disables its own `respond` reaper too (see `respondTimeoutMs`).
+   * The DO-side `respond` transport has no default reaper; a DO can still opt into one with
+   * `respondTimeoutMs`.
    */
   heldConnection?: boolean;
 }

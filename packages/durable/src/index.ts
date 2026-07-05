@@ -223,9 +223,8 @@ export abstract class DurableObjectBase {
   }
 
   /**
-   * Override the inbound `respond()` reaper for this DO (default 120s — `httpClient.ts`). A DO with
-   * legitimately long HELD handlers (the EvalDO's `executeRun`) returns a very large value or `0`
-   * (disabled), so the held connection isn't cut short. `undefined` ⇒ the transport default.
+   * Optional inbound `respond()` reaper for this DO. `undefined` uses the transport default of no
+   * reaper; return a positive value only when this DO wants a transport-level deadline.
    */
   protected get respondTimeoutMs(): number | undefined {
     return undefined;

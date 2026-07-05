@@ -3,9 +3,6 @@ import { decodeFramedResponseToStreaming } from "../protocol/streamCodec.js";
 
 const rpcFetch = globalThis.fetch.bind(globalThis);
 
-/** How long `respond()` waits for the core to produce a response envelope. */
-const RESPOND_TIMEOUT_MS = 120_000;
-
 export interface HttpClientTransportConfig {
   selfId: string;
   serverUrl: string;
@@ -13,9 +10,9 @@ export interface HttpClientTransportConfig {
   fetch?: typeof fetch;
   runtimeIdHeader?: string;
   /**
-   * How long `respond()` waits for the handler before giving up (default 120s). A DO that runs
-   * legitimately long HELD handlers (the EvalDO's `executeRun`) sets this very high / disables it
-   * (`<= 0` ⇒ no reaper) — the held connection itself, plus the run's opt-in `timeoutMs`, bound it.
+   * Optional finite `respond()` reaper for callers that want a transport-level deadline.
+   * Omitted or `<= 0` means no transport reaper; operation-level timeouts should live in
+   * the handler protocol where the caller can observe a structured outcome.
    */
   respondTimeoutMs?: number;
 }
@@ -171,12 +168,12 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         return Promise.resolve(null);
       }
       const requestId = (message as RpcRequest).requestId;
-      const timeoutMs = config.respondTimeoutMs ?? RESPOND_TIMEOUT_MS;
+      const timeoutMs = config.respondTimeoutMs;
       return new Promise<RpcEnvelope | null>((resolve) => {
-        // `<= 0` disables the reaper (the EvalDO's held `executeRun`); the handler resolves only
-        // when it really finishes (or the held connection drops).
+        // Omitted/`<= 0` disables the reaper; the handler resolves only when it really
+        // finishes or the held connection drops.
         const timer =
-          timeoutMs > 0
+          typeof timeoutMs === "number" && timeoutMs > 0
             ? setTimeout(() => {
                 captures.delete(requestId);
                 // Resolve with a REJECTING response envelope, not `null`. The

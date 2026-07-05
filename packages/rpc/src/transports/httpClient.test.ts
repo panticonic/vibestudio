@@ -75,6 +75,26 @@ describe("httpClientTransport", () => {
     }
   });
 
+  it("respond() has no default reaper", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = httpClientTransport({
+        selfId: "do:notes:Bucket:key",
+        serverUrl: "http://127.0.0.1:65530",
+        authToken: "token",
+      });
+
+      let settled = false;
+      void transport.respond(requestEnvelope()).then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("respond() never reaps when respondTimeoutMs <= 0 (held exemption preserved)", async () => {
     vi.useFakeTimers();
     try {

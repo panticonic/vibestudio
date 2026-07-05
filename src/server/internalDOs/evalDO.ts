@@ -482,9 +482,9 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
-   * Disable the inbound `respond()` reaper: `executeRun` is a HELD handler that legitimately runs
-   * for the eval's whole duration (the eval service holds the connection with a no-`headersTimeout`
-   * dispatcher). Unbounded by default; an opt-in `timeoutMs` bounds a run, and a dropped connection
+   * Keep the inbound `respond()` path explicitly unreaped: `executeRun` is a HELD handler that
+   * legitimately runs for the eval's whole duration (the eval service holds the connection with a
+   * no-`headersTimeout` dispatcher). An opt-in `timeoutMs` bounds a run, and a dropped connection
    * (server restart) ends it (reconciled on boot). Quick methods (startRun/getRun) resolve at once.
    */
   protected override get respondTimeoutMs(): number {

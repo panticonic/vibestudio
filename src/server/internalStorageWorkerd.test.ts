@@ -254,15 +254,12 @@ describe("internal storage DOs under workerd", () => {
 
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
   // the unbounded-eval.run design: real workerd does NOT cap a DO `fetch` handler
-  // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly,
-  // proving the only sub-undici cap in the chain is our own transport
-  // `RESPOND_TIMEOUT_MS` (120s). (The relay's bare `fetch` adds undici's
-  // ~300s `headersTimeout` as a second cap — defeatable with a custom dispatcher.)
+  // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly.
+  // The relay's bare `fetch` adds undici's ~300s `headersTimeout` as a cap,
+  // defeatable with a custom dispatcher for held calls.
   it.skip("real workerd holds a DO fetch handler open past the ~30s regular-Worker wall limit", async () => {
-    // Probe under the 120s respond ceiling (35s) so the value returns; a
-    // workerd-level cap would instead error around 30s. (A separate manual probe
-    // with RESPOND_TIMEOUT_MS raised confirmed a HELD request runs 150s+ cleanly —
-    // workerd does not cap long-held requests; only no-connection waitUntil is capped.)
+    // A workerd-level cap would error around 30s. Workerd does not cap long-held
+    // requests here; only no-connection waitUntil is capped.
     const probeBuild = await bundleWorker(
       "workers/lifecycle-probe",
       "src/server/testFixtures/lifecycleProbeWorker.ts",
