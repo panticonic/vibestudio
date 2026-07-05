@@ -199,7 +199,7 @@ Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`
 
 Loopback panel-asset fetch bridge (remote shells)
 
-Allowed callers: `shell`, `app`, `panel`
+Allowed callers: `shell`, `app`, `panel`, `worker`, `do`
 
 | Method | Description |
 |--------|-------------|
