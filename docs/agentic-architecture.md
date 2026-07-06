@@ -81,8 +81,9 @@ Location: `workspace/packages/agentic-do/src/agent-worker-base.ts`
 
 The final prompt is composed from the Vibestudio base prompt,
 `workspace/meta/AGENTS.md`, the generated skill index, and optional
-subscription prompt config. Workspace skills live under `workspace/skills/`
-and are discovered through the `workspace.*` RPC service.
+subscription prompt config. Workspace skills are discovered from top-level
+`SKILL.md` files in workspace repos; `workspace/skills/` is reserved for
+cross-repo workflow skills or skills that are themselves reusable code packages.
 
 ### Durable Object SQL Tables
 
@@ -185,7 +186,9 @@ workspace/
 ├── meta/
 │   ├── AGENTS.md        # Workspace system prompt content
 │   └── vibestudio.yml     # Init panels and workspace config
-└── skills/              # Workspace skills (sandbox, workspace-dev, onboarding, etc.)
+├── packages/foo/
+│   └── SKILL.md         # Repo-specific skill docs travel with this package
+└── skills/              # Cross-repo skills (onboarding, sandbox, workspace-dev, etc.)
     └── ...
 ```
 

@@ -285,26 +285,37 @@ describe("bridgeInstructions", () => {
 });
 
 describe("workspace skill resources", () => {
-  it("maps the workspace skill catalog to MCP resource descriptors", async () => {
+  it("maps the workspace skill catalog to MCP resource descriptors keyed by dirPath", async () => {
     const resources = createSkillResources(async (method, args) => {
       expect(method).toBe("workspace.listSkills");
       expect(args).toEqual([]);
       return [
-        { name: "subagents", description: "Delegate work to child agents" },
-        { name: "system-testing" },
+        {
+          name: "onboarding",
+          description: "Get started",
+          dirPath: "skills/onboarding",
+          skillPath: "skills/onboarding/SKILL.md",
+        },
+        // Repo-local skill (post skills-upgrade): read key is the repo path.
+        {
+          name: "agentic-do",
+          description: "Agent runtime work",
+          dirPath: "packages/agentic-do",
+          skillPath: "packages/agentic-do/SKILL.md",
+        },
       ] as never;
     });
     await expect(resources.list()).resolves.toEqual([
       {
-        uri: "vibestudio-skill://subagents",
-        name: "subagents",
-        description: "Workspace skill: Delegate work to child agents",
+        uri: "vibestudio-skill://skills%2Fonboarding",
+        name: "onboarding",
+        description: "Workspace skill (skills/onboarding): Get started",
         mimeType: "text/markdown",
       },
       {
-        uri: "vibestudio-skill://system-testing",
-        name: "system-testing",
-        description: "Workspace skill: system-testing",
+        uri: "vibestudio-skill://packages%2Fagentic-do",
+        name: "agentic-do",
+        description: "Workspace skill (packages/agentic-do): Agent runtime work",
         mimeType: "text/markdown",
       },
     ]);

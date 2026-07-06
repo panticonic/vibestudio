@@ -243,7 +243,10 @@ describe("FsService", () => {
       const ctx = makeDoCtx("do:workers/agent-worker:AiChatWorker:agent-1");
       registerContext(ctx.caller.runtime.id, "do", "ctx-agent");
       mkdirSync(path.join(tmpRoot, "ctx-agent", "skills", "onboarding"), { recursive: true });
-      writeFileSync(path.join(tmpRoot, "ctx-agent", "skills", "onboarding", "SKILL.md"), "skill");
+      writeFileSync(
+        path.join(tmpRoot, "ctx-agent", "skills", "onboarding", "SKILL.md"),
+        "skill"
+      );
 
       await expect(
         service.handleCall(ctx, "access", ["/skills/onboarding/SKILL.md"])

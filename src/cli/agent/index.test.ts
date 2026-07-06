@@ -448,7 +448,14 @@ describe("vibestudio agent commands", () => {
     const { main } = await import("../client.js");
     const { rpcBodies } = stubServer((body) => {
       if (body.method === "workspace.listSkills") {
-        return [{ name: "alpha", description: "A skill", dirPath: "skills/alpha" }];
+        return [
+          {
+            name: "alpha",
+            description: "A skill",
+            dirPath: "skills/alpha",
+            skillPath: "skills/alpha/SKILL.md",
+          },
+        ];
       }
       if (body.method === "workspace.readSkill") return "# alpha skill";
       if (body.method === "workspace.units.logs") return [{ level: "info", message: "hi" }];

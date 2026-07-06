@@ -277,7 +277,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
 
   /** The six workerd-clean file tools over the agent's context folder
    *  (fs RPC scopes paths to the caller's context). Without them, agents
-   *  whose prompts say `read("skills/...")` can only flail. */
+   *  whose prompts say `read(".../SKILL.md")` can only flail. */
   protected override getLoopTools(channelId: string): AgentTool[] {
     const fs = createRpcFs(this.rpc as never);
     const cwd = "/";

@@ -6,12 +6,12 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import YAML from "yaml";
 
 import type { WorkspaceNode, WorkspaceTree } from "@vibestudio/shared/types";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/shared/workspace/sourceDirs";
 import { isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
 import { discoverPackageGraph, type GraphNode } from "../buildV2/packageGraph.js";
+import { readWorkspaceSkillEntry } from "./workspaceSkills.js";
 
 interface ScanCache {
   tree: WorkspaceTree;
@@ -49,12 +49,15 @@ export class WorkspaceTreeScanner {
       }
       if (scope === "meta") {
         // meta is itself a unit root (workspace config), not a scope of units.
-        children.push({
+        const node: WorkspaceNode = {
           name: "meta",
           path: "meta",
           isUnit: true,
           children: [],
-        });
+        };
+        const skill = await readWorkspaceSkillEntry(this.workspaceRoot, "meta");
+        if (skill) node.skillInfo = { name: skill.name, description: skill.description };
+        children.push(node);
         continue;
       }
       const scopeChildren: WorkspaceNode[] = [];
@@ -105,18 +108,8 @@ export class WorkspaceTreeScanner {
       }
     }
 
-    try {
-      const skillRaw = await fs.readFile(path.join(abs, "SKILL.md"), "utf8");
-      const frontmatter = /^---\n([\s\S]*?)\n---/.exec(skillRaw)?.[1];
-      if (frontmatter) {
-        const meta = YAML.parse(frontmatter) as { name?: string; description?: string };
-        if (meta?.name) {
-          node.skillInfo = { name: meta.name, description: meta.description ?? "" };
-        }
-      }
-    } catch {
-      // not a skill
-    }
+    const skill = await readWorkspaceSkillEntry(this.workspaceRoot, unitRel);
+    if (skill) node.skillInfo = { name: skill.name, description: skill.description };
 
     if (!node.packageInfo && !node.skillInfo) {
       // Bare directory with no unit markers — still listed so the UI can

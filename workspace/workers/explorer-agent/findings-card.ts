@@ -38,7 +38,7 @@ export interface FindingsCardState {
 }
 
 export const FINDINGS_TYPE_ID = "explorer.findings";
-export const FINDINGS_RENDERER_PATH = "skills/explorer/renderers/findings.tsx";
+export const FINDINGS_RENDERER_PATH = "workers/explorer-agent/renderers/findings.tsx";
 export const FINDINGS_UI_INSTALL_VERSION = 1;
 export const FINDINGS_KEY_PREFIX = "explorer";
 export const FINDINGS_CARD_CAP = 25;

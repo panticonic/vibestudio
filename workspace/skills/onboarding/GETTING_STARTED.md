@@ -75,7 +75,8 @@ Key directories:
 - `panels/` — panel apps (UI)
 - `packages/` — shared workspace packages
 - `workers/` — workerd workers and Durable Objects
-- `skills/` — skill documentation (like this one)
+- `skills/` — reusable cross-repo skills; repo-specific skills can live at
+  `<repo>/SKILL.md`
 - `projects/` — plain editable repos
 
 ## Step 2: Recommend a First Setup Path
@@ -89,7 +90,7 @@ above the chat history before the first agent reply:
 - **GitHub** — set up GitHub provider integration
 - **Slack** — set up Slack provider integration
 - **Model key** — set up a model or API key provider credential
-- **Agent defaults** — change the default model, swap providers, or tune effort/approval/chattiness; load the `agent-tuning` skill
+- **Agent defaults** — change the default model, swap providers, or tune effort/approval/chattiness; load the `agentic-do` skill
 - **Web search upgrade** — register a Tavily / Brave / Exa key so `web_search` graduates from DuckDuckGo (optional; see `web-research` skill)
 - **Custom API** — set up a custom OAuth or API provider
 - **Browser import** — import cookies, bookmarks, passwords, or local browser state
@@ -199,11 +200,11 @@ Cold-start choices live in `packages/agentic-do/src/agent-config.ts`; provider
 credential presets are derived from `@workspace/model-catalog/providerConnect`.
 Edit and reload or resubscribe to change the default model/provider. Session
 knobs (effort, approval, chattiness) are agent method calls that can change
-during a conversation. Use the `agent-tuning` skill for either path.
+during a conversation. Use `packages/agentic-do/SKILL.md` for either path.
 
 ## Step 4: Import Browser Data
 
-If the user wants to bring in their existing browser data (cookies for authentication, bookmarks, passwords), use the **browser-import** skill.
+If the user wants to bring in their existing browser data (cookies for authentication, bookmarks, passwords), use the **browser-import** skill at `extensions/browser-data/SKILL.md`.
 
 Quick start — detect what browsers are available:
 
@@ -225,12 +226,12 @@ eval({ code: `
 
 Then ask the user which browser/profile to import from and which data types they want. See the `browser-import` skill docs for:
 
-- [DISCOVERY.md](../browser-import/DISCOVERY.md) — browser detection and profile enumeration
-- [IMPORT.md](../browser-import/IMPORT.md) — running imports
-- [COOKIES.md](../browser-import/COOKIES.md) — cookie management and session sync
-- [PASSWORDS.md](../browser-import/PASSWORDS.md) — password vault
-- [BOOKMARKS.md](../browser-import/BOOKMARKS.md) — bookmark browsing
-- [WORKFLOWS.md](../browser-import/WORKFLOWS.md) — end-to-end recipes
+- [DISCOVERY.md](../../extensions/browser-data/references/DISCOVERY.md) — browser detection and profile enumeration
+- [IMPORT.md](../../extensions/browser-data/references/IMPORT.md) — running imports
+- [COOKIES.md](../../extensions/browser-data/references/COOKIES.md) — cookie management and session sync
+- [PASSWORDS.md](../../extensions/browser-data/references/PASSWORDS.md) — password vault
+- [BOOKMARKS.md](../../extensions/browser-data/references/BOOKMARKS.md) — bookmark browsing
+- [WORKFLOWS.md](../../extensions/browser-data/references/WORKFLOWS.md) — end-to-end recipes
 
 ## Step 5: Set Up a Workspace
 

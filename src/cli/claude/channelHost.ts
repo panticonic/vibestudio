@@ -328,10 +328,9 @@ export const WORKSPACE_SKILL_ADDENDUM = `> **You are reading a WORKSPACE skill a
 >   their own context; open your own preview instance for foreign UI.
 > - Approval prompts skills mention resolve as workspace approval cards for
 >   the user (or fail closed); do not expect an interactive prompt locally.
-> - Files a skill references beside its SKILL.md (RECIPES.md, EVAL.md, …)
->   live in the workspace tree next to the skill — library skills under
->   \`skills/<name>/\`, repo-hosted skills inside their repo. Read them with
->   \`vibestudio fs read <path>\` (or \`fs glob\` to locate the skill dir).
+> - Files a skill references beside its SKILL.md (RECIPES.md, references/…)
+>   live in the workspace tree next to it — the skill's repo path is in this
+>   resource's description. Read them with \`vibestudio fs read <repoPath>/<file>\`.
 
 ---
 
@@ -351,14 +350,18 @@ export function createSkillResources(call: <T>(method: string, args: unknown[]) 
   let addendumServed = false;
   return {
     list: async () => {
-      const skills = await call<Array<{ name: string; description?: string }>>(
+      const skills = await call<Array<{ name: string; description?: string; dirPath?: string }>>(
         "workspace.listSkills",
         []
       );
+      // Keyed by dirPath (repo-local skills made bare names non-unique);
+      // readSkill accepts repo paths and legacy bare names alike.
       return skills.map((skill) => ({
-        uri: skillResourceUri(skill.name),
+        uri: skillResourceUri(skill.dirPath ?? skill.name),
         name: skill.name,
-        description: `Workspace skill: ${skill.description ?? skill.name}`,
+        description: `Workspace skill (${skill.dirPath ?? skill.name}): ${
+          skill.description ?? skill.name
+        }`,
         mimeType: "text/markdown",
       }));
     },

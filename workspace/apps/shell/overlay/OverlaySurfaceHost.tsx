@@ -22,6 +22,8 @@ import type { OverlayRenderMessage } from "./types";
 /** Transparent margin around the surface so its elevation shadow isn't clipped
  *  by the native view's rectangular bounds. */
 const SURFACE_MARGIN = 16;
+/** Compact approval-card view width, mirrored from ShellContentOverlayView. */
+const SURFACE_MIN_WIDTH = 472;
 
 /** Elements that should consume a pointer-down themselves rather than start a
  *  drag. A surface marks its grab region with `[data-overlay-drag-handle]`. */
@@ -45,7 +47,15 @@ export function OverlaySurfaceHost() {
   useLayoutEffect(() => {
     const el = boxRef.current;
     if (!el || !bridge) return;
-    const report = () => bridge.reportSize(Math.ceil(el.getBoundingClientRect().height));
+    const report = () => {
+      const rect = el.getBoundingClientRect();
+      bridge.reportSize({
+        width: Math.ceil(
+          Math.min(Math.max(rect.width, el.scrollWidth), message?.maxWidth ?? rect.width)
+        ),
+        height: Math.ceil(rect.height),
+      });
+    };
     report();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(report);
     observer?.observe(el);
@@ -89,9 +99,15 @@ export function OverlaySurfaceHost() {
   const theme = message.theme;
   const boxStyle = {
     padding: SURFACE_MARGIN,
+    width: "max-content",
+    minWidth: Math.min(SURFACE_MIN_WIDTH, message.maxWidth),
+    maxWidth: message.maxWidth,
     maxHeight: message.maxHeight + SURFACE_MARGIN * 2,
+    boxSizing: "border-box",
     display: "flex",
     background: "transparent",
+    "--overlay-min-width": `${Math.min(SURFACE_MIN_WIDTH, message.maxWidth)}px`,
+    "--overlay-max-width": `${message.maxWidth}px`,
     "--overlay-max-height": `${message.maxHeight}px`,
   } as CSSProperties;
   return (

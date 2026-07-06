@@ -11,17 +11,17 @@ Import and manage browser data (cookies, passwords, bookmarks, history) from ins
 
 | Document                     | Content                                                                     |
 | ---------------------------- | --------------------------------------------------------------------------- |
-| [DISCOVERY.md](DISCOVERY.md) | Detect browsers, enumerate profiles, preview available data                 |
-| [IMPORT.md](IMPORT.md)       | Run imports, handle edge cases, review results                              |
-| [COOKIES.md](COOKIES.md)     | Cookie management — browse, search, delete, sync to session                 |
-| [PASSWORDS.md](PASSWORDS.md) | Password vault — browse, search, reveal, copy                               |
-| [BOOKMARKS.md](BOOKMARKS.md) | Bookmark browser — folder tree, search, open, export                        |
-| [HISTORY.md](HISTORY.md)     | Unified imported/local browser history, address-bar autocomplete, open tabs |
-| [WORKFLOWS.md](WORKFLOWS.md) | End-to-end recipes — import-sync-verify, cross-browser merge                |
+| [DISCOVERY.md](references/DISCOVERY.md) | Detect browsers, enumerate profiles, preview available data                 |
+| [IMPORT.md](references/IMPORT.md)       | Run imports, handle edge cases, review results                              |
+| [COOKIES.md](references/COOKIES.md)     | Cookie management — browse, search, delete, sync to session                 |
+| [PASSWORDS.md](references/PASSWORDS.md) | Password vault — browse, search, reveal, copy                               |
+| [BOOKMARKS.md](references/BOOKMARKS.md) | Bookmark browser — folder tree, search, open, export                        |
+| [HISTORY.md](references/HISTORY.md)     | Unified imported/local browser history, address-bar autocomplete, open tabs |
+| [WORKFLOWS.md](references/WORKFLOWS.md) | End-to-end recipes — import-sync-verify, cross-browser merge                |
 
 ## Interaction Patterns
 
-See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERNS.md) for when to use inline UI vs eval for side-effect actions. Browser import is a prime example: discovery can be eval, but the actual import (choosing browser, profile, data types) should be an inline UI that reports results back via `chat.publish`.
+See the sandbox skill's [INTERACTION_PATTERNS.md](../../skills/sandbox/INTERACTION_PATTERNS.md) for when to use inline UI vs eval for side-effect actions. Browser import is a prime example: discovery can be eval, but the actual import (choosing browser, profile, data types) should be an inline UI that reports results back via `chat.publish`.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ declared browser-data extension reads browser profile databases directly
 (SQLite for Chrome/Firefox, plist for Safari) and stores imported data in
 `BrowserDataDO`.
 
-History is unified: imported Chrome/Firefox/Safari visits and Vibestudio browser-panel navigations both write visit events into `BrowserDataDO`. The address bar autocomplete reads the materialized `history` summary alongside open panels, bookmarks, and search engines. See [HISTORY.md](HISTORY.md).
+History is unified: imported Chrome/Firefox/Safari visits and Vibestudio browser-panel navigations both write visit events into `BrowserDataDO`. The address bar autocomplete reads the materialized `history` summary alongside open panels, bookmarks, and search engines. See [HISTORY.md](references/HISTORY.md).
 
 Data imports are incremental for a given browser/profile: source-keyed records
 upsert, aggregate source counts such as autofill do not inflate on repeat runs,

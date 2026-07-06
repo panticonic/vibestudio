@@ -1,6 +1,6 @@
 ---
 name: workspace-dev
-description: Build and develop Vibestudio workspace units — project scaffolding, panels, workers, Durable Objects, runtime publishing, and development workflow.
+description: Build and develop Vibestudio workspace units — project scaffolding, panels, workers, Durable Objects, runtime publishing, repo-local SKILL.md authoring, and development workflow.
 ---
 
 # Workspace Development Skill
@@ -10,6 +10,36 @@ packages, skills, and extensions.
 
 For trusted workspace apps under `apps/` (`@workspace-apps/*`, Electron shell,
 mobile React Native, or terminal targets), use the `appdev` skill instead.
+
+When authoring skill docs, keep repo-specific guidance in the repo it documents
+as a top-level `SKILL.md`. Use `skills/<name>` only for cross-repo workflows or
+skills that are themselves reusable code packages.
+
+## Repo-Local Skill Docs
+
+Any workspace repo can carry a top-level `SKILL.md`. Add or update that file
+when a package, panel, worker, extension, project, template, about page, or
+other repo needs agent guidance that should travel with its code.
+
+Use repo-local skill docs for implementation-specific workflows, APIs, schemas,
+debugging recipes, generated files, ownership notes, or migration guidance. Put
+the file at the repo root:
+
+- `packages/foo/SKILL.md`
+- `workers/foo/SKILL.md`
+- `panels/foo/SKILL.md`
+- `extensions/foo/SKILL.md`
+- `projects/foo/SKILL.md`
+
+Use `skills/<name>/SKILL.md` only for workspace-wide workflows, cross-repo
+guidance, or a reusable skill package that exports code. The built-in onboarding
+skill intentionally stays at `skills/onboarding/SKILL.md` because it describes
+the whole workspace. Trusted app repos under `apps/` can also carry `SKILL.md`,
+but use the `appdev` skill when developing those apps.
+
+Agents read skills by the path shown in the generated skill index, for example
+`read("packages/foo/SKILL.md")`; do not assume every skill lives under
+`skills/<name>`.
 
 ## Files
 
@@ -85,6 +115,7 @@ const myApp = await openPanel("panels/my-app");
 | Fork panel      | `eval` — `import { forkProject } from "@workspace-skills/workspace-dev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })` |
 | Fork worker     | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                              |
 | Build app database | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a manifest service with `policy.allowed`, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases). |
+| Add repo guidance | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages |
 | Launch panel    | `eval` — `const handle = await openPanel(source)` for pushed/main code. `openPanel` does not take a build ref; to run context-local panel code, first push it or use a ref-capable navigation path with `ref: \`ctx:${ctx.contextId}\``. |
 | Launch worker   | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` }])` for newly created or context-edited worker code; omit `ref` only when launching the main build. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id` |
 | Read a file     | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                          |

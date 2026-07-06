@@ -1,25 +1,24 @@
----
-name: subagents
-description: Delegate work to child agents with spawn_subagent — in-process Pi children or external engines like Claude Code (agentKind) — supervise task channels, inspect child contexts, and merge or pick results safely.
----
-
 # Subagents
 
-Use this skill when you need to delegate work to a child agent, inspect a child
-agent's work, merge or cherry-pick work back, choose between the in-process Pi
-engine and an external engine (Claude Code), or reason about conversation forks
-versus subagent task channels.
+Use this guide when delegating work to a child agent, inspecting a child
+agent's work, merging or cherry-picking work back, choosing between the
+in-process Pi engine and an external engine (Claude Code), or reasoning about
+conversation forks versus subagent task channels.
+
+The parent-side tool surface is defined in `src/agent-worker-base.ts`. The run
+mechanics and child context orchestration live primarily in `src/agent-vessel.ts`
+and `src/subagent-runs.ts`.
 
 ## Vocabulary
 
-- **Conversation fork**: an alternate chat branch. It is user-facing chat
-  lineage, not a source repo fork.
-- **Repo fork**: `vcs.forkRepo(fromPath, toPath)`, a source-control operation
-  that copies a repo to a new path while preserving history.
-- **Context fork**: the VCS/runtime state copied for an isolated workspace
-  context. Subagents use child contexts so their edits are isolated until the
-  parent merges or picks them.
-- **Subagent**: a child agent spawned by `spawn_subagent`. It has its own task
+- Conversation fork: an alternate chat branch. It is user-facing chat lineage,
+  not a source repo fork.
+- Repo fork: `vcs.forkRepo(fromPath, toPath)`, a source-control operation that
+  copies a repo to a new path while preserving history.
+- Context fork: the VCS/runtime state copied for an isolated workspace context.
+  Subagents use child contexts so their edits are isolated until the parent
+  merges or picks them.
+- Subagent: a child agent spawned by `spawn_subagent`. It has its own task
   channel transcript and child context. The parent supervises it through the
   `*_subagent` tools.
 
@@ -74,14 +73,15 @@ spawn_subagent({
 - `mode: "fresh"` starts a child with only the task prompt. Prefer this for
   independent research, audits, extraction work, or isolated implementation.
 - `mode: "fork"` starts a child from your current trajectory. Prefer this when
-  the child needs the conversation context you already built, and repeating that
-  context in the task would be expensive or lossy. Forked subagents can save a
-  lot on tokens because the child starts from the parent's existing trajectory
-  and the context window cache is shared.
+  the child needs the conversation context you already built, and repeating
+  that context in the task would be expensive or lossy. Forked subagents can
+  save a lot on tokens because the child starts from the parent's existing
+  trajectory and the context window cache is shared.
 
 When you choose `mode: "fork"`, the child is told that the parent owns the main
-line of work and that its job is to focus only on the task you gave it. Make the
-task narrow enough that the child does not try to take over the whole project.
+line of work and that its job is to focus only on the task you gave it. Make
+the task narrow enough that the child does not try to take over the whole
+project.
 
 Always include `task`. It should be self-contained enough that the child can
 recover after compaction or a tool retry.
@@ -175,7 +175,8 @@ Subagents should keep the task channel quiet by default.
 - Use `say` for meaningful milestones: "I found the failing contract", "OCR is
   required", "tests pass", or "blocked on missing credential".
 - Do not use `say` for every internal step.
-- Ordinary child messages and `say` updates are progress. They are not terminal.
+- Ordinary child messages and `say` updates are progress. They are not
+  terminal.
 - The parent should not assume the run is finished until the child calls
   `complete`.
 
@@ -207,7 +208,7 @@ condition, what you tried, and whether partial work exists.
 Do not treat normal final text, idle, or turn closure as completion. Only
 `complete` ends the subagent run.
 
-If you are a **forked** subagent, you inherited the parent's trajectory and the
+If you are a forked subagent, you inherited the parent's trajectory and the
 context window cache is shared. Assume the parent will do the main work. Stay
 focused on the particular task the parent assigned; do not broaden the scope or
 redo parent work unless it is necessary for that task.
@@ -216,13 +217,13 @@ redo parent work unless it is necessary for that task.
 
 `read_subagent` and `inspect_subagent` answer different questions:
 
-- `read_subagent({ runId, afterSeq })` reads the task-channel transcript since a
-  cursor and returns `nextSeq`. Keep the cursor if you will poll again.
-- `inspect_subagent({ runId, query })` reads the child context's workspace state.
-  Use `query: "status"`, `"diff"`, `"log"`, or a file path.
+- `read_subagent({ runId, afterSeq })` reads the task-channel transcript since
+  a cursor and returns `nextSeq`. Keep the cursor if you will poll again.
+- `inspect_subagent({ runId, query })` reads the child context's workspace
+  state. Use `query: "status"`, `"diff"`, `"log"`, or a file path.
 
-Use `read_subagent` for what the child said. Use `inspect_subagent` for what the
-child changed.
+Use `read_subagent` for what the child said. Use `inspect_subagent` for what
+the child changed.
 
 ## Merge, Pick, Or Discard
 
@@ -246,8 +247,8 @@ pick_from_subagent({
 })
 ```
 
-After merge or pick, verify in the parent context. Then close the child run when
-inspection is no longer needed.
+After merge or pick, verify in the parent context. Then close the child run
+when inspection is no longer needed.
 
 ## Failure And Cleanup
 

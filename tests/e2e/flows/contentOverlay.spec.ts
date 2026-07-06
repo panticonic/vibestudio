@@ -79,9 +79,12 @@ async function waitHostedShellReady(testApp: TestApp): Promise<void> {
 
 /** Probe the content-overlay webContents, identified by its preload bridge
  *  (more robust than URL matching, since getURL() may omit the hash). */
-async function probeOverlay(
-  testApp: TestApp
-): Promise<{ hasCard: boolean; tone: string | null; text: string } | null> {
+async function probeOverlay(testApp: TestApp): Promise<{
+  hasCard: boolean;
+  tone: string | null;
+  text: string;
+  card: { width: number; height: number; clientHeight: number; scrollHeight: number } | null;
+} | null> {
   return testApp.app.evaluate(async ({ webContents }) => {
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
@@ -94,14 +97,31 @@ async function probeOverlay(
         return (await contents.executeJavaScript(
           `(() => {
             const card = document.querySelector(".approval-card");
+            const rect = card ? card.getBoundingClientRect() : null;
             return {
               hasCard: !!card,
               tone: card ? card.getAttribute("data-approval-tone") : null,
               text: document.body ? document.body.innerText : "",
+              card: card && rect ? {
+                width: rect.width,
+                height: rect.height,
+                clientHeight: card.clientHeight,
+                scrollHeight: card.scrollHeight,
+              } : null,
             };
           })()`,
           true
-        )) as { hasCard: boolean; tone: string | null; text: string };
+        )) as {
+          hasCard: boolean;
+          tone: string | null;
+          text: string;
+          card: {
+            width: number;
+            height: number;
+            clientHeight: number;
+            scrollHeight: number;
+          } | null;
+        };
       } catch {
         // Try the next webContents.
       }
@@ -224,6 +244,7 @@ test.describe("Content overlay", () => {
     const probe = await probeOverlay(testApp);
     expect(probe?.tone).toBe("red");
     expect(probe?.text).toContain("E2E drive panel");
+    expect(probe?.card?.height ?? 0).toBeGreaterThan(120);
     // The full severe-capability action set rendered (incl. the danger trust action).
     expect(probe?.text).toContain("Trust and drive");
     expect(probe?.text).toContain("Deny");

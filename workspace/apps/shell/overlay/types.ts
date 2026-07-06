@@ -47,6 +47,11 @@ export interface OverlayRenderMessage {
   props: unknown;
   theme: OverlayThemeInfo;
   /**
+   * Max content width (px) the surface may occupy — derived by main from the
+   * anchor region and an overlay-specific upper bound.
+   */
+  maxWidth: number;
+  /**
    * Max content height (px) the surface may occupy — derived by main from the
    * anchor region. The surface caps itself to this (scrolling internally) and
    * reports its actual height, so auto-fit never loops.
@@ -63,8 +68,8 @@ export interface ContentOverlayBridge {
   /** Subscribe to render messages; `null` means clear (the overlay was hidden).
    *  Returns an unsubscribe fn. */
   onRender(handler: (message: OverlayRenderMessage | null) => void): () => void;
-  /** Report the surface's current content height (px) for auto-fit. */
-  reportSize(height: number): void;
+  /** Report the surface's current content dimensions (px) for auto-fit. */
+  reportSize(size: { width: number; height: number }): void;
   /** Emit an opaque intent payload back to the owning chrome. */
   emitIntent(payload: unknown): void;
   /** Report a drag gesture (screen coordinates) so main can move the native

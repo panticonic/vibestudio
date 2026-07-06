@@ -41,7 +41,8 @@ class TestableAiChatWorker extends AiChatWorker {
     {
       name: "onboarding",
       description: "Onboarding skill",
-      dirPath: "/skills/onboarding",
+      dirPath: "skills/onboarding",
+      skillPath: "skills/onboarding/SKILL.md",
     },
   ];
 
