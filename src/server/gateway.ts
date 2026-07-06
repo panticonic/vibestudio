@@ -810,10 +810,23 @@ function proxyUpgrade(
     targetSocket.write(upgradeReq);
     if (head.length > 0) targetSocket.write(head);
 
+    const bridgeStartedAt = Date.now();
+    let closeLogged = false;
     bridgeDuplexSockets(socket, targetSocket, {
       onError: ({ side, error }) => {
         const message = error instanceof Error ? error.message : String(error);
         log.warn(`Gateway WS proxy ${side} socket error: ${message}`);
+      },
+      onClose: ({ side }) => {
+        // Close attribution for relayed long-lived sockets (see egressProxy).
+        // Ordinary short-lived closes (panel navigations etc.) stay silent.
+        if (closeLogged) return;
+        closeLogged = true;
+        const durationMs = Date.now() - bridgeStartedAt;
+        if (durationMs < 30_000) return;
+        log.warn(
+          `Gateway WS proxy closed (first close: ${side}) after ${durationMs}ms: ${req.method} ${req.url}`
+        );
       },
     });
   });

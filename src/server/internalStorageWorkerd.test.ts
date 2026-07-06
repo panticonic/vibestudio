@@ -255,14 +255,13 @@ describe("internal storage DOs under workerd", () => {
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
   // the unbounded-eval.run design: real workerd does NOT cap a DO `fetch` handler
   // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly,
-  // proving the only sub-undici cap in the chain is our own transport
-  // `RESPOND_TIMEOUT_MS` (120s). (The relay's bare `fetch` adds undici's
-  // ~300s `headersTimeout` as a second cap — defeatable with a custom dispatcher.)
+  // proving workerd itself is not the short cap in this path. The relay's bare
+  // `fetch` adds undici's ~300s `headersTimeout`, defeatable with a custom
+  // dispatcher for held calls.
   it.skip("real workerd holds a DO fetch handler open past the ~30s regular-Worker wall limit", async () => {
-    // Probe under the 120s respond ceiling (35s) so the value returns; a
-    // workerd-level cap would instead error around 30s. (A separate manual probe
-    // with RESPOND_TIMEOUT_MS raised confirmed a HELD request runs 150s+ cleanly —
-    // workerd does not cap long-held requests; only no-connection waitUntil is capped.)
+    // Probe at 35s; a workerd-level cap would instead error around 30s. A
+    // separate manual probe confirmed a HELD request runs 150s+ cleanly —
+    // workerd does not cap long-held requests; only no-connection waitUntil is capped.
     const probeBuild = await bundleWorker(
       "workers/lifecycle-probe",
       "src/server/testFixtures/lifecycleProbeWorker.ts",
@@ -356,7 +355,7 @@ describe("internal storage DOs under workerd", () => {
       objectKey: "bg-dur-probe",
     };
 
-    // 150s background task — well past respond's 120s. Don't touch the DO meanwhile.
+    // 150s background task. Don't touch the DO meanwhile.
     await harness.callDurableObject(ref, "bgRunProbe", 150_000);
     await new Promise((resolve) => setTimeout(resolve, 155_000));
     const result = (await harness.callDurableObject(ref, "bgRunResult")) as Record<string, string>;

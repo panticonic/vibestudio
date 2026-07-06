@@ -3,9 +3,6 @@ import { decodeFramedResponseToStreaming } from "../protocol/streamCodec.js";
 
 const rpcFetch = globalThis.fetch.bind(globalThis);
 
-/** How long `respond()` waits for the core to produce a response envelope. */
-const RESPOND_TIMEOUT_MS = 120_000;
-
 export interface HttpClientTransportConfig {
   selfId: string;
   serverUrl: string;
@@ -13,9 +10,9 @@ export interface HttpClientTransportConfig {
   fetch?: typeof fetch;
   runtimeIdHeader?: string;
   /**
-   * How long `respond()` waits for the handler before giving up (default 120s). A DO that runs
-   * legitimately long HELD handlers (the EvalDO's `executeRun`) sets this very high / disables it
-   * (`<= 0` ⇒ no reaper) — the held connection itself, plus the run's opt-in `timeoutMs`, bound it.
+   * Optional watchdog for inbound request handlers. Omitted or `<= 0` means no
+   * transport deadline; callers that need a bounded probe can opt in with a
+   * positive value.
    */
   respondTimeoutMs?: number;
 }
@@ -143,6 +140,14 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
           capture(envelope);
           return;
         }
+        // There is no `/rpc` route for raw response envelopes; the original
+        // held request already settled (for example via an explicit watchdog) or
+        // was never captured. Posting it only creates a misleading HTTP 400.
+        console.warn(
+          `[httpClientTransport:${config.selfId}] dropping unmatched response ` +
+            `(requestId=${message.requestId})`
+        );
+        return;
       }
       const response = (await postEnvelope(envelope)) as unknown;
       const returnedEnvelope =
@@ -171,10 +176,11 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         return Promise.resolve(null);
       }
       const requestId = (message as RpcRequest).requestId;
-      const timeoutMs = config.respondTimeoutMs ?? RESPOND_TIMEOUT_MS;
+      const timeoutMs = config.respondTimeoutMs ?? 0;
       return new Promise<RpcEnvelope | null>((resolve) => {
-        // `<= 0` disables the reaper (the EvalDO's held `executeRun`); the handler resolves only
-        // when it really finishes (or the held connection drops).
+        // No implicit transport deadline: handlers that wait for human approval
+        // can legitimately outlive short RPC watchdogs. Positive `respondTimeoutMs`
+        // remains as an explicit opt-in for tests/probes.
         const timer =
           timeoutMs > 0
             ? setTimeout(() => {

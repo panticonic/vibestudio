@@ -1602,6 +1602,8 @@ export class EgressProxy {
           if (head.length > 0) {
             upstreamSocket.write(head);
           }
+          const bridgeStartedAt = Date.now();
+          let closeLogged = false;
           bridgeDuplexSockets(socket, upstreamSocket, {
             onError: ({ side, error }) => {
               if (side !== "upstream") return;
@@ -1609,6 +1611,22 @@ export class EgressProxy {
                 reason: "upstream_socket_error",
                 target: diagnosticWebSocketTarget(targetUrl),
                 error: diagnosticThrownError(error),
+              });
+            },
+            onClose: ({ side }) => {
+              // Close attribution: a relayed long-lived WS (model streaming)
+              // dying with 1006 downstream is undiagnosable without knowing
+              // which side of THIS bridge closed first and after how long.
+              // Short-lived bridges (ordinary per-call teardown) stay silent —
+              // logging every model call's normal close drowns the log.
+              if (closeLogged) return;
+              closeLogged = true;
+              const durationMs = Date.now() - bridgeStartedAt;
+              if (durationMs < 30_000) return;
+              console.warn("[EgressProxy] long-lived WebSocket bridge closed", {
+                firstCloseSide: side,
+                durationMs,
+                target: diagnosticWebSocketTarget(targetUrl),
               });
             },
           });
