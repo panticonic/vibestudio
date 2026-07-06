@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import { createPanelRuntimeService } from "./panelRuntimeService.js";
 
@@ -142,5 +142,48 @@ describe("panelRuntimeService", () => {
         connectionId: "desktop-runtime",
       })
     );
+  });
+
+  it("lets userland callers read lease snapshots but not mutate leases", async () => {
+    const coordinator = {
+      registerClient: vi.fn(),
+      unregisterClient: vi.fn(),
+      getSnapshot: vi.fn(() => ({ version: { epoch: "test", counter: 0 }, leases: [] })),
+      acquire: vi.fn(),
+      takeOver: vi.fn(),
+      release: vi.fn(),
+      ownsClientSession: vi.fn(() => true),
+      getLease: vi.fn(() => null),
+    };
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(createPanelRuntimeService({ coordinator: coordinator as never }));
+    dispatcher.markInitialized();
+
+    for (const kind of ["panel", "worker", "do"] as const) {
+      await expect(
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller(`${kind}:test`, kind) },
+          "panelRuntime",
+          "getSnapshot",
+          []
+        )
+      ).resolves.toMatchObject({ leases: [] });
+    }
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("panel:test", "panel") },
+        "panelRuntime",
+        "acquire",
+        [
+          "panel:nav-a",
+          {
+            slotId: "panel:tree/slot-a",
+            clientSessionId: "desktop-session",
+            connectionId: "panel-runtime",
+          },
+        ]
+      )
+    ).rejects.toThrow(/not accessible to panel callers/);
   });
 });

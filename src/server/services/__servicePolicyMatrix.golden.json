@@ -9,7 +9,16 @@
     "service": ["server", "shell"],
     "methods": {
       "createPairingInvite": ["app", "server", "shell"],
-      "getConnectionInfo": null,
+      "getConnectionInfo": [
+        "agent",
+        "app",
+        "do",
+        "extension",
+        "panel",
+        "server",
+        "shell",
+        "worker"
+      ],
       "grantConnection": ["app", "server", "shell"],
       "listDevices": null,
       "mintAgentCredential": ["extension", "server"],
@@ -208,7 +217,7 @@
     "service": ["app", "server", "shell"],
     "methods": {
       "acquire": null,
-      "getSnapshot": null,
+      "getSnapshot": ["app", "do", "panel", "server", "shell", "worker"],
       "registerClient": null,
       "release": null,
       "takeOver": null,
@@ -251,7 +260,16 @@
   "presence": {
     "service": ["server", "shell"],
     "methods": {
-      "getPanelActiveOwner": null,
+      "getPanelActiveOwner": [
+        "agent",
+        "app",
+        "do",
+        "extension",
+        "panel",
+        "server",
+        "shell",
+        "worker"
+      ],
       "markPanelActive": null,
       "markPanelsOwned": null
     }
