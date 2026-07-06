@@ -455,6 +455,13 @@ export const workspaceMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.array(SkillEntrySchema),
     access: READ_ACCESS,
+    // `agent` (linked external sessions): the channel-host bridge serves the
+    // workspace skill catalog to Claude Code as MCP resources. Read-only
+    // widening on the skill-discovery hot path (docs/architecture/
+    // rpc-and-services.md, "Agent callers and the eval escape hatch").
+    policy: {
+      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server", "agent"],
+    },
   },
   readSkill: {
     description:
@@ -464,6 +471,10 @@ export const workspaceMethods = defineServiceMethods({
     ]),
     returns: z.string(),
     access: READ_ACCESS,
+    // Read-only widening for agent callers (see listSkills).
+    policy: {
+      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server", "agent"],
+    },
     examples: [{ args: ["code-review"] }],
   },
   sourceTree: {

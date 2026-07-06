@@ -2175,6 +2175,13 @@ app.on("ready", async () => {
               undefined
           );
         }
+        if (action === "captureScreenshot") {
+          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
+          return cdpHostProvider.captureScreenshot(
+            panelId,
+            (args[0] as { format?: string; quality?: number } | undefined) ?? {}
+          );
+        }
         throw new Error(`Unknown host command: ${action}`);
       },
     });

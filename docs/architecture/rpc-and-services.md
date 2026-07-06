@@ -91,3 +91,40 @@ Are you routing point-to-point with a single caller/target?
    ├─ Resolve it with workers.resolveService
    └─ Call the returned worker or Durable Object target
 ```
+
+## Agent callers and the eval escape hatch
+
+The `agent` caller kind (linked external sessions — Claude Code et al.,
+authenticated by an entity-scoped agent credential) is deliberately allowed on
+only a handful of host services. This is NOT a reachability limitation, and
+service authors should not play whack-a-mole adding `agent` to allow lists.
+
+**The reachability guarantee is eval.** An agent's `vibestudio eval` runs in a
+per-owner EvalDO activated as an ordinary `do` principal scoped to the agent's
+own context (`evalService.ts`). Every service call the eval makes carries that
+`do` identity — so anything `do`-callable is agent-reachable today, including
+capability-gated paths: the EvalDO carries a code identity the grant/approval
+pipeline understands, so consent prompts work through eval where they may be
+deny-only on the direct path.
+
+The only services closed to `do` callers are deliberately user/host surfaces
+(`auth`, `tokens`, `hostLifecycle`, `shellApproval`, `shellPresence`,
+`presence`, `push`, `panelRuntime`, `panelLog`) — none of which an agent
+should reach programmatically.
+
+**Adding `agent` to a service (or method) allow list is purely a UX
+optimization for high-frequency paths** — it lets the CLI hit the service in
+one RPC without composing an eval (e.g. `panelCdp.screenshot` for the
+frontend-dev loop, `workspace.listSkills` for skill discovery). Apply it when:
+
+- the method is read-only or the write is fully permission-gated server-side,
+- the operation is something agents do often enough that eval composition is
+  real friction, and
+- the permission story for a code-identity-less caller is settled (agent
+  callers carry a host-verified `agentBinding` instead of `.code`; gates must
+  treat them as first-class subjects — see `panelAccessPermission.ts` — and
+  cannot rely on the capability grant store, which keys on code identity).
+
+When in doubt, leave the allow list alone and let eval carry it. The policy
+matrix golden (`__servicePolicyMatrix.golden.json`) makes every widening a
+reviewable diff.

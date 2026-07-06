@@ -183,7 +183,7 @@
     }
   },
   "panelCdp": {
-    "service": ["app", "do", "panel", "server", "shell", "worker"],
+    "service": ["agent", "app", "do", "panel", "server", "shell", "worker"],
     "methods": {
       "consoleHistory": null,
       "getCdpEndpoint": null,
@@ -194,6 +194,7 @@
       "hostProvider.send": ["server", "shell"],
       "navigate": null,
       "reload": null,
+      "screenshot": null,
       "stop": null
     }
   },
@@ -228,9 +229,9 @@
       "getFocusedPanelId": null,
       "getRuntimeLease": null,
       "getStateArgs": null,
-      "getTreeSnapshot": null,
+      "getTreeSnapshot": ["agent", "app", "do", "panel", "server", "shell", "worker"],
       "list": null,
-      "metadata": null,
+      "metadata": ["agent", "app", "do", "panel", "server", "shell", "worker"],
       "movePanel": null,
       "navigate": null,
       "navigateHistory": null,
@@ -424,8 +425,8 @@
       "hostTargets.setSelection": ["server", "shell"],
       "hostTargets.versions": ["server", "shell"],
       "list": null,
-      "listSkills": null,
-      "readSkill": null,
+      "listSkills": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
+      "readSkill": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
       "recurring.list": ["app", "do", "panel", "server", "shell", "worker"],
       "select": ["app", "do", "panel", "server", "shell", "worker"],
       "setConfigField": ["app", "do", "panel", "server", "shell", "worker"],

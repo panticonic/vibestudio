@@ -129,4 +129,49 @@ describe("McpStdioServer", () => {
     expect(sent[0]!.error?.code).toBe(-32601);
     expect(sent[1]!.result!["isError"]).toBe(true);
   });
+
+  it("declares and serves resources when the hooks are provided", async () => {
+    const { sent, send, flush } = harness({
+      resources: {
+        list: async () => [
+          { uri: "vibestudio-skill://subagents", name: "subagents", mimeType: "text/markdown" },
+        ],
+        read: async (uri) => ({
+          contents: [{ uri, mimeType: "text/markdown", text: "# Subagents" }],
+        }),
+      },
+    });
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    send({ jsonrpc: "2.0", id: 2, method: "resources/list" });
+    send({
+      jsonrpc: "2.0",
+      id: 3,
+      method: "resources/read",
+      params: { uri: "vibestudio-skill://subagents" },
+    });
+    send({ jsonrpc: "2.0", id: 4, method: "resources/read", params: {} });
+    await flush();
+
+    // Async handlers may respond out of submission order — index by request id.
+    const byId = new Map(sent.map((message) => [message.id, message]));
+    const caps = byId.get(1)!.result!["capabilities"] as Record<string, unknown>;
+    expect(caps["resources"]).toEqual({});
+    expect(byId.get(2)!.result!["resources"]).toEqual([
+      { uri: "vibestudio-skill://subagents", name: "subagents", mimeType: "text/markdown" },
+    ]);
+    expect(byId.get(3)!.result!["contents"]).toEqual([
+      { uri: "vibestudio-skill://subagents", mimeType: "text/markdown", text: "# Subagents" },
+    ]);
+    expect(byId.get(4)!.error?.code).toBe(-32602);
+  });
+
+  it("rejects resource methods when no resources are configured", async () => {
+    const { sent, send, flush } = harness();
+    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+    send({ jsonrpc: "2.0", id: 2, method: "resources/list" });
+    await flush();
+    const caps = sent[0]!.result!["capabilities"] as Record<string, unknown>;
+    expect(caps["resources"]).toBeUndefined();
+    expect(sent[1]!.error?.code).toBe(-32601);
+  });
 });

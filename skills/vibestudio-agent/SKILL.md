@@ -30,7 +30,10 @@ the repo: `pnpm cli ...`).
   `5` stale session (entity retired, or credential targets another server).
 - **Discover, don't guess.** `vibestudio agent services` lists every callable
   RPC service live; `vibestudio agent services NAME --json` returns full
-  argument schemas. `API.md` is the offline snapshot.
+  argument schemas. `API.md` is the offline snapshot. The workspace's own
+  skill library (subagents, testing, panel dev, …) is exposed as MCP
+  resources on the `vibestudio` MCP server in linked sessions — each served
+  with an addendum mapping its Pi-agent idioms to your CLI surfaces.
 - **VCS is per-repo and the loop is edit → commit → push.** Each repo
   (`panels/notes`, `packages/ui`, `projects/vault`, `meta`) versions itself with
   three distinct layers:
@@ -114,6 +117,51 @@ vibestudio eval run -e '
 State survives across invocations within a session, so you can build up
 intermediate results and inspect `scope` keys between runs.
 
+## Frontend development: SEE what you build
+
+When you edit panel UI code, do not fly blind — screenshot the running panel
+and read its console after every meaningful change:
+
+```bash
+vibestudio panel list                          # panel ids + sources + contexts
+vibestudio panel screenshot <panelId> --out shot.png
+vibestudio panel console <panelId> --errors    # render errors, exceptions
+```
+
+Screenshots force-paint hidden/unslotted panels, so the panel does not need to
+be visible on anyone's screen (a headless renderer serves it if no desktop
+shell holds it). **Scope rule:** you may only automate panels in *your own
+context* — a foreign-context panel is denied with guidance, not prompted. That
+is the correct loop anyway: your code edits only render in *your* context's
+build, so open your own preview instance and iterate on it:
+
+```bash
+# Open a preview of the panel you are editing, in YOUR context, on YOUR build:
+vibestudio eval run -e '
+  const h = await openPanel("panels/notes", { contextId, ref: "ctx:" + contextId });
+  return { panelId: h.id };
+'
+vibestudio panel screenshot <panelId> --out after-change.png
+vibestudio panel console <panelId> --errors
+```
+
+Full loop with build preview in [RECIPES.md](RECIPES.md).
+
+## Subagents (linked sessions)
+
+Two directions, both one-way:
+
+- **If you ARE a subagent** (a workspace agent spawned you): your MCP server
+  instructions say so explicitly and carry your operating contract. The short
+  version: work in this context, `say` sparingly for parent-visible progress,
+  **commit** durable work here (the parent merges this context — only committed
+  work merges; never push `main`), and finish exactly once by calling the
+  `complete` MCP tool — a normal final message does not end the run.
+- **You cannot spawn subagents from a linked session.** `spawn_subagent` is a
+  workspace-side vessel tool with no CLI/eval/RPC surface. If work needs
+  delegation, `say` it to the workspace agent in your conversation — it can
+  spawn children (including other Claude Code sessions) and supervise them.
+
 ## Command groups
 
 | Group | Commands | Purpose |
@@ -125,6 +173,7 @@ intermediate results and inspect `scope` keys between runs.
 | `vibestudio eval` | `run`, `repl-reset` | Sandboxed TS/JS against the server — **the full-power surface** (see below) |
 | `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster` | Conversation channels: read/post messages, follow live, inspect the roster |
 | `vibestudio context` | `mirror` | Materialize a context's repos into a local dir (`--watch` writes local edits back as context edit ops) |
+| `vibestudio panel` | `list`, `screenshot`, `console` | Look at running UI: enumerate live panels, capture one to an image file, read its console/errors — the frontend-dev feedback loop (see below) |
 
 `--help` works at the group level (`vibestudio fs --help`) and per command
 (`vibestudio fs write --help`).

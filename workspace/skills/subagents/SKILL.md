@@ -1,12 +1,13 @@
 ---
 name: subagents
-description: Delegate work to child agents with spawn_subagent, supervise task channels, inspect child contexts, and merge or pick results safely.
+description: Delegate work to child agents with spawn_subagent — in-process Pi children or external engines like Claude Code (agentKind) — supervise task channels, inspect child contexts, and merge or pick results safely.
 ---
 
 # Subagents
 
 Use this skill when you need to delegate work to a child agent, inspect a child
-agent's work, merge or cherry-pick work back, or reason about conversation forks
+agent's work, merge or cherry-pick work back, choose between the in-process Pi
+engine and an external engine (Claude Code), or reason about conversation forks
 versus subagent task channels.
 
 ## Vocabulary
@@ -85,6 +86,72 @@ task narrow enough that the child does not try to take over the whole project.
 Always include `task`. It should be self-contained enough that the child can
 recover after compaction or a tool retry.
 
+## External Engines (`agentKind`)
+
+`spawn_subagent` defaults to `agentKind: "pi"` — an in-process child of your own
+vessel class. Any other value names an extension-owned external launcher
+(`@workspace-extensions/<agentKind>`); `"claude-code"` runs a headless Claude
+Code session in the child context. Everything about supervision stays the same:
+the run gets a task channel and child context, progress is pushed into your
+channel, the run card badges the engine, and `send_to_subagent` /
+`inspect_subagent` / `merge_subagent` / `pick_from_subagent` /
+`close_subagent` all work identically. Depth and fan-out gates are shared.
+
+```ts
+spawn_subagent({
+  mode: "fresh",
+  agentKind: "claude-code",
+  label: "repo audit",
+  task: "Audit packages/foo for stale contracts. Commit fixes in this context; complete with findings.",
+  config: { model: "opus", effort: "high" }
+})
+```
+
+When to choose which engine:
+
+- **pi** (default): the child shares your loop machinery and model settings;
+  `mode: "fork"` gives it your full trajectory with a shared context-window
+  cache — the cheap option when the child needs context you already built.
+- **claude-code**: the child is a full Claude Code session with its own harness
+  (local file tools, its own skills, the `vibestudio` CLI pre-scoped to the
+  child context). Choose it for work that benefits from that harness or from a
+  different model/effort tier than yours. For frontend/UI tasks it can SEE its
+  work: `vibestudio panel screenshot` captures a running panel to an image file
+  (own-context panels only — the child opens its own preview instance on its
+  context build and iterates against screenshots + `panel console --errors`).
+
+External-engine specifics:
+
+- **`task` is always required** (both modes) and must be fully self-contained:
+  an external child never inherits your conversation trajectory — even with
+  `mode: "fork"` it starts from just your task text (plus the child context's
+  files). Prefer `mode: "fresh"` and write the task accordingly.
+- **`config` maps to the launcher CLI** (whitelisted; unknown keys and
+  flag-shaped values are dropped). For claude-code:
+
+  | key | CLI flag | values |
+  |-----|----------|--------|
+  | `model` | `--model` | alias (`"opus"`, `"sonnet"`, `"haiku"`) or full model name |
+  | `effort` | `--effort` | `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` \| `"max"` |
+  | `permissionMode` | `--permission-mode` | `"auto"` (default) \| `"acceptEdits"` \| `"bypassPermissions"` \| `"manual"` \| `"dontAsk"` \| `"plan"` |
+  | `fallbackModel` | `--fallback-model` | model name |
+  | `maxBudgetUsd` | `--max-budget-usd` | positive number |
+
+- **Permissions default to `auto`**: your spawn is the authorization, and a
+  headless run blocked on interactive prompts would hang. Override
+  `permissionMode` only when you deliberately want the child's tool use relayed
+  as workspace approvals.
+- **The child gets the same operating contract** a Pi child gets (task channel
+  etiquette, `say` sparingly, commit-before-complete, finish exactly once with
+  `complete`), delivered through its session instructions — you do not need to
+  restate it in the task.
+- **Crashes cannot dangle the run**: if the external process exits without
+  calling `complete`, the run settles as `failed` with the exit code in the
+  report. Treat that like any failed child — inspect status/diff for partial
+  work before discarding.
+- Cancellation (`close_subagent`) kills the external process and releases its
+  session credential.
+
 ## Writing Good Tasks
 
 A good subagent task says:
@@ -114,12 +181,17 @@ Subagents should keep the task channel quiet by default.
 
 ## Child-Side Rules
 
-If you are the spawned subagent:
+If you are the spawned subagent (these rules apply whatever your engine — Pi
+children get them as a runtime prompt, external children like Claude Code get
+them in their session instructions, with `say`/`complete` as MCP tools and the
+`vibestudio` CLI for workspace access):
 
 1. Do the assigned task in the child context.
 2. Read required skills/docs yourself.
 3. Use `say` sparingly for parent-visible progress.
-4. Commit child-context edits when the task asks for durable work.
+4. Commit child-context edits when the task asks for durable work — the parent
+   takes your work by merging this context, and only committed work merges. Do
+   not push `main` yourself; the parent decides what to merge or pick.
 5. Finish exactly once with:
 
 ```ts

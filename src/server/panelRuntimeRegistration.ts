@@ -1277,6 +1277,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               import("./services/panelCdpService.js").PanelConsoleHistoryResult
             >;
           },
+          screenshot: async (panelId, _requesterEntityId, options) => {
+            await ensureCdpTargetReady(panelId);
+            return bridge.sendHostCommand(panelId, "captureScreenshot", [options ?? {}]) as Promise<
+              import("./services/panelCdpService.js").PanelScreenshotResult
+            >;
+          },
           hostProvider: hostProviderChannel,
           logAccess: (event) => {
             const message = event.denied ? "Panel CDP access denied" : "Panel CDP access";

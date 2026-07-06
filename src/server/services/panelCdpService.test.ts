@@ -471,6 +471,103 @@ describe("panelCdpService", () => {
     expect(drive).not.toHaveBeenCalled();
   });
 
+  it("captures a screenshot through deps.screenshot with the cdp gate", async () => {
+    const approvalQueue = approvalQueueMock("session");
+    const shot = { data: "aGk=", mimeType: "image/png" as const, width: 800, height: 600 };
+    const screenshot = vi.fn(async () => shot);
+    const service = cdpService({
+      approvalQueue,
+      getTarget: () => ({
+        id: "target",
+        title: "Target",
+        kind: "workspace",
+        contextId: "ctx-target",
+      }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target" })),
+      screenshot,
+    });
+
+    await expect(
+      service.handler(ctx(), "screenshot", ["target", { format: "png" }])
+    ).resolves.toEqual(shot);
+    // Cross-context ⇒ the same context-boundary prompt as raw CDP access.
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
+    );
+    expect(screenshot).toHaveBeenCalledWith("target", "panel:requester", { format: "png" });
+  });
+
+  it("agent callers screenshot same-context panels freely via their credential binding", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+    const shot = { data: "aGk=", mimeType: "image/png" as const, width: 1, height: 1 };
+    const screenshot = vi.fn(async () => shot);
+    const service = cdpService({
+      approvalQueue,
+      // resolveCallerContext must NOT be consulted for agent callers — return a
+      // mismatching context to prove the binding wins.
+      resolveCallerContext: vi.fn(async () => "ctx-elsewhere"),
+      getTarget: () => ({
+        id: "target",
+        title: "Target",
+        kind: "workspace",
+        contextId: "ctx-agent",
+      }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target" })),
+      screenshot,
+    });
+    const agentCaller = createVerifiedCaller("agent:ent-1", "agent", null, {
+      entityId: "ent-1",
+      contextId: "ctx-agent",
+      channelId: "chan-1",
+      agentId: "agt_1",
+    });
+
+    await expect(
+      service.handler({ caller: agentCaller }, "screenshot", ["target", undefined])
+    ).resolves.toEqual(shot);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("agent callers are denied (not prompted, never anchor-substituted) cross-context", async () => {
+    const approvalQueue = approvalQueueMock("session");
+    const screenshot = vi.fn(async () => ({
+      data: "aGk=",
+      mimeType: "image/png" as const,
+      width: 1,
+      height: 1,
+    }));
+    const service = cdpService({
+      approvalQueue,
+      // If the agent wrongly fell into the anchor branch, the target panel's
+      // own entity would become the subject and access would be free — the
+      // deny below proves the agent is judged as its own subject.
+      resolveSubjectCaller: vi.fn(() => {
+        throw new Error("agent callers must not resolve an anchor subject");
+      }),
+      getTarget: () => ({
+        id: "target",
+        title: "Target",
+        kind: "workspace",
+        contextId: "ctx-foreign",
+        runtimeEntityId: "panel:target",
+      }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target" })),
+      screenshot,
+    });
+    const agentCaller = createVerifiedCaller("agent:ent-1", "agent", null, {
+      entityId: "ent-1",
+      contextId: "ctx-agent",
+      channelId: "chan-1",
+      agentId: "agt_1",
+    });
+
+    await expect(
+      service.handler({ caller: agentCaller }, "screenshot", ["target", undefined])
+    ).rejects.toThrow(/agents may only automate panels in their own context/);
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(screenshot).not.toHaveBeenCalled();
+  });
+
   it("bypasses approval for shell callers", async () => {
     const approvalQueue = approvalQueueMock("deny");
     const endpoint = { wsEndpoint: "ws://server/cdp/target", token: "t" };

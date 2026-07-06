@@ -394,3 +394,51 @@ vibestudio context mirror <contextId> ./work --watch
 Conflicts surface through the context's normal edit/commit semantics — the
 mirror adds no merge model (concurrent edits look like two panels editing one
 context). Inbound sync is an interval poll of the context's repo states (v1).
+
+## Frontend dev loop: edit → preview → screenshot → console
+
+Building or changing panel UI. The key facts: your edits live on YOUR context
+head, so only a panel opened in your context (on your context's build) shows
+them; and `vibestudio panel screenshot` force-paints hidden panels, so nothing
+needs to be on a human's screen.
+
+```bash
+# 1. Edit the panel source (tracked context edits):
+vibestudio fs write panels/notes/App.tsx < App.tsx
+
+# 2. Preview-build without committing (structured diagnostics on failure):
+vibestudio eval run -e 'return await services.vcs.previewBuild("panels/notes")'
+
+# 3. Open (once) a preview instance in YOUR context on YOUR build:
+vibestudio eval run -e '
+  const h = await openPanel("panels/notes", { contextId, ref: "ctx:" + contextId });
+  return { panelId: h.id };
+'
+
+# 4. LOOK at it, and read its console:
+vibestudio panel screenshot <panelId> --out shot.png
+vibestudio panel console <panelId> --errors
+
+# 5. Iterate: edit → previewBuild → reload → screenshot, until it is right.
+vibestudio eval run -e '
+  const h = await getPanelHandle("<panelId>");
+  await h.cdp.reload();
+'
+
+# 6. Ship: commit, then push (build-gated).
+vibestudio eval run -e 'return await services.vcs.commit("panels/notes", "polish empty state")'
+vibestudio vcs push panels/notes
+```
+
+Judge your work from the screenshot like a designer would: spacing, alignment,
+contrast, empty/loading/error states, overflow at narrow widths. If the panel
+renders blank, `panel console --errors` almost always names the exception.
+
+Notes:
+- `panel list` marks panels in your context with `*`. Screenshot/console of a
+  panel in ANOTHER context is denied for agents by design (you could not see
+  your edits there anyway) — open your own preview instance instead.
+- Richer automation (click, evaluate, navigate) is available on the same handle
+  via eval: `(await getPanelHandle(id)).cdp` — see [EVAL.md](EVAL.md).
+- A JPEG screenshot (`--format jpeg --quality 60`) is much smaller when you
+  just need a quick look.

@@ -128,12 +128,16 @@ export async function requirePanelAccessPermission(
     return { allowed: true };
   }
 
-  // Resolve the subject. A direct userland caller carries `.code`; a host-
-  // mediated call arrives as `server`/`shell` (no code identity) and runs under
-  // the host-set anchor entity instead. No code identity AND no resolvable
-  // anchor ⇒ a genuine system action ⇒ free.
+  // Resolve the subject. A direct userland caller carries `.code`; an `agent`
+  // caller (linked external session) carries a host-verified entity binding and
+  // is its own subject — it must NOT fall into the anchor branch below, which
+  // would substitute the TARGET panel's entity and make every access read as
+  // same-context. A host-mediated call arrives as `server`/`shell` (no code
+  // identity) and runs under the host-set anchor entity instead. No code
+  // identity AND no resolvable anchor ⇒ a genuine system action ⇒ free.
+  const isAgentCaller = ctx.caller.runtime.kind === "agent";
   let subjectCaller: VerifiedCaller = ctx.caller;
-  if (!ctx.caller.code) {
+  if (!ctx.caller.code && !isAgentCaller) {
     const anchorId = anchorEntityId(target);
     const anchor = anchorId ? deps.resolveSubjectCaller(anchorId) : null;
     if (!anchor) return { allowed: true };
@@ -142,6 +146,28 @@ export async function requirePanelAccessPermission(
 
   const targetContextId = destinationContextId(deps, op, target);
   if (targetContextId == null) return { allowed: true }; // fresh / no-change / unknown
+
+  // Agent callers: same-context (per the host-verified credential binding) is
+  // free; cross-context is DENY-not-prompt — the capability-approval pipeline
+  // is code-identity-shaped (grants key on repoPath/version), which an agent
+  // credential does not carry, and the correct agent workflow is to open its
+  // own preview panel in its own context rather than automate another
+  // context's live panel. The structured reason tells the agent exactly that.
+  if (isAgentCaller) {
+    const agentContextId = ctx.caller.agentBinding?.contextId ?? null;
+    if (agentContextId !== null && targetContextId === agentContextId) {
+      return { allowed: true };
+    }
+    if (!deps.contextExists(targetContextId)) return { allowed: true };
+    return {
+      allowed: false,
+      reason:
+        `${verbFor(op)} ${targetContextId} denied: agents may only automate panels in ` +
+        `their own context (${agentContextId ?? "unbound"}). Open a preview instance in ` +
+        `your context instead (eval: openPanel(source, { contextId }) ), or ask a user ` +
+        `in the conversation to act on the foreign panel.`,
+    };
+  }
 
   const originContextId = await deps.resolveCallerContext(subjectCaller.runtime.id);
 

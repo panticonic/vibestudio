@@ -48,6 +48,19 @@ export interface PanelCdpHostProviderCaller {
   kind: CallerKind;
 }
 
+export interface PanelScreenshotOptions {
+  format?: "png" | "jpeg";
+  quality?: number;
+}
+
+export interface PanelScreenshotResult {
+  /** Base64-encoded image bytes. */
+  data: string;
+  mimeType: "image/png" | "image/jpeg";
+  width: number;
+  height: number;
+}
+
 export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
   getTarget(
     panelId: string
@@ -58,6 +71,16 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
    * assignment and provider-ready waiting before returning an endpoint.
    */
   getEndpoint(panelId: string, requesterEntityId: string): Promise<CdpEndpoint>;
+  /**
+   * One-RPC screenshot: the registration layer routes this to the active CDP
+   * host's `captureScreenshot` host command (ViewManager.captureView — force-
+   * paints hidden/unslotted views), so callers need no CDP WebSocket client.
+   */
+  screenshot?(
+    panelId: string,
+    requesterEntityId: string,
+    options?: PanelScreenshotOptions
+  ): Promise<PanelScreenshotResult>;
   drive?(
     panelId: string,
     requesterEntityId: string,
@@ -96,6 +119,13 @@ const consoleHistoryOptionsSchema = z
   })
   .optional();
 
+const screenshotOptionsSchema = z
+  .object({
+    format: z.enum(["png", "jpeg"]).optional(),
+    quality: z.number().min(0).max(100).optional(),
+  })
+  .optional();
+
 export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinition {
   async function requireTarget(panelId: string): Promise<PanelAccessPermissionTarget> {
     const target = await deps.getTarget(panelId);
@@ -124,7 +154,10 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
   return {
     name: "panelCdp",
     description: "Approval-gated server CDP access for panel targets",
-    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
+    // `agent` = linked external sessions (Claude Code et al.) driving the
+    // frontend-dev loop over the CLI; every target op below is gated by the
+    // same context-boundary permission as sandboxed code callers.
+    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do", "agent"] },
     methods: {
       getCdpEndpoint: {
         description: "Return a single-use CDP WebSocket endpoint for an approved panel target.",
@@ -153,6 +186,13 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
       consoleHistory: {
         description: "Read console history from an approved panel target's active CDP host.",
         args: z.tuple([z.string(), consoleHistoryOptionsSchema]),
+      },
+      screenshot: {
+        description:
+          "Capture a screenshot of an approved panel target through its active CDP host " +
+          "(force-paints hidden/unslotted panels). Returns base64 image data + mime type; " +
+          "no CDP WebSocket client needed.",
+        args: z.tuple([z.string(), screenshotOptionsSchema]),
       },
       "hostProvider.open": {
         description: "Internal shell/server transport: open a streamed CDP host-provider channel.",
@@ -230,6 +270,26 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
             panelId,
             requesterEntityId,
             (args[1] as PanelConsoleHistoryOptions | undefined) ?? undefined
+          );
+        }
+
+        case "screenshot": {
+          const panelId = args[0] as string;
+          const requesterEntityId = ctx.caller.runtime.id;
+          const target = await requireTarget(panelId);
+          const permission = await requirePanelAccessPermission(deps, ctx, "cdp", target);
+          if (!permission.allowed) {
+            recordAccess(method, ctx, target, { reason: permission.reason ?? "CDP access denied" });
+            throw new Error(permission.reason ?? "CDP access denied");
+          }
+          if (!deps.screenshot) {
+            throw new Error("Panel screenshot is not available");
+          }
+          recordAccess(method, ctx, target);
+          return deps.screenshot(
+            panelId,
+            requesterEntityId,
+            (args[1] as PanelScreenshotOptions | undefined) ?? undefined
           );
         }
 

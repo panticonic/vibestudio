@@ -5,9 +5,13 @@ import * as path from "node:path";
 import type { RpcClient } from "../rpcClient.js";
 import {
   bridgeInstructions,
+  createSkillResources,
   deriveVesselRef,
   normalizeServerUrl,
   resolveBridgeConfig,
+  skillNameFromUri,
+  skillResourceUri,
+  WORKSPACE_SKILL_ADDENDUM,
   type AdoptionEnvironment,
   type BridgeConfig,
 } from "./channelHost.js";
@@ -277,5 +281,57 @@ describe("bridgeInstructions", () => {
     });
     expect(text).toContain("spawned as a SUBAGENT (run run-8)");
     expect(text).toContain("calling `complete`");
+  });
+});
+
+describe("workspace skill resources", () => {
+  it("maps the workspace skill catalog to MCP resource descriptors", async () => {
+    const resources = createSkillResources(async (method, args) => {
+      expect(method).toBe("workspace.listSkills");
+      expect(args).toEqual([]);
+      return [
+        { name: "subagents", description: "Delegate work to child agents" },
+        { name: "system-testing" },
+      ] as never;
+    });
+    await expect(resources.list()).resolves.toEqual([
+      {
+        uri: "vibestudio-skill://subagents",
+        name: "subagents",
+        description: "Workspace skill: Delegate work to child agents",
+        mimeType: "text/markdown",
+      },
+      {
+        uri: "vibestudio-skill://system-testing",
+        name: "system-testing",
+        description: "Workspace skill: system-testing",
+        mimeType: "text/markdown",
+      },
+    ]);
+  });
+
+  it("serves the linked-session addendum on the first read only", async () => {
+    const resources = createSkillResources(async (method) => {
+      expect(method).toBe("workspace.readSkill");
+      return "# Skill body" as never;
+    });
+    const first = await resources.read("vibestudio-skill://subagents");
+    const firstText = first.contents[0]!.text;
+    expect(firstText.startsWith(WORKSPACE_SKILL_ADDENDUM)).toBe(true);
+    expect(firstText).toContain("translate as you read");
+    expect(firstText.endsWith("# Skill body")).toBe(true);
+
+    // Second read (any skill): session already has the translation rules.
+    const second = await resources.read("vibestudio-skill://system-testing");
+    expect(second.contents[0]!.text).toBe("# Skill body");
+  });
+
+  it("refuses non-skill uris and round-trips encoded names", async () => {
+    const resources = createSkillResources(async () => "unused" as never);
+    await expect(resources.read("file:///etc/passwd")).rejects.toThrow(
+      /not a workspace skill resource/
+    );
+    expect(skillNameFromUri(skillResourceUri("gad-context"))).toBe("gad-context");
+    expect(skillNameFromUri("vibestudio-skill://")).toBeNull();
   });
 });

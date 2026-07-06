@@ -256,7 +256,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 
 Approval-gated server CDP access for panel targets
 
-Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
+Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `agent`
 
 | Method | Description |
 |--------|-------------|
@@ -267,6 +267,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
 | `panelCdp.goForward` | Drive browser history forward on an approved panel target. |
 | `panelCdp.stop` | Stop loading an approved panel target through its active CDP host. |
 | `panelCdp.consoleHistory` | Read console history from an approved panel target's active CDP host. |
+| `panelCdp.screenshot` | Capture a screenshot of an approved panel target through its active CDP host (force-paints hidden/unslotted panels). Returns base64 image data + mime type; no CDP WebSocket client needed. |
 | `panelCdp.hostProvider.open` | Internal shell/server transport: open a streamed CDP host-provider channel. |
 | `panelCdp.hostProvider.send` | Internal shell/server transport: deliver a CDP host-provider frame to the bridge. |
 | `panelCdp.hostProvider.close` | Internal shell/server transport: close a CDP host-provider channel. |

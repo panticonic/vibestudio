@@ -30,6 +30,7 @@ import { vcsCommands } from "./agent/vcsCommands.js";
 import { evalCommands } from "./agent/evalCommand.js";
 import { channelCommands } from "./channelCommands.js";
 import { contextCommands } from "./contextCommands.js";
+import { panelCommands } from "./panelCommands.js";
 import { runClaudeGroup } from "./claude/index.js";
 import {
   findCommand,
@@ -842,6 +843,7 @@ const commandRegistry: CliCommand[] = [
   ...evalCommands,
   ...channelCommands,
   ...contextCommands,
+  ...panelCommands,
 ];
 
 const GROUP_ORDER = [
@@ -854,6 +856,7 @@ const GROUP_ORDER = [
   "eval",
   "channel",
   "context",
+  "panel",
 ];
 
 export async function main(argv: string[]): Promise<number> {

@@ -47,6 +47,7 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
   const captureView = vi.fn(async () => ({
     toPNG: () => Buffer.from("png-bytes"),
     toJPEG: (_quality: number) => Buffer.from("jpeg-bytes"),
+    getSize: () => ({ width: 800, height: 600 }),
   }));
   const provider = new CdpHostProvider({
     serverUrl,
@@ -180,6 +181,38 @@ describe("CdpHostProvider", () => {
       targetId: "panel-1",
       requestId: "s1",
       result: { data },
+    });
+  });
+
+  it("serves the captureScreenshot host command with image data + dimensions", async () => {
+    // The one-RPC screenshot path (panelCdp.screenshot → host command) shares
+    // the captureView route with intercepted Page.captureScreenshot.
+    const { provider, socket, debuggerApi, captureView } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    provider.start();
+    socket.emit("open");
+    socket.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
+
+    await provider.handleProviderMessageForTest({
+      type: "host:command",
+      targetId: "panel-1",
+      requestId: "h1",
+      action: "captureScreenshot",
+      args: [{ format: "jpeg", quality: 60 }],
+    });
+
+    expect(captureView).toHaveBeenCalledWith("panel-1");
+    expect(debuggerApi.sendCommand).not.toHaveBeenCalled();
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "host:result",
+      targetId: "panel-1",
+      requestId: "h1",
+      result: {
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mimeType: "image/jpeg",
+        width: 800,
+        height: 600,
+      },
     });
   });
 

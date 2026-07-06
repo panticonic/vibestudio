@@ -20,7 +20,14 @@ import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient } from "../rpcClient.js";
 import { AuthError, CliError } from "../output.js";
 import { normalizeServerBaseUrl } from "../serverUrl.js";
-import { McpStdioServer, toolText, type McpToolDef, type McpToolResult } from "./mcpServer.js";
+import {
+  McpStdioServer,
+  toolText,
+  type McpResourceContents,
+  type McpResourceDef,
+  type McpToolDef,
+  type McpToolResult,
+} from "./mcpServer.js";
 import {
   TurnTracker,
   agentSocketPath,
@@ -278,6 +285,96 @@ const COMPLETE_TOOL: McpToolDef = {
   },
 };
 
+// ── Workspace skills as MCP resources ────────────────────────────────────────
+// The workspace's own skill library (skills/* in the workspace tree, indexed by
+// `workspace.listSkills`) is invisible to Claude Code's native .claude/skills
+// discovery. Expose it through the standard MCP resources surface instead:
+// resources/list = the catalog, resources/read = the SKILL.md wrapped in an
+// addendum translating Pi-agent idioms into what a linked session actually has.
+
+const SKILL_RESOURCE_SCHEME = "vibestudio-skill://";
+
+export function skillResourceUri(name: string): string {
+  return `${SKILL_RESOURCE_SCHEME}${encodeURIComponent(name)}`;
+}
+
+export function skillNameFromUri(uri: string): string | null {
+  if (!uri.startsWith(SKILL_RESOURCE_SCHEME)) return null;
+  const name = decodeURIComponent(uri.slice(SKILL_RESOURCE_SCHEME.length));
+  return name.length > 0 ? name : null;
+}
+
+/**
+ * Prepended to every workspace skill served over the bridge: workspace skills
+ * are written for the in-process (Pi) agents, whose runtime differs from a
+ * linked Claude Code session's in specific, predictable ways.
+ */
+export const WORKSPACE_SKILL_ADDENDUM = `> **You are reading a WORKSPACE skill as a linked Claude Code session.**
+> It is written for the workspace's in-process (Pi) agents; translate as you read:
+>
+> - Pi loop tools named in skills (\`spawn_subagent\`, \`read_subagent\`,
+>   \`inspect_subagent\`, \`merge_subagent\`, \`suspend_turn\`, \`ask_user\`, panel
+>   \`handle.*\`) are NOT your tools. Your MCP tools are \`say\` and \`complete\`;
+>   everything else routes through the \`vibestudio\` CLI (\`fs\`/\`vcs\`/\`eval\`/
+>   \`channel\`/\`panel\`). You cannot spawn subagents — \`say\` a delegation
+>   request to the workspace agent in your conversation instead.
+> - TypeScript snippets that import \`@workspace/*\` or call runtime bindings
+>   (\`openPanel\`, \`getPanelHandle\`, \`services.*\`, \`chat\`, …) run INSIDE the
+>   workspace via \`vibestudio eval run -e '...'\` — never in your local shell
+>   or node.
+> - Panel automation examples (\`handle.cdp.screenshot()\` etc.) map to
+>   \`vibestudio panel screenshot/console\`, or eval
+>   \`(await getPanelHandle(id)).cdp\`. Agents may only automate panels in
+>   their own context; open your own preview instance for foreign UI.
+> - Approval prompts skills mention resolve as workspace approval cards for
+>   the user (or fail closed); do not expect an interactive prompt locally.
+> - Files a skill references beside its SKILL.md (RECIPES.md, EVAL.md, …)
+>   live in the workspace tree next to the skill — library skills under
+>   \`skills/<name>/\`, repo-hosted skills inside their repo. Read them with
+>   \`vibestudio fs read <path>\` (or \`fs glob\` to locate the skill dir).
+
+---
+
+`;
+
+/**
+ * Build the MCP resources hooks over the bridge's authenticated RPC client.
+ * The linked-session addendum is prepended to the FIRST skill read of this
+ * bridge process only (one bridge process = one session): the translation
+ * rules are session-wide context, not per-document content, so repeating them
+ * on every read would just burn tokens.
+ */
+export function createSkillResources(call: <T>(method: string, args: unknown[]) => Promise<T>): {
+  list(): Promise<McpResourceDef[]>;
+  read(uri: string): Promise<McpResourceContents>;
+} {
+  let addendumServed = false;
+  return {
+    list: async () => {
+      const skills = await call<Array<{ name: string; description?: string }>>(
+        "workspace.listSkills",
+        []
+      );
+      return skills.map((skill) => ({
+        uri: skillResourceUri(skill.name),
+        name: skill.name,
+        description: `Workspace skill: ${skill.description ?? skill.name}`,
+        mimeType: "text/markdown",
+      }));
+    },
+    read: async (uri) => {
+      const name = skillNameFromUri(uri);
+      if (!name) throw new Error(`not a workspace skill resource: ${uri}`);
+      const content = await call<string>("workspace.readSkill", [name]);
+      const withAddendum = addendumServed ? content : `${WORKSPACE_SKILL_ADDENDUM}${content}`;
+      addendumServed = true;
+      return {
+        contents: [{ uri, mimeType: "text/markdown", text: withAddendum }],
+      };
+    },
+  };
+}
+
 export function bridgeInstructions(config: BridgeConfig): string {
   const sections = [
     "You are linked to a vibestudio workspace conversation as a peer agent.",
@@ -303,6 +400,11 @@ export function bridgeInstructions(config: BridgeConfig): string {
       "empty to local `ls`/glob. Discover the tree with `vibestudio fs ls /` (server-side, " +
       "authoritative) before concluding files are missing; `vibestudio fs` operations " +
       "materialize the repos they touch onto disk for your local tools.",
+    "",
+    "The workspace's own skill library (how-to guides for working in THIS workspace: " +
+      "subagents, testing, panel dev, provenance, …) is exposed as MCP resources on this " +
+      "server — list them and read any that match your task. Each is served with an " +
+      "addendum translating its Pi-agent idioms to your session's surfaces.",
   ];
   if (config.subagent) {
     sections.push(
@@ -356,6 +458,7 @@ export async function runChannelHostLoop(
     serverVersion: "1.0.0",
     instructions: bridgeInstructions(config),
     tools: [SAY_TOOL, COMPLETE_TOOL],
+    resources: createSkillResources((method, args) => client.call(method, args)),
     log,
     onToolCall: async (name, args, requestId): Promise<McpToolResult> => {
       if (name === "say") {

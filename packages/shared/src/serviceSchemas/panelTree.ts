@@ -110,6 +110,10 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.custom<PanelTreeSnapshot>(),
     access: READ_ACCESS,
+    // `agent` (linked external sessions): tree enumeration is the discovery
+    // step of the CLI panel screenshot/console loop. Read-only widening; every
+    // mutating panelTree op stays closed to agent callers.
+    policy: { allowed: ["panel", "worker", "do", "shell", "server", "app", "agent"] },
   },
   getFocusedPanelId: {
     description: "Return the id of the currently focused panel, or null if none is focused.",
@@ -256,6 +260,8 @@ export const panelTreeMethods = defineServiceMethods({
     args: z.tuple([PanelIdSchema]),
     returns: z.custom<Panel>().nullable(),
     access: READ_ACCESS,
+    // Read-only widening for agent callers (see getTreeSnapshot).
+    policy: { allowed: ["panel", "worker", "do", "shell", "server", "app", "agent"] },
   },
   getCollapsedIds: {
     description: "Return the ids of panels that are currently collapsed in the tree UI.",

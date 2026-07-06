@@ -242,6 +242,46 @@ export class CdpHostProvider {
     };
   }
 
+  /**
+   * Capture a screenshot of a panel view. The one screenshot path for both the
+   * `captureScreenshot` host command and intercepted `Page.captureScreenshot`
+   * CDP commands: routes through ViewManager.captureView (force-paints hidden/
+   * unslotted views, so it resolves or fails — never hangs like raw CDP capture
+   * on an uncomposited surface).
+   */
+  async captureScreenshot(
+    targetId: string,
+    options: { format?: string; quality?: number } = {}
+  ): Promise<{
+    data: string;
+    mimeType: "image/png" | "image/jpeg";
+    width: number;
+    height: number;
+  }> {
+    const image = await this.options.getViewManager()?.captureView(targetId);
+    if (!image) {
+      throw new Error(
+        "captureScreenshot unavailable: panel view is not capturable (missing or destroyed)"
+      );
+    }
+    const size = image.getSize();
+    if (options.format === "jpeg") {
+      const quality = typeof options.quality === "number" ? options.quality : 80;
+      return {
+        data: image.toJPEG(quality).toString("base64"),
+        mimeType: "image/jpeg",
+        width: size.width,
+        height: size.height,
+      };
+    }
+    return {
+      data: image.toPNG().toString("base64"),
+      mimeType: "image/png",
+      width: size.width,
+      height: size.height,
+    };
+  }
+
   async handleProviderMessageForTest(message: ProviderMessage): Promise<void> {
     await this.handleProviderMessage(message);
   }
@@ -370,6 +410,9 @@ export class CdpHostProvider {
     }
     if (action === "consoleHistory") {
       return this.getConsoleHistory(targetId, normalizeConsoleHistoryOptions(args[0]));
+    }
+    if (action === "captureScreenshot") {
+      return this.captureScreenshot(targetId, normalizeScreenshotOptions(args[0]));
     }
     throw new Error(`Unknown host command: ${action}`);
   }
@@ -554,24 +597,22 @@ export class CdpHostProvider {
       // is missing/destroyed — so this can only ever resolve or fail, never
       // hang. No timeout.
       if (method === "Page.captureScreenshot") {
-        const image = await this.options.getViewManager()?.captureView(targetId);
-        if (image) {
+        try {
           const format = (message.params?.["format"] ?? message.params?.["type"]) as
             | string
             | undefined;
           const quality = message.params?.["quality"];
-          const data =
-            format === "jpeg"
-              ? image.toJPEG(typeof quality === "number" ? quality : 80).toString("base64")
-              : image.toPNG().toString("base64");
-          this.send({ type: "cdp:result", targetId, requestId, result: { data } });
-        } else {
+          const shot = await this.captureScreenshot(targetId, {
+            ...(format ? { format } : {}),
+            ...(typeof quality === "number" ? { quality } : {}),
+          });
+          this.send({ type: "cdp:result", targetId, requestId, result: { data: shot.data } });
+        } catch (error) {
           this.send({
             type: "cdp:error",
             targetId,
             requestId,
-            error:
-              "captureScreenshot unavailable: panel view is not capturable (missing or destroyed)",
+            error: error instanceof Error ? error.message : String(error),
           });
         }
         return;
@@ -770,6 +811,15 @@ function normalizeConsoleHistoryOptions(value: unknown): PanelConsoleHistoryOpti
     options.levels = record.levels.map(normalizeConsoleLevel);
   }
   return options;
+}
+
+function normalizeScreenshotOptions(value: unknown): { format?: string; quality?: number } {
+  if (!value || typeof value !== "object") return {};
+  const record = value as { format?: unknown; quality?: unknown };
+  return {
+    ...(record.format === "jpeg" || record.format === "png" ? { format: record.format } : {}),
+    ...(typeof record.quality === "number" ? { quality: record.quality } : {}),
+  };
 }
 
 function normalizeLimit(value: unknown, fallback: number): number {

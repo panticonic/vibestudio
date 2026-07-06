@@ -20,6 +20,12 @@
  * (c) Handler-doesn't-narrow-below-declared — see the note at the bottom of this
  * file for the feasibility verdict; this matrix is the backstop that catches any
  * such drift as a snapshot diff.
+ *
+ * Reviewing an `agent` widening in this diff? Read "Agent callers and the eval
+ * escape hatch" in docs/architecture/rpc-and-services.md first: eval already
+ * makes everything `do`-callable agent-reachable, so `agent` on an allow list
+ * is a hot-path UX optimization — it needs a settled permission story for
+ * code-identity-less callers, never a reachability argument.
  */
 
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";

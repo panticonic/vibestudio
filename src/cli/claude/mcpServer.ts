@@ -23,6 +23,17 @@ export interface McpToolDef {
   inputSchema: Record<string, unknown>;
 }
 
+export interface McpResourceDef {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface McpResourceContents {
+  contents: Array<{ uri: string; mimeType?: string; text: string }>;
+}
+
 export interface McpToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
@@ -46,6 +57,11 @@ export interface McpServerOptions {
   serverVersion: string;
   instructions: string;
   tools: McpToolDef[];
+  /** Optional MCP resources (declares the `resources` capability when set). */
+  resources?: {
+    list(): Promise<McpResourceDef[]>;
+    read(uri: string): Promise<McpResourceContents>;
+  };
   /** Handle a tools/call; `requestId` is the JSON-RPC id (idempotency seed). */
   onToolCall: (
     name: string,
@@ -137,6 +153,7 @@ export class McpStdioServer {
           protocolVersion: requested ?? MCP_PROTOCOL_VERSION,
           capabilities: {
             tools: {},
+            ...(this.options.resources ? { resources: {} } : {}),
             experimental: { "claude/channel": {}, "claude/channel/permission": {} },
           },
           serverInfo: { name: this.options.serverName, version: this.options.serverVersion },
@@ -150,6 +167,35 @@ export class McpStdioServer {
       case "tools/list":
         this.respond(id, { tools: this.options.tools });
         return;
+      case "resources/list": {
+        if (!this.options.resources) {
+          this.respondError(id, -32601, "resources are not supported");
+          return;
+        }
+        try {
+          this.respond(id, { resources: await this.options.resources.list() });
+        } catch (err) {
+          this.respondError(id, -32603, err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
+      case "resources/read": {
+        if (!this.options.resources) {
+          this.respondError(id, -32601, "resources are not supported");
+          return;
+        }
+        const uri = str(params["uri"]);
+        if (!uri) {
+          this.respondError(id, -32602, "resources/read requires a uri");
+          return;
+        }
+        try {
+          this.respond(id, await this.options.resources.read(uri));
+        } catch (err) {
+          this.respondError(id, -32603, err instanceof Error ? err.message : String(err));
+        }
+        return;
+      }
       case "tools/call": {
         const name = str(params["name"]);
         const args = (params["arguments"] ?? {}) as Record<string, unknown>;
