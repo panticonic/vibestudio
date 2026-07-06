@@ -14,7 +14,12 @@ source/
     my-panel/           ← User-created panel
   packages/             ← Shared libraries
     runtime/            ← @workspace/runtime
-  skills/               ← Agent skill definitions
+    my-lib/
+      SKILL.md          ← Repo-specific agent guidance for this package
+  skills/               ← Cross-repo agent skill packages
+    onboarding/         ← Workspace-wide onboarding skill and setup references
+      SKILL.md
+      ActionBar.tsx
     sandbox/            ← Sandbox execution skill
     workspace-dev/           ← Workspace development skill
   workers/              ← Workerd Durable Object source
@@ -40,6 +45,9 @@ state/
 
 - **vibestudio.yml** — Workspace configuration (initial panels and external git remotes). Read by the server at startup; agents can read it via `workspace.getConfig()`.
 - **AGENTS.md** — The system prompt injected into every agent session. Loaded by the resource loader at agent startup. Agents can also read it directly from `meta/AGENTS.md` in their context folder.
+
+Workspace-wide onboarding lives in `skills/onboarding/` because it describes the
+whole workspace rather than the `meta/` config repo itself.
 
 Like every other source directory, `meta/` is tracked by workspace VCS. This means:
 

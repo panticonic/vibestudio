@@ -13,8 +13,9 @@ on top of the verified `google-workspace` connection and reuses the staged
 ## Prerequisite
 
 Google Drive has no separate console setup beyond Google Workspace. The user
-must first complete `skills/google-workspace/ONBOARDING.md` and reach the
-verified stage.
+must first complete
+[Google Workspace onboarding](../../skills/google-workspace/ONBOARDING.md) and
+reach the verified stage.
 
 ## Runtime Helpers
 
@@ -76,4 +77,5 @@ const extensionBytes = {
 
 | Document | Content |
 |----------|---------|
-| [index.ts](index.ts) | Importable Drive skill helpers |
+| [src/drive.ts](src/drive.ts) | Google Drive API client |
+| [../../skills/google-drive/index.ts](../../skills/google-drive/index.ts) | Importable Drive skill helpers |

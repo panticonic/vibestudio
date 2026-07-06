@@ -1,16 +1,11 @@
----
-name: agent-tuning
-description: Change the host chat agent's default model/provider, add model credentials, and tune live session effort, approval, and chattiness.
----
-
 # Agent Tuning
 
-Use this skill when a user wants to change the AI chat agent's model, provider,
-credential setup, thinking effort, approval behavior, or response policy.
+Use this guide when changing the AI chat agent's model, provider, credential
+setup, thinking effort, approval behavior, or response policy.
 
 ## Two Tiers
 
-Cold-start choices live in `packages/agentic-do/src/agent-config.ts`:
+Cold-start choices live in `src/agent-config.ts`:
 
 - `DEFAULT_MODEL` chooses the default `provider:modelId`.
 - `PROVIDER_CREDENTIAL_SETUPS` wires OAuth or API-key credential collection and
@@ -29,15 +24,19 @@ const providers = listProviderConnectPresets();
 
 Session knobs are method calls on the agent participant:
 
-- `setThinkingLevel({ level })` where `level` is `minimal`, `low`, `medium`, or `high`.
+- `setThinkingLevel({ level })` where `level` is `minimal`, `low`, `medium`, or
+  `high`.
 - `setApprovalLevel({ level })` where `level` is `0`, `1`, or `2`.
-- `setRespondPolicy({ policy, from? })` where `policy` is `all`, `mentioned`, `mentioned-strict`, or `from-participants`.
-- `getAgentSettings()` returns current values and whether each came from state, subscription config, or defaults.
-- `connectModelCredential({ providerId, ... })` starts the provider's OAuth or API-key credential flow.
+- `setRespondPolicy({ policy, from? })` where `policy` is `all`, `mentioned`,
+  `mentioned-strict`, or `from-participants`.
+- `getAgentSettings()` returns current values and whether each came from state,
+  subscription config, or defaults.
+- `connectModelCredential({ providerId, ... })` starts the provider's OAuth or
+  API-key credential flow.
 
 ## Switching The Default Model
 
-Edit `packages/agentic-do/src/agent-config.ts` and set `DEFAULT_MODEL`.
+Edit `src/agent-config.ts` and set `DEFAULT_MODEL`.
 
 Examples:
 
@@ -53,30 +52,33 @@ truth for ids wired into the runtime.
 
 ## Adding An OAuth Provider
 
-Add or update the provider preset in the shared provider-connect registry
-(`@workspace/model-catalog/providerConnect` in workspace code; the Vibestudio
-source of truth is `packages/shared/src/providerConnect.ts`). Verify every
-URL/scope against the provider's current docs before enabling it. OAuth
-endpoints and scopes are product-specific and can drift.
+Add or update the provider preset in the shared provider-connect registry:
+`@workspace/model-catalog/providerConnect`. In workspace source, that registry
+lives at `../model-catalog/src/providerConnect.ts`.
 
-If the provider returns account identity in a nonstandard claim, also update
-`AiChatWorker.getModelCredentialTokenClaims()` so the model SDK receives the
-claims it expects.
+Verify every URL and scope against the provider's current docs before enabling
+it. OAuth endpoints and scopes are product-specific and can drift.
+
+If the provider returns account identity in a nonstandard claim, also update the
+concrete worker override that passes token claims to the model SDK. For the
+standard chat agent, that is
+`../../workers/agent-worker/ai-chat-worker.ts`.
 
 ## Adding An API-Key Provider
 
 Add or update the provider preset in `@workspace/model-catalog/providerConnect`.
-For Vibestudio source changes, edit `packages/shared/src/providerConnect.ts`.
+In workspace source, edit `../model-catalog/src/providerConnect.ts`.
 
 Set:
 
 - `providerId` by using the provider id as the map key.
 - `DEFAULT_MODEL` to the matching `provider:modelId`.
 - `credential.audience` to the provider API origin/base path.
-- `credential.injection.name` and `valueTemplate` to the provider's auth header convention.
+- `credential.injection.name` and `valueTemplate` to the provider's auth header
+  convention.
 
-`materialTemplate` controls what token material is stored. `credential.injection`
-controls what is placed on outbound model requests.
+`materialTemplate` controls what token material is stored.
+`credential.injection` controls what is placed on outbound model requests.
 
 ## Tuning A Live Session
 
@@ -112,5 +114,7 @@ Lookup order:
 
 - `model`: subscription config, then default.
 - `thinkingLevel`: live state, subscription config, then default.
-- `approvalLevel`: live state, subscription config/channel config, then default.
-- `respondPolicy` and `respondFrom`: live state, subscription config, then default.
+- `approvalLevel`: live state, subscription config/channel config, then
+  default.
+- `respondPolicy` and `respondFrom`: live state, subscription config, then
+  default.

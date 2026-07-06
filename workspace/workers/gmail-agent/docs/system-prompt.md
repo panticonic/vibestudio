@@ -1,7 +1,7 @@
 # Gmail Agent System Prompt (documentation copy)
 
 The authoritative prompt lives in
-`workspace/workers/gmail-agent/agent/prompts.ts` (`GMAIL_SYSTEM_PROMPT`).
+[../agent/prompts.ts](../agent/prompts.ts) (`GMAIL_SYSTEM_PROMPT`).
 Summary of what it instructs:
 
 You are the Gmail agent for this channel. Operate narrowly on Gmail tasks:

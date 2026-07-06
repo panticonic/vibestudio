@@ -69,10 +69,10 @@ function repoScopeForPath(filePath: string): { repoPath: string; repoRelPath: st
  * The explorer agent: a silent agent variant that agentically tests the workspace's
  * own capability surface. It inherits silence + the `say` tool from
  * `SilentAgentWorker`, and adds (a) the explorer system prompt (the oracle loop —
- * full methodology in `skills/explorer/SKILL.md`), (b) a recurring autonomous sweep
- * driven by the `vibestudio.yml recurring:` registry, and (c) a `report_finding` tool
- * that durably logs findings (commit + push) and aggregates them into a findings
- * card in the connected chat panel.
+ * full methodology in `workers/explorer-agent/SKILL.md`), (b) a recurring
+ * autonomous sweep driven by the `vibestudio.yml recurring:` registry, and (c)
+ * a `report_finding` tool that durably logs findings (commit + push) and
+ * aggregates them into a findings card in the connected chat panel.
  *
  * Runs as a `do` caller with the full `services.*` surface (NOT read-only) — the
  * sandbox is the safety boundary.

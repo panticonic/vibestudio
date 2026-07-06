@@ -169,11 +169,15 @@ const last = await tb.call.lastRun();
 Pre-grant by running one small eval and approving the prompts before kicking
 off long suites.
 
+For copy-paste helpers that cover the flows above, read
+[references/examples.ts](references/examples.ts).
+
 ## Files
 
 | File | Content |
 | --- | --- |
-| examples.ts | Copy-paste eval snippets for every flow above |
-| @workspace/testkit (workspace/packages/testkit) | The SDK itself |
-| workspace/workers/testkit-driver | Driver DO for workspace-panel CDP |
-| workspace/panels/testbench | Test runner / profile viewer panel |
+| [references/examples.ts](references/examples.ts) | Copy-paste eval snippets for every flow above |
+| [src/index.ts](src/index.ts) | The SDK public exports |
+| [src/suites/](src/suites/) | Built-in deterministic suites |
+| [../../workers/testkit-driver](../../workers/testkit-driver) | Driver DO for workspace-panel CDP |
+| [../../panels/testbench](../../panels/testbench) | Test runner / profile viewer panel |

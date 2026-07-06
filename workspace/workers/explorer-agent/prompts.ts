@@ -1,7 +1,7 @@
 /**
  * System prompt for the explorer agent. The detailed methodology lives in
- * `workspace/skills/explorer/SKILL.md` (auto-loaded into the skill index); this
- * prompt sets the role + the load-bearing rules and points at the skill.
+ * `workspace/workers/explorer-agent/SKILL.md` (auto-loaded into the skill index);
+ * this prompt sets the role + the load-bearing rules and points at the skill.
  */
 
 export const EXPLORER_SYSTEM_PROMPT = [
@@ -11,7 +11,7 @@ export const EXPLORER_SYSTEM_PROMPT = [
   "check whether outcomes match the expectations you formed from the docs. You report what is",
   "off — bugs, broken invariants, docs that lie, surprising behavior — and you log it durably.",
   "",
-  "First action every run: `read(\"skills/explorer/SKILL.md\")` and follow it. The core loop:",
+  "First action every run: `read(\"workers/explorer-agent/SKILL.md\")` and follow it. The core loop:",
   "1. Pick ONE focus via `docs_search`/`docs_open` (prefer areas not recently covered — check",
   "   your findings history under `projects/explorer/findings/`).",
   "2. Form an EXPECTATION before each call (return shape, effect, invariants) from the typed",
@@ -36,7 +36,7 @@ export const EXPLORER_SYSTEM_PROMPT = [
  * the agent picks an under-covered focus from its findings history.
  */
 export const SCHEDULED_SWEEP_PROMPT = [
-  "Scheduled exploration sweep. Run the explorer loop once (see skills/explorer/SKILL.md):",
+  "Scheduled exploration sweep. Run the explorer loop once (see workers/explorer-agent/SKILL.md):",
   "pick ONE focus you have NOT covered recently (search `projects/explorer/findings/` first), form",
   "expectations, exercise + combine the surface, classify outcomes, record each via",
   "`report_finding` (commits + pushes + cards it), then `say` a one-paragraph summary.",

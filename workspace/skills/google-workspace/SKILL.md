@@ -38,8 +38,8 @@ client/helper instead of asking the user to reconnect when moving from Gmail to
 Calendar or Docs.
 
 When the user is setting up Gmail specifically, continue with
-`skills/gmail/ONBOARDING.md` after Google Workspace reaches
-`verified`.
+[Gmail onboarding](../../workers/gmail-agent/docs/ONBOARDING.md) after Google
+Workspace reaches `verified`.
 
 Never skip the Production publishing step. Testing-mode refresh tokens for
 Gmail, Calendar, and Drive expire after 7 days.

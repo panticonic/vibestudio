@@ -24,7 +24,7 @@ Guide new users through understanding Vibestudio and getting their workspace set
 | ------------------ | ----------------------------------------------------------------------------------------------------- |
 | `browser-import`   | Importing cookies, passwords, bookmarks, history from existing browsers                               |
 | `api-integrations` | Connecting third-party APIs (Gmail, GitHub, Slack, etc.) via OAuth                                    |
-| `agent-tuning`     | Changing the default model/provider; tuning effort, approval, chattiness for a running chat agent     |
+| `agentic-do`       | Changing the default model/provider; tuning effort, approval, chattiness, or subagent behavior        |
 | `web-research`     | Optional Tavily / Brave / Exa API key setup so `web_search` upgrades past DuckDuckGo                  |
 | `sandbox`          | Learning the eval tool, inline UI, runtime APIs                                                       |
 | `workspace-dev`    | Building and launching panels, workers, full development workflow                                     |

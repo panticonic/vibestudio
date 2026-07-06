@@ -207,6 +207,6 @@ appears in logs, and shuts the server down cleanly.
 When app architecture changes, update:
 
 - this `appdev` skill
-- `onboarding/WORKSPACE_STRUCTURE.md`
+- `skills/onboarding/WORKSPACE_STRUCTURE.md`
 - `docs/trusted-workspace-units.md`
 - `system-testing/SELF_IMPROVEMENT.md` if the change affects agent repair loops

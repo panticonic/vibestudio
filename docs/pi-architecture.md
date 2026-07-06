@@ -37,10 +37,9 @@ workspace/
 ├── meta/
 │   ├── AGENTS.md    # System prompt (read via workspace RPC)
 │   └── vibestudio.yml # Workspace manifest
-├── skills/          # Workspace skills (read via workspace RPC)
+├── skills/          # Cross-repo workspace skill packages (read via workspace RPC)
 │   ├── sandbox/
 │   ├── workspace-dev/
-│   ├── onboarding/
 │   └── ...
 └── ...              # Other workspace files
 ```
@@ -181,12 +180,19 @@ The cloned worker:
 
 ## How to add a new skill
 
-1. Create a directory under `workspace/skills/<skill-name>/`
-2. Add a `SKILL.md` file with frontmatter (`name`, `description`)
-3. Add additional markdown docs the agent can load
-4. Ship — the skill is part of the workspace and is read via the
-   `workspace.*` RPC service; Pi loads it via `additionalSkillPaths` in the
-   resource loader.
+1. Decide ownership first. If the skill is specific to one repo, add a top-level
+   `SKILL.md` to that repo (`workspace/packages/foo/SKILL.md`,
+   `workspace/workers/foo/SKILL.md`, `workspace/extensions/foo/SKILL.md`, etc.) so the
+   guidance travels with the code.
+2. Use `workspace/skills/<skill-name>/` only for cross-repo workflows or skills
+   that are themselves reusable workspace packages with code exports.
+   The built-in onboarding skill intentionally stays in
+   `workspace/skills/onboarding/` because it describes the whole workspace.
+3. Add frontmatter (`name`, `description`) and any additional markdown docs the
+   agent can load from the same repo.
+4. Ship — the skill is discovered through the workspace repo taxonomy and read
+   via the `workspace.*` RPC service; Pi includes the repo path in the generated
+   skill index.
 
 ## How to debug Pi events at the worker boundary
 
