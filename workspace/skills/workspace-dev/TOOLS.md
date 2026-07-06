@@ -68,7 +68,7 @@ Grep({ pattern: "import.*runtime", path: "panels/my-app", literal: false })
 
 Create new projects via eval. Workspace skill packages are auto-resolved — just write the `import` statement.
 
-Supported types: `panel`, `package`, `skill`, `project`, `worker`. Each scaffolds into its repo directory (`panels/`, `packages/`, `skills/`, `projects/`, `workers/`).
+Supported types: `panel`, `package`, `skill`, `project`, `worker`. Each scaffolds into its repo directory (`panels/`, `packages/`, `skills/`, `projects/`, `workers/`). The `skill` type is for a standalone cross-repo skill package. Do not use `projectType: "skill"` to document an existing package, worker, panel, extension, or project.
 
 The scaffold runs the full dev loop for you: it writes the files (edit), commits
 them with a scaffold message (commit), and pushes the new repo so its `main` is
@@ -82,6 +82,25 @@ never be published. A repo path is established by writing any file inside it:
 leave it as uncommitted working state, `vcs.commit` it as a context-local
 snapshot, or later `vcs.push({ repoPaths: ["projects/tmp-name"] })` if it should
 become visible on `main`.
+
+### Project-Specific Skill Docs
+
+Any workspace repo can include a top-level `SKILL.md` that is discovered as an
+agent skill. For guidance tied to one repo, add or edit that repo's own file
+instead of creating a separate `skills/<name>` repo.
+
+Examples:
+
+- `packages/data-model/SKILL.md` for package APIs, schemas, and test commands
+- `workers/gmail-agent/SKILL.md` for worker behavior, queues, and diagnostics
+- `panels/chat/SKILL.md` for panel-specific UI conventions
+- `extensions/browser-data/SKILL.md` for extension setup and operational notes
+- `projects/customer-vault/SKILL.md` for a plain content repo's structure
+
+Use `skills/<name>/SKILL.md` only for cross-repo workflows or reusable skill
+packages. The built-in onboarding skill stays in `skills/onboarding/SKILL.md`
+because it describes the whole workspace. Read repo-local skills using the path
+shown in the skill index, such as `read("packages/data-model/SKILL.md")`.
 
 ### Usage
 
