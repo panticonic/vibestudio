@@ -10,6 +10,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Theme } from "@radix-ui/themes";
@@ -86,6 +87,13 @@ export function OverlaySurfaceHost() {
   };
 
   const theme = message.theme;
+  const boxStyle = {
+    padding: SURFACE_MARGIN,
+    maxHeight: message.maxHeight + SURFACE_MARGIN * 2,
+    display: "flex",
+    background: "transparent",
+    "--overlay-max-height": `${message.maxHeight}px`,
+  } as CSSProperties;
   return (
     <Theme
       appearance={theme.appearance}
@@ -103,12 +111,7 @@ export function OverlaySurfaceHost() {
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        style={{
-          padding: SURFACE_MARGIN,
-          maxHeight: message.maxHeight + SURFACE_MARGIN * 2,
-          display: "flex",
-          background: "transparent",
-        }}
+        style={boxStyle}
       >
         <Surface props={message.props} emitIntent={(payload) => bridge?.emitIntent(payload)} />
       </div>

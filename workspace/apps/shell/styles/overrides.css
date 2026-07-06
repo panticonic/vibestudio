@@ -248,7 +248,7 @@ body,
 .approval-card {
   position: relative;
   width: 100%;
-  max-height: 100%;
+  max-height: min(var(--overlay-max-height, 100vh), calc(100vh - 32px));
   display: flex;
   flex-direction: column;
   overflow: hidden;

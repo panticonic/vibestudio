@@ -704,13 +704,13 @@ describe("SubagentRunCard", () => {
           execution: {
             status: "running",
             description:
-              "Pilot-process one Google Drive PDF into a normalized poetry archive repo.",
+              "**Pilot-process one Google Drive PDF** into a normalized poetry archive repo.",
             progress: [
               { kind: "turn-started", messageSeq: 1, at: at(300) },
               { kind: "tool-started", tool: "Read", messageSeq: 2, at: at(120) },
               {
                 kind: "said",
-                text: "Writing normalized catalog",
+                text: "**Writing normalized catalog**\n\n- normalized index\n- poem records",
                 messageSeq: 3,
                 say: true,
                 at: at(30),
@@ -735,7 +735,13 @@ describe("SubagentRunCard", () => {
     expect(screen.getByText("Running")).toBeTruthy();
     expect(screen.getByText("3 updates")).toBeTruthy();
     // Collapsed: only the latest update, as a preview line.
-    expect(screen.getByText("Said: Writing normalized catalog")).toBeTruthy();
+    const preview = document.body.querySelector(".subagent-update-preview");
+    expect(preview).toBeTruthy();
+    expect(preview?.textContent).toContain("Writing normalized catalog");
+    expect(preview?.textContent).toContain("normalized index");
+    expect(preview?.querySelector(".markdown-preview-strong")).toBeTruthy();
+    expect(preview?.querySelector("a, button, input")).toBeNull();
+    expect(screen.queryByText("Said")).toBeNull();
     expect(screen.queryByText("Started working")).toBeNull();
     expect(
       screen.queryByText(
@@ -743,16 +749,22 @@ describe("SubagentRunCard", () => {
       )
     ).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("Expand run details"));
+    fireEvent.click(preview as HTMLElement);
 
     expect(screen.getByText("Started working")).toBeTruthy();
     expect(screen.getByText("Started Read")).toBeTruthy();
-    expect(screen.getByText("Writing normalized catalog")).toBeTruthy();
+    expect(screen.getAllByText("Writing normalized catalog").length).toBeGreaterThan(0);
+    expect(document.body.querySelector(".subagent-timeline-body .message-prose ul")).toBeTruthy();
+    expect(document.body.querySelector(".subagent-timeline-body-clamped")).toBeNull();
+    expect(screen.queryByText("Said")).toBeNull();
     // Per-entry relative timestamps from the structured feed.
     expect(screen.getByText("5m")).toBeTruthy();
     expect(screen.getByText("2m")).toBeTruthy();
     expect(
-      screen.getByText("Pilot-process one Google Drive PDF into a normalized poetry archive repo.")
+      screen.getByText("Pilot-process one Google Drive PDF")
+    ).toBeTruthy();
+    expect(
+      document.body.querySelector(".subagent-description .message-prose .rt-r-weight-bold")
     ).toBeTruthy();
 
     // Identifiers stay behind their own disclosure until asked for.
@@ -760,6 +772,37 @@ describe("SubagentRunCard", () => {
     fireEvent.click(screen.getByText("Run identifiers"));
     expect(screen.getByText("task-run-1")).toBeTruthy();
     expect(screen.getByText("ctx-run-1")).toBeTruthy();
+  });
+
+  it("renders markdown in collapsed description previews", () => {
+    render(
+      React.createElement(SubagentRunCard, {
+        msg: subagentMessage({
+          id: "run-description",
+          execution: {
+            status: "complete",
+            description: "**Final report** uses `inline code` and [a link](https://example.com).",
+          },
+          subagent: {
+            runId: "run-description",
+            mode: "fresh",
+            taskChannelId: "task-run-description",
+            contextId: "ctx-run-description",
+            childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-description",
+            label: "Report renderer",
+          },
+          complete: true,
+        }),
+      })
+    );
+
+    const preview = document.body.querySelector(".subagent-update-preview");
+    expect(preview).toBeTruthy();
+    expect(preview?.textContent).toContain("Final report");
+    expect(preview?.querySelector(".markdown-preview-strong")).toBeTruthy();
+    expect(preview?.querySelector(".markdown-preview-code")).toBeTruthy();
+    expect(preview?.querySelector(".markdown-preview-link")).toBeTruthy();
+    expect(preview?.querySelector("a, button, input")).toBeNull();
   });
 
   it("shows useful expanded details before the child has published progress", () => {
