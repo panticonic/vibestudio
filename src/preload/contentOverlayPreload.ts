@@ -37,8 +37,8 @@ contextBridge.exposeInMainWorld("__vibestudioContentOverlay", {
     if (lastMessage !== null) handler(lastMessage);
     return () => renderHandlers.delete(handler);
   },
-  reportSize(height: number) {
-    ipcRenderer.send("vibestudio:content-overlay:size", { height });
+  reportSize(size: { width: number; height: number }) {
+    ipcRenderer.send("vibestudio:content-overlay:size", size);
   },
   emitIntent(payload: unknown) {
     ipcRenderer.send("vibestudio:content-overlay:intent", { payload });

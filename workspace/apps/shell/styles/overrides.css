@@ -247,8 +247,13 @@ body,
    elevation shadow. */
 .approval-card {
   position: relative;
-  width: 100%;
-  max-height: min(var(--overlay-max-height, 100vh), calc(100vh - 32px));
+  width: max-content;
+  min-width: var(--overlay-min-width, 100%);
+  max-width: var(--overlay-max-width, 100vw);
+  /* The native overlay starts at a small bootstrap height and grows after this
+     document reports content size. Do not cap to 100vh here, or the first
+     64px viewport becomes a permanent height ceiling. */
+  max-height: var(--overlay-max-height, calc(100vh - 32px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -263,6 +268,44 @@ body,
   transform-origin: top left;
   animation: approval-card-in var(--motion-emphasized) var(--ease-emphasized);
   outline: none;
+}
+
+.approval-card,
+.approval-card * {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--gray-10) 55%, transparent) transparent;
+}
+
+.approval-card::-webkit-scrollbar,
+.approval-card *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.approval-card::-webkit-scrollbar-track,
+.approval-card *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.approval-card::-webkit-scrollbar-thumb,
+.approval-card *::-webkit-scrollbar-thumb {
+  min-width: 28px;
+  min-height: 28px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gray-10) 48%, transparent);
+  background-clip: padding-box;
+}
+
+.approval-card::-webkit-scrollbar-thumb:hover,
+.approval-card *::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--gray-11) 68%, transparent);
+  background-clip: padding-box;
+}
+
+.approval-card::-webkit-scrollbar-corner,
+.approval-card *::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 @keyframes approval-card-in {
@@ -335,6 +378,7 @@ html[data-overlay-dragging] * {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: auto;
   padding: var(--space-4);
   padding-left: calc(var(--space-4) + 3px);
 }

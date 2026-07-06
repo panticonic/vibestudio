@@ -304,7 +304,62 @@ describe("ViewManager", () => {
 
       didFinishLoad?.();
 
+      expect(overlayView.webContents.send).toHaveBeenCalledWith(
+        "vibestudio:content-overlay:render",
+        expect.objectContaining({ maxWidth: 396, maxHeight: 276 })
+      );
       expect(overlayView.webContents.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps content overlays top-left anchored while expanding to reported content size", () => {
+      const vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+      const shellContents = vm.getShellWebContents();
+      (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
+
+      vm.showContentOverlay({
+        surface: "approval-card",
+        bounds: { x: 20, y: 40, width: 700, height: 480 },
+        props: { approvalId: "approval-1" },
+        theme: { appearance: "light" },
+      });
+
+      const results = (WebContentsView as unknown as Mock).mock.results;
+      const overlayView = results[results.length - 1]?.value;
+      expect(overlayView).toBeTruthy();
+      expect(overlayView.setBounds).toHaveBeenCalledWith({
+        x: 32,
+        y: 52,
+        width: 472,
+        height: 64,
+      });
+
+      const sizeHandler = (ipcMain.on as Mock).mock.calls.find(
+        ([channel]) => channel === "vibestudio:content-overlay:size"
+      )?.[1] as ((event: { sender: { id: number } }, payload: unknown) => void) | undefined;
+      expect(sizeHandler).toEqual(expect.any(Function));
+
+      sizeHandler?.({ sender: { id: overlayView.webContents.id } }, { width: 620, height: 240 });
+
+      expect(overlayView.setBounds).toHaveBeenCalledWith({
+        x: 32,
+        y: 52,
+        width: 620,
+        height: 240,
+      });
+
+      sizeHandler?.({ sender: { id: overlayView.webContents.id } }, { width: 1200, height: 260 });
+
+      expect(overlayView.setBounds).toHaveBeenCalledWith({
+        x: 32,
+        y: 52,
+        width: 676,
+        height: 260,
+      });
     });
   });
 

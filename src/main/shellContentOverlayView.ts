@@ -5,7 +5,9 @@ import type { ContentOverlayTheme } from "@vibestudio/shared/serviceSchemas/view
 const log = createDevLogger("ShellContentOverlayView");
 
 /** Card width (440) + 2× the surface margin (16) used by OverlaySurfaceHost. */
-const VIEW_WIDTH = 472;
+const DEFAULT_VIEW_WIDTH = 472;
+/** Maximum native overlay width. Leaves room for content without becoming a sheet. */
+const MAX_VIEW_WIDTH = 760;
 /** Inset of the overlay's corner from the anchor region's corresponding corner. */
 const ANCHOR_MARGIN = 12;
 const MIN_HEIGHT = 64;
@@ -52,6 +54,7 @@ export class ShellContentOverlayView {
   private props: unknown = null;
   private theme: ContentOverlayTheme | null = null;
   private anchor: ContentOverlayBounds | null = null;
+  private contentWidth = DEFAULT_VIEW_WIDTH;
   private contentHeight = MIN_HEIGHT;
   private pendingFocus = false;
   /** Corner the overlay snaps to; persists across re-shows so the card reappears
@@ -64,10 +67,19 @@ export class ShellContentOverlayView {
 
   private readonly handleSize = (event: Electron.IpcMainEvent, payload: unknown) => {
     if (!this.isOwnSender(event.sender.id)) return;
-    const height = Number((payload as { height?: unknown } | null)?.height);
-    if (!Number.isFinite(height)) return;
-    this.contentHeight = Math.max(MIN_HEIGHT, Math.round(height));
-    this.applyBounds();
+    const message = payload as { width?: unknown; height?: unknown } | null;
+    const width = Number(message?.width);
+    const height = Number(message?.height);
+    let changed = false;
+    if (Number.isFinite(width)) {
+      this.contentWidth = Math.max(1, Math.round(width));
+      changed = true;
+    }
+    if (Number.isFinite(height)) {
+      this.contentHeight = Math.max(MIN_HEIGHT, Math.round(height));
+      changed = true;
+    }
+    if (changed) this.applyBounds();
   };
 
   private readonly handleIntent = (event: Electron.IpcMainEvent, payload: unknown) => {
@@ -181,6 +193,7 @@ export class ShellContentOverlayView {
     this.surface = null;
     this.props = null;
     this.anchor = null;
+    this.contentWidth = DEFAULT_VIEW_WIDTH;
     this.contentHeight = MIN_HEIGHT;
     this.pendingFocus = false;
     if (!this.view || this.view.webContents.isDestroyed()) return;
@@ -265,11 +278,13 @@ export class ShellContentOverlayView {
   private pushRender(): void {
     if (!this.view || this.view.webContents.isDestroyed()) return;
     if (!this.loaded || !this.surface || !this.theme || !this.anchor) return;
+    const maxWidth = this.maxWidthForAnchor(this.anchor);
     const maxHeight = Math.max(MIN_HEIGHT, Math.round(this.anchor.height - 2 * ANCHOR_MARGIN));
     this.view.webContents.send("vibestudio:content-overlay:render", {
       surface: this.surface,
       props: this.props,
       theme: this.theme,
+      maxWidth,
       maxHeight,
     });
   }
@@ -293,11 +308,17 @@ export class ShellContentOverlayView {
   /** The overlay's width/height for the current anchor + reported content. */
   private currentSize(): { width: number; height: number } {
     const anchor = this.anchor;
-    if (!anchor) return { width: VIEW_WIDTH, height: this.contentHeight };
-    const width = Math.max(1, Math.min(VIEW_WIDTH, Math.round(anchor.width)));
+    if (!anchor) return { width: this.contentWidth, height: this.contentHeight };
+    const maxWidth = this.maxWidthForAnchor(anchor);
+    const minWidth = Math.min(DEFAULT_VIEW_WIDTH, maxWidth);
+    const width = Math.max(minWidth, Math.min(this.contentWidth, maxWidth));
     const maxHeight = Math.max(MIN_HEIGHT, Math.round(anchor.height));
     const height = Math.max(MIN_HEIGHT, Math.min(this.contentHeight, maxHeight));
     return { width, height };
+  }
+
+  private maxWidthForAnchor(anchor: ContentOverlayBounds): number {
+    return Math.max(1, Math.min(MAX_VIEW_WIDTH, Math.round(anchor.width - 2 * ANCHOR_MARGIN)));
   }
 
   /** Position of the active corner within the anchor, inset by the margin. */
