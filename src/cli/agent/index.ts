@@ -359,7 +359,8 @@ async function skills(inv: ParsedInvocation): Promise<number> {
       json,
       human: () => {
         for (const entry of entries) {
-          console.log(entry.description ? `${entry.name}  ${entry.description}` : entry.name);
+          const prefix = `${entry.name}  ${entry.dirPath}`;
+          console.log(entry.description ? `${prefix}  ${entry.description}` : prefix);
         }
       },
     });
@@ -543,7 +544,7 @@ export const agentCommands: CliCommand[] = [
     group: "agent",
     name: "skills",
     summary: "List workspace skills, or print one SKILL.md",
-    usage: "vibestudio agent skills [NAME]",
+    usage: "vibestudio agent skills [NAME_OR_REPO_PATH]",
     flags: [JSON_FLAG],
     run: skills,
   },

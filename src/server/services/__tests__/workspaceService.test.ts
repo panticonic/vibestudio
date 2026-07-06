@@ -644,30 +644,87 @@ describe("workspace service agent resources", () => {
   // ─── listSkills ────────────────────────────────────────────────────────────
 
   describe("listSkills", () => {
-    it("walks skills/ and parses SKILL.md frontmatter for name + description", async () => {
+    it("walks repo taxonomy and parses top-level SKILL.md frontmatter", async () => {
       const wsPath = mkdtempSync(path.join(tmpRoot, "ws-"));
-      const skillsDir = path.join(wsPath, "skills");
-      mkdirSync(path.join(skillsDir, "alpha"), { recursive: true });
+      mkdirSync(path.join(wsPath, "meta"), { recursive: true });
       writeFileSync(
-        path.join(skillsDir, "alpha", "SKILL.md"),
+        path.join(wsPath, "meta", "SKILL.md"),
+        "---\nname: meta-skill\ndescription: Flat repo skill\n---\n"
+      );
+      mkdirSync(path.join(wsPath, "skills", "alpha"), { recursive: true });
+      writeFileSync(
+        path.join(wsPath, "skills", "alpha", "SKILL.md"),
         "---\nname: alpha\ndescription: First skill\n---\n\nbody\n"
       );
-      mkdirSync(path.join(skillsDir, "gamma"), { recursive: true });
+      mkdirSync(path.join(wsPath, "skills", "gamma"), { recursive: true });
       writeFileSync(
-        path.join(skillsDir, "gamma", "SKILL.md"),
+        path.join(wsPath, "skills", "gamma", "SKILL.md"),
         "---\nname: \"gamma-named\"\ndescription: 'Third skill'\n---\n"
+      );
+      mkdirSync(path.join(wsPath, "packages", "foo"), { recursive: true });
+      writeFileSync(
+        path.join(wsPath, "packages", "foo", "SKILL.md"),
+        "---\nname: duplicate\ndescription: Package skill\n---\n"
+      );
+      mkdirSync(path.join(wsPath, "workers", "gmail-agent"), { recursive: true });
+      writeFileSync(
+        path.join(wsPath, "workers", "gmail-agent", "SKILL.md"),
+        "---\nname: duplicate\ndescription: Worker skill\n---\n"
+      );
+      mkdirSync(path.join(wsPath, "projects", "vault"), { recursive: true });
+      writeFileSync(
+        path.join(wsPath, "projects", "vault", "SKILL.md"),
+        "---\nname: vault\ndescription: Project skill\n---\n"
+      );
+      mkdirSync(path.join(wsPath, "agents", "ignored"), { recursive: true });
+      writeFileSync(
+        path.join(wsPath, "agents", "ignored", "SKILL.md"),
+        "---\nname: ignored\ndescription: Not a repo\n---\n"
       );
       const service = makeFsService(wsPath);
       const result = (await service.handler(panelCtx, "listSkills", [])) as Array<{
         name: string;
         description: string;
         dirPath: string;
+        skillPath: string;
       }>;
-      // Sort to make assertion order-independent (readdir order varies by FS).
-      result.sort((a, b) => a.name.localeCompare(b.name));
       expect(result).toEqual([
-        { name: "alpha", description: "First skill", dirPath: "skills/alpha" },
-        { name: "gamma-named", description: "Third skill", dirPath: "skills/gamma" },
+        {
+          name: "meta-skill",
+          description: "Flat repo skill",
+          dirPath: "meta",
+          skillPath: "meta/SKILL.md",
+        },
+        {
+          name: "duplicate",
+          description: "Package skill",
+          dirPath: "packages/foo",
+          skillPath: "packages/foo/SKILL.md",
+        },
+        {
+          name: "vault",
+          description: "Project skill",
+          dirPath: "projects/vault",
+          skillPath: "projects/vault/SKILL.md",
+        },
+        {
+          name: "alpha",
+          description: "First skill",
+          dirPath: "skills/alpha",
+          skillPath: "skills/alpha/SKILL.md",
+        },
+        {
+          name: "gamma-named",
+          description: "Third skill",
+          dirPath: "skills/gamma",
+          skillPath: "skills/gamma/SKILL.md",
+        },
+        {
+          name: "duplicate",
+          description: "Worker skill",
+          dirPath: "workers/gmail-agent",
+          skillPath: "workers/gmail-agent/SKILL.md",
+        },
       ]);
     });
 
@@ -697,8 +754,16 @@ describe("workspace service agent resources", () => {
         name: string;
         description: string;
         dirPath: string;
+        skillPath: string;
       }>;
-      expect(result).toEqual([{ name: "beta", description: "", dirPath: "skills/beta" }]);
+      expect(result).toEqual([
+        {
+          name: "beta",
+          description: "",
+          dirPath: "skills/beta",
+          skillPath: "skills/beta/SKILL.md",
+        },
+      ]);
     });
 
     it("returns an empty array when skills/ does not exist (ENOENT)", async () => {
@@ -723,6 +788,26 @@ describe("workspace service agent resources", () => {
       expect(result).toBe(body);
     });
 
+    it("returns the raw SKILL.md content for a workspace repo path", async () => {
+      const wsPath = mkdtempSync(path.join(tmpRoot, "ws-"));
+      mkdirSync(path.join(wsPath, "packages", "foo"), { recursive: true });
+      const body = "---\nname: foo\ndescription: repo skill\n---\n\nbody\n";
+      writeFileSync(path.join(wsPath, "packages", "foo", "SKILL.md"), body);
+      const service = makeFsService(wsPath);
+      const result = await service.handler(panelCtx, "readSkill", ["packages/foo"]);
+      expect(result).toBe(body);
+    });
+
+    it("reads meta/SKILL.md when no legacy skills/meta skill exists", async () => {
+      const wsPath = mkdtempSync(path.join(tmpRoot, "ws-"));
+      mkdirSync(path.join(wsPath, "meta"), { recursive: true });
+      const body = "---\nname: meta\ndescription: flat repo\n---\n\nbody\n";
+      writeFileSync(path.join(wsPath, "meta", "SKILL.md"), body);
+      const service = makeFsService(wsPath);
+      const result = await service.handler(panelCtx, "readSkill", ["meta"]);
+      expect(result).toBe(body);
+    });
+
     it("rejects path traversal attempts like '../etc/passwd'", async () => {
       const wsPath = mkdtempSync(path.join(tmpRoot, "ws-"));
       const service = makeFsService(wsPath);
@@ -741,6 +826,17 @@ describe("workspace service agent resources", () => {
         /Invalid skill name/
       );
       await expect(service.handler(panelCtx, "readSkill", [""])).rejects.toThrow(
+        /Invalid skill name/
+      );
+    });
+
+    it("rejects non-repo and deeper workspace paths", async () => {
+      const wsPath = mkdtempSync(path.join(tmpRoot, "ws-"));
+      const service = makeFsService(wsPath);
+      await expect(service.handler(panelCtx, "readSkill", ["agents/foo"])).rejects.toThrow(
+        /Invalid skill name/
+      );
+      await expect(service.handler(panelCtx, "readSkill", ["packages/foo/bar"])).rejects.toThrow(
         /Invalid skill name/
       );
     });

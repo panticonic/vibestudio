@@ -35,6 +35,7 @@ import type {
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "@vibestudio/shared/hostTargets";
+import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import type {
   WorkspaceAppVersions,
@@ -48,6 +49,7 @@ import type {
 } from "@vibestudio/shared/serviceSchemas/workspace";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
+import { listWorkspaceSkillEntries } from "../vcsHost/workspaceSkills.js";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
 // Wire data types live in the shared schema module (single source of truth
@@ -65,51 +67,7 @@ export type {
   WorkspaceUnitStatus,
 } from "@vibestudio/shared/serviceSchemas/workspace";
 
-/**
- * Minimal metadata for a skill directory under `<workspace>/skills/<name>/`.
- * Produced by walking the skills directory and parsing each SKILL.md's
- * YAML-ish frontmatter. Consumers use this to build the agent's skill catalog.
- */
-export interface SkillEntry {
-  /** Skill identifier (from frontmatter `name:`, falling back to the directory name). */
-  name: string;
-  /** Short human-readable description from frontmatter `description:` (may be empty). */
-  description: string;
-  /** Workspace-relative directory path, always `skills/<dirname>`. */
-  dirPath: string;
-}
-
-/**
- * Parse a very small subset of YAML frontmatter: a leading `---` fence, one
- * `key: value` per line (values are trimmed strings), and a closing `---`.
- * Returns an empty object if no frontmatter is present. This deliberately
- * does not try to be a full YAML parser — SKILL.md files only need flat
- * key/value metadata and pulling in js-yaml just for this would be overkill.
- */
-function parseFrontmatter(content: string): Record<string, string> {
-  // Allow an optional BOM / leading whitespace before the opening fence.
-  const match = content.match(/^\s*---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match) return {};
-  const body = match[1] ?? "";
-  const result: Record<string, string> = {};
-  for (const rawLine of body.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    const key = line.slice(0, colon).trim();
-    let value = line.slice(colon + 1).trim();
-    // Strip surrounding quotes if present.
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key) result[key] = value;
-  }
-  return result;
-}
+export type { SkillEntry } from "../vcsHost/workspaceSkills.js";
 
 function isWorkspaceEntry(value: unknown): value is { name: string; lastOpened: number } {
   return (
@@ -287,6 +245,37 @@ function normalizeWorkspaceRelativePath(input: string): string {
     }
   }
   return normalized;
+}
+
+async function resolveSkillMdPath(workspaceRoot: string, nameOrPath: string): Promise<string> {
+  if (typeof nameOrPath !== "string" || nameOrPath.length === 0) {
+    throw new Error(`Invalid skill name or repo path: ${nameOrPath}`);
+  }
+  if (/^[a-zA-Z0-9_-]+$/.test(nameOrPath)) {
+    const legacyPath = path.join(workspaceRoot, "skills", nameOrPath, "SKILL.md");
+    if (await pathExists(legacyPath)) return legacyPath;
+    try {
+      const repoPath = normalizeWorkspaceRepoPath(nameOrPath);
+      return path.join(workspaceRoot, repoPath, "SKILL.md");
+    } catch {
+      return legacyPath;
+    }
+  }
+  try {
+    const repoPath = normalizeWorkspaceRepoPath(nameOrPath);
+    return path.join(workspaceRoot, repoPath, "SKILL.md");
+  } catch {
+    throw new Error(`Invalid skill name or repo path: ${nameOrPath}`);
+  }
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isTrustedWorkspaceCaller(ctx: ServiceContext, deps: WorkspaceServiceDeps): boolean {
@@ -659,45 +648,12 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         }
 
         case "listSkills": {
-          // Walk <workspace>/skills/*/SKILL.md and return a catalog of skills
-          // with just enough metadata (name + description) for the agent to
-          // decide which ones to load. Directories without a valid SKILL.md
-          // are silently skipped — they may be in-progress or unrelated.
-          const skillsDir = path.join(workspace.path, "skills");
-          let entries: string[] = [];
-          try {
-            entries = await fs.readdir(skillsDir);
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-            throw err;
-          }
-          const skills: SkillEntry[] = [];
-          for (const entry of entries) {
-            const skillMdPath = path.join(skillsDir, entry, "SKILL.md");
-            try {
-              const content = await fs.readFile(skillMdPath, "utf-8");
-              const fm = parseFrontmatter(content);
-              skills.push({
-                name: fm["name"] ?? entry,
-                description: fm["description"] ?? "",
-                dirPath: `skills/${entry}`,
-              });
-            } catch {
-              // No SKILL.md (or unreadable): not a skill, skip.
-            }
-          }
-          return skills;
+          return await listWorkspaceSkillEntries(workspace.path);
         }
 
         case "readSkill": {
-          const [name] = args as [string];
-          // Strictly validate to block any path-traversal attempt (../, slashes,
-          // null bytes, etc). Only simple single-segment names are allowed, and
-          // they must match the directory layout produced by listSkills.
-          if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-            throw new Error(`Invalid skill name: ${name}`);
-          }
-          const skillMdPath = path.join(workspace.path, "skills", name, "SKILL.md");
+          const [nameOrPath] = args as [string];
+          const skillMdPath = await resolveSkillMdPath(workspace.path, nameOrPath);
           return await fs.readFile(skillMdPath, "utf-8");
         }
 

@@ -282,8 +282,10 @@ export const SkillEntrySchema = z.object({
   name: z.string(),
   /** Short human-readable description from frontmatter `description:` (may be empty). */
   description: z.string(),
-  /** Workspace-relative directory path, always `skills/<dirname>`. */
+  /** Workspace-relative repo path containing the skill. */
   dirPath: z.string(),
+  /** Workspace-relative path to the SKILL.md file. */
+  skillPath: z.string(),
 });
 
 export type WorkspaceTreeNode = WorkspaceNode;
@@ -451,20 +453,20 @@ export const workspaceMethods = defineServiceMethods({
   },
   listSkills: {
     description:
-      "List skills under <workspace>/skills/* with name + description parsed from each SKILL.md frontmatter.",
+      "List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter.",
     args: z.tuple([]),
     returns: z.array(SkillEntrySchema),
     access: READ_ACCESS,
   },
   readSkill: {
     description:
-      "Return the raw SKILL.md contents for a single skill by name (single-segment names only; path traversal is rejected).",
+      "Return raw SKILL.md contents by legacy bare skill name (`code-review` -> skills/code-review/SKILL.md) or workspace repo path (`packages/foo`, `workers/bar`, `meta`). Path traversal is rejected.",
     args: z.tuple([
-      z.string().describe("Skill directory name under skills/ (e.g. `code-review`)."),
+      z.string().describe("Legacy skill name under skills/ or workspace repo path containing SKILL.md."),
     ]),
     returns: z.string(),
     access: READ_ACCESS,
-    examples: [{ args: ["code-review"] }],
+    examples: [{ args: ["code-review"] }, { args: ["packages/foo"] }, { args: ["meta"] }],
   },
   sourceTree: {
     description: "Return the workspace source tree, annotating units, launchables, and skills.",

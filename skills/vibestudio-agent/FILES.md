@@ -321,7 +321,7 @@ entity-defined and may be plain names without a `SERVICE.` prefix (e.g.
 
 ```bash
 vibestudio agent services [NAME]    # list RPC services, or describe one (full Zod schemas with --json)
-vibestudio agent skills [NAME]      # list workspace skills, or print one SKILL.md
+vibestudio agent skills [NAME_OR_REPO_PATH] # list workspace skills, or print one SKILL.md
 vibestudio agent logs UNIT [--since MS] [--level L] [--limit N]   # workspace unit logs
 vibestudio agent skill install [--dir DIR] | print   # install this skill (default ./.claude/skills/vibestudio-agent)
 ```

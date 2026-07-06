@@ -5,12 +5,11 @@
  * PiRunner uses this at session startup to inject `AGENTS.md` content and
  * a formatted skill index into the agent's system prompt. The skill index
  * is markdown that the LLM can read; actual skill files are read on demand
- * by the read tool from the per-context folder (skills and AGENTS.md are
- * copied into each context folder at creation time).
+ * by the read tool from the per-context folder.
  *
  * Contract: `workspace.getAgentsMd` returns the workspace AGENTS.md
  * as a string; `workspace.listSkills` returns an array of `SkillEntry`
- * descriptors (one per skill directory under `workspace/skills/`).
+ * descriptors (one per repo-embedded SKILL.md).
  */
 import type { RpcCaller } from "@vibestudio/rpc";
 import { AgentWorkerError } from "./errors.js";
@@ -18,12 +17,14 @@ import { AgentWorkerError } from "./errors.js";
 export type { RpcCaller } from "@vibestudio/rpc";
 
 export interface SkillEntry {
-  /** Skill identifier; matches the directory name under `workspace/skills/`. */
+  /** Skill identifier from frontmatter, falling back to the containing repo name. */
   name: string;
   /** Short human-readable description shown in the skill index. */
   description: string;
-  /** Absolute path to the skill directory (informational; not used by LLM). */
+  /** Workspace-relative repo path containing the skill. */
   dirPath: string;
+  /** Workspace-relative path to the SKILL.md file. */
+  skillPath: string;
 }
 export interface VibestudioResources {
   /** Contents of `workspace/meta/AGENTS.md`. */
@@ -83,14 +84,22 @@ function validateSkillEntry(value: unknown, index: number): SkillEntry {
   const name = record["name"];
   const description = record["description"];
   const dirPath = record["dirPath"];
+  const skillPath = record["skillPath"];
   if (typeof name !== "string" || typeof description !== "string" || typeof dirPath !== "string") {
     throw resourceShapeError(
       `workspace.listSkills[${index}]`,
-      "{ name: string, description: string, dirPath: string }",
+      "{ name: string, description: string, dirPath: string, skillPath?: string }",
       value
     );
   }
-  return { name, description, dirPath };
+  if (skillPath !== undefined && typeof skillPath !== "string") {
+    throw resourceShapeError(
+      `workspace.listSkills[${index}]`,
+      "{ name: string, description: string, dirPath: string, skillPath?: string }",
+      value
+    );
+  }
+  return { name, description, dirPath, skillPath: skillPath ?? `${dirPath}/SKILL.md` };
 }
 
 function callWorkspace<T>(deps: ResourceLoaderDeps, method: string): Promise<T> {
@@ -138,11 +147,13 @@ export function formatSkillIndex(skills: SkillEntry[]): string {
   if (skills.length === 0) return "";
   const lines: string[] = ["", "## Available skills", ""];
   for (const s of skills) {
-    lines.push(`- **${s.name}** \u2014 ${s.description}`);
+    lines.push(`- **${s.name}** (${s.dirPath}) \u2014 ${s.description}`);
   }
   lines.push("");
-  lines.push('Use the read tool to load a skill: `read("skills/<name>/SKILL.md")`.');
-  lines.push("(Skill files are available in the per-context folder under `skills/<name>/`.)");
+  lines.push(
+    'Use the read tool to load a skill: `read("<dirPath>/SKILL.md")` using the path shown next to each skill.'
+  );
+  lines.push("(Skill files are available in the per-context folder under their repo paths.)");
   lines.push("");
   lines.push(
     "To discover callable services and runtime APIs with typed schemas and access rules, use the `docs_search` and `docs_open` tools (results are filtered to what you can call)."

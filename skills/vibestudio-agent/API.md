@@ -536,8 +536,8 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 | `workspace.setInitPanels` | Replace the set of panels opened when this workspace starts; approval-gated for userland. |
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
-| `workspace.listSkills` | List skills under <workspace>/skills/* with name + description parsed from each SKILL.md frontmatter. |
-| `workspace.readSkill` | Return the raw SKILL.md contents for a single skill by name (single-segment names only; path traversal is rejected). |
+| `workspace.listSkills` | List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. |
+| `workspace.readSkill` | Return raw SKILL.md contents by legacy bare skill name (`code-review` -> skills/code-review/SKILL.md) or workspace repo path (`packages/foo`, `workers/bar`, `meta`). Path traversal is rejected. |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |

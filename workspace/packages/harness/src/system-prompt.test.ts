@@ -69,6 +69,6 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("do not conflate them");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("context window cache is shared");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("complete({ report, outcome })");
-    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("skills/subagents/SKILL.md");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("packages/agentic-do/SKILL.md");
   });
 });

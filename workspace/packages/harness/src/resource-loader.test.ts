@@ -29,12 +29,14 @@ const SAMPLE_SKILLS: SkillEntry[] = [
   {
     name: "eval",
     description: "Evaluate expressions in a sandboxed JS REPL.",
-    dirPath: "/workspace/skills/eval",
+    dirPath: "skills/eval",
+    skillPath: "skills/eval/SKILL.md",
   },
   {
     name: "search",
     description: "Search the codebase using ripgrep.",
-    dirPath: "/workspace/skills/search",
+    dirPath: "packages/search",
+    skillPath: "packages/search/SKILL.md",
   },
 ];
 
@@ -108,12 +110,12 @@ describe("loadVibestudioResources", () => {
 
     expect(skillIndex).toContain("## Available skills");
     expect(skillIndex).toContain(
-      "- **eval** \u2014 Evaluate expressions in a sandboxed JS REPL.",
+      "- **eval** (skills/eval) \u2014 Evaluate expressions in a sandboxed JS REPL.",
     );
     expect(skillIndex).toContain(
-      "- **search** \u2014 Search the codebase using ripgrep.",
+      "- **search** (packages/search) \u2014 Search the codebase using ripgrep.",
     );
-    expect(skillIndex).toContain('read("skills/<name>/SKILL.md")');
+    expect(skillIndex).toContain('read("<dirPath>/SKILL.md")');
     expect(skillIndex).toContain("per-context folder");
   });
 
@@ -195,12 +197,17 @@ describe("formatSkillIndex", () => {
 
   it("starts with a leading blank line and the heading", () => {
     const out = formatSkillIndex([
-      { name: "x", description: "X skill", dirPath: "/x" },
+      {
+        name: "x",
+        description: "X skill",
+        dirPath: "packages/x",
+        skillPath: "packages/x/SKILL.md",
+      },
     ]);
     const lines = out.split("\n");
     expect(lines[0]).toBe("");
     expect(lines[1]).toBe("## Available skills");
     expect(lines[2]).toBe("");
-    expect(lines[3]).toBe("- **x** \u2014 X skill");
+    expect(lines[3]).toBe("- **x** (packages/x) \u2014 X skill");
   });
 });
