@@ -335,6 +335,10 @@ export class RouteRegistry {
     return this.workerRoutes.get(source) ?? [];
   }
 
+  getWorkerRouteSources(): string[] {
+    return Array.from(this.workerRoutes.keys()).sort();
+  }
+
   private addWorkerEntry(source: string, entry: WorkerRouteEntry): void {
     const list = this.workerRoutes.get(source) ?? [];
     // Deduplicate by kind + rawPath + (DO: className+objectKey).

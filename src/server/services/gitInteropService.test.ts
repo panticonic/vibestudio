@@ -50,6 +50,29 @@ function grantStore(): CapabilityGrantStore {
   } as unknown as CapabilityGrantStore;
 }
 
+function diskConfigPersistence(workspacePath: string) {
+  const configPath = path.join(workspacePath, "meta", "vibestudio.yml");
+  const render = (nextConfig: WorkspaceConfig): string => {
+    const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
+    const beforeParsed = before ? ((YAML.parse(before) as Record<string, unknown>) ?? {}) : {};
+    return YAML.stringify({ ...beforeParsed, ...nextConfig });
+  };
+  return {
+    workspaceConfigWouldChange: vi.fn(async (nextConfig: WorkspaceConfig) => {
+      const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
+      return before !== render(nextConfig);
+    }),
+    persistWorkspaceConfig: vi.fn(async ({ nextConfig }: { nextConfig: WorkspaceConfig }) => {
+      const before = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf-8") : "";
+      const next = render(nextConfig);
+      if (before === next) return false;
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, next, "utf-8");
+      return true;
+    }),
+  };
+}
+
 describe("gitInteropService", () => {
   it("imports a requested branch and persists it as a shared remote", async () => {
     gitMocks.clone.mockClear();
@@ -65,6 +88,7 @@ describe("gitInteropService", () => {
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
       egressProxy: { forwardGitHttp: vi.fn() },
+      ...diskConfigPersistence(workspacePath),
     });
 
     await service.handler(serviceContext(), "importProject", [
@@ -111,6 +135,7 @@ describe("gitInteropService", () => {
       egressProxy: { forwardGitHttp: vi.fn() },
       approvalQueue,
       grantStore: grantStore(),
+      ...diskConfigPersistence(workspacePath),
     });
 
     await service.handler(panelServiceContext(), "importProject", [
@@ -159,6 +184,7 @@ describe("gitInteropService", () => {
       egressProxy: { forwardGitHttp: vi.fn() },
       approvalQueue,
       grantStore: grantStore(),
+      ...diskConfigPersistence(workspacePath),
     });
 
     await expect(
@@ -199,6 +225,7 @@ describe("gitInteropService", () => {
       } as unknown as ApprovalQueue,
       grantStore: grantStore(),
       onWorkspaceSourceChanged: sourceChanged,
+      ...diskConfigPersistence(workspacePath),
     });
 
     await expect(
@@ -266,6 +293,7 @@ describe("gitInteropService", () => {
       approvalQueue,
       grantStore: grantStore(),
       onWorkspaceSourceChanged: sourceChanged,
+      ...diskConfigPersistence(workspacePath),
     });
 
     const result = await service.handler(
@@ -298,5 +326,49 @@ describe("gitInteropService", () => {
       panelServiceContext(),
       "Import workspace project projects/bgkit"
     );
+  });
+
+  it("uses the injected config writer instead of reading the projected meta file", async () => {
+    const workspacePath = tempWorkspace();
+    const projectedConfigPath = path.join(workspacePath, "meta", "vibestudio.yml");
+    fs.rmSync(projectedConfigPath, { force: true });
+    const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const persistWorkspaceConfig = vi.fn(async () => true);
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      egressProxy: { forwardGitHttp: vi.fn() },
+      workspaceConfigWouldChange: vi.fn(async () => true),
+      persistWorkspaceConfig,
+    });
+
+    await service.handler(serviceContext(), "setSharedRemote", [
+      "projects/bgkit",
+      {
+        name: "origin",
+        url: "https://github.com/werg/bgkit.git",
+      },
+    ]);
+
+    expect(persistWorkspaceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          git: expect.objectContaining({
+            remotes: expect.objectContaining({
+              projects: expect.objectContaining({
+                bgkit: expect.objectContaining({
+                  origin: "https://github.com/werg/bgkit.git",
+                }),
+              }),
+            }),
+          }),
+        }),
+      })
+    );
+    expect(workspaceConfig.git?.remotes?.["projects"]?.["bgkit"]?.["origin"]).toBe(
+      "https://github.com/werg/bgkit.git"
+    );
+    expect(fs.existsSync(projectedConfigPath)).toBe(false);
   });
 });

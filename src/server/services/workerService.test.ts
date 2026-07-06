@@ -136,6 +136,129 @@ describe("workerService userland service resolution", () => {
     });
   });
 
+  it("uses workspace declarations added after the service is constructed", async () => {
+    const deps = createDeps();
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(createWorkerService(deps as never));
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(panelCtx, "workers", "resolveService", ["poem.store.v1"])
+    ).rejects.toThrow("No userland service registered");
+
+    deps.workspaceDecls.singletons.replaceAll([
+      ...deps.workspaceDecls.singletons.all(),
+      { source: "workers/poem-store", className: "PoemStoreDO", key: "workspace-poem-store" },
+    ]);
+    deps.workspaceDecls.services = [
+      ...deps.workspaceDecls.services,
+      {
+        source: "workers/poem-store",
+        name: "poem-store",
+        protocols: ["poem.store.v1"],
+        policy: { allowed: ["panel", "worker", "shell"] },
+        durableObject: { className: "PoemStoreDO" },
+      },
+    ];
+
+    await expect(
+      dispatcher.dispatch(panelCtx, "workers", "resolveService", ["poem.store.v1"])
+    ).resolves.toMatchObject({
+      kind: "durable-object",
+      name: "poem-store",
+      source: "workers/poem-store",
+      className: "PoemStoreDO",
+      objectKey: "workspace-poem-store",
+      targetId: "do:workers/poem-store:PoemStoreDO:workspace-poem-store",
+    });
+  });
+
+  it("resolves services declared only in the caller context", async () => {
+    const deps = createDeps();
+    const contextDecls: WorkspaceDeclarations = {
+      singletons: new SingletonRegistry([
+        { source: "workers/poem-collection-store", className: "PoemStore", key: "mother-poems" },
+      ]),
+      services: [
+        {
+          source: "workers/poem-collection-store",
+          name: "poem-collection",
+          protocols: ["poems.collection.v1"],
+          policy: { allowed: ["panel", "worker"] },
+          durableObject: { className: "PoemStore" },
+        },
+      ],
+      routes: [],
+    };
+    const activateDurableObject = vi.fn(async () => {});
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        getCallerContextId: (callerId: string) => (callerId === "panel-test" ? "ctx-poems" : null),
+        loadContextDeclarations: async (contextId: string) =>
+          contextId === "ctx-poems" ? contextDecls : null,
+        activateDurableObject,
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(panelCtx, "workers", "resolveService", ["poems.collection.v1"])
+    ).resolves.toMatchObject({
+      kind: "durable-object",
+      name: "poem-collection",
+      source: "workers/poem-collection-store",
+      className: "PoemStore",
+      objectKey: "mother-poems",
+      targetId: "do:workers/poem-collection-store:PoemStore:mother-poems",
+    });
+    expect(activateDurableObject).toHaveBeenCalledWith({
+      source: "workers/poem-collection-store",
+      className: "PoemStore",
+      objectKey: "mother-poems",
+      contextId: "ctx-poems",
+      buildRef: "ctx:ctx-poems",
+    });
+  });
+
+  it("does not use a context duplicate to bypass a main service policy", async () => {
+    const deps = createDeps();
+    const contextDecls: WorkspaceDeclarations = {
+      singletons: new SingletonRegistry([
+        { source: "workers/example-store", className: "ExampleStoreDO", key: "channel" },
+      ]),
+      services: [
+        {
+          source: "workers/example-store",
+          name: "panel-channel",
+          protocols: ["example.panel-store.v1"],
+          policy: { allowed: ["extension"] },
+          durableObject: { className: "ExampleStoreDO" },
+        },
+      ],
+      routes: [],
+    };
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        getCallerContextId: () => "ctx-agent",
+        loadContextDeclarations: async () => contextDecls,
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("extension:test", "extension") },
+        "workers",
+        "resolveService",
+        ["example.panel-store.v1", "chat-1"]
+      )
+    ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
   it("resolves concrete durable object targets", async () => {
     const deps = createDeps();
     const dispatcher = new ServiceDispatcher();
@@ -165,6 +288,95 @@ describe("workerService userland service resolution", () => {
     ).rejects.toThrow("No Durable Object class registered");
   });
 
+  it("resolves concrete durable object targets declared only in the caller context", async () => {
+    const deps = createDeps();
+    const contextDecls: WorkspaceDeclarations = {
+      singletons: new SingletonRegistry([
+        { source: "workers/poem-collection-store", className: "PoemStore", key: "mother-poems" },
+      ]),
+      services: [
+        {
+          source: "workers/poem-collection-store",
+          name: "poem-collection",
+          protocols: ["poems.collection.v1"],
+          policy: { allowed: ["panel", "worker"] },
+          durableObject: { className: "PoemStore" },
+        },
+      ],
+      routes: [],
+    };
+    const activateDurableObject = vi.fn(async () => {});
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        getCallerContextId: (callerId: string) => (callerId === "panel-test" ? "ctx-poems" : null),
+        loadContextDeclarations: async (contextId: string) =>
+          contextId === "ctx-poems" ? contextDecls : null,
+        activateDurableObject,
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(panelCtx, "workers", "resolveDurableObject", [
+        "workers/poem-collection-store",
+        "PoemStore",
+        "mother-poems",
+      ])
+    ).resolves.toMatchObject({
+      kind: "durable-object",
+      source: "workers/poem-collection-store",
+      className: "PoemStore",
+      objectKey: "mother-poems",
+      targetId: "do:workers/poem-collection-store:PoemStore:mother-poems",
+    });
+    expect(activateDurableObject).toHaveBeenCalledWith({
+      source: "workers/poem-collection-store",
+      className: "PoemStore",
+      objectKey: "mother-poems",
+      contextId: "ctx-poems",
+      buildRef: "ctx:ctx-poems",
+    });
+  });
+
+  it("does not use a context duplicate to bypass a main direct DO policy", async () => {
+    const deps = createDeps();
+    const contextDecls: WorkspaceDeclarations = {
+      singletons: new SingletonRegistry([
+        { source: "workers/example-store", className: "ExampleStoreDO", key: "channel" },
+      ]),
+      services: [
+        {
+          source: "workers/example-store",
+          name: "panel-channel",
+          protocols: ["example.panel-store.v1"],
+          policy: { allowed: ["extension"] },
+          durableObject: { className: "ExampleStoreDO" },
+        },
+      ],
+      routes: [],
+    };
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({
+        ...(deps as object),
+        getCallerContextId: () => "ctx-agent",
+        loadContextDeclarations: async () => contextDecls,
+      } as never)
+    );
+    dispatcher.markInitialized();
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("extension:test", "extension") },
+        "workers",
+        "resolveDurableObject",
+        ["workers/example-store", "ExampleStoreDO", "chat-1"]
+      )
+    ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
   it("activates resolved durable object services and lets DO callers use worker-allowed services", async () => {
     const deps = createDeps();
     const activateDurableObject = vi.fn(async () => {});
@@ -190,6 +402,7 @@ describe("workerService userland service resolution", () => {
       source: "workers/example-store",
       className: "ExampleStoreDO",
       objectKey: "chat-1",
+      buildRef: "main",
     });
   });
 

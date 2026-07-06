@@ -708,6 +708,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async ensureFreshUncoalesced(): Promise<{ stateHash: string }> {
     if (!this.attached) {
+      if (this.deps.refs.listMains().length > 0) {
+        const view = await this.workspaceView();
+        this.localMain = null;
+        this.lastState.set(VCS_MAIN_HEAD, view.stateHash);
+        return view;
+      }
       // Bootstrap: hash locally (blobs enter the CAS), no DO involved.
       const local = await this.locked(VCS_MAIN_HEAD, () =>
         this.worktrees.localState(this.deps.workspaceRoot)
@@ -761,7 +767,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async resolveHead(head: string, repoPath?: string): Promise<string | null> {
     if (!repoPath && !this.attached && head === VCS_MAIN_HEAD) {
-      return this.localMain?.stateHash ?? null;
+      if (this.localMain) return this.localMain.stateHash;
+      if (this.deps.refs.listMains().length > 0) return (await this.workspaceView()).stateHash;
+      return null;
     }
     if (head === VCS_MAIN_HEAD) {
       this.repoLogId(repoPath); // per-repo VCS: a repoPath is required

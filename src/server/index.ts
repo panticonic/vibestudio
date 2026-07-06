@@ -404,16 +404,86 @@ async function main() {
   // durable VCS store. The host's attach/follower and workerd's bootstrap
   // main-binding resolve through it; there is no separate provider slot.
   const { resolveVcsStoreBinding } = await import("./userlandServices.js");
-
-  // Manifest-declared host contracts (meta/vibestudio.yml `trust`/`providers`/
-  // `hostTargets`). Loading the config (loadWorkspaceConfig) already seeded the
-  // process trust registry; re-seed explicitly so a differently-sourced config
-  // still establishes trust, and surface missing declarations once at boot.
   const { resolveWorkspaceTrustGrants, resolveHostTargetDecl, browserDataBrokerPackageName } =
     await import("@vibestudio/shared/workspace/configParser");
   const { setWorkspaceAppTrust } = await import("@vibestudio/shared/chromeTrust");
-  setWorkspaceAppTrust(resolveWorkspaceTrustGrants(workspaceConfig));
-  {
+  const restartBoundManifestChanges = (
+    previousConfig: typeof workspaceConfig,
+    nextConfig: typeof workspaceConfig,
+    previousDecls: typeof workspaceDecls,
+    nextDecls: typeof workspaceDecls
+  ): string[] => {
+    const changes: string[] = [];
+    const compare = (field: string, previousValue: unknown, nextValue: unknown): void => {
+      if (JSON.stringify(previousValue ?? null) === JSON.stringify(nextValue ?? null)) return;
+      changes.push(
+        `${field} changed from ${formatManifestValue(previousValue)} to ${formatManifestValue(
+          nextValue
+        )}; existing static workerd/internal-DO bindings keep the previous value until restart`
+      );
+    };
+
+    compare(
+      "providers.evalEngine.source",
+      previousConfig.providers?.evalEngine?.source?.trim(),
+      nextConfig.providers?.evalEngine?.source?.trim()
+    );
+    compare(
+      "providers.evalRuntime.source",
+      previousConfig.providers?.evalRuntime?.source?.trim(),
+      nextConfig.providers?.evalRuntime?.source?.trim()
+    );
+    compare(
+      "providers.cdpClient.source",
+      previousConfig.providers?.cdpClient?.source?.trim(),
+      nextConfig.providers?.cdpClient?.source?.trim()
+    );
+    compare(
+      "providers.browserData.extension",
+      browserDataBrokerPackageName(previousConfig),
+      browserDataBrokerPackageName(nextConfig)
+    );
+
+    const previousVcs = resolveVcsStoreBinding(previousDecls);
+    const nextVcs = resolveVcsStoreBinding(nextDecls);
+    if (JSON.stringify(previousVcs ?? null) !== JSON.stringify(nextVcs ?? null)) {
+      changes.push(
+        "vibestudio.vcs.v1 service binding changed; the running server keeps the existing VCS store attachment until restart or explicit migration"
+      );
+    }
+
+    return changes;
+  };
+  const applyWorkspaceConfigReload = (
+    nextConfig: typeof workspaceConfig,
+    opts: { warnRestartBoundChanges?: boolean } = {}
+  ): { routeSources: string[] } => {
+    const routeSources = new Set(workspaceDecls.routes.map((route) => route.source));
+    const nextDecls = buildWorkspaceDeclarations(nextConfig);
+    const restartBoundChanges = restartBoundManifestChanges(
+      workspaceConfig,
+      nextConfig,
+      workspaceDecls,
+      nextDecls
+    );
+    for (const route of nextDecls.routes) routeSources.add(route.source);
+    replaceWorkspaceConfig(workspaceConfig, nextConfig);
+    workspaceDecls.singletons.replaceAll(nextDecls.singletons.all());
+    workspaceDecls.services = nextDecls.services;
+    workspaceDecls.routes = nextDecls.routes;
+    setWorkspaceAppTrust(resolveWorkspaceTrustGrants(nextConfig));
+    if (opts.warnRestartBoundChanges !== false) {
+      for (const change of restartBoundChanges) {
+        console.warn(`[WorkspaceConfig] ${change}`);
+      }
+    }
+    return { routeSources: Array.from(routeSources).sort() };
+  };
+
+  // Manifest-declared host contracts (meta/vibestudio.yml `trust`/`providers`/
+  // `hostTargets`). Loading the disk config seeds trust once; the startup
+  // protected-main sync below re-seeds it before RPC/container services start.
+  const warnMissingWorkspaceTrust = (): void => {
     const trustGrants = resolveWorkspaceTrustGrants(workspaceConfig);
     if (trustGrants.chromeApps.length === 0) {
       console.warn(
@@ -425,7 +495,7 @@ async function main() {
         "[Trust] meta/vibestudio.yml declares no `trust.connectionManagementApps` — no workspace app may manage connections"
       );
     }
-  }
+  };
   /** Manifest `providers.*` env bindings for internal DO classes (workerdManager). */
   const internalDoProviderEnv = (className: string): Record<string, string> => {
     if (className === "EvalDO") {
@@ -649,6 +719,7 @@ async function main() {
   const configuredProtocol = "http" as const;
   let extensionHostForGateway: import("@vibestudio/extension-host").ExtensionHost | null = null;
   let appHostForGateway: import("./appHost.js").AppHost | null = null;
+  let workerdManagerForGateway: import("./workerdManager.js").WorkerdManager | null = null;
   type TrustedUnitHostInstance =
     | import("@vibestudio/extension-host").ExtensionHost
     | import("./appHost.js").AppHost;
@@ -774,10 +845,30 @@ async function main() {
 
   const { isDeclaredRemoteRepoPath, syncDeclaredRemoteForRepo } =
     await import("@vibestudio/shared/workspace/remotes");
-  const { loadWorkspaceConfig, resolveDeclaredApps, resolveDeclaredExtensions } =
+  const { resolveDeclaredApps, resolveDeclaredExtensions } =
     await import("@vibestudio/shared/workspace/loader");
+  const { readStartupWorkspaceConfig, readWorkspaceConfigFromState } =
+    await import("./workspaceConfigSource.js");
+  const loadWorkspaceConfigFromState = async (
+    stateHash: string
+  ): Promise<typeof workspaceConfig> => {
+    return readWorkspaceConfigFromState(workspaceVcs, workspacePath, stateHash);
+  };
+  try {
+    const startupConfig = await readStartupWorkspaceConfig(workspaceVcs, refService, workspacePath);
+    applyWorkspaceConfigReload(startupConfig.config, { warnRestartBoundChanges: false });
+    if (startupConfig.source === "protected-main") {
+      console.log(
+        `[WorkspaceConfig] Loaded startup manifest from protected main ${startupConfig.stateHash}`
+      );
+    }
+    warnMissingWorkspaceTrust();
+  } catch (err) {
+    console.warn("[WorkspaceConfig] Failed to load startup manifest from workspace state:", err);
+    throw err;
+  }
   const reconcileDeclaredWorkspaceUnits = async (
-    nextConfig: ReturnType<typeof loadWorkspaceConfig>,
+    nextConfig: typeof workspaceConfig,
     trigger: "startup" | "meta-change"
   ): Promise<void> => {
     const reconcile = async (): Promise<void> => {
@@ -848,12 +939,14 @@ async function main() {
     );
   };
   // Workspace state advances drive source-side reactions:
-  //  - meta/ changes reload the workspace config and reconcile declared units
+  //  - meta/ changes reload the workspace config from the advanced VCS state
+  //    and reconcile declared units
   //  - any change invalidates the tree scanner cache
   //  - pnpm dev mode mirrors the committed tree back to the template checkout
   let devMirrorTimer: NodeJS.Timeout | null = null;
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
+  let latestMetaConfigReloadSeq = 0;
   // Bridge every head advance to the client event bus so subscribers (panels)
   // can react incrementally: `vcs.subscribeHead(head)` listens on this topic.
   workspaceVcs.onStateAdvanced((event) => {
@@ -870,23 +963,31 @@ async function main() {
     if (event.head !== "main") return;
     treeScanner.invalidate();
     if (event.changedPaths.some((changed) => changed.startsWith("meta/"))) {
+      const reloadSeq = ++latestMetaConfigReloadSeq;
       queueMicrotask(() => {
-        try {
-          const nextConfig = loadWorkspaceConfig(workspacePath);
-          replaceWorkspaceConfig(workspaceConfig, nextConfig);
-          if (!initialWorkspaceUnitReconcileComplete) {
-            pendingStartupMetaConfigReload = true;
-            return;
+        void (async () => {
+          try {
+            const nextConfig = await loadWorkspaceConfigFromState(event.stateHash);
+            if (reloadSeq !== latestMetaConfigReloadSeq) return;
+            const reload = applyWorkspaceConfigReload(nextConfig);
+            workerdManagerForGateway?.reconcileManifestRoutes(reload.routeSources);
+            if (!initialWorkspaceUnitReconcileComplete) {
+              pendingStartupMetaConfigReload = true;
+              return;
+            }
+            void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change");
+            recurringRegistryInstance?.notifyChanged();
+            heartbeatDeclarationRegistryInstance?.notifyChanged();
+            syncDeclaredRemotesForSource().catch((err: unknown) =>
+              console.warn("[GitRemotes] Failed to sync declared remotes after meta change:", err)
+            );
+          } catch (err) {
+            console.warn(
+              "[WorkspaceConfig] Failed to reload workspace config after meta change:",
+              err
+            );
           }
-          void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change");
-          recurringRegistryInstance?.notifyChanged();
-          heartbeatDeclarationRegistryInstance?.notifyChanged();
-          syncDeclaredRemotesForSource().catch((err: unknown) =>
-            console.warn("[GitRemotes] Failed to sync declared remotes after meta change:", err)
-          );
-        } catch (err) {
-          console.warn("[GitRemotes] Failed to reload workspace config after meta change:", err);
-        }
+        })();
       });
     }
     if (devTemplateMirrorDir) {
@@ -1063,6 +1164,13 @@ async function main() {
   // Git interchange semantics (P5c part 2) live in the trusted git-bridge
   // EXTENSION (workspace/extensions/git-bridge); the host keeps only this
   // policy/dispatch service (approvals, egress clone, config writes).
+  const { createWorkspaceConfigMainWriter } = await import("./workspaceConfigWriter.js");
+  const workspaceConfigWriter = createWorkspaceConfigMainWriter({
+    workspacePath,
+    blobsDir: path.join(getUserDataPath(), "blobs"),
+    refs: refService,
+    vcs: workspaceVcs,
+  });
   const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
   const gitInteropDefinition = createGitInteropService({
     treeScanner,
@@ -1083,6 +1191,8 @@ async function main() {
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    workspaceConfigWouldChange: (nextConfig) => workspaceConfigWriter.wouldChange(nextConfig),
+    persistWorkspaceConfig: (input) => workspaceConfigWriter.persist(input),
     onWorkspaceSourceChanged: async (_ctx, _summary) => {
       // Phase-2 revision §5 (INTERIM — see design fork in the revision report):
       // the actual repo→`main` publish for a git import already runs through
@@ -2074,11 +2184,25 @@ async function main() {
   const activateDurableObjectEntity = async (
     doDispatch: import("./doDispatch.js").DODispatch,
     workerdManagerInst: import("./workerdManager.js").WorkerdManager,
-    ref: { source: string; className: string; objectKey: string; buildRef?: string }
+    ref: {
+      source: string;
+      className: string;
+      objectKey: string;
+      contextId?: string;
+      buildRef?: string;
+    }
   ): Promise<void> => {
     const { source, className, objectKey, buildRef } = ref;
     const targetId = canonicalEntityId({ kind: "do", source, className, key: objectKey });
-    if (entityCache.resolveActive(targetId)) return;
+    const active = entityCache.resolveActive(targetId);
+    if (active) {
+      if (ref.contextId && active.contextId !== ref.contextId) {
+        throw new Error(
+          `Durable Object ${targetId} is already active in context ${active.contextId}; cannot resolve it from context ${ref.contextId}`
+        );
+      }
+      return;
+    }
     const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
     const workspaceDORef: import("./doDispatch.js").DORef = {
       source: INTERNAL_DO_SOURCE,
@@ -2091,10 +2215,16 @@ async function main() {
       targetId
     )) as EntityRecord | null;
     if (existing?.status === "active") {
+      if (ref.contextId && existing.contextId !== ref.contextId) {
+        throw new Error(
+          `Durable Object ${targetId} is already registered in context ${existing.contextId}; cannot resolve it from context ${ref.contextId}`
+        );
+      }
       entityCache._onActivate(existing);
       return;
     }
     const contextId =
+      ref.contextId ??
       existing?.contextId ??
       createHash("sha256")
         .update(`${workspace.config.id}\x00${source}\x00${className}\x00${objectKey}`)
@@ -2137,13 +2267,23 @@ async function main() {
         workerServiceDef = createWorkerService({
           buildSystem: buildSystemInst,
           workspaceDecls,
-          activateDurableObject: ({ source, className, objectKey }) => {
-            const singleton = workspaceDecls.singletons.find(source, className);
+          getCallerContextId: (callerId) => entityCache.resolveContext(callerId),
+          loadContextDeclarations: async (contextId) => {
+            const stateHash = await workspaceVcs.resolveContextView(contextId);
+            const config = await readWorkspaceConfigFromState(
+              workspaceVcs,
+              workspacePath,
+              stateHash
+            );
+            return buildWorkspaceDeclarations(config);
+          },
+          activateDurableObject: ({ source, className, objectKey, contextId, buildRef }) => {
             return activateDurableObjectEntity(doDispatch, workerdManagerInst, {
               source,
               className,
               objectKey,
-              buildRef: singleton?.contextId ? undefined : "main",
+              ...(contextId ? { contextId } : {}),
+              ...(buildRef ? { buildRef } : {}),
             });
           },
         });
@@ -2217,7 +2357,6 @@ async function main() {
   //
   // Workers POST back through the gateway. The gateway starts before
   // container.startAll(), so this URL is stable by the time workerd boots.
-  let workerdManagerForGateway: import("./workerdManager.js").WorkerdManager | null = null;
   // Live worker → VerifiedCaller registry for attributed egress through the
   // shared listener. Populated by WorkerdManager on worker create/destroy.
   const egressCallers = new Map<
@@ -2269,6 +2408,13 @@ async function main() {
           statePath,
           routeRegistry,
           getManifestRoutes: (source) => workspaceDecls.routes.filter((r) => r.source === source),
+          getManifestDoClasses: (source) => {
+            const node = assertPresent(buildSystemForWorkerd)
+              .getGraph()
+              .allNodes()
+              .find((n) => n.kind === "worker" && n.relativePath === source);
+            return node?.manifest.durable?.classes ?? [];
+          },
           singletonRegistry: workspaceDecls.singletons,
           getProxyPort: (caller) => egressProxy.startForCaller(caller),
           getSharedEgressPort: () =>
@@ -3604,15 +3750,7 @@ async function main() {
     try {
       do {
         if (pendingStartupMetaConfigReload) {
-          try {
-            replaceWorkspaceConfig(workspaceConfig, loadWorkspaceConfig(workspacePath));
-            syncDeclaredRemotesAfterStartupReload = true;
-          } catch (err) {
-            console.warn(
-              "[GitRemotes] Failed to reload workspace config before startup reconcile:",
-              err
-            );
-          }
+          syncDeclaredRemotesAfterStartupReload = true;
           pendingStartupMetaConfigReload = false;
         }
         await completeConfiguredWorkspaceDependenciesAtStartup();
@@ -3906,6 +4044,12 @@ function replaceWorkspaceConfig<T extends object>(target: T, next: T): void {
     deleteDynamicProperty(mutableTarget, key);
   }
   Object.assign(target, next);
+}
+
+function formatManifestValue(value: unknown): string {
+  if (value === undefined || value === null || value === "") return "<unset>";
+  if (typeof value === "string") return JSON.stringify(value);
+  return JSON.stringify(value);
 }
 
 function parseGatewayAliases(value: string): string[] {
