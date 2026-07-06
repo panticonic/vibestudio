@@ -841,19 +841,85 @@ Same change set, not a follow-up:
   tree via `--artifact`** (npm-pack tarball — the tag version is never on the
   registry during CI) and exercising deploy → pair → RPC → remove, plus
   idempotent re-deploy and resume-after-linger-fix.
-- **Triangle e2e (the headline):** remote server (deployed via WP3 path in a
-  container) + desktop paired over WebRTC + invite minted from the desktop UI +
-  second client (CLI standing in for the phone, plus the Android emulator job)
-  redeems it and round-trips RPC against the remote server — covering plain
-  `remote serve` and hub mode.
-- **iOS:** simulator install + paste-link pairing smoke in CI (device/TestFlight
-  verified manually per release).
+### 6.1 Full-system smoke — real emulator, real desktop automation (the headline)
+
+One orchestrated harness, `scripts/full-system-smoke.mjs`, exercises **every
+golden path end-to-end with the real clients**: the Android emulator running
+the actual shell APK, and the branded Electron desktop driven by e2e
+automation. It is built from the proven patterns already in the repo — do not
+invent new machinery where these exist:
+
+- **Desktop automation:** Playwright's `_electron` launch of the branded
+  binary, exactly as `scripts/desktop-pairing-smoke.mjs` does today (single
+  Electron launch handle for the whole flow, deep-link launch argument,
+  screenshots to `test-results/`, crash-proof cleanup that always SIGKILLs
+  Electron + children on pass or fail). UI steps are driven through Playwright
+  selectors against the shell; pairing payloads are read from the modal's DOM
+  (the QR's link is also rendered as text) — never by decoding QR pixels.
+- **Mobile automation:** the Android emulator machinery from
+  `scripts/cli/mobile-dev.mjs` (AVD boot, `adb reverse`, deep-link injection
+  via `adb shell am start`) plus the `smokePhase` logcat markers that
+  `scripts/cli/mobile-smoke.mjs` already asserts on
+  (`apps/mobile/index.js` emits `embedded-pairing-start/-complete`, bundle
+  activation phases). The APK under test is the release artifact in CI
+  (`--from-source` locally).
+- **"Remote" box:** a local container with sshd (CI: the job's service
+  container), provisioned by the real `remote deploy --artifact` path — the
+  smoke tests the deploy tool, not a hand-rolled substitute.
+- **Signaling:** `wrangler dev apps/signaling`, as in every existing smoke.
+
+**Phases, in order — each phase emits a named marker and hard-fails the run:**
+
+1. **Deploy (Path A):** `remote deploy --artifact <packed working tree>` into
+   the container; assert systemd user unit active, `remote doctor` green, and
+   a complete pair link emitted; parse it with the shared grammar module.
+2. **Desktop → remote (Path C):** launch Electron with the pair deep link;
+   assert WebRTC session connected, then open a panel and assert its
+   manifest **and** assets arrived over the bridge (WP9 parity); screenshot.
+3. **Phone ← desktop, remote server (Path B):** via Playwright, open
+   Devices → "Connect a phone"; pull the invite link from the modal DOM; fire
+   it into the emulator as a **verified App Link VIEW intent** (the https
+   carrier, proving fragment survival in passing); drive the native host's
+   confirmation sheet via adb/uiautomator; assert logcat `smokePhase` pairing
+   markers, OTA workspace-app fetch/verify/activate markers, and the desktop
+   modal flipping to the paired device's name. Then **revoke from the desktop
+   UI** and assert the phone lands on its re-pair screen.
+4. **Invite over SSH (Path D):** `ssh <container> vibestudio remote invite`
+   with **no CLI credentials in the container** (proving the WP4 loopback
+   admin path); redeem the printed link with the CLI client; RPC round-trip.
+5. **Local-server variant (the P0 proof):** relaunch Electron against a
+   locally spawned co-located server (default ingress per WP1); repeat phase
+   3 against it, with the emulator reaching loopback signaling via
+   `adb reverse` exactly as `mobile dev` wires it today.
+6. **Hub-mode variant:** repeat phases 1–4 with the container running the hub
+   (`src/server/hubServer.ts`) so proxied child-server invites are covered.
+
+**Forensics on failure (mandatory, not best-effort):** the harness always
+collects desktop screenshots + the Electron main log, full `adb logcat`, the
+container's `journalctl --user -u vibestudio-server`, and the wrangler dev
+log into `test-results/full-system-smoke/` before cleanup.
+
+**Invocation and CI wiring:** `pnpm smoke:full` runs the whole ladder
+locally. In CI it extends `.github/workflows/webrtc-e2e-nightly.yml` (the
+emulator job uses the standard Android-emulator runner action with KVM) and
+**must also run on-demand for the overhaul change set itself** — the
+definition of done (§7) requires it green, so it cannot live only in a
+nightly. Phases are independent enough to report individually but the job is
+one run: the point of this harness is the *composition*.
+
+- **iOS:** simulator install + paste-link pairing smoke in CI, asserting the
+  same `smokePhase` ladder through pairing and OTA activation
+  (device/TestFlight verified manually per release; CDP-brokered panel
+  automation is unavailable on iOS, so panel assertions are Android-only).
 
 ## 7. Definition of done
 
 - All four golden-path transcripts (§1) reproduce verbatim on clean machines.
 - Deletions register (§5) fully executed; CI greps prove no references remain.
-- All tests in §6 green in CI; both mobile release artifacts produced on tag.
+- All tests in §6 green in CI — including a full pass of the §6.1
+  full-system smoke (`pnpm smoke:full`: emulator + Playwright-driven desktop,
+  all six phases) on the change set itself, not just nightly; both mobile
+  release artifacts produced on tag.
 - Docs sweep (WP10) merged in the same change set.
 - No feature flags, no compatibility branches, no "TODO(follow-up)" markers
   introduced by this change.
