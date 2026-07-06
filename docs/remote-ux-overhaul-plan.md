@@ -742,7 +742,7 @@ cannot import WebRTC/signaling modules; remote-session Playwright run opens a
 panel whose manifest+assets came over the bridge; existing local smoke stays
 green.
 
-### WP10 — Documentation and registry sweep
+### WP10 — Documentation, skills, and registry sweep
 
 Same change set, not a follow-up:
 
@@ -751,10 +751,62 @@ Same change set, not a follow-up:
   around Paths A–D; regenerate `docs/cli.md` for the new/changed commands
   (`remote deploy|doctor|repair-identity|setup-signaling|invite`,
   `mobile install|doctor`); update `STATE_DIRECTORY.md` (WP8 files, systemd
-  unit, server config file); update `workspace/skills/appdev/MOBILE.md` and
-  `REMOTE_CLIENTS.md` for the scanner, https carrier, and prebuilt install.
+  unit, server config file).
 - Mark the superseded sections of `webrtc-rpc-remediation-plan.md` (B9 identity
   handling) as closed by this plan.
+
+**Skill upgrades — agents must be able to assist with every new flow.**
+Vibestudio's in-product agents learn the system through skills
+(`workspace/skills/<name>/SKILL.md` for workspace-wide skills), and the
+system now also supports **repo-local skills**: any workspace repo —
+package, worker, panel, extension, or project — carries its own top-level
+`SKILL.md` next to its code (convention documented in
+`workspace/skills/workspace-dev/SKILL.md`; workspace-wide concerns stay
+under `workspace/skills/`). Every flow this plan ships gets skill coverage
+in the same change set, so an agent can walk a user through it, or execute
+it, the day it lands:
+
+- **New workspace-wide skill `workspace/skills/remote-access/`** — the
+  agent-facing counterpart of this plan's golden paths: deploying a server
+  (`remote deploy`, `--artifact`, version pinning), connecting a phone from
+  the desktop Devices surface, minting invites (including the SSH/Path D
+  loopback-admin route), and a **troubleshooting ladder** keyed to `remote
+  doctor` output (signaling unreachable vs identity anomaly vs linger
+  denied vs addon missing — each mapped to its one-line fix). Agents assist
+  by reading doctor/`journalctl` output and driving the same CLI the user
+  would.
+- **Update `workspace/skills/appdev/MOBILE.md` and `REMOTE_CLIENTS.md`** for
+  the https pair-link carrier, in-shell QR scanner, prebuilt
+  `mobile install`, iOS target, and the invite contract (non-nullable,
+  loopback-admin minting) — these are the docs agents already consult for
+  the two-layer mobile architecture, and several of their documented
+  footguns (bare codes, null deep links) stop existing.
+- **Update `workspace/skills/onboarding/SKILL.md`** (intentionally
+  workspace-wide) so first-run guidance includes "Connect a phone" and the
+  pair-page install route.
+- **Update `workspace/skills/system-testing/SKILL.md`** with the §6.1
+  full-system smoke: how to invoke `pnpm smoke:full`, what each phase
+  proves, and how to read its forensics bundle — so agents can run and
+  interpret the smoke when asked "is remote access working?".
+- **Update `workspace/skills/server-logs/SKILL.md`** for deployed boxes:
+  `remote deploy logs` / `journalctl --user -u vibestudio-server` as the
+  remote counterpart of local server logs.
+- **Repo-local skills for every unit this plan touches or that users run as
+  extensions:** `workspace/apps/mobile/SKILL.md` (workspace app: OTA
+  update prompts, re-pair states, scanner entry points),
+  `workspace/apps/shell/SKILL.md` (Devices surface: minting invites,
+  reading pairing state, revoking devices — the operations WP5 exposes),
+  and a `SKILL.md` in each in-use extension repo (starting with
+  `workspace/extensions/git-bridge/`) documenting what the extension needs
+  from a *remote* server topology (which side of the pipe it runs on, what
+  breaks when the server is remote). New extensions adopt this by
+  convention; the `extensiondev` skill gains a line requiring a repo-local
+  `SKILL.md` in its definition of done for new extensions.
+- **Freshness is part of the deletions rule:** any skill sentence describing
+  a surface this plan deletes (env-var-only signaling, `mobile build`,
+  nullable invites, two-file identity) is removed in the same commit that
+  deletes the surface — the §7 grep gate covers `workspace/skills/` and
+  repo-local `SKILL.md` files too.
 
 ---
 
@@ -920,7 +972,10 @@ one run: the point of this harness is the *composition*.
   full-system smoke (`pnpm smoke:full`: emulator + Playwright-driven desktop,
   all six phases) on the change set itself, not just nightly; both mobile
   release artifacts produced on tag.
-- Docs sweep (WP10) merged in the same change set.
+- Docs **and skills** sweep (WP10) merged in the same change set: the
+  `remote-access` skill exists, the named skills are updated, repo-local
+  `SKILL.md` files exist for the touched workspace units and in-use
+  extensions, and no skill references a deleted surface (grep gate).
 - No feature flags, no compatibility branches, no "TODO(follow-up)" markers
   introduced by this change.
 
