@@ -408,9 +408,12 @@ export class CallTransport {
     // 5. dispatch
     const transport = this.deps.participantTransport(pendingRow.targetId);
     if (transport === null) {
+      const message =
+        `Target ${pendingRow.targetId} is not joined to channel ${this.deps.objectKey}; ` +
+        "chat.callMethod is channel-scoped and only routes to live participants in this channel";
       await this.settleCall(
         pendingRow.transportCallId,
-        { error: `Target ${pendingRow.targetId} not found` },
+        { error: message },
         true
       );
       return;
@@ -829,10 +832,21 @@ export class CallTransport {
 
   /** Re-emit still-pending calls targeting a (re)subscribed participant as
    *  signals (at-least-once delivery over the call lifetime). */
-  redeliverPendingCallsTo(participantId: string): void {
+  async redeliverPendingCallsTo(participantId: string): Promise<number> {
     const rows = this.pendingFor(participantId);
-    if (rows.length === 0) return;
+    if (rows.length === 0) return 0;
+    const terminalEnvelopeIds = await this.deps.log.hasEnvelopes(
+      rows.map((row) => `terminal:${row.transportCallId}`)
+    );
+    let redelivered = 0;
+    let pruned = 0;
     for (const row of rows) {
+      const terminalEnvelopeId = `terminal:${row.transportCallId}`;
+      if (terminalEnvelopeIds.has(terminalEnvelopeId)) {
+        this.deleteRow(row.transportCallId);
+        pruned += 1;
+        continue;
+      }
       const payload = this.deps.builders().started({
         channelId: this.deps.objectKey,
         caller: this.deps.participantRef(row.callerId),
@@ -855,8 +869,16 @@ export class CallTransport {
         ts: Date.now(),
       };
       this.deps.emitSignal(participantId, event);
+      redelivered += 1;
     }
-    console.log(`[Channel] Redelivered ${rows.length} pending call(s) to ${participantId}`);
+    if (pruned > 0) this.deps.scheduleNextAlarm();
+    if (redelivered > 0 || pruned > 0) {
+      console.log(
+        `[Channel] Redelivered ${redelivered} pending call(s) to ${participantId}` +
+          (pruned > 0 ? ` (${pruned} stale row(s) pruned)` : "")
+      );
+    }
+    return redelivered;
   }
 
   async timeoutExpiredPendingCalls(

@@ -3061,6 +3061,46 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return row ? this.mapLogEnvelope(row) : null;
   }
 
+  @rpc({ callers: ["panel", "do", "worker", "server"] })
+  hasLogEvents(input: { logId: string; head: string; envelopeIds: string[] }): string[] {
+    this.ensureReady();
+    const requested = Array.from(
+      new Set(
+        (Array.isArray(input.envelopeIds) ? input.envelopeIds : []).filter(
+          (id): id is string => typeof id === "string" && id.length > 0
+        )
+      )
+    );
+    if (requested.length === 0) return [];
+
+    const found = new Set<string>();
+    for (const segment of this.logLineage(input.logId, input.head)) {
+      const missing = requested.filter((id) => !found.has(id));
+      if (missing.length === 0) break;
+      for (let offset = 0; offset < missing.length; offset += 450) {
+        const chunk = missing.slice(offset, offset + 450);
+        const clauses = [
+          "log_id = ?",
+          "head = ?",
+          `envelope_id IN (${chunk.map(() => "?").join(", ")})`,
+        ];
+        const bindings: SqlBinding[] = [segment.logId, segment.head, ...chunk];
+        if (Number.isFinite(segment.throughSeq)) {
+          clauses.push("seq <= ?");
+          bindings.push(segment.throughSeq);
+        }
+        const rows = this.sql
+          .exec(
+            `SELECT envelope_id FROM log_events WHERE ${clauses.join(" AND ")}`,
+            ...bindings
+          )
+          .toArray() as JsonRecord[];
+        for (const row of rows) found.add(String(row["envelope_id"]));
+      }
+    }
+    return requested.filter((id) => found.has(id));
+  }
+
   private lineageEventRow(logId: string, head: string, envelopeId: string): JsonRecord | null {
     for (const segment of this.logLineage(logId, head)) {
       const clauses = ["log_id = ?", "head = ?", "envelope_id = ?"];
@@ -3165,19 +3205,46 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
       replayed.push(stored);
     }
+    // Mid-batch replay: an at-least-once redelivery can compose a batch where
+    // an already-journaled event follows genuinely-new ones (multi-writer task
+    // logs: parent + subagent + channel redelivery both write spawn/seed
+    // events). When the stored copy is semantically IDENTICAL the log is truth
+    // and the duplicate is skipped (loudly, via warn). Same id with DIFFERENT
+    // content remains a hard replay-mismatch failure — that is a genuine
+    // causality/ordering bug, never benign redelivery.
+    const midBatchReplayed: LogEnvelope[] = [];
+    const remaining: typeof prepared = [];
     for (const event of prepared.slice(replayed.length)) {
-      if (existingHead && this.lineageEventRow(input.logId, input.head, event.envelopeId)) {
+      const existing = existingHead
+        ? this.lineageEventRow(input.logId, input.head, event.envelopeId)
+        : null;
+      if (!existing) {
+        remaining.push(event);
+        continue;
+      }
+      const stored = this.mapLogEnvelope(existing);
+      const incomingSemantic = this.semanticSlice({
+        ...event,
+        appendedAt: event.appendedAtExplicit ? event.appendedAt : stored.appendedAt,
+      });
+      const storedSemantic = this.semanticSlice(stored);
+      if (canonicalJson(incomingSemantic) !== canonicalJson(storedSemantic)) {
+        const divergence = this.describeSemanticDivergence(incomingSemantic, storedSemantic);
         throw new Error(
           gadAppendErrorMessage(
             "replay-mismatch",
-            `log append replay has already-applied events after a new suffix ` +
+            `log append replay has a DIVERGENT already-applied event after a new suffix ` +
               `[log=${input.logId} head=${input.head} alreadyApplied=${event.envelopeId} ` +
-              `replayedPrefix=${replayed.length}/${prepared.length}]`
+              `replayedPrefix=${replayed.length}/${prepared.length}] diverged at → ${divergence}`
           )
         );
       }
+      console.warn(
+        `[GadStore] skipped already-journaled duplicate in mid-batch replay ` +
+          `[log=${input.logId} head=${input.head} envelopeId=${event.envelopeId}]`
+      );
+      midBatchReplayed.push(stored);
     }
-    const remaining = prepared.slice(replayed.length);
 
     if (!existingHead) {
       this.sql.exec(
@@ -3215,7 +3282,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     const published: AppendLogEventResult["published"] = [];
     // Recover the publication list for replayed events from the causality edges.
-    for (const envelope of replayed) {
+    for (const envelope of [...replayed, ...midBatchReplayed]) {
       for (const publication of this.publicationsForOrigin(
         input.logId,
         input.head,
@@ -3310,7 +3377,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       head: input.head,
       headSeq: finalPointer.seq,
       headHash: finalPointer.hash,
-      envelopes: [...replayed, ...appended],
+      envelopes: [...replayed, ...midBatchReplayed, ...appended],
       published,
     };
   }
@@ -13743,7 +13810,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
                 t.turn_id AS turn_id,
                 t.opened_at AS opened_at,
                 t.closed_at AS closed_at,
-                COUNT(DISTINCT CASE WHEN m.status != 'completed' THEN m.message_id END) AS streaming_messages,
+                COUNT(DISTINCT CASE WHEN m.status NOT IN ('completed', 'failed') THEN m.message_id END) AS streaming_messages,
                 COUNT(DISTINCT CASE WHEN i.status NOT IN ('completed', 'failed', 'cancelled', 'abandoned') THEN i.invocation_id END) AS nonterminal_invocations,
                 COUNT(DISTINCT e.envelope_id) AS duplicate_open_events
          FROM trajectory_turns t

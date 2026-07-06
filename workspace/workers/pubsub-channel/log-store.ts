@@ -186,6 +186,19 @@ export class ChannelLog {
     return envelope != null;
   }
 
+  async hasEnvelopes(envelopeIds: string[]): Promise<Set<string>> {
+    const uniqueIds = Array.from(
+      new Set(envelopeIds.filter((id) => typeof id === "string" && id.length > 0))
+    );
+    if (uniqueIds.length === 0) return new Set();
+    const present = await this.gad.call<string[]>("hasLogEvents", {
+      logId: this.channelId,
+      head: CHANNEL_LOG_HEAD,
+      envelopeIds: uniqueIds,
+    });
+    return new Set(present);
+  }
+
   async getEventByEnvelopeId(envelopeId: string): Promise<ChannelEvent | null> {
     const envelope = await this.gad.call<LogEnvelope | null>("getLogEvent", {
       logId: this.channelId,

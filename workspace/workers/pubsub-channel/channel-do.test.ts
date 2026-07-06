@@ -705,6 +705,182 @@ describe("PubSubChannel", () => {
     );
   });
 
+  it("reports channel-scoped target absence for method calls to participants outside the live roster", async () => {
+    const { instance } = await createGadBackedChannel();
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-outside-channel";
+
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+    await instance.callMethod(
+      "panel:user",
+      targetPid,
+      "debug-call",
+      "getDebugState",
+      {},
+      { invocationId: "debug-invocation", transportCallId: "debug-call" }
+    );
+
+    const replay = await instance.getReplayAfter(0);
+    const events = replay.logEvents
+      .filter((event) => event.type === AGENTIC_EVENT_PAYLOAD_KIND)
+      .map((event) => event.payload);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "invocation.failed",
+          causality: { invocationId: "debug-invocation", transportCallId: "debug-call" },
+          payload: expect.objectContaining({
+            error: expect.objectContaining({
+              error: expect.stringContaining(
+                "is not joined to channel channel-1; chat.callMethod is channel-scoped"
+              ),
+            }),
+            terminalReasonCode: "method_failed",
+          }),
+        }),
+      ])
+    );
+  });
+
+  it("admin-inspects a DO-backed agent debug method without requiring a live roster row", async () => {
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-recently-active";
+    const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
+    const { instance } = await createGadBackedChannel({
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "workers.resolveDurableObject") {
+          return {
+            kind: "durable-object",
+            source: "workers/agent-worker",
+            className: "AiChatWorker",
+            objectKey: "agent-recently-active",
+            targetId: targetPid,
+          };
+        }
+        if (target === targetPid && method === "onMethodCall") {
+          rpcCalls.push({ target, method, args });
+          return { result: { loops: { "channel-1": { turnStatus: "idle" } } } };
+        }
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "server:test", "server");
+    await expect(instance.adminInspectAgent(targetPid, "getDebugState")).resolves.toMatchObject({
+      participantId: targetPid,
+      channelId: "channel-1",
+      methodName: "getDebugState",
+      result: { loops: { "channel-1": { turnStatus: "idle" } } },
+      roster: { present: false },
+    });
+    expect(rpcCalls).toEqual([
+      {
+        target: targetPid,
+        method: "onMethodCall",
+        args: ["channel-1", expect.stringMatching(/^admin-inspect:/u), "getDebugState", {}],
+      },
+    ]);
+  });
+
+  it("allows non-privileged callers to inspect standard read-only agent debug methods after approval", async () => {
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-recently-active";
+    const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
+    const { instance } = await createGadBackedChannel({
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "userlandApproval.request") {
+          rpcCalls.push({ target, method, args });
+          return { kind: "choice", choice: "allow" };
+        }
+        if (target === "main" && method === "workers.resolveDurableObject") {
+          return {
+            kind: "durable-object",
+            source: "workers/agent-worker",
+            className: "AiChatWorker",
+            objectKey: "agent-recently-active",
+            targetId: targetPid,
+          };
+        }
+        if (target === targetPid && method === "onMethodCall") {
+          rpcCalls.push({ target, method, args });
+          return { result: { settings: { model: "test:model" } } };
+        }
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "do:vibestudio/internal:EvalDO:agent-eval", "do");
+    await expect(instance.inspectAgent(targetPid, "getAgentSettings")).resolves.toMatchObject({
+      participantId: targetPid,
+      channelId: "channel-1",
+      methodName: "getAgentSettings",
+      result: { settings: { model: "test:model" } },
+      roster: { present: false },
+    });
+    expect(rpcCalls).toEqual([
+      {
+        target: "main",
+        method: "userlandApproval.request",
+        args: [
+          expect.objectContaining({
+            subject: expect.objectContaining({
+              id: expect.stringMatching(/^channel\.inspectAgent:/u),
+            }),
+            title: "Inspect agent debug data",
+            details: expect.arrayContaining([
+              { label: "Caller", value: "do do:vibestudio/internal:EvalDO:agent-eval" },
+              { label: "Agent", value: targetPid },
+              { label: "Method", value: "getAgentSettings" },
+            ]),
+          }),
+        ],
+      },
+      {
+        target: targetPid,
+        method: "onMethodCall",
+        args: ["channel-1", expect.stringMatching(/^admin-inspect:/u), "getAgentSettings", {}],
+      },
+    ]);
+  });
+
+  it("denies non-privileged agent inspection when approval is denied", async () => {
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-recently-active";
+    const rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
+    const { instance } = await createGadBackedChannel({
+      rpcCall: (target, method, args) => {
+        if (target === "main" && method === "userlandApproval.request") {
+          rpcCalls.push({ target, method, args });
+          return { kind: "choice", choice: "deny" };
+        }
+        if (target === targetPid && method === "onMethodCall") {
+          rpcCalls.push({ target, method, args });
+          return { result: { settings: { model: "test:model" } } };
+        }
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "panel:user", "panel");
+    await expect(instance.inspectAgent(targetPid, "getAgentSettings")).rejects.toThrow(
+      /approval denied/u
+    );
+    expect(rpcCalls).toHaveLength(1);
+    expect(rpcCalls[0]).toMatchObject({
+      target: "main",
+      method: "userlandApproval.request",
+    });
+  });
+
+  it("limits admin agent inspection to standard read-only debug methods", async () => {
+    const { instance } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "server:test", "server");
+    await expect(
+      instance.adminInspectAgent(
+        "do:workers/agent-worker:AiChatWorker:agent-recently-active",
+        "pause"
+      )
+    ).rejects.toThrow(/unsupported method pause/u);
+  });
+
   it("uses GAD as the durable channel log backend without changing replay shape", async () => {
     const { instance, sql } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:user", "panel");
@@ -2479,6 +2655,129 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       expect.arrayContaining(["terminal:call-settle", "terminal:call-keep"])
     );
     expect(sql.exec(`SELECT COUNT(*) AS cnt FROM pending_calls`).toArray()[0]?.["cnt"]).toBe(0);
+  });
+
+  it("does not redeliver a stale pending feedback call after the user already answered", async () => {
+    const emitted: unknown[] = [];
+    let countRedeliveryTerminalProbes = false;
+    let redeliveryTerminalProbeCount = 0;
+    let redeliveryFullLogReadCount = 0;
+    let redeliveryBatchProbeCount = 0;
+    let sawRedeliveryBatchProbe = false;
+    const { instance, sql } = await createGadBackedChannel({
+      emitted,
+      rpcCall: (_target, method, args) => {
+        const firstArg = args[0] as { envelopeId?: unknown } | undefined;
+        if (
+          countRedeliveryTerminalProbes &&
+          method === "getLogEvent" &&
+          firstArg?.envelopeId === "terminal:call-feedback"
+        ) {
+          redeliveryTerminalProbeCount += 1;
+        }
+        if (countRedeliveryTerminalProbes && sawRedeliveryBatchProbe && method === "readLog") {
+          redeliveryFullLogReadCount += 1;
+        }
+        if (countRedeliveryTerminalProbes && method === "hasLogEvents") {
+          redeliveryBatchProbeCount += 1;
+          sawRedeliveryBatchProbe = true;
+        }
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "agent:caller", "worker");
+    await instance.subscribe("agent:caller", {
+      contextId: "ctx-1",
+      name: "Agent",
+      type: "agent",
+    });
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", {
+      contextId: "ctx-1",
+      name: "User",
+      type: "panel",
+      __participantSessionId: "session-1",
+    });
+
+    setRpcCaller(instance, "agent:caller", "worker");
+    await instance.callMethod(
+      "agent:caller",
+      "panel:user",
+      "call-feedback",
+      "feedback_form",
+      { title: "Continue?" },
+      { invocationId: "inv-feedback", transportCallId: "call-feedback", turnId: "turn-feedback" }
+    );
+
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.submitMethodResult(
+      "panel:user",
+      "call-feedback",
+      { type: "submit", value: { ok: true } },
+      false,
+      { invocationId: "inv-feedback", turnId: "turn-feedback" }
+    );
+
+    // Simulate a crash/old-cache state: the durable terminal exists, but the
+    // declared pending_calls cache still contains the answered feedback call.
+    sql.exec(
+      `INSERT INTO pending_calls (transport_call_id, invocation_id, turn_id, caller_id,
+        target_id, method, args, created_at, deadline_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      "call-feedback",
+      "inv-feedback",
+      "turn-feedback",
+      "agent:caller",
+      "panel:user",
+      "feedback_form",
+      JSON.stringify({ title: "Continue?" }),
+      Date.now() - 60_000,
+      null
+    );
+    emitted.length = 0;
+    countRedeliveryTerminalProbes = true;
+
+    await instance.subscribe("panel:user", {
+      contextId: "ctx-1",
+      name: "User",
+      type: "panel",
+      __participantSessionId: "session-2",
+    });
+    countRedeliveryTerminalProbes = false;
+    await Promise.resolve();
+
+    const redeliveredFeedback = emitted.filter((payload) => {
+      const signal = payload as {
+        message?: {
+          kind?: string;
+          payload?: {
+            kind?: string;
+            causality?: { transportCallId?: string };
+            payload?: { name?: string };
+          };
+        };
+      };
+      return (
+        signal.message?.kind === "signal" &&
+        signal.message.payload?.kind === "invocation.started" &&
+        signal.message.payload.causality?.transportCallId === "call-feedback" &&
+        signal.message.payload.payload?.name === "feedback_form"
+      );
+    });
+
+    expect(redeliveredFeedback).toHaveLength(0);
+    expect(
+      sql
+        .exec(
+          `SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`,
+          "call-feedback"
+        )
+        .toArray()
+    ).toHaveLength(0);
+    expect(redeliveryTerminalProbeCount).toBe(0);
+    expect(redeliveryFullLogReadCount).toBe(0);
+    expect(redeliveryBatchProbeCount).toBe(1);
   });
 
   it("does not busy-loop the alarm on a long-running pending call (CH-4)", async () => {
