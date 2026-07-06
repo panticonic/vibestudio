@@ -460,6 +460,8 @@ export interface ChatContextValue {
   onReloadPanel?: (panelId: string) => void;
   /** Start a fresh conversation (surfaced for the command palette). */
   onNewConversation?: () => void;
+  /** Launch Claude Code as a linked agent in this conversation (§4.3). */
+  onOpenClaudeCode?: (channelId: string) => Promise<void> | void;
 
   // Tool approval (optional)
   toolApproval?: ToolApprovalProps;

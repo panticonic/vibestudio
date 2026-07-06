@@ -573,6 +573,7 @@ async function makeGateProbe(): Promise<EvalGateProbe> {
 class SubagentSpawnProbe extends TestVessel {
   rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
   gadLogHead: Record<string, unknown> | null = null;
+  failClaudeLaunch = false;
   readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {});
   protected override async ensurePromptArtifacts(): Promise<void> {}
   protected override get driver(): AgentLoopDriver {
@@ -612,6 +613,41 @@ class SubagentSpawnProbe extends TestVessel {
           const input = args[0] as { atSeq?: number };
           return { forkSeq: input.atSeq ?? 0, forkHash: "fork-hash", inherited: 0 };
         }
+        if (target === "main" && method === "extensions.invoke") {
+          const [ext, extMethod] = args as [string, string, unknown[]];
+          if (
+            (ext === "@workspace-extensions/claude-code" ||
+              ext === "@workspace-extensions/codex") &&
+            extMethod === "launchSubagent"
+          ) {
+            if (this.failClaudeLaunch) throw new Error("launchSubagent boom");
+            const isCodex = ext === "@workspace-extensions/codex";
+            return {
+              entityId: isCodex ? "session:codex-1" : "session:cc-1",
+              contextId: "ctx-child",
+              channelId: isCodex ? "task-inv-codex" : "task-inv-cc",
+              vesselRef: `do:workers/linked-agent:LinkedAgentWorker:linked:${
+                isCodex ? "session-codex-1" : "session-cc-1"
+              }`,
+              vesselEntityId: `do:workers/linked-agent:LinkedAgentWorker:linked:${
+                isCodex ? "session-codex-1" : "session-cc-1"
+              }`,
+              vesselParticipantId: "participant-linked",
+              launchId: isCodex ? "codex:inv-codex" : "claude-code:inv-cc",
+              pid: 4242,
+              logPath: `/state/agent-launch/${
+                isCodex ? "session:codex-1" : "session:cc-1"
+              }/headless.log`,
+            };
+          }
+          if (
+            (ext === "@workspace-extensions/claude-code" ||
+              ext === "@workspace-extensions/codex") &&
+            extMethod === "release"
+          ) {
+            return { released: true };
+          }
+        }
         return { ok: true, participantId: "participant-child" };
       },
     } as unknown as DeferrableRpcClient;
@@ -642,6 +678,8 @@ class SubagentSpawnProbe extends TestVessel {
       merge: null,
       startedAt: now,
       lastActivityAt: row.lastActivityAt ?? now,
+      agentKind: "pi",
+      externalSessionEntityId: null,
     });
   }
   async sweepAbandonedForTest(now: number) {
@@ -654,6 +692,13 @@ class SubagentSpawnProbe extends TestVessel {
     if (!run) throw new Error(`missing run ${runId}`);
     this.callerIdForTest = run.childEntityId;
     await this.onSubagentComplete({ runId, report, outcome });
+  }
+  async closeSubagentForTest(runId: string, discard = false) {
+    return (
+      this as unknown as {
+        closeSubagent(runId: string, discard: boolean): Promise<unknown>;
+      }
+    ).closeSubagent(runId, discard);
   }
 }
 
@@ -1073,6 +1118,163 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
 
     expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
     expect(probe.handleIncomingSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("agentKind:'claude-code' prepares the linked vessel and headless-launches via the supervisor", async () => {
+    const probe = await makeSubagentSpawnProbe();
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-cc", {
+      mode: "fresh",
+      agentKind: "claude-code",
+      label: "cc audit",
+      task: "audit the repo",
+      config: { model: "opus", effort: "high" },
+    });
+
+    expect(out).toMatchObject({
+      isError: false,
+      result: {
+        details: {
+          runId: "inv-cc",
+          status: "running",
+          agentKind: "claude-code",
+          taskChannelId: "task-inv-cc",
+          contextId: "ctx-child",
+        },
+      },
+    });
+
+    // Run row records the claude-code kind, the linked vessel as childEntityId
+    // (its complete-caller identity), and the external session entity to release.
+    expect(probe.subagentRunForTest("inv-cc")).toMatchObject({
+      runId: "inv-cc",
+      status: "running",
+      agentKind: "claude-code",
+      childEntityId: "do:workers/linked-agent:LinkedAgentWorker:linked:session-cc-1",
+      childParticipantId: "participant-linked",
+      externalSessionEntityId: "session:cc-1",
+      childContextId: "ctx-child",
+    });
+
+    // The extension's subagent launch was invoked on the task channel WITH
+    // subagent duty and the task; argv/cwd/env stay private to the extension.
+    const launchCall = probe.rpcCalls.find(
+      (c) => c.method === "extensions.invoke" && (c.args[1] as string) === "launchSubagent"
+    );
+    expect(launchCall).toBeDefined();
+    expect(launchCall!.args[0]).toBe("@workspace-extensions/claude-code");
+    const launchArg = (launchCall!.args[2] as unknown[])[0] as {
+      channelId: string;
+      task: string;
+      options?: Record<string, unknown>;
+      subagent: { runId: string; parentRef: string; parentChannelId: string; depth: number };
+    };
+    expect(launchArg.channelId).toBe("task-inv-cc");
+    expect(launchArg.task).toBe("audit the repo");
+    // The spawn `config` reaches the launcher as CLI options (the extension
+    // whitelists what its CLI supports).
+    expect(launchArg.options).toEqual({ model: "opus", effort: "high" });
+    expect(launchArg.subagent).toMatchObject({
+      runId: "inv-cc",
+      parentChannelId: CHANNEL,
+      depth: 1,
+    });
+
+    // The started card + task seed still flow through the shared pipeline.
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-started:inv-cc")
+    ).toBe(true);
+    expect(
+      probe.channelStub.published.some((p) => p.idempotencyKey === "subagent-seed:inv-cc")
+    ).toBe(true);
+  });
+
+  it("agentKind names an external launcher extension without a vessel branch", async () => {
+    const probe = await makeSubagentSpawnProbe();
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-codex", {
+      mode: "fresh",
+      agentKind: "codex",
+      label: "codex audit",
+      task: "audit the repo",
+    });
+
+    expect(out).toMatchObject({
+      isError: false,
+      result: {
+        details: {
+          runId: "inv-codex",
+          status: "running",
+          agentKind: "codex",
+          taskChannelId: "task-inv-codex",
+          contextId: "ctx-child",
+        },
+      },
+    });
+
+    const launchCall = probe.rpcCalls.find(
+      (c) => c.method === "extensions.invoke" && (c.args[1] as string) === "launchSubagent"
+    );
+    expect(launchCall!.args[0]).toBe("@workspace-extensions/codex");
+
+    await probe.closeSubagentForTest("inv-codex");
+    const releaseCall = probe.rpcCalls.find(
+      (c) =>
+        c.method === "extensions.invoke" &&
+        c.args[0] === "@workspace-extensions/codex" &&
+        c.args[1] === "release"
+    );
+    expect(releaseCall).toBeDefined();
+    expect((releaseCall!.args[2] as unknown[])[0]).toMatchObject({ entityId: "session:codex-1" });
+  });
+
+  it("tears down the child context when the Claude extension launch fails during setup", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.failClaudeLaunch = true;
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-cc", {
+      mode: "fresh",
+      agentKind: "claude-code",
+      task: "audit the repo",
+    });
+
+    expect(out).toMatchObject({ isError: true });
+    // The run row (recorded before prepare) is reclaimed and the child context torn down.
+    expect(probe.subagentRunForTest("inv-cc")).toBeNull();
+    expect(
+      probe.rpcCalls.some(
+        (c) =>
+          c.method === "runtime.destroyContext" &&
+          JSON.stringify(c.args).includes("ctx-child")
+      )
+    ).toBe(true);
+  });
+
+  it("closing a claude-code subagent releases its extension-owned launch", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-cc", {
+      mode: "fresh",
+      agentKind: "claude-code",
+      task: "audit the repo",
+    });
+
+    await probe.closeSubagentForTest("inv-cc");
+
+    const releaseCall = probe.rpcCalls.find(
+      (c) => c.method === "extensions.invoke" && (c.args[1] as string) === "release"
+    );
+    expect(releaseCall).toBeDefined();
+    expect(releaseCall!.args[0]).toBe("@workspace-extensions/claude-code");
+    expect((releaseCall!.args[2] as unknown[])[0]).toMatchObject({ entityId: "session:cc-1" });
+    // Context teardown still runs.
+    expect(
+      probe.rpcCalls.some(
+        (c) =>
+          c.method === "runtime.destroyContext" &&
+          JSON.stringify(c.args).includes("ctx-child")
+      )
+    ).toBe(true);
+    expect(probe.subagentRunForTest("inv-cc")).toBeNull();
   });
 });
 

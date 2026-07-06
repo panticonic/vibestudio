@@ -1,7 +1,4 @@
-import {
-  AGENTIC_PROTOCOL_VERSION,
-  type AgenticEvent,
-} from "@workspace/agentic-protocol";
+import { AGENTIC_PROTOCOL_VERSION, type AgenticEvent } from "@workspace/agentic-protocol";
 import {
   toSubscriptionConfig,
   type AgentSubscriptionConfig,
@@ -36,6 +33,7 @@ export interface AgentEntityCreateInput {
   ref?: string;
   config?: AgentSubscriptionConfig | Record<string, unknown>;
   stateArgs?: Record<string, unknown>;
+  agentBinding?: { entityId: string; channelId: string };
 }
 
 export interface AgentChannelSubscriptionInput {
@@ -112,6 +110,7 @@ export function buildAgentEntityCreateSpec(input: AgentEntityCreateInput): Recor
     ...(input.ref ? { ref: input.ref } : {}),
     ...(input.contextId ? { contextId: input.contextId } : {}),
     ...(Object.keys(stateArgs).length > 0 ? { stateArgs } : {}),
+    ...(input.agentBinding ? { agentBinding: input.agentBinding } : {}),
   };
 }
 
@@ -124,10 +123,7 @@ export async function createAgentEntity(
   ]);
 }
 
-export async function retireAgentEntity(
-  rpc: AgentLaunchRpc,
-  id: string
-): Promise<void> {
+export async function retireAgentEntity(rpc: AgentLaunchRpc, id: string): Promise<void> {
   await rpc.call("main", "runtime.retireEntity", [{ id }]);
 }
 
@@ -151,15 +147,19 @@ export async function initAgentFromTrajectoryFork(
   handleOrTargetId: AgentEntityHandle | string,
   input: AgentTrajectoryForkInput
 ): Promise<AgentSubscriptionResult> {
-  return rpc.call<AgentSubscriptionResult>(targetIdFor(handleOrTargetId), "initFromTrajectoryFork", [
-    {
-      parentLogId: input.parentLogId,
-      seq: input.seq,
-      taskChannelId: input.taskChannelId,
-      contextId: input.contextId,
-      config: toSubscriptionConfig(input.config),
-    },
-  ]);
+  return rpc.call<AgentSubscriptionResult>(
+    targetIdFor(handleOrTargetId),
+    "initFromTrajectoryFork",
+    [
+      {
+        parentLogId: input.parentLogId,
+        seq: input.seq,
+        taskChannelId: input.taskChannelId,
+        contextId: input.contextId,
+        config: toSubscriptionConfig(input.config),
+      },
+    ]
+  );
 }
 
 export async function launchAgentIntoChannel(

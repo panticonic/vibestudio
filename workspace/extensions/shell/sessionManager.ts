@@ -24,6 +24,7 @@ interface Session {
   ownerKind: string;
   label: string;
   command: { argv: string[]; cwd: string };
+  contextId?: string;
   gitBranch?: string;
   pid: number;
   cols: number;
@@ -54,6 +55,19 @@ export interface SessionManagerOptions {
   janitorIntervalMs?: number;
   exitedSessionTtlMs?: number;
   watchAllHeartbeatMs?: number;
+  /**
+   * Resolve a session's `detectedAgent` from its argv. Injected by the shell
+   * extension so detection flows through the launch-adapter registry (§4.3)
+   * rather than a hardcoded table. Omitted ⇒ no agent tagging.
+   */
+  detectAgent?: (argv: string[]) => { kind: string; title?: string } | undefined;
+  /**
+   * Resolve a context-scoped session's branch display (the context head +
+   * dirty indicator via `vcs.contextStatus`, §4.1). Injected by the shell
+   * extension because it needs RPC. Non-context sessions keep the `.git`
+   * branch probe (`readGitBranch`). Best-effort — a rejection yields no branch.
+   */
+  resolveContextBranch?: (contextId: string) => Promise<string | undefined>;
 }
 
 const SCROLLBACK_BYTES = 256 * 1024;
@@ -92,10 +106,14 @@ export class SessionManager {
   private janitor: NodeJS.Timeout;
   private exitedSessionTtlMs: number;
   private watchAllHeartbeatMs: number;
+  private readonly detectAgent?: (argv: string[]) => { kind: string; title?: string } | undefined;
+  private readonly resolveContextBranch?: (contextId: string) => Promise<string | undefined>;
 
   constructor(private readonly hooks: SessionManagerHooks = {}, opts: SessionManagerOptions = {}) {
     this.exitedSessionTtlMs = opts.exitedSessionTtlMs ?? EXITED_SESSION_TTL_MS;
     this.watchAllHeartbeatMs = opts.watchAllHeartbeatMs ?? WATCH_ALL_HEARTBEAT_MS;
+    this.detectAgent = opts.detectAgent;
+    this.resolveContextBranch = opts.resolveContextBranch;
     this.janitor = nodeSetInterval(() => this.sweepExitedSessions(), opts.janitorIntervalMs ?? JANITOR_INTERVAL_MS);
     this.janitor.unref?.();
   }
@@ -104,7 +122,7 @@ export class SessionManager {
     return !!this.pty;
   }
 
-  open(req: Omit<OpenRequest, "cwd" | "env"> & { cwd: string; env: NodeJS.ProcessEnv }, owner: { callerId: string; callerKind: string }): { sessionId: string } {
+  open(req: Omit<OpenRequest, "cwd" | "env"> & { cwd: string; env: NodeJS.ProcessEnv; contextId?: string }, owner: { callerId: string; callerKind: string }): { sessionId: string } {
     const id = randomUUID();
     const command = req.command ?? process.env["SHELL"] ?? "/bin/bash";
     const args = req.args ?? [];
@@ -115,6 +133,7 @@ export class SessionManager {
       ownerKind: owner.callerKind,
       label,
       command: { argv: [command, ...args], cwd: req.cwd },
+      ...(req.contextId ? { contextId: req.contextId } : {}),
       pid: -1,
       cols: req.cols,
       rows: req.rows,
@@ -171,6 +190,7 @@ export class SessionManager {
       ownerCallerId: session.ownerCallerId,
       label: session.label,
       command: session.command,
+      ...(session.contextId ? { contextId: session.contextId } : {}),
       ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
       pid: session.pid,
       pgid: session.pid,
@@ -186,7 +206,7 @@ export class SessionManager {
       detectedUrls: session.detection.detectedUrls,
       bytesOut: session.bytesOut,
       meta: session.meta,
-      detectedAgent: detectAgent(session.command.argv),
+      detectedAgent: this.detectAgent?.(session.command.argv),
     };
   }
 
@@ -217,6 +237,10 @@ export class SessionManager {
     return this.sessions.get(sessionId)?.command.cwd;
   }
 
+  contextIdOf(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.contextId;
+  }
+
   setLabel(session: Session, label: string): void {
     session.label = label.slice(0, 80);
     this.emitSnapshot(session);
@@ -234,6 +258,7 @@ export class SessionManager {
       cols: req.cols ?? session.cols,
       rows: req.rows ?? session.rows,
       label: session.label,
+      ...(session.contextId ? { contextId: session.contextId } : {}),
     }, { callerId: session.ownerCallerId, callerKind: session.ownerKind });
   }
 
@@ -416,7 +441,13 @@ export class SessionManager {
   }
 
   private refreshGitBranch(session: Session): void {
-    void readGitBranch(session.command.cwd).then((branch) => {
+    // Context sessions live in a VCS context folder, not a `.git` checkout —
+    // their branch display is the context head + dirty indicator resolved over
+    // `vcs.contextStatus` (§4.1). Only non-context sessions probe `.git`.
+    const probe = session.contextId && this.resolveContextBranch
+      ? this.resolveContextBranch(session.contextId)
+      : readGitBranch(session.command.cwd);
+    void probe.then((branch) => {
       if (!branch) return;
       const current = this.sessions.get(session.id);
       if (current !== session) return;
@@ -547,17 +578,6 @@ export class SessionManager {
       throw Object.assign(new Error("Session metadata exceeds 16KB"), { code: "E2BIG" });
     }
   }
-}
-
-function detectAgent(argv: string[]): SessionInfo["detectedAgent"] {
-  const joined = argv.join(" ");
-  if (/\bclaude(-code)?\b/.test(joined)) return { kind: "claude-code", title: "Claude Code" };
-  if (/\bcodex\b/.test(joined)) return { kind: "codex", title: "Codex" };
-  if (/\baider\b/.test(joined)) return { kind: "aider", title: "Aider" };
-  if (/\bopencode\b/.test(joined)) return { kind: "opencode", title: "OpenCode" };
-  if (/\b(vitest|jest|pnpm test)\b/.test(joined)) return { kind: "test-runner", title: "Tests" };
-  if (/\b(vite|next dev|tsx watch)\b/.test(joined)) return { kind: "dev-server", title: "Dev server" };
-  return undefined;
 }
 
 function readGitBranch(cwd: string): Promise<string | undefined> {

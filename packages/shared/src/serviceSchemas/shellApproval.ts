@@ -56,6 +56,51 @@ export const shellApprovalMethods = defineServiceMethods({
     access: RESOLVE_ACCESS,
     examples: [{ args: ["approval-123", "dismiss"] }],
   },
+  resolveExternalAgent: {
+    description:
+      "Record the user's allow/deny verdict on a pending external-agent tool-use approval, resolving the relayed permission request.",
+    args: z.tuple([z.string(), z.enum(["allow", "deny"])]),
+    returns: z.void(),
+    access: RESOLVE_ACCESS,
+    examples: [{ args: ["approval-123", "allow"] }],
+  },
+  resolveExternalAgentByRequest: {
+    description:
+      "Record the user's allow/deny verdict on a pending external-agent approval matched by (channelId, requestId, resolveToken) rather than approvalId — the inline conversation card knows the requestId and opaque resolve token, not the internal approvalId. Records a real verdict (unlike the quiet settle-elsewhere path). Returns whether a matching pending approval was resolved.",
+    args: z.tuple([
+      z
+        .object({
+          channelId: z.string().min(1).max(200),
+          requestId: z
+            .string()
+            .min(1)
+            .max(200)
+            .regex(/^[A-Za-z0-9._:/-]+$/),
+          resolveToken: z
+            .string()
+            .min(16)
+            .max(200)
+            .regex(/^[A-Za-z0-9._:/-]+$/),
+        })
+        .strict(),
+      z.enum(["allow", "deny"]),
+    ]),
+    returns: z.object({ resolved: z.boolean() }),
+    // Method-level gate: the inline approve/deny card lives in the chat panel, so
+    // `panel` is admitted here (the service-level policy is shell/app/server for
+    // the trusted approval bar). Resolution is scoped to
+    // (channelId, requestId, resolveToken).
+    policy: { allowed: ["panel", "shell", "app", "server"] },
+    access: RESOLVE_ACCESS,
+    examples: [
+      {
+        args: [
+          { channelId: "channel-1", requestId: "req-1", resolveToken: "token-1234567890" },
+          "allow",
+        ],
+      },
+    ],
+  },
   submitClientConfig: {
     description:
       "Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request.",

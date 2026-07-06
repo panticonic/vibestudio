@@ -6,12 +6,14 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
 import type { DeviceAuthStore } from "./deviceAuthStore.js";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { AuditLog } from "@vibestudio/shared/credentials/audit";
 import type { PendingUnitBatchApproval } from "@vibestudio/shared/approvals";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
+  agentCallerId,
   connectionInfoResponse,
   createPairingInviteResponse,
   responseForCredential,
@@ -61,6 +63,11 @@ const RevokeDeviceBodySchema = z.object({
   deviceId: z.string().min(1).max(128),
 });
 
+const RefreshAgentBodySchema = z.object({
+  // The full presentable credential: `agent:<agentId>:<secret>`.
+  agentToken: z.string().min(8).max(512),
+});
+
 async function readJson(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -98,7 +105,31 @@ export function createPairingRedeemer(deps: {
   tokenManager: TokenManager;
 }) {
   const REFRESH_PREFIX = "refresh:";
+  const AGENT_PREFIX = "agent:";
   return (token: string, ctx: { clientLabel?: string; clientPlatform?: string }) => {
+    if (token.startsWith(AGENT_PREFIX)) {
+      // `agent:<agentId>:<secret>` — an entity-scoped agent credential (§3.2).
+      // Redeems to the `agent:<entityId>` principal, kind `agent`, and carries a
+      // host-verified binding onto the connection (stamped by handleAuth, never
+      // from client input).
+      const parsed = parseAgentToken(token);
+      if (!parsed) return null;
+      const binding = deps.deviceAuthStore.validateAgentToken(parsed.agentId, parsed.secret);
+      if (!binding) return null;
+      const callerId = agentCallerId(binding.entityId);
+      const agentBinding = {
+        entityId: binding.entityId,
+        contextId: binding.contextId,
+        channelId: binding.channelId,
+        agentId: binding.agentId,
+      };
+      deps.tokenManager.ensureToken(callerId, "agent", { agentBinding });
+      return {
+        callerId,
+        callerKind: "agent" as const,
+        agentBinding,
+      };
+    }
     if (token.startsWith(REFRESH_PREFIX)) {
       const rest = token.slice(REFRESH_PREFIX.length);
       const sep = rest.indexOf(":");
@@ -134,6 +165,19 @@ export function createPairingRedeemer(deps: {
   };
 }
 
+/** Parse a presentable agent credential `agent:<agentId>:<secret>`. */
+function parseAgentToken(token: string): { agentId: string; secret: string } | null {
+  const AGENT_PREFIX = "agent:";
+  if (!token.startsWith(AGENT_PREFIX)) return null;
+  const rest = token.slice(AGENT_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep <= 0) return null;
+  const agentId = rest.slice(0, sep);
+  const secret = rest.slice(sep + 1);
+  if (!secret) return null;
+  return { agentId, secret };
+}
+
 export function createAuthService(deps: {
   tokenManager: TokenManager;
   deviceAuthStore: DeviceAuthStore;
@@ -162,6 +206,7 @@ export function createAuthService(deps: {
     source?: string | null
   ) => string | null | Promise<string | null>;
   retireMobileAppPrincipal?: (deviceId: string) => void;
+  resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
 }): ServiceWithRoutes {
   const capabilityAuthorizer =
     deps.capabilityAuthorizer ??
@@ -190,7 +235,11 @@ export function createAuthService(deps: {
         return deps.connectionGrants.grant(principalId, ctx.caller.runtime.id);
       }
       if (method === "getConnectionInfo") {
-        return connectionInfoResponse(deps);
+        return {
+          ...connectionInfoResponse(deps),
+          callerKind: ctx.caller.runtime.kind,
+          ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
+        };
       }
       if (method === "createPairingInvite") {
         capabilityAuthorizer.require(ctx.caller, "connection-management");
@@ -203,6 +252,65 @@ export function createAuthService(deps: {
           method: "rpc",
         });
         return response;
+      }
+      async function resolveAgentCredentialTarget(
+        methodName: string,
+        entityId: string
+      ): Promise<EntityRecord> {
+        if (!deps.resolveRuntimeEntity) {
+          throw new Error(`auth.${methodName} requires runtime entity resolution`);
+        }
+        const record = await deps.resolveRuntimeEntity(entityId);
+        if (!record || record.status !== "active") {
+          throw new Error(`auth.${methodName} target entity is not active: ${entityId}`);
+        }
+        if (record.kind !== "session") {
+          throw new Error(`auth.${methodName} target entity must be a session`);
+        }
+        return record;
+      }
+
+      function assertAgentCredentialOwner(
+        methodName: string,
+        callerId: string,
+        record: EntityRecord
+      ): void {
+        if (record.parentId !== callerId && record.id !== callerId) {
+          throw new Error(`auth.${methodName} caller does not own target entity ${record.id}`);
+        }
+      }
+
+      if (method === "mintAgentCredential") {
+        const input = args[0] as {
+          entityId: string;
+          channelId: string;
+          ttlMs?: number;
+          scopes?: string[];
+        };
+        const record = await resolveAgentCredentialTarget("mintAgentCredential", input.entityId);
+        if (ctx.caller.runtime.kind !== "server") {
+          assertAgentCredentialOwner("mintAgentCredential", ctx.caller.runtime.id, record);
+        }
+        return deps.deviceAuthStore.mintAgentCredential({
+          ...input,
+          contextId: record.contextId,
+        });
+      }
+      if (method === "revokeAgentCredential") {
+        const agentId = args[0] as string;
+        const existing = deps.deviceAuthStore.getAgentCredential(agentId);
+        if (!existing) return { revoked: false };
+        if (existing.revokedAt) return { revoked: false };
+        const record = await resolveAgentCredentialTarget(
+          "revokeAgentCredential",
+          existing.entityId
+        );
+        if (ctx.caller.runtime.kind !== "server") {
+          assertAgentCredentialOwner("revokeAgentCredential", ctx.caller.runtime.id, record);
+        }
+        const revoked = deps.deviceAuthStore.revokeAgentCredential(agentId);
+        if (revoked) deps.tokenManager.revokeToken(agentCallerId(existing.entityId));
+        return { revoked };
       }
       if (method === "listDevices") {
         return {
@@ -316,6 +424,55 @@ export function createAuthService(deps: {
             callerId: shellCallerId(body.deviceId),
             deviceId: body.deviceId,
             label: device.label,
+            serverId: deps.deviceAuthStore.getServerId(),
+            serverBootId: deps.getServerBootId(),
+            workspaceId: deps.getWorkspaceId(),
+          });
+        } catch (error) {
+          sendAuthError(res, error, 401);
+        }
+      },
+    },
+    {
+      serviceName: "auth",
+      path: "/refresh-agent",
+      methods: ["POST"],
+      auth: "public",
+      // Mirror of /refresh-shell for entity-scoped agent credentials (§3.2):
+      // exchange an `agent:<agentId>:<secret>` credential for a short-lived
+      // caller (bearer) token so HTTP `POST /rpc` works with one auth model
+      // everywhere. The WS/WebRTC paths use the same credential directly via the
+      // redeemer; this route is the HTTP-only leg.
+      handler: async (req, res) => {
+        try {
+          const body = RefreshAgentBodySchema.parse(await readJson(req));
+          const parsed = parseAgentToken(body.agentToken);
+          const binding = parsed
+            ? deps.deviceAuthStore.validateAgentToken(parsed.agentId, parsed.secret)
+            : null;
+          if (!binding) {
+            sendJson(res, 401, {
+              error: "Invalid or expired agent credential",
+              code: "INVALID_AGENT_CREDENTIAL",
+            });
+            return;
+          }
+          const callerId = agentCallerId(binding.entityId);
+          const agentBinding = {
+            entityId: binding.entityId,
+            contextId: binding.contextId,
+            channelId: binding.channelId,
+            agentId: binding.agentId,
+          };
+          const token = deps.tokenManager.ensureToken(callerId, "agent", { agentBinding });
+          sendJson(res, 200, {
+            token,
+            callerId,
+            callerKind: "agent",
+            entityId: binding.entityId,
+            contextId: binding.contextId,
+            channelId: binding.channelId,
+            agentId: binding.agentId,
             serverId: deps.deviceAuthStore.getServerId(),
             serverBootId: deps.getServerBootId(),
             workspaceId: deps.getWorkspaceId(),

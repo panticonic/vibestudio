@@ -27,6 +27,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import { callerKindAllowedByPolicy } from "@vibestudio/shared/servicePolicy";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 
 const servicesDir = fileURLToPath(new URL(".", import.meta.url));
 const goldenPath = join(servicesDir, "__servicePolicyMatrix.golden.json");
@@ -142,6 +144,38 @@ describe("service policy matrix", () => {
     // Fix 2: the handler no longer re-gates caller kind; this per-method policy
     // is the SOLE gate. If someone widens/narrows it, this — and the snapshot — fail.
     expect(matrix["runtime"]?.methods["setTitle"]).toEqual(["app", "do", "panel", "worker"]);
+  });
+
+  // Invariant (docs/claude-code-channels-plan.md §3.1): the `agent` grant set
+  // must remain a SUBSET of what `do` can reach. Agent-authored code already
+  // executes as `do` inside the EvalDO, so `do` is the agent's real capability
+  // ceiling; keeping agent ⊆ do guarantees the direct-CLI path is never an
+  // escalation over the eval path. Computed against the REAL registered service
+  // definitions, accounting for the `do`→worker/panel widening rule in
+  // callerKindAllowedByPolicy (agent gets NO such widening).
+  it("every (service, method) reachable by `agent` is also reachable by `do` (agent ⊆ do)", async () => {
+    const matrix = await collectPolicyMatrix();
+    const violations: string[] = [];
+    let agentReachable = 0;
+    for (const [service, entry] of Object.entries(matrix)) {
+      for (const [method, methodAllowed] of Object.entries(entry.methods)) {
+        // Effective caller gate: the method policy when declared, else the
+        // service-level policy (exactly how checkServiceAccess resolves it).
+        const allowed = (methodAllowed ?? entry.service) as CallerKind[];
+        const agentOk = callerKindAllowedByPolicy("agent", allowed);
+        if (!agentOk) continue;
+        agentReachable += 1;
+        if (!callerKindAllowedByPolicy("do", allowed)) {
+          violations.push(`${service}.${method} [${allowed.join(", ")}]`);
+        }
+      }
+    }
+    // Guard against a vacuous pass: the grant set must be non-empty, so the
+    // subset assertion is actually exercising something.
+    expect(agentReachable, "no agent-reachable methods — grant sweep missing?").toBeGreaterThan(0);
+    expect(violations, `agent-reachable but not do-reachable:\n${violations.join("\n")}`).toEqual(
+      []
+    );
   });
 });
 

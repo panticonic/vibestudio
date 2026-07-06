@@ -291,7 +291,20 @@ export type ExtensionRpcSurface = Record<string, (...args: unknown[]) => Promise
 
 export interface ExtensionWorkspaceLike {
   /** Information about the active workspace. */
-  getInfo(): Promise<{ id: string; name: string; path: string; contextsPath: string }>;
+  getInfo(): Promise<{
+    id: string;
+    name: string;
+    path: string;
+    /** Absolute path to the workspace's persisted state directory. */
+    statePath: string;
+    contextsPath: string;
+  }>;
+  /**
+   * Materialize a context's working folder on the server host (idempotent) and
+   * return its absolute path. Lets a launch orchestrator confine a
+   * context-scoped session to a real VCS-branched working tree.
+   */
+  ensureContextFolder(contextId: string): Promise<{ dir: string }>;
 }
 
 export interface ExtensionNotificationsLike {

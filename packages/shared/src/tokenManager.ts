@@ -1,5 +1,15 @@
 import { randomBytes, timingSafeEqual } from "crypto";
-import type { CallerKind } from "./serviceDispatcher.js";
+import type { AgentBinding, CallerKind } from "./serviceDispatcher.js";
+
+export interface TokenEntry {
+  callerId: string;
+  callerKind: CallerKind;
+  agentBinding?: AgentBinding;
+}
+
+export interface TokenMetadata {
+  agentBinding?: AgentBinding;
+}
 
 /**
  * Constant-time string comparison.
@@ -30,11 +40,8 @@ export function constantTimeStringEqual(a: string, b: string): boolean {
  * to authenticate requests from panels/workers/shell.
  */
 export class TokenManager {
-  // token -> { callerId, callerKind }
-  private tokenToEntry = new Map<
-    string,
-    { callerId: string; callerKind: CallerKind }
-  >();
+  // token -> caller entry plus optional host-verified binding metadata.
+  private tokenToEntry = new Map<string, TokenEntry>();
   // callerId -> token
   private callerIdToToken = new Map<string, string>();
   // revocation listeners
@@ -45,7 +52,7 @@ export class TokenManager {
   /**
    * Create a new token for a caller. Throws if a token already exists for this callerId.
    */
-  createToken(callerId: string, callerKind: CallerKind): string {
+  createToken(callerId: string, callerKind: CallerKind, metadata?: TokenMetadata): string {
     if (callerKind === "panel") {
       throw new Error("Panel bearer tokens have been removed; use connection grants");
     }
@@ -54,7 +61,7 @@ export class TokenManager {
     }
 
     const token = randomBytes(32).toString("hex");
-    this.tokenToEntry.set(token, { callerId, callerKind });
+    this.tokenToEntry.set(token, { callerId, callerKind, ...metadata });
     this.callerIdToToken.set(callerId, token);
     return token;
   }
@@ -64,10 +71,16 @@ export class TokenManager {
    * If not, create a new one. Used by rebuild/restore paths where the token
    * may or may not have been revoked.
    */
-  ensureToken(callerId: string, callerKind: CallerKind): string {
+  ensureToken(callerId: string, callerKind: CallerKind, metadata?: TokenMetadata): string {
     const existing = this.callerIdToToken.get(callerId);
-    if (existing) return existing;
-    return this.createToken(callerId, callerKind);
+    if (existing) {
+      if (metadata) {
+        const entry = this.tokenToEntry.get(existing);
+        if (entry) this.tokenToEntry.set(existing, { ...entry, ...metadata });
+      }
+      return existing;
+    }
+    return this.createToken(callerId, callerKind, metadata);
   }
 
   /**
@@ -80,11 +93,16 @@ export class TokenManager {
    * to a different caller (collision; should be vanishingly rare with 256
    * bits of entropy, but we refuse silently rather than overwrite).
    */
-  registerExistingToken(token: string, callerId: string, callerKind: CallerKind): boolean {
+  registerExistingToken(
+    token: string,
+    callerId: string,
+    callerKind: CallerKind,
+    metadata?: TokenMetadata
+  ): boolean {
     if (callerKind === "panel") return false;
     if (this.callerIdToToken.has(callerId)) return false;
     if (this.tokenToEntry.has(token)) return false;
-    this.tokenToEntry.set(token, { callerId, callerKind });
+    this.tokenToEntry.set(token, { callerId, callerKind, ...metadata });
     this.callerIdToToken.set(callerId, token);
     return true;
   }
@@ -104,9 +122,7 @@ export class TokenManager {
    * Validate a bearer token.
    * Returns the entry { callerId, callerKind } if valid, null otherwise.
    */
-  validateToken(
-    token: string
-  ): { callerId: string; callerKind: CallerKind } | null {
+  validateToken(token: string): TokenEntry | null {
     return this.tokenToEntry.get(token) ?? null;
   }
 
@@ -185,5 +201,4 @@ export class TokenManager {
     if (typeof token !== "string" || token.length === 0) return false;
     return constantTimeStringEqual(token, this.adminToken);
   }
-
 }

@@ -61,6 +61,15 @@ export function shellCallerId(deviceId: string): string {
   return `shell:${deviceId}`;
 }
 
+/**
+ * Runtime principal id for an entity-scoped agent credential.
+ * One agent principal per entity, so
+ * all credentials minted for the same entity authenticate as the same caller id.
+ */
+export function agentCallerId(entityId: string): string {
+  return `agent:${entityId}`;
+}
+
 export function connectionInfoResponse(deps: {
   deviceAuthStore: DeviceAuthStore;
   getServerBootId: () => string;

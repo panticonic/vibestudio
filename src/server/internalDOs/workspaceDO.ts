@@ -17,6 +17,7 @@ import {
   canonicalEntityId,
   type EntityKind,
   type EntityRecord,
+  type RuntimeAgentBinding,
 } from "../../../packages/shared/src/runtime/entitySpec.js";
 import type {
   IndexablePanel,
@@ -32,6 +33,7 @@ interface DbEntityRow {
   class_name: string | null;
   key: string;
   state_args: string | null;
+  agent_binding: string | null;
   parent_id: string | null;
   created_at: number;
   status: "active" | "retired";
@@ -116,6 +118,7 @@ export interface EntityActivateInput {
   className?: string;
   key: string;
   stateArgs?: unknown;
+  agentBinding?: RuntimeAgentBinding;
   /** Launch parent (verified caller id) — see EntityRecord.parentId. */
   parentId?: string;
 }
@@ -267,7 +270,7 @@ function rowToHeartbeatRegistry(row: Record<string, unknown>): HeartbeatRegistry
 }
 
 export class WorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 17;
+  static override schemaVersion = 18;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -310,6 +313,7 @@ export class WorkspaceDO extends DurableObjectBase {
         class_name TEXT,
         key TEXT NOT NULL,
         state_args TEXT,
+        agent_binding TEXT,
         parent_id TEXT,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
@@ -507,6 +511,19 @@ export class WorkspaceDO extends DurableObjectBase {
       const existing = this.readEntityRow(id);
       if (existing) {
         this.assertIdentityMatches(id, existing, input);
+        const nextAgentBinding =
+          input.agentBinding === undefined ? null : JSON.stringify(input.agentBinding);
+        if (existing.agent_binding !== null && existing.agent_binding !== nextAgentBinding) {
+          throw new IdentityCollisionError(id, {
+            field: "agentBinding",
+            existing: existing.agent_binding,
+            attempted: nextAgentBinding,
+          });
+        }
+        if (existing.agent_binding === null && nextAgentBinding !== null) {
+          this.sql.exec(`UPDATE entities SET agent_binding = ? WHERE id = ?`, nextAgentBinding, id);
+          existing.agent_binding = nextAgentBinding;
+        }
         if (existing.status === "active") {
           return this.rowToEntity(existing);
         }
@@ -517,6 +534,7 @@ export class WorkspaceDO extends DurableObjectBase {
         );
         return this.rowToEntity({
           ...existing,
+          agent_binding: existing.agent_binding,
           status: "active",
           retired_at: null,
           cleanup_complete: 1,
@@ -528,9 +546,9 @@ export class WorkspaceDO extends DurableObjectBase {
       this.sql.exec(
         `INSERT INTO entities (
           id, kind, source_repo_path, source_effective_version,
-          context_id, class_name, key, state_args, parent_id, created_at,
+          context_id, class_name, key, state_args, agent_binding, parent_id, created_at,
           status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
         id,
         input.kind,
         input.source.repoPath,
@@ -539,6 +557,7 @@ export class WorkspaceDO extends DurableObjectBase {
         input.className ?? null,
         input.key,
         input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
+        input.agentBinding === undefined ? null : JSON.stringify(input.agentBinding),
         input.parentId ?? null,
         now
       );
@@ -1948,6 +1967,7 @@ export class WorkspaceDO extends DurableObjectBase {
     };
     if (row.class_name) record.className = row.class_name;
     if (row.state_args !== null) record.stateArgs = JSON.parse(row.state_args);
+    if (row.agent_binding !== null) record.agentBinding = JSON.parse(row.agent_binding);
     if (row.parent_id !== null) record.parentId = row.parent_id;
     if (row.retired_at !== null) record.retiredAt = row.retired_at;
     if (row.error !== null) record.error = row.error;

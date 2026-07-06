@@ -80,6 +80,31 @@ export function buildOpenApproval(req: {
   };
 }
 
+export function buildContextAttachApproval(req: {
+  contextId: string;
+  callerId: string;
+  operation: "exec" | "open";
+}): UserlandApprovalRequest {
+  return {
+    subject: {
+      id: `user.context-attach.${digest([req.contextId])}`,
+      label: subjectLabel(req.contextId),
+    },
+    title: "Attach to context",
+    summary: summaryValue(
+      `Allow this ${req.operation === "exec" ? "command" : "terminal session"} to attach to context ${req.contextId}?`
+    ),
+    details: [
+      { label: "Context", value: detailValue(req.contextId) },
+      { label: "Caller", value: detailValue(req.callerId) },
+      { label: "Operation", value: req.operation },
+    ],
+    warning: "This gives the shell extension access to the context's materialized working folder.",
+    defaultAction: "deny",
+    promptOptions: "scoped",
+  };
+}
+
 function markdownShellBlock(value: string): string {
   return `\`\`\`sh\n${truncate(value, 500).replace(/```/g, "'''")}\n\`\`\``;
 }

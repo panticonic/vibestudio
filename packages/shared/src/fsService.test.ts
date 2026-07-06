@@ -82,6 +82,17 @@ function makeShellCtx(callerId: string): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "shell") };
 }
 
+function makeAgentCtx(entityId: string, contextId: string): ServiceContext {
+  return {
+    caller: createVerifiedCaller(`agent:${entityId}`, "agent", null, {
+      entityId,
+      contextId,
+      channelId: "chan-1",
+      agentId: `agent:${entityId}`,
+    }),
+  };
+}
+
 describe("FsService", () => {
   let tmpRoot: string;
   let service: FsService;
@@ -398,6 +409,18 @@ describe("FsService", () => {
       const ctx: ServiceContext = { caller: createVerifiedCaller("server-main", "server") };
       await service.handleCall(ctx, "writeFile", ["ctx-fresh", "/s.txt", "srv"]);
       expect(existsSync(path.join(tmpRoot, "ctx-fresh", "s.txt"))).toBe(true);
+    });
+
+    it("agent callers are pinned to their host-verified binding, not a client-supplied context id", async () => {
+      mkdirSync(path.join(tmpRoot, "ctx-foreign"), { recursive: true });
+      const ctx = makeAgentCtx("session-1", "ctx-agent-bound");
+
+      await service.handleCall(ctx, "writeFile", ["ctx-foreign", "/pwned.txt", "owned"]);
+      await service.handleCall(ctx, "writeFile", ["/own.txt", "ok"]);
+
+      expect(existsSync(path.join(tmpRoot, "ctx-foreign", "pwned.txt"))).toBe(false);
+      expect(existsSync(path.join(tmpRoot, "ctx-agent-bound", "ctx-foreign"))).toBe(true);
+      expect(existsSync(path.join(tmpRoot, "ctx-agent-bound", "own.txt"))).toBe(true);
     });
   });
 

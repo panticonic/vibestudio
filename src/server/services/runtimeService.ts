@@ -24,6 +24,8 @@ import {
   buildWorkspaceContext,
   canonicalEntityId,
   type EntityRecord,
+  type RuntimeAgentBinding,
+  type RuntimeAgentBindingInput,
   type RuntimeEntityCreateSpec,
   type RuntimeEntityHandle,
   type WorkspaceContext,
@@ -150,6 +152,13 @@ export interface RuntimeServiceDeps {
     options?: { explicit?: boolean }
   ) => void | Promise<void>;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  /**
+   * Revoke every entity-scoped agent credential + the live agent TokenManager
+   * token for a retired entity. Called
+   * at the end of `retireEntity` so agent credentials never outlive their
+   * entity. Wired in src/server/index.ts to deviceAuthStore + tokenManager.
+   */
+  revokeAgentCredentials?: (entityId: string) => void | Promise<void>;
 }
 
 /**
@@ -217,6 +226,53 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     return caller.runtime.id === entity.id || entity.parentId === caller.runtime.id;
   }
 
+  function bindingFromSpec(spec: RuntimeEntityCreateSpec): RuntimeAgentBindingInput | undefined {
+    return spec.kind === "do" || spec.kind === "worker" ? spec.agentBinding : undefined;
+  }
+
+  function isExtensionOrchestratedCreate(
+    caller: VerifiedCaller,
+    spec: RuntimeEntityCreateSpec
+  ): boolean {
+    if (caller.runtime.kind !== "extension") return false;
+    return spec.kind === "session" || bindingFromSpec(spec) !== undefined;
+  }
+
+  async function resolveAgentBinding(
+    caller: VerifiedCaller,
+    method: string,
+    contextId: string,
+    binding: RuntimeAgentBindingInput | undefined
+  ): Promise<RuntimeAgentBinding | undefined> {
+    if (!binding) return undefined;
+    if (
+      caller.runtime.kind !== "shell" &&
+      caller.runtime.kind !== "server" &&
+      caller.runtime.kind !== "extension"
+    ) {
+      throw new Error(
+        `runtime.${method} agentBinding is restricted to host callers and extensions`
+      );
+    }
+    const bound = await store.resolveRecord(binding.entityId);
+    if (!bound || bound.status !== "active") {
+      throw new Error(
+        `runtime.createEntity agentBinding references an inactive entity: ${binding.entityId}`
+      );
+    }
+    if (bound.contextId !== contextId) {
+      throw new Error("runtime.createEntity agentBinding context does not match the bound entity");
+    }
+    if (!isTrustedRuntimeHost(caller) && !callerOwnsEntity(caller, bound)) {
+      throw new Error(`runtime.createEntity caller does not own bound entity ${binding.entityId}`);
+    }
+    return {
+      entityId: bound.id,
+      contextId: bound.contextId,
+      channelId: binding.channelId,
+    };
+  }
+
   async function callerOwnsLifecycleContext(
     caller: VerifiedCaller,
     originContextId: string | null,
@@ -243,13 +299,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     if (requested == null || requested === "") {
       return randomUUID();
     }
-    await gateContextLaunch(caller, requested, {
-      kind: "runtime",
-      verb: `Create ${spec.kind}`,
-      targetLabel: spec.source,
-      targetLabelName: "Source",
-      groupKey: `context-boundary:${requested}:${spec.source}`,
-    });
+    if (!isExtensionOrchestratedCreate(caller, spec)) {
+      await gateContextLaunch(caller, requested, {
+        kind: "runtime",
+        verb: `Create ${spec.kind}`,
+        targetLabel: spec.source,
+        targetLabelName: "Source",
+        groupKey: `context-boundary:${requested}:${spec.source}`,
+      });
+    }
     return requested;
   }
 
@@ -272,19 +330,33 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const spec = rawSpec;
-    if (spec.kind === "app" || spec.kind === "session") {
+    if (spec.kind === "app") {
       const callerKind = caller.runtime.kind;
       if (callerKind !== "shell" && callerKind !== "server") {
-        throw new Error(
-          `${spec.kind === "app" ? "App" : "Session"} runtime entities are host-managed`
-        );
+        throw new Error("App runtime entities are host-managed");
+      }
+    }
+    if (spec.kind === "session") {
+      const callerKind = caller.runtime.kind;
+      // Session entities are host-managed, EXCEPT an extension may create a
+      // source-tagged session for a launch it owns. The source tag distinguishes
+      // an orchestrated launch from an ad-hoc device session.
+      const orchestratorExtension = callerKind === "extension" && Boolean(spec.source);
+      if (callerKind !== "shell" && callerKind !== "server" && !orchestratorExtension) {
+        throw new Error("Session runtime entities are host-managed");
       }
     }
     // Gate (context-boundary) then prepare+activate. The gate is the ONLY caller
     // of the boundary check on this path; `activateEntity` is gate-free so internal
     // orchestration (cloneContext) can create clones after a single source-gate.
     const contextId = await resolveContextPolicy(caller, spec.contextId, spec);
-    return activateEntity(caller, spec, contextId);
+    const agentBinding = await resolveAgentBinding(
+      caller,
+      "createEntity",
+      contextId,
+      bindingFromSpec(spec)
+    );
+    return activateEntity(caller, spec, contextId, agentBinding);
   }
 
   /**
@@ -296,7 +368,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   async function activateEntity(
     caller: VerifiedCaller,
     spec: RuntimeEntityCreateSpec,
-    initialContextId: string
+    initialContextId: string,
+    agentBinding?: RuntimeAgentBinding
   ): Promise<RuntimeEntityHandle> {
     let contextId = initialContextId;
     const key = spec.key ?? randomUUID();
@@ -410,6 +483,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           : "stateArgs" in spec
             ? spec.stateArgs
             : undefined,
+      agentBinding,
       // Record the verified caller as this entity's launch parent (server-
       // authoritative) so a runtime can later resolve its nearest panel ancestor
       // (e.g. eval launched by an agent inherits the agent's owning panel).
@@ -486,6 +560,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     }
     const record = await retireRecord(id);
     if (!record) return;
+    // Agent credentials follow the entity: revoke outstanding credentials + the
+    // live agent token so a retired entity's bound agent sessions can't
+    // re-authenticate (§3.2).
+    await deps.revokeAgentCredentials?.(id);
     if (removeContext) {
       const live = await store.listActive();
       if (!live.some((e) => e.contextId === record.contextId)) {
@@ -933,7 +1011,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   return {
     name: "runtime",
     description: "Runtime entity creation and retirement",
-    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do"] },
+    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
     methods: runtimeMethods,
     handler: async (ctx, method, args) => {
       switch (method) {

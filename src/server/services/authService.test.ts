@@ -41,6 +41,24 @@ function makeAppRecord(id: string): EntityRecord {
   };
 }
 
+function makeSessionRecord(
+  id: string,
+  opts: { contextId?: string; parentId?: string; status?: EntityRecord["status"] } = {}
+): EntityRecord {
+  const key = id.startsWith("session:") ? id.slice("session:".length) : id;
+  return {
+    id,
+    kind: "session",
+    source: { repoPath: "agent-cli", effectiveVersion: "" },
+    contextId: opts.contextId ?? "ctx-abc",
+    key,
+    parentId: opts.parentId,
+    createdAt: Date.now(),
+    status: opts.status ?? "active",
+    cleanupComplete: true,
+  };
+}
+
 // `deepLink` is no longer minted server-side: the full WebRTC pairing link needs
 // the answerer's room/fp (assembled at the pairing banner, not the auth service).
 type PairingCodeResponse = { code: string; serverUrl: string; deepLink?: string };
@@ -702,6 +720,99 @@ async function postLocal<T>(
   return { status: response.status, body: (await response.json()) as T };
 }
 
+describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () => {
+  const makeDispatcher = () => {
+    const dispatcher = new ServiceDispatcher();
+    const tokenManager = new TokenManager();
+    const authStore = new DeviceAuthStore(
+      path.join(fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-agent-")), "devices.json")
+    );
+    const records = new Map<string, EntityRecord>();
+    const authService = createAuthService({
+      tokenManager,
+      deviceAuthStore: authStore,
+      getServerBootId: () => "boot",
+      getWorkspaceId: () => "ws",
+      resolveRuntimeEntity: async (id) => records.get(id) ?? null,
+    });
+    dispatcher.registerService(authService.definition);
+    dispatcher.markInitialized();
+    return { dispatcher, authStore, records, tokenManager };
+  };
+
+  it("lets the owning extension mint + revoke, deriving context from the target session", async () => {
+    const { dispatcher, authStore, records, tokenManager } = makeDispatcher();
+    const extensionId = "extension:agent-launcher";
+    records.set(
+      "session:s1",
+      makeSessionRecord("session:s1", { contextId: "ctx-derived", parentId: extensionId })
+    );
+    const ext = { caller: createVerifiedCaller(extensionId, "extension") };
+
+    const minted = (await dispatcher.dispatch(ext, "auth", "mintAgentCredential", [
+      { entityId: "session:s1", channelId: "chan-1" },
+    ])) as { agentId: string; agentToken: string };
+    expect(minted.agentId).toMatch(/^agt_/);
+    expect(minted.agentToken.startsWith(`agent:${minted.agentId}:`)).toBe(true);
+    expect(
+      authStore.validateAgentToken(minted.agentId, minted.agentToken.split(":")[2]!)
+    ).toMatchObject({
+      entityId: "session:s1",
+      contextId: "ctx-derived",
+      channelId: "chan-1",
+    });
+    const bearer = tokenManager.ensureToken("agent:session:s1", "agent");
+    expect(tokenManager.validateToken(bearer)).not.toBeNull();
+
+    const revoked = (await dispatcher.dispatch(ext, "auth", "revokeAgentCredential", [
+      minted.agentId,
+    ])) as { revoked: boolean };
+    expect(revoked.revoked).toBe(true);
+    expect(tokenManager.validateToken(bearer)).toBeNull();
+  });
+
+  it("lets the server mint for any active session but rejects a non-owning extension", async () => {
+    const { dispatcher, authStore, records } = makeDispatcher();
+    records.set(
+      "session:s2",
+      makeSessionRecord("session:s2", { contextId: "ctx-server", parentId: "extension:owner" })
+    );
+
+    const serverMinted = (await dispatcher.dispatch(
+      { caller: createVerifiedCaller("server", "server") },
+      "auth",
+      "mintAgentCredential",
+      [{ entityId: "session:s2", channelId: "chan-2" }]
+    )) as { agentId: string; agentToken: string };
+    expect(
+      authStore.validateAgentToken(serverMinted.agentId, serverMinted.agentToken.split(":")[2]!)
+    ).toMatchObject({ contextId: "ctx-server" });
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("extension:other", "extension") },
+        "auth",
+        "mintAgentCredential",
+        [{ entityId: "session:s2", channelId: "chan-2" }]
+      )
+    ).rejects.toThrow(/does not own target entity/);
+  });
+
+  it("denies non-extension, non-server callers at the service policy", async () => {
+    const { dispatcher } = makeDispatcher();
+    for (const kind of ["shell", "agent", "panel"] as const) {
+      await expect(
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller(`${kind}:x`, kind) },
+          "auth",
+          "mintAgentCredential",
+          [{ entityId: "e", channelId: "ch" }]
+        )
+      ).rejects.toThrow(/not accessible/i);
+    }
+  });
+});
+
 describe("createPairingRedeemer (over-the-pipe device pairing)", () => {
   const makeStore = () =>
     new DeviceAuthStore(
@@ -765,5 +876,47 @@ describe("createPairingRedeemer (over-the-pipe device pairing)", () => {
     expect(redeem("refresh:dev_x:wrong-secret", {})).toBeNull();
     expect(redeem("refresh:malformed", {})).toBeNull();
     expect(redeem("some-random-token-that-is-neither", {})).toBeNull();
+  });
+
+  it("redeems an agent credential into an agent principal + host-verified binding (§3.2)", () => {
+    const store = makeStore();
+    const tokenManager = new TokenManager();
+    const redeem = createPairingRedeemer({ deviceAuthStore: store, tokenManager });
+    const { agentId, agentToken } = store.mintAgentCredential({
+      entityId: "session:s1",
+      contextId: "ctx-abc",
+      channelId: "chan-1",
+    });
+
+    const result = redeem(agentToken, {});
+    expect(result).not.toBeNull();
+    expect(result!.callerKind).toBe("agent");
+    expect(result!.callerId).toBe("agent:session:s1");
+    expect(result!.agentBinding).toEqual({
+      entityId: "session:s1",
+      contextId: "ctx-abc",
+      channelId: "chan-1",
+      agentId,
+    });
+    // The agent token for this principal now validates (issued during redeem).
+    const token = tokenManager.ensureToken(result!.callerId, "agent");
+    expect(tokenManager.validateToken(token)?.callerKind).toBe("agent");
+  });
+
+  it("rejects a revoked, malformed, or unknown agent token", () => {
+    const store = makeStore();
+    const redeem = createPairingRedeemer({
+      deviceAuthStore: store,
+      tokenManager: new TokenManager(),
+    });
+    const { agentId, agentToken } = store.mintAgentCredential({
+      entityId: "e",
+      contextId: "c",
+      channelId: "ch",
+    });
+    expect(redeem("agent:malformed", {})).toBeNull();
+    expect(redeem(`agent:${agentId}:wrong-secret`, {})).toBeNull();
+    store.revokeAgentCredential(agentId);
+    expect(redeem(agentToken, {})).toBeNull();
   });
 });

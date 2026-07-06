@@ -59,7 +59,9 @@ export function createServerLogService(deps: {
   const definition: ServiceDefinition = {
     name: "serverLog",
     description: "Server host log inspection and live tailing",
-    policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension"] },
+    // serverLog exposes only read methods (query/tail/stats), so the service-level
+    // `agent` grant is read-only in practice.
+    policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension", "agent"] },
     methods: serverLogMethods,
     handler: async (_ctx, method, args) => {
       switch (method) {

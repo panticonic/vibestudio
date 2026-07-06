@@ -575,6 +575,8 @@ export const shellApproval = {
     shellApprovalClient.resolveBootstrap(approvalId, decision),
   resolveUserland: (approvalId: string, choice: string | "dismiss") =>
     shellApprovalClient.resolveUserland(approvalId, choice),
+  resolveExternalAgent: (approvalId: string, behavior: "allow" | "deny") =>
+    shellApprovalClient.resolveExternalAgent(approvalId, behavior),
   submitClientConfig: (approvalId: string, values: Record<string, string>) =>
     shellApprovalClient.submitClientConfig(approvalId, values),
   submitCredentialInput: (approvalId: string, values: Record<string, string>) =>

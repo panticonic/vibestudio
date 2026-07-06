@@ -12,6 +12,8 @@
       "getConnectionInfo": null,
       "grantConnection": ["app", "server", "shell"],
       "listDevices": null,
+      "mintAgentCredential": ["extension", "server"],
+      "revokeAgentCredential": ["extension", "server"],
       "revokeDevice": null
     }
   },
@@ -84,7 +86,7 @@
     }
   },
   "docs": {
-    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "service": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "describe": null,
       "describeService": null,
@@ -95,7 +97,7 @@
     }
   },
   "eval": {
-    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "service": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "cancel": null,
       "forceReset": null,
@@ -112,7 +114,7 @@
     }
   },
   "fs": {
-    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "service": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "access": null,
       "appendFile": null,
@@ -163,6 +165,13 @@
     "service": ["server", "shell"],
     "methods": {
       "shutdown": null
+    }
+  },
+  "mirror": {
+    "service": ["agent", "do", "panel", "server", "shell"],
+    "methods": {
+      "objects": ["agent", "do", "panel", "server", "shell"],
+      "targets": ["agent", "do", "panel", "server", "shell"]
     }
   },
   "notification": {
@@ -265,23 +274,23 @@
     }
   },
   "runtime": {
-    "service": ["app", "do", "panel", "server", "shell", "worker"],
+    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "cloneContext": null,
       "createContext": ["app", "do", "panel", "server", "shell", "worker"],
       "createEntity": null,
       "createSubagentContext": ["do", "panel", "server", "shell", "worker"],
       "destroyContext": null,
-      "listEntities": null,
-      "listOwnedContexts": null,
+      "listEntities": ["agent", "app", "do", "panel", "server", "shell", "worker"],
+      "listOwnedContexts": ["agent", "app", "do", "panel", "server", "shell", "worker"],
       "recordContextEdge": ["server", "shell"],
-      "resolveContext": null,
+      "resolveContext": ["agent", "app", "do", "panel", "server", "shell", "worker"],
       "retireEntity": null,
       "setTitle": ["app", "do", "panel", "worker"]
     }
   },
   "serverLog": {
-    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "service": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "query": null,
       "stats": null,
@@ -294,6 +303,8 @@
       "listPending": null,
       "resolve": null,
       "resolveBootstrap": null,
+      "resolveExternalAgent": null,
+      "resolveExternalAgentByRequest": ["app", "panel", "server", "shell"],
       "resolveUserland": null,
       "submitClientConfig": null,
       "submitCredentialInput": null,
@@ -322,13 +333,15 @@
       "list": null,
       "request": null,
       "requestAs": ["extension"],
+      "requestExternal": ["do", "worker"],
       "requestSecretInput": null,
       "requestSecretInputAs": ["extension"],
-      "revoke": null
+      "revoke": null,
+      "settleExternal": ["do", "worker"]
     }
   },
   "vcs": {
-    "service": ["app", "do", "extension", "panel", "server", "shell", "worker"],
+    "service": ["agent", "app", "do", "extension", "panel", "server", "shell", "worker"],
     "methods": {
       "abortMerge": null,
       "commit": null,
@@ -388,6 +401,7 @@
     "methods": {
       "create": ["app", "do", "panel", "server", "shell", "worker"],
       "delete": ["app", "do", "panel", "server", "shell", "worker"],
+      "ensureContextFolder": ["do", "extension", "panel", "server", "shell", "worker"],
       "findUnitForPath": null,
       "getActive": null,
       "getActiveEntry": null,

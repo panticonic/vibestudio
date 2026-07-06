@@ -921,4 +921,137 @@ describe("approvalQueue", () => {
       expect(h1.approvalId).not.toBe(h2.approvalId);
     });
   });
+
+  describe("external-agent approvals", () => {
+    function externalRequest(overrides: Record<string, unknown> = {}) {
+      return {
+        kind: "external-agent" as const,
+        callerId: "do:workers/agent:AgentWorker:entity-1",
+        callerKind: "do" as const,
+        repoPath: "workers/linked",
+        effectiveVersion: "hash-1",
+        entityId: "entity-1",
+        channelId: "channel-1",
+        capability: "external-agent.tool",
+        operationName: "Bash",
+        description: "External agent wants to run Bash",
+        preview: "npm install",
+        requestId: "req-1",
+        resolveToken: "resolve-token-123",
+        ...overrides,
+      };
+    }
+
+    it("files a first-class external-agent pending approval with the payload shape", () => {
+      const { queue } = createQueue();
+      void queue.requestExternalAgent(externalRequest());
+      const pending = queue.listPending();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({
+        kind: "external-agent",
+        entityId: "entity-1",
+        channelId: "channel-1",
+        capability: "external-agent.tool",
+        operationName: "Bash",
+        preview: "npm install",
+        requestId: "req-1",
+        resolveToken: "resolve-token-123",
+        operation: { kind: "external-agent", verb: "run Bash" },
+      });
+    });
+
+    it("resolves allow/deny via resolveExternalAgent and clears the card", async () => {
+      const { queue } = createQueue();
+      const allow = queue.requestExternalAgent(externalRequest({ requestId: "allow-1" }));
+      const deny = queue.requestExternalAgent(externalRequest({ requestId: "deny-1" }));
+      const [allowId, denyId] = queue.listPending().map((a) => a.approvalId);
+      queue.resolveExternalAgent(allowId!, "allow");
+      queue.resolveExternalAgent(denyId!, "deny");
+      await expect(allow).resolves.toEqual({ behavior: "allow" });
+      await expect(deny).resolves.toEqual({ behavior: "deny" });
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("settleExternalAgent quiet-settles matching cards as deny and returns the count", async () => {
+      const { queue } = createQueue();
+      const promise = queue.requestExternalAgent(externalRequest({ requestId: "req-quiet" }));
+      queue.requestExternalAgent(externalRequest({ requestId: "other", entityId: "entity-2" }));
+      const settled = queue.settleExternalAgent(
+        (a) => a.entityId === "entity-1" && a.requestId === "req-quiet"
+      );
+      expect(settled).toBe(1);
+      await expect(promise).resolves.toEqual({ behavior: "deny" });
+      // The unmatched request for a different entity is untouched.
+      expect(queue.listPending()).toHaveLength(1);
+      expect(queue.listPending()[0]).toMatchObject({ requestId: "other" });
+    });
+
+    it("resolveExternalAgentByRequest records a real verdict keyed by (channelId, requestId, resolveToken)", async () => {
+      const { queue } = createQueue();
+      const allow = queue.requestExternalAgent(externalRequest({ requestId: "byreq-allow" }));
+      const deny = queue.requestExternalAgent(externalRequest({ requestId: "byreq-deny" }));
+      queue.requestExternalAgent(
+        externalRequest({
+          requestId: "byreq-allow",
+          entityId: "entity-2",
+          resolveToken: "other-token-123",
+        })
+      );
+      // Matches on channel + request id + token; the other same requestId is untouched.
+      expect(
+        queue.resolveExternalAgentByRequest(
+          "channel-1",
+          "byreq-allow",
+          "resolve-token-123",
+          "allow"
+        )
+      ).toBe(1);
+      expect(
+        queue.resolveExternalAgentByRequest("channel-1", "byreq-deny", "resolve-token-123", "deny")
+      ).toBe(1);
+      await expect(allow).resolves.toEqual({ behavior: "allow" });
+      await expect(deny).resolves.toEqual({ behavior: "deny" });
+      // The unmatched entity-2 request remains pending.
+      expect(queue.listPending()).toHaveLength(1);
+      expect(queue.listPending()[0]).toMatchObject({
+        entityId: "entity-2",
+        requestId: "byreq-allow",
+      });
+    });
+
+    it("resolveExternalAgentByRequest returns 0 when nothing matches", () => {
+      const { queue } = createQueue();
+      void queue.requestExternalAgent(externalRequest({ requestId: "present" }));
+      expect(
+        queue.resolveExternalAgentByRequest("channel-1", "absent", "resolve-token-123", "allow")
+      ).toBe(0);
+      expect(queue.listPending()).toHaveLength(1);
+    });
+
+    it("auto-denies on signal abort (expiry) and removes the card", async () => {
+      const { queue } = createQueue();
+      const ac = new AbortController();
+      const promise = queue.requestExternalAgent(
+        externalRequest({ requestId: "expire-1", signal: ac.signal })
+      );
+      expect(queue.listPending()).toHaveLength(1);
+      ac.abort();
+      await expect(promise).resolves.toEqual({ behavior: "deny" });
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("each relayed permission is isolated; one verdict never releases another", async () => {
+      const { queue } = createQueue();
+      const a = queue.requestExternalAgent(externalRequest({ requestId: "a" }));
+      const b = queue.requestExternalAgent(externalRequest({ requestId: "b" }));
+      expect(queue.listPending()).toHaveLength(2);
+      const [firstId] = queue.listPending().map((x) => x.approvalId);
+      queue.resolveExternalAgent(firstId!, "allow");
+      await expect(a).resolves.toEqual({ behavior: "allow" });
+      // b is still pending.
+      expect(queue.listPending()).toHaveLength(1);
+      queue.resolveExternalAgent(queue.listPending()[0]!.approvalId, "deny");
+      await expect(b).resolves.toEqual({ behavior: "deny" });
+    });
+  });
 });

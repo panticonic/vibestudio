@@ -243,6 +243,7 @@ describe("WorkspaceVcs eager mirroring (edit → commit → push, composed views
     const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir, refs });
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir,
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),

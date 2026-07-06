@@ -36,6 +36,9 @@ export function PaneHeader(props: {
   onFind(): void;
   onZoom(): void;
   onOpenScratch(): void;
+  /** Present for context-scoped Claude Code sessions: jump to the linked
+   *  conversation (docs/claude-code-channels-plan.md §8.1). */
+  onOpenChat?: () => void;
 }) {
   const ports = props.session.detectedPorts.slice(0, 3);
   const exitText = sessionExitText(props.session);
@@ -67,6 +70,11 @@ export function PaneHeader(props: {
         {!exitText && commandState.state === "failed" ? (
           <Badge size="1" color="red" variant="soft">
             exit {commandState.exitCode}{commandDuration ? ` · ${commandDuration}` : ""}
+          </Badge>
+        ) : null}
+        {props.session.contextId ? (
+          <Badge size="1" variant="soft" color="purple" title={`Context ${props.session.contextId}`}>
+            {contextBadgeLabel(props.session.contextId)}
           </Badge>
         ) : null}
         {props.session.gitBranch ? <Text size="1" color="gray" truncate>{props.session.gitBranch}</Text> : null}
@@ -101,6 +109,12 @@ export function PaneHeader(props: {
             <IconButton size="1" variant="ghost" aria-label="Pane menu"><DotsHorizontalIcon /></IconButton>
           </DropdownMenu.Trigger>
           <DropdownMenu.Content size="1">
+            {props.onOpenChat ? (
+              <>
+                <DropdownMenu.Item onSelect={props.onOpenChat}>Jump to conversation</DropdownMenu.Item>
+                <DropdownMenu.Separator />
+              </>
+            ) : null}
             <DropdownMenu.Item onSelect={props.onClear}>Clear scrollback</DropdownMenu.Item>
             <DropdownMenu.Item onSelect={props.onCopyAll}>Copy all</DropdownMenu.Item>
             <DropdownMenu.Item disabled={!preview} onSelect={props.onOpenPreview}>Open preview</DropdownMenu.Item>
@@ -127,4 +141,10 @@ export function previewTarget(session: SessionInfo): { kind: "url"; url: string 
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** Short, header-friendly label for a context id (full id in the badge title). */
+function contextBadgeLabel(contextId: string): string {
+  const short = contextId.length > 12 ? `${contextId.slice(0, 8)}…` : contextId;
+  return `ctx:${short}`;
 }

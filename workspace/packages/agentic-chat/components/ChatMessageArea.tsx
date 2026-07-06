@@ -4,6 +4,7 @@ import { Flex, Text } from "@radix-ui/themes";
 import { useChatContext } from "../context/ChatContext";
 import { useChatInputContext } from "../context/ChatInputContext";
 import { AgentSetupInline } from "./AgentSetupInline";
+import { LinkedPermissionCards } from "./LinkedPermissionCards";
 import { MessageList } from "./MessageList";
 import { deriveActiveOutbox } from "./Outbox";
 import { SignalPills } from "./SignalPills";
@@ -93,6 +94,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
   return (
     <Flex direction="column" gap="1" style={{ minHeight: 0, flexGrow: 1 }}>
       <SignalPills client={clientRef.current} />
+      <LinkedPermissionCards client={clientRef.current} chat={chat} />
       <MessageList
         emptyState={launchingEmptyState}
         messages={transcriptMessages}

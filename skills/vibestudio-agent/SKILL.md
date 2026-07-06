@@ -18,6 +18,10 @@ the repo: `pnpm cli ...`).
 - **Paths are remote.** `fs`/`vcs`/`eval` operate inside the session's
   *context folder on the server*, not the local filesystem. The context is a
   copy-on-write checkout of the workspace tree (e.g. `panels/notes/...`).
+  Context folders are **sparse**: repos materialize on disk on demand, so a
+  fresh checkout can look almost empty to local `ls`/glob. Discover the tree
+  with `vibestudio fs ls /` (server-side, authoritative); `fs` operations
+  materialize the repos they touch.
 - **JSON is automatic when piped.** Results are human text on a TTY and a
   single JSON document when stdout is piped or `--json` is passed. Errors go
   to stderr (`{"error":..., "exitCode":...}` in JSON mode).
@@ -60,6 +64,56 @@ vibestudio eval run -e 'return await services.docs.listServices()'
 vibestudio agent detach --rm             # retire session + remove its context
 ```
 
+## Scope resolution & tier probing
+
+Every `fs`/`vcs`/`eval`/`channel`/`context` command resolves **one context +
+one credential** with a fixed precedence — so inside a launched session (or a
+`context mirror` directory) you need **zero flags**:
+
+1. `--context <id>` / `--session <name>` explicit flags;
+2. `VIBESTUDIO_CONTEXT_ID` env — and if `VIBESTUDIO_AGENT_TOKEN` is also set,
+   the raw **agent** credential + `VIBESTUDIO_SERVER_URL` are used (caller kind
+   `agent`; no device credential or session file involved);
+3. cwd-upward search for `.vibestudio-context.json` (its `contextId` +
+   `serverUrl`, over the paired device credential);
+4. the named default session file (`vibestudio agent attach` bookkeeping).
+
+**Probe your tier** (what's available depends on how you were started). Check
+in this order and state what's missing:
+
+- `VIBESTUDIO_AGENT_TOKEN` set ⇒ **linked-agent** tier: full `fs`/`vcs`/`eval`
+  auto-scoped, plus `channel send/history/roster` and live `channel tail` (WS
+  push). This is a launched or plugin session.
+- else a `.vibestudio-context.json` marker up-tree ⇒ **paired-CLI (Tier 0)**:
+  full `fs`/`vcs`/`eval` and `channel send/history` over the device credential,
+  but **no vessel presence, no permission relay, and `channel tail` push only
+  works if the device credential can hold a WS connection**. Say so.
+- else `vibestudio claude status` / `vibestudio remote status` to confirm a
+  bare device pairing with no context — you must pass `--context`/`--session`
+  or `cd` into a context/mirror directory first.
+
+## Eval is the full-power surface
+
+`vibestudio eval` runs TypeScript **inside the system** (an EvalDO in workerd),
+scoped to your entity's context, with a persistent per-entity REPL scope. Prefer
+it over stringing together CLI calls for anything programmatic. Canonical shapes
+(see [EVAL.md](EVAL.md) for bindings/imports):
+
+```bash
+# Call any service and return a structured value (JSON when piped):
+vibestudio eval run -e 'return await services.docs.listServices()'
+# VCS operations against your own context tree:
+vibestudio eval run -e 'return await services.vcs.status("panels/notes","ctx:"+contextId)'
+# Post to the bound conversation channel from inside the system:
+vibestudio eval run -e '
+  await chat.send("done - see the diff");
+  return { channelId };
+'
+```
+
+State survives across invocations within a session, so you can build up
+intermediate results and inspect `scope` keys between runs.
+
 ## Command groups
 
 | Group | Commands | Purpose |
@@ -68,7 +122,9 @@ vibestudio agent detach --rm             # retire session + remove its context
 | `vibestudio agent` | `attach`, `status`, `detach`, `sessions`, `call`, `services`, `skills`, `logs`, `skill` | Sessions, raw RPC, introspection |
 | `vibestudio fs` | `ls`, `read`, `write`, `rm`, `mv`, `cp`, `mkdir`, `stat`, `grep`, `glob` | Files in the session context |
 | `vibestudio vcs` | `push`, `push-status`, `status`, `diff`, `log`, `fork-repo` | Per-repo, build-gated VCS (push). `vcs.edit`/`vcs.commit`/`vcs.merge` are RPCs — see below |
-| `vibestudio eval` | `run`, `repl-reset` | Sandboxed TS/JS against the server |
+| `vibestudio eval` | `run`, `repl-reset` | Sandboxed TS/JS against the server — **the full-power surface** (see below) |
+| `vibestudio channel` | `list`, `history`, `send`, `tail`, `roster` | Conversation channels: read/post messages, follow live, inspect the roster |
+| `vibestudio context` | `mirror` | Materialize a context's repos into a local dir (`--watch` writes local edits back as context edit ops) |
 
 `--help` works at the group level (`vibestudio fs --help`) and per command
 (`vibestudio fs write --help`).

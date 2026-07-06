@@ -472,6 +472,22 @@ export const workspaceMethods = defineServiceMethods({
     returns: WorkspaceTreeSchema,
     access: READ_ACCESS,
   },
+  ensureContextFolder: {
+    description:
+      "Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree.",
+    args: z.tuple([
+      z.string().describe("Context id whose working folder to materialize."),
+    ]),
+    returns: z.object({
+      dir: z.string().describe("Absolute path to the materialized context folder."),
+    }),
+    // Launch orchestration is an extension concern; panels/workers/DO drive it
+    // too (e.g. opening a context terminal). Narrower than the service default
+    // (drops `app`, which never places terminal sessions).
+    policy: { allowed: ["shell", "panel", "worker", "do", "extension", "server"] },
+    access: { sensitivity: "write" },
+    examples: [{ args: ["ctx-abc"] }],
+  },
   findUnitForPath: {
     description:
       "Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it.",

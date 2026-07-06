@@ -4,12 +4,13 @@ import { liveSessionCwd } from "./vscodeShellIntegrationMeta.js";
 
 type SetState = (updater: (state: TerminalState) => TerminalState) => void;
 type SetSessions = (updater: (sessions: Record<string, SessionInfo>) => Record<string, SessionInfo>) => void;
+type ContextOpenOptions = { contextId?: string; contextAttachToken?: string };
 
 export interface PanelActions {
-  openSession(command?: string): Promise<string>;
+  openSession(command?: string, opts?: ContextOpenOptions): Promise<string>;
   closeSession(sessionId: string): void;
-  splitFocused(direction: "row" | "column", command?: string): Promise<string | undefined>;
-  splitSession(sessionId: string, direction: "row" | "column", command?: string): Promise<string | undefined>;
+  splitFocused(direction: "row" | "column", command?: string, opts?: ContextOpenOptions): Promise<string | undefined>;
+  splitSession(sessionId: string, direction: "row" | "column", command?: string, opts?: ContextOpenOptions): Promise<string | undefined>;
   focusSession(sessionId: string): void;
   sendText(sessionId: string, text: string): Promise<void>;
   runCommand(command: string): Promise<string | undefined>;
@@ -78,8 +79,17 @@ export function createPanelActions(args: {
       await shell.dispose?.(sessionId).catch(() => {});
     };
 
-    const openSession = async (command?: string): Promise<string> => {
-      const req = command ? { command: "/bin/sh", args: ["-c", command], label: command } : {};
+    const openSession = async (command?: string, opts?: ContextOpenOptions): Promise<string> => {
+      const base = command ? { command: "/bin/sh", args: ["-c", command], label: command } : {};
+      // Context placement (§4.1): a chosen contextId confines the session to the
+      // context's materialized VCS working folder.
+      const req = opts?.contextId
+        ? {
+            ...base,
+            contextId: opts.contextId,
+            ...(opts.contextAttachToken ? { contextAttachToken: opts.contextAttachToken } : {}),
+          }
+        : base;
       const { sessionId } = await shell.open(req);
       const info = await shell.get(sessionId);
       await applyScrollbackLimit(sessionId);
@@ -117,13 +127,24 @@ export function createPanelActions(args: {
       });
     };
 
-    const splitSession = async (targetSessionId: string, direction: "row" | "column", command?: string): Promise<string | undefined> => {
-      if (!containsSession(state.tree, targetSessionId)) return state.tree ? undefined : openSession(command);
+    const splitSession = async (targetSessionId: string, direction: "row" | "column", command?: string, opts?: ContextOpenOptions): Promise<string | undefined> => {
+      if (!containsSession(state.tree, targetSessionId)) return state.tree ? undefined : openSession(command, opts);
       const focusedInfo = sessions[targetSessionId];
       const cwd = liveSessionCwd(focusedInfo);
-      const req = command
-        ? { command: "/bin/sh", args: ["-c", command], label: command, cwd }
-        : { cwd };
+      // Split inherits the parent session's context (§4.1) so a context terminal
+      // splits into the same context folder — unless an explicit contextId is
+      // chosen (opening a new terminal into a different context).
+      const contextId = opts?.contextId ?? focusedInfo?.contextId;
+      // Only inherit the parent's cwd when the new session stays in the parent's
+      // context (or workspace root). A different chosen context folder makes the
+      // parent's absolute cwd meaningless — default to that folder's root.
+      const inheritCwd = (opts?.contextId ?? focusedInfo?.contextId) === focusedInfo?.contextId;
+      const req = {
+        ...(command ? { command: "/bin/sh", args: ["-c", command], label: command } : {}),
+        ...(inheritCwd && cwd ? { cwd } : {}),
+        ...(contextId ? { contextId } : {}),
+        ...(opts?.contextAttachToken ? { contextAttachToken: opts.contextAttachToken } : {}),
+      };
       const { sessionId } = await shell.open(req);
       const info = await shell.get(sessionId);
       await applyScrollbackLimit(sessionId);
@@ -136,9 +157,9 @@ export function createPanelActions(args: {
       return sessionId;
     };
 
-    const splitFocused = async (direction: "row" | "column", command?: string): Promise<string | undefined> => {
-      if (!state.tree || !state.focusedSessionId) return openSession(command);
-      return splitSession(state.focusedSessionId, direction, command);
+    const splitFocused = async (direction: "row" | "column", command?: string, opts?: ContextOpenOptions): Promise<string | undefined> => {
+      if (!state.tree || !state.focusedSessionId) return openSession(command, opts);
+      return splitSession(state.focusedSessionId, direction, command, opts);
     };
 
     const runCommand = async (command: string): Promise<string | undefined> => splitFocused("row", command);

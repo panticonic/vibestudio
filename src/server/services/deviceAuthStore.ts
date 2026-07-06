@@ -20,9 +20,44 @@ export interface DeviceRecord {
   room?: string;
 }
 
+/**
+ * An entity-scoped agent credential.
+ * Authenticates as caller kind `agent`, principal `agent:<entityId>`. Only the
+ * sha256 hash of the secret is persisted (mirrors device refresh tokens); the
+ * clear token exists only at mint time. Lifecycle follows the entity —
+ * `retireEntity` revokes every outstanding credential for it.
+ */
+export interface AgentCredentialRecord {
+  agentId: string;
+  tokenHash: string;
+  entityId: string;
+  contextId: string;
+  channelId: string;
+  scopes?: string[];
+  createdAt: number;
+  expiresAt?: number;
+  revokedAt?: number;
+}
+
+/** The validated binding an agent credential authorizes (no secret material). */
+export interface AgentBinding {
+  agentId: string;
+  entityId: string;
+  contextId: string;
+  channelId: string;
+  scopes?: string[];
+}
+
+export interface IssuedAgentCredential {
+  agentId: string;
+  /** Full presentable token: `agent:<agentId>:<secret>`. */
+  agentToken: string;
+}
+
 interface StoredDeviceAuthState {
   serverId: string;
   devices: DeviceRecord[];
+  agents: AgentCredentialRecord[];
 }
 
 interface PairingCodeRecord {
@@ -182,9 +217,98 @@ export class DeviceAuthStore {
     return this.state.devices.map((device) => ({ ...device }));
   }
 
+  // ===========================================================================
+  // Agent credentials (entity-scoped; §3.2)
+  // ===========================================================================
+
+  /**
+   * Mint an entity-scoped agent credential. `agentId` is `agt_<rand>`; the
+   * secret is a fresh 32-byte base64url token stored only as a sha256 hash
+   * (mirrors `issueDevice`). Returns the full presentable token
+   * `agent:<agentId>:<secret>`.
+   */
+  mintAgentCredential(input: {
+    entityId: string;
+    contextId: string;
+    channelId: string;
+    ttlMs?: number;
+    scopes?: string[];
+  }): IssuedAgentCredential {
+    const agentId = `agt_${randomBase64Url(18)}`;
+    const secret = randomBase64Url(32);
+    const record: AgentCredentialRecord = {
+      agentId,
+      tokenHash: hashSecret(secret),
+      entityId: input.entityId,
+      contextId: input.contextId,
+      channelId: input.channelId,
+      createdAt: this.now(),
+      ...(input.ttlMs ? { expiresAt: this.now() + input.ttlMs } : {}),
+      ...(input.scopes ? { scopes: input.scopes } : {}),
+    };
+    this.state.agents.push(record);
+    this.save();
+    return { agentId, agentToken: `agent:${agentId}:${secret}` };
+  }
+
+  /**
+   * Validate a presented agent secret against a stored credential. Returns the
+   * authorized binding (no secret material) or null when unknown, revoked,
+   * expired, or the secret mismatches (constant-time compare).
+   */
+  validateAgentToken(agentId: string, token: string): AgentBinding | null {
+    const record = this.state.agents.find((agent) => agent.agentId === agentId);
+    if (!record || record.revokedAt) return null;
+    if (record.expiresAt !== undefined && record.expiresAt < this.now()) return null;
+    const presentedHash = hashSecret(token);
+    if (!constantTimeStringEqual(presentedHash, record.tokenHash)) return null;
+    return {
+      agentId: record.agentId,
+      entityId: record.entityId,
+      contextId: record.contextId,
+      channelId: record.channelId,
+      ...(record.scopes ? { scopes: record.scopes } : {}),
+    };
+  }
+
+  /** Revoke a single agent credential by id. Returns whether it was live. */
+  revokeAgentCredential(agentId: string): boolean {
+    const record = this.state.agents.find((agent) => agent.agentId === agentId);
+    if (!record || record.revokedAt) return false;
+    record.revokedAt = this.now();
+    this.save();
+    return true;
+  }
+
+  getAgentCredential(agentId: string): AgentCredentialRecord | null {
+    const record = this.state.agents.find((agent) => agent.agentId === agentId);
+    return record ? { ...record, ...(record.scopes ? { scopes: [...record.scopes] } : {}) } : null;
+  }
+
+  /**
+   * Revoke every outstanding agent credential bound to an entity. Called by
+   * `retireEntity` so credentials never outlive their entity. Returns the ids
+   * revoked so the caller can also drop live TokenManager tokens.
+   */
+  revokeAgentCredentialsForEntity(entityId: string): string[] {
+    const revoked: string[] = [];
+    for (const record of this.state.agents) {
+      if (record.entityId === entityId && !record.revokedAt) {
+        record.revokedAt = this.now();
+        revoked.push(record.agentId);
+      }
+    }
+    if (revoked.length > 0) this.save();
+    return revoked;
+  }
+
+  listAgentCredentials(): AgentCredentialRecord[] {
+    return this.state.agents.map((agent) => ({ ...agent }));
+  }
+
   private load(): StoredDeviceAuthState {
     if (!fs.existsSync(this.filePath)) {
-      return { serverId: `srv_${randomBase64Url(18)}`, devices: [] };
+      return { serverId: `srv_${randomBase64Url(18)}`, devices: [], agents: [] };
     }
     const raw = JSON.parse(
       fs.readFileSync(this.filePath, "utf8")
@@ -195,6 +319,7 @@ export class DeviceAuthStore {
           ? raw.serverId
           : `srv_${randomBase64Url(18)}`,
       devices: Array.isArray(raw.devices) ? raw.devices.filter(isDeviceRecord) : [],
+      agents: Array.isArray(raw.agents) ? raw.agents.filter(isAgentCredentialRecord) : [],
     };
   }
 
@@ -221,5 +346,21 @@ function isDeviceRecord(value: unknown): value is DeviceRecord {
     typeof record.label === "string" &&
     typeof record.createdAt === "number" &&
     (record.room === undefined || typeof record.room === "string")
+  );
+}
+
+function isAgentCredentialRecord(value: unknown): value is AgentCredentialRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<AgentCredentialRecord>;
+  return (
+    typeof record.agentId === "string" &&
+    typeof record.tokenHash === "string" &&
+    typeof record.entityId === "string" &&
+    typeof record.contextId === "string" &&
+    typeof record.channelId === "string" &&
+    typeof record.createdAt === "number" &&
+    (record.expiresAt === undefined || typeof record.expiresAt === "number") &&
+    (record.revokedAt === undefined || typeof record.revokedAt === "number") &&
+    (record.scopes === undefined || Array.isArray(record.scopes))
   );
 }

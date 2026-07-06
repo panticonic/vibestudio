@@ -143,6 +143,7 @@ describe("main provenance — DO-owned push lineage + fail-closed drift", () => 
       buildValidate: async () => [],
     });
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),

@@ -21,6 +21,10 @@ export type SubagentRunStatus =
 
 export type SubagentRunMerge = "merged" | "conflicted" | "discarded";
 
+/** The reasoning engine behind a subagent: "pi" is the in-process vessel; any
+ *  other string names an extension-owned external launcher. */
+export type SubagentAgentKind = string;
+
 export interface SubagentRunRow {
   runId: string;
   taskChannelId: string;
@@ -35,6 +39,10 @@ export interface SubagentRunRow {
   merge: SubagentRunMerge | null;
   startedAt: number;
   lastActivityAt: number;
+  /** Reasoning engine kind (default "pi"). */
+  agentKind: SubagentAgentKind;
+  /** External session entity id for extension-launched kinds, or null. */
+  externalSessionEntityId: string | null;
 }
 
 interface SubagentRunSqlRow {
@@ -51,6 +59,9 @@ interface SubagentRunSqlRow {
   merge_status: string | null;
   started_at: number;
   last_activity_at: number;
+  agent_kind: string | null;
+  external_session_entity_id: string | null;
+  process_id?: string | null;
 }
 
 function toRow(row: SubagentRunSqlRow): SubagentRunRow {
@@ -68,6 +79,8 @@ function toRow(row: SubagentRunSqlRow): SubagentRunRow {
     merge: (row.merge_status as SubagentRunMerge | null) ?? null,
     startedAt: Number(row.started_at),
     lastActivityAt: Number(row.last_activity_at),
+    agentKind: row.agent_kind || "pi",
+    externalSessionEntityId: row.external_session_entity_id ?? row.process_id ?? null,
   };
 }
 
@@ -89,7 +102,9 @@ export class SubagentRunStore {
         status TEXT NOT NULL,
         merge_status TEXT,
         started_at INTEGER NOT NULL,
-        last_activity_at INTEGER NOT NULL
+        last_activity_at INTEGER NOT NULL,
+        agent_kind TEXT,
+        external_session_entity_id TEXT
       )
     `);
     this.sql.exec(`
@@ -98,6 +113,11 @@ export class SubagentRunStore {
         last_seq INTEGER NOT NULL
       )
     `);
+    try {
+      this.sql.exec(`ALTER TABLE subagent_runs ADD COLUMN external_session_entity_id TEXT`);
+    } catch {
+      // Column already exists on fresh/newer stores.
+    }
   }
 
   /** Idempotent insert — a re-driven spawn (same runId) is a no-op. */
@@ -105,8 +125,8 @@ export class SubagentRunStore {
     this.sql.exec(
       `INSERT OR IGNORE INTO subagent_runs
          (run_id, task_channel_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
-          mode, label, depth, status, merge_status, started_at, last_activity_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          mode, label, depth, status, merge_status, started_at, last_activity_at, agent_kind, external_session_entity_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.runId,
       row.taskChannelId,
       row.childContextId,
@@ -119,7 +139,9 @@ export class SubagentRunStore {
       row.status,
       row.merge,
       row.startedAt,
-      row.lastActivityAt
+      row.lastActivityAt,
+      row.agentKind,
+      row.externalSessionEntityId
     );
   }
 
@@ -154,9 +176,7 @@ export class SubagentRunStore {
   /** Number of live (not-yet-terminal) runs — the fan-out gate. */
   countRunning(): number {
     const row = this.sql
-      .exec(
-        `SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status IN ('starting', 'running')`
-      )
+      .exec(`SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status IN ('starting', 'running')`)
       .toArray()[0];
     return Number(row?.["cnt"] ?? 0);
   }
@@ -181,6 +201,22 @@ export class SubagentRunStore {
     this.sql.exec(
       `UPDATE subagent_runs SET child_participant_id = ? WHERE run_id = ?`,
       participantId,
+      runId
+    );
+  }
+
+  setExternalSessionEntityId(runId: string, entityId: string | null): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET external_session_entity_id = ? WHERE run_id = ?`,
+      entityId,
+      runId
+    );
+  }
+
+  setChildEntityId(runId: string, childEntityId: string): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET child_entity_id = ? WHERE run_id = ?`,
+      childEntityId,
       runId
     );
   }

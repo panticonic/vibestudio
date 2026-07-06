@@ -214,6 +214,60 @@ describe("PubSubChannel", () => {
     );
   });
 
+  it("does not let agent callers inject or evict arbitrary roster participants", async () => {
+    const { instance } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+
+    setRpcCaller(instance, "agent:session-1", "agent");
+    await expect(
+      instance.subscribe("panel:phantom", { contextId: "ctx-1", name: "Fake", type: "agent" })
+    ).rejects.toThrow("Participant panel:phantom cannot be subscribed by caller agent:session-1");
+    await expect(instance.unsubscribe("panel:user")).rejects.toThrow(
+      "unsubscribe: participant panel:user cannot be used by caller agent:session-1"
+    );
+    await expect(
+      instance.subscribe("agent:session-1", {
+        contextId: "ctx-1",
+        name: "Agent",
+        type: "agent",
+      })
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("does not let shell callers inject arbitrary roster participants", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "shell:dev-1", "shell");
+
+    await expect(
+      instance.subscribe("cli-shadow", { contextId: "ctx-1", name: "CLI", type: "client" })
+    ).rejects.toThrow("Participant cli-shadow cannot be subscribed by caller shell:dev-1");
+    await expect(
+      instance.subscribe("shell:dev-1", { contextId: "ctx-1", name: "CLI", type: "client" })
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("sendAsCaller ignores an agent-supplied display handle", async () => {
+    const { instance, gad } = await createGadBackedChannel();
+    setRpcCaller(instance, "agent:session-1", "agent");
+
+    await instance.sendAsCaller("hello", { handle: "Alice" });
+
+    const rows = gad.sql
+      .exec(
+        `SELECT annotations_json FROM log_events WHERE payload_kind = ? ORDER BY seq DESC`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray();
+    const annotations = JSON.parse(String(rows[0]!["annotations_json"]));
+    expect(annotations.metadata).toMatchObject({
+      name: "agent:session-1",
+      handle: "agent:session-1",
+      kind: "agent",
+    });
+  });
+
   it("rejects arbitrary participant labels for durable-object callers", async () => {
     const { instance } = await createGadBackedChannel({
       rpcCall: (target, method) => {

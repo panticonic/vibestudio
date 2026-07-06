@@ -13,6 +13,15 @@ function panelCaller(id = "panel-source") {
   });
 }
 
+function agentCaller(entityId: string, contextId: string) {
+  return createVerifiedCaller(`agent:${entityId}`, "agent", null, {
+    entityId,
+    contextId,
+    channelId: "chan-1",
+    agentId: `agent:${entityId}`,
+  });
+}
+
 function entityCacheWithContext(
   callerId: string,
   contextId: string,
@@ -91,6 +100,41 @@ describe("vcsService", () => {
       await service.handler({ caller: panelCaller() }, "status", ["panels/source"]);
 
       expect(statusHead).toHaveBeenCalledWith("ctx:ctx-1", "panels/source");
+    });
+
+    it("agent status defaults to the host-verified bound context", async () => {
+      const statusHead = vi.fn(async () => ({
+        stateHash: "state:agent",
+        dirty: false,
+        added: [],
+        removed: [],
+        changed: [],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { statusHead } as never,
+        entityCache: new EntityCache(),
+      });
+
+      await service.handler({ caller: agentCaller("ent-agent", "ctx-agent") }, "status", [
+        "panels/source",
+      ]);
+
+      expect(statusHead).toHaveBeenCalledWith("ctx:ctx-agent", "panels/source");
+    });
+
+    it("agent status fails closed when the verified binding is missing", async () => {
+      const statusHead = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { statusHead } as never,
+        entityCache: new EntityCache(),
+      });
+
+      await expect(
+        service.handler({ caller: createVerifiedCaller("agent:ent-agent", "agent") }, "status", [
+          "panels/source",
+        ])
+      ).rejects.toThrow(/agent caller has no entity binding/);
+      expect(statusHead).not.toHaveBeenCalled();
     });
 
     it("resolveHead defaults to the caller's context head when the arg is omitted", async () => {
@@ -514,6 +558,41 @@ describe("vcsService", () => {
       expect(result.committed).toBe(false);
       expect(result.status).toBe("uncommitted");
       expect(result.stateHash).toBe("state:next");
+    });
+
+    it("allows agent callers to record a working edit on their bound context head", async () => {
+      const recordEdit = vi.fn(async () => ({
+        head: "ctx:ctx-agent",
+        stateHash: "state:next",
+        committed: false as const,
+        status: "uncommitted" as const,
+        editSeq: 1,
+        changedPaths: ["panels/source/agent.txt"],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { recordEdit } as never,
+        entityCache: new EntityCache(),
+      });
+
+      await service.handler({ caller: agentCaller("ent-agent", "ctx-agent") }, "edit", [
+        {
+          edits: [
+            {
+              kind: "write",
+              path: "panels/source/agent.txt",
+              content: { kind: "text", text: "ok\n" },
+            },
+          ],
+        },
+      ]);
+
+      expect(recordEdit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          head: "ctx:ctx-agent",
+          actor: { id: "agent:ent-agent", kind: "agent" },
+          repoPath: "panels/source",
+        })
+      );
     });
 
     it("normalizes documented shorthand edit ops before routing to WorkspaceVcs", async () => {

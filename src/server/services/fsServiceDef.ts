@@ -23,7 +23,7 @@ export function createFsServiceDefinition(getFsService: () => FsService): Servic
     name: "fs",
     description: "Per-context filesystem operations (sandboxed to context folder)",
     policy: {
-      allowed: ["panel", "app", "server", "worker", "do", "extension", "shell"],
+      allowed: ["panel", "app", "server", "worker", "do", "extension", "shell", "agent"],
     },
     methods: fsMethods,
     handler: (ctx, method, serviceArgs) => handleFsCall(getFsService(), ctx, method, serviceArgs),

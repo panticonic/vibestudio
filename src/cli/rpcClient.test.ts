@@ -1,6 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthError } from "./output.js";
-import { RpcClient, clearShellTokenCache, refreshShell } from "./rpcClient.js";
+import { RpcClient, clearShellTokenCache, refreshAgent, refreshShell } from "./rpcClient.js";
+
+// Intercept the lazily-imported WS client so push/stream selection can be
+// asserted without opening a real socket.
+const wsMocks = vi.hoisted(() => ({
+  ctor: vi.fn(),
+  onEvent: vi.fn(async () => () => {}),
+  stream: vi.fn(async () => new Response("streamed")),
+}));
+vi.mock("./wsClient.js", () => ({
+  WsRpcClient: class {
+    constructor(config: unknown) {
+      wsMocks.ctor(config);
+    }
+    onEvent = wsMocks.onEvent;
+    stream = wsMocks.stream;
+    async onRecovery() {
+      return () => {};
+    }
+    async close() {}
+  },
+}));
 
 const CREDS = {
   url: "https://host.tailnet.ts.net",
@@ -108,13 +129,13 @@ describe("rpcClient", () => {
     expect(requests[1]?.auth).toBe("Bearer tok");
     expect(requests[2]?.auth).toBe("Bearer tok");
     expect(requests[1]?.body).toMatchObject({
-      from: CREDS.deviceId,
+      from: "c",
       target: "main",
-      delivery: { caller: { callerId: CREDS.deviceId, callerKind: "shell" } },
-      provenance: [{ callerId: CREDS.deviceId, callerKind: "shell" }],
+      delivery: { caller: { callerId: "c", callerKind: "shell" } },
+      provenance: [{ callerId: "c", callerKind: "shell" }],
       message: {
         type: "request",
-        fromId: CREDS.deviceId,
+        fromId: "c",
         method: "meta.listServices",
         args: [],
       },
@@ -201,12 +222,12 @@ describe("rpcClient", () => {
     await expect(client.callTarget("worker:repo:abc", "ping", ["x"])).resolves.toBe("pong");
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({
-      from: CREDS.deviceId,
+      from: "c",
       target: "worker:repo:abc",
-      delivery: { caller: { callerId: CREDS.deviceId, callerKind: "shell" } },
+      delivery: { caller: { callerId: "c", callerKind: "shell" } },
       message: {
         type: "request",
-        fromId: CREDS.deviceId,
+        fromId: "c",
         method: "ping",
         args: ["x"],
       },
@@ -276,5 +297,98 @@ describe("rpcClient", () => {
     );
     const client = new RpcClient(CREDS);
     await expect(client.call("meta.listServices", [])).rejects.toThrow(AuthError);
+  });
+
+  describe("WS push transport selection (§6.1)", () => {
+    beforeEach(() => {
+      wsMocks.ctor.mockClear();
+      wsMocks.onEvent.mockClear();
+      wsMocks.stream.mockClear();
+    });
+
+    it("opens the WS client for onEvent on a loopback device credential (was WebRTC-only)", async () => {
+      const client = new RpcClient(CREDS);
+      const off = await client.onEvent("some:event", () => {});
+      expect(wsMocks.ctor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: CREDS.url,
+          callerId: `shell:${CREDS.deviceId}`,
+          callerKind: "shell",
+        })
+      );
+      expect(wsMocks.onEvent).toHaveBeenCalledTimes(1);
+      expect(typeof off).toBe("function");
+    });
+
+    it("opens the WS client for stream with an agent-kind caller on a raw agent token", async () => {
+      const client = new RpcClient({ url: CREDS.url, token: "agent:agt_1:sec" });
+      await client.stream("main", "eval.run", []);
+      expect(wsMocks.ctor).toHaveBeenCalledWith(
+        expect.objectContaining({ callerId: "agent:agt_1", callerKind: "agent" })
+      );
+      expect(wsMocks.stream).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("agent raw-token credential (§6.1)", () => {
+    const AGENT_CREDS = {
+      url: "https://host.tailnet.ts.net",
+      token: "agent:agt_cli:secret_cli",
+    };
+
+    it("exchanges the agent token for a bearer at /refresh-agent and posts an agent envelope", async () => {
+      const requests: Array<{ url: string; auth?: string; body: unknown }> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: URL, init?: RequestInit) => {
+          const headers = (init?.headers ?? {}) as Record<string, string>;
+          requests.push({
+            url: String(url),
+            auth: headers["Authorization"],
+            body: JSON.parse(String(init?.body ?? "{}")),
+          });
+          if (String(url).endsWith("/refresh-agent")) {
+            return new Response(
+              JSON.stringify({
+                token: "bearer_agent",
+                callerId: "agent:session:s1",
+                callerKind: "agent",
+                entityId: "session:s1",
+                contextId: "ctx-abc",
+                channelId: "chan-1",
+                agentId: "agt_cli",
+              })
+            );
+          }
+          return new Response(rpcResult({ ok: true }));
+        })
+      );
+
+      const client = new RpcClient(AGENT_CREDS);
+      await expect(client.call("fs.readFile", ["/x"])).resolves.toEqual({ ok: true });
+
+      expect(requests.map((r) => r.url)).toEqual([
+        "https://host.tailnet.ts.net/_r/s/auth/refresh-agent",
+        "https://host.tailnet.ts.net/rpc",
+      ]);
+      // The agent credential is sent verbatim to /refresh-agent.
+      expect(requests[0]?.body).toEqual({ agentToken: "agent:agt_cli:secret_cli" });
+      // /rpc rides the exchanged bearer with an agent-kind envelope.
+      expect(requests[1]?.auth).toBe("Bearer bearer_agent");
+      expect(requests[1]?.body).toMatchObject({
+        from: "agent:session:s1",
+        target: "main",
+        delivery: { caller: { callerId: "agent:session:s1", callerKind: "agent" } },
+        message: { type: "request", method: "fs.readFile", args: ["/x"] },
+      });
+    });
+
+    it("refreshAgent surfaces a failed exchange as an auth error", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify({ error: "bad" }), { status: 401 }))
+      );
+      await expect(refreshAgent(AGENT_CREDS)).rejects.toThrow(AuthError);
+    });
   });
 });

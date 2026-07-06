@@ -62,6 +62,14 @@ class JigShell implements ShellApi {
     return { sessionId: this.session.sessionId };
   }
 
+  async createContext(): Promise<{ contextId: string; contextAttachToken: string }> {
+    return { contextId: "jig-context", contextAttachToken: "jig-context-token" };
+  }
+
+  async registerLaunchAdapter(): Promise<void> {}
+
+  async unregisterLaunchAdapter(): Promise<void> {}
+
   async dispose(): Promise<void> {}
 
   async restart(): Promise<{ sessionId: string }> {

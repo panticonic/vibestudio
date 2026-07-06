@@ -103,6 +103,7 @@ describe("lifecycle intents — fork/delete/restore write-ahead reconcile (§6)"
       gate: (batch) => gateHook(batch),
     });
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),

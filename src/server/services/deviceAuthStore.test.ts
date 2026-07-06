@@ -81,6 +81,81 @@ describe("DeviceAuthStore", () => {
   });
 });
 
+describe("DeviceAuthStore agent credentials (§3.2)", () => {
+  it("mints an entity-scoped credential, persists only the token hash, and validates the secret", () => {
+    const filePath = tempFile();
+    let now = 1000;
+    const store = new DeviceAuthStore(filePath, () => now);
+
+    const { agentId, agentToken } = store.mintAgentCredential({
+      entityId: "session:s1",
+      contextId: "ctx-abc",
+      channelId: "chan-1",
+    });
+    expect(agentId).toMatch(/^agt_/);
+    expect(agentToken).toBe(`agent:${agentId}:${agentToken.split(":")[2]}`);
+    const secret = agentToken.split(":")[2]!;
+
+    // Only the sha256 hash is persisted — never the clear secret.
+    const raw = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    expect(raw.agents).toHaveLength(1);
+    expect(raw.agents[0].tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(raw)).not.toContain(secret);
+
+    // Validation returns the binding (no secret material) after reload.
+    now = 2000;
+    const reloaded = new DeviceAuthStore(filePath, () => now);
+    const binding = reloaded.validateAgentToken(agentId, secret);
+    expect(binding).toEqual({
+      agentId,
+      entityId: "session:s1",
+      contextId: "ctx-abc",
+      channelId: "chan-1",
+    });
+    expect(reloaded.validateAgentToken(agentId, "wrong-secret")).toBeNull();
+    expect(reloaded.validateAgentToken("agt_missing", secret)).toBeNull();
+  });
+
+  it("honors expiry and revocation", () => {
+    const filePath = tempFile();
+    let now = 1000;
+    const store = new DeviceAuthStore(filePath, () => now);
+
+    const expiring = store.mintAgentCredential({
+      entityId: "e1",
+      contextId: "c1",
+      channelId: "ch1",
+      ttlMs: 100,
+    });
+    const secret = expiring.agentToken.split(":")[2]!;
+    expect(store.validateAgentToken(expiring.agentId, secret)).not.toBeNull();
+    now = 1101;
+    expect(store.validateAgentToken(expiring.agentId, secret)).toBeNull();
+
+    now = 1000;
+    const live = store.mintAgentCredential({ entityId: "e2", contextId: "c2", channelId: "ch2" });
+    const liveSecret = live.agentToken.split(":")[2]!;
+    expect(store.revokeAgentCredential(live.agentId)).toBe(true);
+    expect(store.revokeAgentCredential(live.agentId)).toBe(false);
+    expect(store.validateAgentToken(live.agentId, liveSecret)).toBeNull();
+  });
+
+  it("revokes every outstanding credential for a retired entity", () => {
+    const filePath = tempFile();
+    const store = new DeviceAuthStore(filePath, () => 1000);
+    const a = store.mintAgentCredential({ entityId: "ent", contextId: "c", channelId: "ch" });
+    const b = store.mintAgentCredential({ entityId: "ent", contextId: "c", channelId: "ch" });
+    const other = store.mintAgentCredential({ entityId: "keep", contextId: "c", channelId: "ch" });
+
+    const revoked = store.revokeAgentCredentialsForEntity("ent");
+    expect(revoked.sort()).toEqual([a.agentId, b.agentId].sort());
+    expect(store.validateAgentToken(a.agentId, a.agentToken.split(":")[2]!)).toBeNull();
+    expect(store.validateAgentToken(b.agentId, b.agentToken.split(":")[2]!)).toBeNull();
+    // The unrelated entity's credential is untouched.
+    expect(store.validateAgentToken(other.agentId, other.agentToken.split(":")[2]!)).not.toBeNull();
+  });
+});
+
 describe("DeviceAuthStore pairing rooms (per-invite rooms, plan §2.1)", () => {
   afterEach(() => {
     vi.useRealTimers();

@@ -5,6 +5,7 @@ import {
   type CliHubCredential,
   type CliStoredPairing,
 } from "./credentialStore.js";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcStreamOptions } from "@vibestudio/rpc";
 
 /**
@@ -39,6 +40,50 @@ export interface RefreshShellResponse {
   serverId?: string;
   serverBootId?: string;
   workspaceId?: string | null;
+}
+
+/**
+ * A raw-token credential: an entity-scoped agent credential
+ * `agent:<agentId>:<token>`, typically supplied via `VIBESTUDIO_AGENT_TOKEN`.
+ * The `agent:` token IS the auth; there is no
+ * refresh-shell device exchange; WS/WebRTC auth and the HTTP `/refresh-agent`
+ * bearer exchange all use it verbatim.
+ */
+export interface RawTokenCredential {
+  url: string;
+  token: string;
+  pairing?: CliStoredPairing;
+}
+
+/** Response of POST /_r/s/auth/refresh-agent (see authService.ts). */
+export interface RefreshAgentResponse {
+  token: string;
+  callerId: string;
+  callerKind: "agent";
+  entityId: string;
+  contextId: string;
+  channelId: string;
+  agentId: string;
+}
+
+export type RpcClientCredential =
+  | (Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
+      Partial<Pick<DeviceCredential, "pairing">>)
+  | RawTokenCredential;
+
+function isRawTokenCredential(creds: RpcClientCredential): creds is RawTokenCredential {
+  return typeof (creds as RawTokenCredential).token === "string";
+}
+
+/** Extract the `<agentId>` from an `agent:<agentId>:<secret>` token. */
+function agentIdFromToken(token: string): string {
+  const rest = token.startsWith("agent:") ? token.slice("agent:".length) : token;
+  const sep = rest.indexOf(":");
+  return sep > 0 ? rest.slice(0, sep) : rest;
+}
+
+export function shellCallerId(deviceId: string): string {
+  return deviceId.startsWith("shell:") ? deviceId : `shell:${deviceId}`;
 }
 
 /** Server-reported RPC failure (HTTP 200 with an `error` body). */
@@ -84,7 +129,8 @@ export async function refreshShell(
   }
   return {
     shellToken: body["shellToken"],
-    callerId: typeof body["callerId"] === "string" ? body["callerId"] : creds.deviceId,
+    callerId:
+      typeof body["callerId"] === "string" ? body["callerId"] : shellCallerId(creds.deviceId),
     deviceId: typeof body["deviceId"] === "string" ? body["deviceId"] : creds.deviceId,
     label: typeof body["label"] === "string" ? body["label"] : undefined,
     serverId: typeof body["serverId"] === "string" ? body["serverId"] : undefined,
@@ -96,12 +142,46 @@ export async function refreshShell(
   };
 }
 
-// In-process shell-token cache, keyed per (url, deviceId) so multiple
+/**
+ * Exchange an `agent:<agentId>:<token>` credential for a short-lived caller
+ * (bearer) token, so HTTP `POST /rpc` works with agent credentials — the HTTP
+ * mirror of the WS/WebRTC redeemer (one auth model everywhere, §6.1).
+ */
+export async function refreshAgent(creds: {
+  url: string;
+  token: string;
+}): Promise<RefreshAgentResponse> {
+  const response = await fetchOrAuthError(serverAuthRouteUrl(creds.url, "refresh-agent"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agentToken: creds.token }),
+  });
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok || typeof body["token"] !== "string") {
+    throw new AuthError(
+      remoteErrorMessage(
+        body,
+        `agent token exchange failed (${response.status} ${response.statusText})`
+      )
+    );
+  }
+  return {
+    token: body["token"],
+    callerId: typeof body["callerId"] === "string" ? body["callerId"] : "",
+    callerKind: "agent",
+    entityId: typeof body["entityId"] === "string" ? body["entityId"] : "",
+    contextId: typeof body["contextId"] === "string" ? body["contextId"] : "",
+    channelId: typeof body["channelId"] === "string" ? body["channelId"] : "",
+    agentId: typeof body["agentId"] === "string" ? body["agentId"] : "",
+  };
+}
+
+// In-process bearer-token cache, keyed per (url, principal) so multiple
 // RpcClient instances within one CLI invocation share a token.
 const shellTokenCache = new Map<string, string>();
 
-function cacheKey(creds: Pick<DeviceCredential, "url" | "deviceId">): string {
-  return `${creds.url}#${creds.deviceId}`;
+function cacheKey(url: string, principalId: string): string {
+  return `${url}#${principalId}`;
 }
 
 /** Test hook: drop all cached shell tokens. */
@@ -110,45 +190,95 @@ export function clearShellTokenCache(): void {
 }
 
 export class RpcClient {
-  private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
-  private keepWebRtcOpen = false;
+  private readonly url: string;
+  /** Non-null for a raw agent-token credential (`agent:<agentId>:<token>`). */
+  private readonly rawToken: string | null;
+  private readonly deviceId: string | null;
+  private readonly refreshToken: string | null;
+  private readonly pairing: CliStoredPairing | undefined;
+  /** Envelope self-id + kind. The server re-derives the authenticated caller
+   *  from the redeemed token, so these are informational for routing/logging. */
+  private callerId: string;
+  private readonly callerKind: CallerKind;
 
-  constructor(
-    private readonly creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> &
-      Partial<Pick<DeviceCredential, "pairing">>
-  ) {}
+  private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
+  private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
+  private keepPushOpen = false;
+
+  constructor(creds: RpcClientCredential) {
+    this.url = creds.url;
+    this.pairing = creds.pairing;
+    if (isRawTokenCredential(creds)) {
+      this.rawToken = creds.token;
+      this.deviceId = null;
+      this.refreshToken = null;
+      this.callerId = `agent:${agentIdFromToken(creds.token)}`;
+      this.callerKind = "agent";
+    } else {
+      this.rawToken = null;
+      this.deviceId = creds.deviceId;
+      this.refreshToken = creds.refreshToken;
+      this.callerId = shellCallerId(creds.deviceId);
+      this.callerKind = "shell";
+    }
+  }
 
   /** Result of the most recent shell refresh, if one occurred. */
   lastRefresh: RefreshShellResponse | null = null;
 
+  /** Whether this credential rides WebRTC (a pairing blob is present). */
+  private get isWebRtc(): boolean {
+    return isWebRtcCredential({ pairing: this.pairing });
+  }
+
+  /** The redeemable WS/WebRTC auth token (`agent:…` or `refresh:…`). */
+  private authToken(): string {
+    return this.rawToken ?? `refresh:${this.deviceId}:${this.refreshToken}`;
+  }
+
+  /** Cache principal id for bearer tokens (agentId or deviceId). */
+  private principalCacheId(): string {
+    return this.rawToken ? agentIdFromToken(this.rawToken) : this.deviceId!;
+  }
+
   /**
-   * Ensure a shell token exists (cached or freshly refreshed) and return it.
-   * Lets callers that need the raw token (e.g. eval runner handshakes) share
-   * the same token subsequent `call`s will use, instead of refreshing twice.
+   * Ensure a token exists (cached or freshly refreshed) and return it.
+   * For push transports (WS/WebRTC) the redeemable token IS the auth; for the
+   * one-shot HTTP path it is a short-lived bearer (shell or agent).
    */
   async getShellToken(): Promise<string> {
-    if (isWebRtcCredential(this.creds)) {
-      return `refresh:${this.creds.deviceId}:${this.creds.refreshToken}`;
-    }
-    return await this.ensureShellToken();
+    if (this.rawToken) return this.rawToken;
+    if (this.isWebRtc) return this.authToken();
+    return await this.ensureBearerToken();
   }
 
-  private async ensureShellToken(): Promise<string> {
-    const cached = shellTokenCache.get(cacheKey(this.creds));
+  private async ensureBearerToken(): Promise<string> {
+    const cached = shellTokenCache.get(cacheKey(this.url, this.principalCacheId()));
     if (cached) return cached;
-    return await this.refreshShellToken();
+    return await this.refreshBearerToken();
   }
 
-  private async refreshShellToken(): Promise<string> {
-    const refresh = await refreshShell(this.creds);
+  private async refreshBearerToken(): Promise<string> {
+    if (this.rawToken) {
+      const refresh = await refreshAgent({ url: this.url, token: this.rawToken });
+      this.callerId = refresh.callerId || `agent:${refresh.entityId}`;
+      shellTokenCache.set(cacheKey(this.url, this.principalCacheId()), refresh.token);
+      return refresh.token;
+    }
+    const refresh = await refreshShell({
+      url: this.url,
+      deviceId: this.deviceId!,
+      refreshToken: this.refreshToken!,
+    });
     this.lastRefresh = refresh;
-    shellTokenCache.set(cacheKey(this.creds), refresh.shellToken);
+    this.callerId = refresh.callerId;
+    shellTokenCache.set(cacheKey(this.url, this.principalCacheId()), refresh.shellToken);
     return refresh.shellToken;
   }
 
   /** Direct service dispatch: `service.method` on the server dispatcher. */
   async call<T = unknown>(method: string, args: unknown[] = []): Promise<T> {
-    if (isWebRtcCredential(this.creds)) {
+    if (this.isWebRtc) {
       return await this.dispatchWebRtc<T>("main", method, args);
     }
     return await this.dispatch<T>("main", method, args);
@@ -160,10 +290,34 @@ export class RpcClient {
     method: string,
     args: unknown[] = []
   ): Promise<T> {
-    if (isWebRtcCredential(this.creds)) {
+    if (this.isWebRtc) {
       return await this.dispatchWebRtc<T>(targetId, method, args);
     }
     return await this.dispatch<T>(targetId, method, args);
+  }
+
+  /**
+   * `callTarget` over the PERSISTENT push transport (WS, or WebRTC when paired),
+   * not the one-shot HTTP path. A subsequent {@link onEvent} on this same client
+   * receives pushes the call registers — e.g. `channel subscribe`, whose
+   * `channel:message` emits are routed to the subscribing connection. A plain
+   * HTTP `callTarget` would register against a transient request connection that
+   * never receives emits.
+   */
+  async callTargetPush<T = unknown>(
+    targetId: string,
+    method: string,
+    args: unknown[] = []
+  ): Promise<T> {
+    this.keepPushOpen = true;
+    if (this.isWebRtc) {
+      const client = await this.ensureWebRtcClient();
+      return targetId === "main"
+        ? await client.call<T>(method, args)
+        : await client.callTarget<T>(targetId, method, args);
+    }
+    const client = await this.ensureWsClient();
+    return await client.callTarget<T>(targetId, method, args);
   }
 
   async stream(
@@ -172,10 +326,14 @@ export class RpcClient {
     args: unknown[] = [],
     options?: RpcStreamOptions
   ): Promise<Response> {
-    if (!isWebRtcCredential(this.creds)) {
-      throw new Error("CLI streaming requires a WebRTC remote credential");
+    // Push/stream: WebRTC when the credential is a pairing blob, otherwise the
+    // persistent loopback/LAN WebSocket (no more "streaming requires WebRTC").
+    if (this.isWebRtc) {
+      const client = await this.ensureWebRtcClient();
+      return await client.stream(targetId, method, args, options);
     }
-    const client = await this.ensureWebRtcClient();
+    this.keepPushOpen = true;
+    const client = await this.ensureWsClient();
     return await client.stream(targetId, method, args, options);
   }
 
@@ -183,36 +341,44 @@ export class RpcClient {
     event: string,
     listener: (payload: unknown, fromId: string) => void
   ): Promise<() => void> {
-    if (!isWebRtcCredential(this.creds)) {
-      throw new Error("CLI push events require a WebRTC remote credential");
+    this.keepPushOpen = true;
+    if (this.isWebRtc) {
+      const client = await this.ensureWebRtcClient();
+      return await client.onEvent(event, listener);
     }
-    this.keepWebRtcOpen = true;
-    const client = await this.ensureWebRtcClient();
+    const client = await this.ensureWsClient();
     return await client.onEvent(event, listener);
   }
 
   async onRecovery(
     handler: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
   ): Promise<() => void> {
-    if (!isWebRtcCredential(this.creds)) return () => {};
-    this.keepWebRtcOpen = true;
-    const client = await this.ensureWebRtcClient();
+    this.keepPushOpen = true;
+    if (this.isWebRtc) {
+      const client = await this.ensureWebRtcClient();
+      return await client.onRecovery(handler);
+    }
+    const client = await this.ensureWsClient();
     return await client.onRecovery(handler);
   }
 
   async close(): Promise<void> {
-    const client = this.webRtcClient;
+    const webRtc = this.webRtcClient;
+    const ws = this.wsClient;
     this.webRtcClient = null;
-    if (client) await (await client).close();
+    this.wsClient = null;
+    if (webRtc) await (await webRtc).close();
+    if (ws) await (await ws).close();
   }
 
   /** Build an `RpcEnvelope` and POST it to the envelope-native `/rpc`. */
   private async dispatch<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
+    const token = await this.ensureBearerToken();
     const requestId =
       typeof globalThis.crypto?.randomUUID === "function"
         ? globalThis.crypto.randomUUID()
         : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    const caller = { callerId: this.creds.deviceId, callerKind: "shell" as const };
+    const caller = { callerId: this.callerId, callerKind: this.callerKind };
     const envelope = {
       from: caller.callerId,
       target: targetId,
@@ -220,16 +386,16 @@ export class RpcClient {
       provenance: [caller],
       message: { type: "request", requestId, fromId: caller.callerId, method, args },
     };
-    return await this.post<T>(envelope);
+    return await this.post<T>(envelope, token);
   }
 
-  private async post<T>(body: Record<string, unknown>): Promise<T> {
-    let token = await this.ensureShellToken();
+  private async post<T>(body: Record<string, unknown>, initialToken?: string): Promise<T> {
+    let token = initialToken ?? (await this.ensureBearerToken());
     let response = await this.postRpc(token, body);
     if (response.status === 401) {
-      // Shell token expired or server restarted — refresh once and retry.
-      shellTokenCache.delete(cacheKey(this.creds));
-      token = await this.refreshShellToken();
+      // Bearer token expired or server restarted — refresh once and retry.
+      shellTokenCache.delete(cacheKey(this.url, this.principalCacheId()));
+      token = await this.refreshBearerToken();
       response = await this.postRpc(token, body);
       if (response.status === 401) {
         const errorBody = (await response.json().catch(() => ({}))) as Record<string, unknown>;
@@ -265,7 +431,7 @@ export class RpcClient {
   }
 
   private postRpc(token: string, body: Record<string, unknown>): Promise<Response> {
-    return fetchOrAuthError(serverRpcHttpUrl(this.creds.url), {
+    return fetchOrAuthError(serverRpcHttpUrl(this.url), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -284,25 +450,26 @@ export class RpcClient {
     } catch (error) {
       throw toRpcError(error);
     } finally {
-      if (!this.keepWebRtcOpen) await this.close().catch(() => undefined);
+      if (!this.keepPushOpen) await this.close().catch(() => undefined);
     }
   }
 
   private ensureWebRtcClient(): Promise<import("./webrtcClient.js").WebRtcRpcClient> {
-    if (!isWebRtcCredential(this.creds)) {
+    if (!this.pairing) {
       throw new Error("Stored credential does not contain WebRTC pairing material");
     }
     if (!this.webRtcClient) {
+      const pairing = this.pairing;
       this.webRtcClient = import("./webrtcClient.js")
         .then(({ WebRtcRpcClient }) => {
-          const client = new WebRtcRpcClient({
-            pairing: this.creds.pairing!,
-            callerId: `shell:${this.creds.deviceId}`,
-            getToken: () => `refresh:${this.creds.deviceId}:${this.creds.refreshToken}`,
+          return new WebRtcRpcClient({
+            pairing,
+            callerId: this.callerId,
+            callerKind: this.callerKind,
+            getToken: () => this.authToken(),
             clientLabel: "Vibestudio CLI",
             onPaired: () => undefined,
           });
-          return client;
         })
         .catch((error) => {
           this.webRtcClient = null;
@@ -310,6 +477,26 @@ export class RpcClient {
         });
     }
     return this.webRtcClient;
+  }
+
+  private ensureWsClient(): Promise<import("./wsClient.js").WsRpcClient> {
+    if (!this.wsClient) {
+      this.wsClient = import("./wsClient.js")
+        .then(({ WsRpcClient }) => {
+          return new WsRpcClient({
+            url: this.url,
+            callerId: this.callerId,
+            callerKind: this.callerKind,
+            getToken: () => this.authToken(),
+            clientLabel: "Vibestudio CLI",
+          });
+        })
+        .catch((error) => {
+          this.wsClient = null;
+          throw error;
+        });
+    }
+    return this.wsClient;
   }
 }
 

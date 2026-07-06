@@ -28,6 +28,9 @@ import { agentCommands } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
 import { evalCommands } from "./agent/evalCommand.js";
+import { channelCommands } from "./channelCommands.js";
+import { contextCommands } from "./contextCommands.js";
+import { runClaudeGroup } from "./claude/index.js";
 import {
   findCommand,
   groupCommands,
@@ -837,15 +840,33 @@ const commandRegistry: CliCommand[] = [
   ...fsCommands,
   ...vcsCommands,
   ...evalCommands,
+  ...channelCommands,
+  ...contextCommands,
 ];
 
-const GROUP_ORDER = ["remote", "terminal", "mobile", "agent", "fs", "vcs", "eval"];
+const GROUP_ORDER = [
+  "remote",
+  "terminal",
+  "mobile",
+  "agent",
+  "fs",
+  "vcs",
+  "eval",
+  "channel",
+  "context",
+];
 
 export async function main(argv: string[]): Promise<number> {
   const [group, ...rest] = argv;
   if (!group || group === "--help" || group === "help") {
     printHelp();
     return 0;
+  }
+  // The `claude` group self-parses (it supports a bare launcher invocation plus
+  // `emit`/`channel-host` subcommands) and calls the claude-code extension over
+  // RPC — it deliberately owns no `CliCommand` entries.
+  if (group === "claude") {
+    return await runClaudeGroup(rest);
   }
   if (!GROUP_ORDER.includes(group)) {
     console.error(`Unknown command: ${group}`);
@@ -931,10 +952,13 @@ function runScript(scriptName: string, argv: string[]): Promise<number> {
 
 function printHelp(): void {
   const sections = GROUP_ORDER.map((group) => renderGroupHelp(commandRegistry, group)).join("\n");
+  const claudeSection =
+    "  vibestudio claude [--channel <id>]                   Launch Claude Code as a linked channel agent";
   console.log(`vibestudio
 
 Usage:
 ${sections}
+${claudeSection}
 
 Credentials are stored as a 0600 JSON file at ${credentialPath()}.
 `);

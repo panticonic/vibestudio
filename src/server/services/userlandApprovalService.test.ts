@@ -16,17 +16,52 @@ function createDeps() {
     kind: "choice",
     choice: "allow",
   }));
+  const requestExternalAgent = vi.fn<ApprovalQueue["requestExternalAgent"]>(async () => ({
+    behavior: "allow",
+  }));
+  const settleExternalAgent = vi.fn<ApprovalQueue["settleExternalAgent"]>(() => 1);
   const lookup = vi.fn<
     (principal: unknown, subjectId: string, issuer?: unknown) => UserlandApprovalGrant | null
   >(() => null);
   const record = vi.fn(async () => {});
   const revoke = vi.fn(async () => true);
   const list = vi.fn<(principal: unknown, issuer?: unknown) => UserlandApprovalGrant[]>(() => []);
+  const resolveRuntimeEntity = vi.fn(async (id: string) =>
+    id === "do:workers/alpha:AlphaDO:agent-1"
+      ? {
+          id,
+          kind: "do" as const,
+          source: { repoPath: "workers/alpha", effectiveVersion: "hash-1" },
+          contextId: "ctx-1",
+          className: "AlphaDO",
+          key: "agent-1",
+          createdAt: 1,
+          status: "active" as const,
+          cleanupComplete: true,
+          agentBinding: { entityId: "entity-1", contextId: "ctx-1", channelId: "channel-1" },
+        }
+      : null
+  );
   const service = createUserlandApprovalService({
-    approvalQueue: { requestUserland: queued } as Partial<ApprovalQueue> as ApprovalQueue,
+    approvalQueue: {
+      requestUserland: queued,
+      requestExternalAgent,
+      settleExternalAgent,
+    } as Partial<ApprovalQueue> as ApprovalQueue,
     grantStore: { lookup, record, revoke, list },
+    resolveRuntimeEntity,
   });
-  return { service, queued, lookup, record, revoke, list };
+  return {
+    service,
+    queued,
+    requestExternalAgent,
+    settleExternalAgent,
+    lookup,
+    record,
+    revoke,
+    list,
+    resolveRuntimeEntity,
+  };
 }
 
 const workerCtx: ServiceContext = {
@@ -459,6 +494,119 @@ describe("userlandApprovalService", () => {
     await expect(
       service.handler(workerCtx, "requestAs", [workerCtx.caller.code, validRequest])
     ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
+  const externalRequest = {
+    channelId: "channel-1",
+    capability: "external-agent.tool",
+    operation: "Bash",
+    description: "External agent wants to run Bash",
+    preview: "npm install",
+    requestId: "req-1",
+    resolveToken: "resolve-token-123",
+  };
+
+  it("requestExternal maps the runtime payload onto the queue and returns the verdict", async () => {
+    const { service, requestExternalAgent } = createDeps();
+    requestExternalAgent.mockResolvedValueOnce({ behavior: "allow" });
+
+    await expect(service.handler(doCtx, "requestExternal", [externalRequest])).resolves.toEqual({
+      behavior: "allow",
+    });
+    expect(requestExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "external-agent",
+        callerId: "do:workers/alpha:AlphaDO:agent-1",
+        callerKind: "do",
+        entityId: "entity-1",
+        channelId: "channel-1",
+        capability: "external-agent.tool",
+        operationName: "Bash",
+        preview: "npm install",
+        requestId: "req-1",
+        resolveToken: "resolve-token-123",
+        signal: expect.any(AbortSignal),
+      })
+    );
+  });
+
+  it("requestExternal returns the deny verdict from the queue", async () => {
+    const { service, requestExternalAgent } = createDeps();
+    requestExternalAgent.mockResolvedValueOnce({ behavior: "deny" });
+    await expect(service.handler(doCtx, "requestExternal", [externalRequest])).resolves.toEqual({
+      behavior: "deny",
+    });
+  });
+
+  it("requestExternal strips control chars from the preview before queueing", async () => {
+    const { service, requestExternalAgent } = createDeps();
+    await service.handler(doCtx, "requestExternal", [
+      { ...externalRequest, preview: "line1 \nline2" },
+    ]);
+    expect(requestExternalAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ preview: "line1\nline2" })
+    );
+  });
+
+  it("requestExternal arms a timeout that auto-denies (abort settles the queue as deny)", async () => {
+    // The queue owns the abort→deny behavior (covered in approvalQueue.test.ts);
+    // here we assert the service passes a live signal that fires on timeout.
+    vi.useFakeTimers();
+    try {
+      const { service, requestExternalAgent } = createDeps();
+      let capturedSignal: AbortSignal | undefined;
+      requestExternalAgent.mockImplementationOnce((req) => {
+        capturedSignal = req.signal;
+        return new Promise((resolve) => {
+          req.signal?.addEventListener("abort", () => resolve({ behavior: "deny" }), {
+            once: true,
+          });
+        });
+      });
+      const promise = service.handler(doCtx, "requestExternal", [externalRequest]);
+      // Flush the async principal resolution so the timeout is armed, then fire it.
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(promise).resolves.toEqual({ behavior: "deny" });
+      expect(capturedSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settleExternal quiet-settles by bound entity plus (channelId, requestId) and reports the count", async () => {
+    const { service, settleExternalAgent } = createDeps();
+    settleExternalAgent.mockReturnValueOnce(1);
+    await expect(
+      service.handler(doCtx, "settleExternal", [{ channelId: "channel-1", requestId: "req-1" }])
+    ).resolves.toEqual({ settled: true });
+    expect(settleExternalAgent).toHaveBeenCalledTimes(1);
+    const predicate = settleExternalAgent.mock.calls[0]![0];
+    expect(
+      predicate({ entityId: "entity-1", channelId: "channel-1", requestId: "req-1" } as never)
+    ).toBe(true);
+    expect(
+      predicate({ entityId: "entity-2", channelId: "channel-1", requestId: "req-1" } as never)
+    ).toBe(false);
+    expect(
+      predicate({ entityId: "entity-1", channelId: "channel-2", requestId: "req-1" } as never)
+    ).toBe(false);
+    expect(
+      predicate({ entityId: "entity-1", channelId: "channel-1", requestId: "req-9" } as never)
+    ).toBe(false);
+  });
+
+  it("settleExternal reports settled=false when nothing matched", async () => {
+    const { service, settleExternalAgent } = createDeps();
+    settleExternalAgent.mockReturnValueOnce(0);
+    await expect(
+      service.handler(doCtx, "settleExternal", [{ channelId: "channel-1", requestId: "gone" }])
+    ).resolves.toEqual({ settled: false });
+  });
+
+  it("gates requestExternal/settleExternal to do and worker callers via policy", () => {
+    const { service } = createDeps();
+    expect(service.methods["requestExternal"]!.policy?.allowed).toEqual(["do", "worker"]);
+    expect(service.methods["settleExternal"]!.policy?.allowed).toEqual(["do", "worker"]);
   });
 
   it("throws ServiceError for unknown methods", async () => {

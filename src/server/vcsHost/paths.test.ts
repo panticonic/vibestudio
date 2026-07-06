@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
 
-import { assertSafeVcsPath, normalizeRepoPathForLog } from "./paths.js";
+import {
+  ALWAYS_IGNORED_FILES,
+  CONTEXT_MARKER_FILE,
+  assertSafeVcsPath,
+  assertWritableVcsPath,
+  isWritableVcsPath,
+  normalizeRepoPathForLog,
+} from "./paths.js";
 
 describe("normalizeRepoPathForLog", () => {
   it("accepts canonical repo paths", () => {
@@ -55,5 +62,21 @@ describe("assertSafeVcsPath", () => {
     for (const ok of ["a/b", "a.b/c", "ok/nested.txt", "single", "packages/foo/index.ts"]) {
       expect(() => assertSafeVcsPath(ok), ok).not.toThrow();
     }
+  });
+});
+
+describe("context marker (.vibestudio-context.json)", () => {
+  it("is a platform-ignored file the VCS scan/edit never captures", async () => {
+    expect(ALWAYS_IGNORED_FILES.has(CONTEXT_MARKER_FILE)).toBe(true);
+    // The edit-ingress guard must refuse it — at the worktree root AND nested —
+    // so vcs.edit can never write the host-owned marker into VCS state.
+    await expect(assertWritableVcsPath(CONTEXT_MARKER_FILE)).rejects.toThrow(/platform-ignored/);
+    await expect(assertWritableVcsPath(`sub/${CONTEXT_MARKER_FILE}`)).rejects.toThrow(
+      /platform-ignored/
+    );
+    expect(await isWritableVcsPath(CONTEXT_MARKER_FILE)).toBe(false);
+    expect(await isWritableVcsPath(`packages/foo/${CONTEXT_MARKER_FILE}`)).toBe(false);
+    // A same-stem-but-different file is still trackable — the guard is exact.
+    expect(await isWritableVcsPath("packages/foo/vibestudio-context.json")).toBe(true);
   });
 });

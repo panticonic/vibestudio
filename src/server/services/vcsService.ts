@@ -47,6 +47,12 @@ export interface VcsServiceDeps {
 
 /** The caller's own context id (extensions resolve through their chained caller). */
 function callerContextId(ctx: ServiceContext, deps: VcsServiceDeps): string | null {
+  if (ctx.caller.runtime.kind === "agent") {
+    if (!ctx.caller.agentBinding) {
+      throw new Error("vcs: agent caller has no entity binding");
+    }
+    return ctx.caller.agentBinding.contextId;
+  }
   const contextCallerId =
     ctx.caller.runtime.kind === "extension" && ctx.chainCaller
       ? ctx.chainCaller.callerId
@@ -84,11 +90,7 @@ function resolveWriteHead(
 ): string {
   const callerKind = ctx.caller.runtime.kind;
   if (isPrivilegedCaller(ctx, deps)) return requestedHead ?? headForCaller(ctx, deps);
-  const contextCallerId =
-    callerKind === "extension" && ctx.chainCaller
-      ? ctx.chainCaller.callerId
-      : ctx.caller.runtime.id;
-  const contextId = deps.entityCache?.resolveContext(contextCallerId) ?? null;
+  const contextId = callerContextId(ctx, deps);
   if (!contextId) {
     throw new Error(
       `vcs head writes require a context: caller ${ctx.caller.runtime.id} (${callerKind}) has no ` +
@@ -308,7 +310,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     description:
       "Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibestudio vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.",
     policy: {
-      allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"],
+      allowed: ["shell", "panel", "app", "server", "worker", "do", "extension", "agent"],
     },
     methods: vcsMethods,
     handler: async (ctx, method, args) => {

@@ -115,6 +115,13 @@ export interface AgenticChatActions {
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => Promise<void>;
   onBecomeVisible?: () => void;
+  /**
+   * Launch a Claude Code session as a linked agent in this conversation. The
+   * host calls the `@workspace-extensions/claude-code` extension's `prepare`
+   * for the current channel and opens a context-scoped terminal running the
+   * returned argv. Absent on hosts that don't wire agent-CLI launches.
+   */
+  onOpenClaudeCode?: (channelId: string) => Promise<void> | void;
 }
 
 /** Chat API exposed to sandboxed code (eval, inline_ui, action bars, feedback_custom) */

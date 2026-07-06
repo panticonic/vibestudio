@@ -55,6 +55,7 @@ describe("WorkspaceVcs dev extraction (main → source dir)", () => {
     const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),
@@ -111,6 +112,7 @@ describe("WorkspaceVcs dev extraction (main → source dir)", () => {
     const gadOff = await createTestDO(GadWorkspaceDO, { __objectKey: "gadOff" });
     attachLocalHostBridges(gadOff.instance, { blobsDir: path.join(root, "blobs-off"), refs });
     const vcsOff = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs-off"),
       workspaceRoot: gatedOffRoot,
       contextsRoot: path.join(root, ".contexts-off"),

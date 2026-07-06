@@ -222,7 +222,13 @@ export type CallerKind =
   | "worker"
   | "do"
   | "extension"
-  | "server";
+  | "server"
+  // An autonomous external process acting as a workspace agent. Distinct from `shell`
+  // (a paired human-driven device) so policy/approval flows can treat
+  // autonomous tool use differently. Authenticates with an entity-scoped agent
+  // credential (`agent:<agentId>:<token>`) and carries an `agentBinding` on the
+  // connection.
+  | "agent";
 
 /**
  * Frame yielded by a streaming method handler. Mirrors the wire frame

@@ -85,6 +85,19 @@ const userland: PendingApproval = {
   ],
 };
 
+const externalAgent: PendingApproval = {
+  ...base,
+  callerId: "do:workers/linked:LinkedAgentWorker:entity-1",
+  callerKind: "do",
+  kind: "external-agent",
+  entityId: "entity-1",
+  capability: "claude-code.tool",
+  operationName: "Bash",
+  description: "Runs a shell command in the project.",
+  preview: "npm install",
+  requestId: "req-1",
+};
+
 const deviceCode: PendingApproval = {
   ...base,
   kind: "device-code",
@@ -145,6 +158,7 @@ function renderSheet(
     onSubmitCredentialInput: jest.fn(async () => undefined),
     onSubmitSecretInput: jest.fn(async () => undefined),
     onResolveUserland: jest.fn(async () => undefined),
+    onResolveExternalAgent: jest.fn(async () => undefined),
     ...overrides,
   };
   const view = render(<ApprovalSheet {...props} />);
@@ -244,9 +258,23 @@ describe("ApprovalSheet", () => {
         onSubmitCredentialInput={jest.fn()}
         onSubmitSecretInput={jest.fn()}
         onResolveUserland={jest.fn()}
+        onResolveExternalAgent={jest.fn()}
       />
     );
     expect(queryByText("The sign-in domain differs from the service domain.")).toBeNull();
+  });
+
+  it("resolves an external-agent tool prompt and renders its preview", async () => {
+    const onResolveExternalAgent = jest.fn(async () => undefined);
+    const { getByText, getByTestId } = renderSheet(externalAgent, { onResolveExternalAgent });
+
+    expect(getByText("Claude Code wants to run Bash")).toBeTruthy();
+    expect(getByText("npm install")).toBeTruthy();
+
+    fireEvent.press(getByTestId("approval-action-allow"));
+    await waitFor(() =>
+      expect(onResolveExternalAgent).toHaveBeenCalledWith("approval-1", "allow")
+    );
   });
 
   it("resolves userland options and renders verified issuer chrome", async () => {
@@ -368,7 +396,7 @@ describe("ApprovalSheet", () => {
 
     expect(getByText("Act on Shell's context")).toBeTruthy();
     expect(
-      getByText("This runs code in, or acts on, another agent or panel's existing state.")
+      getByText("This can affect files or running work owned by another agent or panel.")
     ).toBeTruthy();
     expect(getByTestId("approval-accent-stripe").props.style).toEqual(
       expect.arrayContaining([

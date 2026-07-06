@@ -81,6 +81,7 @@ describe("WorkspaceVcs — whole-repo deletion", () => {
     // build graph, and supply the `{ kind: "caller" }` gate context the DO's
     // updateMains would otherwise receive from the relay's on-behalf-of token.
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),

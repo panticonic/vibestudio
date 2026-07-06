@@ -33,6 +33,7 @@ export type PushApprovalDataPayload = {
     | "credential-input"
     | "secret-input"
     | "userland"
+    | "external-agent"
     | "device-code";
   title?: string;
   body?: string;

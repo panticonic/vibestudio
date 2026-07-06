@@ -164,6 +164,20 @@ export interface VerifiedCodeIdentity {
   effectiveVersion: string;
 }
 
+/**
+ * The entity/context/channel scope an `agent`-kind connection is bound to,
+ * resolved from its agent credential at auth time. HOST-VERIFIED — stamped in
+ * `handleAuth` from the redeemer result only, NEVER from client input (modelled
+ * after the host-verified `callerContextId` precedent). Services read
+ * `ctx.caller.agentBinding` to enforce scope without trusting client-supplied ids.
+ */
+export interface AgentBinding {
+  entityId: string;
+  contextId: string;
+  channelId: string;
+  agentId: string;
+}
+
 export interface VerifiedCaller {
   runtime: {
     /** Concrete runtime principal, e.g. a panel id or do:source:Class:objectKey. */
@@ -172,16 +186,20 @@ export interface VerifiedCaller {
   };
   /** Code/build identity verified at the trust boundary, when applicable. */
   code?: VerifiedCodeIdentity;
+  /** Entity/context binding for `agent`-kind callers (host-verified; §3.2). */
+  agentBinding?: AgentBinding;
 }
 
 export function createVerifiedCaller(
   callerId: string,
   callerKind: CallerKind,
-  code?: VerifiedCodeIdentity | null
+  code?: VerifiedCodeIdentity | null,
+  agentBinding?: AgentBinding | null
 ): VerifiedCaller {
   return {
     runtime: { id: callerId, kind: callerKind },
     ...(code ? { code } : {}),
+    ...(agentBinding ? { agentBinding } : {}),
   };
 }
 

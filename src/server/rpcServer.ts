@@ -567,6 +567,12 @@ export class RpcServer {
         callerId: string;
         callerKind: CallerKind;
         deviceCredential?: { deviceId: string; refreshToken: string };
+        /**
+         * Entity/context binding for an `agent:`-prefixed credential (§3.2),
+         * stamped onto the connection's VerifiedCaller. Host-verified — never
+         * from client input.
+         */
+        agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding;
       } | null;
       uploadPreopenLimits?: RpcServerUploadPreopenLimits;
     }
@@ -596,20 +602,25 @@ export class RpcServer {
     });
   }
 
-  private verifiedCallerFor(callerId: string, callerKind: CallerKind): VerifiedCaller {
+  private verifiedCallerFor(
+    callerId: string,
+    callerKind: CallerKind,
+    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
+  ): VerifiedCaller {
     const code = this.deps.entityCache
       ? resolveCodeIdentity(this.deps.entityCache, callerId)
       : null;
-    return createVerifiedCaller(callerId, callerKind, code);
+    return createVerifiedCaller(callerId, callerKind, code, agentBinding);
   }
 
   private serviceContextFor(
     callerId: string,
     callerKind: CallerKind,
-    extras: Omit<ServiceContext, "caller"> = {}
+    extras: Omit<ServiceContext, "caller"> = {},
+    agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
   ): ServiceContext {
     return {
-      caller: this.verifiedCallerFor(callerId, callerKind),
+      caller: this.verifiedCallerFor(callerId, callerKind, agentBinding),
       ...extras,
     };
   }
@@ -848,8 +859,9 @@ export class RpcServer {
     }
 
     const grant = this.deps.connectionGrants?.redeem(token);
-    let entry: { callerId: string; callerKind: CallerKind } | null;
+    let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
     let deviceCredential: { deviceId: string; refreshToken: string } | undefined;
+    let agentBinding: import("@vibestudio/shared/serviceDispatcher").AgentBinding | undefined;
     try {
       entry = grant
         ? {
@@ -857,6 +869,7 @@ export class RpcServer {
             callerKind: this.callerKindForRuntimePrincipal(grant.principalId),
           }
         : this.deps.tokenManager.validateToken(token);
+      if (entry?.agentBinding) agentBinding = entry.agentBinding;
     } catch {
       entry = null;
     }
@@ -870,6 +883,7 @@ export class RpcServer {
       if (paired) {
         entry = { callerId: paired.callerId, callerKind: paired.callerKind };
         deviceCredential = paired.deviceCredential;
+        agentBinding = paired.agentBinding;
       }
     }
     if (!entry) {
@@ -938,7 +952,7 @@ export class RpcServer {
       this.cleanupClient(existing);
     }
     const { sessionDirty } = this.sessions.markConnected(callerId, callerKind);
-    const caller = this.verifiedCallerFor(callerId, callerKind);
+    const caller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
 
     const client: WsClientState = {
       ws,
@@ -1875,7 +1889,13 @@ export class RpcServer {
 
     const requestId = message.requestId;
     try {
-      const result = await this.handleEnvelopeRequest(callerId, callerKind, envelope, message);
+      const result = await this.handleEnvelopeRequest(
+        callerId,
+        callerKind,
+        callerId === entry.callerId ? entry.agentBinding : undefined,
+        envelope,
+        message
+      );
       res.writeHead(200, { "Content-Type": "application/json" });
       if (isDeferredResult(result)) {
         // Handler parked the call; ack now and deliver later via onDeferredResult.
@@ -1918,6 +1938,7 @@ export class RpcServer {
   private async handleEnvelopeRequest(
     callerId: string,
     callerKind: CallerKind,
+    agentBinding: import("@vibestudio/shared/serviceDispatcher").AgentBinding | undefined,
     envelope: RpcEnvelope,
     message: RpcRequest
   ): Promise<unknown> {
@@ -1952,12 +1973,17 @@ export class RpcServer {
             method: parsed.method,
           })
         : undefined;
-      const ctx = this.serviceContextFor(callerId, callerKind, {
-        ...(requestId ? { requestId } : {}),
-        ...(idempotencyKey ? { idempotencyKey } : {}),
-        ...(deferral ? { deferral } : {}),
-        ...(readOnly ? { readOnly: true } : {}),
-      });
+      const ctx = this.serviceContextFor(
+        callerId,
+        callerKind,
+        {
+          ...(requestId ? { requestId } : {}),
+          ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(deferral ? { deferral } : {}),
+          ...(readOnly ? { readOnly: true } : {}),
+        },
+        agentBinding
+      );
       return await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
     }
 
@@ -2166,7 +2192,8 @@ export class RpcServer {
     const targetId = streamEnvelope.target;
     const idempotencyKey = streamEnvelope.delivery?.idempotencyKey;
     const readOnly = streamEnvelope.delivery?.readOnly === true;
-    const effectiveCaller = this.verifiedCallerFor(callerId, callerKind);
+    const agentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
+    const effectiveCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
 
     if (targetId && targetId !== "main") {
       res.writeHead(400, { "Content-Type": "application/json" });
@@ -2199,11 +2226,16 @@ export class RpcServer {
 
       let response: Response;
       try {
-        const ctx = this.serviceContextFor(callerId, callerKind, {
-          ...(streamMessage?.requestId ? { requestId: streamMessage.requestId } : {}),
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-          ...(readOnly ? { readOnly: true } : {}),
-        });
+        const ctx = this.serviceContextFor(
+          callerId,
+          callerKind,
+          {
+            ...(streamMessage?.requestId ? { requestId: streamMessage.requestId } : {}),
+            ...(idempotencyKey ? { idempotencyKey } : {}),
+            ...(readOnly ? { readOnly: true } : {}),
+          },
+          agentBinding
+        );
         const result = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
         if (!(result instanceof Response)) {
           res.writeHead(500, { "Content-Type": "application/json" });

@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "vibestudio claude emit SessionStart" }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "vibestudio claude emit UserPromptSubmit" }] }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "vibestudio claude emit PreToolUse" }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "vibestudio claude emit PostToolUse" }] }
+    ],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "vibestudio claude emit Stop" }] }],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "vibestudio claude emit SessionEnd" }] }
+    ]
+  }
+}

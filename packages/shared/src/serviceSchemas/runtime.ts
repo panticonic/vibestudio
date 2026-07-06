@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "../servicePolicy.js";
+import type { MethodAccessDescriptor, ServicePolicy } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
 // Access descriptors shared across the runtime method groups. `callers` is left
@@ -17,6 +17,15 @@ const RETIRE_ACCESS: MethodAccessDescriptor = {
 };
 const TITLE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
+};
+
+// Read-query caller gate that additionally admits the `agent` caller kind.
+// The service-level runtime policy
+// deliberately omits `agent` — mutating/lifecycle methods (createEntity,
+// retireEntity, cloneContext, destroyContext, …) stay agent-denied — so the
+// agent grant is opted into per read method here (still a subset of `do`).
+const RUNTIME_AGENT_READ_POLICY: ServicePolicy = {
+  allowed: ["app", "do", "panel", "server", "shell", "worker", "agent"],
 };
 
 export const RuntimeEntityHandleSchema = z
@@ -47,6 +56,16 @@ const BuildRefSchema = z
   .string()
   .describe(
     'Optional code build ref. Omit to use the main build; pass "ctx:<contextId>" or "state:<stateHash>" only for targeted builds.'
+  );
+
+const RuntimeAgentBindingSchema = z
+  .object({
+    entityId: z.string().min(1).max(240),
+    channelId: z.string().min(1).max(200),
+  })
+  .strict()
+  .describe(
+    "Host-verified binding input for runtimes that relay an external agent/session. The host derives context from the bound entity."
   );
 
 export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
@@ -89,6 +108,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .optional()
       .describe("Opaque initial state passed to the worker runtime."),
     env: z.record(z.string()).optional().describe("Extra environment variables for the worker."),
+    agentBinding: RuntimeAgentBindingSchema.optional(),
   }),
   z.object({
     kind: z.literal("do"),
@@ -102,6 +122,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
       .optional()
       .describe("Target context; omit/null to mint a fresh one in the caller's context."),
     stateArgs: z.unknown().optional().describe("Opaque initial state passed to the DO runtime."),
+    agentBinding: RuntimeAgentBindingSchema.optional(),
   }),
   z.object({
     kind: z.literal("session"),
@@ -205,13 +226,20 @@ export const runtimeMethods = defineServiceMethods({
     returns: RuntimeEntityHandleSchema,
     access: {
       sensitivity: "write",
-      // Declares the handler's gate (createEntity rejects app/session for
-      // non-shell/non-server callers with "host-managed").
+      // Declares the handler's gate (createEntity rejects app for
+      // non-shell/non-server callers, and session for callers other than
+      // shell/server/orchestrator-extension, with "host-managed").
       restrictedTo: [
         {
-          when: "spec.kind is 'app' or 'session'",
+          when: "spec.kind is 'app'",
           callers: ["shell", "server"],
-          reason: "app/session runtime entities are host-managed",
+          reason: "app runtime entities are host-managed",
+        },
+        {
+          when: "spec.kind is 'session'",
+          callers: ["shell", "server", "extension"],
+          reason:
+            "session entities are host-managed, except a launch-orchestrator extension may create a source-tagged session",
         },
       ],
       // Declares the handler's context-boundary approval gate
@@ -269,6 +297,7 @@ export const runtimeMethods = defineServiceMethods({
       })
     ),
     access: READ_ACCESS,
+    policy: RUNTIME_AGENT_READ_POLICY,
     examples: [{ args: [{ kind: "session" }] }],
   },
   resolveContext: {
@@ -277,6 +306,7 @@ export const runtimeMethods = defineServiceMethods({
     args: z.tuple([z.string().describe("Canonical entity id to resolve.")]),
     returns: z.string().nullable(),
     access: READ_ACCESS,
+    policy: RUNTIME_AGENT_READ_POLICY,
   },
   setTitle: {
     description:
@@ -421,6 +451,7 @@ export const runtimeMethods = defineServiceMethods({
       })
       .strict(),
     access: READ_ACCESS,
+    policy: RUNTIME_AGENT_READ_POLICY,
     examples: [{ args: [{ contextId: "ctx-abc", kind: "lifecycle" }] }],
   },
   recordContextEdge: {
@@ -448,7 +479,7 @@ export const runtimeMethods = defineServiceMethods({
   },
   createSubagentContext: {
     description:
-      "Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; the vessel must NOT hand-roll this.",
+      "Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; callers must not hand-roll this.",
     args: z.tuple([
       z.object({
         parentContextId: z.string().describe("Parent context the subagent forks from."),

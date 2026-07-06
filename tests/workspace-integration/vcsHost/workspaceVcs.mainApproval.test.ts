@@ -125,6 +125,7 @@ describe("WorkspaceVcs main approval (protected-ref gate)", () => {
       gateContext: () => callerAdvance(vcsContextHead("gated")),
     });
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),

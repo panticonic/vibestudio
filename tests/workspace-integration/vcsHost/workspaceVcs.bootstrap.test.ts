@@ -60,6 +60,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     const refs = createRefService({ statePath: path.join(root, "refs"), gate: async () => {} });
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),
@@ -137,6 +138,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
       refs: coldRefs,
     });
     const coldVcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(coldRoot, "blobs"),
       workspaceRoot: coldWorkspaceRoot,
       contextsRoot: path.join(coldRoot, ".contexts"),
@@ -285,6 +287,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     );
 
     const restarted = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),
@@ -318,8 +321,9 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
   it("ensureContextFolder is SPARSE — it materializes nothing up front", async () => {
     const { dir } = await vcs.ensureContextFolder("test");
     const sections = await fsp.readdir(dir).catch(() => []);
-    // The folder exists but holds no repo content (sparse).
-    expect(sections.filter((s) => s !== ".gad")).toEqual([]);
+    // The folder exists but holds no repo content (sparse) — only the context
+    // marker (host bookkeeping, excluded from projection) and .gad may appear.
+    expect(sections.filter((s) => s !== ".gad" && s !== ".vibestudio-context.json")).toEqual([]);
     expect(vcs.isContextRepoMaterialized("test", "skills/onboarding")).toBe(false);
   });
 
@@ -356,6 +360,7 @@ describe("WorkspaceVcs.ensureRepoLogsFromDisk (disk bootstrap)", () => {
     // in GAD, but the in-memory materialized map and context disk projection are gone.
     await fsp.rm(path.join(root, ".contexts", ctxId), { recursive: true, force: true });
     const restarted = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),

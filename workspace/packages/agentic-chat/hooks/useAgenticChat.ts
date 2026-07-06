@@ -1334,6 +1334,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
   const onFocusPanel = actions?.onFocusPanel;
   const onReloadPanel = actions?.onReloadPanel;
   const onNewConversation = actions?.onNewConversation;
+  const onOpenClaudeCode = actions?.onOpenClaudeCode;
 
   // --- Deferred first-agent flow (inline config + pre-send delivery queue) ---
   const clearComposer = useCallback(() => {
@@ -1440,6 +1441,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onFocusPanel,
       onReloadPanel,
       onNewConversation,
+      onOpenClaudeCode,
       toolApproval: chatTools.toolApprovalValue,
       // Fork UI is enabled only when the panel wired navigation handlers.
       forkState: forkNav ? forkState : undefined,
@@ -1512,6 +1514,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onFocusPanel,
       onReloadPanel,
       onNewConversation,
+      onOpenClaudeCode,
       chatTools.toolApprovalValue,
       forkNav,
       forkState,

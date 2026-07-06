@@ -70,6 +70,8 @@ Stores extension runtime dependency installs for packages esbuild leaves externa
 
 Per-context filesystem scopes at `workspaces/{name}/state/.contexts/{contextId}/` (the server's state directory is already per-workspace, so there is no workspace level inside it). Each context gets an isolated filesystem root managed by `ContextFolderManager` and used by sessions, panels, workers, and DOs.
 
+At materialization, `WorkspaceVcs.ensureContextFolder` writes a host-owned bookkeeping marker `.vibestudio-context.json` at the context folder root — `{ contextId, workspaceId, serverUrl? }` (`serverUrl` is the loopback ws RPC base URL, present once the gateway port is finalized). It lets CLI + agent scope resolution (cwd-upward search) bind to the right server, workspace, and context with zero flags. It is **not** workspace source: `.vibestudio-context.json` is in `ALWAYS_IGNORED_FILES` (and the userland `VCS_IGNORED_FILES` twin), so the VCS scan never captures it, `vcs.edit` refuses to write it, and it never appears in projection/diff/status. The marker is rewritten idempotently only when its contents drift.
+
 ### `.databases/workerd-do/`
 
 The only SQLite files Vibestudio owns are workerd Durable Object databases:

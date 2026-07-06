@@ -2,6 +2,9 @@ import { z } from "zod";
 
 import type {
   ApprovalPrincipal,
+  ExternalAgentApprovalRequest,
+  ExternalAgentApprovalResult,
+  ExternalAgentSettle,
   SecretInputRequest,
   SecretInputResult,
   UserlandApprovalChoice,
@@ -13,16 +16,25 @@ import type {
 } from "@vibestudio/shared/approvals";
 import {
   approvalPrincipalSchema,
+  externalAgentApprovalRequestSchema,
+  externalAgentSettleSchema,
   secretInputRequestSchema,
   userlandApprovalRequestSchema,
   userlandApprovalSubjectIdSchema,
 } from "@vibestudio/shared/approvals";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
+import type { EntityRecord, RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
 
 const SERVICE_NAME = "userlandApproval";
+/**
+ * A relayed external-agent permission auto-denies at the workspace card after
+ * this long with no user answer. Agent runtimes use the same horizon so
+ * whichever side fires first wins, and the other settle path is a no-op.
+ */
+const EXTERNAL_APPROVAL_TIMEOUT_MS = 120_000;
 const BINARY_OPTIONS: UserlandApprovalOption[] = [
   { value: "allow", label: "Allow", tone: "primary" },
   { value: "deny", label: "Deny", tone: "danger" },
@@ -79,6 +91,7 @@ function scopedOptionsFor(
 export function createUserlandApprovalService(deps: {
   approvalQueue: ApprovalQueue;
   grantStore: Pick<UserlandApprovalGrantStore, "lookup" | "record" | "revoke" | "list">;
+  resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
 }): ServiceDefinition {
   function extensionIssuer(ctx: ServiceContext): UserlandApprovalIssuer | undefined {
     return ctx.caller.runtime.kind === "extension"
@@ -151,6 +164,65 @@ export function createUserlandApprovalService(deps: {
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
     };
+  }
+
+  async function resolveExternalAgentBinding(
+    ctx: ServiceContext,
+    method: string,
+    channelId: string
+  ): Promise<RuntimeAgentBinding> {
+    const kind = ctx.caller.runtime.kind;
+    if (kind !== "do" && kind !== "worker") {
+      throw new ServiceError(
+        SERVICE_NAME,
+        method,
+        "external-agent approvals require a bound runtime caller",
+        "EACCES"
+      );
+    }
+    if (!deps.resolveRuntimeEntity) {
+      throw new ServiceError(
+        SERVICE_NAME,
+        method,
+        "runtime entity resolver is unavailable",
+        "ENOSYS"
+      );
+    }
+    const record = await deps.resolveRuntimeEntity(ctx.caller.runtime.id);
+    if (!record || record.status !== "active") {
+      throw new ServiceError(
+        SERVICE_NAME,
+        method,
+        `Unknown active runtime entity: ${ctx.caller.runtime.id}`,
+        "ENOENT"
+      );
+    }
+    const binding = record.agentBinding;
+    if (!binding) {
+      throw new ServiceError(
+        SERVICE_NAME,
+        method,
+        "runtime entity is not bound to an external agent session",
+        "EACCES"
+      );
+    }
+    if (record.contextId !== binding.contextId) {
+      throw new ServiceError(
+        SERVICE_NAME,
+        method,
+        "runtime entity binding does not match its context",
+        "EACCES"
+      );
+    }
+    if (binding.channelId !== channelId) {
+      throw new ServiceError(
+        SERVICE_NAME,
+        method,
+        "external-agent request channel does not match the runtime binding",
+        "EACCES"
+      );
+    }
+    return binding;
   }
 
   async function request(
@@ -313,6 +385,70 @@ export function createUserlandApprovalService(deps: {
     return result;
   }
 
+  /**
+   * File a relayed external-agent tool-use permission (plan §7.3) as a
+   * first-class workspace approval and long-poll for the verdict. Resolves
+   * `{ behavior: "allow" | "deny" }` when the user answers, or `deny` on the
+   * ~120s expiry / no-user-context. Per-request; no durable grant.
+   */
+  async function requestExternal(
+    ctx: ServiceContext,
+    rawReq: ExternalAgentApprovalRequest
+  ): Promise<ExternalAgentApprovalResult> {
+    // Re-parse to apply the schema transforms (preview control-char strip) — see
+    // the comment in `request`: the dispatcher forwards un-transformed input.
+    const req = externalAgentApprovalRequestSchema.parse(rawReq);
+    const principal = await resolvePrincipal(ctx, "requestExternal");
+    if (!principal) return { behavior: "deny" };
+    const binding = await resolveExternalAgentBinding(ctx, "requestExternal", req.channelId);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EXTERNAL_APPROVAL_TIMEOUT_MS);
+    try {
+      return await deps.approvalQueue.requestExternalAgent({
+        kind: "external-agent",
+        callerId: principal.callerId,
+        callerKind: principal.callerKind,
+        repoPath: principal.repoPath,
+        effectiveVersion: principal.effectiveVersion,
+        ...(principal.requesterCategory ? { requesterCategory: principal.requesterCategory } : {}),
+        entityId: binding.entityId,
+        channelId: binding.channelId,
+        capability: req.capability,
+        operationName: req.operation,
+        ...(req.description !== undefined ? { description: req.description } : {}),
+        ...(req.preview !== undefined ? { preview: req.preview } : {}),
+        requestId: req.requestId,
+        resolveToken: req.resolveToken,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Quiet-settle a pending external-agent approval whose permission was answered
+   * at the terminal (or whose bridge detached): the card disappears without a
+   * recorded deny (plan §7.5). Scoped to the caller's runtime binding and
+   * (channelId, requestId).
+   */
+  async function settleExternal(
+    ctx: ServiceContext,
+    rawArg: ExternalAgentSettle
+  ): Promise<{ settled: boolean }> {
+    const principal = await resolvePrincipal(ctx, "settleExternal");
+    if (!principal) return { settled: false };
+    const arg = externalAgentSettleSchema.parse(rawArg);
+    const binding = await resolveExternalAgentBinding(ctx, "settleExternal", arg.channelId);
+    const count = deps.approvalQueue.settleExternalAgent(
+      (approval) =>
+        approval.entityId === binding.entityId &&
+        approval.channelId === binding.channelId &&
+        approval.requestId === arg.requestId
+    );
+    return { settled: count > 0 };
+  }
+
   return {
     name: SERVICE_NAME,
     description: "Userland-managed consent approvals",
@@ -327,6 +463,15 @@ export function createUserlandApprovalService(deps: {
       requestSecretInputAs: {
         args: z.tuple([approvalPrincipalSchema, secretInputRequestSchema]),
         policy: { allowed: ["extension"] },
+      },
+      // External-agent relay: bound agent runtimes may be either DOs or workers.
+      requestExternal: {
+        args: z.tuple([externalAgentApprovalRequestSchema]),
+        policy: { allowed: ["do", "worker"] },
+      },
+      settleExternal: {
+        args: z.tuple([externalAgentSettleSchema]),
+        policy: { allowed: ["do", "worker"] },
       },
       revoke: { args: z.tuple([userlandApprovalSubjectIdSchema]) },
       list: { args: z.tuple([]) },
@@ -345,6 +490,10 @@ export function createUserlandApprovalService(deps: {
             args[0] as ApprovalPrincipal,
             args[1] as SecretInputRequest
           );
+        case "requestExternal":
+          return requestExternal(ctx, args[0] as ExternalAgentApprovalRequest);
+        case "settleExternal":
+          return settleExternal(ctx, args[0] as ExternalAgentSettle);
         case "revoke": {
           const principal = await resolvePrincipal(ctx, "revoke");
           if (!principal) return { kind: "uncallable", reason: "no-user-context" };

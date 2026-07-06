@@ -2,6 +2,18 @@
   "$comment": "Host/workspace boundary allowlist. Non-allowlisted findings from scripts/check-host-workspace-imports.mjs fail CI. Regenerate with `node scripts/check-host-workspace-imports.mjs --update-allowlist`. An entry with no `specifier` covers the whole file; `category` is optional.",
   "entries": [
     {
+      "file": "src/cli/claude/index.ts",
+      "specifier": "@workspace-extensions/claude-code",
+      "category": "workspace-reference",
+      "reason": "RPC target name, not an import: the CLI reaches the claude-code launch orchestrator over `extensions.invoke` (no workspace code linked in)"
+    },
+    {
+      "file": "src/cli/claude/channelHost.ts",
+      "specifier": "@workspace-extensions/claude-code",
+      "category": "workspace-reference",
+      "reason": "RPC target name, not an import: adoption mode calls the claude-code extension's prepare over `extensions.invoke`"
+    },
+    {
       "file": "packages/shared/src/workspace/sourceDirs.ts",
       "specifier": "@workspace-about/",
       "category": "workspace-reference",

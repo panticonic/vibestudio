@@ -234,6 +234,14 @@ export interface WorkspaceServiceDeps {
   /** Queue used to gate userland workspace mutations. */
   approvalQueue?: Pick<ApprovalQueue, "requestUserland">;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  /**
+   * Materialize a context's working folder (idempotent) and return its absolute
+   * path. Backs `workspace.ensureContextFolder`; delegates to the
+   * ContextFolderManager. Absent in remote-server/mobile-client mode.
+   */
+  ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
+  /** Resolve the owning context for runtime callers that request context materialization directly. */
+  resolveCallerContext?: (callerId: string) => Promise<string | null> | string | null;
 }
 
 type WorkspaceApprovalOperation =
@@ -283,6 +291,40 @@ function normalizeWorkspaceRelativePath(input: string): string {
 
 function isTrustedWorkspaceCaller(ctx: ServiceContext, deps: WorkspaceServiceDeps): boolean {
   return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
+}
+
+async function requireEnsureContextFolderAccess(
+  deps: WorkspaceServiceDeps,
+  ctx: ServiceContext,
+  contextId: string
+): Promise<void> {
+  if (isTrustedWorkspaceCaller(ctx, deps) || ctx.caller.runtime.kind === "extension") return;
+  const kind = ctx.caller.runtime.kind;
+  if (kind !== "panel" && kind !== "worker" && kind !== "do") {
+    throw new ServiceError(
+      "workspace",
+      "ensureContextFolder",
+      `workspace.ensureContextFolder is not accessible to ${kind} callers`,
+      "EACCES"
+    );
+  }
+  if (!deps.resolveCallerContext) {
+    throw new ServiceError(
+      "workspace",
+      "ensureContextFolder",
+      "Caller context resolution is unavailable",
+      "EACCES"
+    );
+  }
+  const callerContextId = await deps.resolveCallerContext(ctx.caller.runtime.id);
+  if (callerContextId !== contextId) {
+    throw new ServiceError(
+      "workspace",
+      "ensureContextFolder",
+      "Caller's runtime context does not match requested context",
+      "EACCES"
+    );
+  }
 }
 
 async function requireAppUnitManagementAccess(
@@ -662,6 +704,20 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         case "sourceTree": {
           if (!deps.treeScanner) throw new Error("Workspace source tree is unavailable");
           return deps.treeScanner.getSourceTree();
+        }
+
+        case "ensureContextFolder": {
+          if (!deps.ensureContextFolder) {
+            throw new ServiceError(
+              "workspace",
+              method,
+              "Context folder materialization is unavailable",
+              "ENOENT"
+            );
+          }
+          const [contextId] = args as [string];
+          await requireEnsureContextFolderAccess(deps, ctx, contextId);
+          return await deps.ensureContextFolder(contextId);
         }
 
         case "findUnitForPath": {

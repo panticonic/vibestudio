@@ -1,5 +1,5 @@
 import React, { useRef, useState } from "react";
-import { Badge, Card, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
+import { Badge, Button, Card, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
 import { DotsHorizontalIcon } from "@radix-ui/react-icons";
 import type { Participant } from "@workspace/pubsub";
 import { APPROVAL_LEVELS, type ToolApprovalProps } from "@workspace/tool-ui";
@@ -14,6 +14,52 @@ import { AgentDialog } from "./AgentDialog";
 import { ForkSwitcher } from "./ForkSwitcher";
 
 const NOOP = () => {};
+
+/**
+ * Self-subscribing "Open Claude Code" launcher (wide layout). Renders only when
+ * the host wired {@link AgenticChatActions.onOpenClaudeCode}; the narrow layout
+ * exposes the same action through the overflow menu.
+ */
+function ClaudeCodeLauncher() {
+  const { onOpenClaudeCode, channelId, participants } = useChatContext();
+  if (!onOpenClaudeCode || !channelId) return null;
+  // Reflect a live linked Claude Code session from the roster (§8.1): when a
+  // linked-agent vessel is present the button shows attach state (attached =
+  // running/online) instead of a bare "launch".
+  const linked = Object.values(participants).find(
+    (p) => p.metadata.linkedAgent === true || p.metadata.agentKind === "claude-code"
+  );
+  const attached = linked?.metadata.linkedAttachment === "attached";
+  const title = linked
+    ? attached
+      ? "Claude Code attached — reopen the session"
+      : "Claude Code linked but offline — relaunch to reattach"
+    : "Launch Claude Code";
+  return (
+    <Button
+      variant="soft"
+      size="1"
+      color={attached ? "green" : undefined}
+      onClick={() => void onOpenClaudeCode(channelId)}
+      title={title}
+    >
+      {linked ? (
+        <span
+          aria-hidden="true"
+          style={{
+            display: "inline-block",
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            marginRight: 4,
+            background: attached ? "var(--green-9)" : "var(--gray-8)",
+          }}
+        />
+      ) : null}
+      {linked ? (attached ? "Claude Code" : "Claude Code (offline)") : "Claude Code"}
+    </Button>
+  );
+}
 
 /** Shallow-compare two Maps by entry value (used for small maps like activeStatus). */
 function mapsShallowEqual<K, V>(a: Map<K, V>, b: Map<K, V>): boolean {
@@ -209,6 +255,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
             />
           ))}
           <AgentLauncher />
+          <ClaudeCodeLauncher />
           {toolApproval && (
             <ToolPermissionsDropdown
               settings={toolApproval.settings}
@@ -276,6 +323,7 @@ function ChatHeaderOverflowMenu({
 }) {
   const [addAgentOpen, setAddAgentOpen] = useState(false);
   const [settingsParticipantId, setSettingsParticipantId] = useState<string | null>(null);
+  const { onOpenClaudeCode } = useChatContext();
 
   const participantList = Object.values(participants);
   const agentCount =
@@ -343,6 +391,11 @@ function ChatHeaderOverflowMenu({
           })}
           <DropdownMenu.Separator />
           <DropdownMenu.Item onSelect={() => setAddAgentOpen(true)}>Add agent</DropdownMenu.Item>
+          {onOpenClaudeCode && channelId && (
+            <DropdownMenu.Item onSelect={() => void onOpenClaudeCode(channelId)}>
+              Open Claude Code
+            </DropdownMenu.Item>
+          )}
           {toolApproval && (
             <DropdownMenu.Sub>
               <DropdownMenu.SubTrigger>

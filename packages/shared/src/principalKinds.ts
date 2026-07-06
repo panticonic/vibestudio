@@ -29,6 +29,10 @@ export const PRINCIPAL_KIND_REGISTRY = {
     callerKind: "server",
     codeIdentity: false,
   },
+  agent: {
+    callerKind: "agent",
+    codeIdentity: false,
+  },
 } as const;
 
 export type PrincipalKind = keyof typeof PRINCIPAL_KIND_REGISTRY;
@@ -43,8 +47,7 @@ export type PrincipalKind = keyof typeof PRINCIPAL_KIND_REGISTRY;
 export type CallerKind = RpcCallerKind;
 
 // Union the registry actually produces (kept internal, only for the guard).
-type RegistryCallerKind =
-  (typeof PRINCIPAL_KIND_REGISTRY)[PrincipalKind]["callerKind"];
+type RegistryCallerKind = (typeof PRINCIPAL_KIND_REGISTRY)[PrincipalKind]["callerKind"];
 
 // Parity guard: the registry must cover exactly the canonical rpc CallerKind.
 type Assert<Cond extends true> = Cond;
@@ -63,19 +66,17 @@ export function isPrincipalKind(value: string | null | undefined): value is Prin
 
 export function isCallerKind(value: string | null | undefined): value is CallerKind {
   if (!value) return false;
-  return Object.values(PRINCIPAL_KIND_REGISTRY).some((entry) =>
-    entry.callerKind === value
-  );
+  return Object.values(PRINCIPAL_KIND_REGISTRY).some((entry) => entry.callerKind === value);
 }
 
-export function isCodeIdentityCallerKind(value: string | null | undefined): value is CodeIdentityCallerKind {
+export function isCodeIdentityCallerKind(
+  value: string | null | undefined
+): value is CodeIdentityCallerKind {
   if (!value || !isPrincipalKind(value)) return false;
   return PRINCIPAL_KIND_REGISTRY[value].codeIdentity;
 }
 
-export function callerKindForPrincipalKind(
-  kind: string | null | undefined,
-): CallerKind {
+export function callerKindForPrincipalKind(kind: string | null | undefined): CallerKind {
   if (!isPrincipalKind(kind)) {
     throw new Error(`Unknown principal kind: ${String(kind)}`);
   }

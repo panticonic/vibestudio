@@ -38,6 +38,10 @@ function approvalQueueMock(
     })),
     resolve: vi.fn(),
     resolveUserland: vi.fn(),
+    requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
+    resolveExternalAgent: vi.fn(),
+    settleExternalAgent: vi.fn(() => 0),
+    resolveExternalAgentByRequest: vi.fn(() => 0),
     submitClientConfig: vi.fn(),
     submitCredentialInput: vi.fn(),
     requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
@@ -205,6 +209,7 @@ const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
 
 const shellCaller = createVerifiedCaller("shell", "shell");
 const serverCaller = createVerifiedCaller("server", "server");
+const extensionCaller = (id = "extension:agent-launcher") => createVerifiedCaller(id, "extension");
 
 const doCreateSpec = (
   overrides: Partial<Extract<RuntimeEntityCreateSpec, { kind: "do" }>> = {}
@@ -281,6 +286,72 @@ describe("runtimeService.createEntity (do kind)", () => {
         },
       })
     );
+  });
+
+  it("stores a host-derived agent binding for extension-orchestrated runtimes", async () => {
+    const { service, instance } = await buildDeps();
+    const caller = extensionCaller();
+    const session = (await service.handler({ caller }, "createEntity", [
+      {
+        kind: "session",
+        source: "agent-launcher",
+        key: "s-bound",
+        contextId: "ctx-bound",
+      } satisfies RuntimeEntityCreateSpec,
+    ])) as { id: string };
+
+    const agent = (await service.handler({ caller }, "createEntity", [
+      doCreateSpec({
+        source: "workers/agent",
+        className: "AgentDO",
+        key: "bound-agent",
+        contextId: "ctx-bound",
+        agentBinding: { entityId: session.id, channelId: "chan-1" },
+      }),
+    ])) as { id: string };
+
+    expect(instance.entityResolve(agent.id)?.agentBinding).toEqual({
+      entityId: session.id,
+      contextId: "ctx-bound",
+      channelId: "chan-1",
+    });
+  });
+
+  it("rejects agent bindings for a different context or a session the extension does not own", async () => {
+    const { service } = await buildDeps();
+    const owner = extensionCaller("extension:owner");
+    const session = (await service.handler({ caller: owner }, "createEntity", [
+      {
+        kind: "session",
+        source: "agent-launcher",
+        key: "s-owned",
+        contextId: "ctx-owned",
+      } satisfies RuntimeEntityCreateSpec,
+    ])) as { id: string };
+
+    await expect(
+      service.handler({ caller: owner }, "createEntity", [
+        doCreateSpec({
+          source: "workers/agent",
+          className: "AgentDO",
+          key: "wrong-context",
+          contextId: "ctx-other",
+          agentBinding: { entityId: session.id, channelId: "chan-1" },
+        }),
+      ])
+    ).rejects.toThrow(/context does not match/);
+
+    await expect(
+      service.handler({ caller: extensionCaller("extension:other") }, "createEntity", [
+        doCreateSpec({
+          source: "workers/agent",
+          className: "AgentDO",
+          key: "wrong-owner",
+          contextId: "ctx-owned",
+          agentBinding: { entityId: session.id, channelId: "chan-1" },
+        }),
+      ])
+    ).rejects.toThrow(/does not own bound entity/);
   });
 
   it("reactivates a retired row and re-runs prepareDurableObject", async () => {

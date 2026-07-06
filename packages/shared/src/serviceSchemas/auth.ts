@@ -34,6 +34,14 @@ export const CreatePairingInviteArgsSchema = z.object({
     .describe("Invite lifetime in milliseconds (30s–1h); defaults to the server's standard TTL."),
 });
 
+/** The entity/context/channel binding surfaced for an `agent`-kind connection. */
+export const AgentBindingSchema = z.object({
+  entityId: z.string(),
+  contextId: z.string(),
+  channelId: z.string(),
+  agentId: z.string(),
+});
+
 export const ConnectionInfoResponseSchema = z.object({
   serverUrl: z.string(),
   protocol: z.enum(["http", "https"]).optional(),
@@ -42,6 +50,17 @@ export const ConnectionInfoResponseSchema = z.object({
   serverId: z.string(),
   serverBootId: z.string(),
   workspaceId: z.string().nullable().optional(),
+  /**
+   * Authenticated caller kind of THIS connection (present on getConnectionInfo).
+   * Lets a client confirm it authenticated as `agent` (vs `shell`) and, when it
+   * did, read its host-verified `agentBinding`. Omitted on the pairing-invite
+   * responses that reuse this schema (they carry no per-connection caller).
+   */
+  callerKind: z
+    .enum(["shell", "panel", "app", "worker", "do", "extension", "server", "agent"])
+    .optional(),
+  /** Entity/context binding for an `agent`-kind connection (host-verified). */
+  agentBinding: AgentBindingSchema.optional(),
 });
 
 export const authMethods = defineServiceMethods({
@@ -103,6 +122,38 @@ export const authMethods = defineServiceMethods({
       "Revoke a paired device by id, invalidating its shell token and retiring any mobile-app principal; audit-logged. Returns whether a device was revoked.",
     args: z.tuple([z.string()]),
     returns: z.object({ revoked: z.boolean() }),
+    access: AUTH_REVOKE_ACCESS,
+  },
+  mintAgentCredential: {
+    description:
+      "Mint an entity-scoped agent credential (caller kind `agent`, principal `agent:<entityId>`) bound to a runtime session and channel. The host derives context from the target session. Returns { agentId, agentToken } where agentToken is the full `agent:<agentId>:<token>` string. Callable only by the server or by the extension that owns the target session.",
+    args: z.tuple([
+      z.object({
+        entityId: z.string().describe("Runtime entity id the credential is bound to."),
+        channelId: z.string().describe("Primary channel the agent is invited into."),
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Credential lifetime in milliseconds; omit for no expiry (entity-lifetime)."),
+        scopes: z
+          .array(z.string())
+          .optional()
+          .describe("Optional capability scopes carried on the credential."),
+      }),
+    ]),
+    returns: z.object({ agentId: z.string(), agentToken: z.string() }),
+    policy: { allowed: ["extension", "server"] },
+    access: AUTH_PAIRING_ACCESS,
+    examples: [{ args: [{ entityId: "session:s1", channelId: "chan-1" }] }],
+  },
+  revokeAgentCredential: {
+    description:
+      "Revoke a single entity-scoped agent credential by agentId. Callable only by the server or by the extension that owns the target session. Returns whether a credential was revoked.",
+    args: z.tuple([z.string().describe("Agent credential id (agt_…).")]),
+    returns: z.object({ revoked: z.boolean() }),
+    policy: { allowed: ["extension", "server"] },
     access: AUTH_REVOKE_ACCESS,
   },
 });

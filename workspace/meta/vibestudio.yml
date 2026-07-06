@@ -299,6 +299,8 @@ services:
         - do
         # git-bridge extension: vcsLog / ingestWorktreeState / listStateFiles
         - extension
+        # agent CLI (plan §3.1 grant set): vcsLog, listChannelLogs, mirror reads
+        - agent
     durableObject:
       className: GadWorkspaceDO
   - source: workers/pubsub-channel
@@ -314,6 +316,7 @@ services:
         - worker
         - do
         - extension
+        - agent
     durableObject:
       className: PubSubChannel
   - source: workers/model-settings
@@ -355,6 +358,7 @@ extensions:
   - source: extensions/test-runner
   - source: extensions/browser-data
   - source: extensions/shell
+  - source: extensions/claude-code
   - source: extensions/mobile-debug
   - source: extensions/react-native
 apps:

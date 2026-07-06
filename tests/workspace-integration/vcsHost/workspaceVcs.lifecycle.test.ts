@@ -94,6 +94,7 @@ describe("WorkspaceVcs — full context lifecycle (e2e)", () => {
     });
     caller = callerFor(gad);
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot,
       contextsRoot: path.join(root, ".contexts"),

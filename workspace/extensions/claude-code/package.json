@@ -1,0 +1,17 @@
+{
+  "name": "@workspace-extensions/claude-code",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "displayName": "Claude Code",
+    "entry": "index.ts",
+    "sourcemap": true,
+    "extension": {
+      "activationEvents": ["*"]
+    }
+  },
+  "dependencies": {
+    "zod": "^3.22.0"
+  }
+}

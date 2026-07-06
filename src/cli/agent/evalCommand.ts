@@ -10,7 +10,6 @@
 import * as fs from "node:fs";
 import { evalMethods } from "@vibestudio/shared/serviceSchemas/eval";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
-import { loadCliCredentials } from "../credentialStore.js";
 import {
   jsonMode,
   printError,
@@ -20,7 +19,7 @@ import {
   UsageError,
 } from "../output.js";
 import { typedClient } from "../typedClients.js";
-import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
+import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -134,10 +133,10 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     const timeoutMs = parseTimeout(inv);
     const imports = parseImports(inv);
     const syntax = parseSyntax(inv);
+    // Scope (credential + context + owner identity) is fully resolved by
+    // resolveSessionScope — including the agent-token path, which has no device
+    // credential or workspace selection to validate here.
     const { client, contextId, session } = resolveSessionScope(inv);
-    const creds = loadCliCredentials();
-    if (!creds) throw new CliError("not paired");
-    if (!creds.workspaceName) throw new CliError("no remote workspace selected");
 
     const evalClient = typedClient("eval", evalMethods, client);
     const subKey = session.scopeKey;
@@ -236,7 +235,7 @@ export const evalCommands: CliCommand[] = [
         takesValue: true,
         description: 'JSON imports map, e.g. {"lodash":"npm:4"}',
       },
-      SESSION_FLAG,
+      ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
     run: evalRun,
@@ -246,7 +245,7 @@ export const evalCommands: CliCommand[] = [
     name: "repl-reset",
     summary: "Reset the persistent REPL scope for a session",
     usage: "vibestudio eval repl-reset [--session NAME]",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: evalReplReset,
   },
 ];

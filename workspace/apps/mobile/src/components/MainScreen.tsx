@@ -450,6 +450,14 @@ export function MainScreen() {
     },
     [removeResolvedApproval, shellClient]
   );
+  const resolveExternalAgent = useCallback(
+    async (approvalId: string, behavior: "allow" | "deny") => {
+      if (!shellClient) throw new Error("Shell client not available");
+      await shellClient.shellApproval.resolveExternalAgent(approvalId, behavior);
+      removeResolvedApproval(approvalId);
+    },
+    [removeResolvedApproval, shellClient]
+  );
   const activatePanel = useCallback(
     (panelId: string) => {
       if (!shellClient || !hostConfig) return;
@@ -1469,6 +1477,7 @@ export function MainScreen() {
         onSubmitCredentialInput={submitCredentialInput}
         onSubmitSecretInput={submitSecretInput}
         onResolveUserland={resolveUserland}
+        onResolveExternalAgent={resolveExternalAgent}
         onNavigateToPanel={activatePanel}
       />
       <Toast />

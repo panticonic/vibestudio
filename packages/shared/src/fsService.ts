@@ -692,6 +692,7 @@ export class FsService {
    * Repos are materialized on demand under their workspace subtrees. Edit
    * routing maps each path back to its owning repo by section taxonomy.
    * - panel/app/worker/DO callers: look up contextId from EntityCache
+   * - agent callers: use the host-verified connection binding
    * - extension callers inside an invocation: use the chained caller context
    * - extension callers outside an invocation: unrestricted host fs
    * - server/shell callers: contextId is the first arg (shifted from
@@ -702,7 +703,14 @@ export class FsService {
     let contextId: string;
     let panelId: string;
 
-    if (
+    if (ctx.caller.runtime.kind === "agent") {
+      const binding = ctx.caller.agentBinding;
+      if (!binding) {
+        throw new Error("agent fs caller has no entity binding");
+      }
+      contextId = binding.contextId;
+      panelId = ctx.caller.runtime.id;
+    } else if (
       ctx.caller.runtime.kind === "panel" ||
       ctx.caller.runtime.kind === "app" ||
       ctx.caller.runtime.kind === "worker" ||

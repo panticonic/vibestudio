@@ -8,6 +8,8 @@ export interface SessionInfo {
   sessionId: string;
   label: string;
   command: { argv: string[]; cwd: string };
+  /** Set for context-scoped sessions (placed inside a VCS context folder). */
+  contextId?: string;
   gitBranch?: string;
   cols: number;
   rows: number;

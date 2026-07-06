@@ -4,7 +4,7 @@
  *
  * Extracted into a self-contained, import-light module so it is unit-testable
  * without loading the EvalDO's heavy engine/runtime deps. Both bindings forward
- * to the owning agent vessel over the gated `chatOp` channel (the vessel's
+ * to the owning agent runtime over the gated `chatOp` channel (the runtime's
  * `assertOwnEvalCaller` restricts that to the agent's own EvalDO).
  */
 

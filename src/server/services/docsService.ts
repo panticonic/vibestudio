@@ -51,7 +51,7 @@ export function createDocsService(deps: {
     name: "docs",
     description:
       "Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).",
-    policy: { allowed: ["panel", "app", "worker", "do", "extension", "server", "shell"] },
+    policy: { allowed: ["panel", "app", "worker", "do", "extension", "server", "shell", "agent"] },
     methods: docsMethods,
     handler: async (ctx, method, args) => {
       const kind = ctx.caller.runtime.kind;

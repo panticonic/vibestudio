@@ -66,6 +66,8 @@ export type {
   LaunchAgentIntoChannelInput,
   LaunchAgentIntoChannelResult,
 } from "./agent-launch.js";
+export { subagentRuntimePrompt } from "./subagent-prompt.js";
+export type { SubagentIdentity } from "./subagent-prompt.js";
 
 // Re-exported from @workspace/pubsub for convenience — canonical role-based
 // predicates for distinguishing agent participants from client participants.

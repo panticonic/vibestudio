@@ -43,6 +43,10 @@ export const VCS_IGNORED_FILES: ReadonlySet<string> = new Set([
   "firebase-service-account.json",
   "google-services.json",
   "GoogleService-Info.plist",
+  // Host-owned per-context bookkeeping marker written into every materialized
+  // context folder (host twin: src/server/vcsHost/paths.ts). Not workspace
+  // source — edit ingress must refuse it so it never enters VCS state.
+  ".vibestudio-context.json",
 ]);
 
 /** Basename glob patterns never tracked (secret/env/scratch files). Mirrors

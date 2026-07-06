@@ -51,7 +51,9 @@ import {
   createSubagentContext,
   initAgentFromTrajectoryFork,
   publishAgentTaskSeed,
+  subagentRuntimePrompt,
   subscribeAgentToChannel,
+  type SubagentIdentity,
 } from "@workspace/agentic-core";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
@@ -79,7 +81,12 @@ import type {
 } from "@workspace/runtime/credentials";
 import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";
-import { SubagentRunStore, type SubagentRunMerge, type SubagentRunRow } from "./subagent-runs.js";
+import {
+  SubagentRunStore,
+  type SubagentAgentKind,
+  type SubagentRunMerge,
+  type SubagentRunRow,
+} from "./subagent-runs.js";
 import { ChannelClient } from "./channel-client.js";
 import { FeedbackIngest } from "./feedback-ingest.js";
 import { CardManager } from "./custom-cards.js";
@@ -109,6 +116,34 @@ const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 4;
 const DEFAULT_SUBAGENT_TTL_MS = 30 * 60 * 1000;
 const SUBAGENT_TTL_ALARM_SOURCE = "subagent-ttl";
 const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+
+/** The subset of an external subagent launch result the spawn path consumes.
+ *  Typed inline to avoid a vessel→extension source dependency; the call goes
+ *  through the host `extensions.invoke` RPC. */
+interface ExternalSubagentLaunchResult {
+  entityId: string;
+  contextId: string;
+  channelId: string;
+  vesselRef: string;
+  vesselEntityId: string;
+  vesselParticipantId: string | null;
+  launchId: string;
+  pid?: number | null;
+}
+
+const EXTERNAL_SUBAGENT_KIND_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,63}$/;
+
+function normalizeSubagentAgentKind(value: unknown): SubagentAgentKind | null {
+  if (value === undefined || value === null || value === "") return "pi";
+  if (typeof value !== "string") return null;
+  const kind = value.trim();
+  if (kind === "pi") return "pi";
+  return EXTERNAL_SUBAGENT_KIND_PATTERN.test(kind) ? kind : null;
+}
+
+function externalSubagentExtensionId(agentKind: SubagentAgentKind): string {
+  return `@workspace-extensions/${agentKind}`;
+}
 
 export type ApprovalLevel = 0 | 1 | 2;
 
@@ -216,51 +251,10 @@ export interface AgentPromptOverride {
   systemPromptMode?: SystemPromptMode;
 }
 
-export interface SubagentIdentity {
-  runId: string;
-  parentRef: string;
-  parentChannelId: string;
-  parentContextId: string;
-  depth: number;
-  mode?: "fresh" | "fork";
-}
-
-export function subagentRuntimePrompt(subagent: SubagentIdentity): string {
-  const forkPrefix =
-    subagent.mode === "fork"
-      ? `## Forked Subagent Scope
-
-You are a forked subagent. You inherited the parent's current trajectory, and the context window cache is shared. That sharing is why the parent chose a fork: do not spend tokens reconstructing broad context the parent already has unless the task specifically requires it.
-
-Assume the parent agent owns the main line of work. Your job is to focus narrowly on the particular task the parent gave you, produce useful findings or isolated child-context edits, and hand the result back. Do not broaden scope, take over the whole project, or redo parent work unless it is necessary for your assigned task.`
-      : "";
-
-  const base = `## Subagent Operating Contract
-
-You are operating as a subagent spawned by a parent agent.
-
-- Run id: ${subagent.runId}
-- Parent channel id: ${subagent.parentChannelId}
-
-Your task channel is a working transcript, not the user's main conversation. Do the assigned task in this child context, read required skills/docs yourself, and keep ordinary messages concise.
-
-Progress:
-- Use \`say\` sparingly for meaningful parent-visible milestones, blockers, or verification results.
-- Ordinary messages and \`say\` updates are progress only. They do not finish the run.
-
-Completion:
-- Finish exactly once by calling \`complete({ report, outcome })\`.
-- Use \`outcome: "success"\` only when the assigned task is complete enough for the parent to act on.
-- Use \`outcome: "failed"\` when blocked or unable to complete; include what you tried, the blocking condition, and whether partial work exists.
-- Idle, turn closure, and a normal final assistant message are not terminal. Only \`complete\` ends this subagent run.
-
-When you produce durable work, commit it in the child context if the task asks for a repository artifact, and report verification and uncertainties in \`complete.report\`.`;
-
-  return [forkPrefix, base]
-    .filter((part) => part.length > 0)
-    .join("\n\n")
-    .trim();
-}
+// Moved to @workspace/agentic-core so external launcher extensions render the
+// same contract; re-exported here for existing import sites.
+export { subagentRuntimePrompt } from "@workspace/agentic-core";
+export type { SubagentIdentity } from "@workspace/agentic-core";
 
 type BrowserOpenMode = "internal" | "external";
 type BrowserHandoffCallerKind = "app" | "panel" | "shell";
@@ -809,7 +803,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private _gadClient: DurableObjectServiceClient | null = null;
 
-  private async callGad<T>(method: string, ...args: unknown[]): Promise<T> {
+  protected async callGad<T>(method: string, ...args: unknown[]): Promise<T> {
     this._gadClient ??= createGadServiceClient({
       call: <R>(targetId: string, m: string, a: unknown[]) => this.rpc.call<R>(targetId, m, a),
     });
@@ -1431,7 +1425,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel membership ───────────────────────────────────────────────────
 
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ callers: ["panel", "do", "extension"] })
   async subscribeChannel(opts: {
     channelId: string;
     contextId: string;
@@ -1598,6 +1592,23 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     await this.publishReceivedAck(channelId, sourceMessageId);
 
     await this.maybeRefreshRoster(channelId);
+    await this.dispatchApprovedInput(channelId, event, sourceMessageId);
+  }
+
+  /**
+   * Deliver an addressing-approved inbound message to this vessel's reasoning
+   * loop. The default drives the in-process AgentLoopDriver; a vessel whose
+   * reasoning loop lives OUTSIDE the system (linked agents — an attached
+   * external process) overrides this to enqueue/forward instead. Runs AFTER
+   * shouldRespond and the received ack, so overrides only ever see input the
+   * agent should react to.
+   */
+  protected async dispatchApprovedInput(
+    channelId: string,
+    event: ChannelEvent,
+    sourceMessageId: string | undefined
+  ): Promise<void> {
+    const agentic = event.payload as AgenticEvent | null;
     await this.ensurePromptArtifacts(channelId);
     const metadata = this.turnMetadata(event);
     await this.driver.handleIncoming(channelId, {
@@ -1786,7 +1797,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       });
   }
 
-  private turnContent(channelId: string, event: ChannelEvent): unknown {
+  protected turnContent(channelId: string, event: ChannelEvent): unknown {
     const agentic = event.payload as { payload?: { blocks?: unknown[] } };
     const blocks = agentic.payload?.blocks ?? [];
     const text = blocks
@@ -1803,7 +1814,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return notes.length > 0 ? [...notes, text].filter(Boolean).join("\n\n") : text;
   }
 
-  private turnMetadata(event: ChannelEvent): AgentTurnMetadata | undefined {
+  protected turnMetadata(event: ChannelEvent): AgentTurnMetadata | undefined {
     const agentic = event.payload as { payload?: { metadata?: unknown } };
     const metadata = agentic.payload?.metadata;
     return metadata && typeof metadata === "object" && !Array.isArray(metadata)
@@ -3352,11 +3363,27 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         source?: unknown;
         config?: unknown;
         label?: unknown;
+        agentKind?: unknown;
       };
       const mode: "fresh" | "fork" = p.mode === "fork" ? "fork" : "fresh";
+      const agentKind = normalizeSubagentAgentKind(p.agentKind);
+      if (!agentKind) {
+        return {
+          result: "spawn_subagent agentKind must be 'pi' or a valid extension launcher id",
+          isError: true,
+        };
+      }
       const task = typeof p.task === "string" ? p.task : "";
       if (mode === "fresh" && !task.trim()) {
         return { result: "spawn_subagent(mode:'fresh') requires a non-empty task", isError: true };
+      }
+      // External launchers receive their task out-of-process, so it must be
+      // non-empty regardless of mode.
+      if (agentKind !== "pi" && !task.trim()) {
+        return {
+          result: `spawn_subagent(agentKind:'${agentKind}') requires a non-empty task`,
+          isError: true,
+        };
       }
       // Idempotency: a re-driven spawn returns the SAME run handle.
       const existingRun = this.subagentRuns.get(invocationId);
@@ -3425,6 +3452,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const parentContextId = this.subscriptions.getContextId(channelId);
       const ownerEntityId = this.participantId();
 
+      // External subagent target: the child is a linked external session driven
+      // by an extension-owned headless process, not an in-process Pi child.
+      if (agentKind !== "pi") {
+        return await this.runExternalSubagentSpawn(agentKind, channelId, {
+          runId,
+          taskChannelId,
+          label,
+          task,
+          mode,
+          childDepth,
+          parentContextId,
+          ownerEntityId,
+          // For external kinds `config` is launcher options (the extension
+          // whitelists what its CLI supports — e.g. model/effort for claude-code).
+          ...(childConfig ? { launcherOptions: childConfig } : {}),
+        });
+      }
+
       // 1) Child context (deterministic; runtime records the lifecycle edge).
       const { contextId } = await createSubagentContext(this.rpc, {
         parentContextId,
@@ -3468,6 +3513,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         merge: null,
         startedAt: now,
         lastActivityAt: now,
+        agentKind: "pi",
+        externalSessionEntityId: null,
       };
       this.subagentRuns.insert(run);
 
@@ -3555,6 +3602,138 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   }
 
+  /**
+   * External subagent bring-up. Mirrors the Pi path but delegates the child
+   * process to an extension launcher named by agentKind. Completion still flows
+   * through the same linked-vessel `completeFromBridge` → `onSubagentComplete`
+   * path, so cards, progress, merge-back, and cancellation stay shared.
+   */
+  private async runExternalSubagentSpawn(
+    agentKind: SubagentAgentKind,
+    channelId: string,
+    opts: {
+      runId: string;
+      taskChannelId: string;
+      label: string;
+      task: string;
+      mode: "fresh" | "fork";
+      childDepth: number;
+      parentContextId: string;
+      ownerEntityId: string;
+      /** Launcher-specific options, forwarded verbatim; the extension owns the
+       *  whitelist of what its CLI supports. */
+      launcherOptions?: Record<string, unknown>;
+    }
+  ): Promise<{ result: unknown; isError: boolean }> {
+    const { runId, taskChannelId, label, task, mode, childDepth, parentContextId, ownerEntityId } =
+      opts;
+    const targetKey = `subagent:${runId}`;
+
+    // 1) Child context (deterministic; runtime records the lifecycle edge).
+    const { contextId } = await createSubagentContext(this.rpc, {
+      parentContextId,
+      ownerEntityId,
+      targetKey,
+    });
+
+    // 2) Record the run BEFORE any external side effect so a setup failure
+    //    (prepare/spawn) is reclaimable by the tool's catch → teardownRun (which
+    //    keys teardown off childContextId). childEntityId/participant are filled
+    //    once `prepare` returns; the complete-gate can't fire during setup.
+    const now = Date.now();
+    const run: SubagentRunRow = {
+      runId,
+      taskChannelId,
+      childContextId: contextId,
+      childEntityId: "",
+      childParticipantId: null,
+      parentChannelId: channelId,
+      mode,
+      label,
+      depth: childDepth,
+      status: "starting",
+      merge: null,
+      startedAt: now,
+      lastActivityAt: now,
+      agentKind,
+      externalSessionEntityId: null,
+    };
+    this.subagentRuns.insert(run);
+
+    // 3) Parent watches the task channel turn-final + stamps task provenance —
+    //    this also materializes the channel bound to the child context, which the
+    //    extension's `prepare` resolves the session context from.
+    await this.subscribeChannel({
+      channelId: taskChannelId,
+      contextId,
+      config: { wakePolicy: "turn-final" },
+      replay: false,
+    });
+    await this.createChannelClient(taskChannelId).recordTaskProvenance({
+      parentChannelId: channelId,
+      parentContextId: parentContextId ?? "",
+      runId,
+    });
+
+    // 4) Launch the linked external subagent via its extension. The extension
+    //    owns the Node-only work: prepare the linked vessel, write the profile,
+    //    and spawn the headless process in the child context.
+    const launched = await this.rpc.call<ExternalSubagentLaunchResult>(
+      "main",
+      "extensions.invoke",
+      [
+        externalSubagentExtensionId(agentKind),
+        "launchSubagent",
+        [
+          {
+            channelId: taskChannelId,
+            title: label,
+            task,
+            ...(opts.launcherOptions ? { options: opts.launcherOptions } : {}),
+            subagent: {
+              runId,
+              parentRef: ownerEntityId,
+              parentChannelId: channelId,
+              parentContextId,
+              depth: childDepth,
+              mode,
+            },
+          },
+        ],
+      ]
+    );
+
+    // childEntityId = the linked vessel's canonical id — its RPC caller identity
+    // when it calls back `onSubagentComplete` (the ownership gate).
+    this.subagentRuns.setChildEntityId(runId, launched.vesselEntityId);
+    this.subagentRuns.setChildParticipantId(runId, launched.vesselParticipantId);
+    this.subagentRuns.setExternalSessionEntityId(runId, launched.entityId);
+
+    // 6) Durable run card, then transition to live.
+    const startedRun = this.subagentRuns.get(runId) ?? {
+      ...run,
+      externalSessionEntityId: launched.entityId,
+    };
+    await this.publishSubagentStarted(startedRun);
+    this.subagentRuns.setStatus(runId, "running");
+    const runningRun = this.subagentRuns.get(runId) ?? {
+      ...startedRun,
+      status: "running" as const,
+    };
+
+    // 7) Seed the task on the channel (trajectory visibility; the headless copy
+    //    is the -p prompt).
+    await this.publishSubagentSeed(runningRun, task);
+
+    return {
+      result: {
+        protocolContent: [{ type: "text", text: `spawned ${agentKind} subagent ${runId}` }],
+        details: this.subagentRunDetails(runningRun),
+      },
+      isError: false,
+    };
+  }
+
   private subagentRunDetails(run: SubagentRunRow): Record<string, unknown> {
     return {
       runId: run.runId,
@@ -3564,6 +3743,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       contextId: run.childContextId,
       childEntityId: run.childEntityId,
       status: run.status,
+      // W6b: the SubagentRunCard badges the reasoning engine from this field.
+      agentKind: run.agentKind,
+      ...(run.externalSessionEntityId
+        ? { externalSessionEntityId: run.externalSessionEntityId }
+        : {}),
     };
   }
 
@@ -3895,6 +4079,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           contextId: run.childContextId,
           childEntityId: run.childEntityId,
           label: run.label,
+          agentKind: run.agentKind,
         },
       },
       createdAt: new Date().toISOString(),
@@ -3963,6 +4148,29 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       /* already gone */
     }
     this.subagentRuns.deleteWakeCursor(run.taskChannelId);
+    // Release an extension-owned headless launch directly. Close/cancel/abandon
+    // all route here. Idempotent — releasing an already-exited launch is a no-op.
+    if (run.externalSessionEntityId) {
+      const agentKind = normalizeSubagentAgentKind(run.agentKind);
+      if (agentKind && agentKind !== "pi") {
+        await this.rpc
+          .call("main", "extensions.invoke", [
+            externalSubagentExtensionId(agentKind),
+            "release",
+            [{ entityId: run.externalSessionEntityId }],
+          ])
+          .catch((err) => {
+            console.error(
+              `[AgentVessel] ${run.agentKind} release for subagent ${run.runId} failed:`,
+              err
+            );
+          });
+      } else {
+        console.error(
+          `[AgentVessel] cannot release external subagent ${run.runId}: invalid agentKind ${run.agentKind}`
+        );
+      }
+    }
     try {
       await this.rpc.call("main", "runtime.destroyContext", [
         { contextId: run.childContextId, recursive: true },

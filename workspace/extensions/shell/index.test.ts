@@ -1,4 +1,4 @@
-import { readFile, stat, mkdtemp } from "node:fs/promises";
+import { readFile, stat, mkdtemp, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -15,26 +15,62 @@ async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "a
     choice: approvals?.shift() ?? approval,
   }));
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  // Materialize a per-context folder on demand, mirroring the host capability.
+  const ensureContextFolder = vi.fn(async (contextId: string) => {
+    const dir = join(root, ".contexts", contextId);
+    await mkdir(dir, { recursive: true });
+    return { dir };
+  });
+  const rpcCall = vi.fn(
+    async (_target: string, _method: string, ..._args: unknown[]) => [] as unknown
+  );
+  const invoke = vi.fn(async (_name: string, _method: string, _args: unknown[]) => null as unknown);
+  const invocationCurrent = vi.fn(() => ({
+    caller: { callerId: "panel:test", callerKind: "panel" },
+  }));
   const ctx = {
-    workspace: { getInfo: async () => ({ id: "ws", name: "ws", path: root, contextsPath: join(root, ".contexts") }) },
-    invocation: { current: () => ({ caller: { callerId: "panel:test", callerKind: "panel" } }) },
+    workspace: {
+      getInfo: async () => ({
+        id: "ws",
+        name: "ws",
+        path: root,
+        contextsPath: join(root, ".contexts"),
+      }),
+      ensureContextFolder,
+    },
+    invocation: { current: invocationCurrent },
     approvals: { request, revoke: vi.fn(), list: vi.fn() },
+    extensions: { invoke, use: vi.fn(), on: vi.fn(), list: vi.fn(), reload: vi.fn() },
+    rpc: { call: rpcCall, stream: vi.fn(), on: vi.fn() },
     health: { healthy: vi.fn(), degraded: vi.fn(), unhealthy: vi.fn(), report: vi.fn() },
     log,
   } as unknown as ExtensionContext;
-  return { api: await activate(ctx), request, root, log };
+  return {
+    api: await activate(ctx),
+    request,
+    root,
+    log,
+    ensureContextFolder,
+    rpcCall,
+    invoke,
+    invocationCurrent,
+  };
 }
 
 describe("@workspace-extensions/shell", () => {
   it("rejects cwd escapes before requesting approval", async () => {
     const { api, request } = await makeApi();
-    await expect(api.exec({ command: "pwd", cwd: "../../" })).rejects.toMatchObject({ code: "EACCES" });
+    await expect(api.exec({ command: "pwd", cwd: "../../" })).rejects.toMatchObject({
+      code: "EACCES",
+    });
     expect(request).not.toHaveBeenCalled();
   });
 
   it("maps denied exec approval to EACCES before spawning", async () => {
     const { api, request } = await makeApi("deny");
-    await expect(api.exec({ command: "node", args: ["-e", "console.log('nope')"] })).rejects.toMatchObject({ code: "EACCES" });
+    await expect(
+      api.exec({ command: "node", args: ["-e", "console.log('nope')"] })
+    ).rejects.toMatchObject({ code: "EACCES" });
     expect(request).toHaveBeenCalledTimes(1);
   });
 
@@ -57,7 +93,9 @@ describe("@workspace-extensions/shell", () => {
 
   it("maps denied open approval to EACCES before spawning a session", async () => {
     const { api, request } = await makeApi("deny");
-    await expect(api.open({ command: "node", args: ["-e", "console.log('nope')"] })).rejects.toMatchObject({ code: "EACCES" });
+    await expect(
+      api.open({ command: "node", args: ["-e", "console.log('nope')"] })
+    ).rejects.toMatchObject({ code: "EACCES" });
     expect(await api.list()).toEqual([]);
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -78,8 +116,12 @@ describe("@workspace-extensions/shell", () => {
     expect(result.absolutePath.startsWith(join(root, ".snug", "scratch"))).toBe(true);
     expect(result.workspaceRelative.startsWith(".snug/scratch/")).toBe(true);
     await expect(readFile(result.absolutePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
-    await expect(api.stashScratch(new Uint8Array(), "png")).rejects.toMatchObject({ code: "EINVAL" });
-    await expect(api.stashScratch(new Uint8Array(25 * 1024 * 1024 + 1), "png")).rejects.toMatchObject({ code: "E2BIG" });
+    await expect(api.stashScratch(new Uint8Array(), "png")).rejects.toMatchObject({
+      code: "EINVAL",
+    });
+    await expect(
+      api.stashScratch(new Uint8Array(25 * 1024 * 1024 + 1), "png")
+    ).rejects.toMatchObject({ code: "E2BIG" });
   });
 
   it("normalizes hostile scratch extensions to bin", async () => {
@@ -99,7 +141,10 @@ describe("@workspace-extensions/shell", () => {
     if (first.type !== "snapshot-batch") throw new Error(`unexpected event ${first.type}`);
     expect(first.sessions).toEqual([]);
 
-    const opened = api.open({ command: "node", args: ["-e", "console.log('http://localhost:5173')"] });
+    const opened = api.open({
+      command: "node",
+      args: ["-e", "console.log('http://localhost:5173')"],
+    });
     const openedEvent = await readEvent(reader);
     expect(openedEvent.type).toBe("opened");
     if (openedEvent.type !== "opened") throw new Error(`unexpected event ${openedEvent.type}`);
@@ -114,13 +159,19 @@ describe("@workspace-extensions/shell", () => {
         break;
       }
     }
-    expect(snapshot && "info" in snapshot ? snapshot.info : null).toMatchObject({ detectedPorts: [5173], detectedUrls: ["http://localhost:5173"] });
+    expect(snapshot && "info" in snapshot ? snapshot.info : null).toMatchObject({
+      detectedPorts: [5173],
+      detectedUrls: ["http://localhost:5173"],
+    });
     await reader.cancel();
   });
 
   it("supports metadata, restart, scrollback clearing, and disposal", async () => {
     const { api } = await makeApi("allow");
-    const { sessionId } = await api.open({ command: "node", args: ["-e", "process.stdout.write('one')"] });
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "process.stdout.write('one')"],
+    });
     await api.awaitExit(sessionId);
     const beforeClear = await api.getScrollback(sessionId);
     expect(beforeClear.text).toContain("one");
@@ -148,15 +199,25 @@ describe("@workspace-extensions/shell", () => {
     const { sessionId } = await api.open({ command: "node", args: ["-e", ""] });
     await api.awaitExit(sessionId);
 
-    await expect(api.setMeta(sessionId, "snugOpenUrl", { id: "spoof", url: "https://spoof.test", requestedAt: 1 }))
-      .rejects.toMatchObject({ code: "EACCES" });
-    await expect(api.deleteMeta(sessionId, "snugOpenUrl")).rejects.toMatchObject({ code: "EACCES" });
+    await expect(
+      api.setMeta(sessionId, "snugOpenUrl", {
+        id: "spoof",
+        url: "https://spoof.test",
+        requestedAt: 1,
+      })
+    ).rejects.toMatchObject({ code: "EACCES" });
+    await expect(api.deleteMeta(sessionId, "snugOpenUrl")).rejects.toMatchObject({
+      code: "EACCES",
+    });
     await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toBeUndefined();
   });
 
   it("coalesces bulk stream snapshots while keeping lifecycle events immediate", async () => {
     const { api } = await makeApi("allow");
-    const { sessionId } = await api.open({ command: "node", args: ["-e", "setTimeout(() => {}, 5000)"] });
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "setTimeout(() => {}, 5000)"],
+    });
     const response = await api.watchAllSessionInfo();
     const reader = response.body!.getReader();
     await readEvent(reader);
@@ -178,7 +239,10 @@ describe("@workspace-extensions/shell", () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug version && snug meta set mood '{\"ok\":true}' && snug meta get mood && snug badge 7 --color amber && snug label renamed && snug notify --severity done --title Build finished"],
+      args: [
+        "-lc",
+        "snug version && snug meta set mood '{\"ok\":true}' && snug meta get mood && snug badge 7 --color amber && snug label renamed && snug notify --severity done --title Build finished",
+      ],
     });
     await api.awaitExit(sessionId);
     const info = await api.get(sessionId);
@@ -193,8 +257,14 @@ describe("@workspace-extensions/shell", () => {
 
   it("allocates isolated snug sockets and unlinks them when sessions exit", async () => {
     const { api } = await makeApi("allow");
-    const first = await api.open({ command: "/bin/sh", args: ["-lc", "printf '%s\\n' \"$SNUG_SOCK\""] });
-    const second = await api.open({ command: "/bin/sh", args: ["-lc", "printf '%s\\n' \"$SNUG_SOCK\""] });
+    const first = await api.open({
+      command: "/bin/sh",
+      args: ["-lc", "printf '%s\\n' \"$SNUG_SOCK\""],
+    });
+    const second = await api.open({
+      command: "/bin/sh",
+      args: ["-lc", "printf '%s\\n' \"$SNUG_SOCK\""],
+    });
     await api.awaitExit(first.sessionId);
     await api.awaitExit(second.sessionId);
 
@@ -211,7 +281,10 @@ describe("@workspace-extensions/shell", () => {
 
   it("does not expose snug routing tokens in the session environment", async () => {
     const { api } = await makeApi("allow");
-    const { sessionId } = await api.open({ command: "/bin/sh", args: ["-lc", "test -n \"$SNUG_SOCK\" && test -z \"${SNUG_TOKEN:-}\" && snug version"] });
+    const { sessionId } = await api.open({
+      command: "/bin/sh",
+      args: ["-lc", 'test -n "$SNUG_SOCK" && test -z "${SNUG_TOKEN:-}" && snug version'],
+    });
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
 
@@ -256,7 +329,10 @@ describe("@workspace-extensions/shell", () => {
     const { api } = await makeApi("allow");
     const { sessionId } = await api.open({
       command: "/bin/sh",
-      args: ["-lc", "snug meta set snugOpenUrl '{\"id\":\"spoof\",\"url\":\"https://spoof.test\",\"requestedAt\":1}' || echo rejected"],
+      args: [
+        "-lc",
+        'snug meta set snugOpenUrl \'{"id":"spoof","url":"https://spoof.test","requestedAt":1}\' || echo rejected',
+      ],
     });
     await api.awaitExit(sessionId);
     const scrollback = await api.getScrollback(sessionId);
@@ -313,9 +389,15 @@ describe("@workspace-extensions/shell", () => {
     await api.awaitExit(sessionId);
     const sessions = await api.list();
     const child = sessions.find((item) => item.sessionId !== sessionId && item.meta["snugSpawn"]);
-    expect(child?.meta["snugSpawn"]).toMatchObject({ parentSessionId: sessionId, direction: "row" });
+    expect(child?.meta["snugSpawn"]).toMatchObject({
+      parentSessionId: sessionId,
+      direction: "row",
+    });
     expect(child?.command.argv.join(" ")).toContain("printf child");
-    expect(log.info).toHaveBeenCalledWith("snug category-c decision", expect.objectContaining({ action: "split", decision: "allow" }));
+    expect(log.info).toHaveBeenCalledWith(
+      "snug category-c decision",
+      expect.objectContaining({ action: "split", decision: "allow" })
+    );
   });
 
   it("routes approved snug open into a trusted session metadata handoff", async () => {
@@ -330,6 +412,173 @@ describe("@workspace-extensions/shell", () => {
       url: "https://example.test",
       requestedAt: expect.any(Number),
     });
+  });
+
+  it("tags detected agents via the built-in launch-adapter registry", async () => {
+    const { api } = await makeApi("allow");
+    // Detection matches the resolved argv (command + args), not the label.
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "process.exit(0)", "claude"],
+    });
+    await api.awaitExit(sessionId);
+    const info = await api.get(sessionId);
+    expect(info.detectedAgent).toEqual({ kind: "claude-code", title: "Claude Code" });
+  });
+
+  it("places context sessions in the materialized context folder and carries contextId", async () => {
+    const { api, ensureContextFolder, root } = await makeApi("allow");
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "process.exit(0)"],
+      contextId: "ctx-1",
+    });
+    await api.awaitExit(sessionId);
+    expect(ensureContextFolder).toHaveBeenCalledWith("ctx-1");
+    const info = await api.get(sessionId);
+    expect(info.contextId).toBe("ctx-1");
+    expect(info.command.cwd).toBe(join(root, ".contexts", "ctx-1"));
+  });
+
+  it("approval-gates attaching to an existing context before materializing it", async () => {
+    const { api, request, ensureContextFolder } = await makeApi("deny");
+    await expect(
+      api.open({
+        command: "node",
+        args: ["-e", "process.exit(0)"],
+        contextId: "ctx-existing",
+      })
+    ).rejects.toMatchObject({ code: "EACCES" });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]![0]).toMatchObject({
+      title: "Attach to context",
+      subject: { label: "ctx-existing" },
+    });
+    expect(ensureContextFolder).not.toHaveBeenCalled();
+    expect(await api.list()).toEqual([]);
+  });
+
+  it("uses shell-created fresh context tokens without an extra attach prompt", async () => {
+    const { api, request, ensureContextFolder, rpcCall } = await makeApi("allow");
+    rpcCall.mockImplementation(async (_target: string, method: string) => {
+      if (method === "runtime.createEntity") return { id: "entity-new", contextId: "ctx-new" };
+      if (method === "runtime.resolveContext") return "ctx-new";
+      return [];
+    });
+
+    const created = await api.createContext({ title: "New terminal context" });
+    expect(created.contextId).toBe("ctx-new");
+    expect(created.contextAttachToken).toEqual(expect.any(String));
+
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "process.exit(0)"],
+      contextId: created.contextId,
+      contextAttachToken: created.contextAttachToken,
+    });
+    await api.awaitExit(sessionId);
+
+    expect(ensureContextFolder).toHaveBeenCalledWith("ctx-new");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]![0]).toMatchObject({ title: "Open terminal session" });
+  });
+
+  it("does not prompt again once the caller already has a session attached to the context", async () => {
+    const { api, request } = await makeApi(["allow", "allow", "allow"]);
+    const first = await api.open({
+      command: "node",
+      args: ["-e", "setTimeout(() => {}, 5000)"],
+      contextId: "ctx-attached",
+    });
+    const second = await api.open({
+      command: "node",
+      args: ["-e", "process.exit(0)"],
+      contextId: "ctx-attached",
+    });
+
+    await api.kill(first.sessionId, "SIGTERM");
+    await api.awaitExit(first.sessionId);
+    await api.awaitExit(second.sessionId);
+    expect(request.mock.calls.map((call) => call[0].title)).toEqual([
+      "Attach to context",
+      "Open terminal session",
+      "Open terminal session",
+    ]);
+  });
+
+  it("invokes a registered launch-adapter handler for context sessions and applies rewrites", async () => {
+    const { api, invoke, invocationCurrent } = await makeApi("allow");
+    invoke.mockResolvedValueOnce({
+      env: { INJECTED: "1" },
+      argv: ["node", "-e", "process.stdout.write(process.env.INJECTED||'')"],
+    });
+    invocationCurrent.mockReturnValueOnce({
+      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
+    });
+    await api.registerLaunchAdapter({
+      id: "test:claude",
+      match: { pattern: "\\bclaude\\b" },
+      detect: { kind: "claude-code", title: "Claude Code" },
+      handler: { extension: "@workspace-extensions/claude-code", method: "prepareLaunch" },
+    });
+    // argv carries "claude" so the adapter matches; the handler rewrites it to a
+    // runnable node invocation before spawn.
+    const { sessionId } = await api.open({ command: "node", args: ["claude"], contextId: "ctx-2" });
+    await api.awaitExit(sessionId);
+    expect(invoke).toHaveBeenCalledWith("@workspace-extensions/claude-code", "prepareLaunch", [
+      expect.objectContaining({ contextId: "ctx-2", argv: ["node", "claude"] }),
+    ]);
+    const info = await api.get(sessionId);
+    // The handler's argv rewrite is what actually spawned.
+    expect(info.command.argv).toEqual([
+      "node",
+      "-e",
+      "process.stdout.write(process.env.INJECTED||'')",
+    ]);
+    const scrollback = await api.getScrollback(sessionId);
+    expect(scrollback.text).toContain("1");
+  });
+
+  it("does not run launch-adapter handlers for non-context sessions", async () => {
+    const { api, invoke, invocationCurrent } = await makeApi("allow");
+    invocationCurrent.mockReturnValueOnce({
+      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
+    });
+    await api.registerLaunchAdapter({
+      id: "test:claude",
+      match: { pattern: "\\bclaude\\b" },
+      handler: { extension: "@workspace-extensions/claude-code", method: "prepareLaunch" },
+    });
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "process.exit(0)"],
+      label: "claude",
+    });
+    await api.awaitExit(sessionId);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("launches untouched when a launch-adapter handler throws", async () => {
+    const { api, invoke, log, invocationCurrent } = await makeApi("allow");
+    invoke.mockRejectedValueOnce(new Error("boom"));
+    invocationCurrent.mockReturnValueOnce({
+      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
+    });
+    await api.registerLaunchAdapter({
+      id: "test:claude",
+      match: { pattern: "\\bclaude\\b" },
+      handler: { extension: "@workspace-extensions/claude-code", method: "prepareLaunch" },
+    });
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "process.exit(0)", "claude"],
+      contextId: "ctx-3",
+    });
+    await api.awaitExit(sessionId);
+    const info = await api.get(sessionId);
+    expect(info.command.argv).toEqual(["node", "-e", "process.exit(0)", "claude"]);
+    expect(log.debug).toHaveBeenCalled();
   });
 
   it("approval-gates snug open before creating an open-url handoff", async () => {
@@ -349,13 +598,19 @@ describe("@workspace-extensions/shell", () => {
     });
     await expect(api.getMeta(sessionId, "snugOpenUrl")).resolves.toBeUndefined();
     expect(scrollback.text).toContain("shell.open denied by user");
-    expect(log.info).toHaveBeenCalledWith("snug category-c decision", expect.objectContaining({ action: "open-url", decision: "deny" }));
+    expect(log.info).toHaveBeenCalledWith(
+      "snug category-c decision",
+      expect.objectContaining({ action: "open-url", decision: "deny" })
+    );
   });
 });
 
 const readerBuffers = new WeakMap<ReadableStreamDefaultReader<Uint8Array>, string>();
 
-async function readEvent(reader: ReadableStreamDefaultReader<Uint8Array>, timeoutMs = 5000): Promise<SessionInfoEvent> {
+async function readEvent(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutMs = 5000
+): Promise<SessionInfoEvent> {
   const decoder = new TextDecoder();
   let buffer = readerBuffers.get(reader) ?? "";
   const deadline = Date.now() + timeoutMs;
@@ -387,5 +642,7 @@ async function readEvent(reader: ReadableStreamDefaultReader<Uint8Array>, timeou
 }
 
 function socketPathFrom(scrollback: string): string | undefined {
-  return scrollback.split(/\r?\n/).find((line) => line.includes("/snug-") && line.endsWith(".sock"));
+  return scrollback
+    .split(/\r?\n/)
+    .find((line) => line.includes("/snug-") && line.endsWith(".sock"));
 }

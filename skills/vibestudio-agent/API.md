@@ -123,7 +123,7 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `server`, `shell`
+Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `server`, `shell`, `agent`
 
 | Method | Description |
 |--------|-------------|
@@ -138,7 +138,7 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `server`, `shell`
 
 Owner-scoped sandbox eval backed by a per-owner internal EvalDO
 
-Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`
+Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`, `agent`
 
 | Method | Description |
 |--------|-------------|
@@ -163,7 +163,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Per-context filesystem operations (sandboxed to context folder)
 
-Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`
+Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`, `agent`
 
 | Method | Description |
 |--------|-------------|
@@ -228,6 +228,17 @@ Allowed callers: `shell`, `server`
 | Method | Description |
 |--------|-------------|
 | `hostLifecycle.shutdown` | Gracefully shut down the workspace server process (same path as SIGTERM). Shell-only. |
+
+## `mirror`
+
+Read-side of the context projector: `targets` returns a context's per-repo content-addressed states, `objects` streams the CAS tree content for a state in size-bounded pages. Powers `vibestudio context mirror`.
+
+Allowed callers: `shell`, `agent`, `do`, `server`, `panel`
+
+| Method | Description |
+|--------|-------------|
+| `mirror.targets` | The per-repo { repoPath, stateHash } targets a context resolves to (read-side of the projector). Fetch these, then stream each state's tree via `objects`. |
+| `mirror.objects` | Stream the content-addressed tree for a `stateHash` as size-bounded pages of { path, mode, content (base64), size }. Page with the returned `next` cursor until absent; optionally restrict to `paths`. |
 
 ## `notification`
 
@@ -361,7 +372,7 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 
 Runtime entity creation and retirement
 
-Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`
+Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `extension`
 
 | Method | Description |
 |--------|-------------|
@@ -374,13 +385,13 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`
 | `runtime.destroyContext` | Retire every entity in a context and delete its folder + VCS state. With `recursive` (the default when lifecycle children exist), post-order teardown of the LIFECYCLE subtree only — never crossing a lineage (fork) edge. Free for your own context or one you fully own (every active entity was launched by you); gated when destroying another agent or panel's existing context. |
 | `runtime.listOwnedContexts` | List the contexts owned by a context via the relationship registry. `kind` scopes to 'lifecycle' (subagent children) or 'lineage' (fork provenance); omit to list both. Returns { contexts: [...] }. |
 | `runtime.recordContextEdge` | Idempotently upsert a context-relationship edge into the registry. Host-internal only; userland creates trusted edges through cloneContext/createSubagentContext instead. |
-| `runtime.createSubagentContext` | Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; the vessel must NOT hand-roll this. |
+| `runtime.createSubagentContext` | Create a subagent's child context off a parent: validate the spawning owner, mint a deterministic child contextId from targetKey, fork the parent's file state into it, materialize its folder, and record a 'lifecycle' edge (owner = parentContextId). Idempotent under targetKey. Composes createContext + forkContext + the registry; callers must not hand-roll this. |
 
 ## `serverLog`
 
 Server host log inspection and live tailing
 
-Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
+Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`, `agent`
 
 | Method | Description |
 |--------|-------------|
@@ -399,6 +410,8 @@ Allowed callers: `shell`, `app`, `server`
 | `shellApproval.resolve` | Record the user's decision (once/session/version/repo/deny/dismiss) on a pending approval, resolving its queued request. |
 | `shellApproval.resolveBootstrap` | Resolve a pending startup-app (bootstrap unit) approval with an allow-once or deny decision; rejects if the id is not a pending bootstrap approval. |
 | `shellApproval.resolveUserland` | Resolve a pending userland approval by selecting one of the presented option values (or 'dismiss'); rejects if the choice was not offered to the user. |
+| `shellApproval.resolveExternalAgent` | Record the user's allow/deny verdict on a pending external-agent tool-use approval, resolving the relayed permission request. |
+| `shellApproval.resolveExternalAgentByRequest` | Record the user's allow/deny verdict on a pending external-agent approval matched by (channelId, requestId, resolveToken) rather than approvalId — the inline conversation card knows the requestId and opaque resolve token, not the internal approvalId. Records a real verdict (unlike the quiet settle-elsewhere path). Returns whether a matching pending approval was resolved. |
 | `shellApproval.submitClientConfig` | Submit the user-entered client-configuration field values for a pending approval, fulfilling its config request. |
 | `shellApproval.submitCredentialInput` | Submit the user-entered credential/secret field values for a pending approval, fulfilling its credential-input request. |
 | `shellApproval.submitSecretInput` | Submit the user-entered secret field values for a pending secret-input approval, fulfilling its feedback-form request. |
@@ -432,7 +445,7 @@ Allowed callers: `server`, `shell`
 
 Workspace version control (GAD-native): commit, status, log, diff. Publishing is not a public host vcs.push RPC; use vibestudio vcs push / runtime VcsClient.push, which dispatch userland to the gad-store DO's vcsPush.
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
+Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`, `agent`
 
 | Method | Description |
 |--------|-------------|
@@ -526,6 +539,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 | `workspace.listSkills` | List skills under <workspace>/skills/* with name + description parsed from each SKILL.md frontmatter. |
 | `workspace.readSkill` | Return the raw SKILL.md contents for a single skill by name (single-segment names only; path traversal is rejected). |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
+| `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
 | `workspace.units.list` | List operational status rows for all workspace units (panels, workers, extensions, apps), including build/health state. |
 | `workspace.units.inspector` | Return the devtools inspector URL for a unit by name or source, or null if it has none. |

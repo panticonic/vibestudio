@@ -25,6 +25,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT,
         key TEXT NOT NULL,
         state_args TEXT,
+        agent_binding TEXT,
         parent_id TEXT,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',

@@ -706,6 +706,19 @@ async function main() {
     contextsRoot: path.join(statePath, ".contexts"),
     buildSourcesRoot: path.join(getUserDataPath(), "build-sources"),
     refs: refService,
+    // Per-context marker bookkeeping (§6.2): stamp the workspace id and the
+    // loopback HTTP(S) server base URL into `.vibestudio-context.json` at folder
+    // materialization. `getServerUrl` is a getter because the gateway port is
+    // only finalized post-listen (getResolvedGatewayPort throws until then);
+    // ensureContextFolder always runs well after startup, so it resolves.
+    workspaceId: workspace.config.id,
+    getServerUrl: () => {
+      try {
+        return `${gatewayProtocol()}://127.0.0.1:${getResolvedGatewayPort("context marker")}`;
+      } catch {
+        return undefined;
+      }
+    },
     // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
     // the source dir only when there is a persistent dev source to extract to.
     // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
@@ -927,6 +940,8 @@ async function main() {
 
   const dispatcher = new ServiceDispatcher();
   const container = new ServiceContainer(dispatcher);
+  const getEntityStore = (): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
+    ensureEntityStore(container.get<import("./doDispatch.js").DODispatch>("doDispatch"));
 
   // Route registry — shared across workerdManager (registers manifest-declared
   // worker routes) and the gateway (dispatches `/_r/` requests). Constructed
@@ -1188,6 +1203,27 @@ async function main() {
         },
       })
     );
+    // Remote context mirrors (plan §6.5): read-side of the projector over the
+    // wire. `targets` reads a context's per-repo states; `objects` streams the
+    // CAS tree content in size-bounded pages. Backed by the same WorkspaceVcs +
+    // WorktreeStore + blobstore the projector uses — no new write semantics.
+    {
+      const { createMirrorService } = await import("./services/mirrorService.js");
+      const { getBytes: readMirrorBlob } = await import("./services/blobstoreService.js");
+      const mirrorBlobsDir = path.join(getUserDataPath(), "blobs");
+      container.registerRpc(
+        createMirrorService({
+          contextRepoTargets: (contextId) => workspaceVcs.contextRepoTargets(contextId),
+          listStateFiles: async (stateHash) =>
+            (await workspaceVcs.worktrees.listStateFiles(stateHash)).map((file) => ({
+              path: file.path,
+              contentHash: file.content_hash,
+              mode: file.mode,
+            })),
+          readBlob: (contentHash) => readMirrorBlob(mirrorBlobsDir, contentHash),
+        })
+      );
+    }
     let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;
     container.registerManaged({
       name: "vcsService",
@@ -1449,6 +1485,7 @@ async function main() {
     createUserlandApprovalService({
       approvalQueue,
       grantStore: userlandApprovalGrantStore,
+      resolveRuntimeEntity: (id) => getEntityStore().resolveRecord(id),
     })
   );
 
@@ -1772,6 +1809,13 @@ async function main() {
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           setEntityTitle: (entityId, title, options) =>
             entityTitleService.setTitle(entityId, title, options),
+          // Agent credentials follow the entity (§3.2): on retire, revoke all
+          // outstanding agent credentials and the live `agent:<entityId>` token.
+          revokeAgentCredentials: (entityId) => {
+            deviceAuthStore.revokeAgentCredentialsForEntity(entityId);
+            // Matches auth/model.ts agentCallerId(entityId).
+            tokenManager.revokeToken(`agent:${entityId}`);
+          },
         });
       },
       getServiceDefinition() {
@@ -2650,6 +2694,12 @@ async function main() {
     },
     getGatewayPort: () => gatewayPortResolved,
     eventService,
+    // Backs `workspace.ensureContextFolder` — launch orchestrators materialize a
+    // context's working folder to place context-scoped terminal sessions in it.
+    ensureContextFolder: async (contextId: string) => ({
+      dir: await contextFolderManager.ensureContextFolder(contextId),
+    }),
+    resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
     listWorkspaceUnits: () => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
       type WorkspaceUnitStatus = import("./services/workspaceService.js").WorkspaceUnitStatus;
@@ -3200,6 +3250,7 @@ async function main() {
           retireMobileAppPrincipal: (deviceId) => {
             appHostForGateway?.retireReactNativeAppPrincipal(deviceId);
           },
+          resolveRuntimeEntity: (id) => getEntityStore().resolveRecord(id),
         }),
         routeRegistry
       )

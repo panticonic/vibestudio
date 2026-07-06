@@ -16,7 +16,7 @@ import {
   type ParsedInvocation,
 } from "../commandTable.js";
 import { CliError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
-import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
+import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
 import { createVcsUserlandClient, type RpcCallerLike } from "@vibestudio/shared/userlandServiceRpc";
 import type { RpcClient } from "../rpcClient.js";
 
@@ -819,7 +819,7 @@ export const vcsCommands: CliCommand[] = [
     name: "edit",
     summary: "Record uncommitted working edits on your context head (no commit, no build)",
     usage: "vibestudio vcs edit [--repo REPOPATH] --edits '<json>'  (or pipe JSON on stdin)",
-    flags: [REPO_FLAG, EDITS_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, EDITS_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: edit,
   },
   {
@@ -827,7 +827,7 @@ export const vcsCommands: CliCommand[] = [
     name: "commit",
     summary: "Fold your context's uncommitted working edits into one messaged snapshot per repo",
     usage: "vibestudio vcs commit -m MESSAGE [--repo REPOPATH ...]",
-    flags: [REPO_FLAG, MESSAGE_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, MESSAGE_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: commit,
   },
   {
@@ -835,7 +835,7 @@ export const vcsCommands: CliCommand[] = [
     name: "push",
     summary: "Build-gate a repo's context head into main (repeat --repo for an atomic group)",
     usage: "vibestudio vcs push --repo REPOPATH [--repo REPOPATH ...] [-m MESSAGE]",
-    flags: [REPO_FLAG, MESSAGE_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, MESSAGE_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: push,
   },
   {
@@ -843,7 +843,7 @@ export const vcsCommands: CliCommand[] = [
     name: "merge",
     summary: "Pull main into your context head (reconcile divergence before re-pushing)",
     usage: "vibestudio vcs merge --repo REPOPATH",
-    flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: merge,
   },
   {
@@ -851,7 +851,7 @@ export const vcsCommands: CliCommand[] = [
     name: "discard",
     summary: "Drop a repo's uncommitted working edits (and abort any in-progress merge)",
     usage: "vibestudio vcs discard --repo REPOPATH",
-    flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: discard,
   },
   {
@@ -860,7 +860,7 @@ export const vcsCommands: CliCommand[] = [
     aliases: ["pushstatus"],
     summary: "Show how many changes each repo has ahead of main (pre-push)",
     usage: "vibestudio vcs push-status --repo REPOPATH [--repo REPOPATH ...]",
-    flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: pushStatus,
   },
   {
@@ -868,7 +868,7 @@ export const vcsCommands: CliCommand[] = [
     name: "status",
     summary: "Show a repo's unpushed changes (context head vs its main)",
     usage: "vibestudio vcs status --repo REPOPATH",
-    flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: status,
   },
   {
@@ -876,7 +876,7 @@ export const vcsCommands: CliCommand[] = [
     name: "diff",
     summary: "Show a name-status diff of a repo's unpushed changes",
     usage: "vibestudio vcs diff --repo REPOPATH",
-    flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: diff,
   },
   {
@@ -884,7 +884,7 @@ export const vcsCommands: CliCommand[] = [
     name: "log",
     summary: "Show a single repo's push history",
     usage: "vibestudio vcs log --repo REPOPATH [--limit N]",
-    flags: [REPO_FLAG, LIMIT_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, LIMIT_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: log,
   },
   {
@@ -892,7 +892,7 @@ export const vcsCommands: CliCommand[] = [
     name: "fork-repo",
     summary: "Fork a repo to a new path, preserving its history (edit on top of the fork)",
     usage: "vibestudio vcs fork-repo FROM_REPO TO_REPO",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: forkRepo,
   },
   {
@@ -901,7 +901,7 @@ export const vcsCommands: CliCommand[] = [
     summary:
       "Permanently remove a repo from the workspace — archives its history, drops it from main (requires user approval; refuses if depended-on unless --force)",
     usage: "vibestudio vcs delete-repo --repo REPOPATH [--force]",
-    flags: [REPO_FLAG, FORCE_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, FORCE_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: deleteRepo,
   },
   {
@@ -910,7 +910,7 @@ export const vcsCommands: CliCommand[] = [
     summary:
       "Recover a deleted repo from its archived history (fails if a different repo now occupies the path; requires user approval)",
     usage: "vibestudio vcs restore-repo --repo REPOPATH",
-    flags: [REPO_FLAG, SESSION_FLAG, JSON_FLAG],
+    flags: [REPO_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
     run: restoreRepo,
   },
   {
@@ -918,7 +918,7 @@ export const vcsCommands: CliCommand[] = [
     name: "context-status",
     summary: "Show what your context has edited and how far it has drifted from main",
     usage: "vibestudio vcs context-status",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: contextStatus,
   },
   {
@@ -926,7 +926,7 @@ export const vcsCommands: CliCommand[] = [
     name: "rebase",
     summary: "Pull latest main into your context (merge edited repos + re-pin base)",
     usage: "vibestudio vcs rebase",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: rebase,
   },
 ];

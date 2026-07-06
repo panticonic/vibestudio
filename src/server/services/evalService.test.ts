@@ -480,4 +480,49 @@ describe("createEvalService — F2 held-run failure reconciliation", () => {
     // it); forcing a terminal here would cut a legitimately long-running eval short.
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
+
+  // Plan §6.4: an `agent` caller binds to its host-verified entity binding with
+  // zero flags; the EvalDO trusts the binding, not client-supplied owner/context.
+  it("binds agent eval to the entity binding (owner = binding.entityId, context = binding.contextId)", async () => {
+    const { service, calls } = createHarness({});
+    const binding = {
+      entityId: "ent_agent",
+      contextId: "ctx_bound",
+      channelId: "chan_1",
+      agentId: "ag_1",
+    };
+
+    await service.handler(
+      { caller: createVerifiedCaller("agent:ent_agent", "agent", null, binding) },
+      "run",
+      [{ code: "return 1;" }]
+    );
+
+    // Registered + ran against the EvalDO keyed by the BINDING entity, in the
+    // bound context — no ownerId/contextId came from the client.
+    const objectKey = evalKey("ent_agent", "default");
+    const activate = calls.find((c) => c.method === "entityActivate");
+    expect(activate).toBeTruthy();
+    expect((activate!.args[0] as { contextId?: string }).contextId).toBe("ctx_bound");
+    const run = calls.find((c) => c.method === "run");
+    expect((run!.ref as { objectKey: string }).objectKey).toBe(objectKey);
+  });
+
+  it("rejects an agent eval whose client-supplied owner/context contradicts the binding", async () => {
+    const { service } = createHarness({});
+    const binding = {
+      entityId: "ent_agent",
+      contextId: "ctx_bound",
+      channelId: "chan_1",
+      agentId: "ag_1",
+    };
+
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("agent:ent_agent", "agent", null, binding) },
+        "run",
+        [{ ownerId: "someone_else", contextId: "ctx_bound", code: "return 1;" }]
+      )
+    ).rejects.toThrow(/must match the connection's entity binding/);
+  });
 });

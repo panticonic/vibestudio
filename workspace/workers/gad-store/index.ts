@@ -14149,6 +14149,34 @@ export class GadWorkspaceDO extends DurableObjectBase {
     ];
   }
 
+  /**
+   * Enumerate every durable channel log (the smallest primitive reflecting
+   * durable truth for `vibestudio channel list`). There is no host-side live-DO
+   * instance registry — workerd addresses DOs by one-way-hashed object id — so
+   * the gad-store `log_heads` index (log_kind = 'channel') IS the authoritative
+   * roster of channels that have ever received a durable envelope. Returns one
+   * row per channel log id (`branch:channel:<channelId>`), newest first. The CLI
+   * annotates each with its bound context via the channel DO's `getContextId`.
+   */
+  @rpc({ callers: ["panel", "do", "worker", "server", "shell", "agent"] })
+  listChannelLogs(): { channelId: string; logId: string; createdAt: number | null }[] {
+    this.ensureReady();
+    const rows = this.sql
+      .exec(
+        `SELECT log_id AS logId, MIN(created_at) AS createdAt
+         FROM log_heads WHERE log_kind = 'channel'
+         GROUP BY log_id ORDER BY createdAt DESC`
+      )
+      .toArray();
+    const prefix = "branch:channel:";
+    return rows.map((row) => {
+      const logId = String(row["logId"]);
+      const channelId = logId.startsWith(prefix) ? logId.slice(prefix.length) : logId;
+      const createdAt = row["createdAt"];
+      return { channelId, logId, createdAt: typeof createdAt === "number" ? createdAt : null };
+    });
+  }
+
   @rpc({ callers: ["panel", "do", "worker", "server"] })
   async validateGadHashes(): Promise<{ ok: boolean; errors: string[] }> {
     const integrity = await this.checkGadIntegrity();

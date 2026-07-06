@@ -297,6 +297,17 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
                   {subagent.mode}
                 </Badge>
               )}
+              {subagent.agentKind === "claude-code" && (
+                <Badge
+                  className="subagent-kind-badge"
+                  size="1"
+                  variant="soft"
+                  color="amber"
+                  title="Claude Code subagent"
+                >
+                  Claude Code
+                </Badge>
+              )}
               {merge && (
                 <Badge className="subagent-merge-badge" size="1" variant="soft" color={merge.color}>
                   {merge.label}

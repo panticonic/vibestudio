@@ -114,7 +114,16 @@ export const ALWAYS_IGNORED_FILES = new Set([
   "firebase-service-account.json",
   "google-services.json",
   "GoogleService-Info.plist",
+  // Host-owned per-context bookkeeping marker written into every materialized
+  // context folder by WorkspaceVcs.ensureContextFolder (docs/…channels-plan §6.2).
+  // Names the context/workspace/server to CLI + agent scope resolution; it is
+  // NOT workspace source, so the scan never captures it and vcs.edit refuses to
+  // write it (assertWritableVcsPath rejects it via this set).
+  ".vibestudio-context.json",
 ]);
+
+/** Host-owned per-context bookkeeping marker basename (see ALWAYS_IGNORED_FILES). */
+export const CONTEXT_MARKER_FILE = ".vibestudio-context.json";
 
 export const SNAPSHOT_IGNORE_PATTERNS = [
   ".env",

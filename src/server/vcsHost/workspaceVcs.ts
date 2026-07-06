@@ -52,6 +52,7 @@ import {
 } from "../buildV2/packageGraph.js";
 import { CONTAINER_SECTIONS, FLAT_SECTIONS } from "@vibestudio/shared/runtime/entitySpec";
 import {
+  CONTEXT_MARKER_FILE,
   VCS_MAIN_HEAD,
   contextIdFromVcsHead,
   logIdForRepo,
@@ -126,6 +127,18 @@ interface WorkspaceVcsDeps {
   extractMainToSource?: boolean;
   /** Root for context-folder working trees (`{contextsRoot}/{contextId}`). */
   contextsRoot: string;
+  /**
+   * Active workspace id, stamped into the per-context marker
+   * (`.vibestudio-context.json`) written at folder materialization.
+   */
+  workspaceId: string;
+  /**
+   * Resolve the loopback HTTP(S) server base URL the server advertises to same-host
+   * CLI/agent processes, or undefined if the gateway port is not finalized yet.
+   * Written into the per-context marker (§6.2). A getter because the port is
+   * only known post-listen, well after WorkspaceVcs is constructed.
+   */
+  getServerUrl?: () => string | undefined;
   /** Root for per-state build-source checkouts. */
   buildSourcesRoot: string;
   /**
@@ -1137,11 +1150,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
    * (`vcsContextRepoStates` — section prefixes expand there); this host side
    * skips repos already on disk at the right state and projects the rest.
    */
+  /**
+   * The per-repo `{ repoPath, stateHash }` targets a context resolves to (the
+   * DO's `vcsContextRepoStates`) WITHOUT touching disk — the read-side of the
+   * projector, exposed for the `mirror` service (plan §6.5) so a remote CLI can
+   * fetch the targets and stream the CAS tree itself.
+   */
+  async contextRepoTargets(
+    contextId: string,
+    repos: string[] | "all" = "all"
+  ): Promise<Array<{ repoPath: string; stateHash: string }>> {
+    return this.gad().call<Array<{ repoPath: string; stateHash: string }>>("vcsContextRepoStates", {
+      contextId,
+      repos,
+    });
+  }
+
   async materializeContextRepos(contextId: string, repos: string[] | "all"): Promise<void> {
-    const targets = await this.gad().call<Array<{ repoPath: string; stateHash: string }>>(
-      "vcsContextRepoStates",
-      { contextId, repos }
-    );
+    const targets = await this.contextRepoTargets(contextId, repos);
     const mat = this.materializedFor(contextId);
     for (const { repoPath, stateHash } of targets) {
       const norm = normalizeRepoPathForLog(repoPath);
@@ -1164,7 +1190,38 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     // Sparse: ensure the folder EXISTS but materialize nothing — repos are
     // written on demand by `materializeContextRepos`.
     await fsp.mkdir(dir, { recursive: true });
+    await this.writeContextMarker(contextId, dir);
     return { dir, head };
+  }
+
+  /**
+   * Write the host-owned per-context marker (`.vibestudio-context.json`) at the
+   * context folder root (docs/…channels-plan §6.2). Names the context so CLI +
+   * agent scope resolution (cwd-upward search) binds to the right server,
+   * workspace, and context with zero flags. Idempotent: only rewrites when the
+   * on-disk contents drift (e.g. the advertised serverUrl changed across a
+   * restart). Excluded from VCS projection/diff/edit via ALWAYS_IGNORED_FILES.
+   */
+  private async writeContextMarker(contextId: string, dir: string): Promise<void> {
+    const marker: {
+      contextId: string;
+      workspaceId: string;
+      serverUrl?: string;
+    } = {
+      contextId,
+      workspaceId: this.deps.workspaceId,
+    };
+    const serverUrl = this.deps.getServerUrl?.();
+    if (serverUrl) marker.serverUrl = serverUrl;
+    const markerPath = path.join(dir, CONTEXT_MARKER_FILE);
+    const next = `${JSON.stringify(marker, null, 2)}\n`;
+    try {
+      const current = await fsp.readFile(markerPath, "utf8");
+      if (current === next) return; // no drift — leave it
+    } catch {
+      // missing/unreadable — (re)write below
+    }
+    await fsp.writeFile(markerPath, next);
   }
 
   /**

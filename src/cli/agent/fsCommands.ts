@@ -7,7 +7,7 @@ import {
 } from "@vibestudio/shared/serviceSchemas/fs";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import { jsonMode, printError, printResult, UsageError } from "../output.js";
-import { resolveSessionScope, SESSION_FLAG } from "./sessionContext.js";
+import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
 import { typedClient } from "../typedClients.js";
 
 /** JSON-RPC binary envelope used by fs.readFile/writeFile (see fsService.ts). */
@@ -255,8 +255,8 @@ async function grep(inv: ParsedInvocation): Promise<number> {
     if (inv.positionals[1]) options.path = inv.positionals[1];
     if (typeof inv.flags["glob"] === "string") options.glob = inv.flags["glob"];
     if (inv.flags["ignore-case"] === true) options.caseInsensitive = true;
-    if (typeof inv.flags["context"] === "string") {
-      options.contextLines = positiveInt(inv.flags["context"], "-C/--context");
+    if (typeof inv.flags["context-lines"] === "string") {
+      options.contextLines = positiveInt(inv.flags["context-lines"], "-C/--context-lines");
     }
     if (typeof inv.flags["max"] === "string") {
       options.maxMatches = positiveInt(inv.flags["max"], "--max");
@@ -310,7 +310,7 @@ export const fsCommands: CliCommand[] = [
         takesValue: false,
         description: "Recurse into subdirectories",
       },
-      SESSION_FLAG,
+      ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
     run: ls,
@@ -322,7 +322,7 @@ export const fsCommands: CliCommand[] = [
     usage: "vibestudio fs read PATH [--out FILE]",
     flags: [
       { name: "out", takesValue: true, description: "Write content to a local file" },
-      SESSION_FLAG,
+      ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
     run: read,
@@ -336,7 +336,7 @@ export const fsCommands: CliCommand[] = [
       { name: "from-file", takesValue: true, description: "Read content from a local file" },
       { name: "content", takesValue: true, description: "Literal content" },
       { name: "append", takesValue: false, description: "Append instead of overwrite" },
-      SESSION_FLAG,
+      ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
     run: write,
@@ -353,7 +353,7 @@ export const fsCommands: CliCommand[] = [
         takesValue: false,
         description: "Remove directories recursively",
       },
-      SESSION_FLAG,
+      ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
     run: rm,
@@ -363,7 +363,7 @@ export const fsCommands: CliCommand[] = [
     name: "mv",
     summary: "Move/rename a file or directory",
     usage: "vibestudio fs mv SRC DEST",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: mv,
   },
   {
@@ -371,7 +371,7 @@ export const fsCommands: CliCommand[] = [
     name: "cp",
     summary: "Copy a file",
     usage: "vibestudio fs cp SRC DEST",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: cp,
   },
   {
@@ -381,7 +381,7 @@ export const fsCommands: CliCommand[] = [
     usage: "vibestudio fs mkdir PATH [-p]",
     flags: [
       { name: "parents", short: "p", takesValue: false, description: "Create parent directories" },
-      SESSION_FLAG,
+      ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
     run: mkdir,
@@ -391,7 +391,7 @@ export const fsCommands: CliCommand[] = [
     name: "stat",
     summary: "Stat a file or directory",
     usage: "vibestudio fs stat PATH",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: stat,
   },
   {
@@ -408,13 +408,13 @@ export const fsCommands: CliCommand[] = [
       },
       { name: "glob", takesValue: true, description: "Filter candidate files by glob" },
       {
-        name: "context",
+        name: "context-lines",
         short: "C",
         takesValue: true,
         description: "Context lines around matches",
       },
       { name: "max", takesValue: true, description: "Stop after N matches" },
-      SESSION_FLAG,
+      ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
     run: grep,
@@ -424,7 +424,7 @@ export const fsCommands: CliCommand[] = [
     name: "glob",
     summary: "Find files by glob pattern (mtime-sorted)",
     usage: "vibestudio fs glob PATTERN [PATH]",
-    flags: [SESSION_FLAG, JSON_FLAG],
+    flags: [...SCOPE_FLAGS, JSON_FLAG],
     run: glob,
   },
 ];

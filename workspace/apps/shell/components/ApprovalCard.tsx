@@ -44,6 +44,7 @@ import type {
   PendingSecretInputApproval,
   PendingClientConfigApproval,
   PendingDeviceCodeApproval,
+  PendingExternalAgentApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
 } from "@vibestudio/shared/approvals";
@@ -136,6 +137,10 @@ export function ApprovalCard({
       <UserlandApprovalActions
         approval={approval}
         onChoose={(choice) => emitForApproval({ type: "resolve-userland", choice })}
+      />
+    ) : approval.kind === "external-agent" ? (
+      <ExternalAgentActions
+        onDecide={(behavior) => emitForApproval({ type: "resolve-external-agent", behavior })}
       />
     ) : approval.kind === "device-code" ? (
       <DeviceCodeActions onCancel={() => emitForApproval({ type: "device-cancel" })} />
@@ -269,6 +274,9 @@ export function ApprovalCard({
               defaultOpen={shouldOpenApprovalDetails(approval)}
             />
             {approval.kind === "device-code" ? <DeviceCodeBody approval={approval} /> : null}
+            {approval.kind === "external-agent" ? (
+              <ExternalAgentBody approval={approval} />
+            ) : null}
             {approval.kind === "client-config" ||
             approval.kind === "credential-input" ||
             approval.kind === "secret-input" ? (
@@ -413,6 +421,7 @@ export function ApprovalKindIcon({
   if (approval.kind === "unit-batch") return <ExclamationTriangleIcon width={size} height={size} />;
   if (approval.kind === "device-code") return <ExternalLinkIcon width={size} height={size} />;
   if (approval.kind === "capability") return <GlobeIcon width={size} height={size} />;
+  if (approval.kind === "external-agent") return <PersonIcon width={size} height={size} />;
   if (approval.kind === "client-config" || approval.kind === "credential-input")
     return <GearIcon width={size} height={size} />;
   return <LockClosedIcon width={size} height={size} />;
@@ -788,6 +797,80 @@ function UserlandApprovalActions({
   );
 }
 
+function ExternalAgentActions({ onDecide }: { onDecide: (behavior: "allow" | "deny") => void }) {
+  return (
+    <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
+      <DecisionButton
+        label="Allow"
+        description="Let the linked Claude Code session run this tool once."
+        color="sky"
+        variant="solid"
+        onClick={() => onDecide("allow")}
+      />
+      <DecisionButton
+        label="Deny"
+        description="Do not let the session run this tool."
+        color="red"
+        icon={<CrossCircledIcon />}
+        onClick={() => onDecide("deny")}
+      />
+    </Flex>
+  );
+}
+
+function ExternalAgentBody({ approval }: { approval: PendingExternalAgentApproval }) {
+  if (!approval.preview) return null;
+  return (
+    <pre
+      style={{
+        margin: "4px 0 0",
+        maxWidth: "100%",
+        maxHeight: 220,
+        overflow: "auto",
+        borderRadius: 6,
+        padding: "8px 10px",
+        background: "var(--gray-a3)",
+        fontSize: 12,
+        lineHeight: 1.45,
+        whiteSpace: "pre-wrap",
+        overflowWrap: "anywhere",
+      }}
+    >
+      <code>{approval.preview}</code>
+    </pre>
+  );
+}
+
+function ExternalAgentDetails({ approval }: { approval: PendingExternalAgentApproval }) {
+  return (
+    <>
+      <Detail
+        icon={<GearIcon />}
+        label="Tool"
+        value={<InlineCode>{approval.operationName}</InlineCode>}
+      />
+      <Detail
+        icon={<LockClosedIcon />}
+        label="Capability"
+        value={<InlineCode>{approval.capability}</InlineCode>}
+      />
+      <Detail icon={<PersonIcon />} label="Agent" value={<IdCode value={approval.entityId} />} />
+      {approval.description ? (
+        <Detail
+          icon={<GearIcon />}
+          label="Request"
+          value={
+            <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+              {approval.description}
+            </Text>
+          }
+        />
+      ) : null}
+      <Detail icon={<LockClosedIcon />} label="Request id" value={<IdCode value={approval.requestId} />} />
+    </>
+  );
+}
+
 function DecisionButton({
   label,
   description,
@@ -1004,6 +1087,8 @@ function ApprovalDetails({
           <CredentialInputDetails approval={approval} />
         ) : approval.kind === "userland" ? (
           <UserlandDetails approval={approval} />
+        ) : approval.kind === "external-agent" ? (
+          <ExternalAgentDetails approval={approval} />
         ) : approval.kind === "device-code" ? (
           <DeviceCodeDetails approval={approval} />
         ) : approval.kind === "unit-batch" ? (

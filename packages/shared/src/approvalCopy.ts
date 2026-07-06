@@ -114,6 +114,8 @@ export function getApprovalOperationKindLabel(kind: ApprovalOperationDescriptor[
       return "Service setup";
     case "userland":
       return "User request";
+    case "external-agent":
+      return "Agent tool";
     case "device-code":
       return "Device sign-in";
     case "unknown":
@@ -156,6 +158,9 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.kind === "userland") {
     if (approval.severity === "dangerous") return "Privileged action";
     return `${userlandCallerKindLabel(approval.callerKind)} request`;
+  }
+  if (approval.kind === "external-agent") {
+    return "Agent tool";
   }
   if (approval.kind === "device-code") {
     return "Device sign-in";
@@ -749,6 +754,16 @@ export function getApprovalCopy(approval: PendingApproval): {
       title: approval.title,
       summary: approval.summary ?? `Decision about ${subjectName}.`,
       warning: approval.warning,
+    };
+  }
+  if (approval.kind === "external-agent") {
+    // The headline names the operation the linked agent wants to run; the
+    // description (from the agent) is retained for push/summary surfaces. The
+    // preview renders as a monospace block on the card itself.
+    return {
+      title: `External agent wants to run ${approval.operationName}`,
+      summary:
+        approval.description ?? `A linked external agent wants to run ${approval.operationName}.`,
     };
   }
   if (approval.kind === "device-code") {

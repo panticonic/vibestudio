@@ -261,6 +261,14 @@ export function ConsentApprovalBar() {
       .resolveUserland(current.approvalId, choice)
       .catch((err: unknown) => console.error("[ConsentApprovalBar] resolveUserland failed:", err));
   };
+  const resolveExternalAgent = (behavior: "allow" | "deny") => {
+    if (current?.kind !== "external-agent") return;
+    void shellApproval
+      .resolveExternalAgent(current.approvalId, behavior)
+      .catch((err: unknown) =>
+        console.error("[ConsentApprovalBar] resolveExternalAgent failed:", err)
+      );
+  };
   // Diff-review escape hatch: reuse the open gad-browser panel if one exists
   // (navigate it to the new target + focus), otherwise create one. The target
   // rides along as launch state-args the panel consumes on mount/param-change.
@@ -319,6 +327,9 @@ export function ConsentApprovalBar() {
         return;
       case "resolve-userland":
         resolveUserland(intent.choice);
+        return;
+      case "resolve-external-agent":
+        resolveExternalAgent(intent.behavior);
         return;
       case "fetch-blob":
         fetchBlob(intent.hash);

@@ -14,7 +14,7 @@ describe("buildOwnerBindings", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
-  it("agent self-config + chat forward to the owning vessel's gated chatOp on this channel", async () => {
+  it("agent self-config + chat forward to the owning runtime's gated chatOp on this channel", async () => {
     const call = vi.fn(async () => undefined);
     const b = buildOwnerBindings(
       { channelId: "chan-1", agentRef: "do:a:Agent:k", contextId: "ctx-1" },

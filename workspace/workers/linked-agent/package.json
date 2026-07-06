@@ -1,0 +1,31 @@
+{
+  "name": "@workspace-workers/linked-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "entry": "index.ts",
+    "durable": {
+      "classes": [{ "className": "LinkedAgentWorker" }]
+    },
+    "agent": {
+      "displayName": "Linked Agent",
+      "description": "Vessel for an externally-driven agent (e.g. a Claude Code session) attached over RPC",
+      "icon": "🔗"
+    },
+    "exposeModules": [
+      "@workspace/runtime",
+      "@workspace/pubsub",
+      "zod"
+    ]
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*",
+    "@workspace/agentic-do": "workspace:*",
+    "@workspace/agentic-protocol": "workspace:*",
+    "@workspace/agent-loop": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
+    "@workspace/harness": "workspace:*",
+    "zod": "^3.24.0"
+  }
+}

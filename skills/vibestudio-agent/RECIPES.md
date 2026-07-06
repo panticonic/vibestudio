@@ -352,3 +352,45 @@ vibestudio remote invite --ttl-ms 600000    # prints a pairing code + vibestudio
 vibestudio agent skill install              # -> ./.claude/skills/vibestudio-agent
 vibestudio agent skill install --dir ~/myproj/.claude/skills/vibestudio-agent
 ```
+
+## Channels: read, post, follow
+
+Channels are the workspace's conversations. The CLI resolves the channel DO and
+relays to it — messages you `send` are durable and rendered like any other
+participant's, but you do **not** join the roster (no presence).
+
+```bash
+# Channels bound to your current context (all workspaces with --all):
+vibestudio channel list
+# Durable history, paged (page with --after = the last seq you saw):
+vibestudio channel history <channelId> --limit 50
+vibestudio channel history <channelId> --after 120
+# Post a message as yourself (a human shell device, or the agent under a token);
+# address participants with --to (repeatable):
+vibestudio channel send <channelId> --text "build is green" --to @alice
+# Follow live over the WS push transport (Ctrl-C to stop):
+vibestudio channel tail <channelId>
+# Who's in the room:
+vibestudio channel roster <channelId>
+```
+
+`channel tail` needs a push-capable connection: it works with an agent token
+(launched/plugin session) and over a loopback/LAN or WebRTC device credential.
+On a bare HTTP-only pairing, use `channel history` polling instead.
+
+## Remote context mirror
+
+Get a real local working tree for a context (e.g. on a second machine), then
+drive it with the same `fs`/`vcs` commands — the marker makes scoping automatic.
+
+```bash
+# Materialize a context's repos into ./<contextId> and drop the scope marker:
+vibestudio context mirror <contextId> ./work
+cd ./work                      # fs/vcs/eval/channel now auto-scope here
+# Keep it live: local edits become context edit ops; inbound changes re-apply:
+vibestudio context mirror <contextId> ./work --watch
+```
+
+Conflicts surface through the context's normal edit/commit semantics — the
+mirror adds no merge model (concurrent edits look like two panels editing one
+context). Inbound sync is an interval poll of the context's repo states (v1).

@@ -110,6 +110,47 @@ export function ParticipantBadgeMenu({
     />
   ) : null;
 
+  // Linked-agent (Claude Code) kind badge + attach/detach presence dot
+  // (docs/claude-code-channels-plan.md §8.1). Rendered tolerantly: `agentKind`
+  // /`linkedAttachment` are optional metadata the linked-agent vessel advertises.
+  const linkedAgentKind =
+    participant.metadata.agentKind ??
+    (participant.metadata.linkedAgent ? "claude-code" : undefined);
+  const linkedAttachment = participant.metadata.linkedAttachment;
+  const linkedKindLabel = linkedAgentKind === "claude-code" ? "Claude Code" : linkedAgentKind;
+  const linkedKindIndicator = linkedKindLabel ? (
+    <Badge
+      color="amber"
+      variant="soft"
+      size="1"
+      style={{ marginLeft: 4, fontSize: "9px", padding: "0 4px" }}
+      title={
+        linkedAttachment === "detached"
+          ? `${linkedKindLabel} — offline (detached)`
+          : linkedAttachment === "attached"
+            ? `${linkedKindLabel} — online (attached)`
+            : String(linkedKindLabel)
+      }
+    >
+      {linkedAttachment ? (
+        <span
+          aria-hidden="true"
+          style={{
+            display: "inline-block",
+            width: 6,
+            height: 6,
+            borderRadius: "50%",
+            marginRight: 4,
+            verticalAlign: "middle",
+            background:
+              linkedAttachment === "attached" ? "var(--green-9)" : "var(--gray-8)",
+          }}
+        />
+      ) : null}
+      {linkedKindLabel}
+    </Badge>
+  ) : null;
+
   // Plan mode indicator
   const planModeIndicator = isPlanMode ? (
     <Badge
@@ -153,6 +194,7 @@ export function ParticipantBadgeMenu({
       <span style={{ position: "relative" }}>
         <Badge color={color}>
           @{participant.metadata.handle}
+          {linkedKindIndicator}
           {planModeIndicator}
           {statusIndicator}
         </Badge>
@@ -169,6 +211,7 @@ export function ParticipantBadgeMenu({
           <DropdownMenu.Trigger>
             <Badge color={color} style={{ cursor: "pointer" }}>
               @{participant.metadata.handle}
+              {linkedKindIndicator}
               {planModeIndicator}
               {statusIndicator}
               <TriangleDownIcon

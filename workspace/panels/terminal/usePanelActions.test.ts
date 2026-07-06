@@ -136,6 +136,21 @@ describe("panel actions", () => {
     expect(harness.state.perSession["old-1"]).toBeUndefined();
   });
 
+  it("passes fresh context attach tokens through to shell.open", async () => {
+    const shell = makeShell();
+    const harness = makeHarness(shell);
+
+    await harness.actions.openSession(undefined, {
+      contextId: "ctx-new",
+      contextAttachToken: "fresh-token-123456",
+    });
+
+    expect(shell.open).toHaveBeenCalledWith({
+      contextId: "ctx-new",
+      contextAttachToken: "fresh-token-123456",
+    });
+  });
+
   it("removes exited panes without sending another kill signal", () => {
     const shell = makeShell();
     const harness = makeHarness(shell, {

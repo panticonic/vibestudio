@@ -527,6 +527,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/browser-data
 
+  extensions/claude-code:
+    dependencies:
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
+
   extensions/file-tools:
     dependencies:
       '@vscode/ripgrep':
@@ -1771,6 +1777,30 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+
+  workers/linked-agent:
+    dependencies:
+      '@workspace/agent-loop':
+        specifier: workspace:*
+        version: link:../../packages/agent-loop
+      '@workspace/agentic-do':
+        specifier: workspace:*
+        version: link:../../packages/agentic-do
+      '@workspace/agentic-protocol':
+        specifier: workspace:*
+        version: link:../../packages/agentic-protocol
+      '@workspace/harness':
+        specifier: workspace:*
+        version: link:../../packages/harness
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../../packages/pubsub
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
 
   workers/model-settings:
     dependencies:

@@ -42,6 +42,13 @@ export { useAgenticChat } from "./hooks/useAgenticChat";
 export type { UseAgenticChatOptions } from "./hooks/useAgenticChat";
 export { useChannelSignals } from "./hooks/useChannelSignals";
 export type { ChannelSignal, UseChannelSignalsOptions } from "./hooks/useChannelSignals";
+export { useLinkedPermissionSignals } from "./hooks/useLinkedPermissionSignals";
+export type {
+  LinkedPermissionPrompt,
+  UseLinkedPermissionSignalsResult,
+} from "./hooks/useLinkedPermissionSignals";
+export { LinkedPermissionCards } from "./components/LinkedPermissionCards";
+export type { LinkedPermissionCardsProps } from "./components/LinkedPermissionCards";
 
 // Core hook (minimum viable chat — delegates to SessionManager)
 export { useChatCore } from "./hooks/core/useChatCore";

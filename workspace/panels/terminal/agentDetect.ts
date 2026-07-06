@@ -6,6 +6,9 @@ export function agentLabel(kind?: string): string {
     case "opencode": return "OpenCode";
     case "test-runner": return "Tests";
     case "dev-server": return "Dev server";
-    default: return "Shell";
+    // Launch adapters register arbitrary kinds (§4.3): fall back to the kind
+    // string itself rather than a generic "Shell" so new agents still read
+    // sensibly. Only a truly absent kind is a plain shell.
+    default: return kind && kind.length > 0 ? kind : "Shell";
   }
 }

@@ -43,6 +43,10 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve: vi.fn(),
         resolveUserland: vi.fn(),
+        requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
+        resolveExternalAgent: vi.fn(),
+        settleExternalAgent: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(() => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -70,6 +74,10 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve,
         resolveUserland,
+        requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
+        resolveExternalAgent: vi.fn(),
+        settleExternalAgent: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(() => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -128,6 +136,10 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve: vi.fn(),
         resolveUserland: vi.fn(),
+        requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
+        resolveExternalAgent: vi.fn(),
+        settleExternalAgent: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(() => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -160,6 +172,10 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve,
         resolveUserland: vi.fn(),
+        requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
+        resolveExternalAgent: vi.fn(),
+        settleExternalAgent: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(() => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -203,6 +219,10 @@ describe("shellApprovalService", () => {
         onPendingChanged: vi.fn(),
         resolve,
         resolveUserland: vi.fn(),
+        requestExternalAgent: vi.fn(async () => ({ behavior: "deny" as const })),
+        resolveExternalAgent: vi.fn(),
+        settleExternalAgent: vi.fn(() => 0),
+        resolveExternalAgentByRequest: vi.fn(() => 0),
         submitClientConfig: vi.fn(),
         submitSecretInput: vi.fn(),
         submitCredentialInput: vi.fn(),
@@ -254,6 +274,55 @@ describe("shellApprovalService", () => {
     });
     expect(metrics.snapshot().approval_resolved_total).not.toHaveProperty(
       "decision=deny,source=shell"
+    );
+  });
+
+  it("resolveExternalAgentByRequest resolves the pending relay by (channelId, requestId, resolveToken) as a panel", async () => {
+    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const metrics = createPushMetrics();
+    const service = createShellApprovalService({ approvalQueue, metrics });
+    const verdict = approvalQueue.requestExternalAgent({
+      kind: "external-agent",
+      callerId: "do:workers/agent:AgentWorker:entity-1",
+      callerKind: "do",
+      repoPath: "workers/linked",
+      effectiveVersion: "hash-1",
+      entityId: "entity-1",
+      channelId: "channel-1",
+      capability: "external-agent.tool",
+      operationName: "Bash",
+      requestId: "req-1",
+      resolveToken: "resolve-token-123",
+    });
+    expect(approvalQueue.listPending()).toHaveLength(1);
+
+    // The inline conversation card is a panel caller and knows the request selector plus token.
+    const result = await service.handler(
+      { caller: createVerifiedCaller("panel-1", "panel") },
+      "resolveExternalAgentByRequest",
+      [{ channelId: "channel-1", requestId: "req-1", resolveToken: "resolve-token-123" }, "allow"]
+    );
+
+    expect(result).toEqual({ resolved: true });
+    await expect(verdict).resolves.toEqual({ behavior: "allow" });
+    expect(approvalQueue.listPending()).toEqual([]);
+    expect(metrics.snapshot().approval_resolved_total).toMatchObject({
+      "decision=allow,source=panel": 1,
+    });
+  });
+
+  it("resolveExternalAgentByRequest reports resolved:false and records nothing when no card matches", async () => {
+    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const metrics = createPushMetrics();
+    const service = createShellApprovalService({ approvalQueue, metrics });
+    const result = await service.handler(
+      { caller: createVerifiedCaller("panel-1", "panel") },
+      "resolveExternalAgentByRequest",
+      [{ channelId: "channel-1", requestId: "absent", resolveToken: "resolve-token-123" }, "deny"]
+    );
+    expect(result).toEqual({ resolved: false });
+    expect(metrics.snapshot().approval_resolved_total).not.toHaveProperty(
+      "decision=deny,source=panel"
     );
   });
 });

@@ -1,0 +1,6 @@
+{
+  "name": "vibestudio",
+  "description": "Link this Claude Code session to a vibestudio workspace: channel connection (say/complete + pushed conversation events), lifecycle hooks that mirror your work into the workspace trajectory, and slash commands for connecting and pairing.",
+  "version": "0.1.0",
+  "author": { "name": "vibestudio" }
+}

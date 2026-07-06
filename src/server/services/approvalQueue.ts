@@ -24,8 +24,10 @@ import type {
   PendingSecretInputApproval,
   PendingClientConfigApproval,
   PendingDeviceCodeApproval,
+  PendingExternalAgentApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
+  ExternalAgentApprovalResult,
   UserlandApprovalChoice,
   UserlandApprovalOption,
   UserlandApprovalSubject,
@@ -150,6 +152,19 @@ export interface UserlandApprovalQueueRequest {
   signal?: AbortSignal;
 }
 
+export interface ExternalAgentApprovalQueueRequest extends ApprovalQueueRequestBase {
+  kind: "external-agent";
+  entityId: string;
+  channelId: string;
+  capability: string;
+  /** Tool/operation name (runtime-facing request field `operation`). */
+  operationName: string;
+  description?: string;
+  preview?: string;
+  requestId: string;
+  resolveToken: string;
+}
+
 export interface DeviceCodeApprovalQueueRequest extends ApprovalQueueRequestBase {
   kind: "device-code";
   credentialLabel: string;
@@ -213,6 +228,12 @@ interface DeviceCodeQueueWaiter {
   cancel: () => void;
 }
 
+interface ExternalAgentQueueWaiter {
+  resolve: (result: ExternalAgentApprovalResult) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
 interface QueueEntry {
   approval: PendingApproval;
   dedupKey: string;
@@ -220,6 +241,7 @@ interface QueueEntry {
   fieldInputWaiters: Map<number, FieldInputQueueWaiter>;
   userlandWaiters: Map<number, UserlandQueueWaiter>;
   deviceCodeWaiters: Map<number, DeviceCodeQueueWaiter>;
+  externalAgentWaiters: Map<number, ExternalAgentQueueWaiter>;
   nextWaiterId: number;
 }
 
@@ -231,10 +253,34 @@ export interface ApprovalQueue {
   ): Promise<FieldInputApprovalResult>;
   requestSecretInput(req: SecretInputApprovalQueueRequest): Promise<FieldInputApprovalResult>;
   requestUserland(req: UserlandApprovalQueueRequest): Promise<UserlandApprovalResult>;
+  requestExternalAgent(
+    req: ExternalAgentApprovalQueueRequest
+  ): Promise<ExternalAgentApprovalResult>;
   presentDeviceCode(req: DeviceCodeApprovalQueueRequest): DeviceCodeApprovalHandle;
   onPendingChanged?(listener: (pending: PendingApproval[]) => void): () => void;
   resolve(approvalId: string, decision: ApprovalDecision): void;
   resolveUserland(approvalId: string, choice: string): void;
+  resolveExternalAgent(approvalId: string, behavior: "allow" | "deny"): void;
+  /**
+   * Record a user verdict on the external-agent approval matched by
+   * (channelId, requestId, resolveToken) — the inline conversation card
+   * resolution path, which knows the runtime requestId and opaque token but not
+   * the internal approvalId. Resolves the
+   * pending request with the given `behavior` (a real verdict, NOT the quiet
+   * settle-elsewhere path). Returns the number of approvals resolved.
+   */
+  resolveExternalAgentByRequest(
+    channelId: string,
+    requestId: string,
+    resolveToken: string,
+    behavior: "allow" | "deny"
+  ): number;
+  /**
+   * Quiet-settle every external-agent approval matching `predicate` (answered at
+   * the terminal / bridge detached): removes the card and resolves the pending
+   * request as `deny` WITHOUT the UI recording a user deny. Returns the count.
+   */
+  settleExternalAgent(predicate: (approval: PendingExternalAgentApproval) => boolean): number;
   resolveMatching?(
     predicate: (approval: PendingApproval) => boolean,
     decision: GrantedDecision
@@ -636,6 +682,7 @@ export function createApprovalQueue(deps: {
         fieldInputWaiters: new Map(),
         userlandWaiters: new Map(),
         deviceCodeWaiters: new Map(),
+        externalAgentWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -717,6 +764,13 @@ export function createApprovalQueue(deps: {
       waiter.resolve({ kind: "dismissed" });
     }
     entry.userlandWaiters.clear();
+    for (const waiter of entry.externalAgentWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ behavior: "deny" });
+    }
+    entry.externalAgentWaiters.clear();
 
     emitPendingChanged();
   }
@@ -748,6 +802,13 @@ export function createApprovalQueue(deps: {
       waiter.cancel();
     }
     entry.deviceCodeWaiters.clear();
+    for (const waiter of entry.externalAgentWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ behavior: "deny" });
+    }
+    entry.externalAgentWaiters.clear();
   }
 
   function settleUserlandEntry(entry: QueueEntry, choice: string): void {
@@ -777,6 +838,24 @@ export function createApprovalQueue(deps: {
       waiter.cancel();
     }
     entry.deviceCodeWaiters.clear();
+    for (const waiter of entry.externalAgentWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ behavior: "deny" });
+    }
+    entry.externalAgentWaiters.clear();
+  }
+
+  function settleExternalAgentEntry(entry: QueueEntry, behavior: "allow" | "deny"): void {
+    removeEntry(entry);
+    for (const waiter of entry.externalAgentWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ behavior });
+    }
+    entry.externalAgentWaiters.clear();
   }
 
   function autoApproveUserlandChoice(options: UserlandApprovalOption[]): string {
@@ -808,6 +887,7 @@ export function createApprovalQueue(deps: {
           fieldInputWaiters: new Map(),
           userlandWaiters: new Map(),
           deviceCodeWaiters: new Map(),
+          externalAgentWaiters: new Map(),
           nextWaiterId: 0,
         };
         entriesById.set(approval.approvalId, entry);
@@ -888,6 +968,7 @@ export function createApprovalQueue(deps: {
         fieldInputWaiters: new Map(),
         userlandWaiters: new Map(),
         deviceCodeWaiters: new Map(),
+        externalAgentWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -992,6 +1073,7 @@ export function createApprovalQueue(deps: {
           fieldInputWaiters: new Map(),
           userlandWaiters: new Map(),
           deviceCodeWaiters: new Map(),
+          externalAgentWaiters: new Map(),
           nextWaiterId: 0,
         };
         entriesById.set(approval.approvalId, entry);
@@ -1042,6 +1124,95 @@ export function createApprovalQueue(deps: {
       });
     },
 
+    requestExternalAgent(req) {
+      if (autoApproveDecision) {
+        return Promise.resolve({ behavior: "allow" });
+      }
+
+      // Each relayed permission is its own one-shot decision — never deduped, so
+      // one verdict can't release another tool call. Keyed by the unique
+      // requestId (plus a nonce) for defensive isolation.
+      const dedupKey = canonicalKey([
+        "external-agent",
+        req.entityId,
+        req.channelId,
+        req.requestId,
+        randomUUID(),
+      ]);
+      const requester = resolveRequesterFor(req);
+      const callerTitle = requester?.title ?? resolveTitle(req.callerId);
+      const descriptor: ApprovalOperationDescriptor = {
+        kind: "external-agent",
+        verb: `run ${req.operationName}`,
+        object: { type: "tool", label: "Tool", value: req.operationName },
+      };
+      const approval: PendingExternalAgentApproval = {
+        approvalId: randomUUID(),
+        callerId: req.callerId,
+        callerKind: req.callerKind,
+        repoPath: req.repoPath,
+        effectiveVersion: req.effectiveVersion,
+        requestedAt: Date.now(),
+        ...(callerTitle !== undefined ? { callerTitle } : {}),
+        ...(requester ? { requester } : {}),
+        operation: descriptor,
+        kind: "external-agent",
+        entityId: req.entityId,
+        channelId: req.channelId,
+        capability: req.capability,
+        operationName: req.operationName,
+        ...(req.description !== undefined ? { description: req.description } : {}),
+        ...(req.preview !== undefined ? { preview: req.preview } : {}),
+        requestId: req.requestId,
+        resolveToken: req.resolveToken,
+      };
+
+      const entry: QueueEntry = {
+        approval,
+        dedupKey,
+        waiters: new Map(),
+        fieldInputWaiters: new Map(),
+        userlandWaiters: new Map(),
+        deviceCodeWaiters: new Map(),
+        externalAgentWaiters: new Map(),
+        nextWaiterId: 0,
+      };
+      entriesById.set(approval.approvalId, entry);
+      entriesByDedupKey.set(dedupKey, entry);
+
+      return new Promise<ExternalAgentApprovalResult>((resolve) => {
+        const waiterId = entry.nextWaiterId++;
+        const waiter: ExternalAgentQueueWaiter = { resolve, signal: req.signal };
+
+        if (req.signal) {
+          // Auto-deny on expiry (the service arms a ~120s timeout) or caller
+          // cancellation: the card disappears and the relay is denied.
+          const onAbort = () => {
+            const e = entriesById.get(entry.approval.approvalId);
+            if (!e) {
+              resolve({ behavior: "deny" });
+              return;
+            }
+            e.externalAgentWaiters.delete(waiterId);
+            if (e.externalAgentWaiters.size === 0) {
+              removeEntry(e);
+              emitPendingChanged();
+            }
+            resolve({ behavior: "deny" });
+          };
+          waiter.onAbort = onAbort;
+          if (req.signal.aborted) {
+            queueMicrotask(onAbort);
+          } else {
+            req.signal.addEventListener("abort", onAbort, { once: true });
+          }
+        }
+
+        entry.externalAgentWaiters.set(waiterId, waiter);
+        emitPendingChanged();
+      });
+    },
+
     onPendingChanged(listener) {
       pendingListeners.add(listener);
       return () => {
@@ -1070,6 +1241,45 @@ export function createApprovalQueue(deps: {
       settleUserlandEntry(entry, choice);
 
       emitPendingChanged();
+    },
+
+    resolveExternalAgent(approvalId, behavior) {
+      const entry = entriesById.get(approvalId);
+      if (!entry || entry.approval.kind !== "external-agent") return;
+      settleExternalAgentEntry(entry, behavior);
+      emitPendingChanged();
+    },
+
+    resolveExternalAgentByRequest(channelId, requestId, resolveToken, behavior) {
+      const matching = Array.from(entriesById.values()).filter(
+        (entry) =>
+          entry.approval.kind === "external-agent" &&
+          entry.approval.channelId === channelId &&
+          entry.approval.requestId === requestId &&
+          entry.approval.resolveToken === resolveToken
+      );
+      // Real verdict (allow/deny) — the waiter resolves with the user's choice,
+      // exactly as the by-approvalId path does, but keyed on the runtime's
+      // (channelId, requestId, resolveToken) that the inline conversation card carries.
+      for (const entry of matching) {
+        settleExternalAgentEntry(entry, behavior);
+      }
+      if (matching.length > 0) emitPendingChanged();
+      return matching.length;
+    },
+
+    settleExternalAgent(predicate) {
+      const matching = Array.from(entriesById.values()).filter(
+        (entry) => entry.approval.kind === "external-agent" && predicate(entry.approval)
+      );
+      // Quiet settle: the request resolves as `deny` (the caller already has its
+      // answer from elsewhere and ignores this) but no user-facing deny is
+      // recorded — the card simply disappears.
+      for (const entry of matching) {
+        settleExternalAgentEntry(entry, "deny");
+      }
+      if (matching.length > 0) emitPendingChanged();
+      return matching.length;
     },
 
     resolveMatching(predicate, decision) {
@@ -1143,6 +1353,13 @@ export function createApprovalQueue(deps: {
           waiter.cancel();
         }
         entry.deviceCodeWaiters.clear();
+        for (const waiter of entry.externalAgentWaiters.values()) {
+          if (waiter.signal && waiter.onAbort) {
+            waiter.signal.removeEventListener("abort", waiter.onAbort);
+          }
+          waiter.resolve({ behavior: "deny" });
+        }
+        entry.externalAgentWaiters.clear();
       }
       if (matching.length > 0) emitPendingChanged();
     },

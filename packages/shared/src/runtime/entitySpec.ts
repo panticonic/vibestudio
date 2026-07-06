@@ -15,6 +15,22 @@ export interface EntitySource {
   effectiveVersion: string;
 }
 
+/**
+ * Host-owned binding for a runtime entity that is allowed to relay work for an
+ * external agent/session. The host records this at entity creation time and
+ * downstream services derive authority from it instead of trusting request args.
+ */
+export interface RuntimeAgentBinding {
+  entityId: string;
+  contextId: string;
+  channelId: string;
+}
+
+export interface RuntimeAgentBindingInput {
+  entityId: string;
+  channelId: string;
+}
+
 export type EntityStatus = "active" | "retired";
 
 /** A workspace-relative repo path (`packages/foo`, `panels/chat`, `meta`). */
@@ -172,6 +188,7 @@ export interface EntityRecord {
   className?: string;
   key: string;
   stateArgs?: unknown;
+  agentBinding?: RuntimeAgentBinding;
   /**
    * The entity id of the verified caller that created this entity (its launch
    * parent), or undefined for self/bootstrap-created entities. Server-authoritative
@@ -224,6 +241,7 @@ export type RuntimeEntityCreateSpec =
       key?: string;
       stateArgs?: unknown;
       env?: Record<string, string>;
+      agentBinding?: RuntimeAgentBindingInput;
     }
   | {
       kind: "do";
@@ -233,6 +251,7 @@ export type RuntimeEntityCreateSpec =
       key?: string;
       contextId?: string | null;
       stateArgs?: unknown;
+      agentBinding?: RuntimeAgentBindingInput;
     }
   | {
       /** Inert session entity: no workerd/panel runtime, just identity + context. */

@@ -96,6 +96,39 @@ export function createShellApprovalService(deps: {
           metrics.recordApprovalResolved({ decision: choice, source: ctx.caller.runtime.kind });
           return;
         }
+        case "resolveExternalAgent": {
+          const [approvalId, behavior] = args as [string, "allow" | "deny"];
+          const pending = approvalQueue
+            .listPending()
+            .find((approval) => approval.approvalId === approvalId);
+          if (!pending || pending.kind !== "external-agent") {
+            throw new ServiceError(
+              serviceName,
+              method,
+              "No pending external-agent approval found",
+              "ENOENT"
+            );
+          }
+          approvalQueue.resolveExternalAgent(approvalId, behavior);
+          metrics.recordApprovalResolved({ decision: behavior, source: ctx.caller.runtime.kind });
+          return;
+        }
+        case "resolveExternalAgentByRequest": {
+          const [ref, behavior] = args as [
+            { channelId: string; requestId: string; resolveToken: string },
+            "allow" | "deny",
+          ];
+          const resolved = approvalQueue.resolveExternalAgentByRequest(
+            ref.channelId,
+            ref.requestId,
+            ref.resolveToken,
+            behavior
+          );
+          if (resolved > 0) {
+            metrics.recordApprovalResolved({ decision: behavior, source: ctx.caller.runtime.kind });
+          }
+          return { resolved: resolved > 0 };
+        }
         case "submitClientConfig": {
           const [approvalId, values] = args as [string, Record<string, string>];
           const existed = approvalQueue

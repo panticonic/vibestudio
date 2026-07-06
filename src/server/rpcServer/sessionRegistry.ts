@@ -44,6 +44,7 @@ const DEFAULT_TTL_MS: Required<SessionTtlMs> = {
   worker: 5 * 60_000,
   do: 5 * 60_000,
   extension: 15 * 60_000,
+  agent: 15 * 60_000,
 };
 
 export class SessionRegistry {

@@ -6,6 +6,7 @@ import {
   rpc,
   panel,
   workspace,
+  callMain,
   type WorkspaceUnitStatus,
 } from "@workspace/runtime";
 
@@ -15,6 +16,8 @@ const expose = (method: string, handler: (...args: any[]) => unknown | Promise<u
   rpc.expose(method, (request) => handler(...request.args));
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandLauncher } from "./CommandLauncher.js";
+import { ContextPicker, type CreatedContext, type PickedContextOptions } from "./ContextPicker.js";
+import { deriveContextOptions, type ContextOption, type LiveEntity } from "./contextPicker.js";
 import { documentTitleForSession } from "./documentTitle.js";
 import { NotificationCenter } from "./NotificationCenter.js";
 import { ScratchOverlay } from "./ScratchOverlay.js";
@@ -393,6 +396,35 @@ export function TerminalApp() {
     }
     return runInteractiveOpen(() => actions.splitFocused("row"));
   }, [actions, initialOpenStatus, openInitialSession, runInteractiveOpen, state.tree]);
+
+  // Context picker (§4.1): list live contexts, create fresh session contexts,
+  // and open a terminal placed in a chosen context (or the workspace root).
+  const loadContexts = useCallback(async (): Promise<ContextOption[]> => {
+    const entities = await callMain<LiveEntity[]>("runtime.listEntities", {});
+    return deriveContextOptions(entities ?? []);
+  }, []);
+  const createSessionContext = useCallback(
+    async (): Promise<CreatedContext> => shell.createContext({ title: "Terminal context" }),
+    [shell]
+  );
+  const openTerminalInContext = useCallback(
+    (contextId?: string, contextOpts?: PickedContextOptions) => {
+      const opts = contextId
+        ? {
+            contextId,
+            ...(contextOpts?.contextAttachToken
+              ? { contextAttachToken: contextOpts.contextAttachToken }
+              : {}),
+          }
+        : undefined;
+      if (!state.tree) {
+        void runInteractiveOpen(() => actions.openSession(undefined, opts));
+      } else {
+        void runInteractiveOpen(() => actions.splitFocused("row", undefined, opts));
+      }
+    },
+    [actions, runInteractiveOpen, state.tree]
+  );
 
   useEffect(
     () => () => {
@@ -894,6 +926,9 @@ export function TerminalApp() {
                   : 0
               }
               onOpen={() => void openDefaultPane()}
+              onPickContext={openTerminalInContext}
+              loadContexts={loadContexts}
+              createContext={createSessionContext}
             />
           )}
         </Box>
@@ -958,6 +993,9 @@ function EmptyTerminalState(props: {
   shellUnit: ShellUnitStatus | null;
   elapsedSeconds: number;
   onOpen(): void;
+  onPickContext(contextId?: string, opts?: PickedContextOptions): void;
+  loadContexts(): Promise<ContextOption[]>;
+  createContext(): Promise<CreatedContext>;
 }) {
   const isBusy = props.status === "opening" || props.status === "waitingApproval";
   const copy = terminalStartupDetail({
@@ -982,9 +1020,17 @@ function EmptyTerminalState(props: {
         </>
       }
       actions={
-        <Button onClick={props.onOpen} disabled={isBusy}>
-          {isBusy ? "Waiting..." : props.status === "failed" ? "Retry" : "Open terminal"}
-        </Button>
+        <Flex gap="2" align="center" justify="center">
+          <Button onClick={props.onOpen} disabled={isBusy}>
+            {isBusy ? "Waiting..." : props.status === "failed" ? "Retry" : "Open terminal"}
+          </Button>
+          <ContextPicker
+            disabled={isBusy}
+            onPick={props.onPickContext}
+            loadContexts={props.loadContexts}
+            createContext={props.createContext}
+          />
+        </Flex>
       }
     />
   );

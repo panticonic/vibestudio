@@ -6,7 +6,7 @@
  * directly — no cross-context navigation needed.
  */
 
-import { contextId, rpc, panel, buildPanelLink, createDurableObjectServiceClient, openPanel, notifications } from "@workspace/runtime";
+import { contextId, rpc, panel, buildPanelLink, createDurableObjectServiceClient, openPanel, notifications, extensions } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -347,6 +347,43 @@ export default function ChatPanel() {
     void panel.focusPanel(panelId);
   }, []);
 
+  // Launch a Claude Code session as a linked agent in this conversation (§4.3):
+  // prepare via the claude-code extension (resolves the channel's context,
+  // ensures the vessel, mints the agent credential, writes the launch profile),
+  // then open a context-scoped terminal running the returned argv. Both calls go
+  // through `extensions.invoke` (untyped) so the panel needs no extension types.
+  const handleOpenClaudeCode = useCallback(async (channelId: string) => {
+    try {
+      const prepared = (await extensions.invoke(
+        "@workspace-extensions/claude-code",
+        "prepare",
+        [{ channelId }]
+      )) as {
+        contextId: string;
+        contextFolder: string;
+        env: Record<string, string>;
+        argv: string[];
+      };
+      const [command, ...args] = prepared.argv;
+      await extensions.invoke("@workspace-extensions/shell", "open", [
+        {
+          contextId: prepared.contextId,
+          cwd: prepared.contextFolder,
+          command: command ?? "claude",
+          args,
+          env: prepared.env,
+          label: "Claude Code",
+        },
+      ]);
+    } catch (err) {
+      void notifications.show({
+        type: "error",
+        title: "Open Claude Code failed",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, []);
+
   const handleActionBarFileChange = useCallback((value: {
     path: string | null;
     props?: Record<string, unknown>;
@@ -643,7 +680,8 @@ export default function ChatPanel() {
     connectedModelRefs,
     onFocusPanel: handleFocusPanel,
     onReloadPanel: handleReloadPanel,
-  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, workspaceDefaultAgentConfig, connectedModelRefs, handleFocusPanel, handleReloadPanel]);
+    onOpenClaudeCode: handleOpenClaudeCode,
+  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, workspaceDefaultAgentConfig, connectedModelRefs, handleFocusPanel, handleReloadPanel, handleOpenClaudeCode]);
 
   // --- Fork navigation + review overlay ---------------------------------
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);

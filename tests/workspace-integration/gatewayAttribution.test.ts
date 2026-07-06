@@ -124,6 +124,7 @@ describe("full-gateway attribution (row 11)", () => {
     attachLocalHostBridges(gad.instance, { blobsDir: path.join(root, "blobs"), refs });
     installRealRefsBridge();
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot: path.join(root, "workspace"),
       contextsRoot: path.join(root, ".contexts"),

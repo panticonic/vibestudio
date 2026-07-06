@@ -529,7 +529,8 @@ export class PubSubChannel extends DurableObjectBase {
     const caller = this.caller;
     if (!caller?.callerId) return true;
     if (caller.callerId === participantId) return true;
-    return caller.callerKind === "panel" && caller.callerPanelId === participantId;
+    if (caller.callerKind === "panel" && caller.callerPanelId === participantId) return true;
+    return false;
   }
 
   private isPrivilegedRpcCaller(): boolean {
@@ -603,7 +604,7 @@ export class PubSubChannel extends DurableObjectBase {
    * Subscribe a participant to this channel. Inserts the participant first,
    * then builds replay, so an initial roster snapshot includes the subscriber.
    */
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ callers: ["panel", "do", "shell", "agent"] })
   async subscribe(
     participantId: string,
     metadata: Record<string, unknown>
@@ -868,7 +869,7 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
-  @rpc({ callers: ["panel", "do"] })
+  @rpc({ callers: ["panel", "do", "shell", "agent"] })
   async unsubscribe(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribe");
     await this.unsubscribeParticipant(participantId, "graceful");
@@ -969,6 +970,69 @@ export class PubSubChannel extends DurableObjectBase {
     return { id: event.id };
   }
 
+  /**
+   * Publish a durable text message on behalf of a NON-participant host caller
+   * (the `vibestudio channel send` CLI: a human `shell` device or an autonomous
+   * `agent`). Unlike `publish`, the sender is NOT a roster participant and is NOT
+   * taken from a client-supplied `participantId` — it is stamped from the VERIFIED
+   * caller (`this.caller`), so a CLI can address a conversation without joining it
+   * and cannot impersonate another participant. The message is a standard
+   * `agentic.trajectory.v1` `message.completed` (role user for a shell device,
+   * role assistant for an agent), carrying the same addressing fields
+   * (`to`/`mentions`) a participant's message would.
+   */
+  @rpc({ callers: ["panel", "do", "worker", "server", "shell", "agent"] })
+  async sendAsCaller(
+    text: string,
+    opts?: {
+      handle?: string;
+      to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
+      mentions?: string[];
+      idempotencyKey?: string;
+    }
+  ): Promise<{ id?: number; messageId: string }> {
+    const caller = this.caller;
+    const senderId = caller?.callerId ?? "cli";
+    const isAgent = caller?.callerKind === "agent";
+    const handle = isAgent ? senderId : (opts?.handle ?? senderId);
+    const messageId = opts?.idempotencyKey ? `ik:${opts.idempotencyKey}` : crypto.randomUUID();
+    const senderMetadata: Record<string, unknown> = {
+      name: handle,
+      handle,
+      transport: "rpc",
+      kind: isAgent ? "agent" : "user",
+    };
+    const event = {
+      kind: "message.completed",
+      actor: {
+        kind: isAgent ? "agent" : "user",
+        id: senderId,
+        displayName: handle,
+        metadata: senderMetadata,
+      },
+      causality: { messageId },
+      payload: {
+        protocol: "agentic.trajectory.v1",
+        role: isAgent ? "assistant" : "user",
+        blocks: [{ blockId: `${messageId}:block:0`, type: "text", content: text }],
+        outcome: "completed",
+        ...(opts?.mentions ? { mentions: opts.mentions } : {}),
+        ...(opts?.to ? { to: opts.to } : {}),
+      },
+      createdAt: new Date().toISOString(),
+    };
+    const logged = await this.appendDurable({
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: event,
+      senderId,
+      senderMetadata,
+      messageId,
+      ...(opts?.idempotencyKey ? { idempotency: "idempotent-by-id" as const } : {}),
+    });
+    broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, senderId);
+    return { id: logged.id, messageId };
+  }
+
   /** Policy fold state (replaces getConversationState — WS2 §4.4). */
   @rpc({ callers: ["panel", "do", "server"] })
   async getPolicyState(name?: string): Promise<{
@@ -1056,7 +1120,7 @@ export class PubSubChannel extends DurableObjectBase {
     broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, participantId);
   }
 
-  @rpc({ callers: ["panel", "do", "server"] })
+  @rpc({ callers: ["panel", "do", "server", "shell", "agent"] })
   async getReplayAfter(sinceId: number) {
     return this.channelLog.replayAfter(sinceId, this.currentReplayContext());
   }
@@ -1139,7 +1203,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Get all participants with DO identity when available. */
-  @rpc({ callers: ["panel", "do", "server", "shell"] })
+  @rpc({ callers: ["panel", "do", "server", "shell", "agent"] })
   async getParticipants(): Promise<
     Array<{
       participantId: string;
@@ -1174,7 +1238,7 @@ export class PubSubChannel extends DurableObjectBase {
     });
   }
 
-  @rpc({ callers: ["panel", "do", "server", "shell"] })
+  @rpc({ callers: ["panel", "do", "server", "shell", "extension", "agent"] })
   async getContextId(): Promise<string | null> {
     return this.getStateValue("contextId");
   }

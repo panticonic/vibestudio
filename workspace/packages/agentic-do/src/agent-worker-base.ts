@@ -509,9 +509,20 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             },
             config: {
               type: "object",
-              description: "Optional child agent config (model/handle/etc.).",
+              description:
+                "Optional child agent config. For 'pi' children: agent settings (model/handle/etc.). " +
+                "For external kinds it maps to the launcher's CLI — claude-code supports model " +
+                "(alias like 'opus'/'sonnet' or a full model name), effort " +
+                "('low'|'medium'|'high'|'xhigh'|'max'), permissionMode ('auto' by default — the " +
+                "child runs autonomously; also 'acceptEdits'|'bypassPermissions'|'manual'|'dontAsk'|'plan'), " +
+                "fallbackModel, and maxBudgetUsd (number). Unknown keys are ignored.",
             },
             label: { type: "string", description: "Optional short label for the run." },
+            agentKind: {
+              type: "string",
+              description:
+                "Reasoning engine for the child (default 'pi', an in-process agent). Any other value names an external launcher extension @workspace-extensions/<agentKind>; the task is required and the launched child reports progress, completes, and merges back exactly like a 'pi' subagent.",
+            },
           },
           required: ["mode"],
         } as never,

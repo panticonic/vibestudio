@@ -8,6 +8,7 @@ import { authMethods } from "./auth.js";
 import { autofillMethods } from "./autofill.js";
 import { blobstoreMethods } from "./blobstore.js";
 import { buildMethods } from "./build.js";
+import { channelMethods } from "./channel.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { credentialsMethods } from "./credentials.js";
 import { docsMethods } from "./docs.js";
@@ -19,6 +20,7 @@ import { gitInteropMethods } from "./gitInterop.js";
 import { hostLifecycleMethods } from "./hostLifecycle.js";
 import { serverLogMethods } from "./serverLog.js";
 import { menuMethods } from "./menu.js";
+import { mirrorMethods } from "./mirror.js";
 import { notificationMethods } from "./notification.js";
 import { paletteMethods } from "./palette.js";
 import { panelMethods } from "./panel.js";
@@ -52,6 +54,7 @@ const serviceTables: ServiceTable[] = [
   { service: "autofill", file: "autofill.ts", methods: autofillMethods },
   { service: "blobstore", file: "blobstore.ts", methods: blobstoreMethods },
   { service: "build", file: "build.ts", methods: buildMethods },
+  { service: "channel", file: "channel.ts", methods: channelMethods },
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
   { service: "docs", file: "docs.ts", methods: docsMethods },
@@ -63,6 +66,7 @@ const serviceTables: ServiceTable[] = [
   { service: "hostLifecycle", file: "hostLifecycle.ts", methods: hostLifecycleMethods },
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
+  { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
   { service: "palette", file: "palette.ts", methods: paletteMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },

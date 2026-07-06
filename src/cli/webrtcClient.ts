@@ -20,12 +20,16 @@ import {
 } from "@vibestudio/rpc/transports/pairedConnection";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { ConnectPairing } from "@vibestudio/shared/connect";
+import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 
 export type CliWebRtcPairing = Omit<ConnectPairing, "code"> & { code?: string };
 
 export interface WebRtcClientConfig {
   pairing: CliWebRtcPairing;
   callerId: string;
+  /** Client-asserted caller kind (server re-derives the real kind from the
+   *  redeemed token). Defaults to "shell"; agent credentials pass "agent". */
+  callerKind?: CallerKind;
   getToken: () => Promise<string> | string;
   connectionId?: string;
   clientLabel?: string;
@@ -126,7 +130,7 @@ export class WebRtcRpcClient {
       sig: this.config.pairing.sig,
       getShellToken: this.config.getToken,
       connectionId: this.config.connectionId ?? randomUUID(),
-      callerKind: "shell",
+      callerKind: this.config.callerKind ?? "shell",
       clientLabel: this.config.clientLabel ?? "Vibestudio CLI",
       clientPlatform: "headless",
       platform: "headless",
@@ -137,7 +141,7 @@ export class WebRtcRpcClient {
     const callerId = paired.mainSession.callerId() ?? this.config.callerId;
     const core = createRpcClient({
       selfId: callerId,
-      callerKind: "shell",
+      callerKind: this.config.callerKind ?? "shell",
       transport: paired.mainSession,
       onRecovery: (handler) => paired.onRecovery(handler),
     });

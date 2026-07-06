@@ -148,6 +148,7 @@ describe("DO vcsPush (narrow-host push orchestration)", () => {
             : [],
     });
     vcs = new WorkspaceVcs({
+      workspaceId: "test-ws",
       blobsDir: path.join(root, "blobs"),
       workspaceRoot: path.join(root, "workspace"),
       contextsRoot: path.join(root, ".contexts"),

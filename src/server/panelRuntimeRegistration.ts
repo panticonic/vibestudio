@@ -904,6 +904,8 @@ export interface CommonDeps {
    */
   ensureDefaultHeadlessHost?: () => Promise<boolean>;
   getGatewayPort?: () => number | null;
+  /** Materialize a context's working folder; backs `workspace.ensureContextFolder`. */
+  ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
   listWorkspaceUnits?: () =>
     | Promise<import("./services/workspaceService.js").WorkspaceUnitStatus[]>
     | import("./services/workspaceService.js").WorkspaceUnitStatus[];
@@ -1117,6 +1119,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         cancelHostTargetLaunchSession: deps.cancelHostTargetLaunchSession,
         hasAppCapability: deps.hasAppCapability,
         approvalQueue: deps.approvalQueue,
+        ensureContextFolder: deps.ensureContextFolder,
       })
     );
   }

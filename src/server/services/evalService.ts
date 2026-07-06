@@ -210,8 +210,27 @@ export function createEvalService(deps: {
   async function resolveOwner(
     callerKind: string,
     callerId: string,
-    requested: { ownerId?: string; contextId?: string }
+    requested: { ownerId?: string; contextId?: string },
+    agentBinding?: { entityId: string; contextId: string }
   ): Promise<EvalOwner> {
+    // Agent callers (plan §6.4): the host-verified entity binding IS the owner
+    // and context the EvalDO trusts. Client-supplied ownerId/contextId are never
+    // honored as overrides for an autonomous agent — if present they must match
+    // the binding, else the call is rejected (no cross-entity escalation).
+    if (callerKind === "agent") {
+      if (!agentBinding) {
+        throw new Error("eval: agent caller has no entity binding");
+      }
+      if (
+        (requested.ownerId !== undefined && requested.ownerId !== agentBinding.entityId) ||
+        (requested.contextId !== undefined && requested.contextId !== agentBinding.contextId)
+      ) {
+        throw new Error(
+          "eval: agent ownerId/contextId overrides must match the connection's entity binding"
+        );
+      }
+      return { ownerId: agentBinding.entityId, contextId: agentBinding.contextId };
+    }
     if (requested.ownerId !== undefined || requested.contextId !== undefined) {
       if (callerKind !== "shell" && callerKind !== "server") {
         throw new Error("eval: ownerId/contextId overrides are restricted to shell/server callers");
@@ -284,10 +303,15 @@ export function createEvalService(deps: {
   return {
     name: "eval",
     description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
-    policy: { allowed: ["panel", "app", "worker", "do", "extension", "shell", "server"] },
+    policy: { allowed: ["panel", "app", "worker", "do", "extension", "shell", "server", "agent"] },
     methods: evalMethods,
     handler: async (ctx, method, args) => {
       const ownerId = ctx.caller.runtime.id;
+      // Bind resolveOwner to this connection's verified caller — including the
+      // host-verified agent entity binding (plan §6.4), which the EvalDO trusts
+      // over any client-supplied owner/context.
+      const resolveOwnerForCaller = (requested: { ownerId?: string; contextId?: string }) =>
+        resolveOwner(ctx.caller.runtime.kind, ownerId, requested, ctx.caller.agentBinding);
 
       type EvalRunArgs = {
         ownerId?: string;
@@ -313,7 +337,7 @@ export function createEvalService(deps: {
         agentRef: string | undefined;
       }> => {
         assertRunSource(runArgs);
-        const owner = await resolveOwner(ctx.caller.runtime.kind, ownerId, {
+        const owner = await resolveOwnerForCaller({
           ownerId: runArgs.ownerId,
           contextId: runArgs.contextId,
         });
@@ -390,7 +414,7 @@ export function createEvalService(deps: {
           subKey?: string;
           runId: string;
         };
-        const owner = await resolveOwner(ctx.caller.runtime.kind, ownerId, {
+        const owner = await resolveOwnerForCaller({
           ownerId: getArgs.ownerId,
           contextId: getArgs.contextId,
         });
@@ -407,7 +431,7 @@ export function createEvalService(deps: {
           contextId?: string;
           subKey?: string;
         };
-        const owner = await resolveOwner(ctx.caller.runtime.kind, ownerId, {
+        const owner = await resolveOwnerForCaller({
           ownerId: resetArgs.ownerId,
           contextId: resetArgs.contextId,
         });
@@ -424,7 +448,7 @@ export function createEvalService(deps: {
           subKey?: string;
           runId: string;
         };
-        const owner = await resolveOwner(ctx.caller.runtime.kind, ownerId, {
+        const owner = await resolveOwnerForCaller({
           ownerId: cancelArgs.ownerId,
           contextId: cancelArgs.contextId,
         });
@@ -441,7 +465,7 @@ export function createEvalService(deps: {
           contextId?: string;
           subKey?: string;
         };
-        const owner = await resolveOwner(ctx.caller.runtime.kind, ownerId, {
+        const owner = await resolveOwnerForCaller({
           ownerId: forceArgs.ownerId,
           contextId: forceArgs.contextId,
         });

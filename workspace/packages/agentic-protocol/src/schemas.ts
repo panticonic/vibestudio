@@ -242,6 +242,9 @@ const invocationStartedPayloadSchema = z
         contextId: idSchema,
         childEntityId: z.string().min(1).optional(),
         label: z.string(),
+        // Reasoning engine of the child run — drives the SubagentRunCard kind
+        // badge. Optional/tolerant: older spawn payloads simply render no badge.
+        agentKind: z.string().min(1).optional(),
       })
       .strict()
       .optional(),

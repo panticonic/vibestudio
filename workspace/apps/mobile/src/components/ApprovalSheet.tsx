@@ -35,6 +35,7 @@ import type {
   PendingCredentialInputApproval,
   PendingSecretInputApproval,
   PendingDeviceCodeApproval,
+  PendingExternalAgentApproval,
   PendingUnitBatchApproval,
   PendingUserlandApproval,
   UserlandApprovalOption,
@@ -200,6 +201,10 @@ export interface ApprovalSheetProps {
     values: Record<string, string>
   ) => Promise<void> | void;
   onResolveUserland: (approvalId: string, choice: string | "dismiss") => Promise<void> | void;
+  onResolveExternalAgent: (
+    approvalId: string,
+    behavior: "allow" | "deny"
+  ) => Promise<void> | void;
   /**
    * Optional. When supplied and the current approval comes from a panel,
    * the caller chip becomes touchable and invokes this with the panel id.
@@ -213,7 +218,8 @@ type PendingAction =
   | "submit-client-config"
   | "submit-credential-input"
   | "submit-secret-input"
-  | `userland:${string}`;
+  | `userland:${string}`
+  | `external-agent:${"allow" | "deny"}`;
 
 type ButtonVariant = "primary" | "surface" | "danger" | "dangerPrimary" | "outline";
 
@@ -228,6 +234,7 @@ export function ApprovalSheet({
   onSubmitCredentialInput,
   onSubmitSecretInput,
   onResolveUserland,
+  onResolveExternalAgent,
   onNavigateToPanel,
 }: ApprovalSheetProps) {
   const colors = useAtomValue(themeColorsAtom);
@@ -439,6 +446,9 @@ export function ApprovalSheet({
                 {copy.summary ? <ApprovalMarkdown source={copy.summary} tone="muted" /> : null}
                 {copy.warning ? <WarningBand message={copy.warning} /> : null}
                 {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
+                {current.kind === "external-agent" ? (
+                  <ExternalAgentPanel approval={current} />
+                ) : null}
                 {error ? <InlineError message={error} /> : null}
                 {current.kind === "client-config" || current.kind === "credential-input" || current.kind === "secret-input" ? (
                   <SecretConfigFields
@@ -513,6 +523,16 @@ export function ApprovalSheet({
                     onChoose={(choice) =>
                       runAction(`userland:${choice}`, () =>
                         onResolveUserland(current.approvalId, choice)
+                      )
+                    }
+                  />
+                ) : current.kind === "external-agent" ? (
+                  <ExternalAgentActions
+                    busy={isBusy}
+                    pendingAction={pendingAction}
+                    onDecide={(behavior) =>
+                      runAction(`external-agent:${behavior}`, () =>
+                        onResolveExternalAgent(current.approvalId, behavior)
                       )
                     }
                   />
@@ -1018,6 +1038,8 @@ function ApprovalDetails({
             <SecretInputDetails approval={approval} />
           ) : approval.kind === "userland" ? (
             <UserlandDetails approval={approval} />
+          ) : approval.kind === "external-agent" ? (
+            <ExternalAgentDetails approval={approval} />
           ) : approval.kind === "device-code" ? (
             <DeviceCodeDetails approval={approval} />
           ) : approval.kind === "unit-batch" ? (
@@ -1330,6 +1352,78 @@ function DeviceCodeActions({
         testID="approval-action-device-cancel"
       />
     </View>
+  );
+}
+
+function ExternalAgentPanel({ approval }: { approval: PendingExternalAgentApproval }) {
+  const colors = useAtomValue(themeColorsAtom);
+  if (!approval.preview) return null;
+  return (
+    <View
+      style={[
+        styles.issuerPanel,
+        { backgroundColor: colors.background, borderColor: colors.border },
+      ]}
+    >
+      <Text style={[styles.helperText, { color: colors.textSecondary }]}>Tool input:</Text>
+      <Text
+        selectable
+        style={[
+          styles.markdownCodeBlock,
+          { color: colors.text, backgroundColor: colors.codeBackground },
+        ]}
+      >
+        {approval.preview}
+      </Text>
+    </View>
+  );
+}
+
+function ExternalAgentActions({
+  busy,
+  pendingAction,
+  onDecide,
+}: {
+  busy: boolean;
+  pendingAction: PendingAction | null;
+  onDecide: (behavior: "allow" | "deny") => void;
+}) {
+  return (
+    <View style={styles.actionRow}>
+      <DecisionButton
+        label="Allow"
+        description="Let the linked Claude Code session run this tool once."
+        variant="primary"
+        disabled={busy}
+        loading={pendingAction === "external-agent:allow"}
+        onPress={() => onDecide("allow")}
+        testID="approval-action-allow"
+      />
+      <DecisionButton
+        label="Deny"
+        description="Do not let the session run this tool."
+        variant="danger"
+        disabled={busy}
+        loading={pendingAction === "external-agent:deny"}
+        icon={XCircle}
+        onPress={() => onDecide("deny")}
+        testID="approval-action-deny"
+      />
+    </View>
+  );
+}
+
+function ExternalAgentDetails({ approval }: { approval: PendingExternalAgentApproval }) {
+  return (
+    <>
+      <DetailRow icon={Settings2} label="Tool" value={approval.operationName} code />
+      <DetailRow icon={Lock} label="Capability" value={approval.capability} code />
+      <DetailRow icon={User} label="Agent" value={approval.entityId} code />
+      {approval.description ? (
+        <DetailRow icon={Settings2} label="Request" value={approval.description} />
+      ) : null}
+      <DetailRow icon={Lock} label="Request id" value={approval.requestId} code />
+    </>
   );
 }
 

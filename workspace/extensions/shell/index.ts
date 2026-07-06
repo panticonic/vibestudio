@@ -1,19 +1,32 @@
 import * as path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, readdir, stat, unlink, writeFile } from "node:fs/promises";
-import type { ExtensionContext } from "@vibestudio/extension";
-import { buildExecApproval, buildOpenApproval, buildUrlOpenApproval } from "./approvals.js";
+import type { ExtensionContext, UserlandApprovalRequest } from "@vibestudio/extension";
+import {
+  buildContextAttachApproval,
+  buildExecApproval,
+  buildOpenApproval,
+  buildUrlOpenApproval,
+} from "./approvals.js";
 import { runExec } from "./exec.js";
 import { SessionManager } from "./sessionManager.js";
 import { prepareVscodeShellIntegrationLaunch } from "./shellIntegrationEnv.js";
 import { SnugServer } from "./snugServer.js";
 import { nodeSetInterval } from "./nodeTimers.js";
-import { execRequestSchema, openRequestSchema } from "./types.js";
+import { LaunchAdapterRegistry } from "./launchAdapters.js";
+import {
+  createContextRequestSchema,
+  execRequestSchema,
+  launchAdapterSchema,
+  openRequestSchema,
+  unregisterLaunchAdapterSchema,
+} from "./types.js";
 
 const BLOCKED_ENV = /^(LD_PRELOAD|NODE_OPTIONS|PYTHONSTARTUP|SHELL)$|^DYLD_/;
 const SCRATCH_LIMIT_BYTES = 25 * 1024 * 1024;
 export const SCRATCH_TTL_MS = 24 * 60 * 60_000;
 const SCRATCH_JANITOR_INTERVAL_MS = 30 * 60_000;
+const CONTEXT_ATTACH_TOKEN_TTL_MS = 2 * 60_000;
 
 function error(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
@@ -73,10 +86,23 @@ function currentOwner(ctx: ExtensionContext): { callerId: string; callerKind: st
   return { callerId: caller.callerId, callerKind: caller.callerKind };
 }
 
+function currentInvocationContextId(ctx: ExtensionContext): string | undefined {
+  const invocation = ctx.invocation.current();
+  return invocation?.chainCaller?.contextId ?? invocation?.caller.contextId;
+}
+
+function currentExtensionCaller(ctx: ExtensionContext, method: string): string {
+  const caller = ctx.invocation.current()?.caller;
+  if (!caller || caller.callerKind !== "extension") {
+    throw error("EACCES", `shell.${method} is only available to extension callers`);
+  }
+  return caller.callerId;
+}
+
 async function requireApproval(
   ctx: ExtensionContext,
   kind: "exec" | "open",
-  req: ReturnType<typeof buildExecApproval> | ReturnType<typeof buildOpenApproval> | ReturnType<typeof buildUrlOpenApproval>,
+  req: UserlandApprovalRequest
 ): Promise<void> {
   const choice = await ctx.approvals.request(req);
   if (choice.kind === "uncallable") {
@@ -98,13 +124,102 @@ declare module "@vibestudio/extension" {
   }
 }
 
+/**
+ * Build the branch-display string for a context-scoped session from
+ * `vcs.contextStatus` (§4.1): the (shortened) context head plus a `*` dirty
+ * marker when any repo carries uncommitted edits. Best-effort — returns
+ * undefined on any failure (an unauthorized cross-context read, no active
+ * context, etc.), so the header simply shows no branch.
+ */
+async function contextBranchDisplay(
+  ctx: ExtensionContext,
+  contextId: string
+): Promise<string | undefined> {
+  try {
+    const rows = await ctx.rpc.call<Array<{ uncommitted?: boolean }>>("main", "vcs.contextStatus", {
+      contextId,
+    });
+    const dirty = Array.isArray(rows) && rows.some((r) => r?.uncommitted);
+    const short = contextId.length > 12 ? `${contextId.slice(0, 8)}…` : contextId;
+    return `ctx:${short}${dirty ? " *" : ""}`.slice(0, 120);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function activate(ctx: ExtensionContext) {
   const workspace = await ctx.workspace.getInfo();
+  // Launch-adapter registry (§4.3) — the single mechanism for recognizing and
+  // optionally enriching agent launches. Seeded with the built-in detect-only
+  // adapters; extensions add/replace entries via registerLaunchAdapter.
+  const launchAdapters = new LaunchAdapterRegistry();
+  const launchAdapterOwners = new Map<string, string>();
+  const freshContextTokens = new Map<
+    string,
+    { contextId: string; callerId: string; expiresAt: number }
+  >();
   let snug!: SnugServer;
-  const sessions = new SessionManager({
-    onExit: (sessionId) => snug.unregister(sessionId),
-    onDispose: (sessionId) => snug.unregister(sessionId),
-  });
+  const sessions = new SessionManager(
+    {
+      onExit: (sessionId) => snug.unregister(sessionId),
+      onDispose: (sessionId) => snug.unregister(sessionId),
+    },
+    {
+      detectAgent: (argv) => launchAdapters.detect(argv),
+      resolveContextBranch: (contextId) => contextBranchDisplay(ctx, contextId),
+    }
+  );
+  // Resolve the cwd-confinement root for a request: the context's materialized
+  // working folder when contextId is set (§4.1), else the workspace root.
+  const confinementRoot = async (contextId?: string): Promise<string> => {
+    if (!contextId) return workspace.path;
+    const { dir } = await ctx.workspace.ensureContextFolder(contextId);
+    return dir;
+  };
+  const pruneFreshContextTokens = () => {
+    const now = Date.now();
+    for (const [token, claim] of freshContextTokens) {
+      if (claim.expiresAt <= now) freshContextTokens.delete(token);
+    }
+  };
+  const mintFreshContextToken = (callerId: string, contextId: string): string => {
+    pruneFreshContextTokens();
+    const token = randomUUID();
+    freshContextTokens.set(token, {
+      callerId,
+      contextId,
+      expiresAt: Date.now() + CONTEXT_ATTACH_TOKEN_TTL_MS,
+    });
+    return token;
+  };
+  const consumeFreshContextToken = (
+    token: string | undefined,
+    callerId: string,
+    contextId: string
+  ): boolean => {
+    if (!token) return false;
+    pruneFreshContextTokens();
+    const claim = freshContextTokens.get(token);
+    if (!claim || claim.callerId !== callerId || claim.contextId !== contextId) return false;
+    freshContextTokens.delete(token);
+    return true;
+  };
+  const requireContextAttachApproval = async (
+    operation: "exec" | "open",
+    contextId: string | undefined,
+    contextAttachToken: string | undefined,
+    owner: { callerId: string; callerKind: string }
+  ): Promise<void> => {
+    if (!contextId) return;
+    if (currentInvocationContextId(ctx) === contextId) return;
+    if (consumeFreshContextToken(contextAttachToken, owner.callerId, contextId)) return;
+    if (sessions.list(owner.callerId).some((session) => session.contextId === contextId)) return;
+    await requireApproval(
+      ctx,
+      operation,
+      buildContextAttachApproval({ contextId, callerId: owner.callerId, operation })
+    );
+  };
   snug = new SnugServer({
     list: (ownerCallerId) => sessions.list(ownerCallerId),
     setMeta: (sessionId, key, value) => sessions.setMetaById(sessionId, key, value),
@@ -117,16 +232,40 @@ export async function activate(ctx: ExtensionContext) {
       const owner = sessions.ownerFor(sourceSessionId);
       if (!owner) throw error("ENOENT", "Unknown source session");
       const cwd = sessions.cwdOf(sourceSessionId) ?? workspace.path;
-      const command = commandLine ? "/bin/sh" : process.env["SHELL"] ?? "/bin/bash";
+      const contextId = sessions.contextIdOf(sourceSessionId);
+      const command = commandLine ? "/bin/sh" : (process.env["SHELL"] ?? "/bin/bash");
       const args = commandLine ? ["-c", commandLine] : [];
-      ctx.log.info?.("snug category-c request", { action: "split", sourceSessionId, direction, command, args, cwd, caller: owner.callerId });
+      ctx.log.info?.("snug category-c request", {
+        action: "split",
+        sourceSessionId,
+        direction,
+        command,
+        args,
+        cwd,
+        caller: owner.callerId,
+      });
       try {
-        await requireApproval(ctx, "open", buildOpenApproval({ command, args, cwd, label: commandLine }));
+        await requireApproval(
+          ctx,
+          "open",
+          buildOpenApproval({ command, args, cwd, label: commandLine })
+        );
       } catch (err) {
-        ctx.log.info?.("snug category-c decision", { action: "split", sourceSessionId, decision: "deny", caller: owner.callerId, error: err instanceof Error ? err.message : String(err) });
+        ctx.log.info?.("snug category-c decision", {
+          action: "split",
+          sourceSessionId,
+          decision: "deny",
+          caller: owner.callerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw err;
       }
-      ctx.log.info?.("snug category-c decision", { action: "split", sourceSessionId, decision: "allow", caller: owner.callerId });
+      ctx.log.info?.("snug category-c decision", {
+        action: "split",
+        sourceSessionId,
+        decision: "allow",
+        caller: owner.callerId,
+      });
       const snugEnv = snug.envForSession(cleanEnv({}));
       try {
         const launch = await prepareVscodeShellIntegrationLaunch({
@@ -134,17 +273,24 @@ export async function activate(ctx: ExtensionContext) {
           args,
           env: snugEnv.env,
         });
-        const result = sessions.open({
-          command: launch.command,
-          args: launch.args,
-          cwd,
-          env: launch.env,
-          cols: 80,
-          rows: 24,
-          label: commandLine ?? "Shell",
-        }, owner);
+        const result = sessions.open(
+          {
+            command: launch.command,
+            args: launch.args,
+            cwd,
+            env: launch.env,
+            cols: 80,
+            rows: 24,
+            label: commandLine ?? "Shell",
+            ...(contextId ? { contextId } : {}),
+          },
+          owner
+        );
         snug.register(snugEnv.token, result.sessionId);
-        sessions.setMetaById(result.sessionId, "snugSpawn", { parentSessionId: sourceSessionId, direction });
+        sessions.setMetaById(result.sessionId, "snugSpawn", {
+          parentSessionId: sourceSessionId,
+          direction,
+        });
         return result.sessionId;
       } catch (err) {
         snug.discardPending(snugEnv.token);
@@ -155,78 +301,231 @@ export async function activate(ctx: ExtensionContext) {
       if (!/^https?:\/\//.test(url)) throw error("EINVAL", "snug open only supports http(s) URLs");
       const owner = sessions.ownerFor(_sessionId);
       if (!owner) throw error("ENOENT", "Unknown source session");
-      ctx.log.info?.("snug category-c request", { action: "open-url", sourceSessionId: _sessionId, url, caller: owner.callerId });
+      ctx.log.info?.("snug category-c request", {
+        action: "open-url",
+        sourceSessionId: _sessionId,
+        url,
+        caller: owner.callerId,
+      });
       try {
         await requireApproval(ctx, "open", buildUrlOpenApproval({ url }));
       } catch (err) {
-        ctx.log.info?.("snug category-c decision", { action: "open-url", sourceSessionId: _sessionId, decision: "deny", caller: owner.callerId, error: err instanceof Error ? err.message : String(err) });
+        ctx.log.info?.("snug category-c decision", {
+          action: "open-url",
+          sourceSessionId: _sessionId,
+          decision: "deny",
+          caller: owner.callerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
         throw err;
       }
-      ctx.log.info?.("snug category-c decision", { action: "open-url", sourceSessionId: _sessionId, decision: "allow", caller: owner.callerId });
-      sessions.setMetaById(_sessionId, "snugOpenUrl", { id: randomUUID(), url, requestedAt: Date.now() });
+      ctx.log.info?.("snug category-c decision", {
+        action: "open-url",
+        sourceSessionId: _sessionId,
+        decision: "allow",
+        caller: owner.callerId,
+      });
+      sessions.setMetaById(_sessionId, "snugOpenUrl", {
+        id: randomUUID(),
+        url,
+        requestedAt: Date.now(),
+      });
     },
   });
   await snug.start();
   const scratchDir = path.join(workspace.path, ".snug", "scratch");
   void sweepScratch(scratchDir);
-  const scratchJanitor = nodeSetInterval(() => void sweepScratch(scratchDir), SCRATCH_JANITOR_INTERVAL_MS);
+  const scratchJanitor = nodeSetInterval(
+    () => void sweepScratch(scratchDir),
+    SCRATCH_JANITOR_INTERVAL_MS
+  );
   scratchJanitor.unref?.();
   if (sessions.ptyAvailable) {
     ctx.health.healthy({ summary: "Shell extension activated" });
   } else {
     ctx.health.degraded({
       summary: "Shell extension activated without node-pty",
-      reasons: ["Interactive terminal sessions require node-pty and cannot start until it is installed and built."],
+      reasons: [
+        "Interactive terminal sessions require node-pty and cannot start until it is installed and built.",
+      ],
     });
   }
 
   return {
+    async createContext(raw: unknown) {
+      const parsed = createContextRequestSchema.parse(raw);
+      const owner = currentOwner(ctx);
+      const handle = await ctx.rpc.call<{ id?: string; contextId?: string }>(
+        "main",
+        "runtime.createEntity",
+        {
+          kind: "session",
+          source: "terminal",
+          title: parsed?.title ?? "Terminal context",
+        }
+      );
+      const entityId = typeof handle?.id === "string" ? handle.id : undefined;
+      const contextId =
+        typeof handle?.contextId === "string"
+          ? handle.contextId
+          : entityId
+            ? await ctx.rpc.call<string | null>("main", "runtime.resolveContext", entityId)
+            : null;
+      if (!contextId) throw error("EIO", "Failed to resolve new context id");
+      return { contextId, contextAttachToken: mintFreshContextToken(owner.callerId, contextId) };
+    },
+
     async exec(raw: unknown) {
       const parsed = execRequestSchema.parse(raw);
-      const cwd = resolveWithin(workspace.path, parsed.cwd);
+      const owner = currentOwner(ctx);
+      await requireContextAttachApproval(
+        "exec",
+        parsed.contextId,
+        parsed.contextAttachToken,
+        owner
+      );
+      const root = await confinementRoot(parsed.contextId);
+      const cwd = resolveWithin(root, parsed.cwd);
       const env = cleanEnv(parsed.env);
-      const { env: _env, cwd: _cwd, ...execReq } = parsed;
-      await requireApproval(ctx, "exec", buildExecApproval({
-        command: parsed.command,
-        args: parsed.args,
-        cwd,
-        shell: parsed.shell,
-      }));
+      const {
+        env: _env,
+        cwd: _cwd,
+        contextId: _ctxId,
+        contextAttachToken: _contextAttachToken,
+        ...execReq
+      } = parsed;
+      await requireApproval(
+        ctx,
+        "exec",
+        buildExecApproval({
+          command: parsed.command,
+          args: parsed.args,
+          cwd,
+          shell: parsed.shell,
+        })
+      );
       return runExec({ ...execReq, cwd, env });
     },
 
     async open(raw: unknown) {
       const parsed = openRequestSchema.parse(raw);
-      const cwd = resolveWithin(workspace.path, parsed.cwd);
-      const command = parsed.command ?? process.env["SHELL"] ?? "/bin/bash";
-      const { env: _env, cwd: _cwd, command: _command, ...openReq } = parsed;
       const owner = currentOwner(ctx);
-      await requireApproval(ctx, "open", buildOpenApproval({
-        command,
-        args: parsed.args,
-        cwd,
-        label: parsed.label,
-      }));
-      const { env, token } = snug.envForSession(cleanEnv(parsed.env));
+      await requireContextAttachApproval(
+        "open",
+        parsed.contextId,
+        parsed.contextAttachToken,
+        owner
+      );
+      const root = await confinementRoot(parsed.contextId);
+      const cwd = resolveWithin(root, parsed.cwd);
+      let command = parsed.command ?? process.env["SHELL"] ?? "/bin/bash";
+      let args = parsed.args;
+      const {
+        env: _env,
+        cwd: _cwd,
+        command: _command,
+        contextId: _ctxId,
+        contextAttachToken: _contextAttachToken,
+        ...openReq
+      } = parsed;
+      // Launch-adapter enrichment (§4.3): for a context-scoped session whose
+      // resolved argv matches an adapter with a handler, invoke the handler
+      // BEFORE approval/spawn so its env/argv rewrites are what the user
+      // approves and what runs. No context, no match, or a null/failed handler
+      // ⇒ launch untouched (today's detection/tagging only).
+      let handlerEnv: Record<string, string> = {};
+      if (parsed.contextId) {
+        const argv = [command, ...args];
+        const handler = launchAdapters.matchHandler(argv);
+        if (handler) {
+          try {
+            const rewrite = (await ctx.extensions.invoke(handler.extension, handler.method, [
+              { contextId: parsed.contextId, argv, cwd, env: parsed.env },
+            ])) as { env?: Record<string, string>; argv?: string[] } | null | undefined;
+            if (rewrite?.argv && rewrite.argv.length > 0) {
+              const [nextCommand, ...nextArgs] = rewrite.argv;
+              command = nextCommand ?? command;
+              args = nextArgs;
+            }
+            if (rewrite?.env) handlerEnv = rewrite.env;
+          } catch (err) {
+            ctx.log.debug?.("launch adapter handler failed; launching untouched", {
+              extension: handler.extension,
+              method: handler.method,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+      await requireApproval(
+        ctx,
+        "open",
+        buildOpenApproval({
+          command,
+          args,
+          cwd,
+          label: parsed.label,
+        })
+      );
+      const { env, token } = snug.envForSession(cleanEnv({ ...parsed.env, ...handlerEnv }));
       try {
         const launch = await prepareVscodeShellIntegrationLaunch({
           command,
-          args: parsed.args,
+          args,
           env,
         });
-        const result = sessions.open({
-          ...openReq,
-          command: launch.command,
-          args: launch.args,
-          cwd,
-          env: launch.env,
-        }, owner);
+        const result = sessions.open(
+          {
+            ...openReq,
+            command: launch.command,
+            args: launch.args,
+            cwd,
+            env: launch.env,
+            ...(parsed.contextId ? { contextId: parsed.contextId } : {}),
+          },
+          owner
+        );
         snug.register(token, result.sessionId);
         return result;
       } catch (err) {
         snug.discardPending(token);
         throw err;
       }
+    },
+
+    /**
+     * Register (or replace, by id) a launch adapter (§4.3). Extensions call
+     * this on activation to teach the shell how to recognize and — for
+     * context-scoped sessions — enrich their agent launches. Idempotent by id.
+     */
+    async registerLaunchAdapter(raw: unknown) {
+      const adapter = launchAdapterSchema.parse(raw);
+      const owner = currentExtensionCaller(ctx, "registerLaunchAdapter");
+      if (adapter.id.startsWith("builtin:")) {
+        throw error("EACCES", "Built-in launch adapters cannot be replaced");
+      }
+      const existingOwner = launchAdapterOwners.get(adapter.id);
+      if (existingOwner && existingOwner !== owner) {
+        throw error("EACCES", `Launch adapter ${adapter.id} is owned by another extension`);
+      }
+      if (adapter.handler && adapter.handler.extension !== owner) {
+        throw error("EACCES", "Launch adapter handlers must be owned by the registering extension");
+      }
+      launchAdapters.register(adapter);
+      launchAdapterOwners.set(adapter.id, owner);
+    },
+
+    /** Remove a previously-registered launch adapter by id. */
+    async unregisterLaunchAdapter(raw: unknown) {
+      const { id } = unregisterLaunchAdapterSchema.parse(raw);
+      const owner = currentExtensionCaller(ctx, "unregisterLaunchAdapter");
+      const existingOwner = launchAdapterOwners.get(id);
+      if (!existingOwner) return;
+      if (existingOwner !== owner) {
+        throw error("EACCES", `Launch adapter ${id} is owned by another extension`);
+      }
+      launchAdapters.unregister(id);
+      launchAdapterOwners.delete(id);
     },
 
     async dispose(sessionId: string) {
@@ -282,7 +581,10 @@ export async function activate(ctx: ExtensionContext) {
     },
 
     async kill(sessionId: string, signal?: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP") {
-      sessions.kill(sessions.requireOwner(sessionId, currentOwner(ctx).callerId), signal ?? "SIGTERM");
+      sessions.kill(
+        sessions.requireOwner(sessionId, currentOwner(ctx).callerId),
+        signal ?? "SIGTERM"
+      );
     },
 
     async list() {
@@ -314,11 +616,17 @@ export async function activate(ctx: ExtensionContext) {
     },
 
     async getScrollback(sessionId: string, maxBytes?: number) {
-      return sessions.getScrollback(sessions.requireOwner(sessionId, currentOwner(ctx).callerId), maxBytes);
+      return sessions.getScrollback(
+        sessions.requireOwner(sessionId, currentOwner(ctx).callerId),
+        maxBytes
+      );
     },
 
     async setScrollbackLimit(sessionId: string, maxBytes: number) {
-      sessions.setScrollbackLimit(sessions.requireOwner(sessionId, currentOwner(ctx).callerId), maxBytes);
+      sessions.setScrollbackLimit(
+        sessions.requireOwner(sessionId, currentOwner(ctx).callerId),
+        maxBytes
+      );
     },
 
     async clearScrollback(sessionId: string) {
@@ -329,7 +637,8 @@ export async function activate(ctx: ExtensionContext) {
       currentOwner(ctx);
       const payload = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
       if (payload.byteLength === 0) throw error("EINVAL", "Cannot stash an empty file");
-      if (payload.byteLength > SCRATCH_LIMIT_BYTES) throw error("E2BIG", "Scratch file exceeds 25MB limit");
+      if (payload.byteLength > SCRATCH_LIMIT_BYTES)
+        throw error("E2BIG", "Scratch file exceeds 25MB limit");
       await mkdir(scratchDir, { recursive: true });
       const filename = scratchFilename(ext);
       const absolutePath = path.join(scratchDir, filename);
@@ -365,13 +674,15 @@ export async function sweepScratch(scratchDir: string, now = Date.now()): Promis
     return;
   }
   const cutoff = now - SCRATCH_TTL_MS;
-  await Promise.all(entries.map(async (entry) => {
-    const absolutePath = path.join(scratchDir, entry);
-    try {
-      const info = await stat(absolutePath);
-      if (info.isFile() && info.mtimeMs < cutoff) await unlink(absolutePath);
-    } catch {
-      // Best-effort cleanup only.
-    }
-  }));
+  await Promise.all(
+    entries.map(async (entry) => {
+      const absolutePath = path.join(scratchDir, entry);
+      try {
+        const info = await stat(absolutePath);
+        if (info.isFile() && info.mtimeMs < cutoff) await unlink(absolutePath);
+      } catch {
+        // Best-effort cleanup only.
+      }
+    })
+  );
 }

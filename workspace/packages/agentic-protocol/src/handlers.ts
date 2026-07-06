@@ -110,6 +110,8 @@ export interface ProjectedInvocation {
     childEntityId?: string;
     label?: string;
     merge?: "merged" | "conflicted" | "discarded";
+    /** Reasoning engine of the child run — SubagentRunCard badge. */
+    agentKind?: string;
   };
 }
 
