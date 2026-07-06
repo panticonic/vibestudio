@@ -17,7 +17,8 @@ function makeRpc(
     call: vi.fn(async (target: string, method: string, args: unknown[]) => {
       if (impl) return impl(target, method, args);
       if (target === "main" && method === "runtime.createEntity") {
-        return { id: "entity-1", targetId: "target-1", contextId: "ctx-minted" };
+        const spec = args[0] as { contextId?: string };
+        return { id: "entity-1", targetId: "target-1", contextId: spec.contextId ?? "ctx-minted" };
       }
       return { ok: true, participantId: "participant-1" };
     }),
@@ -132,6 +133,27 @@ describe("agent launch primitive", () => {
     expect(rpc.call).toHaveBeenLastCalledWith("main", "runtime.retireEntity", [
       { id: "entity-1" },
     ]);
+  });
+
+  it("refuses to subscribe an existing active agent into a different channel context", async () => {
+    const rpc = makeRpc(async (_target, method) => {
+      if (method === "runtime.createEntity") {
+        return { id: "entity-1", targetId: "target-1", contextId: "ctx-original" };
+      }
+      return { ok: true, participantId: "participant-1" };
+    });
+
+    await expect(
+      launchAgentIntoChannel(rpc, {
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        key: "agent-1",
+        channelId: "ch-fork",
+        contextId: "ctx-fork",
+      })
+    ).rejects.toThrow(/existing agent entity-1 in context ctx-original.*channel ch-fork.*ctx-fork/);
+
+    expect(rpc.call).toHaveBeenCalledTimes(1);
   });
 
   it("initializes trajectory forks through the same stripped subscription config contract", async () => {

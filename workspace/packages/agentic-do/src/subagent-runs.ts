@@ -5,8 +5,9 @@
  * The log is the source of truth for a run's transcript (the task channel) and
  * its trajectory record (parent invocation events); this table is the vessel's
  * live INDEX over those — enough to route `complete`, gate depth/fan-out, drive
- * the TTL sweep, and re-home teardown after hibernation. Every field is derived
- * from durable inputs at spawn, so a replay reconstructs it deterministically.
+ * supervision tools, and re-home teardown after hibernation. Every field is
+ * derived from durable inputs at spawn, so a replay reconstructs it
+ * deterministically.
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
@@ -24,6 +25,7 @@ export type SubagentRunMerge = "merged" | "conflicted" | "discarded";
 export interface SubagentRunRow {
   runId: string;
   taskChannelId: string;
+  parentContextId: string | null;
   childContextId: string;
   childEntityId: string;
   childParticipantId: string | null;
@@ -40,6 +42,7 @@ export interface SubagentRunRow {
 interface SubagentRunSqlRow {
   run_id: string;
   task_channel_id: string;
+  parent_context_id?: string | null;
   child_context_id: string;
   child_entity_id: string;
   child_participant_id: string | null;
@@ -57,6 +60,7 @@ function toRow(row: SubagentRunSqlRow): SubagentRunRow {
   return {
     runId: row.run_id,
     taskChannelId: row.task_channel_id,
+    parentContextId: row.parent_context_id ?? null,
     childContextId: row.child_context_id,
     childEntityId: row.child_entity_id,
     childParticipantId: row.child_participant_id ?? null,
@@ -79,6 +83,7 @@ export class SubagentRunStore {
       CREATE TABLE IF NOT EXISTS subagent_runs (
         run_id TEXT PRIMARY KEY,
         task_channel_id TEXT NOT NULL,
+        parent_context_id TEXT,
         child_context_id TEXT NOT NULL,
         child_entity_id TEXT NOT NULL,
         child_participant_id TEXT,
@@ -92,6 +97,11 @@ export class SubagentRunStore {
         last_activity_at INTEGER NOT NULL
       )
     `);
+    try {
+      this.sql.exec(`ALTER TABLE subagent_runs ADD COLUMN parent_context_id TEXT`);
+    } catch {
+      // Existing/new tables may already have the migration.
+    }
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS subagent_wake_cursors (
         channel_id TEXT PRIMARY KEY,
@@ -104,11 +114,12 @@ export class SubagentRunStore {
   insert(row: SubagentRunRow): void {
     this.sql.exec(
       `INSERT OR IGNORE INTO subagent_runs
-         (run_id, task_channel_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
+         (run_id, task_channel_id, parent_context_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
           mode, label, depth, status, merge_status, started_at, last_activity_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.runId,
       row.taskChannelId,
+      row.parentContextId,
       row.childContextId,
       row.childEntityId,
       row.childParticipantId,
@@ -181,6 +192,14 @@ export class SubagentRunStore {
     this.sql.exec(
       `UPDATE subagent_runs SET child_participant_id = ? WHERE run_id = ?`,
       participantId,
+      runId
+    );
+  }
+
+  setParentContextId(runId: string, contextId: string): void {
+    this.sql.exec(
+      `UPDATE subagent_runs SET parent_context_id = ? WHERE run_id = ?`,
+      contextId,
       runId
     );
   }

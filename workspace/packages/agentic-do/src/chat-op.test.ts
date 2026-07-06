@@ -60,7 +60,10 @@ class TestVessel extends AgentVesselBase {
     messageTypes: new Map<string, Record<string, unknown>>(),
     calls: [] as Array<{ callId: string; targetPid: string; method: string; args: unknown }>,
     participants: [] as Array<{ participantId: string; metadata: Record<string, unknown> }>,
+    subscriptions: [] as Array<{ channelId: string; participantId: string }>,
+    replay: new Map<string, ChannelEvent[]>(),
   };
+  readonly operationLog: string[] = [];
 
   protected override get rpcCallerId(): string | null {
     return this.callerIdForTest;
@@ -78,26 +81,28 @@ class TestVessel extends AgentVesselBase {
     return { type: "agent", name: "TestAgent", handle: "testagent" } as ParticipantDescriptor;
   }
 
-  protected override createChannelClient(_channelId: string): ChannelClient {
-    return this.makeChannelStub() as unknown as ChannelClient;
+  protected override createChannelClient(channelId: string): ChannelClient {
+    return this.makeChannelStub(channelId) as unknown as ChannelClient;
   }
 
   /** Register a subscription row (so getParticipantId returns a non-null
    *  participant id for the card publish path) WITHOUT running the heavy
    *  post-subscribe machinery (prompt artifacts, driver wake) that needs a live
    *  gateway/GAD. */
-  async registerSubscriptionForTest(): Promise<void> {
+  async registerSubscriptionForTest(channelId = CHANNEL, config?: unknown): Promise<void> {
     await this.subscriptions.subscribe({
-      channelId: CHANNEL,
+      channelId,
       contextId: "ctx-1",
       descriptor: this.getParticipantInfo(),
+      config,
       replay: false,
     });
   }
 
-  private makeChannelStub() {
+  private makeChannelStub(channelId: string) {
     const stub = this.channelStub;
     const failures = this.channelPublishFailures;
+    const operationLog = this.operationLog;
     return {
       publishAgenticEvent: vi.fn(
         async (_pid: string, event: AgenticEvent, opts?: { idempotencyKey?: string }) => {
@@ -122,14 +127,27 @@ class TestVessel extends AgentVesselBase {
           stub.calls.push({ callId, targetPid, method, args });
         }
       ),
+      getReplayAfter: vi.fn(async (afterSeq: number) => {
+        const logEvents = (stub.replay.get(channelId) ?? []).filter(
+          (event) => (event.id ?? 0) > afterSeq
+        );
+        return {
+          logEvents,
+          ready: { totalCount: logEvents.length, envelopeCount: logEvents.length },
+        };
+      }),
       send: vi.fn(async () => undefined),
       recordTaskProvenance: vi.fn(async () => undefined),
-      subscribe: vi.fn(async (participantId: string) => ({
-        ok: true,
-        channelConfig: {},
-        envelope: { logEvents: [], ready: { totalCount: 0 } },
-        participantId,
-      })),
+      subscribe: vi.fn(async (participantId: string) => {
+        operationLog.push(`channel:${channelId}:subscribe`);
+        stub.subscriptions.push({ channelId, participantId });
+        return {
+          ok: true,
+          channelConfig: {},
+          envelope: { logEvents: [], ready: { totalCount: 0, envelopeCount: 0 } },
+          participantId,
+        };
+      }),
       unsubscribe: vi.fn(async () => undefined),
       getConfig: vi.fn(async () => ({})),
     };
@@ -184,6 +202,18 @@ class PromptEventProbe extends TestVessel {
   }
 }
 
+class ReadyWakeProbe extends TestVessel {
+  readonly wakeSpy = vi.fn(async (_channelId: string) => {});
+
+  protected override async ensurePromptArtifacts(): Promise<void> {}
+
+  protected override get driver(): AgentLoopDriver {
+    return {
+      wake: this.wakeSpy,
+    } as unknown as AgentLoopDriver;
+  }
+}
+
 async function makeVessel(): Promise<TestVessel> {
   const { instance } = await createTestDO(TestVessel, { __objectKey: "agent-key" });
   // Register a subscription row so the card path has a participant id, without
@@ -205,6 +235,63 @@ async function expectedEvalCaller(): Promise<string> {
   const key = (await sha256Hex(`${AGENT_ID}\0${CHANNEL}`)).slice(0, 40);
   return `do:vibestudio/internal:EvalDO:${key}`;
 }
+
+describe("AgentVesselBase channel ready wake policy", () => {
+  it("wakes every-envelope subscriptions after subscribe replay", async () => {
+    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+
+    await instance.subscribeChannel({
+      channelId: CHANNEL,
+      contextId: "ctx-1",
+      replay: false,
+    });
+
+    expect(instance.wakeSpy).toHaveBeenCalledWith(CHANNEL);
+  });
+
+  it("does not generic-wake turn-final supervisor subscriptions after subscribe replay", async () => {
+    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+
+    await instance.subscribeChannel({
+      channelId: CHANNEL,
+      contextId: "ctx-1",
+      config: { wakePolicy: "turn-final" },
+      replay: false,
+    });
+
+    expect(instance.wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it("wakes every-envelope subscriptions when the channel reports ready", async () => {
+    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+    await instance.registerSubscriptionForTest(CHANNEL);
+    instance.callerKindForTest = "do";
+    instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
+
+    await instance.onChannelEnvelope(CHANNEL, {
+      kind: "control",
+      type: "ready",
+      ready: { totalCount: 0, envelopeCount: 0 },
+    });
+
+    expect(instance.wakeSpy).toHaveBeenCalledWith(CHANNEL);
+  });
+
+  it("does not generic-wake turn-final supervisor subscriptions on ready", async () => {
+    const { instance } = await createTestDO(ReadyWakeProbe, { __objectKey: "agent-key" });
+    await instance.registerSubscriptionForTest(CHANNEL, { wakePolicy: "turn-final" });
+    instance.callerKindForTest = "do";
+    instance.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
+
+    await instance.onChannelEnvelope(CHANNEL, {
+      kind: "control",
+      type: "ready",
+      ready: { totalCount: 0, envelopeCount: 0 },
+    });
+
+    expect(instance.wakeSpy).not.toHaveBeenCalled();
+  });
+});
 
 describe("AgentVesselBase.chatOp", () => {
   it("rejects a caller that is not this agent's own EvalDO", async () => {
@@ -573,6 +660,7 @@ async function makeGateProbe(): Promise<EvalGateProbe> {
 class SubagentSpawnProbe extends TestVessel {
   rpcCalls: Array<{ target: string; method: string; args: unknown[] }> = [];
   gadLogHead: Record<string, unknown> | null = null;
+  ownerRuntimeContextId = "ctx-1";
   readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {});
   protected override async ensurePromptArtifacts(): Promise<void> {}
   protected override get driver(): AgentLoopDriver {
@@ -587,6 +675,10 @@ class SubagentSpawnProbe extends TestVessel {
     return {
       call: async (target: string, method: string, args: unknown[]) => {
         this.rpcCalls.push({ target, method, args });
+        this.operationLog.push(`rpc:${target}:${method}`);
+        if (target === "main" && method === "runtime.resolveContext") {
+          return this.ownerRuntimeContextId;
+        }
         if (target === "main" && method === "runtime.createSubagentContext") {
           return { contextId: "ctx-child" };
         }
@@ -622,6 +714,36 @@ class SubagentSpawnProbe extends TestVessel {
   subagentRunForTest(runId: string) {
     return this.subagentRuns.get(runId);
   }
+  seedSubagentStartedInParentChannelForTest(runId: string) {
+    this.channelStub.replay.set(CHANNEL, [
+      {
+        id: 1,
+        messageId: `ik:subagent-started:${runId}`,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: {
+          kind: "invocation.started",
+          actor: { kind: "agent", id: AGENT_ID, displayName: "TestAgent" },
+          causality: { invocationId: runId },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            name: "spawn_subagent",
+            subagent: {
+              runId,
+              mode: "fresh",
+              taskChannelId: `task-${runId}`,
+              contextId: `ctx-${runId}`,
+              parentContextId: "ctx-1",
+              childEntityId: `do:workers/agent-worker:AiChatWorker:subagent-${runId}`,
+              label: "recovered subagent",
+            },
+          },
+          createdAt: new Date().toISOString(),
+        } as unknown as AgenticEvent,
+        senderId: AGENT_ID,
+        ts: Date.now(),
+      },
+    ]);
+  }
   insertSubagentRunForTest(row: {
     runId: string;
     status: "starting" | "running";
@@ -631,6 +753,7 @@ class SubagentSpawnProbe extends TestVessel {
     this.subagentRuns.insert({
       runId: row.runId,
       taskChannelId: `task-${row.runId}`,
+      parentContextId: "ctx-1",
       childContextId: `ctx-${row.runId}-stale`,
       childEntityId: `do:workers/agent-worker:AiChatWorker:subagent-${row.runId}`,
       childParticipantId: "participant-child",
@@ -644,10 +767,11 @@ class SubagentSpawnProbe extends TestVessel {
       lastActivityAt: row.lastActivityAt ?? now,
     });
   }
-  async sweepAbandonedForTest(now: number) {
-    await (
-      this as unknown as { sweepAbandonedSubagents(now: number): Promise<void> }
-    ).sweepAbandonedSubagents(now);
+  async inspectSubagentForTest(runId: string, query: string, parentChannelId = CHANNEL) {
+    return this.inspectSubagent(runId, query, parentChannelId);
+  }
+  async readSubagentForTest(runId: string, afterSeq: number, parentChannelId = CHANNEL) {
+    return this.readSubagent(runId, afterSeq, parentChannelId);
   }
   async completeSubagentForTest(runId: string, report: string, outcome: "success" | "failed") {
     const run = this.subagentRuns.get(runId);
@@ -783,6 +907,89 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       toHead: childLogId,
       atSeq: 7,
     });
+  });
+
+  it("creates the task trajectory fork before initializing the child or subscribing the supervisor", async () => {
+    const probe = await makeSubagentSpawnProbe();
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fork",
+      task: "start the forked child",
+    });
+
+    expect(out).toMatchObject({ isError: false });
+    const forkIndex = probe.operationLog.findIndex((entry) => entry === "rpc:gad:forkLog");
+    const initIndex = probe.operationLog.findIndex((entry) =>
+      entry.includes(":initFromTrajectoryFork")
+    );
+    const supervisorSubscribeIndex = probe.operationLog.findIndex(
+      (entry) => entry === "channel:task-inv-1:subscribe"
+    );
+    expect(forkIndex).toBeGreaterThanOrEqual(0);
+    expect(initIndex).toBeGreaterThanOrEqual(0);
+    expect(supervisorSubscribeIndex).toBeGreaterThanOrEqual(0);
+    expect(forkIndex).toBeLessThan(initIndex);
+    expect(initIndex).toBeLessThan(supervisorSubscribeIndex);
+  });
+
+  it("fails before context creation when the owner entity and channel subscription contexts diverge", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.ownerRuntimeContextId = "ctx-original";
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-ctx-mismatch", {
+      mode: "fork",
+      task: "start the forked child",
+    });
+
+    expect(out).toMatchObject({
+      isError: true,
+      result: expect.stringContaining(
+        "spawn_subagent context mismatch: owner do:test:TestAgent:agent-key is registered in ctx-original, but channel chan-1 is subscribed as ctx-1"
+      ),
+    });
+    expect(
+      probe.rpcCalls.some(
+        (call) => call.target === "main" && call.method === "runtime.createSubagentContext"
+      )
+    ).toBe(false);
+  });
+
+  it("fails a forked spawn before child init when the task trajectory has different lineage", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    const childLogId = ids.logIdForChannel("task-inv-1");
+    probe.gadLogHead = {
+      logId: childLogId,
+      head: childLogId,
+      logKind: "trajectory",
+      seq: 0,
+      hash: "root-head",
+      envelopeId: null,
+      parentLogId: null,
+      parentHead: null,
+      forkSeq: null,
+      forkHash: null,
+    };
+
+    const out = await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fork",
+      task: "start the forked child",
+    });
+
+    expect(out).toMatchObject({
+      isError: true,
+      result: `subagent task trajectory already exists with different fork lineage: ${childLogId}:${childLogId}`,
+    });
+    expect(probe.operationLog.some((entry) => entry.includes(":initFromTrajectoryFork"))).toBe(
+      false
+    );
+    expect(
+      probe.rpcCalls.some(
+        (call) =>
+          call.target === "main" &&
+          call.method === "runtime.destroyContext" &&
+          JSON.stringify(call.args).includes("ctx-child")
+      )
+    ).toBe(true);
   });
 
   it("launches the child and returns a run handle immediately instead of parking the tool call", async () => {
@@ -969,23 +1176,59 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     });
   });
 
-  it("keeps abandoned runs live when the TTL terminal publish fails", async () => {
+  it("recovers a missing subagent row from the parent invocation card for inspect", async () => {
     const probe = await makeSubagentSpawnProbe();
-    const old = Date.now() - 60 * 60 * 1000;
-    probe.insertSubagentRunForTest({ runId: "inv-ttl", status: "running", lastActivityAt: old });
-    probe.channelPublishFailures.add("subagent-terminal:inv-ttl");
+    probe.seedSubagentStartedInParentChannelForTest("inv-recovered");
 
-    await probe.sweepAbandonedForTest(Date.now());
+    const out = await probe.inspectSubagentForTest("inv-recovered", "status");
 
-    expect(probe.subagentRunForTest("inv-ttl")).toMatchObject({
-      runId: "inv-ttl",
+    expect(out.details).toMatchObject({ runId: "inv-recovered", query: "status" });
+    expect(probe.subagentRunForTest("inv-recovered")).toMatchObject({
+      runId: "inv-recovered",
       status: "running",
+      taskChannelId: "task-inv-recovered",
+      childContextId: "ctx-inv-recovered",
     });
-    expect(
-      probe.rpcCalls.some(
-        (call) => call.target === "main" && call.method === "runtime.destroyContext"
-      )
-    ).toBe(false);
+    expect(probe.rpcCalls).toContainEqual({
+      target: "main",
+      method: "vcs.contextStatus",
+      args: [{ contextId: "ctx-inv-recovered", ownerContextId: "ctx-1" }],
+    });
+  });
+
+  it("recovers a missing subagent row from the parent invocation card for transcript reads", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    probe.seedSubagentStartedInParentChannelForTest("inv-recovered");
+    probe.channelStub.replay.set("task-inv-recovered", [
+      {
+        id: 7,
+        messageId: "child-msg-7",
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: {
+          kind: "message.completed",
+          actor: { kind: "agent", id: "participant-child", displayName: "Child" },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            role: "assistant",
+            blocks: [{ type: "text", content: "Recovered transcript line." }],
+          },
+          createdAt: new Date().toISOString(),
+        } as unknown as AgenticEvent,
+        senderId: "participant-child",
+        ts: Date.now(),
+      },
+    ]);
+
+    const out = await probe.readSubagentForTest("inv-recovered", 0);
+
+    expect((out.content[0] as { text?: string } | undefined)?.text).toContain(
+      "Recovered transcript line."
+    );
+    expect(out.details).toMatchObject({
+      runId: "inv-recovered",
+      nextSeq: 7,
+      empty: false,
+    });
   });
 
   it("relays child task-channel activity onto the parent subagent card", async () => {

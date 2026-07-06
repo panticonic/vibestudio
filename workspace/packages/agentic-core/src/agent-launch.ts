@@ -167,6 +167,15 @@ export async function launchAgentIntoChannel(
   input: LaunchAgentIntoChannelInput
 ): Promise<LaunchAgentIntoChannelResult> {
   const handle = await createAgentEntity(rpc, input);
+  if (input.contextId && handle.contextId && handle.contextId !== input.contextId) {
+    if (input.retireEntityOnSubscribeFailure && handle.id) {
+      await retireAgentEntity(rpc, handle.id).catch(() => undefined);
+    }
+    throw new Error(
+      `runtime.createEntity returned existing agent ${handle.id ?? handle.targetId} in context ` +
+        `${handle.contextId}, but channel ${input.channelId} is in context ${input.contextId}`
+    );
+  }
   const contextId = input.contextId ?? handle.contextId;
   if (!contextId) {
     if (input.retireEntityOnSubscribeFailure && handle.id) {

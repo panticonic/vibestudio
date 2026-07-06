@@ -1451,6 +1451,54 @@ describe("chatMessagesFromChannelView", () => {
     expect(messages[0]?.complete).toBe(true);
   });
 
+  it("does not surface fork-cleanup turns as no-response errors", () => {
+    const turnId = brandId<TurnId>("turn-forked");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-forked") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "spawn_subagent" },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const abandoned: AgenticEvent<"invocation.abandoned"> = {
+      kind: "invocation.abandoned",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-forked") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "forked",
+        terminalOutcome: "abandoned",
+        terminalReasonCode: "forked",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const closed: AgenticEvent<"turn.closed"> = {
+      kind: "turn.closed",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "forked" },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, started, abandoned, closed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    const messages = chatMessagesFromChannelView(state);
+
+    expect(messages.map((message) => message.id)).toEqual(["invocation:inv-forked"]);
+    expect(messages[0]?.invocation?.execution.status).toBe("abandoned");
+    expect(messages[0]?.complete).toBe(true);
+  });
+
   it("preserves invocation name and arguments when only completion is projected", () => {
     const completed: AgenticEvent<"invocation.completed"> = {
       kind: "invocation.completed",
@@ -1809,6 +1857,38 @@ describe("chatMessagesFromChannelView", () => {
           status: "complete",
           consoleOutput: "src/index.ts",
         },
+      },
+    });
+  });
+
+  it("projects a started subagent card without progress as running", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-subagent-started") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "spawn_subagent",
+        subagent: {
+          runId: "inv-subagent-started",
+          mode: "fork",
+          taskChannelId: "task-inv-subagent-started",
+          contextId: "ctx-inv-subagent-started",
+          parentContextId: "ctx-parent",
+          label: "background fork",
+        },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+
+    const state = [envelope(started, 1)].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
+      contentType: "invocation",
+      invocation: {
+        id: "inv-subagent-started",
+        execution: { status: "running" },
+        subagent: { parentContextId: "ctx-parent" },
       },
     });
   });

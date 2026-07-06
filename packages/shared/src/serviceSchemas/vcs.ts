@@ -369,7 +369,7 @@ export type VcsMergeResult = z.infer<typeof vcsMergeResultSchema>;
  */
 export const vcsMergeSourceSchema = z.union([
   z.literal("main"),
-  z.object({ contextId: z.string() }),
+  z.object({ contextId: z.string(), ownerContextId: z.string().optional() }),
 ]);
 export type VcsMergeSource = z.infer<typeof vcsMergeSourceSchema>;
 
@@ -663,10 +663,13 @@ const repoPathArgOptional = z
  * resolves the NAMED context's `ctx:*` head instead of the caller's own. The
  * caller must OWN (lifecycle child) or have FORKED (lineage descendant) that
  * context per the runtime relationship registry — otherwise the read THROWS
- * (this is a deny gate, never a prompt). Omit to read the caller's own head.
+ * (this is a deny gate, never a prompt). `ownerContextId` is a host-verified
+ * owner-context hint for child tools such as subagent inspection; it is honored
+ * only when the caller entity owns the recorded context edge. Omit to read the
+ * caller's own head.
  */
 const contextScopeArg = z
-  .object({ contextId: z.string() })
+  .object({ contextId: z.string(), ownerContextId: z.string().optional() })
   .optional()
   .describe(
     "Inspect another context you own or forked (resolves that context's ctx:* head). Unauthorized cross-context reads throw."
@@ -875,6 +878,12 @@ export const vcsMethods = defineServiceMethods({
     args: z.tuple([
       z.object({
         contextId: z.string().describe("The context to diff (must be one you own or forked)."),
+        ownerContextId: z
+          .string()
+          .optional()
+          .describe(
+            "Optional owner context for host-verified child-context reads such as subagent inspection."
+          ),
         against: z
           .enum(["fork-base", "main"])
           .optional()

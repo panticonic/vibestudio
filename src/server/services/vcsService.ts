@@ -42,16 +42,20 @@ export interface VcsServiceDeps {
    */
   listOwnedContexts?: (input: {
     contextId: string;
-  }) => Promise<{ contexts: Array<{ contextId: string }> }>;
+  }) => Promise<{ contexts: Array<{ contextId: string; ownerEntityId?: string | null }> }>;
+}
+
+type ContextReadScope = { contextId: string; ownerContextId?: string };
+
+function contextCallerId(ctx: ServiceContext): string {
+  return ctx.caller.runtime.kind === "extension" && ctx.chainCaller
+    ? ctx.chainCaller.callerId
+    : ctx.caller.runtime.id;
 }
 
 /** The caller's own context id (extensions resolve through their chained caller). */
 function callerContextId(ctx: ServiceContext, deps: VcsServiceDeps): string | null {
-  const contextCallerId =
-    ctx.caller.runtime.kind === "extension" && ctx.chainCaller
-      ? ctx.chainCaller.callerId
-      : ctx.caller.runtime.id;
-  return deps.entityCache?.resolveContext(contextCallerId) ?? null;
+  return deps.entityCache?.resolveContext(contextCallerId(ctx)) ?? null;
 }
 
 /** Resolve the caller's default head: context callers → their ctx head, else main. */
@@ -84,11 +88,7 @@ function resolveWriteHead(
 ): string {
   const callerKind = ctx.caller.runtime.kind;
   if (isPrivilegedCaller(ctx, deps)) return requestedHead ?? headForCaller(ctx, deps);
-  const contextCallerId =
-    callerKind === "extension" && ctx.chainCaller
-      ? ctx.chainCaller.callerId
-      : ctx.caller.runtime.id;
-  const contextId = deps.entityCache?.resolveContext(contextCallerId) ?? null;
+  const contextId = deps.entityCache?.resolveContext(contextCallerId(ctx)) ?? null;
   if (!contextId) {
     throw new Error(
       `vcs head writes require a context: caller ${ctx.caller.runtime.id} (${callerKind}) has no ` +
@@ -119,11 +119,17 @@ function resolveWriteHead(
 async function authorizeContextRead(
   ctx: ServiceContext,
   deps: VcsServiceDeps,
-  targetContextId: string
+  targetContextId: string,
+  ownerContextId?: string
 ): Promise<void> {
   if (callerContextId(ctx, deps) === targetContextId) return;
   // Shell/server are user-level surfaces — the user owns every context.
   if (isPrivilegedCaller(ctx, deps)) return;
+  if (ownerContextId) {
+    const ownedByHint = await deps.listOwnedContexts?.({ contextId: ownerContextId });
+    const edge = ownedByHint?.contexts.find((c) => c.contextId === targetContextId);
+    if (edge?.ownerEntityId && edge.ownerEntityId === ctx.caller.runtime.id) return;
+  }
   const own = callerContextId(ctx, deps);
   if (!own) {
     throw new Error(
@@ -147,6 +153,19 @@ async function authorizeReadHead(
 ): Promise<void> {
   if (!head.startsWith("ctx:")) return;
   await authorizeContextRead(ctx, deps, head.slice("ctx:".length));
+}
+
+async function authorizeScopedReadHead(
+  ctx: ServiceContext,
+  deps: VcsServiceDeps,
+  head: string,
+  scope?: ContextReadScope
+): Promise<void> {
+  if (scope && head === vcsContextHead(scope.contextId)) {
+    await authorizeContextRead(ctx, deps, scope.contextId, scope.ownerContextId);
+    return;
+  }
+  await authorizeReadHead(ctx, deps, head);
 }
 
 function routeWorkspacePath(filePath: string): { repoPath: string; repoRelPath: string } | null {
@@ -479,11 +498,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             string,
             string,
             string | undefined,
-            { contextId: string } | undefined,
+            ContextReadScope | undefined,
           ];
           const resolvedRef =
             ref || (scope ? vcsContextHead(scope.contextId) : headForCaller(ctx, deps));
-          await authorizeReadHead(ctx, deps, resolvedRef);
+          await authorizeScopedReadHead(ctx, deps, resolvedRef, scope);
           if (repoArg) {
             const repoPath = normalizeWorkspaceRepoPath(repoArg);
             const repoRelPath = stripRepoPath(filePath, repoPath);
@@ -518,11 +537,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const [ref, repoArg, scope] = args as [
             string | undefined,
             string | undefined,
-            { contextId: string } | undefined,
+            ContextReadScope | undefined,
           ];
           const resolvedRef =
             ref || (scope ? vcsContextHead(scope.contextId) : headForCaller(ctx, deps));
-          await authorizeReadHead(ctx, deps, resolvedRef);
+          await authorizeScopedReadHead(ctx, deps, resolvedRef, scope);
           if (repoArg) {
             const repoPath = normalizeWorkspaceRepoPath(repoArg);
             if (resolvedRef.startsWith("ctx:")) {
@@ -560,13 +579,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const [repoArg, headArg, scope] = args as [
             string,
             string | undefined,
-            { contextId: string } | undefined,
+            ContextReadScope | undefined,
           ];
           const repoPath = normalizeWorkspaceRepoPath(repoArg);
           const head = scope
             ? vcsContextHead(scope.contextId)
             : resolveReadHeadArg("status", headArg, ctx, deps);
-          await authorizeReadHead(ctx, deps, head);
+          await authorizeScopedReadHead(ctx, deps, head, scope);
           return await vcs.statusHead(head, repoPath);
         }
         case "diff": {
@@ -616,7 +635,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             defaultScopeContextId = targetHead.slice("ctx:".length);
           } else {
             // Merging another context's committed head IN reads that context.
-            await authorizeContextRead(ctx, deps, input.source.contextId);
+            await authorizeContextRead(
+              ctx,
+              deps,
+              input.source.contextId,
+              input.source.ownerContextId
+            );
             sourceHead = vcsContextHead(input.source.contextId);
             defaultScopeContextId = input.source.contextId;
           }
@@ -650,7 +674,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           }
           let sourceContextId: string | null = null;
           if (input.source && input.source !== "main") {
-            await authorizeContextRead(ctx, deps, input.source.contextId);
+            await authorizeContextRead(
+              ctx,
+              deps,
+              input.source.contextId,
+              input.source.ownerContextId
+            );
             sourceContextId = input.source.contextId;
           }
           if (!input.picks || input.picks.length === 0) {
@@ -707,8 +736,8 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           // A convenience projection: diff a context you own/forked against its
           // fork-base (default) or main. Read-authorized like the cross-context
           // reads; NOT a head write.
-          const [input] = args as [{ contextId: string; against?: "fork-base" | "main" }];
-          await authorizeContextRead(ctx, deps, input.contextId);
+          const [input] = args as [ContextReadScope & { against?: "fork-base" | "main" }];
+          await authorizeContextRead(ctx, deps, input.contextId, input.ownerContextId);
           return await vcs.contextDiff(input.contextId, input.against ?? "fork-base");
         }
         case "abortMerge": {
@@ -726,12 +755,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const [repoArg, headArg, scope] = args as [
             string | undefined,
             string | undefined,
-            { contextId: string } | undefined,
+            ContextReadScope | undefined,
           ];
           const targetHead = scope
             ? vcsContextHead(scope.contextId)
             : resolveReadHeadArg("pendingMerge", headArg, ctx, deps);
-          await authorizeReadHead(ctx, deps, targetHead);
+          await authorizeScopedReadHead(ctx, deps, targetHead, scope);
           const repoPath = repoArg ? normalizeWorkspaceRepoPath(repoArg) : undefined;
           if (!repoPath) {
             throw new Error("vcs.pendingMerge requires repoPath in the per-repo VCS model");
@@ -755,9 +784,9 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         // on-behalf-of token attributing the severe prompt to the originating
         // caller (D3). A host forward would erase that attribution.
         case "contextStatus": {
-          const [scope] = args as [{ contextId: string } | undefined];
+          const [scope] = args as [ContextReadScope | undefined];
           if (scope) {
-            await authorizeContextRead(ctx, deps, scope.contextId);
+            await authorizeContextRead(ctx, deps, scope.contextId, scope.ownerContextId);
             return await vcs.contextStatus(scope.contextId);
           }
           const contextId = callerContextId(ctx, deps);

@@ -103,11 +103,7 @@ const DEFAULT_COMPACTION_TRIGGER_BYTES = 256 * 1024;
 /** Subagent guardrails (overridable per-agent via config). Depth bounds the
  *  spawn chain; concurrency bounds live children per supervisor. */
 const DEFAULT_MAX_SUBAGENT_DEPTH = 3;
-const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 4;
-/** A subagent with no activity for this long is swept as `invocation.abandoned`
- *  by the supervisor TTL alarm (overridable via `config.subagentTtlMs`). */
-const DEFAULT_SUBAGENT_TTL_MS = 30 * 60 * 1000;
-const SUBAGENT_TTL_ALARM_SOURCE = "subagent-ttl";
+const DEFAULT_MAX_CONCURRENT_SUBAGENTS = 10;
 const PARTICIPANT_HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 export type ApprovalLevel = 0 | 1 | 2;
@@ -162,6 +158,12 @@ function configuredParticipantHandle(config: unknown): string | null {
   if (!config || typeof config !== "object") return null;
   const handle = (config as Record<string, unknown>)["handle"];
   return typeof handle === "string" && handle.length > 0 ? handle : null;
+}
+
+function configuredWakePolicy(config: unknown): "every-envelope" | "turn-final" | "manual" {
+  if (!config || typeof config !== "object") return "every-envelope";
+  const wakePolicy = (config as Record<string, unknown>)["wakePolicy"];
+  return wakePolicy === "turn-final" || wakePolicy === "manual" ? wakePolicy : "every-envelope";
 }
 
 function sanitizeParticipantHandlePart(value: string): string {
@@ -385,13 +387,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         await this.driver.alarm();
       },
     });
-    this.registerAgentAlarmSource({
-      id: SUBAGENT_TTL_ALARM_SOURCE,
-      nextWakeAt: () => this.nextSubagentTtlWakeAt(),
-      fire: async (now) => {
-        await this.sweepAbandonedSubagents(now);
-      },
-    });
   }
 
   protected createTables(): void {
@@ -443,11 +438,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return DEFAULT_MAX_CONCURRENT_SUBAGENTS;
   }
 
-  /** TTL (ms) after which an idle subagent is swept as `invocation.abandoned`. */
-  protected getSubagentTtlMs(): number {
-    return DEFAULT_SUBAGENT_TTL_MS;
-  }
-
   protected abstract getParticipantInfo(channelId: string, config?: unknown): ParticipantDescriptor;
 
   protected getEffectiveParticipantInfo(
@@ -471,6 +461,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       ...descriptor,
       handle: deriveSubagentParticipantHandle(descriptor.handle, subagent.runId, objectKey),
     };
+  }
+
+  private subscriptionContextOrNull(channelId: string): string | null {
+    try {
+      return this.subscriptions.getContextId(channelId);
+    } catch {
+      return null;
+    }
   }
 
   /** Workspace-level prompt resources. Workspace agents load AGENTS.md and the
@@ -1453,13 +1451,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       replay: opts.replay,
     });
     await this.ensurePromptArtifacts(opts.channelId);
-    await this.ingestSubscriptionReplay(opts.channelId, result.envelope);
+    await this.ingestSubscriptionReplay(
+      opts.channelId,
+      result.envelope,
+      configuredWakePolicy(opts.config) === "every-envelope"
+    );
     return { ok: result.ok, participantId: result.participantId };
   }
 
   private async ingestSubscriptionReplay(
     channelId: string,
-    envelope: ChannelReplayEnvelope | undefined
+    envelope: ChannelReplayEnvelope | undefined,
+    wakeAfterReplay: boolean
   ): Promise<void> {
     if (envelope?.logEvents?.length) {
       for (const event of envelope.logEvents) {
@@ -1482,7 +1485,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         });
       }
     }
-    await this.driver.wake(channelId);
+    if (wakeAfterReplay) await this.driver.wake(channelId);
   }
 
   @rpc({ callers: ["panel", "do"] })
@@ -1507,7 +1510,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.assertChannelDeliveryCaller("onChannelEnvelope");
     if (envelope.kind === "control") {
       if (envelope.type === "ready") {
-        await this.driver.wake(channelId);
+        const wakePolicy = this.subscriptions.getConfig(channelId)?.wakePolicy ?? "every-envelope";
+        if (wakePolicy === "every-envelope") await this.driver.wake(channelId);
       }
       return;
     }
@@ -3247,26 +3251,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       `INSERT OR REPLACE INTO state (key, value) VALUES ('__objectKey', ?)`,
       this.objectKey
     );
-    const to = ids.logIdForChannel(opts.taskChannelId);
     // `seq` is already a TRAJECTORY seq (the parent's folded head), not a channel
     // seq — no resolveTrajectorySeqForChannelSeq indirection needed.
-    const existing = await this.callGad<{
-      parentLogId: string | null;
-      parentHead: string | null;
-      forkSeq: number | null;
-    } | null>("getLogHead", { logId: to, head: to });
-    const atSeq =
-      existing?.parentLogId === opts.parentLogId &&
-      existing.parentHead === opts.parentLogId &&
-      existing.forkSeq != null
-        ? existing.forkSeq
-        : opts.seq;
-    await this.callGad("forkLog", {
-      fromLogId: opts.parentLogId,
-      fromHead: opts.parentLogId,
-      toLogId: to,
-      toHead: to,
-      atSeq,
+    await this.ensureSubagentTaskTrajectoryFork({
+      parentLogId: opts.parentLogId,
+      parentSeq: opts.seq,
+      taskChannelId: opts.taskChannelId,
     });
     // Subscribe to the task channel; the first task message drives the first turn
     // via the normal intake path (no explicit driver.wake here).
@@ -3333,11 +3323,44 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   }
 
+  private async ensureSubagentTaskTrajectoryFork(input: {
+    parentLogId: string;
+    parentSeq: number;
+    taskChannelId: string;
+  }): Promise<number> {
+    const to = ids.logIdForChannel(input.taskChannelId);
+    const existing = await this.callGad<{
+      parentLogId: string | null;
+      parentHead: string | null;
+      forkSeq: number | null;
+    } | null>("getLogHead", { logId: to, head: to });
+    const parentHead = input.parentLogId;
+    const equivalentExisting =
+      existing?.parentLogId === input.parentLogId &&
+      existing.parentHead === parentHead &&
+      existing.forkSeq != null;
+    if (existing && !equivalentExisting) {
+      throw new Error(
+        `subagent task trajectory already exists with different fork lineage: ${to}:${to}`
+      );
+    }
+    const atSeq = equivalentExisting ? existing.forkSeq! : input.parentSeq;
+    await this.callGad("forkLog", {
+      fromLogId: input.parentLogId,
+      fromHead: parentHead,
+      toLogId: to,
+      toHead: to,
+      atSeq,
+    });
+    return atSeq;
+  }
+
   /**
    * Launch `spawn_subagent`. Mints the child context (deterministic under
-   * `targetKey`) + child agent entity, wires the task channel (parent watches
-   * turn-final, child subscribes / trajectory-forks), seeds the task, records
-   * the run + the parent-trajectory invocation card, then returns a run handle.
+   * `targetKey`) + child agent entity, explicitly creates the task trajectory
+   * fork, wires the task channel (child subscribes, parent watches turn-final),
+   * seeds the task, records the run + the parent-trajectory invocation card,
+   * then returns a run handle.
    * Guarded by depth/fan-out. Any failure settles inline as a tool error.
    */
   protected async runDeferredSpawn(
@@ -3424,6 +3447,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
       const parentContextId = this.subscriptions.getContextId(channelId);
       const ownerEntityId = this.participantId();
+      const ownerRuntimeContextId = await this.rpc.call<string | null>(
+        "main",
+        "runtime.resolveContext",
+        [ownerEntityId]
+      );
+      if (ownerRuntimeContextId && ownerRuntimeContextId !== parentContextId) {
+        console.warn("[AgentVessel] spawn_subagent context mismatch", {
+          channelId,
+          invocationId,
+          ownerEntityId,
+          ownerRuntimeContextId,
+          subscriptionContextId: parentContextId,
+        });
+        throw new Error(
+          `spawn_subagent context mismatch: owner ${ownerEntityId} is registered in ` +
+            `${ownerRuntimeContextId}, but channel ${channelId} is subscribed as ${parentContextId}`
+        );
+      }
 
       // 1) Child context (deterministic; runtime records the lifecycle edge).
       const { contextId } = await createSubagentContext(this.rpc, {
@@ -3457,6 +3498,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       const run: SubagentRunRow = {
         runId,
         taskChannelId,
+        parentContextId: parentContextId ?? null,
         childContextId: contextId,
         childEntityId: childHandle.id ?? childHandle.targetId,
         childParticipantId: null,
@@ -3471,20 +3513,25 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       };
       this.subagentRuns.insert(run);
 
-      // 4) Parent watches the task channel turn-final (buffered, log-derived).
-      await this.subscribeChannel({
-        channelId: taskChannelId,
-        contextId,
-        config: { wakePolicy: "turn-final" },
-        replay: false,
-      });
+      // 4) For forked subagents, the spawn orchestrator creates the task
+      // trajectory fork before ANY task-channel participant subscribes. That
+      // keeps observer-side roster/presence bookkeeping from claiming the task
+      // trajectory as a root log.
+      const parentLogId = ids.logIdForChannel(channelId);
+      const parentSeq = mode === "fork" ? await this.trajectoryHeadSeq(channelId) : 0;
+      if (mode === "fork") {
+        await this.ensureSubagentTaskTrajectoryFork({
+          parentLogId,
+          parentSeq,
+          taskChannelId,
+        });
+      }
 
       // 5) Bring the child online on the task channel.
       let childParticipantId: string | null = null;
       if (mode === "fork") {
-        const parentSeq = await this.trajectoryHeadSeq(channelId);
         const childSubscription = await initAgentFromTrajectoryFork(this.rpc, childHandle, {
-          parentLogId: ids.logIdForChannel(channelId),
+          parentLogId,
           seq: parentSeq,
           taskChannelId,
           contextId,
@@ -3502,7 +3549,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       this.subagentRuns.setChildParticipantId(runId, childParticipantId);
 
-      // 5b) Stamp task provenance on the task channel so its getProvenance
+      // 6) Parent watches the task channel turn-final (buffered, log-derived).
+      // The seed is published only after this, so the supervisor cannot miss
+      // child activity that follows the task prompt.
+      await this.subscribeChannel({
+        channelId: taskChannelId,
+        contextId,
+        config: { wakePolicy: "turn-final" },
+        replay: false,
+      });
+
+      // 6b) Stamp task provenance on the task channel so its getProvenance
       //     reports kind:"task" (B1) — parent home channel + context + runId.
       await this.createChannelClient(taskChannelId).recordTaskProvenance({
         parentChannelId: channelId,
@@ -3528,6 +3585,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      console.warn("[AgentVessel] spawn_subagent failed", {
+        channelId,
+        invocationId,
+        message,
+      });
       const run = this.subagentRuns.get(invocationId);
       if (run && (run.status === "starting" || run.status === "running")) {
         let canTeardown = run.status === "starting";
@@ -3562,9 +3624,148 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       label: run.label,
       taskChannelId: run.taskChannelId,
       contextId: run.childContextId,
+      parentContextId: run.parentContextId,
       childEntityId: run.childEntityId,
       status: run.status,
     };
+  }
+
+  private subagentContextScope(run: SubagentRunRow): {
+    contextId: string;
+    ownerContextId?: string;
+  } {
+    return {
+      contextId: run.childContextId,
+      ...(run.parentContextId ? { ownerContextId: run.parentContextId } : {}),
+    };
+  }
+
+  private async resolveSubagentRun(
+    runId: string,
+    parentChannelId?: string
+  ): Promise<SubagentRunRow | null> {
+    const existing = this.subagentRuns.get(runId);
+    if (existing) return this.hydrateSubagentParentContext(existing);
+    if (!parentChannelId) return null;
+    return this.recoverSubagentRunFromParentChannel(runId, parentChannelId);
+  }
+
+  private async hydrateSubagentParentContext(run: SubagentRunRow): Promise<SubagentRunRow> {
+    if (run.parentContextId) return run;
+    let parentContextId: string | null = null;
+    try {
+      const provenance = await this.createChannelClient(run.taskChannelId).getProvenance();
+      if (provenance && typeof provenance === "object") {
+        const record = provenance as Record<string, unknown>;
+        if (record["kind"] === "task" && typeof record["parentContextId"] === "string") {
+          parentContextId = record["parentContextId"];
+        }
+      }
+    } catch {
+      // Older task channels may not expose provenance; fall back below.
+    }
+    parentContextId = parentContextId ?? this.subscriptionContextOrNull(run.parentChannelId);
+    if (!parentContextId) return run;
+    this.subagentRuns.setParentContextId(run.runId, parentContextId);
+    return { ...run, parentContextId };
+  }
+
+  private async recoverSubagentRunFromParentChannel(
+    runId: string,
+    parentChannelId: string
+  ): Promise<SubagentRunRow | null> {
+    // The subagent lifecycle card is durably published on the parent channel.
+    // Rebuild this local index from that stream after hibernation or teardown.
+    let cursor = 0;
+    let recovered: SubagentRunRow | null = null;
+    const channel = this.createChannelClient(parentChannelId);
+    for (;;) {
+      const page = await channel.getReplayAfter(cursor);
+      if (page.logEvents.length === 0) break;
+      let maxSeq = cursor;
+      for (const event of page.logEvents) {
+        maxSeq = Math.max(maxSeq, Number(event.id) || cursor);
+        if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) continue;
+        const agentic =
+          event.payload && typeof event.payload === "object"
+            ? (event.payload as AgenticEvent & { payload?: unknown })
+            : null;
+        if (!agentic) continue;
+        const eventKind = typeof agentic.kind === "string" ? agentic.kind : null;
+        if (!eventKind) continue;
+        const invocationId = (agentic.causality as { invocationId?: unknown } | undefined)
+          ?.invocationId;
+        if (invocationId !== runId) continue;
+        const payload =
+          agentic.payload && typeof agentic.payload === "object"
+            ? (agentic.payload as Record<string, unknown>)
+            : {};
+        const subagent =
+          payload["subagent"] && typeof payload["subagent"] === "object"
+            ? (payload["subagent"] as Record<string, unknown>)
+            : null;
+        if (eventKind === "invocation.started" && subagent) {
+          const taskChannelId = subagent["taskChannelId"];
+          const contextId = subagent["contextId"];
+          const parentContextId = subagent["parentContextId"];
+          const childEntityId = subagent["childEntityId"];
+          if (
+            typeof taskChannelId !== "string" ||
+            typeof contextId !== "string" ||
+            typeof childEntityId !== "string"
+          ) {
+            continue;
+          }
+          const mode = subagent["mode"] === "fork" ? "fork" : "fresh";
+          const startedAt =
+            Date.parse(typeof agentic.createdAt === "string" ? agentic.createdAt : "") ||
+            event.ts ||
+            Date.now();
+          recovered = {
+            runId,
+            taskChannelId,
+            parentContextId:
+              typeof parentContextId === "string"
+                ? parentContextId
+                : this.subscriptionContextOrNull(parentChannelId),
+            childContextId: contextId,
+            childEntityId,
+            childParticipantId: null,
+            parentChannelId,
+            mode,
+            label: typeof subagent["label"] === "string" ? subagent["label"] : "subagent",
+            depth: this.currentSubagentDepth() + 1,
+            status: "running",
+            merge: null,
+            startedAt,
+            lastActivityAt: startedAt,
+          };
+          continue;
+        }
+        if (recovered && subagent) {
+          const merge = subagent["merge"];
+          if (merge === "merged" || merge === "conflicted" || merge === "discarded") {
+            recovered = { ...recovered, merge };
+          }
+        }
+        if (!recovered) continue;
+        if (eventKind === "invocation.completed") {
+          recovered = { ...recovered, status: "completed" };
+        } else if (eventKind === "invocation.failed") {
+          recovered = { ...recovered, status: "failed" };
+        } else if (eventKind === "invocation.cancelled") {
+          recovered = { ...recovered, status: "cancelled" };
+        } else if (eventKind === "invocation.abandoned") {
+          recovered = { ...recovered, status: "abandoned" };
+        }
+      }
+      if (maxSeq <= cursor) break;
+      cursor = maxSeq;
+    }
+    if (!recovered) return null;
+    this.subagentRuns.insert(recovered);
+    if (recovered.merge) this.subagentRuns.setMerge(recovered.runId, recovered.merge);
+    return this.subagentRuns.get(runId) ?? recovered;
   }
 
   private async publishSubagentSeed(run: SubagentRunRow, task: string): Promise<void> {
@@ -3592,9 +3793,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected async sendToSubagent(
     toolCallId: string,
     runId: string,
-    message: string
+    message: string,
+    parentChannelId?: string
   ): Promise<AgentToolResult<Record<string, unknown>>> {
-    const run = this.subagentRuns.get(runId);
+    const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
     if (typeof message !== "string" || !message.trim()) {
       throw new Error("send_to_subagent requires a non-empty message");
@@ -3614,18 +3816,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  `status` | `diff` | `log` | a file path. */
   protected async inspectSubagent(
     runId: string,
-    query: string
+    query: string,
+    parentChannelId?: string
   ): Promise<AgentToolResult<Record<string, unknown>>> {
-    const run = this.subagentRuns.get(runId);
+    const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
-    const context = { contextId: run.childContextId };
+    const context = this.subagentContextScope(run);
     const q = (query ?? "status").trim() || "status";
     let result: unknown;
     if (q === "status") {
       result = await this.rpc.call<unknown>("main", "vcs.contextStatus", [context]);
     } else if (q === "diff") {
       result = await this.rpc.call<unknown>("main", "vcs.contextDiff", [
-        { contextId: run.childContextId, against: "fork-base" },
+        { ...context, against: "fork-base" },
       ]);
     } else if (q === "log") {
       // `vcs.log` is per-repo and USERLAND-dispatched (P5c) — it carries no
@@ -3656,11 +3859,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   /** Take EVERYTHING from a subagent: merge its child context into ours
    *  (commit-gated both sides — WS-1's source-side dirty gate surfaces here). */
-  protected async mergeSubagent(runId: string): Promise<AgentToolResult<Record<string, unknown>>> {
-    const run = this.subagentRuns.get(runId);
+  protected async mergeSubagent(
+    runId: string,
+    parentChannelId?: string
+  ): Promise<AgentToolResult<Record<string, unknown>>> {
+    const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
     const result = await this.rpc.call<unknown>("main", "vcs.merge", [
-      { source: { contextId: run.childContextId } },
+      { source: this.subagentContextScope(run) },
     ]);
     const merge = this.mergeStatusFromResult(result);
     this.subagentRuns.setMerge(runId, merge);
@@ -3675,15 +3881,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Selectively cherry-pick commits/paths from a subagent's child context. */
   protected async pickFromSubagent(
     runId: string,
-    picks: unknown
+    picks: unknown,
+    parentChannelId?: string
   ): Promise<AgentToolResult<Record<string, unknown>>> {
-    const run = this.subagentRuns.get(runId);
+    const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
     if (!Array.isArray(picks) || picks.length === 0) {
       throw new Error("pick_from_subagent requires a non-empty picks array");
     }
     const result = await this.rpc.call<unknown>("main", "vcs.pick", [
-      { source: { contextId: run.childContextId }, picks },
+      { source: this.subagentContextScope(run), picks },
     ]);
     this.subagentRuns.setMerge(runId, "merged");
     this.subagentRuns.touch(runId, Date.now());
@@ -3697,9 +3904,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  read path). Returns the child's messages + the next cursor. */
   protected async readSubagent(
     runId: string,
-    afterSeq: number
+    afterSeq: number,
+    parentChannelId?: string
   ): Promise<AgentToolResult<Record<string, unknown>>> {
-    const run = this.subagentRuns.get(runId);
+    const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) throw new Error(`unknown subagent run ${runId}`);
     const envelope = await this.createChannelClient(run.taskChannelId).getReplayAfter(
       Number.isFinite(afterSeq) ? afterSeq : 0
@@ -3741,9 +3949,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  (recursive lifecycle subtree), and drop the parent's task subscription. */
   protected async closeSubagent(
     runId: string,
-    discard: boolean
+    discard: boolean,
+    parentChannelId?: string
   ): Promise<AgentToolResult<Record<string, unknown>>> {
-    const run = this.subagentRuns.get(runId);
+    const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) return this.toolText(`subagent ${runId} already closed`, { runId });
     if (discard && run.merge === null) this.subagentRuns.setMerge(runId, "discarded");
     const refreshed = this.subagentRuns.get(runId)!;
@@ -3786,7 +3995,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     report?: unknown;
     outcome?: "success" | "failed";
   }): Promise<void> {
-    const run = this.subagentRuns.get(payload.runId);
+    const run = await this.resolveSubagentRun(payload.runId, payload.channelId);
     if (!run) return; // unknown / already torn down — idempotent
     if (this.rpcCallerId !== run.childEntityId) {
       throw new Error(
@@ -3893,6 +4102,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           mode: run.mode,
           taskChannelId: run.taskChannelId,
           contextId: run.childContextId,
+          parentContextId: run.parentContextId,
           childEntityId: run.childEntityId,
           label: run.label,
         },
@@ -3971,37 +4181,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       console.error(`[AgentVessel] destroyContext for subagent ${run.runId} failed:`, err);
     }
     this.subagentRuns.delete(run.runId);
-  }
-
-  private nextSubagentTtlWakeAt(): number | null {
-    const ttl = this.getSubagentTtlMs();
-    let earliest: number | null = null;
-    for (const run of this.subagentRuns.listLive()) {
-      const due = run.lastActivityAt + ttl;
-      if (earliest === null || due < earliest) earliest = due;
-    }
-    return earliest;
-  }
-
-  /** Supervisor TTL sweep: any run idle past the TTL is closed as
-   *  `invocation.abandoned` and torn down. Rides the agent alarm. */
-  private async sweepAbandonedSubagents(now: number): Promise<void> {
-    const ttl = this.getSubagentTtlMs();
-    for (const run of this.subagentRuns.listLive()) {
-      if (now - run.lastActivityAt <= ttl) continue;
-      try {
-        await this.settleSubagentTerminal(
-          run,
-          "abandoned",
-          `subagent idle > ${ttl}ms`,
-          run.merge ?? undefined
-        );
-      } catch (err) {
-        console.error(`[AgentVessel] abandoned settle for subagent ${run.runId} failed:`, err);
-        continue;
-      }
-      await this.teardownRun(run).catch(() => undefined);
-    }
   }
 
   // ── Wake discipline (turn-final buffering / manual) ─────────────────────────
@@ -4157,6 +4336,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (payload.saliency === "say" || this.eventAddressesSelf(channelId, payload)) {
         // Explicit surface: advance the cursor past it (so a subsequent
         // turn.closed fold doesn't double-count it) and take the normal path.
+        const run = this.subagentRuns.getByTaskChannel(channelId);
+        console.warn("[AgentVessel] turn-final subscription falling through to normal wake", {
+          taskChannelId: channelId,
+          taskContextId: this.subscriptionContextOrNull(channelId),
+          parentChannelId: run?.parentChannelId ?? null,
+          runId: run?.runId ?? null,
+          eventId: event.id ?? null,
+          eventMessageId: event.messageId,
+          saliency: payload.saliency ?? null,
+          addressedSelf: this.eventAddressesSelf(channelId, payload),
+        });
         this.subagentRuns.setWakeCursor(
           channelId,
           Math.max(this.subagentRuns.getWakeCursor(channelId), event.id ?? 0)
@@ -4201,6 +4391,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.subagentRuns.setWakeCursor(channelId, maxId);
     if (parts.length === 0 || !senderRef) return;
     const run = this.subagentRuns.getByTaskChannel(channelId);
+    console.warn("[AgentVessel] turn-final subscription waking loop from task channel", {
+      taskChannelId: channelId,
+      taskContextId: this.subscriptionContextOrNull(channelId),
+      parentChannelId: run?.parentChannelId ?? null,
+      parentContextId: run?.parentChannelId
+        ? this.subscriptionContextOrNull(run.parentChannelId)
+        : null,
+      runId: run?.runId ?? null,
+      wakeCursorBefore: cursor,
+      wakeCursorAfter: maxId,
+      foldedMessageCount: parts.length,
+    });
     if (run) this.subagentRuns.touch(run.runId, Date.now());
     await this.ensurePromptArtifacts(channelId);
     await this.driver.handleIncoming(channelId, {

@@ -852,15 +852,37 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   ): Promise<void> {
     const owner = await store.resolveRecord(args.ownerEntityId);
     if (!owner || owner.status !== "active") {
+      console.warn("[runtime.createSubagentContext] owner not active", {
+        callerId: caller.runtime.id,
+        callerKind: caller.runtime.kind,
+        ownerEntityId: args.ownerEntityId,
+        parentContextId: args.parentContextId,
+        ownerStatus: owner?.status ?? null,
+        ownerContextId: owner?.contextId ?? null,
+      });
       throw new Error(`createSubagentContext: owner entity ${args.ownerEntityId} is not active`);
     }
     if (owner.contextId !== args.parentContextId) {
+      console.warn("[runtime.createSubagentContext] owner context mismatch", {
+        callerId: caller.runtime.id,
+        callerKind: caller.runtime.kind,
+        ownerEntityId: args.ownerEntityId,
+        ownerContextId: owner.contextId,
+        requestedParentContextId: args.parentContextId,
+      });
       throw new Error(
         `createSubagentContext: owner entity ${args.ownerEntityId} is not in parent context ${args.parentContextId}`
       );
     }
     if (isTrustedRuntimeHost(caller)) return;
     if (caller.runtime.id === owner.id || owner.parentId === caller.runtime.id) return;
+    console.warn("[runtime.createSubagentContext] caller cannot create for owner", {
+      callerId: caller.runtime.id,
+      callerKind: caller.runtime.kind,
+      ownerEntityId: owner.id,
+      ownerParentId: owner.parentId,
+      parentContextId: args.parentContextId,
+    });
     throw new Error(
       `createSubagentContext: caller ${caller.runtime.id} cannot create subagent contexts for owner ${owner.id}`
     );
