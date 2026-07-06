@@ -623,6 +623,82 @@ describe("createServerPanelTreeBridge create (root, no wipe)", () => {
 });
 
 describe("createServerPanelTreeBridge self-heal", () => {
+  it("forces a fresh authoritative read for startup tree snapshots after an early empty sync", async () => {
+    const now = Date.now();
+    const slot = {
+      slot_id: "panel:tree/slot-a",
+      parent_slot_id: null,
+      current_entity_id: "panel:entry-a",
+      current_entity_title: "Target",
+      current_entry_key: "entry-a",
+      position_id: "root",
+      created_at: now,
+      closed_at: null,
+    };
+    const history = {
+      slot_id: "panel:tree/slot-a",
+      cursor: 0,
+      entry_key: "entry-a",
+      entity_id: "panel:entry-a",
+      source: "panels/target",
+      context_id: "ctx-target",
+      state_args: null,
+      recorded_at: now,
+    };
+    const entity = {
+      id: "panel:entry-a",
+      kind: "panel",
+      source: { repoPath: "panels/target", effectiveVersion: "ev-target" },
+      contextId: "ctx-target",
+      key: "entry-a",
+      createdAt: now,
+      status: "active",
+      cleanupComplete: false,
+    };
+    let slotListCalls = 0;
+    const dispatch = vi.fn(async (_ctx, service: string, method: string, args: unknown[]) => {
+      if (service === "workspace-state" && method === "slot.list") {
+        slotListCalls += 1;
+        return slotListCalls === 1 ? [] : [slot];
+      }
+      if (service === "workspace-state" && method === "slot.get")
+        return args[0] === "panel:tree/slot-a" ? slot : null;
+      if (service === "workspace-state" && method === "slot.history") return [history];
+      if (service === "workspace-state" && method === "entity.resolveActive") return entity;
+      if (service === "workspace-state" && method === "panel.search") return [];
+      if (service === "build" && method === "getPanelMetadata") return { title: "Target" };
+      if (service === "presence" && method === "markPanelActive") return undefined;
+      throw new Error(`Unexpected dispatch: ${service}.${method}`);
+    });
+    const bridge = await createServerPanelTreeBridge({
+      container: { get: vi.fn(() => ({})) },
+      dispatcher: { dispatch },
+      workspace: {},
+      workspacePath: "/tmp/workspace",
+      workspaceConfig: {},
+      adminToken: "admin-token",
+      centralData: null,
+      hostConfig: { gatewayPort: 0, externalHost: "localhost", protocol: "http" },
+      isIpcMode: false,
+      panelRuntimeCoordinator: { resolveHostForSlot: vi.fn(() => null) },
+      eventService: { emit: vi.fn() },
+    } as never);
+
+    await expect(
+      bridge({ callerId: "server", callerKind: "server", method: "roots", args: [] })
+    ).resolves.toEqual([]);
+
+    const snapshot = (await bridge({
+      callerId: "server",
+      callerKind: "server",
+      method: "getTreeSnapshot",
+      args: [],
+    })) as { rootPanels: Array<{ id: string }> };
+
+    expect(snapshot.rootPanels).toEqual([expect.objectContaining({ id: "panel:tree/slot-a" })]);
+    expect(slotListCalls).toBe(2);
+  });
+
   it("re-syncs the mirror and re-broadcasts (debounced) when the slot tree changes", async () => {
     const now = Date.now();
     const slot = {

@@ -537,7 +537,10 @@ export async function createServerPanelTreeBridge(
         );
       }
       case "getTreeSnapshot": {
-        await sync();
+        // The shell app uses this as its startup recovery read if it missed the
+        // first panel-tree event. Force a fresh authoritative read so an early
+        // empty bridge sync cannot strand the renderer on an empty mirror.
+        await sync({ force: true });
         return registry.getPanelTreeSnapshot();
       }
       case "getFocusedPanelId": {
