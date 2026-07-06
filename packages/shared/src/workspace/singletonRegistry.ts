@@ -28,15 +28,22 @@ export class SingletonRegistry {
   private readonly singletons = new Map<SingletonKey, WorkspaceSingletonObjectDecl>();
 
   constructor(decls: ReadonlyArray<WorkspaceSingletonObjectDecl>) {
+    this.replaceAll(decls);
+  }
+
+  replaceAll(decls: ReadonlyArray<WorkspaceSingletonObjectDecl>): void {
+    const next = new Map<SingletonKey, WorkspaceSingletonObjectDecl>();
     for (const decl of decls) {
       const key = makeKey(decl.source, decl.className);
-      if (this.singletons.has(key)) {
+      if (next.has(key)) {
         throw new Error(
           `Duplicate singletonObjects declaration for (source=${decl.source}, className=${decl.className})`
         );
       }
-      this.singletons.set(key, decl);
+      next.set(key, decl);
     }
+    this.singletons.clear();
+    for (const [key, decl] of next) this.singletons.set(key, decl);
   }
 
   /** Returns the singleton row for a (source, className), or null if absent. */
@@ -69,8 +76,8 @@ export class SingletonRegistry {
 
 /**
  * Parsed and validated workspace declarations.
- * Built once at workspace load; consumed by routeRegistry, userlandServices,
- * workerService, and workerdManager.
+ * Built at workspace load and refreshed on meta reload; consumed by
+ * routeRegistry, userlandServices, workerService, and workerdManager.
  */
 export interface WorkspaceDeclarations {
   singletons: SingletonRegistry;

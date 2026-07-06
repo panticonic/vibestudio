@@ -53,6 +53,10 @@ function classNames(...values: Array<string | false | null | undefined>): string
   return values.filter(Boolean).join(" ");
 }
 
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
 /**
  * Individual message card — wrapped in React.memo so it only re-renders
  * when its own message data or relevant callbacks change.
@@ -135,15 +139,24 @@ export const MessageCard = React.memo(function MessageCard({
   // edit-fork (own read messages) or a steer-fork (agent messages).
   const [editMode, setEditMode] = useState<null | "outbox" | "fork">(null);
   const [editText, setEditText] = useState("");
+  const [forkError, setForkError] = useState<string | null>(null);
   const openEdit = useCallback((mode: "outbox" | "fork") => {
     setEditText(msg.content);
     setEditMode(mode);
   }, [msg.content]);
+  const forkFromHere = useCallback(() => {
+    setForkError(null);
+    void forkState?.actions.forkFromMessage(msg).catch((err) => {
+      console.error("[MessageCard] fork failed:", err);
+      setForkError(errorMessage(err, "Fork failed"));
+    });
+  }, [forkState, msg]);
   const submitEdit = useCallback(async () => {
     const text = editText;
     const mode = editMode;
     setEditMode(null);
     if (!text.trim()) return;
+    setForkError(null);
     try {
       if (mode === "outbox") {
         await editPendingMessage?.(msg.id, text);
@@ -152,6 +165,7 @@ export const MessageCard = React.memo(function MessageCard({
       }
     } catch (err) {
       console.error("[MessageCard] edit failed:", err);
+      if (mode === "fork") setForkError(errorMessage(err, "Edit and fork failed"));
     }
   }, [editText, editMode, editPendingMessage, forkState, msg]);
 
@@ -514,7 +528,7 @@ export const MessageCard = React.memo(function MessageCard({
                     </IconButton>
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Content align="end">
-                    <DropdownMenu.Item onSelect={() => void forkState?.actions.forkFromMessage(msg)}>
+                    <DropdownMenu.Item onSelect={forkFromHere}>
                       Fork from here
                     </DropdownMenu.Item>
                     {isUnreadOutbox ? (
@@ -534,6 +548,11 @@ export const MessageCard = React.memo(function MessageCard({
               ⑂ substituted this turn
             </Text>
           )}
+          {forkError ? (
+            <Text size="1" color="red">
+              {forkError}
+            </Text>
+          ) : null}
           {replyContext && (
             <Box
               asChild

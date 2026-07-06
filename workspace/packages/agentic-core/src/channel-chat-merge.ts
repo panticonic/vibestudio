@@ -345,6 +345,7 @@ function isRunnerRestartClose(turn: ProjectedTurn): boolean {
 
 function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
   return (
+    turn.reason === "forked" ||
     turn.reason === "user_interrupted" ||
     turn.reason === "channel_unsubscribe" ||
     turn.reason === "turn_superseded" ||
@@ -493,13 +494,36 @@ function projectedMessageToChatMessages(
       } as ChatMessage & { sortTime: number },
     ];
   });
+  // Ephemeral tool-call generation status (arguments still streaming from the
+  // model). Only meaningful while the message is live — the authoritative
+  // terminal blocks never carry these, so a completed message has none anyway.
+  const toolCallProgress = complete
+    ? []
+    : (message.blocks ?? []).flatMap((block, index) => {
+        if (block.type !== "toolcall-progress") return [];
+        const content = typeof block.content === "string" ? block.content : "";
+        if (!content) return [];
+        return [
+          {
+            id: `toolcall-progress:${message.messageId}:${block.blockId ?? index}`,
+            senderId: message.actor.id,
+            content,
+            contentType: "toolcall-progress",
+            kind: "message",
+            complete: false,
+            senderMetadata,
+            sortTime: sortTime - 0.4 + index / 1000,
+          } as ChatMessage & { sortTime: number },
+        ];
+      });
+  const preamble = [...thinking, ...toolCallProgress];
   const failureReason = message.status === "failed" ? message.failureReason : undefined;
-  if (isSuppressedAssistantFailure(message)) return thinking;
+  if (isSuppressedAssistantFailure(message)) return preamble;
   const content = messageDisplayText(message.blocks);
   const diagnostic = diagnosticNoticeFromMessage(message);
   if (diagnostic) {
     return [
-      ...thinking,
+      ...preamble,
       {
         id: `diagnostic:${message.messageId}`,
         senderId: message.actor.id,
@@ -515,10 +539,10 @@ function projectedMessageToChatMessages(
       } as ChatMessage & { sortTime: number },
     ];
   }
-  if (!messageShouldRenderStandalone(message)) return thinking;
+  if (!messageShouldRenderStandalone(message)) return preamble;
   if (lifecycle) {
     return [
-      ...thinking,
+      ...preamble,
       {
         id: message.messageId,
         senderId: message.actor.id,
@@ -533,7 +557,7 @@ function projectedMessageToChatMessages(
     ];
   }
   return [
-    ...thinking,
+    ...preamble,
     {
       id: message.messageId,
       senderId: message.actor.id,
@@ -766,6 +790,7 @@ function invocationCardStatus(
       }
       if (invocation.status === "completed") return "complete";
       if (invocation.status === "running") return "running";
+      if (invocation.subagent && invocation.status === "started") return "running";
       return "pending";
   }
 }

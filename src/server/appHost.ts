@@ -1755,6 +1755,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       notify?: boolean;
     } = {}
   ): AppAvailablePayload {
+    this.activateAppEntity(entry);
     const buildKey = entry.activeBundleKey ?? "";
     const build = buildKey ? this.deps.buildSystem.getBuildByKey?.(buildKey) : null;
     const artifactRefs = (build?.artifacts ?? []).map((artifact) => {
@@ -2366,7 +2367,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         ref: decl.ref,
         effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
         dependencyEvs: this.currentDependencyEvs(node),
-        externalDeps: this.currentExternalDeps(node, decl),
+        externalDeps: this.currentExternalDeps(node, decl, this.registry.get(node.name) ?? null),
       }),
       target: this.appTarget(node, decl),
       capabilities: this.appCapabilities(node),
@@ -2386,7 +2387,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       ref: decl.ref,
       effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
       dependencyEvs: this.currentDependencyEvs(node),
-      externalDeps: this.currentExternalDeps(node, decl),
+      externalDeps: this.currentExternalDeps(node, decl, this.registry.get(node.name) ?? null),
       capabilities: this.appCapabilities(node),
     });
   }
@@ -2418,7 +2419,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       ref: decl.ref,
       effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
       dependencyEvs: this.currentDependencyEvs(node),
-      externalDeps: this.currentExternalDeps(node, decl),
+      externalDeps: this.currentExternalDeps(node, decl, entry),
     });
   }
 
@@ -2651,11 +2652,19 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
 
   private currentExternalDeps(
     node: AppGraphNode,
-    decl: WorkspaceAppDeclaration
+    decl: WorkspaceAppDeclaration,
+    fallbackEntry: AppRegistryEntry | null = null
   ): Record<string, string> {
+    const provider = this.currentBuildProviderDetails(node, decl);
+    if (!provider && fallbackEntry && this.appTarget(node, decl) === "react-native") {
+      return this.externalDepsWithStoredBuildProvider(
+        this.deps.buildSystem.getExternalDeps(node.name),
+        fallbackEntry
+      );
+    }
     return this.externalDepsWithProvider(
       this.deps.buildSystem.getExternalDeps(node.name),
-      this.currentBuildProviderDetails(node, decl)
+      provider
     );
   }
 
@@ -2691,6 +2700,19 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       ...externalDeps,
       [`build-provider:${provider.name}`]: buildProviderIdentityValue(provider),
     };
+  }
+
+  private externalDepsWithStoredBuildProvider(
+    externalDeps: Record<string, string>,
+    entry: AppRegistryEntry
+  ): Record<string, string> {
+    const providerDeps = Object.fromEntries(
+      Object.entries(entry.activeExternalDeps ?? {}).filter(([key]) =>
+        key.startsWith("build-provider:")
+      )
+    );
+    if (Object.keys(providerDeps).length === 0) return externalDeps;
+    return { ...externalDeps, ...providerDeps };
   }
 
   async restartApp(sourceOrName: string): Promise<void> {

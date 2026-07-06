@@ -27,6 +27,7 @@ export interface SubagentRunState {
   mode?: "fresh" | "fork";
   taskChannelId?: string;
   contextId?: string;
+  parentContextId?: string | null;
   childEntityId?: string;
   label?: string;
   merge?: "merged" | "conflicted" | "discarded";

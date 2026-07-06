@@ -208,6 +208,40 @@ describe("modelCallExecutor", () => {
     );
   });
 
+  it("returns a terminal model failure for open provider circuit breakers", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.getModel.mockReturnValue({ baseUrl: "https://api.openai.com/v1" });
+    mocks.stream.mockImplementation(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            throw new Error("Circuit breaker is open");
+          },
+        };
+      },
+      result: async () => ({ content: [], stopReason: "stop" }),
+    }));
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: descriptor(),
+        state: initialAgentState({ channelId: "channel-1", config }),
+        signal: new AbortController().signal,
+        deps: deps(),
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({
+      kind: "model",
+      stopReason: "error",
+      recoverable: false,
+      failure: {
+        code: "circuit_breaker_open_terminal",
+        recoverable: false,
+        reason: "Circuit breaker is open",
+      },
+    });
+  });
+
   it("streams thinking deltas and preserves provider replay metadata on completion", async () => {
     const providerModel = {
       id: "claude-sonnet-4-20250514",
@@ -269,8 +303,15 @@ describe("modelCallExecutor", () => {
         blockId: "msg-1:block:0",
         type: "thinking",
         text: "think ",
+        replace: true,
       },
-      { protocol: "agentic.trajectory.v1", blockId: "msg-1:block:1", type: "text", text: "done" },
+      {
+        protocol: "agentic.trajectory.v1",
+        blockId: "msg-1:block:1",
+        type: "text",
+        text: "done",
+        replace: true,
+      },
     ]);
     expect(outcome).toMatchObject({
       kind: "model",
@@ -392,6 +433,84 @@ describe("modelCallExecutor", () => {
     });
   });
 
+  it("rejects orphaned tool results before provider submission", async () => {
+    mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
+    const inputDescriptor = descriptor();
+    inputDescriptor.request.contextThroughSeq = 3;
+    const inputDeps = deps();
+    inputDeps.blobstore.getText = async (digest) => (digest === "sys" ? "BASE SYSTEM" : "");
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: inputDescriptor,
+        state: {
+          ...initialAgentState({ channelId: "channel-1", config }),
+          entries: [
+            {
+              kind: "assistant",
+              seq: 1,
+              messageId: "msg-tool",
+              blocks: [{ type: "toolCall", id: "call-present", name: "read", arguments: {} }],
+            },
+            {
+              kind: "tool-result",
+              seq: 2,
+              invocationId: "call-present",
+              name: "read",
+              result: "valid result",
+              isError: false,
+            },
+            {
+              kind: "tool-result",
+              seq: 3,
+              invocationId: "call-missing",
+              name: "inspect_subagent",
+              result: "orphan result",
+              isError: true,
+            },
+          ],
+        },
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).rejects.toThrow(
+      "model transcript invariant violated: orphaned tool result inspect_subagent call-missing"
+    );
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it("rejects assistant tool calls without tool results before provider submission", async () => {
+    mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
+    const inputDescriptor = descriptor();
+    inputDescriptor.request.contextThroughSeq = 1;
+    const inputDeps = deps();
+    inputDeps.blobstore.getText = async (digest) => (digest === "sys" ? "BASE SYSTEM" : "");
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: inputDescriptor,
+        state: {
+          ...initialAgentState({ channelId: "channel-1", config }),
+          entries: [
+            {
+              kind: "assistant",
+              seq: 1,
+              messageId: "msg-tool",
+              blocks: [{ type: "toolCall", id: "call-missing-result", name: "read", arguments: {} }],
+            },
+          ],
+        },
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).rejects.toThrow(
+      "model transcript invariant violated: assistant tool call call-missing-result has no tool result"
+    );
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
   it("returns a deterministic OpenAI Codex response in VIBESTUDIO_TEST_MODE without credential lookup", async () => {
     const previous = process.env["VIBESTUDIO_TEST_MODE"];
     delete process.env["VIBESTUDIO_TEST_MODE"];
@@ -507,7 +626,9 @@ describe("modelCallExecutor", () => {
       deps: { ...deps(), env: { VIBESTUDIO_TEST_MODE: "1" } },
       onEphemeral: () => {},
     });
-    expect(info).not.toHaveBeenCalled();
+    // The per-call "[model-call] finished:" summary is intentionally always on;
+    // only the fine-grained stage trace is gated behind the env flag.
+    expect(info.mock.calls.filter((call) => call[0] === "[model-call] trace:")).toHaveLength(0);
 
     await modelCallExecutor.execute({
       descriptor: inputDescriptor,

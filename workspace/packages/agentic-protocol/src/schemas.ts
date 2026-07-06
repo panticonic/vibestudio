@@ -240,6 +240,7 @@ const invocationStartedPayloadSchema = z
         mode: z.enum(["fresh", "fork"]),
         taskChannelId: idSchema,
         contextId: idSchema,
+        parentContextId: idSchema.nullable().optional(),
         childEntityId: z.string().min(1).optional(),
         label: z.string(),
         // Reasoning engine of the child run — drives the SubagentRunCard kind

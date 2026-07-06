@@ -33,6 +33,7 @@ import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { DEFERRED_RESULT, isDeferredResult } from "@vibestudio/shared/serviceDispatcher";
 import { CredentialSessionGrantStore } from "../../src/server/services/credentialSessionGrants.js";
 import { createApprovalQueue } from "../../src/server/services/approvalQueue.js";
+import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.js";
 
 function verifiedTestCaller(
   callerId: string,
@@ -1170,6 +1171,102 @@ describe("credentialService", () => {
       )
     ).resolves.toMatchObject({ id: stored.id });
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses trusted-version credential grants for subagent DOs when code identity is missing", async () => {
+    const store = new MemoryCredentialStore();
+    const seedService = createCredentialService({
+      credentialStore: store as never,
+    });
+    const stored = (await seedService.handler(
+      { caller: verifiedTestCaller("worker:owner", "worker") },
+      "storeCredential",
+      [
+        {
+          label: "Example API",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          material: { type: "bearer-token", token: "secret-token" },
+        },
+      ]
+    )) as StoredCredentialSummary;
+
+    const grantStore = new MemoryCredentialUseGrantStore();
+    const approvalQueue = approvingQueue("version");
+    const source = { repoPath: "workers/agent-worker", effectiveVersion: "hash-agent" };
+    const activeEntities: EntityRecord[] = [
+      {
+        id: "do:workers/agent-worker:AiChatWorker:subagent-one",
+        kind: "do",
+        source,
+        contextId: "ctx-one",
+        className: "AiChatWorker",
+        key: "subagent-one",
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: true,
+      },
+      {
+        id: "do:workers/agent-worker:AiChatWorker:subagent-two",
+        kind: "do",
+        source,
+        contextId: "ctx-two",
+        className: "AiChatWorker",
+        key: "subagent-two",
+        createdAt: 2,
+        status: "active",
+        cleanupComplete: true,
+      },
+    ];
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue: approvalQueue as never,
+      sessionGrantStore: new CredentialSessionGrantStore(),
+      credentialUseGrantStore: grantStore,
+      runtimeInspector: {
+        listActiveEntities: () => activeEntities,
+      },
+    });
+
+    const callerOne = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:subagent-one",
+      "do"
+    );
+    const callerTwo = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:subagent-two",
+      "do"
+    );
+
+    await expect(
+      service.handler({ caller: callerOne }, "resolveCredential", [
+        { url: "https://api.example.test/v1" },
+      ])
+    ).resolves.toMatchObject({ id: stored.id });
+    await expect(
+      service.handler({ caller: callerTwo }, "resolveCredential", [
+        { url: "https://api.example.test/v1" },
+      ])
+    ).resolves.toMatchObject({ id: stored.id });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callerId: "do:workers/agent-worker:AiChatWorker:subagent-one",
+        repoPath: source.repoPath,
+        effectiveVersion: source.effectiveVersion,
+      })
+    );
+    expect(grantStore.list(stored.id)).toContainEqual(
+      expect.objectContaining({
+        bindingId: "fetch",
+        use: "fetch",
+        resource: "https://api.example.test/",
+        action: "use",
+        scope: "version",
+        repoPath: source.repoPath,
+        effectiveVersion: source.effectiveVersion,
+      })
+    );
   });
 
   it("resolves queued credential use approvals covered by a trusted version grant", async () => {

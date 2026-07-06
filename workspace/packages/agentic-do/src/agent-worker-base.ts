@@ -419,7 +419,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     // publishPolicy governs whether model narration also publishes) + the
     // subagent supervision surface. The child-side `complete` tool is added
     // ONLY when this agent is itself a subagent.
-    return [...base, this.createSayTool(channelId), ...this.createSubagentTools()];
+    return [...base, this.createSayTool(channelId), ...this.createSubagentTools(channelId)];
   }
 
   /** The generalized `say` tool: an explicit, deliberate channel utterance
@@ -482,7 +482,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
    *  (advertised only to subagents). The vessel implements the spawn mechanics
    *  in the local-tool executor (it never reaches the `execute` below — see
    *  AgentVesselBase.runDeferredSpawn). */
-  private createSubagentTools(): AgentTool[] {
+  private createSubagentTools(channelId: string): AgentTool[] {
     const tools: AgentTool[] = [
       {
         name: "spawn_subagent",
@@ -545,7 +545,12 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         } as never,
         execute: async (toolCallId, params) => {
           const p = params as { runId?: unknown; message?: unknown };
-          return this.sendToSubagent(toolCallId, String(p.runId ?? ""), String(p.message ?? ""));
+          return this.sendToSubagent(
+            toolCallId,
+            String(p.runId ?? ""),
+            String(p.message ?? ""),
+            channelId
+          );
         },
       } as AgentTool,
       {
@@ -566,7 +571,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         } as never,
         execute: async (_toolCallId, params) => {
           const p = params as { runId?: unknown; query?: unknown };
-          return this.inspectSubagent(String(p.runId ?? ""), String(p.query ?? "status"));
+          return this.inspectSubagent(
+            String(p.runId ?? ""),
+            String(p.query ?? "status"),
+            channelId
+          );
         },
       } as AgentTool,
       {
@@ -581,7 +590,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         } as never,
         execute: async (_toolCallId, params) => {
           const p = params as { runId?: unknown };
-          return this.mergeSubagent(String(p.runId ?? ""));
+          return this.mergeSubagent(String(p.runId ?? ""), channelId);
         },
       } as AgentTool,
       {
@@ -604,7 +613,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         } as never,
         execute: async (_toolCallId, params) => {
           const p = params as { runId?: unknown; picks?: unknown };
-          return this.pickFromSubagent(String(p.runId ?? ""), p.picks);
+          return this.pickFromSubagent(String(p.runId ?? ""), p.picks, channelId);
         },
       } as AgentTool,
       {
@@ -627,7 +636,8 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           const p = params as { runId?: unknown; afterSeq?: unknown };
           return this.readSubagent(
             String(p.runId ?? ""),
-            typeof p.afterSeq === "number" ? p.afterSeq : 0
+            typeof p.afterSeq === "number" ? p.afterSeq : 0,
+            channelId
           );
         },
       } as AgentTool,
@@ -649,7 +659,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         } as never,
         execute: async (_toolCallId, params) => {
           const p = params as { runId?: unknown; discard?: unknown };
-          return this.closeSubagent(String(p.runId ?? ""), p.discard === true);
+          return this.closeSubagent(String(p.runId ?? ""), p.discard === true, channelId);
         },
       } as AgentTool,
     ];

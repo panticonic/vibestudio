@@ -1,5 +1,5 @@
 import { app, Menu, MenuItemConstructorOptions, type WebContents } from "electron";
-import type { EventService } from "@vibestudio/shared/eventsService";
+import type { EventName, EventPayloads, EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "./viewManager.js";
 import type { BridgePanelLifecycle } from "@vibestudio/shared/panelInterfaces";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
@@ -21,10 +21,12 @@ export function setMenuEventService(es: EventService): void {
   _menuEventService = es;
 }
 
-/** Guard — throws if eventService not set yet */
-function eventService(): EventService {
-  if (!_menuEventService) throw new Error("Menu eventService not initialized");
-  return _menuEventService;
+function emitMenuEvent<E extends EventName>(event: E, payload?: EventPayloads[E]): boolean {
+  if (!_menuEventService) {
+    throw new Error(`Menu eventService not initialized for "${event}"`);
+  }
+  _menuEventService.emit(event, payload);
+  return true;
 }
 
 /** Set the view manager for menu operations. Called from index.ts. */
@@ -60,9 +62,7 @@ function reloadFocusedPanel(force = false): void {
 }
 
 function dispatchChromeCommand(command: "reload-panel" | "force-reload-view" | "stop"): void {
-  try {
-    eventService().emit("panel-chrome-command", { command });
-  } catch {
+  if (!emitMenuEvent("panel-chrome-command", { command })) {
     if (command === "reload-panel") reloadFocusedPanel(false);
     if (command === "force-reload-view") reloadFocusedPanel(true);
     if (command === "stop") stopFocusedPanel();
@@ -86,7 +86,7 @@ function openFocusedPanelDevTools(): boolean {
 
 function togglePanelDevTools(): void {
   if (!openFocusedPanelDevTools()) {
-    eventService().emit("toggle-panel-devtools");
+    emitMenuEvent("toggle-panel-devtools");
   }
 }
 
@@ -150,7 +150,7 @@ export function buildCommonMenuItems(
       label: "New Panel",
       accelerator: "CmdOrCtrl+T",
       click: () => {
-        eventService().emit("navigate-about", { page: ABOUT_PAGES.NEW });
+        emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
       },
     },
     { type: "separator" },
@@ -158,14 +158,14 @@ export function buildCommonMenuItems(
       label: "Command Palette...",
       accelerator: "CmdOrCtrl+K",
       click: () => {
-        eventService().emit("open-command-palette");
+        emitMenuEvent("open-command-palette");
       },
     },
     {
       label: "Switch Workspace...",
       accelerator: "CmdOrCtrl+Shift+O",
       click: () => {
-        eventService().emit("open-workspace-switcher");
+        emitMenuEvent("open-workspace-switcher");
       },
     },
   ];
@@ -213,8 +213,8 @@ export function buildCommonMenuItems(
       label: "Toggle Address Bar",
       accelerator: "CmdOrCtrl+L",
       click: () => {
-        eventService().emit("toggle-address-bar");
-        eventService().emit("focus-address-bar");
+        emitMenuEvent("toggle-address-bar");
+        emitMenuEvent("focus-address-bar");
       },
     },
     { type: "separator" },
@@ -357,7 +357,7 @@ export function setupMenu(
           label: "New Panel",
           accelerator: "CmdOrCtrl+T",
           click: () => {
-            eventService().emit("navigate-about", { page: ABOUT_PAGES.NEW });
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.NEW });
           },
         },
         { type: "separator" },
@@ -365,7 +365,7 @@ export function setupMenu(
           label: "Switch Workspace...",
           accelerator: "CmdOrCtrl+Shift+O",
           click: () => {
-            eventService().emit("open-workspace-switcher");
+            emitMenuEvent("open-workspace-switcher");
           },
         },
         { type: "separator" },
@@ -423,8 +423,8 @@ export function setupMenu(
           label: "Toggle Address Bar",
           accelerator: "CmdOrCtrl+L",
           click: () => {
-            eventService().emit("toggle-address-bar");
-            eventService().emit("focus-address-bar");
+            emitMenuEvent("toggle-address-bar");
+            emitMenuEvent("focus-address-bar");
           },
         },
         { type: "separator" },
@@ -489,20 +489,20 @@ export function setupMenu(
           label: "Keyboard Shortcuts",
           accelerator: "CmdOrCtrl+/",
           click: () => {
-            eventService().emit("navigate-about", { page: ABOUT_PAGES.KEYBOARD_SHORTCUTS });
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.KEYBOARD_SHORTCUTS });
           },
         },
         { type: "separator" },
         {
           label: "Documentation",
           click: () => {
-            eventService().emit("navigate-about", { page: ABOUT_PAGES.HELP });
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.HELP });
           },
         },
         {
           label: "About Vibestudio",
           click: () => {
-            eventService().emit("navigate-about", { page: ABOUT_PAGES.ABOUT });
+            emitMenuEvent("navigate-about", { page: ABOUT_PAGES.ABOUT });
           },
         },
       ],

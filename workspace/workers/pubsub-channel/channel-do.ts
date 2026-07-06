@@ -15,7 +15,12 @@
  */
 
 /// <reference path="../workerd.d.ts" />
-import { rpc, DurableObjectBase, type DurableObjectContext } from "@workspace/runtime/worker";
+import {
+  rpc,
+  DurableObjectBase,
+  type DurableObjectContext,
+  type UserlandApprovalChoice,
+} from "@workspace/runtime/worker";
 import type { ChannelEvent } from "@workspace/harness";
 import type { BootstrapSnapshot, ParticipantSnapshot } from "@workspace/pubsub";
 import {
@@ -189,6 +194,38 @@ function parseDOParticipantId(
   const objectKey = objectKeyParts.join(":");
   if (!source || !className || !objectKey) return null;
   return { source, className, objectKey };
+}
+
+const ADMIN_AGENT_DEBUG_METHODS = new Set([
+  "getDebugState",
+  "getAgentSettings",
+  "inspectMethodSuspensions",
+]);
+
+function stableShortHash(input: string): string {
+  let h1 = 0xdeadbeef ^ input.length;
+  let h2 = 0x41c6ce57 ^ input.length;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(h2 >>> 0).toString(36).padStart(7, "0")}${(h1 >>> 0).toString(36).padStart(7, "0")}`;
+}
+
+interface AgentInspectionResult {
+  participantId: string;
+  channelId: string;
+  methodName: string;
+  result: unknown;
+  isError?: boolean;
+  roster: {
+    present: boolean;
+    transport?: string;
+    metadata?: Record<string, unknown>;
+  };
 }
 
 export class PubSubChannel extends DurableObjectBase {
@@ -783,7 +820,7 @@ export class PubSubChannel extends DurableObjectBase {
     // process the redelivered `started`, so they're excluded. Gate on the agent-vessel discriminator,
     // NOT `transport` (which would wrongly exclude the eval just because its id is a DO id).
     const isAgentVessel = participantIsAgentVessel(this.getSenderMetadata(participantId));
-    if (sessionReplaced && !isAgentVessel) this.calls.redeliverPendingCallsTo(participantId);
+    if (sessionReplaced && !isAgentVessel) await this.calls.redeliverPendingCallsTo(participantId);
 
     if (!isAgentVessel) {
       this.scheduleNextAlarm();
@@ -1386,6 +1423,132 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   @rpc({ callers: ["server", "shell"] })
+  async adminInspectAgent(
+    participantId: string,
+    methodName = "getDebugState"
+  ): Promise<AgentInspectionResult> {
+    this.assertAdminCaller("adminInspectAgent");
+    return this.inspectAgentReadOnly(participantId, methodName);
+  }
+
+  @rpc({ callers: ["panel", "do", "worker", "app", "extension", "server", "shell"] })
+  async inspectAgent(
+    participantId: string,
+    methodName = "getDebugState"
+  ): Promise<AgentInspectionResult> {
+    this.assertSupportedAgentInspectionMethod(methodName);
+    await this.requireAgentInspectionApproval(participantId, methodName);
+    return this.inspectAgentReadOnly(participantId, methodName);
+  }
+
+  private assertSupportedAgentInspectionMethod(methodName: string): void {
+    if (ADMIN_AGENT_DEBUG_METHODS.has(methodName)) return;
+    throw new Error(
+      `inspectAgent: unsupported method ${methodName}; expected one of ` +
+        [...ADMIN_AGENT_DEBUG_METHODS].join(", ")
+    );
+  }
+
+  private async requireAgentInspectionApproval(
+    participantId: string,
+    methodName: string
+  ): Promise<void> {
+    const caller = this.caller;
+    const callerId = caller?.callerId ?? "unknown";
+    const callerKind = caller?.callerKind ?? "unknown";
+    const subjectHash = stableShortHash(`${callerKind}:${callerId}:${participantId}:${methodName}`);
+    const decision = await this.rpc.call<UserlandApprovalChoice>(
+      "main",
+      "userlandApproval.request",
+      [
+        {
+          subject: {
+            id: `channel.inspectAgent:${subjectHash}`,
+            label: `Inspect ${methodName}`,
+          },
+          title: "Inspect agent debug data",
+          summary:
+            "Allow this runtime to read a standard read-only debug method from an agent, even when the agent is not joined to this channel's live roster.",
+          warning:
+            "Agent debug data may include settings, pending work, or internal execution state.",
+          severity: "standard",
+          defaultAction: "deny",
+          details: [
+            { label: "Caller", value: `${callerKind} ${callerId}` },
+            { label: "Channel", value: this.objectKey },
+            { label: "Agent", value: participantId },
+            { label: "Method", value: methodName },
+          ],
+        },
+      ]
+    );
+    if (decision.kind === "choice" && decision.choice === "allow") return;
+    if (decision.kind === "choice" && decision.choice === "once") return;
+    if (decision.kind === "choice" && decision.choice === "session") return;
+    if (decision.kind === "choice" && decision.choice === "version") return;
+    throw new Error(`inspectAgent approval denied for ${methodName} on ${participantId}`);
+  }
+
+  private async inspectAgentReadOnly(
+    participantId: string,
+    methodName: string
+  ): Promise<AgentInspectionResult> {
+    this.assertSupportedAgentInspectionMethod(methodName);
+    const doRef = parseDOParticipantId(participantId);
+    if (!doRef) {
+      throw new Error(
+        `inspectAgent: participant ${participantId} is not a Durable Object participant id`
+      );
+    }
+
+    await this.rpc.call("main", "workers.resolveDurableObject", [
+      doRef.source,
+      doRef.className,
+      doRef.objectKey,
+    ]);
+
+    const rosterRows = this.sql
+      .exec(`SELECT metadata, transport FROM participants WHERE id = ?`, participantId)
+      .toArray();
+    const roster: {
+      present: boolean;
+      transport?: string;
+      metadata?: Record<string, unknown>;
+    } = { present: rosterRows.length > 0 };
+    if (rosterRows.length > 0) {
+      roster.transport = String(rosterRows[0]!["transport"] ?? "");
+      try {
+        roster.metadata = JSON.parse(String(rosterRows[0]!["metadata"] ?? "{}")) as Record<
+          string,
+          unknown
+        >;
+      } catch {
+        roster.metadata = {};
+      }
+    }
+
+    const response = (await this.rpc.call(participantId, "onMethodCall", [
+      this.objectKey,
+      `admin-inspect:${crypto.randomUUID()}`,
+      methodName,
+      {},
+    ])) as { result?: unknown; isError?: boolean } | unknown;
+    const payload =
+      response && typeof response === "object" && "result" in response
+        ? (response as { result?: unknown; isError?: boolean })
+        : { result: response };
+
+    return {
+      participantId,
+      channelId: this.objectKey,
+      methodName,
+      result: payload.result,
+      ...(payload.isError !== undefined ? { isError: payload.isError === true } : {}),
+      roster,
+    };
+  }
+
+  @rpc({ callers: ["server", "shell"] })
   async adminValidateLog(opts: { rootLimit?: number } = {}) {
     this.assertAdminCaller("adminValidateLog");
     const issues: Array<{ code: string; message: string; rowId?: number }> = [];
@@ -1692,7 +1855,7 @@ export class PubSubChannel extends DurableObjectBase {
         .exec(`SELECT COUNT(*) AS cnt FROM pending_calls`)
         .toArray()[0]?.["cnt"];
       if (typeof pendingCount === "number" && pendingCount > 0) {
-        this.redeliverStalePendingCalls();
+        await this.redeliverStalePendingCalls();
         this.setStateValue(PENDING_REDELIVERY_SWEPT_AT_KEY, String(Date.now()));
       } else {
         // No pending calls — clear the marker so the next call's first
@@ -1721,7 +1884,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /** Re-emit pending calls older than one alarm tick whose target is a
    *  connected rpc participant (lost-delivery healing). */
-  private redeliverStalePendingCalls(): void {
+  private async redeliverStalePendingCalls(): Promise<void> {
     const cutoff = Date.now() - 10_000;
     const targets = new Set<string>();
     for (const row of this.sql
@@ -1733,7 +1896,7 @@ export class PubSubChannel extends DurableObjectBase {
       const connected = this.sql
         .exec(`SELECT 1 FROM participants WHERE id = ? AND transport = 'rpc'`, targetId)
         .toArray();
-      if (connected.length > 0) this.calls.redeliverPendingCallsTo(targetId);
+      if (connected.length > 0) await this.calls.redeliverPendingCallsTo(targetId);
     }
   }
 
@@ -1909,6 +2072,18 @@ export class PubSubChannel extends DurableObjectBase {
       if (includeScope && !includeScope.has(doTarget(p.doRef))) continue;
       keptAgents.push({ participantId: p.participantId, ref: p.doRef });
     }
+    console.info("[Channel] fork op starting", {
+      forkId,
+      phase,
+      channelId: this.objectKey,
+      sourceContextId,
+      forkPointPubsubId: opts.forkPointPubsubId,
+      keptAgentCount: keptAgents.length,
+      keptAgents: keptAgents.map((agent) => ({
+        participantId: agent.participantId,
+        target: doTarget(agent.ref),
+      })),
+    });
 
     try {
       // Preflight canFork on the kept agents (WS-5 per-channel shape).
@@ -1949,6 +2124,14 @@ export class PubSubChannel extends DurableObjectBase {
         objectKey: forkedChannelId,
       };
       const homeableTargets = clone.entities.map((e) => e.sourceId);
+      console.info("[Channel] fork op cloned context", {
+        forkId,
+        sourceChannelId: this.objectKey,
+        forkedChannelId,
+        forkedContextId,
+        clonedEntityCount: clone.entities.length,
+        homeableTargets,
+      });
       if (!forkPhaseReached(phase, "cloned")) {
         this.setForkOpPhase(forkId, "cloned", { forkedChannelId, forkedContextId });
       }
@@ -1992,6 +2175,12 @@ export class PubSubChannel extends DurableObjectBase {
           clonedAgents.push({ participantId: agent.participantId, ...clonedRef });
         }
         this.setForkOpPhase(forkId, "postcloned");
+        console.info("[Channel] fork op postClone complete", {
+          forkId,
+          forkedChannelId,
+          forkedContextId,
+          clonedParticipants,
+        });
       } else {
         for (const agent of keptAgents) {
           const ce = findClone(agent.ref);
@@ -2031,6 +2220,14 @@ export class PubSubChannel extends DurableObjectBase {
       }
 
       this.setForkOpPhase(forkId, "done");
+      console.info("[Channel] fork op done", {
+        forkId,
+        sourceChannelId: this.objectKey,
+        forkedChannelId,
+        forkedContextId,
+        seededMessageId,
+        clonedParticipants,
+      });
       return {
         forkId,
         forkedChannelId,
@@ -2040,6 +2237,12 @@ export class PubSubChannel extends DurableObjectBase {
         ...(seededMessageId ? { seededMessageId } : {}),
       };
     } catch (err) {
+      console.error("[Channel] fork op failed; rolling back", {
+        forkId,
+        channelId: this.objectKey,
+        phase,
+        error: err instanceof Error ? err.message : String(err),
+      });
       await this.rollbackForkOp(forkId);
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Fork failed: ${message}`);

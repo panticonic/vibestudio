@@ -80,6 +80,7 @@ export interface PanelOrchestratorDeps {
 
   getPanelView?: () => PanelViewLike | null;
   cdpHost: {
+    registerTarget?(panelId: string, contentsId: number): void;
     cleanupPanelAccess(panelId: string): void;
     unregisterTarget?(panelId: string): void;
     getAccessibilityTree?(panelId: string): Promise<unknown[]>;
@@ -786,6 +787,22 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
     const view = this.getPanelView();
     if (view?.hasView(targetPanelId)) {
+      try {
+        await this.ensureRuntimeLeaseForExistingView(targetPanelId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const lease = this.registry.getRuntimeLease(targetPanelId);
+        const isLeaseFailure = /running on|leased by/i.test(message);
+        if (isLeaseFailure) this.releaseLocalPanelRuntime(targetPanelId, "lease-transfer");
+        return {
+          panelId: targetPanelId,
+          status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
+          focused: true,
+          loaded: false,
+          message,
+          holderLabel: lease?.holderLabel,
+        };
+      }
       view.setViewVisible?.(targetPanelId, true);
       this.bumpViewRevision();
       this.sendPanelEvent(targetPanelId, { type: "focus" });
@@ -874,6 +891,22 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
     const view = this.getPanelView();
     if (view?.hasView(panelId)) {
+      try {
+        await this.ensureRuntimeLeaseForExistingView(panelId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const lease = this.registry.getRuntimeLease(panelId);
+        const isLeaseFailure = /running on|leased by/i.test(message);
+        if (isLeaseFailure) this.releaseLocalPanelRuntime(panelId, "lease-transfer");
+        return {
+          panelId,
+          status: isLeaseFailure ? "leased_elsewhere" : "view_creation_failed",
+          focused: false,
+          loaded: false,
+          message,
+          holderLabel: lease?.holderLabel,
+        };
+      }
       return {
         panelId,
         status: "loaded",
@@ -1098,6 +1131,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     // Arm the client-side UI GC sweep (desktop only; null on headless, which
     // uses per-panel one-shot timers instead).
     this.startIdleSweep();
+    await this.repairRuntimeLeasesForExistingViews().catch((error: unknown) => {
+      log.warn(
+        `[registerRuntimeClient] Failed to repair existing panel leases: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
   }
 
   async unregisterRuntimeClient(): Promise<void> {
@@ -1123,6 +1163,23 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async syncRuntimeLeaseSnapshot(): Promise<void> {
     const snapshot = await this.panelRuntime.getSnapshot();
     this.registry.applyRuntimeLeaseSnapshot(snapshot);
+  }
+
+  private async repairRuntimeLeasesForExistingViews(): Promise<void> {
+    const view = this.getPanelView();
+    if (!view) return;
+    for (const { panelId } of this.registry.listPanels()) {
+      if (!view.hasView(panelId)) continue;
+      try {
+        await this.ensureRuntimeLeaseForExistingView(panelId);
+      } catch (error) {
+        log.warn(
+          `[repairRuntimeLeasesForExistingViews] Failed to repair ${panelId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
   }
 
   async applyServerPanelTreeSnapshot(snapshot: PanelTreeSnapshot): Promise<void> {
@@ -1313,6 +1370,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   ): Promise<PanelRecoverySnapshot> {
     const { collapsedIds } = await this.shellCore.loadTree();
     await this.syncRuntimeLeaseSnapshot();
+    await this.repairRuntimeLeasesForExistingViews();
 
     const currentFocusedPanelId = this.registry.getFocusedPanelId();
     const roots = this.registry.getRootPanels();
@@ -1391,6 +1449,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           runtimeEntityId: lease.runtimeEntityId,
           connectionId: lease.connectionId,
         });
+        this.registerExistingCdpTarget(slotId);
         this.trackAssignedPanelResource(slotId);
       }
       return;
@@ -1753,6 +1812,44 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     }
     this.runtimeConnectionBySlot.set(panelId, { runtimeEntityId, connectionId });
     return connectionId;
+  }
+
+  private async ensureRuntimeLeaseForExistingView(panelId: string): Promise<void> {
+    const view = this.getPanelView();
+    if (!view?.hasView(panelId)) return;
+
+    const lease = this.registry.getRuntimeLease(panelId);
+    if (lease?.clientSessionId === this.runtimeClientSessionId) {
+      this.runtimeConnectionBySlot.set(panelId, {
+        runtimeEntityId: lease.runtimeEntityId,
+        connectionId: lease.connectionId,
+      });
+      this.registerExistingCdpTarget(panelId);
+      return;
+    }
+
+    const current = this.runtimeConnectionBySlot.get(panelId);
+    const runtimeEntityId = await this.shellCore.getCurrentEntityId(asPanelSlotId(panelId));
+    if (
+      current?.runtimeEntityId === runtimeEntityId &&
+      lease?.connectionId === current.connectionId
+    ) {
+      this.registerExistingCdpTarget(panelId);
+      return;
+    }
+
+    await this.acquireRuntimeLease(panelId, "acquire");
+    this.registerExistingCdpTarget(panelId);
+  }
+
+  private registerExistingCdpTarget(panelId: string): void {
+    const contents = this.getPanelView()?.getWebContents(panelId) as
+      | { id?: unknown; isDestroyed?: () => boolean }
+      | null
+      | undefined;
+    if (!contents || typeof contents.id !== "number") return;
+    if (contents.isDestroyed?.()) return;
+    this.cdpHost.registerTarget?.(panelId, contents.id);
   }
 
   private getBuildRevision(source: string, ref?: string): number | undefined {

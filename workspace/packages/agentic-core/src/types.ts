@@ -44,6 +44,10 @@ export interface ConnectionConfig {
   };
   protocol?: string;
   recoveryCoordinator?: Pick<RecoveryCoordinator, "registerColdRecoverHandler">;
+  /** Initial durable envelope replay window. Busy agent transcripts can exceed
+   * the pubsub client's generic default quickly because tool lifecycle events
+   * count as envelopes even when they collapse into one visible card. */
+  replayMessageLimit?: number;
 }
 
 /** A selectable agent type, enriched from worker manifest `agent` metadata. */

@@ -277,11 +277,28 @@ export default function ChatPanel() {
       for (let attempt = 1; attempt <= AGENT_SUBSCRIPTION_MAX_ATTEMPTS && !cancelled; attempt += 1) {
         try {
           const dos = await getChannelDOParticipants(channelName);
+          console.info("[ChatPanel] agent rehydration participant check", {
+            channelName,
+            contextId: resolvedContextId,
+            participantCount: dos.length,
+            attempt,
+          });
           if (dos.length > 0) return;
 
           const installedList = stateArgs.installedAgents ?? [];
           if (installedList.length === 0) return;
           const defaultAgentConfig = await resolveWorkspaceDefaultAgentConfig();
+          console.warn("[ChatPanel] channel has no DO participants; rehydrating installed agents", {
+            channelName,
+            contextId: resolvedContextId,
+            installedAgentCount: installedList.length,
+            installedAgents: installedList.map((agent) => ({
+              key: agent.key,
+              source: agent.source,
+              className: agent.className,
+              handle: agent.handle,
+            })),
+          });
 
           for (const agent of installedList) {
             // Layer the per-agent persisted config over the global default so a
@@ -302,6 +319,14 @@ export default function ChatPanel() {
               channelContextId: resolvedContextId,
               config: subscribeConfig,
               replay: true,
+            });
+            console.info("[ChatPanel] rehydrated installed agent", {
+              channelName,
+              contextId: resolvedContextId,
+              key: agent.key,
+              source: agent.source,
+              className: agent.className,
+              handle: agent.handle,
             });
           }
           return;
@@ -689,18 +714,30 @@ export default function ChatPanel() {
   // In-place fork switch: rebind the panel's channel + context and let the
   // useChatCore bootstrap effect (keyed on channelName/contextId) reconnect.
   const handleForkSwitch = useCallback((forkChannelId: string, forkContextId: string) => {
+    console.info("[ChatPanel] switching to fork", {
+      fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
+      fromContextId: resolvedContextId,
+      forkChannelId,
+      forkContextId,
+    });
     initialPromptCaptured.current = undefined;
     rehydrationCheckedRef.current = false;
     void panel.stateArgs.set({ channelName: forkChannelId, contextId: forkContextId });
-  }, []);
+  }, [bootstrapChannel, resolvedContextId, stateArgs.channelName]);
 
   // Side-by-side: open the fork in a fresh chat panel (news-panel shape).
   const handleOpenForkPanel = useCallback((forkChannelId: string, forkContextId: string) => {
+    console.info("[ChatPanel] opening fork panel", {
+      fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
+      fromContextId: resolvedContextId,
+      forkChannelId,
+      forkContextId,
+    });
     void openPanel("panels/chat", {
       focus: true,
       stateArgs: { channelName: forkChannelId, contextId: forkContextId },
     });
-  }, []);
+  }, [bootstrapChannel, resolvedContextId, stateArgs.channelName]);
 
   const handleReviewContext = useCallback((target: ReviewTarget) => {
     setReviewTarget(target);

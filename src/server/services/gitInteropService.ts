@@ -1,9 +1,8 @@
 import * as fs from "fs";
 import { lstatSync } from "fs";
 import * as fsPromises from "fs/promises";
-import { mkdir, readFile, writeFile } from "fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "path";
-import YAML from "yaml";
+import { mkdir } from "fs/promises";
+import { dirname, isAbsolute, relative, resolve } from "path";
 import { GitClient } from "@vibestudio/git";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -51,6 +50,13 @@ type GitInteropServiceDeps = {
   grantStore?: CapabilityGrantStore;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   onWorkspaceSourceChanged?: (ctx: ServiceContext, summary: string) => Promise<void>;
+  workspaceConfigWouldChange?: (nextConfig: WorkspaceConfig) => Promise<boolean>;
+  persistWorkspaceConfig?: (input: {
+    ctx: ServiceContext;
+    nextConfig: WorkspaceConfig;
+    summary: string;
+    operation: "push" | "import";
+  }) => Promise<boolean>;
   /**
    * Initialize the per-repo VCS log (`vcs:repo:<repoPath>`) for a freshly
    * cloned repo by snapshotting its on-disk tree into the repo log at `main`
@@ -115,7 +121,11 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
             validRepoPath,
             normalizedRemote
           );
-          await persistWorkspaceConfigChange(deps.workspacePath, deps.workspaceConfig, nextConfig);
+          await persistWorkspaceConfigChange(ctx, deps, {
+            nextConfig,
+            summary: workspaceConfigRemoteSummary(validRepoPath, normalizedRemote, "set"),
+            operation: "push",
+          });
           await propagateSharedRemote(deps, validRepoPath);
           return nextConfig.git?.remotes;
         }
@@ -134,7 +144,11 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
             validRepoPath,
             remoteName
           );
-          await persistWorkspaceConfigChange(deps.workspacePath, deps.workspaceConfig, nextConfig);
+          await persistWorkspaceConfigChange(ctx, deps, {
+            nextConfig,
+            summary: workspaceConfigRemoteSummary(validRepoPath, existing, "remove"),
+            operation: "push",
+          });
           await propagateSharedRemote(deps, validRepoPath);
           return nextConfig.git?.remotes;
         }
@@ -284,11 +298,11 @@ async function importWorkspaceRepo(
     normalizedRemote,
     nextConfig
   );
-  const configChanged = await persistWorkspaceConfigChange(
-    deps.workspacePath,
-    deps.workspaceConfig,
-    nextConfig
-  );
+  const configChanged = await persistWorkspaceConfigChange(ctx, deps, {
+    nextConfig,
+    summary: workspaceConfigImportSummary(validRepoPath, normalizedRemote),
+    operation: "import",
+  });
   await mkdir(dirname(absolutePath), { recursive: true });
   try {
     const client = new GitClient(fsPromises, {
@@ -314,13 +328,15 @@ async function importWorkspaceRepo(
 
 async function ensureWorkspaceConfigWritePermission(
   ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "workspacePath" | "approvalQueue" | "hasAppCapability">,
+  deps: Pick<
+    GitInteropServiceDeps,
+    "workspaceConfig" | "workspaceConfigWouldChange" | "approvalQueue" | "hasAppCapability"
+  >,
   unitPath: string,
   remote: WorkspaceGitRemoteConfig,
   nextConfig: WorkspaceConfig
 ): Promise<void> {
-  if (!deps.workspacePath) throw new Error("No workspace path configured");
-  if (!(await workspaceConfigWouldChange(deps.workspacePath, nextConfig))) return;
+  if (!(await configWouldChange(deps, nextConfig))) return;
   if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
   if (
     ctx.caller.runtime.kind !== "panel" &&
@@ -419,32 +435,41 @@ async function ensureSharedRemotePermission(
   }
 }
 
-async function workspaceConfigWouldChange(
-  workspacePath: string,
-  nextConfig: WorkspaceConfig
+async function persistWorkspaceConfigChange(
+  ctx: ServiceContext,
+  deps: Pick<
+    GitInteropServiceDeps,
+    "workspaceConfig" | "workspaceConfigWouldChange" | "persistWorkspaceConfig"
+  >,
+  input: {
+    nextConfig: WorkspaceConfig;
+    summary: string;
+    operation: "push" | "import";
+  }
 ): Promise<boolean> {
-  const metaDir = join(workspacePath, "meta");
-  const configPath = join(metaDir, "vibestudio.yml");
-  const before = await readFile(configPath, "utf-8");
-  const beforeParsed = YAML.parse(before) as Record<string, unknown>;
-  const nextContent = YAML.stringify({ ...beforeParsed, ...nextConfig });
-  return before !== nextContent;
+  if (!deps.workspaceConfig) throw new Error("Workspace config is unavailable");
+  if (!(await configWouldChange(deps, input.nextConfig))) return false;
+  if (!deps.persistWorkspaceConfig) {
+    throw new Error("Workspace config persistence is unavailable");
+  }
+  const changed = await deps.persistWorkspaceConfig({
+    ctx,
+    nextConfig: input.nextConfig,
+    summary: input.summary,
+    operation: input.operation,
+  });
+  if (!changed) return false;
+  mutateWorkspaceConfig(deps.workspaceConfig, input.nextConfig);
+  return true;
 }
 
-async function persistWorkspaceConfigChange(
-  workspacePath: string,
-  currentConfig: WorkspaceConfig,
+async function configWouldChange(
+  deps: Pick<GitInteropServiceDeps, "workspaceConfig" | "workspaceConfigWouldChange">,
   nextConfig: WorkspaceConfig
 ): Promise<boolean> {
-  const metaDir = join(workspacePath, "meta");
-  const configPath = join(metaDir, "vibestudio.yml");
-  const before = await readFile(configPath, "utf-8");
-  const beforeParsed = YAML.parse(before) as Record<string, unknown>;
-  const nextContent = YAML.stringify({ ...beforeParsed, ...nextConfig });
-  if (before === nextContent) return false;
-  await writeFile(configPath, nextContent, "utf-8");
-  mutateWorkspaceConfig(currentConfig, nextConfig);
-  return true;
+  if (deps.workspaceConfigWouldChange) return await deps.workspaceConfigWouldChange(nextConfig);
+  if (!deps.workspaceConfig) return true;
+  return JSON.stringify(deps.workspaceConfig) !== JSON.stringify(nextConfig);
 }
 
 async function notifyWorkspaceSourceChanged(
@@ -540,6 +565,17 @@ function displayRemoteUrl(value: string): string {
 function workspaceConfigImportSummary(unitPath: string, remote: WorkspaceGitRemoteConfig): string {
   const branch = remote.branch ? ` on ${remote.branch}` : "";
   return `meta/vibestudio.yml records ${remote.name}=${displayRemoteUrl(remote.url)} for ${unitPath}${branch}`;
+}
+
+function workspaceConfigRemoteSummary(
+  unitPath: string,
+  remote: WorkspaceGitRemoteConfig,
+  operation: "set" | "remove"
+): string {
+  if (operation === "remove") {
+    return `meta/vibestudio.yml removes ${remote.name} for ${unitPath}`;
+  }
+  return workspaceConfigImportSummary(unitPath, remote);
 }
 
 function resolveWorkspaceRepoPath(

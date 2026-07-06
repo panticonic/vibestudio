@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from "react";
-import { Box, Flex } from "@radix-ui/themes";
+import { Box, Flex, Spinner, Text } from "@radix-ui/themes";
+import { prettifyToolName } from "@workspace/pubsub";
 import type { CustomMessageCardPayload, InvocationCardPayload } from "@workspace/agentic-core";
 import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { ThinkingPill, ExpandedThinking } from "./ThinkingMessage";
@@ -12,6 +13,7 @@ const PREVIEW_MAX_LENGTH = 50;
 
 export type InlineItem =
   | { type: "thinking"; id: string; content: string; complete: boolean }
+  | { type: "toolcall-progress"; id: string; content: string }
   | { type: "invocation"; id: string; invocation: InvocationCardPayload; complete: boolean; senderId: string }
   | { type: "custom"; id: string; payload: CustomMessageCardPayload }
   | { type: "typing"; id: string; data: TypingIndicatorData; senderId: string };
@@ -41,9 +43,31 @@ function canCancelInvocation(invocation: InvocationCardPayload): boolean {
   return invocation.transportCallId !== undefined || invocation.name === "eval";
 }
 
-/** Typing items are ephemeral and never expand. */
+/** Typing and tool-call-progress items are ephemeral and never expand. */
 function isExpandable(item: InlineItem): boolean {
-  return item.type !== "typing";
+  return item.type !== "typing" && item.type !== "toolcall-progress";
+}
+
+/** Payload of a `toolcall-progress` item's content (see model-call executor). */
+function parseToolCallProgress(content: string): {
+  toolName: string | null;
+  argBytes: number;
+  phase: "streaming" | "prepared";
+} {
+  try {
+    const parsed = JSON.parse(content) as {
+      toolName?: unknown;
+      argBytes?: unknown;
+      phase?: unknown;
+    };
+    return {
+      toolName: typeof parsed.toolName === "string" ? parsed.toolName : null,
+      argBytes: typeof parsed.argBytes === "number" ? parsed.argBytes : 0,
+      phase: parsed.phase === "prepared" ? "prepared" : "streaming",
+    };
+  } catch {
+    return { toolName: null, argBytes: 0, phase: "streaming" };
+  }
 }
 
 /**
@@ -154,6 +178,33 @@ export const InlineGroup = React.memo(function InlineGroup({
             onInterrupt={onInterrupt ? () => onInterrupt(item.senderId) : undefined}
           />
         );
+      case "toolcall-progress": {
+        const progress = parseToolCallProgress(item.content);
+        const label = progress.toolName ? prettifyToolName(progress.toolName) : "tool call";
+        const kb = `${(progress.argBytes / 1024).toFixed(1)} KB`;
+        return (
+          <Flex
+            key={item.id}
+            className="inline-status-pill"
+            align="center"
+            gap="1"
+            data-testid="toolcall-progress-pill"
+            style={{
+              padding: "2px 6px",
+              borderRadius: "4px",
+              backgroundColor: "var(--gray-a3)",
+              display: "inline-flex",
+            }}
+          >
+            {progress.phase === "streaming" ? <Spinner size="1" /> : null}
+            <Text className="inline-pill-summary" size="1" color="gray" weight="medium">
+              {progress.phase === "prepared"
+                ? `${label} · ${kb}`
+                : `${label} · writing ${kb}…`}
+            </Text>
+          </Flex>
+        );
+      }
     }
   };
 
@@ -190,6 +241,7 @@ export const InlineGroup = React.memo(function InlineGroup({
           />
         );
       case "typing":
+      case "toolcall-progress":
         return null;
     }
   };

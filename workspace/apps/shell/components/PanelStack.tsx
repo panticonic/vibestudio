@@ -180,25 +180,19 @@ export function PanelStack({
     if (visiblePanelId || rootPanels.length === 0) {
       return;
     }
-    let cancelled = false;
+    const fallbackPanelId = assertPresent(rootPanels[0]).id;
+    setVisiblePanelId((currentId) => currentId ?? fallbackPanelId);
     void panelService
       .getFocusedPanelId()
       .then((focusedPanelId) => {
-        if (cancelled) return;
         const restoredPanelId =
           focusedPanelId && panelTreeContainsId(rootPanels, focusedPanelId) ? focusedPanelId : null;
-        setVisiblePanelId(
-          (currentId) => currentId ?? restoredPanelId ?? assertPresent(rootPanels[0]).id
+        if (!restoredPanelId) return;
+        setVisiblePanelId((currentId) =>
+          currentId === fallbackPanelId ? restoredPanelId : currentId
         );
       })
-      .catch(() => {
-        if (!cancelled) {
-          setVisiblePanelId((currentId) => currentId ?? assertPresent(rootPanels[0]).id);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
+      .catch(() => {});
   }, [rootPanels, visiblePanelId]);
 
   // Handle panel deletion - fall back to first root if current panel is gone

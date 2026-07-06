@@ -116,6 +116,51 @@ Prefer these structured commands over encoding app ids in action strings.
 Desktop shell also exposes a durable App updates section in connection settings
 for pending updates, retained rollback versions, and recent app update errors.
 
+## App Data And Worker Services
+
+Apps are trusted client runtimes, not database hosts. When an app needs durable
+workspace data, build a worker Durable Object service and let that DO own SQLite
+through `this.sql`. The app resolves the service through the runtime and calls
+narrow RPC methods:
+
+```ts
+import { rpc, workers } from "@workspace/runtime";
+
+const store = await workers.resolveService("example.todos.v1", "project-123");
+if (store.kind !== "durable-object") throw new Error("Expected DO service");
+
+await rpc.call(store.targetId, "upsertTodo", [{ title: "Review mobile pairing" }]);
+const todos = await rpc.call(store.targetId, "listTodos", []);
+```
+
+The service declaration in `meta/vibestudio.yml` must admit app callers:
+
+```yaml
+services:
+  - source: workers/todo-store
+    name: todo-store
+    protocols: [example.todos.v1]
+    policy:
+      allowed: [app, panel, do, worker]
+    durableObject:
+      className: TodoStore
+```
+
+The DO methods must also admit app callers:
+
+```ts
+@rpc({ callers: ["app", "panel", "do", "worker"] })
+listTodos() { ... }
+```
+
+Use a singleton object for one workspace-wide database, or pass an explicit
+`objectKey` to `workers.resolveService(protocol, objectKey)` for per-project,
+per-account, or per-document databases. Do not expose raw SQL to app renderers;
+expose app-shaped methods and validate inputs in the DO.
+
+For the full pattern, including schema migrations and tests, read
+[`../workspace-dev/WORKERS.md`](../workspace-dev/WORKERS.md#durable-object-backed-app-databases).
+
 ## Source And Imports
 
 Use workspace dependencies for shared code:

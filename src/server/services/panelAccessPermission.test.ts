@@ -352,6 +352,35 @@ describe("panelAccessPermission", () => {
     );
   });
 
+  it("allows panel-hosting app callers without a context-boundary prompt", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+    const resolveSubjectCaller = vi.fn();
+    const deps = accessDeps({
+      approvalQueue,
+      resolveSubjectCaller,
+      hasAppCapability: vi.fn(
+        (callerId, capability) =>
+          callerId === "@workspace-apps/shell" && capability === "panel-hosting"
+      ),
+    });
+    const appCaller = createVerifiedCaller("@workspace-apps/shell", "app", {
+      callerId: "@workspace-apps/shell",
+      callerKind: "app",
+      repoPath: "apps/shell",
+      effectiveVersion: "version-1",
+    });
+
+    const result = await requirePanelAccessPermission(deps, { caller: appCaller }, "close", {
+      id: "target",
+      runtimeEntityId: "panel:target",
+      contextId: "ctx-target",
+    });
+
+    expect(result).toEqual({ allowed: true });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(resolveSubjectCaller).not.toHaveBeenCalled();
+  });
+
   it("does not add a timeout signal to context-boundary prompts", async () => {
     const approvalQueue = approvalQueueMock("session");
     const deps = accessDeps({

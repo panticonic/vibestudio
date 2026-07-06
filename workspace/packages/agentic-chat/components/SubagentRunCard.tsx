@@ -14,6 +14,8 @@ import type {
   ToolExecutionState,
 } from "@workspace/agentic-core";
 import { useOptionalChatContext } from "../context/ChatContext";
+import { MarkdownPreview } from "./MarkdownPreview";
+import { MessageContent } from "./MessageContent";
 
 /**
  * SubagentRunCard — a standalone, richer render for an invocation that spawned a
@@ -64,6 +66,39 @@ const MERGE_LABEL: Record<
 
 type ProgressTone = "blue" | "green" | "red" | "amber" | "gray";
 
+function markdownPlainText(value: string): string {
+  return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*[-*+][ \t]+/gm, "")
+    .replace(/^[ \t]*\d+\.[ \t]+/gm, "")
+    .replace(/^[ \t]*>[ \t]?/gm, "")
+    .replace(/[*_~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shorten(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function agentMessageTitle(text: string | undefined): string {
+  if (!text) return "Message";
+  const trimmed = text.trim();
+  const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? trimmed;
+  const heading = firstLine.match(/^[ \t]{0,3}#{1,6}[ \t]+(.+)$/)?.[1];
+  const bold =
+    firstLine.match(/^\*\*([^*\n]+)\*\*/)?.[1] ??
+    firstLine.match(/^__([^_\n]+)__/)?.[1];
+  const source = heading ?? bold ?? firstLine;
+  const plain = markdownPlainText(source) || markdownPlainText(trimmed);
+  return plain ? shorten(plain, 72) : "Message";
+}
+
 const PROGRESS_PRESENTATION: Record<
   SubagentProgressEntry["kind"],
   { title: (entry: SubagentProgressEntry) => string; tone: ProgressTone }
@@ -76,15 +111,17 @@ const PROGRESS_PRESENTATION: Record<
   "tool-failed": { title: (e) => `${e.tool ?? "Tool"} failed`, tone: "red" },
   "tool-cancelled": { title: (e) => `${e.tool ?? "Tool"} cancelled`, tone: "amber" },
   "tool-abandoned": { title: (e) => `${e.tool ?? "Tool"} abandoned`, tone: "amber" },
-  said: { title: () => "Said", tone: "blue" },
+  said: { title: (e) => agentMessageTitle(e.text), tone: "blue" },
 };
 
 function progressTitle(entry: SubagentProgressEntry): string {
   return PROGRESS_PRESENTATION[entry.kind].title(entry);
 }
 
-function progressPreview(entry: SubagentProgressEntry): string {
-  return entry.text ? `${progressTitle(entry)}: ${entry.text}` : progressTitle(entry);
+function progressPreview(entry: SubagentProgressEntry): { prefix?: string; content: string } {
+  if (!entry.text) return { content: progressTitle(entry) };
+  if (entry.kind === "said") return { content: entry.text };
+  return { prefix: `${progressTitle(entry)}:`, content: entry.text };
 }
 
 /** Compact relative time: "now", "42s", "5m", "3h", "2d". */
@@ -165,44 +202,16 @@ function TimelineItem({
   live: boolean;
   now: number;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(entry.kind === "said");
   const expandable = Boolean(entry.text);
   const tone = PROGRESS_PRESENTATION[entry.kind].tone;
   const time = formatRelativeTime(entry.at, now);
-  const content = (
-    <>
-      <span
-        className={`subagent-timeline-node${live && isLast ? " subagent-timeline-node-live" : ""}`}
-        aria-hidden="true"
-      />
-      <div className="subagent-timeline-content">
-        <Flex align="center" gap="1" className="subagent-timeline-title-row">
-          <Text size="1" weight="medium" className="subagent-timeline-title">
-            {progressTitle(entry)}
-          </Text>
-          {entry.say && (
-            <Badge size="1" variant="soft" color="blue" className="subagent-say-badge">
-              say
-            </Badge>
-          )}
-          {expandable && <ChevronDownIcon className="subagent-timeline-chevron" aria-hidden="true" />}
-          {time && (
-            <Text size="1" className="subagent-timeline-time" title={entry.at}>
-              {time}
-            </Text>
-          )}
-        </Flex>
-        {entry.text && (
-          <Text
-            size="1"
-            className={`subagent-timeline-body${open ? "" : " subagent-timeline-body-clamped"}`}
-          >
-            {entry.text}
-          </Text>
-        )}
-      </div>
-    </>
-  );
+  const toggleOpen = () => {
+    if (expandable) setOpen((o) => !o);
+  };
+  const openFromBody = () => {
+    if (!open) setOpen(true);
+  };
   const className = [
     "subagent-timeline-item",
     `subagent-tone-${tone}`,
@@ -211,18 +220,48 @@ function TimelineItem({
   ]
     .filter(Boolean)
     .join(" ");
-  if (!expandable) {
-    return <div className={className}>{content}</div>;
-  }
+
   return (
-    <button
-      type="button"
-      className={`${className} subagent-timeline-item-expandable`}
-      aria-expanded={open}
-      onClick={() => setOpen((o) => !o)}
-    >
-      {content}
-    </button>
+    <div className={className}>
+      <span
+        className={`subagent-timeline-node${live && isLast ? " subagent-timeline-node-live" : ""}`}
+        aria-hidden="true"
+      />
+      <div className="subagent-timeline-content">
+        <div className="subagent-timeline-title-row">
+          {expandable ? (
+            <button
+              type="button"
+              className="subagent-timeline-title-button"
+              aria-expanded={open}
+              onClick={toggleOpen}
+            >
+              <Text as="span" size="1" weight="medium" className="subagent-timeline-title">
+                {progressTitle(entry)}
+              </Text>
+              <ChevronDownIcon className="subagent-timeline-chevron" aria-hidden="true" />
+            </button>
+          ) : (
+            <Text as="span" size="1" weight="medium" className="subagent-timeline-title">
+              {progressTitle(entry)}
+            </Text>
+          )}
+          {time && (
+            <Text size="1" className="subagent-timeline-time" title={entry.at}>
+              {time}
+            </Text>
+          )}
+        </div>
+        {entry.text && (
+          <div
+            className={`subagent-timeline-body${open ? "" : " subagent-timeline-body-clamped"}`}
+            onClick={open ? undefined : openFromBody}
+          >
+            <MessageContent content={entry.text} isStreaming={false} />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -246,16 +285,20 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const canOpen = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
   const canReview = Boolean(forkState && subagent.contextId);
   const latestEntry = progressFeed.length > 0 ? progressFeed[progressFeed.length - 1] : null;
-  const latestUpdate = latestEntry
+  const latestPreview = latestEntry
     ? progressPreview(latestEntry)
-    : invocation.execution.description.trim() ||
-      (isLive ? "Waiting for the child agent to start" : "No child updates yet");
+    : {
+        content:
+          invocation.execution.description.trim() ||
+          (isLive ? "Waiting for the child agent to start" : "No child updates yet"),
+      };
   const latestTime = latestEntry ? formatRelativeTime(latestEntry.at, now) : null;
   const detailsLabel = detailsOpen ? "Collapse run details" : "Expand run details";
   const detailRows = [
     ["Run", subagent.runId],
     ["Task", subagent.taskChannelId],
     ["Context", subagent.contextId],
+    ["Parent", subagent.parentContextId ?? undefined],
     ["Child", subagent.childEntityId],
   ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
 
@@ -357,25 +400,33 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
               </IconButton>
             </Flex>
           </Flex>
-          {!detailsOpen && latestUpdate && (
-            <Flex align="center" gap="2" className="subagent-update-preview">
-              <Text size="1" truncate className="subagent-activity-text">
-                {latestUpdate}
-              </Text>
+          {!detailsOpen && latestPreview.content && (
+            <button
+              type="button"
+              className="subagent-update-preview"
+              aria-label="Expand run details from latest update"
+              onClick={() => setDetailsOpen(true)}
+            >
+              <span className="subagent-activity-text">
+                {latestPreview.prefix && (
+                  <span className="subagent-activity-prefix">{latestPreview.prefix}</span>
+                )}
+                <MarkdownPreview content={latestPreview.content} />
+              </span>
               {latestTime && (
                 <Text size="1" className="subagent-timeline-time" title={latestEntry?.at}>
                   {latestTime}
                 </Text>
               )}
-            </Flex>
+            </button>
           )}
         </div>
         {detailsOpen && (
           <Box className="subagent-details">
             {invocation.execution.description && (
-              <Text size="1" className="subagent-description">
-                {invocation.execution.description}
-              </Text>
+              <div className="subagent-description">
+                <MessageContent content={invocation.execution.description} isStreaming={false} />
+              </div>
             )}
             {progressFeed.length > 0 ? (
               <div className="subagent-timeline">

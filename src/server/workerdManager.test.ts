@@ -869,6 +869,60 @@ describe("WorkerdManager", () => {
       });
     });
 
+    it("reconciles route table changes from meta-only manifest reloads", () => {
+      const routeRegistry = new RouteRegistry();
+      const singletonRegistry = new SingletonRegistry([
+        { source: "workers/agent", className: "AgentDO", key: "agent" },
+      ]);
+      let routes = [
+        {
+          source: "workers/agent",
+          path: "/agent",
+          methods: ["POST" as const],
+          durableObject: { className: "AgentDO" },
+        },
+      ];
+      const deps = createMockDeps({
+        routeRegistry,
+        singletonRegistry,
+        getManifestRoutes: (source) => (source === "workers/agent" ? routes : []),
+        getManifestDoClasses: (source) =>
+          source === "workers/agent" ? [{ className: "AgentDO" }] : [],
+      });
+      const mgr = new WorkerdManager(deps);
+
+      mgr.reconcileManifestRoutes(["workers/agent"]);
+
+      expect(vi.mocked(deps.bindRuntimeImage)).not.toHaveBeenCalled();
+      expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toMatchObject({
+        kind: "worker-do",
+        source: "workers/agent",
+        className: "AgentDO",
+        objectKey: "agent",
+      });
+
+      routes = [
+        {
+          source: "workers/agent",
+          path: "/poems",
+          methods: ["POST" as const],
+          durableObject: { className: "AgentDO" },
+        },
+      ];
+      mgr.reconcileManifestRoutes(["workers/agent"]);
+
+      expect(routeRegistry.lookup("/_r/w/workers/agent/agent", "POST", false)).toBeNull();
+      expect(routeRegistry.lookup("/_r/w/workers/agent/poems", "POST", false)).toMatchObject({
+        kind: "worker-do",
+        objectKey: "agent",
+      });
+
+      routes = [];
+      mgr.reconcileManifestRoutes([]);
+
+      expect(routeRegistry.lookup("/_r/w/workers/agent/poems", "POST", false)).toBeNull();
+    });
+
     it("does NOT probe-and-restart a live workerd on ensureDO (A1: no false-positive restarts)", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);

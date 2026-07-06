@@ -8,7 +8,7 @@ Vibestudio is a desktop application (Electron) that gives you a personal, AI-pow
 
 Panels are the building blocks of your workspace. Each panel is a self-contained TypeScript/React app that gets bundled by esbuild and served in its own webview. Panels can:
 
-- Access a sandboxed filesystem, SQLite databases, and AI models
+- Access a sandboxed filesystem, AI models, and DO-backed app databases
 - Open browser panels to view and automate websites
 - Communicate with other panels via RPC
 - Launch child panels
@@ -56,11 +56,18 @@ The chat panel hosts an AI agent that can:
 - **Tune its own model defaults** — the host chat agent's provider, effort, approval, and chattiness are configurable
 - **Import browser data** — cookies, passwords, bookmarks, history
 - **Automate browsers** via Playwright-style CDP automation (`handle.cdp.lightweightPage()`)
-- **Query databases**, call AI models, manage workers
+- **Use private eval SQLite for scratch work**, call DO-backed app databases,
+  call AI models, manage workers
 
 ### Workers (Workerd)
 
 Workers are Cloudflare V8 isolates (via workerd) that run server-side logic. They support **Durable Objects** for persistent, stateful services. The agent system itself runs on workers with DOs for conversation channels and agent state.
+
+Durable Objects are the normal application database primitive: each DO instance
+owns SQLite through `this.sql`, and panels/apps/agents call its declared service
+methods through `workers.resolveService(...)` and `rpc.call(...)`. The eval
+`db` is private scratch storage for the agent's EvalDO, not a shared app
+database.
 
 ### Runtime APIs
 
@@ -69,9 +76,8 @@ All panels and sandbox code can import from `@workspace/runtime`:
 | API         | What it provides                                     |
 | ----------- | ---------------------------------------------------- |
 | `fs`        | Filesystem scoped to the context folder              |
-| `db`        | SQLite databases scoped to the workspace             |
 | `ai`        | Text generation and streaming (multiple model roles) |
-| `workers`   | Create and manage workerd instances                  |
+| `workers`   | Resolve worker/DO services, including app databases  |
 | `workspace` | List, create, configure, switch workspaces           |
 | `rpc`       | Call services on the main process or other panels    |
 

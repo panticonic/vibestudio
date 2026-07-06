@@ -147,9 +147,9 @@ export const app = {
 // Panel Service
 // =============================================================================
 export const panel = {
-  getTree: async () => (await panelTreeClient.getTreeSnapshot()).rootPanels,
-  getTreeSnapshot: () => panelTreeClient.getTreeSnapshot(),
-  getFocusedPanelId: () => panelTreeClient.getFocusedPanelId(),
+  getTree: async () => (await panelClient.getTreeSnapshot()).rootPanels,
+  getTreeSnapshot: () => panelClient.getTreeSnapshot(),
+  getFocusedPanelId: () => panelClient.getFocusedPanelId(),
   ensureLoaded: (panelId: string) => panelClient.ensureLoaded(panelId),
   updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
   updateThemeConfig: (config: ThemeConfig) => panelClient.updateThemeConfig(config),

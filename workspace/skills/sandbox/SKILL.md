@@ -1,6 +1,6 @@
 ---
 name: sandbox
-description: Execute code in the sandbox — the server-side eval tool, inline UI components, feedback forms, browser automation, and all runtime APIs (fs, db, git, workers, ai).
+description: Execute code in the sandbox — the server-side eval tool, eval-private db, inline UI components, feedback forms, browser automation, and runtime APIs such as fs, git, workers, credentials, and GAD.
 ---
 
 # Sandbox Execution Skill
@@ -21,11 +21,16 @@ panel.
 | [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md)           | Custom message types — register a renderer, publish typed instances with reducer updates                    |
 | [MDX.md](MDX.md)                                   | Normal rich chat messages — callouts, badges, tables, ActionButton                                          |
 | [FEEDBACK.md](FEEDBACK.md)                         | Feedback forms — block until user responds                                                                  |
-| [RUNTIME_API.md](RUNTIME_API.md)                   | Full runtime API reference — fs, db, workers, ai, git, browser data, custom shared-resource approval grants |
+| [RUNTIME_API.md](RUNTIME_API.md)                   | Full runtime API reference — fs, eval `db`, worker/DO app databases, workers, ai, git, browser data, custom shared-resource approval grants |
 | [CHAT_API.md](CHAT_API.md)                         | Chat API — publish messages, call methods, interact with the conversation                                   |
 | [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — Playwright-style page API via the lightweight CDP client                               |
 | [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                 |
 | [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                       |
+
+For workspace server host logs, use the separate
+[server-logs](../server-logs/SKILL.md) skill. It covers the read-only
+`serverLog` service, bounded queries, and live following through
+`server-log:append` or the `about/server-logs` viewer.
 
 ## Execution Modes
 
@@ -44,6 +49,18 @@ possible. The execution modes differ in presentation:
 | `inline_ui`       | panel                      | component (render React)           | persistent (in chat history)      | none (fire-and-forget)               |
 | `load_action_bar` | panel                      | component from file (render React) | persistent (top of current panel) | immediate tool result                |
 | `feedback_custom` | panel                      | component (render React)           | transient                         | deferred (blocks until user submits) |
+
+Perspective matters. In agent eval, `panelTree.self()` is the EvalDO runtime,
+not the visible chat panel. Use `parent`/`getParent()` and
+`panelTree.list()/roots()/children()` when the user refers to a visible parent,
+sibling, or child panel, then read that panel's `stateArgs` to find its
+`channelName`/`channelId` before running GAD or channel diagnostics.
+
+Storage matters too. The eval `db` is private to the agent's EvalDO. For
+application data that panels, apps, workers, or other agents must share, build a
+worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a
+manifest service, and call it through `workers.resolveService(...)` + `rpc.call(...)`.
+See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#durable-object-backed-app-databases).
 
 ## Injected Variables
 
@@ -99,7 +116,7 @@ component code:
 
 | Module                       | What it provides                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `@workspace/runtime`         | rpc, fs, git, db, workers, ai, workspace, contextId, panel navigation, `approvals.request` for custom shared resources |
+| `@workspace/runtime`         | rpc, fs, git, workers, workspace, contextId, panel navigation, credentials, GAD, `approvals.request` for custom shared resources |
 | `@workspace/panel-browser`   | Browser data import/export (cookies, passwords, bookmarks, history)                                             |
 | `react`, `react/jsx-runtime` | React hooks and component APIs                                                                                  |
 | `@radix-ui/themes`           | UI components (Button, Flex, Card, Table, etc.)                                                                 |
@@ -187,6 +204,7 @@ or `feedback_custom` rather than hand-written raw channel records.
 5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**
 6. **Workspace code builds from your working edits, in lockstep, even before you commit** — source under `packages/`, `panels/`, `workers/`, `skills/`, `apps/`, and `extensions/` is built from your context head's working state. The model is **edit → commit → push**: the `edit`/`write` tools and `vcs.edit({ edits })` record each change as a tracked *working* edit on your context head and project it to disk, so it takes effect for builds immediately. `vcs.commit({ message })` then seals those working edits as a messaged milestone (the message is mandatory; the edit itself is NOT a commit), and `vcs.push` advances `main` (fast-forward-only, build-gated). Do NOT edit source via `fs.writeFile` and expect it to build; the worktree is a projection and builds read GAD state, so edits must go through `edit`/`write`/`vcs.edit`.
 7. **Close temporary panels you open** — when eval opens a browser/workspace panel for diagnostics, scraping, setup, or testing, keep its handle and call `await handle.close()` in `finally` when done. Reuse an existing handle instead of opening duplicates. Leave a panel open only when the user explicitly asked to inspect or continue using it, or the workflow explicitly needs it to remain open.
+8. **Use DO workers for shared app data** — eval `db` is private scratch storage for the current EvalDO. User-facing databases should be Durable Object services with narrow RPC methods, manifest `policy.allowed`, and method-level `@rpc({ callers })`.
 
 For optional workspace probes, prefer one of these patterns:
 

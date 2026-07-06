@@ -306,6 +306,14 @@ describe("RouteRegistry", () => {
   });
 
   describe("reconcileWorkerRoutes", () => {
+    it("lists sources with compiled worker routes", () => {
+      const reg = new RouteRegistry();
+      reg.registerWorkerRoutes("workers/b", "b", [makeDecl({ source: "workers/b", path: "/b" })]);
+      reg.registerWorkerRoutes("workers/a", "a", [makeDecl({ source: "workers/a", path: "/a" })]);
+
+      expect(reg.getWorkerRouteSources()).toEqual(["workers/a", "workers/b"]);
+    });
+
     it("drops routes no longer in the manifest", () => {
       const reg = new RouteRegistry();
       const singletons = makeSingletons([]);

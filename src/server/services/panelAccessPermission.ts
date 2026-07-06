@@ -5,6 +5,7 @@ import {
 } from "@vibestudio/shared/panelAccessPolicy";
 import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { callerHasAppCapability } from "./chromeTrust.js";
 import { requireContextBoundaryPermission, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {
@@ -123,6 +124,9 @@ export async function requirePanelAccessPermission(
   target: PanelAccessPermissionTarget
 ): Promise<PanelAccessPermissionResult> {
   if (isOpenPanelOperation(op)) return { allowed: true };
+  if (callerHasAppCapability(ctx.caller, "panel-hosting", deps)) {
+    return { allowed: true };
+  }
 
   // Resolve the subject. A direct userland caller carries `.code`; a host-
   // mediated call arrives as `server`/`shell` (no code identity) and runs under

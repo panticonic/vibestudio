@@ -68,7 +68,8 @@ Review posture:
 - Prefer fail-loud invariant checks over defensive projection code that hides
   corrupt logs.
 - Treat unexpectedly large inline payloads as storage-boundary bugs.
-- Treat empty roster, open turn, streaming message, or mismatched invocation
+- Treat empty roster, open turn, nonterminal message, or mismatched invocation
   reports as system state issues until the inspector APIs prove otherwise.
+  A projected `failed` assistant message is terminal, not streaming.
 - When a code fix appears ineffective, verify context git state and running
   build provenance before changing the fix.

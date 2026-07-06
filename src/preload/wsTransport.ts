@@ -35,13 +35,15 @@ export type TransportBridge = {
 
 export interface WsTransportConfig {
   viewId: string;
+  eventPanelId?: string;
   wsPort: number;
   authToken: string;
   callerKind: string;
   connectionId?: string;
   clientLabel?: string;
   clientSessionId?: string;
-  clientPlatform?: "desktop" | "mobile";
+  clientPlatform?: "desktop" | "headless" | "mobile";
+  reconnect?: boolean;
   /** Override WebSocket URL. Default: ws://127.0.0.1:{wsPort} */
   wsUrl?: string;
 }
@@ -118,7 +120,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
   ): boolean => {
     if (event !== "panel:event") return false;
     const record = payload as Record<string, unknown>;
-    if (record["panelId"] !== config.viewId) return true;
+    if (record["panelId"] !== (config.eventPanelId ?? config.viewId)) return true;
     if (record["type"] === "focus") {
       baseDeliver({ type: "event", fromId: "main", event: "runtime:focus", payload: null });
     } else if (record["type"] === "theme") {
@@ -174,6 +176,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     selfId: config.viewId,
     getWsUrl: () => config.wsUrl ?? `ws://127.0.0.1:${config.wsPort}`,
     connectionId: config.connectionId,
+    reconnect: config.reconnect,
     routeTarget: normalizeEndpointId,
     terminalCloseCodes: [...TERMINAL_CLOSE_CODES],
     translateEvent,

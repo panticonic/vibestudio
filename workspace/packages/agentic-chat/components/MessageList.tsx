@@ -25,10 +25,11 @@ type GroupedItem =
 
 // --- Grouping helper functions (module-level for reuse by fast paths) ---
 
-type InlineItemType = "thinking" | "invocation" | "typing" | "custom";
+type InlineItemType = "thinking" | "toolcall-progress" | "invocation" | "typing" | "custom";
 
 function getInlineItemType(msg: ChatMessage): InlineItemType | null {
   if (msg.contentType === "thinking") return "thinking";
+  if (msg.contentType === "toolcall-progress") return "toolcall-progress";
   // Subagent runs render as a standalone SubagentRunCard, NOT an inline pill —
   // exclude them here so grouping doesn't swallow them into a pill row.
   if (msg.contentType === "invocation" && msg.invocation?.subagent) return null;
@@ -109,6 +110,13 @@ function buildInlineItems(
         type: "custom" as const,
         id: msg.id,
         payload: msg.custom,
+      };
+    }
+    if (msg.contentType === "toolcall-progress") {
+      return {
+        type: "toolcall-progress" as const,
+        id: msg.id,
+        content: msg.content,
       };
     }
     return {

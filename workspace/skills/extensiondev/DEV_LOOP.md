@@ -90,6 +90,11 @@ The unified status surface (`workspace.units.list()`) is the right tool for "is 
 
 Extension records from `ctx.log`, extension process stdout/stderr, worker/DO `console.*`, and panel lifecycle diagnostics share the same persisted diagnostic history. The history is retained under the workspace state directory with separate bounds for general logs and errors, so noisy info logs do not evict the error trail.
 
+If the extension log only shows a symptom, inspect the workspace server host
+logs for manager/reconcile/build/routing failures: `services.serverLog.query(...)`
+from eval, or the `about/server-logs` live viewer. The full host-log follow
+pattern is in `../server-logs/SKILL.md`.
+
 ## Restart without a source change
 
 ```ts

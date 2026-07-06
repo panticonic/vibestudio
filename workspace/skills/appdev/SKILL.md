@@ -45,6 +45,11 @@ from panels, workers, and extensions:
    clean-install pairing must work before the workspace app bundle is available.
 7. Terminal apps run as supervised Node processes only after they are selected
    for launch or explicitly restarted through `workspace.units.restart(appName)`.
+8. Apps that need durable shared data should call a manifest-declared worker
+   Durable Object service. The app itself does not get a generic workspace SQL
+   database; use `workers.resolveService(...)` + `rpc.call(...)` against narrow
+   DO methods, and include `app` in both the service `policy.allowed` and the
+   DO method `@rpc({ callers })` where appropriate.
 
 ## Quick Start
 
@@ -89,6 +94,8 @@ before editing.
 ## Related Skills
 
 - Use `workspace-dev` for ordinary panels and workers.
+- Use `workspace-dev/WORKERS.md` for DO-backed app databases and worker service
+  declarations.
 - Use `extensiondev` for trusted Node service units.
 - Use `system-testing` after app changes that affect startup, pairing, shell
   UX, mobile bootstrap, or client auth.

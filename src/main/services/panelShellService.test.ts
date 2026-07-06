@@ -34,6 +34,9 @@ function createServiceHarness(appCapabilities: string[] = []) {
   const markBrowserNavigationIntent = vi.fn();
   const reload = vi.fn();
   const forceReload = vi.fn();
+  const treeSnapshot = { revision: 7, rootPanels: [] };
+  const getPanelTreeSnapshot = vi.fn(() => treeSnapshot);
+  const getFocusedPanelId = vi.fn(() => "panel-1");
   const getViewInfo = vi.fn(() => ({
     type: "app",
     visible: true,
@@ -65,6 +68,8 @@ function createServiceHarness(appCapabilities: string[] = []) {
         artifacts: {},
       })),
       getSerializablePanelTree: vi.fn(() => []),
+      getPanelTreeSnapshot,
+      getFocusedPanelId,
     } as never,
     panelView: {
       markBrowserNavigationIntent,
@@ -91,6 +96,9 @@ function createServiceHarness(appCapabilities: string[] = []) {
     markBrowserNavigationIntent,
     reload,
     forceReload,
+    treeSnapshot,
+    getPanelTreeSnapshot,
+    getFocusedPanelId,
     serverClient,
   };
 }
@@ -127,6 +135,20 @@ describe("PanelShellService", () => {
     expect(harness.takeOverPanel).toHaveBeenCalledWith("panel-1");
     expect(harness.reload).toHaveBeenCalledWith("panel-1");
     expect(harness.forceReload).toHaveBeenCalledWith("panel-1");
+    expect(harness.serverClient.call).not.toHaveBeenCalled();
+    expect(harness.serverClient.callAs).not.toHaveBeenCalled();
+  });
+
+  it("serves panel tree reads from the Electron host mirror", async () => {
+    const harness = createServiceHarness(["panel-hosting"]);
+
+    await expect(harness.service.handler(appCtx, "getTreeSnapshot", [])).resolves.toBe(
+      harness.treeSnapshot
+    );
+    await expect(harness.service.handler(appCtx, "getFocusedPanelId", [])).resolves.toBe("panel-1");
+
+    expect(harness.getPanelTreeSnapshot).toHaveBeenCalled();
+    expect(harness.getFocusedPanelId).toHaveBeenCalled();
     expect(harness.serverClient.call).not.toHaveBeenCalled();
     expect(harness.serverClient.callAs).not.toHaveBeenCalled();
   });

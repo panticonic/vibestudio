@@ -201,6 +201,10 @@ export class ChannelClient {
     async getConfig(): Promise<Record<string, unknown> | null> {
         return this.call("getConfig") as Promise<Record<string, unknown> | null>;
     }
+    /** Channel provenance used for fork/task lineage recovery. */
+    async getProvenance(): Promise<unknown> {
+        return this.call("getProvenance");
+    }
     /** Stamp task provenance on a subagent task channel so its `getProvenance`
      *  reports `kind:"task"` (B1). Called by the spawning vessel right after the
      *  task channel is created/subscribed. */

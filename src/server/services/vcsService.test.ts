@@ -245,6 +245,61 @@ describe("vcsService", () => {
       expect(statusHead).not.toHaveBeenCalled();
     });
 
+    it("allows an entity to inspect a child context through its recorded owner edge", async () => {
+      const contextStatus = vi.fn(async () => []);
+      const listOwnedContexts = vi.fn(async ({ contextId }: { contextId: string }) => ({
+        contexts:
+          contextId === "ctx-parent"
+            ? [
+                {
+                  contextId: "ctx-child",
+                  kind: "lifecycle" as const,
+                  ownerEntityId: "do:agent",
+                },
+              ]
+            : [],
+      }));
+      const service = createVcsService({
+        workspaceVcs: { contextStatus } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-current", "do"),
+        listOwnedContexts,
+      });
+
+      await service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "contextStatus", [
+        { contextId: "ctx-child", ownerContextId: "ctx-parent" },
+      ]);
+
+      expect(listOwnedContexts).toHaveBeenCalledWith({ contextId: "ctx-parent" });
+      expect(contextStatus).toHaveBeenCalledWith("ctx-child");
+    });
+
+    it("denies owner-context hints when the caller does not own the edge", async () => {
+      const contextStatus = vi.fn();
+      const service = createVcsService({
+        workspaceVcs: { contextStatus } as never,
+        entityCache: entityCacheWithContext("do:agent", "ctx-current", "do"),
+        listOwnedContexts: async ({ contextId }) => ({
+          contexts:
+            contextId === "ctx-parent"
+              ? [
+                  {
+                    contextId: "ctx-child",
+                    kind: "lifecycle" as const,
+                    ownerEntityId: "do:x",
+                  },
+                ]
+              : [],
+        }),
+      });
+
+      await expect(
+        service.handler({ caller: createVerifiedCaller("do:agent", "do") }, "contextStatus", [
+          { contextId: "ctx-child", ownerContextId: "ctx-parent" },
+        ])
+      ).rejects.toThrow("is not owned or forked");
+      expect(contextStatus).not.toHaveBeenCalled();
+    });
+
     it("rejects an invalid repo path arg to status", async () => {
       const statusHead = vi.fn();
       const service = createVcsService({

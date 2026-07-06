@@ -38,7 +38,7 @@ Useful APIs:
 - `gad.inspectChannelEnvelopes({ channelId, cursor, limit, payloadKind })` for normal debugging; it returns compact payload summaries, byte counts, and stored-ref digests.
 - `gad.listChannelEnvelopes({ channelId, cursor, limit, payloadKind })` only when code needs hydrated semantic envelopes. Do not use it for broad exploratory dumps inside an agent turn.
 - `gad.inspectPublicationIntegrity({ channelId, branchId })` to distinguish real missing trajectory publication joins from expected channel-origin envelopes.
-- `gad.inspectTurnState({ branchId, channelId })` to summarize open turns, streaming messages, pending invocations, and duplicate turn-open invariant failures.
+- `gad.inspectTurnState({ branchId, channelId })` to summarize open turns, nonterminal messages, pending invocations, and duplicate turn-open invariant failures. Failed messages are terminal, not streaming.
 - `gad.inspectInvocationState({ branchId, invocationId, transportCallId })` to join projected invocation status with started/terminal trajectory events.
 - `gad.inspectChannelRoster({ channelId })` to read projected presence/roster state without raw SQL.
 - `gad.inspectAgentHealth({ channelId, branchId })` for a one-call bounded channel health report.
@@ -69,6 +69,13 @@ Current implemented hardening:
 - Inspector APIs return summaries and byte counts so agents do not need to dump
   hydrated history into eval results.
 
+Perspective rule: in agent eval, `chat.channelId` is only the current response
+channel. For a parent/sibling/other panel, inspect the visible panel tree with
+`panelTree`, read the target panel's state args, extract `channelName`/`channelId`,
+and run GAD inspectors against that channel. If needed, resolve the channel DO
+with `workers.resolveService("vibestudio.channel.v1", channelId)` and call its
+read-only `inspectAgent` method for standard agent debug methods.
+
 For first-pass diagnostics from eval, prefer inspectors and let
 `inspectAgentHealth` derive the default channel branch:
 
@@ -79,6 +86,15 @@ const publication = await gad.inspectPublicationIntegrity({ channelId });
 const turn = await gad.inspectTurnState({ channelId });
 const invocation = await gad.inspectInvocationState({ branchId: health.branchId });
 const storage = await gad.inspectStorageDiagnostics({ channelId, limit: 25 });
+```
+
+For another visible panel's chat:
+
+```ts
+const target = (await panelTree.list()).find((panel) => panel.id === "panel-slot-id");
+const args = target ? await target.stateArgs.get<Record<string, unknown>>() : {};
+const channelId = String(args.channelName ?? args.channelId ?? "");
+const health = await gad.inspectAgentHealth({ channelId, limit: 50 });
 ```
 
 To enumerate logs and their current heads with SQL instead:

@@ -77,6 +77,52 @@ describe("classifyModelFailure", () => {
     });
   });
 
+  it("treats provider function-call-output shape errors as terminal invalid requests", () => {
+    const failure = classifyModelFailure({
+      provider: "openai-codex",
+      rawReason:
+        "No tool call found for function call output with call_id call_py0iLF677QYAz6AeBKguX7kc.",
+      now,
+    });
+
+    expect(failure).toMatchObject({
+      code: "request_invalid_terminal",
+      recoverable: false,
+      reason:
+        "No tool call found for function call output with call_id call_py0iLF677QYAz6AeBKguX7kc.",
+    });
+  });
+
+  it("treats local model transcript invariant errors as terminal invalid requests", () => {
+    const failure = classifyModelFailure({
+      provider: "openai-codex",
+      rawReason:
+        "model transcript invariant violated: orphaned tool result inspect_subagent call_missing",
+      now,
+    });
+
+    expect(failure).toMatchObject({
+      code: "request_invalid_terminal",
+      recoverable: false,
+      reason:
+        "model transcript invariant violated: orphaned tool result inspect_subagent call_missing",
+    });
+  });
+
+  it("treats open provider circuit breakers as terminal for the current turn", () => {
+    const failure = classifyModelFailure({
+      provider: "openai-codex",
+      rawReason: "Circuit breaker is open",
+      now,
+    });
+
+    expect(failure).toMatchObject({
+      code: "circuit_breaker_open_terminal",
+      recoverable: false,
+      reason: "Circuit breaker is open",
+    });
+  });
+
   it("treats ChatGPT token_expired detail bodies as auth failures", () => {
     const failure = classifyModelFailure({
       provider: "openai-codex",

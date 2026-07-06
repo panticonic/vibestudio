@@ -52,6 +52,18 @@ export class RuntimeImageUnavailableError extends Error {
   readonly code = "RUNTIME_IMAGE_UNAVAILABLE" as const;
 }
 
+/** Diagnostic env vars forwarded from the host process into every worker's
+ *  env bindings, so runtime-side tracing (e.g. the model-call stage trace)
+ *  can be enabled by launching the server with the flag set. */
+const FORWARDED_DIAGNOSTIC_ENV_VARS = ["VIBESTUDIO_MODEL_CALL_TRACE", "VIBESTUDIO_LOG_LEVEL"];
+
+function forwardDiagnosticEnv(env: Record<string, unknown>): void {
+  for (const key of FORWARDED_DIAGNOSTIC_ENV_VARS) {
+    const value = process.env[key];
+    if (value) env[key] = value;
+  }
+}
+
 function explicitScopeRef(explicitRef?: string): string | undefined {
   return explicitRef && explicitRef.length > 0
     ? assertPresent(validateBuildRef(explicitRef))
@@ -239,6 +251,8 @@ export interface WorkerdManagerDeps {
   routeRegistry?: RouteRegistry;
   /** Manifest-route lookup, keyed by source. Used alongside routeRegistry. */
   getManifestRoutes?: (source: string) => ReadonlyArray<ManifestRouteDecl>;
+  /** Durable Object classes declared by a worker package manifest, keyed by source. */
+  getManifestDoClasses?: (source: string) => ReadonlyArray<{ className: string }>;
   /** Singleton registry — joins routes' (source,className) to object keys. */
   singletonRegistry?: SingletonRegistry;
   getProxyPort: (caller: VerifiedCaller) => Promise<number | null> | number | null;
@@ -1071,6 +1085,7 @@ export class WorkerdManager {
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
     }
+    forwardDiagnosticEnv(env);
     if (instance.parentId) env["PARENT_ID"] = instance.parentId;
     if (instance.parentEntityId) env["PARENT_ENTITY_ID"] = instance.parentEntityId;
     if (instance.parentKind) env["PARENT_KIND"] = instance.parentKind;
@@ -1213,6 +1228,7 @@ export class WorkerdManager {
     if (process.env["VIBESTUDIO_TEST_MODE"]) {
       env["VIBESTUDIO_TEST_MODE"] = process.env["VIBESTUDIO_TEST_MODE"];
     }
+    forwardDiagnosticEnv(env);
     if (this.port) env["WORKERD_URL"] = `http://127.0.0.1:${this.port}`;
     const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
     if (gatewayAliases.length > 0) {
@@ -2359,6 +2375,45 @@ export default { fetch() { return new Response("universal-do host"); } };
     );
   }
 
+  reconcileManifestRoutes(sources: Iterable<string>): void {
+    const allSources = new Set(sources);
+    for (const source of this.deps.routeRegistry?.getWorkerRouteSources() ?? []) {
+      allSources.add(source);
+    }
+    for (const source of allSources) {
+      this.reconcileManifestRoutesForSource(source);
+    }
+  }
+
+  private reconcileManifestRoutesForSource(
+    source: string,
+    authoritativeDoClasses?: Array<{ className: string }>
+  ): void {
+    if (!this.deps.routeRegistry || !this.deps.getManifestRoutes || !this.deps.singletonRegistry)
+      return;
+
+    const liveDoClasses = new Set<string>();
+    for (const cls of authoritativeDoClasses ?? this.deps.getManifestDoClasses?.(source) ?? []) {
+      liveDoClasses.add(cls.className);
+    }
+    for (const svc of this.doServices.values()) {
+      if (svc.source === source) liveDoClasses.add(svc.className);
+    }
+
+    const canonical = canonicalInstanceNameForSource(source);
+    const hasCanonicalInstance =
+      this.instances.has(canonical) &&
+      assertPresent(this.instances.get(canonical)).source === source;
+
+    this.deps.routeRegistry.reconcileWorkerRoutes(
+      source,
+      Array.from(this.deps.getManifestRoutes(source)),
+      liveDoClasses,
+      hasCanonicalInstance ? canonical : null,
+      this.deps.singletonRegistry
+    );
+  }
+
   /**
    * Ensure a DO class is registered and workerd is running. Does NOT bootstrap any instance.
    * Use for infrastructure DOs that don't need DOIdentity.
@@ -2746,31 +2801,8 @@ export default { fetch() { return new Response("universal-do host"); } };
       }
     }
 
-    // Reconcile routes: manifest may have added, removed, or changed route
-    // entries for this source. The registry is rebuilt from scratch for this
-    // source using the current manifest + live DO classes + canonical instance.
-    if (this.deps.routeRegistry && this.deps.getManifestRoutes && this.deps.singletonRegistry) {
-      const newRoutes = this.deps.getManifestRoutes(source);
-      const liveDoClasses = new Set<string>();
-      for (const svc of this.doServices.values()) {
-        if (svc.source === source) liveDoClasses.add(svc.className);
-      }
-      if (doClasses && head === "main") {
-        for (const { className } of doClasses) {
-          liveDoClasses.add(className);
-        }
-      }
-      const canonical = canonicalInstanceNameForSource(source);
-      const hasCanonicalInstance =
-        this.instances.has(canonical) &&
-        assertPresent(this.instances.get(canonical)).source === source;
-      this.deps.routeRegistry.reconcileWorkerRoutes(
-        source,
-        Array.from(newRoutes),
-        liveDoClasses,
-        hasCanonicalInstance ? canonical : null,
-        this.deps.singletonRegistry
-      );
-    }
+    // Reconcile routes: worker source rebuilds and meta-only route edits share
+    // the same route-table convergence path.
+    this.reconcileManifestRoutesForSource(source, doClasses);
   }
 }

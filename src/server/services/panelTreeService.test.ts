@@ -51,6 +51,17 @@ function ctx() {
   };
 }
 
+function chromeAppCtx() {
+  return {
+    caller: createVerifiedCaller("@workspace-apps/shell", "app", {
+      callerId: "@workspace-apps/shell",
+      callerKind: "app",
+      repoPath: "apps/shell",
+      effectiveVersion: "v1",
+    }),
+  };
+}
+
 /**
  * Context-boundary deps for the panel-tree gate. Defaults model the requester in
  * `ctx-caller`; any target enriched with a foreign `contextId` (or a foreign
@@ -182,6 +193,36 @@ describe("panelTreeService", () => {
       callerId: "panel:requester",
       callerKind: "panel",
       method: "close",
+      args: ["target"],
+    });
+  });
+
+  it("does not prompt when authorized chrome closes a panel in another context", async () => {
+    const approvalQueue = approvalQueueMock("once");
+    const bridge = vi.fn(async (request: { method: string }) =>
+      request.method === "metadata"
+        ? {
+            id: "target",
+            title: "Target",
+            source: "panels/target",
+            runtimeEntityId: "panel:target",
+            contextId: "ctx-target",
+          }
+        : undefined
+    );
+    const hasAppCapability = vi.fn(
+      (_callerId: string, capability: string) => capability === "panel-hosting"
+    );
+    const service = createPanelTreeService(treeDeps({ approvalQueue, bridge, hasAppCapability }));
+
+    await expect(service.handler(chromeAppCtx(), "archive", ["target"])).resolves.toBeUndefined();
+
+    expect(hasAppCapability).toHaveBeenCalledWith("@workspace-apps/shell", "panel-hosting");
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenLastCalledWith({
+      callerId: "@workspace-apps/shell",
+      callerKind: "app",
+      method: "archive",
       args: ["target"],
     });
   });

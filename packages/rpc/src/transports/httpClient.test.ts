@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { envelopeFromMessage } from "../envelope.js";
+import { envelopeFromMessage, responseEnvelopeFor } from "../envelope.js";
 import { httpClientTransport } from "./httpClient.js";
 import type { RpcEnvelope } from "../types.js";
 
@@ -75,7 +75,63 @@ describe("httpClientTransport", () => {
     }
   });
 
-  it("respond() never reaps when respondTimeoutMs <= 0 (held exemption preserved)", async () => {
+  it("drops a late response after an explicit respond timeout instead of POSTing it to /rpc", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fetchMock = vi.fn(async () => new Response("{}")) as unknown as typeof fetch;
+      const transport = httpClientTransport({
+        selfId: "do:notes:Bucket:key",
+        serverUrl: "http://127.0.0.1:65530",
+        authToken: "token",
+        fetch: fetchMock,
+        respondTimeoutMs: 100,
+      });
+      const inbound = requestEnvelope();
+
+      const settled = transport.respond(inbound);
+      await vi.advanceTimersByTimeAsync(101);
+      await settled;
+
+      await transport.send(
+        responseEnvelopeFor(inbound, { callerId: "do:notes:Bucket:key", callerKind: "do" }, {
+          type: "response",
+          requestId: "req-1",
+          result: "late",
+        })
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("dropping unmatched response (requestId=req-1)")
+      );
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("respond() never reaps by default", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = httpClientTransport({
+        selfId: "do:approval:Waiter:key",
+        serverUrl: "http://127.0.0.1:65530",
+        authToken: "token",
+      });
+
+      let settled = false;
+      void transport.respond(requestEnvelope()).then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("respond() never reaps when respondTimeoutMs <= 0", async () => {
     vi.useFakeTimers();
     try {
       const transport = httpClientTransport({
@@ -89,7 +145,6 @@ describe("httpClientTransport", () => {
       void transport.respond(requestEnvelope()).then(() => {
         settled = true;
       });
-      // Far beyond any default deadline — the held handler must stay pending.
       await vi.advanceTimersByTimeAsync(10 * 60_000);
       expect(settled).toBe(false);
     } finally {

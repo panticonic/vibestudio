@@ -139,3 +139,8 @@ When testing pairing or remote-server state without a shell UI:
 5. Use `scripts/vibestudio-admin.mjs units restart <app>` for terminal apps.
 6. Use `scripts/vibestudio-admin.mjs units logs <app>` to inspect stdout/stderr
    and runner errors.
+7. From app, panel, worker, or eval contexts, use `serverLog.query/tail/stats`
+   (`services.serverLog.*` in eval, raw `rpc.call("main", "serverLog.*", ...)`
+   elsewhere) or the `about/server-logs` viewer for host server logs such as
+   pairing, reconnect, app reconcile, gateway, and shutdown events. See
+   `../server-logs/SKILL.md`.

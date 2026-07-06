@@ -813,9 +813,56 @@ export class AgentLoopDriver {
   }
 
   private async dispatchRow(row: OutboxRow): Promise<void> {
+    // Stall diagnostics for the pre-executor phases (fold load, descriptor
+    // hydration) — these ride host RPCs with no transport deadline, and a hang
+    // here never reaches the executor's own slow-call watchdog.
+    const dispatchProgress = { phase: "load-loop", startedAt: Date.now() };
+    const slowTimer = setInterval(() => {
+      console.warn("[agent-loop-driver] slow effect dispatch:", {
+        phase: dispatchProgress.phase,
+        totalMs: Date.now() - dispatchProgress.startedAt,
+        kind: row.kind,
+        effectId: row.effectId,
+        channelId: row.channelId,
+      });
+      // Keep a live model call's lease fresh: a single generation can
+      // legitimately outlast leaseMs(model_call), and letting the lease lapse
+      // restarts the whole generation from scratch (the redispatch treadmill —
+      // a >10-min response can then NEVER complete). Renewal is bound to this
+      // isolate's timer, so eviction still recovers via expiry exactly as
+      // designed. Other kinds keep expiry-driven semantics (channel_call
+      // redelivery) untouched.
+      if (row.kind === "model_call") {
+        this.outbox.lease(row.branchId, row.effectId, this.deps.now());
+      }
+    }, 30_000);
+    try {
+      await this.dispatchRowInner(row, dispatchProgress);
+    } finally {
+      clearInterval(slowTimer);
+    }
+  }
+
+  private async dispatchRowInner(
+    row: OutboxRow,
+    dispatchProgress: { phase: string; startedAt: number }
+  ): Promise<void> {
     const loop = await this.loopForBranch(row.branchId, row.channelId);
     if (!loop) return;
     this.outbox.lease(row.branchId, row.effectId, this.deps.now());
+    // Lease-expiry redispatch: a previous run of this row may still be wedged
+    // in this isolate. Abort it before superseding its registration — its
+    // signal-honoring awaits unwind, and its cleanup (guarded below) can no
+    // longer clobber the new run's abort registration.
+    const stale = this.aborts.get(this.rowKey(row));
+    if (stale) {
+      console.warn("[agent-loop-driver] superseding wedged effect dispatch:", {
+        kind: row.kind,
+        effectId: row.effectId,
+        channelId: row.channelId,
+      });
+      stale.controller.abort(new Error("effect lease expired; superseded by redispatch"));
+    }
     const controller = new AbortController();
     this.aborts.set(this.rowKey(row), {
       controller,
@@ -823,16 +870,25 @@ export class AgentLoopDriver {
       effectId: row.effectId,
       channelId: row.channelId,
     });
+    // Only this run's own registration may be removed — a superseded run
+    // finishing late must not delete the live run's abort handle.
+    const releaseAbort = () => {
+      if (this.aborts.get(this.rowKey(row))?.controller === controller) {
+        this.aborts.delete(this.rowKey(row));
+      }
+    };
     const executor = this.deps.executorOverride?.(row.descriptor) ?? executorFor(row.descriptor);
     // Storage boundary, read side: effects re-derived from a RELOADED fold
     // carry journaled blob refs for spilled fields (tool args, http request).
     // Executors get fully hydrated descriptors — the single hydration point.
+    dispatchProgress.phase = "hydrate-descriptor";
     const descriptor = this.dispatchDescriptor(
       row,
       (await hydrateStoredValueRefs(row.descriptor, {
         getText: (digest) => this.deps.executorDeps.blobstore.getText(digest),
       })) as EffectDescriptor
     );
+    dispatchProgress.phase = "execute";
     let outcome: EffectOutcome | { deferred: true };
     try {
       outcome = await executor.execute({
@@ -843,6 +899,10 @@ export class AgentLoopDriver {
         onEphemeral: (emit) => this.emitEphemeral(loop, emit),
       });
     } catch (err) {
+      // A superseded run must not touch the row: a lease-expiry redispatch owns
+      // it now, and a late aborted terminal racing the live run's appends is a
+      // second writer on the same log (GadAppendError[replay-mismatch] class).
+      if (this.aborts.get(this.rowKey(row))?.controller !== controller) return;
       // EXECUTION failed → retry/backoff path. (applyOutcome errors below are
       // driver-level crashes and must propagate so the reconcile heals them.)
       const message = err instanceof Error ? err.message : String(err);
@@ -861,7 +921,7 @@ export class AgentLoopDriver {
             retryAfterMs: failure.retryAfterMs,
             code: failure.code,
           });
-          this.aborts.delete(this.rowKey(row));
+          releaseAbort();
           return;
         }
         if (failure.code === "auth_or_credentials" && request?.provider) {
@@ -875,7 +935,7 @@ export class AgentLoopDriver {
               failureCode: failure.code,
             })
           );
-          this.aborts.delete(this.rowKey(row));
+          releaseAbort();
           return;
         }
         if (!failure.recoverable) {
@@ -887,7 +947,7 @@ export class AgentLoopDriver {
             recoverable: false,
             failure,
           });
-          this.aborts.delete(this.rowKey(row));
+          releaseAbort();
           return;
         }
       }
@@ -897,16 +957,20 @@ export class AgentLoopDriver {
       } else {
         this.scheduleEarliest();
       }
-      this.aborts.delete(this.rowKey(row));
+      releaseAbort();
       return;
     }
-    this.aborts.delete(this.rowKey(row));
+    // Superseded run (see catch above): the live redispatch owns the row —
+    // discard this outcome instead of racing its appends.
+    if (this.aborts.get(this.rowKey(row))?.controller !== controller) return;
+    releaseAbort();
     if ((outcome as { deferred?: boolean }).deferred) {
       // Result arrives out-of-band. Keep an earlier wake if the result raced
       // this deferred ack; otherwise redrive later as a backstop.
       this.deferRedrive(row, 60_000);
       return;
     }
+    dispatchProgress.phase = "apply-outcome";
     await this.applyOutcome(row, outcome as EffectOutcome);
   }
 

@@ -5,6 +5,7 @@ export type ModelFailureClass =
   | "provider_overloaded_retryable"
   | "auth_or_credentials"
   | "request_invalid_terminal"
+  | "circuit_breaker_open_terminal"
   | "context_overflow_terminal"
   | "unknown_retryable";
 
@@ -152,6 +153,10 @@ export function classifyModelFailure(
     return terminal("quota_exhausted_terminal", quotaMessage(readable));
   }
 
+  if (isCircuitBreakerOpen(readable)) {
+    return terminal("circuit_breaker_open_terminal", readable);
+  }
+
   if (isOverloadedError(codeKey, status, readable)) {
     return retryable(
       "provider_overloaded_retryable",
@@ -175,6 +180,10 @@ export function classifyModelFailure(
 
   if (isContextOverflow(codeKey, readable)) {
     return terminal("context_overflow_terminal", readable);
+  }
+
+  if (isProviderInputShapeError(readable)) {
+    return terminal("request_invalid_terminal", readable);
   }
 
   if (isInvalidRequestError(codeKey, status, readable)) {
@@ -373,6 +382,10 @@ function isOverloadedError(codeKey: string, status: number | undefined, message:
   );
 }
 
+function isCircuitBreakerOpen(message: string): boolean {
+  return /\bcircuit breaker(?: is)? open\b/i.test(message);
+}
+
 function isAuthOrCredentialError(
   codeKey: string,
   status: number | undefined,
@@ -394,6 +407,16 @@ function isInvalidRequestError(
   if (status === 400 || status === 404) return true;
   return /\b(?:invalid request|invalid argument|unsupported model|model not found)\b/i.test(
     message
+  );
+}
+
+function isProviderInputShapeError(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (lower.includes("model transcript invariant violated")) return true;
+  if (lower.includes("no tool call found for function call output")) return true;
+  return (
+    /\bfunction[_ -]?call[_ -]?output\b/i.test(message) &&
+    /\b(?:no matching|missing|not found|unknown)\b/i.test(message)
   );
 }
 

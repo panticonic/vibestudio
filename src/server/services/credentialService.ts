@@ -3788,11 +3788,23 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     effectiveVersion: string;
   } {
     const identity = ctx.caller.code;
+    const entity = identity ? null : resolveRuntimeEntityForApproval(ctx.caller.runtime.id);
     return {
-      callerId: identity?.callerId ?? ctx.caller.runtime.id,
-      repoPath: identity?.repoPath ?? ctx.caller.runtime.id,
-      effectiveVersion: identity?.effectiveVersion ?? "unknown",
+      callerId: identity?.callerId ?? entity?.id ?? ctx.caller.runtime.id,
+      repoPath: identity?.repoPath ?? entity?.source.repoPath ?? ctx.caller.runtime.id,
+      effectiveVersion: identity?.effectiveVersion ?? entity?.source.effectiveVersion ?? "unknown",
     };
+  }
+
+  function resolveRuntimeEntityForApproval(callerId: string): EntityRecord | null {
+    if (!runtimeInspector) return null;
+    try {
+      const active = runtimeInspector.listActiveEntities();
+      if (!Array.isArray(active)) return null;
+      return active.find((entity) => entity.id === callerId && entity.status === "active") ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async function requestCredentialApproval(

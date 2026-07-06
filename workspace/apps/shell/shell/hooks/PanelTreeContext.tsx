@@ -396,8 +396,6 @@ interface PanelTreeProviderProps {
 export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
   const [tree, setTree] = useState<Panel[]>([]);
   const [initialized, setInitialized] = useState(false);
-  // Track if we've received a real-time event (always newer than getTree result)
-  const receivedEventRef = useRef(false);
   const latestRevisionRef = useRef<number>(0);
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const pinMutationSeq = useAtomValue(pinMutationSeqAtom);
@@ -445,7 +443,6 @@ export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
         console.error("[PanelTreeContext] Invalid tree data received:", data);
         return;
       }
-      receivedEventRef.current = true;
       applyTreeSnapshot(snapshot);
     },
     [applyTreeSnapshot]
@@ -453,33 +450,6 @@ export function PanelTreeProvider({ children }: PanelTreeProviderProps) {
 
   // Subscribe to panel-tree-updated events
   useShellEvent("panel-tree-updated", handleTreeUpdate);
-
-  // Fetch initial tree on mount to handle race condition where
-  // the event may have been emitted before we subscribed.
-  // Only use getTree result if we haven't received an event yet,
-  // since events are always more recent.
-  useEffect(() => {
-    let mounted = true;
-
-    panelService
-      .getTreeSnapshot()
-      .then((initialTree) => {
-        if (mounted && !receivedEventRef.current) {
-          applyTreeSnapshot(initialTree);
-        }
-      })
-      .catch((error) => {
-        console.error("[PanelTreeProvider] Failed to fetch initial tree:", error);
-        // Still mark as initialized so we don't show infinite spinner
-        if (mounted && !receivedEventRef.current) {
-          setInitialized(true);
-        }
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   // Build panel maps for efficient lookups
   const { panelMap, parentMap } = useMemo(() => buildPanelMaps(tree), [tree]);

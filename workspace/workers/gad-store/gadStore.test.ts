@@ -362,6 +362,12 @@ describe("appendLogEvent core (§3.2)", () => {
       envelopeId: "evt-2",
     });
     expect(single).toMatchObject({ envelopeId: "evt-2", seq: 2 });
+    const present = await call<string[]>("hasLogEvents", {
+      logId: "traj-core",
+      head: "main",
+      envelopeIds: ["evt-2", "missing", "evt-1", "evt-2"],
+    });
+    expect(present.sort()).toEqual(["evt-1", "evt-2"]);
     const filtered = await call<any[]>("readLog", {
       logId: "traj-core",
       head: "main",
@@ -372,6 +378,103 @@ describe("appendLogEvent core (§3.2)", () => {
     // one integrity code path passes over both log kinds
     const integrity = await call<{ ok: boolean; errors: unknown[] }>("checkLogIntegrity", {});
     expect(integrity).toMatchObject({ ok: true, errors: [] });
+  });
+
+  it("skips an identical already-applied event that follows a new one (mid-batch replay)", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const duplicate = {
+      envelopeId: "evt-dup",
+      actor: owner,
+      payloadKind: "message.completed",
+      payload: textMessagePayload("msg-dup", "assistant", "landed by the other writer"),
+      causality: { turnId: "turn-1", messageId: "msg-dup" },
+      appendedAt: "2026-05-20T12:00:00.000Z",
+    };
+    await call<any>("appendLogEvent", {
+      logId: "traj-midbatch",
+      head: "main",
+      logKind: "trajectory",
+      owner,
+      events: [duplicate],
+    });
+
+    // At-least-once redelivery composes [new, already-applied] — the identical
+    // duplicate is skipped, the new event appends, nothing is double-written.
+    const result = await call<any>("appendLogEvent", {
+      logId: "traj-midbatch",
+      head: "main",
+      logKind: "trajectory",
+      owner,
+      events: [
+        {
+          envelopeId: "evt-new",
+          actor: owner,
+          payloadKind: "message.completed",
+          payload: textMessagePayload("msg-new", "assistant", "genuinely new"),
+          causality: { turnId: "turn-1", messageId: "msg-new" },
+          appendedAt: "2026-05-20T12:00:01.000Z",
+        },
+        duplicate,
+      ],
+    });
+
+    expect(result.envelopes.map((row: { envelopeId: string }) => row.envelopeId)).toEqual([
+      "evt-dup",
+      "evt-new",
+    ]);
+    const rows = await call<{ rows: Array<{ envelope_id: string }> }>(
+      "query",
+      "SELECT envelope_id FROM log_events WHERE log_id = ? AND head = ? ORDER BY seq",
+      ["traj-midbatch", "main"]
+    );
+    expect(rows.rows.map((row) => row.envelope_id)).toEqual(["evt-dup", "evt-new"]);
+  });
+
+  it("still rejects a DIVERGENT already-applied event after a new one", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call<any>("appendLogEvent", {
+      logId: "traj-midbatch-div",
+      head: "main",
+      logKind: "trajectory",
+      owner,
+      events: [
+        {
+          envelopeId: "evt-dup",
+          actor: owner,
+          payloadKind: "message.completed",
+          payload: textMessagePayload("msg-dup", "assistant", "original content"),
+          causality: { turnId: "turn-1", messageId: "msg-dup" },
+          appendedAt: "2026-05-20T12:00:00.000Z",
+        },
+      ],
+    });
+
+    await expect(
+      call<any>("appendLogEvent", {
+        logId: "traj-midbatch-div",
+        head: "main",
+        logKind: "trajectory",
+        owner,
+        events: [
+          {
+            envelopeId: "evt-new",
+            actor: owner,
+            payloadKind: "message.completed",
+            payload: textMessagePayload("msg-new", "assistant", "genuinely new"),
+            causality: { turnId: "turn-1", messageId: "msg-new" },
+            appendedAt: "2026-05-20T12:00:01.000Z",
+          },
+          {
+            envelopeId: "evt-dup",
+            actor: owner,
+            payloadKind: "message.completed",
+            payload: textMessagePayload("msg-dup", "assistant", "DIFFERENT content"),
+            causality: { turnId: "turn-1", messageId: "msg-dup" },
+            appendedAt: "2026-05-20T12:00:00.000Z",
+          },
+        ],
+      })
+    ).rejects.toThrow(/replay-mismatch.*DIVERGENT/s);
   });
 
   it("rejects appending with a different log_kind to an existing log", async () => {
@@ -931,6 +1034,67 @@ describe("appendTrajectoryBatch adapter (§3.3)", () => {
       invocation_id: "tool-1",
       transport_call_id: "transport-1",
       status: "started",
+    });
+  });
+
+  it("does not count failed terminal messages as streaming", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-failed-terminal",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "turn-opened",
+          event: event("turn.opened", {
+            turnId: "turn-1" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "started" },
+          }),
+        },
+        {
+          eventId: "message-started",
+          event: event("message.started", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-failed" as never },
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant" },
+          }),
+        },
+        {
+          eventId: "message-failed",
+          event: event("message.failed", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-failed" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              reason: "provider stream failed",
+            },
+          }),
+        },
+        {
+          eventId: "turn-closed",
+          event: event("turn.closed", {
+            turnId: "turn-1" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "closed" },
+          }),
+        },
+      ],
+    });
+
+    const turns = await call<any>("inspectTurnState", {
+      trajectoryId: "traj-failed-terminal",
+      branchId: "main",
+    });
+
+    expect(turns.summary).toMatchObject({
+      openTurns: 0,
+      streamingMessages: 0,
+      nonterminalInvocations: 0,
+      duplicateOpenedTurns: 0,
+    });
+    expect(turns.rows[0]).toMatchObject({
+      turn_id: "turn-1",
+      closed_at: expect.any(String),
+      streaming_messages: 0,
     });
   });
 });

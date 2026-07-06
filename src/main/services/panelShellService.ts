@@ -22,7 +22,7 @@ import { createBrowserDataRpcClient } from "@vibestudio/browser-data";
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import { isAboutSource } from "@vibestudio/shared/workspace/aboutNamespace";
 import type { BrowserNavigationIntent } from "@vibestudio/shared/panelCommands";
-import { requireAppCapability } from "./appCapabilities.js";
+import { requireAppCapability, requireChromeCaller } from "./appCapabilities.js";
 
 async function getPanelAddressOptions(
   source: string,
@@ -157,6 +157,16 @@ export function createPanelShellService(deps: {
 
         case "getThemeConfig": {
           return lifecycle.getThemeConfig();
+        }
+
+        case "getTreeSnapshot": {
+          requireChromeCaller(ctx, vm, "panel.getTreeSnapshot");
+          return registry.getPanelTreeSnapshot();
+        }
+
+        case "getFocusedPanelId": {
+          requireChromeCaller(ctx, vm, "panel.getFocusedPanelId");
+          return registry.getFocusedPanelId();
         }
 
         case "getChromeState": {
