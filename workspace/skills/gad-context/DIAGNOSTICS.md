@@ -11,6 +11,25 @@ supervision, reconnects, or build/reload events — inspect the workspace server
 host logs with `services.serverLog.query(...)` or the `about/server-logs` live
 viewer. See `../server-logs/SKILL.md` for querying and live following.
 
+## Perspective First
+
+For agent eval, `chat.channelId` names the channel where the agent is currently
+responding. It does not name a parent panel's chat or a sibling panel's chat.
+Server-side eval runs in the agent's EvalDO; `panelTree.self()` is that EvalDO,
+while `parent`/`getParent()` is the owner agent's nearest visible panel ancestor
+when one exists.
+
+When the user asks about a visible panel:
+
+1. Inspect the visible panel tree with `panelTree.list()/roots()/children()`.
+2. Pick the target panel from the user's perspective.
+3. Read `await target.stateArgs.get()` and extract `channelName` or `channelId`.
+4. Run `gad.inspectAgentHealth({ channelId })`, `gad.inspectTurnState({ channelId })`,
+   and related inspectors against that target channel.
+
+If the target is ambiguous, render an `inline_ui` panel/channel picker rather
+than guessing from the eval runtime's own position.
+
 Do not query raw branch tables such as `trajectory_branches`; that table is not
 part of the current public GAD schema. If an inspector points you to a specific
 artifact and SQL is still necessary, first discover the current schema with a
@@ -44,7 +63,8 @@ or streaming assistant-message investigations.
 It reports:
 
 - open projected turns
-- streaming/non-completed projected messages
+- nonterminal projected messages (`started`/`streaming`; `completed` and
+  `failed` are both terminal)
 - nonterminal projected invocations
 - duplicate `turn.opened` invariant failures
 
@@ -74,6 +94,25 @@ the matching branch, invocation id, and transport call id.
 ```ts
 const joined = await chat.callMethod(agentParticipantId, "inspectMethodSuspensions", {});
 ```
+
+`chat.callMethod` only works for participants in `chat.channelId`. To inspect a
+standard agent debug method for another channel, resolve the channel DO and call
+its read-only `inspectAgent` method:
+
+```ts
+const channel = await workers.resolveService("vibestudio.channel.v1", targetChannelId);
+const debug = await rpc.call(channel.targetId, "inspectAgent", [
+  agentParticipantId,
+  "getDebugState",
+]);
+const suspensions = await rpc.call(channel.targetId, "inspectAgent", [
+  agentParticipantId,
+  "inspectMethodSuspensions",
+]);
+```
+
+`inspectAgent` is intentionally limited to standard read-only debug methods:
+`getDebugState`, `getAgentSettings`, and `inspectMethodSuspensions`.
 
 ### Channel Envelope Inspection
 

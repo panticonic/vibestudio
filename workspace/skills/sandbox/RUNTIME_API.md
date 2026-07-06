@@ -31,7 +31,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
 | `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
 | `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `delete`, `list`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
 | `extensions` | namespace | `use`, `invoke`, `on`, `list`, `reload` |  |
@@ -236,6 +236,31 @@ await credentials.fetch("https://api.example.com/v1/items", undefined, {
 });
 ```
 
+## Durable Object-backed App Databases
+
+For shared application data, use a worker Durable Object with SQLite
+(`this.sql`) and expose narrow RPC methods. Do not use the eval `db` for panel
+or app state that another runtime needs to read; eval `db` is private to the
+agent's EvalDO.
+
+Resolve the service by protocol or name, optionally pass an object key for a
+partitioned database, then call the DO target:
+
+```ts
+import { rpc, workers } from "@workspace/runtime";
+
+const store = await workers.resolveService("example.todos.v1", "project-123");
+if (store.kind !== "durable-object") throw new Error("Expected DO service");
+
+await rpc.call(store.targetId, "upsertTodo", [{ title: "Ship the app" }]);
+const rows = await rpc.call(store.targetId, "listTodos", []);
+```
+
+The worker must also admit the caller in two places: the manifest service
+`policy.allowed` gate and each exposed DO method's `@rpc({ callers })` gate.
+See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#durable-object-backed-app-databases)
+for the schema, declaration, partition-key, and testing recipe.
+
 ## Unified Panel Handles
 
 Use `panelTree` and `PanelHandle` from panels, workers, and DOs. In panel
@@ -261,6 +286,40 @@ await byKnownSlot.navigate("panels/spectrolite", {
   ref: "ctx:ctx-vault",
 }); // only when intentionally building code from that context branch
 ```
+
+### Eval And Visible Panel Perspective
+
+In server-side eval, `panelTree.self()` is the EvalDO runtime, not the visible
+chat panel. Use `parent`/`getParent()` for the owner agent's nearest visible
+panel ancestor, and use `panelTree.list()/roots()/children()` to inspect the
+visible panel tree the user is talking about. If you need the chat attached to a
+parent or sibling panel, read that target panel's state args:
+
+```ts
+import { gad, panelTree, rpc, workers } from "@workspace/runtime";
+
+const panels = await panelTree.list();
+const target = panels.find((panel) => panel.id === "panel-slot-id");
+const stateArgs = target ? await target.stateArgs.get<Record<string, unknown>>() : {};
+const channelId = String(stateArgs.channelName ?? stateArgs.channelId ?? "");
+
+const health = channelId ? await gad.inspectAgentHealth({ channelId }) : null;
+
+// Optional read-only agent debug for a DO-backed agent in that channel.
+const channel = channelId
+  ? await workers.resolveService("vibestudio.channel.v1", channelId)
+  : null;
+const debug =
+  channel?.kind === "durable-object"
+    ? await rpc.call(channel.targetId, "inspectAgent", [
+        "do:workers/agent-worker:AiChatWorker:agent-key",
+        "getDebugState",
+      ])
+    : null;
+```
+
+Do not assume `chat.channelId` names the target panel's channel unless the user
+explicitly means the current chat where the agent is responding.
 
 `openPanel()` creates a panel owned by the workflow. Handles
 from `list`/`roots`/`children`/`get` are existing panels; do not call

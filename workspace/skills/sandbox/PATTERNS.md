@@ -358,51 +358,88 @@ export default function CookieManager({ props, chat }) {
 })
 ```
 
-## Query a Database and Show Results
+## Query a DO-backed App Database and Show Results
+
+For user-facing app data, call a Durable Object service that owns SQLite through
+`this.sql`. There is no generic panel-side app database endpoint; expose narrow
+methods such as `listTodos` and `upsertTodo` on the DO, then call those methods
+from UI code. See
+[workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#durable-object-backed-app-databases)
+for the worker and manifest declaration.
 
 ```
 inline_ui({
   code: `
-import { useState, useCallback } from "react";
-import { Button, Flex, Text, Table, Code } from "@radix-ui/themes";
+import { useCallback, useEffect, useState } from "react";
+import { Button, Flex, Text, Table, TextField } from "@radix-ui/themes";
+import { rpc, workers } from "@workspace/runtime";
 
-export default function SqlRunner({ props, chat }) {
-  const [sql, setSql] = useState(props.defaultQuery || "SELECT 1");
-  const [rows, setRows] = useState([]);
+export default function TodoStoreView({ props = {} }) {
+  const protocol = props.protocol || "example.todos.v1";
+  const objectKey = props.objectKey || null;
+  const [title, setTitle] = useState("");
+  const [todos, setTodos] = useState([]);
   const [error, setError] = useState(null);
-  const run = useCallback(async () => {
+
+  const resolveStore = useCallback(async () => {
+    const service = await workers.resolveService(protocol, objectKey);
+    if (service.kind !== "durable-object") throw new Error("Expected DO service");
+    return service;
+  }, [protocol, objectKey]);
+
+  const load = useCallback(async () => {
     setError(null);
     try {
-      // "main" must expose a db.query method backed by a Durable Object's this.sql.
-      const result = await chat.rpc.call("main", "db.query", [sql]);
-      setRows(result);
+      const service = await resolveStore();
+      setTodos(await rpc.call(service.targetId, "listTodos", []));
     } catch (e) { setError(e.message); }
-  }, [sql]);
+  }, [resolveStore]);
 
-  const cols = rows.length > 0 ? Object.keys(rows[0]) : [];
+  useEffect(() => { load(); }, [load]);
+
+  const addTodo = useCallback(async () => {
+    if (!title.trim()) return;
+    setError(null);
+    try {
+      const service = await resolveStore();
+      await rpc.call(service.targetId, "upsertTodo", [{ title: title.trim() }]);
+      setTitle("");
+      await load();
+    } catch (e) { setError(e.message); }
+  }, [load, resolveStore, title]);
 
   return (
     <Flex direction="column" gap="2">
-      <textarea value={sql} onChange={e => setSql(e.target.value)}
-        style={{ fontFamily: "monospace", fontSize: 12, padding: 8, borderRadius: 4, border: "1px solid var(--gray-6)", minHeight: 60 }} />
-      <Button size="1" onClick={run}>Run Query</Button>
+      <Flex gap="2">
+        <TextField.Root
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          placeholder="New todo"
+          style={{ flex: 1 }}
+        />
+        <Button size="1" onClick={addTodo}>Add</Button>
+      </Flex>
       {error && <Text size="1" color="red">{error}</Text>}
-      {rows.length > 0 && (
-        <Table.Root size="1">
-          <Table.Header>
-            <Table.Row>{cols.map(c => <Table.ColumnHeaderCell key={c}>{c}</Table.ColumnHeaderCell>)}</Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {rows.slice(0, 100).map((row, i) => (
-              <Table.Row key={i}>{cols.map(c => <Table.Cell key={c}><Text size="1">{String(row[c])}</Text></Table.Cell>)}</Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
-      )}
+      <Table.Root size="1">
+        <Table.Header>
+          <Table.Row>
+            <Table.ColumnHeaderCell>Title</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
+          </Table.Row>
+        </Table.Header>
+        <Table.Body>
+          {todos.map(todo => (
+            <Table.Row key={todo.id}>
+              <Table.Cell><Text size="2">{todo.title}</Text></Table.Cell>
+              <Table.Cell><Text size="1">{todo.done ? "Done" : "Open"}</Text></Table.Cell>
+            </Table.Row>
+          ))}
+        </Table.Body>
+      </Table.Root>
     </Flex>
   );
 }`,
-  props: { dbName: "default", defaultQuery: "SELECT name FROM sqlite_master WHERE type='table'" }
+  props: { protocol: "example.todos.v1", objectKey: "project-123" }
 })
 ```
 

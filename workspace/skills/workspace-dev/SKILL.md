@@ -17,7 +17,7 @@ mobile React Native, or terminal targets), use the `appdev` skill instead.
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | [WORKFLOW.md](WORKFLOW.md)             | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                    |
 | [PANEL_API.md](PANEL_API.md)           | Runtime panel API reference                                                                                                             |
-| [WORKERS.md](WORKERS.md)               | Workers & Durable Objects: AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
+| [WORKERS.md](WORKERS.md)               | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
 | [RPC.md](RPC.md)                       | Typed parent-child contracts                                                                                                            |
 | [BROWSER.md](BROWSER.md)               | Browser automation (Playwright/CDP)                                                                                                     |
 | [TOOLS.md](TOOLS.md)                   | Agent tools reference                                                                                                                   |
@@ -84,6 +84,7 @@ const myApp = await openPanel("panels/my-app");
 | Create project  | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `createProject({ projectType, name, title })`                             |
 | Fork panel      | `eval` — `import { forkProject } from "@workspace-skills/workspace-dev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })` |
 | Fork worker     | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                              |
+| Build app database | Create a worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a manifest service with `policy.allowed`, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases). |
 | Launch panel    | `eval` — `const handle = await openPanel(source)` for pushed/main code. `openPanel` does not take a build ref; to run context-local panel code, first push it or use a ref-capable navigation path with `ref: \`ctx:${ctx.contextId}\``. |
 | Launch worker   | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` }])` for newly created or context-edited worker code; omit `ref` only when launching the main build. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id` |
 | Read a file     | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                          |

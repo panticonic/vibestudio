@@ -83,6 +83,19 @@ Electron app filesystem relay is capability-gated:
 Do not add `fs-write` to a shell or app as a convenience. It materially expands
 what compromised client code can request.
 
+## App Databases
+
+There is no app capability that grants a generic workspace SQL database. Use a
+worker Durable Object service for app data: the service's `policy.allowed` must
+include `app`, and each DO method must also include `app` in
+`@rpc({ callers: [...] })` if app callers should invoke it. Keep the DO methods
+app-shaped (`listItems`, `saveSettings`, `appendEvent`) rather than exposing
+raw SQL to trusted client renderers.
+
+If the DO exposes a shared or sensitive resource to other principals, add a
+custom userland approval inside the DO method with `approvals.request(...)`.
+Ordinary private app rows do not need an approval prompt.
+
 ## React Native Capabilities
 
 React Native capabilities document what the workspace app expects from native

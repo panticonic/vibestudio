@@ -150,6 +150,10 @@ const result = await chat.callMethod("agent-participant-id", "someMethod", { arg
 ```
 
 This is useful for inline UI components that need to trigger agent-side behavior directly.
+It is channel-scoped: the target must be a participant in the current
+`chat.channelId`. For another panel's chat, inspect that panel's state args to
+find its channel id, then use GAD inspectors or the channel DO's read-only
+`inspectAgent` method against that channel.
 
 ## chat.callMethodByHandle
 
@@ -199,9 +203,14 @@ Full RPC bridge to all server and main-process services. Same as `rpc` from `@wo
 // Filesystem
 const content = await chat.rpc.call("main", "fs.readFile", ["src/index.ts", "utf-8"]);
 
-// Database
-// Call a Durable Object method that stores data with `this.sql`.
-const rows = await chat.rpc.call("main", "db.query", [handle, "SELECT * FROM items"]);
+// DO-backed app database
+// Resolve a manifest-declared Durable Object service, then call its narrow methods.
+const store = await chat.rpc.call("main", "workers.resolveService", [
+  "example.todos.v1",
+  "project-123",
+]);
+if (store.kind !== "durable-object") throw new Error("Expected DO service");
+const rows = await chat.rpc.call(store.targetId, "listTodos", []);
 
 // Build
 const build = await chat.rpc.call("main", "build.getBuild", ["panels/my-app"]);

@@ -10,6 +10,28 @@ sent back.
 chat/editor panel — or the user — disconnects. State (`scope`, the in-DO SQLite
 `db`) lives in the EvalDO and persists across calls and across turns.
 
+## Eval Perspective
+
+Eval runs in a server-side EvalDO, not in the visible chat/editor panel. That
+means its runtime perspective is slightly different from the user's panel
+perspective:
+
+- `chat.channelId` is the channel where this agent is currently responding.
+  It is not automatically the channel for a parent panel, sibling panel, or
+  any other chat panel in the tree.
+- `panelTree.self()` in eval is the EvalDO runtime handle. Use top-level
+  `parent`/`getParent()` for the owner agent's nearest visible panel ancestor.
+- `openPanel()` from eval defaults new panels under that owner panel ancestor
+  when one exists.
+- When the user points at "this panel", "the parent panel", or another visible
+  panel, inspect the visible tree with `panelTree.list()/roots()/children()`,
+  choose the target panel, and read `await target.stateArgs.get()` to find its
+  `channelName`/`channelId` before running channel diagnostics.
+
+For perspective-heavy investigations, use `inline_ui` to render a small panel
+tree or channel-health dashboard so the user can see and choose the same target
+you are inspecting.
+
 ## Basic Usage
 
 ```
@@ -97,6 +119,11 @@ owning agent DO, which performs it with its channel machinery and relays the
 result. `chat.callMethod` resolves to the **delivered** participant result, and
 `chat.participantByHandle` is async (the roster is fetched over RPC).
 `chat.focusMessage` is panel-only and resolves `false` server-side.
+
+`chat.callMethod` and `chat.callMethodByHandle` are channel-scoped. They only
+route to participants in `chat.channelId`. To inspect an agent or channel from
+another panel, first identify that panel's channel id from its state args, then
+use GAD inspectors or the channel DO's read-only `inspectAgent` method.
 
 > Note: `chat` is only present for **agent** eval. CLI/panel eval (no channel)
 > gets no `chat` — interact with the channel through `rpc`/`services` instead.
@@ -416,10 +443,20 @@ eval({ code: `
   destructive statements (DROP/DELETE/ALTER/UPDATE/INSERT/REPLACE/TRUNCATE/CREATE)
   — use your own table names. Create and write your own tables freely.
 
-(For storage that other panels/workers need to read, define a Durable Object and
-use its `this.sql`, then call it over RPC. See the workers guide
-`workspace/workers/README.md` and `workspace-dev/WORKERS.md`. The eval `db` is
-private to your EvalDO.)
+For storage that other panels, apps, workers, or agents need to read, define a
+worker Durable Object and use its `this.sql`, then declare it as a userland
+service and call it over RPC:
+
+```ts
+import { rpc, workers } from "@workspace/runtime";
+
+const store = await workers.resolveService("example.todos.v1", "project-123");
+if (store.kind !== "durable-object") throw new Error("Expected DO service");
+const todos = await rpc.call(store.targetId, "listTodos", []);
+```
+
+See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#durable-object-backed-app-databases)
+for the full app database pattern. The eval `db` is private to your EvalDO.
 
 ## Filesystem Access
 

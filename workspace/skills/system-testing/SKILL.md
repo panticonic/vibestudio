@@ -568,12 +568,27 @@ checkpoints, and recent lifecycle events. See
 `docs/agent-debug-port.md` for the full response shape and interpretation
 guide.
 
+`chat.callMethod` only reaches participants in the current test channel. When a
+failure points at a parent/sibling/other panel's channel, resolve that target
+channel first and call the channel DO's read-only inspection path:
+
+```typescript
+const channel = await workers.resolveService("vibestudio.channel.v1", targetChannelId);
+const debug = await rpc.call(channel.targetId, "inspectAgent", [
+  agentParticipantId,
+  "getDebugState",
+]);
+```
+
 For eval/tool projection mismatches, call the joined suspension diagnostic:
 
 ```typescript
 const suspensions = await chat.callMethod(agentParticipantId, "inspectMethodSuspensions", {});
 console.log(JSON.stringify(suspensions, null, 2).slice(0, 4000));
 ```
+
+For a non-current target channel, use the same channel DO route with
+`"inspectMethodSuspensions"`.
 
 ### Participants (who was in the channel)
 
@@ -665,7 +680,13 @@ the relevant skills themselves. These tests avoid doc recitation and instead
 check concrete decisions, bounded evidence, and clear reports when documented
 paths do not work.
 
-For SQLite-backed userland storage, the canonical pattern is `this.sql` inside a Durable Object. See `workers/sample-do/index.ts` for the minimal example and `workers/sample-do/sampleDo.test.ts` for an end-to-end round-trip exercised via `createTestDO`.
+For SQLite-backed userland storage, the canonical pattern is `this.sql` inside
+a Durable Object service, not eval `db`. Tests for app databases should cover
+the DO methods directly with `createTestDO(...)` and, when testing panels/apps,
+also verify `workers.resolveService(protocol, objectKey?)` plus
+`rpc.call(targetId, method, args)` from the actual caller kind. See
+`workers/sample-do/index.ts` for the minimal example and
+`workers/sample-do/sampleDo.test.ts` for an end-to-end round trip.
 
 ## Filtering
 

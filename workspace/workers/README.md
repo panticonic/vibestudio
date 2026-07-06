@@ -79,6 +79,8 @@ keeping the same PubSub fan-out/replay API and the same UI reducer path.
 Worker package.json only declares DO classes (workerd binding) via
 `vibestudio.durable.classes`. Workspace-level declarations — singletons,
 services, and HTTP routes — live in `workspace/meta/vibestudio.yml`.
+Runtime hot-reload behavior for those manifest sections is documented in
+[`docs/workspace-manifest-hot-reload.md`](../../docs/workspace-manifest-hot-reload.md).
 
 DO-backed service (in `workspace/meta/vibestudio.yml`):
 
@@ -92,7 +94,7 @@ services:
   - source: workers/my-store
     name: my-store
     protocols: [example.my-store.v1]
-    durableObject: { className: MyStore }    # key joined from singletonObjects
+    durableObject: { className: MyStore } # key joined from singletonObjects
 ```
 
 Stateless worker service:
@@ -133,10 +135,15 @@ sections live exclusively in `vibestudio.yml`.
 
 ```typescript
 export { MyAgentWorker } from "./my-agent-worker.js";
-export default { fetch(_req: Request) { return new Response("my-agent DO service"); } };
+export default {
+  fetch(_req: Request) {
+    return new Response("my-agent DO service");
+  },
+};
 ```
 
 The entry point must:
+
 1. Re-export all DO classes by name
 2. Export a default fetch handler (required by workerd)
 
@@ -177,11 +184,11 @@ protected getDefaultThinkingLevel() {
 
 Returns the tool approval level for a channel. Default: `2` (full auto).
 
-| Level | Meaning |
-|---|---|
-| `0` | Ask all — every tool call gets a UI confirm prompt |
-| `1` | Auto safe — read-only tools auto-approve, others prompt |
-| `2` | Full auto — everything runs without prompts |
+| Level | Meaning                                                 |
+| ----- | ------------------------------------------------------- |
+| `0`   | Ask all — every tool call gets a UI confirm prompt      |
+| `1`   | Auto safe — read-only tools auto-approve, others prompt |
+| `2`   | Full auto — everything runs without prompts             |
 
 The default reads from a per-channel `state` table key
 (`approvalLevel:<channelId>`); subclasses rarely need to override.
@@ -256,17 +263,17 @@ Create a `ChannelClient` for a specific channel, then call methods on it:
 const channel = this.createChannelClient(channelId);
 ```
 
-| Method | Description |
-|--------|-------------|
-| `channel.send(participantId, messageId, content, opts?)` | Publish a canonical agentic `message.completed` event |
-| `channel.update(participantId, messageId, content)` | Update a streaming message |
-| `channel.complete(participantId, messageId)` | Mark a message as complete |
-| `channel.sendSignal(participantId, content, contentType?)` | Send signal event |
-| `channel.updateMetadata(participantId, metadata)` | Update channel metadata |
-| `channel.subscribe(participantId, metadata)` | Subscribe to channel |
-| `channel.unsubscribe(participantId)` | Unsubscribe from channel |
+| Method                                                                                                | Description                                                                                                      |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `channel.send(participantId, messageId, content, opts?)`                                              | Publish a canonical agentic `message.completed` event                                                            |
+| `channel.update(participantId, messageId, content)`                                                   | Update a streaming message                                                                                       |
+| `channel.complete(participantId, messageId)`                                                          | Mark a message as complete                                                                                       |
+| `channel.sendSignal(participantId, content, contentType?)`                                            | Send signal event                                                                                                |
+| `channel.updateMetadata(participantId, metadata)`                                                     | Update channel metadata                                                                                          |
+| `channel.subscribe(participantId, metadata)`                                                          | Subscribe to channel                                                                                             |
+| `channel.unsubscribe(participantId)`                                                                  | Unsubscribe from channel                                                                                         |
 | `channel.callMethod(callerPid, targetPid, transportCallId, method, args, { invocationId?, turnId? })` | Async method call; `transportCallId` routes/cancels the dispatch, `invocationId` is the transcript/provenance id |
-| `channel.getParticipants()` | Get channel roster |
+| `channel.getParticipants()`                                                                           | Get channel roster                                                                                               |
 
 ## 4. Trajectory Event Publishing
 
@@ -282,17 +289,17 @@ that do not own durable agent turns.
 
 ```typescript
 interface ParticipantDescriptor {
-  handle: string;                    // unique identifier in the channel
-  name: string;                      // display name
-  type: string;                      // 'agent', 'panel', etc.
+  handle: string; // unique identifier in the channel
+  name: string; // display name
+  type: string; // 'agent', 'panel', etc.
   metadata?: Record<string, unknown>;
-  methods?: MethodAdvertisement[];   // callable methods
+  methods?: MethodAdvertisement[]; // callable methods
 }
 
 interface MethodAdvertisement {
   name: string;
   description: string;
-  parameters?: unknown;  // JSON Schema for method args
+  parameters?: unknown; // JSON Schema for method args
 }
 ```
 
@@ -302,36 +309,36 @@ interface MethodAdvertisement {
 
 The base class creates these tables on initialization:
 
-| Table | Purpose |
-|-------|---------|
-| `state` | Key-value store (schema version, custom state) |
+| Table           | Purpose                                            |
+| --------------- | -------------------------------------------------- |
+| `state`         | Key-value store (schema version, custom state)     |
 | `subscriptions` | Channel subscriptions with config + participant ID |
 
 ### Helper Methods
 
-| Method | Description |
-|--------|-------------|
-| `getActiveHarness()` | Get the active harness ID |
-| `getContextId(channelId)` | Get context ID from subscription |
-| `getSubscriptionConfig(channelId)` | Get per-channel config |
-| `setActiveTurn(harnessId, channelId, replyToId, turnMessageId?)` | Record active turn |
-| `getActiveTurn(harnessId)` | Get active turn state |
-| `clearActiveTurn(harnessId)` | Clear active turn |
-| `setInFlightTurn(channelId, harnessId, messageId, pubsubId, input)` | Record in-flight turn |
-| `getInFlightTurn(channelId, harnessId)` | Get in-flight turn |
-| `clearInFlightTurn(channelId, harnessId)` | Clear in-flight turn |
-| `advanceCheckpoint(channelId, harnessId, pubsubId)` | Advance checkpoint |
-| `getCheckpoint(channelId, harnessId)` | Get checkpoint |
-| `recordTurn(harnessId, messageId, triggerPubsubId, sessionId)` | Record completed turn |
-| `getResumeSessionId(harnessId)` | Get session ID for conversation resume |
-| `getResumeSessionIdForChannel(channelId)` | Get resume session (prefers forkSessionId if set) |
-| `getAlignment(harnessId)` | Get alignment state |
-| `registerHarness(harnessId, type)` | Register a new harness |
-| `reactivateHarness(harnessId)` | Reactivate a harness |
-| `recordTurnStart(harnessId, channelId, input, messageId, pubsubId, senderParticipantId?)` | Convenience: set active + in-flight + checkpoint |
-| `pendingCall(callId, channelId, type, context)` | Store a continuation (survives hibernation) |
-| `consumePendingCall(callId)` | Load and delete a continuation |
-| `getParticipantId(channelId)` | Get this DO's channel participant ID |
+| Method                                                                                    | Description                                       |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `getActiveHarness()`                                                                      | Get the active harness ID                         |
+| `getContextId(channelId)`                                                                 | Get context ID from subscription                  |
+| `getSubscriptionConfig(channelId)`                                                        | Get per-channel config                            |
+| `setActiveTurn(harnessId, channelId, replyToId, turnMessageId?)`                          | Record active turn                                |
+| `getActiveTurn(harnessId)`                                                                | Get active turn state                             |
+| `clearActiveTurn(harnessId)`                                                              | Clear active turn                                 |
+| `setInFlightTurn(channelId, harnessId, messageId, pubsubId, input)`                       | Record in-flight turn                             |
+| `getInFlightTurn(channelId, harnessId)`                                                   | Get in-flight turn                                |
+| `clearInFlightTurn(channelId, harnessId)`                                                 | Clear in-flight turn                              |
+| `advanceCheckpoint(channelId, harnessId, pubsubId)`                                       | Advance checkpoint                                |
+| `getCheckpoint(channelId, harnessId)`                                                     | Get checkpoint                                    |
+| `recordTurn(harnessId, messageId, triggerPubsubId, sessionId)`                            | Record completed turn                             |
+| `getResumeSessionId(harnessId)`                                                           | Get session ID for conversation resume            |
+| `getResumeSessionIdForChannel(channelId)`                                                 | Get resume session (prefers forkSessionId if set) |
+| `getAlignment(harnessId)`                                                                 | Get alignment state                               |
+| `registerHarness(harnessId, type)`                                                        | Register a new harness                            |
+| `reactivateHarness(harnessId)`                                                            | Reactivate a harness                              |
+| `recordTurnStart(harnessId, channelId, input, messageId, pubsubId, senderParticipantId?)` | Convenience: set active + in-flight + checkpoint  |
+| `pendingCall(callId, channelId, type, context)`                                           | Store a continuation (survives hibernation)       |
+| `consumePendingCall(callId)`                                                              | Load and delete a continuation                    |
+| `getParticipantId(channelId)`                                                             | Get this DO's channel participant ID              |
 
 ### Schema Versioning
 
@@ -498,11 +505,14 @@ Trigger via `POST /fork`:
   "channelId": "chan-1",
   "forkPointPubsubId": 42,
   "exclude": ["participantId-to-skip"],
-  "replace": { "participantId": { "source": "workers/agent", "className": "Agent", "objectKey": "new-key" } }
+  "replace": {
+    "participantId": { "source": "workers/agent", "className": "Agent", "objectKey": "new-key" }
+  }
 }
 ```
 
 Flow:
+
 1. Fetches channel roster and contextId
 2. Preflight: `canFork()` on clones (≤1 sub), replacements (0 subs)
 3. Clones channel SQLite + `postClone` (trims messages, clears roster)
@@ -512,7 +522,7 @@ Flow:
 
 ## 12. Custom Worker Example: CodeReviewWorker
 
-```typescript
+````typescript
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import type { ChannelEvent, ParticipantDescriptor, TurnInput } from "@workspace/harness";
 
@@ -525,24 +535,25 @@ export class CodeReviewWorker extends AgentWorkerBase {
     return "openai-codex:gpt-5.5";
   }
 
-  protected override getParticipantInfo(channelId: string, config?: unknown): ParticipantDescriptor {
+  protected override getParticipantInfo(
+    channelId: string,
+    config?: unknown
+  ): ParticipantDescriptor {
     return {
-      handle: 'code-reviewer',
-      name: 'Code Reviewer',
-      type: 'agent',
-      methods: [
-        { name: 'set-strictness', description: 'Set review strictness (1-5)' },
-      ],
+      handle: "code-reviewer",
+      name: "Code Reviewer",
+      type: "agent",
+      methods: [{ name: "set-strictness", description: "Set review strictness (1-5)" }],
     };
   }
 
   protected override shouldProcess(event: ChannelEvent): boolean {
-    if (event.type !== 'message') return false;
+    if (event.type !== "message") return false;
     const senderType = event.senderMetadata?.["type"] as string | undefined;
     if (!isClientParticipantType(senderType)) return false;
     const agentic = event.payload as { payload?: { blocks?: MessageBlockInput[] } };
     const content = messageDisplayText(agentic.payload?.blocks);
-    return content.includes('```') || content.includes('diff --git');
+    return content.includes("```") || content.includes("diff --git");
   }
 
   protected override buildTurnInput(event: ChannelEvent): TurnInput {
@@ -565,14 +576,17 @@ export class CodeReviewWorker extends AgentWorkerBase {
   // filtering messages by content like the shouldProcess override above).
 
   override async onMethodCall(
-    channelId: string, callId: string, methodName: string, args: unknown,
+    channelId: string,
+    callId: string,
+    methodName: string,
+    args: unknown
   ): Promise<{ result: unknown; isError?: boolean }> {
-    if (methodName === 'set-strictness') {
+    if (methodName === "set-strictness") {
       const level = (args as { level?: number })?.level ?? 3;
-      this.setStateValue('strictness', String(level));
+      this.setStateValue("strictness", String(level));
       return { result: { strictness: level } };
     }
-    return { result: { error: 'unknown method' }, isError: true };
+    return { result: { error: "unknown method" }, isError: true };
   }
 }
-```
+````

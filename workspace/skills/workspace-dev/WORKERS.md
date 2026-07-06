@@ -26,7 +26,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
 | `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
 | `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `delete`, `list`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
 | `extensions` | namespace | `use`, `invoke`, `on`, `list`, `reload` |  |
@@ -78,6 +78,8 @@ services:
   - source: workers/my-store
     name: my-store
     protocols: [example.my-store.v1]
+    policy:
+      allowed: [panel, app, do, worker, server]
     durableObject: { className: MyStore } # key joined from singletonObjects
 ```
 
@@ -101,6 +103,8 @@ services:
   - source: workers/my-api
     name: my-api
     protocols: [example.my-api.v1]
+    policy:
+      allowed: [panel, app, do, worker, server]
     worker: { routePath: /api }
 ```
 
@@ -116,6 +120,146 @@ A `services[].durableObject` or `routes[].durableObject` referencing a DO
 class with no matching `singletonObjects` row is rejected at workspace-load
 time. Stateless service routes are live only while the canonical worker
 instance is running.
+
+## Durable Object-backed App Databases
+
+Use a Durable Object as the default database for user-facing workspace apps,
+panels, and long-lived agent workflows when data must be shared outside one
+agent eval. The eval `db` is private to that agent's EvalDO; it is good for
+scratch analysis and resumable diagnostics, but it is not an application
+database for panels, apps, workers, or other agents.
+
+Canonical shape:
+
+1. Create `workers/<store>` with a `DurableObjectBase` subclass.
+2. Store durable rows in the DO's SQLite database through `this.sql`.
+3. Expose narrow app methods with `@rpc({ callers: [...] })`; do not expose a
+   raw SQL console to normal UI callers.
+4. Declare a `services:` entry in `workspace/meta/vibestudio.yml` with
+   `policy.allowed` for the caller kinds that may resolve the service.
+5. Call it from eval, panels, inline UI, apps, workers, or other DOs with
+   `workers.resolveService(protocol, objectKey?)` and `rpc.call(...)`.
+
+Minimal store:
+
+```ts
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+
+type TodoRow = {
+  id: string;
+  title: string;
+  done: number;
+  updated_at: string;
+};
+
+export class TodoStore extends DurableObjectBase {
+  static override schemaVersion = 1;
+
+  protected override createTables(): void {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS todos (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        done INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      )
+    `);
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return ["todos"];
+  }
+
+  @rpc({ callers: ["panel", "app", "do", "worker"] })
+  upsertTodo(input: { id?: string; title: string; done?: boolean }): { id: string } {
+    this.ensureReady();
+    const id = input.id ?? crypto.randomUUID();
+    this.sql.exec(
+      `INSERT INTO todos (id, title, done, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         done = excluded.done,
+         updated_at = excluded.updated_at`,
+      id,
+      input.title,
+      input.done ? 1 : 0,
+      new Date().toISOString()
+    );
+    return { id };
+  }
+
+  @rpc({ callers: ["panel", "app", "do", "worker"] })
+  listTodos(): Array<{ id: string; title: string; done: boolean; updatedAt: string }> {
+    this.ensureReady();
+    return (this.sql.exec(`SELECT * FROM todos ORDER BY updated_at DESC`).toArray() as TodoRow[])
+      .map((row) => ({
+        id: row.id,
+        title: row.title,
+        done: row.done === 1,
+        updatedAt: row.updated_at,
+      }));
+  }
+}
+```
+
+Declare it. A `singletonObjects` row gives the service a default object key
+(`main` below); omit the singleton only when the service is intentionally a
+factory and every caller will pass an explicit `objectKey`.
+
+```yaml
+singletonObjects:
+  - source: workers/todo-store
+    className: TodoStore
+    key: main
+
+services:
+  - source: workers/todo-store
+    name: todo-store
+    title: Todo Store
+    protocols: [example.todos.v1]
+    policy:
+      allowed: [panel, app, do, worker]
+    durableObject:
+      className: TodoStore
+```
+
+Call it from eval, a panel, an inline UI component, an app, a worker, or
+another DO:
+
+```ts
+import { rpc, workers } from "@workspace/runtime";
+
+const svc = await workers.resolveService("example.todos.v1");
+if (svc.kind !== "durable-object") throw new Error("Expected DO service");
+
+await rpc.call(svc.targetId, "upsertTodo", [{ title: "Write storage docs" }]);
+const todos = await rpc.call(svc.targetId, "listTodos", []);
+```
+
+For a partitioned store, use the optional second argument:
+
+```ts
+const projectStore = await workers.resolveService("example.todos.v1", projectId);
+```
+
+That resolves `do:<source>:<className>:<projectId>` and creates or activates a
+separate SQLite database for that object key. Use stable, user-meaningful keys
+such as workspace id, project id, document id, or account id. Do not use a
+random key unless the app really wants a new isolated database.
+
+Two gates must both admit the caller:
+
+- `services[].policy.allowed` controls who may resolve the service at all.
+- `@rpc({ callers: [...] })` controls who may invoke each exposed DO method.
+
+For sensitive shared resources, add a user decision inside the DO method with
+`approvals.request(...)`; do not use approvals for ordinary private app rows.
+
+Testing: keep storage logic in methods like the above and cover them with
+`createTestDO(...)` unit tests. See `workspace/workers/sample-do/index.ts` and
+`workspace/workers/sample-do/sampleDo.test.ts` for the minimal round trip
+against a real SQLite-backed DO.
 
 ## Durable Object Schema & Migrations
 
@@ -376,6 +520,21 @@ The response includes dispatcher state, runner phase, persisted pending work,
 channel checkpoints, and recent lifecycle/debug events. Do not add sleeps or
 timeouts to diagnose these stalls; inspect the debug state and fix the blocked
 operation. See `../../../docs/agent-debug-port.md` for the full field guide.
+
+`chat.callMethod` is scoped to the current channel. To inspect a standard agent
+debug method for another channel, resolve that channel's DO and use its
+read-only inspection path:
+
+```ts
+const channel = await workers.resolveService("vibestudio.channel.v1", targetChannelId);
+const debug = await rpc.call(channel.targetId, "inspectAgent", [
+  agentParticipantId,
+  "getDebugState",
+]);
+```
+
+The channel DO only exposes `getDebugState`, `getAgentSettings`, and
+`inspectMethodSuspensions` through this route.
 
 ## Host Server Logs
 
