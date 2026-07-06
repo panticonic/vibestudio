@@ -4,6 +4,7 @@ import {
   type ServiceContext,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
+import { panelMethods } from "@vibestudio/shared/serviceSchemas/panel";
 import type { RpcEnvelope, RpcMessage } from "@vibestudio/rpc";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 
@@ -168,54 +169,73 @@ describe("IpcDispatcher", () => {
     });
   });
 
-  it("forwards the workspace shell renderer panelTree RPC as the apps/shell app principal", async () => {
-    // The desktop workspace shell renders as the apps/shell app view, so its
-    // panelTree call is scoped to its own app principal via callAs (no shell→app
-    // proxy). This is the post-relabel path that replaced the deleted proxy.
+  it("serves workspace shell panel-tree reads through the Electron-local panel service", async () => {
+    // The desktop workspace shell renders as the apps/shell app view, but core
+    // chrome state is host-owned. Tree reads come from Electron main's mirror
+    // instead of depending on an app-scoped server grant during startup.
     const shellWc = makeWebContents(20);
     const call = vi.fn();
-    const callAs = vi.fn(async () => ({ rootPanels: [] }));
+    const callAs = vi.fn();
     const onServerRpcResult = vi.fn();
+    const panelHandler = vi.fn(async () => ({ revision: 4, rootPanels: [] }));
     makeDispatcher({
       resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
       call,
       callAs,
       onServerRpcResult,
+      configureDispatcher: (dispatcher) => {
+        dispatcher.registerService({
+          name: "panel",
+          description: "panel",
+          policy: { allowed: ["app"] },
+          methods: panelMethods,
+          handler: panelHandler,
+        });
+      },
     });
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: shellWc } as never,
-      rpcEnvelope("shell", "shell", {
+      rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
         requestId: "req-paneltree",
         fromId: "@workspace-apps/shell",
-        method: "panelTree.getTreeSnapshot",
+        method: "panel.getTreeSnapshot",
         args: [],
       } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {
-      expect(callAs).toHaveBeenCalledWith(
-        { callerId: "@workspace-apps/shell", callerKind: "app" },
-        "panelTree",
+      expect(panelHandler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          caller: expect.objectContaining({
+            runtime: expect.objectContaining({
+              id: "@workspace-apps/shell",
+              kind: "app",
+            }),
+          }),
+        }),
         "getTreeSnapshot",
         []
       );
     });
     expect(call).not.toHaveBeenCalled();
-    expect(onServerRpcResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-        service: "panelTree",
-        method: "getTreeSnapshot",
-      })
-    );
+    expect(callAs).not.toHaveBeenCalled();
     await vi.waitFor(() => {
-      expectSentRpcMessage(shellWc, "shell", {
+      expect(onServerRpcResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          callerId: "@workspace-apps/shell",
+          callerKind: "app",
+          service: "panel",
+          method: "getTreeSnapshot",
+        })
+      );
+    });
+    await vi.waitFor(() => {
+      expectSentRpcMessage(shellWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-paneltree",
-        result: { rootPanels: [] },
+        result: { revision: 4, rootPanels: [] },
       });
     });
   });

@@ -2317,7 +2317,11 @@ app.on("ready", async () => {
     // The workspace shell now runs as an app view, so an app with
     // `panel-hosting` has the same event-bus role.
     {
-      const baseEventsService = createEventsServiceDefinition(eventService);
+      const baseEventsService = createEventsServiceDefinition(eventService, {
+        snapshots: {
+          "panel-tree-updated": () => panelRegistry?.getPanelTreeSnapshot(),
+        },
+      });
       const shouldForwardServerEvents = (caller: ServiceContext["caller"]): boolean => {
         if (callerHasPlatformCapability(caller.runtime.id, caller.runtime.kind, "panel-hosting")) {
           return true;

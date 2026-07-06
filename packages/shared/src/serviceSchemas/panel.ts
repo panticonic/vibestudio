@@ -3,7 +3,12 @@
  */
 
 import { z } from "zod";
-import type { PanelFocusResult, ThemeAppearance, ThemeConfig } from "../types.js";
+import type {
+  PanelFocusResult,
+  PanelTreeSnapshot,
+  ThemeAppearance,
+  ThemeConfig,
+} from "../types.js";
 import type {
   BrowserAddressOptions,
   PanelAddressOptions,
@@ -49,6 +54,18 @@ export const panelMethods = defineServiceMethods({
     args: z.tuple([]),
     returns: z.custom<ThemeConfig>(),
     policy: { allowed: ["shell", "app", "panel"] },
+    access: READ_ACCESS,
+  },
+  getTreeSnapshot: {
+    description: "Return the Electron host's current mirrored panel tree snapshot.",
+    args: z.tuple([]),
+    returns: z.custom<PanelTreeSnapshot>(),
+    access: READ_ACCESS,
+  },
+  getFocusedPanelId: {
+    description: "Return the currently focused panel id from the Electron host mirror.",
+    args: z.tuple([]),
+    returns: z.string().nullable(),
     access: READ_ACCESS,
   },
   getChromeState: {
