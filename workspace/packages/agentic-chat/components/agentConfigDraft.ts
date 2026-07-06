@@ -69,7 +69,7 @@ export function draftForAgent(
       typeof defaults.model === "string"
         ? defaults.model
         : pickDefaultModel(opts.modelCatalog, opts.connectedRefs, opts.defaultModelRef),
-    thinkingLevel: ws?.thinkingLevel ?? defaults.thinkingLevel,
+    thinkingLevel: ws?.thinkingLevel ?? defaults.thinkingLevel ?? "high",
     approvalLevel: ws?.approvalLevel ?? defaults.approvalLevel,
     respondPolicy: defaults.respondPolicy ?? (opts.showReactiveness ? "mentioned" : undefined),
     respondFrom: defaults.respondFrom,

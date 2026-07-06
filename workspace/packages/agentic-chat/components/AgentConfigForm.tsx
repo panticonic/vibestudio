@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import {
   Badge,
   Box,
@@ -63,18 +63,27 @@ const APPROVAL_LABELS: Record<string, string> = {
   "2": "Full-auto",
 };
 
-function FieldLabel({ children, hint }: { children: string; hint?: string }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
   return (
-    <Box mb="1">
+    <Flex direction="column" gap="1">
       <Text size="2" weight="medium">
-        {children}
+        {label}
       </Text>
+      {children}
       {hint && (
-        <Text size="1" color="gray" as="p" style={{ margin: 0 }}>
+        <Text size="1" color="gray">
           {hint}
         </Text>
       )}
-    </Box>
+    </Flex>
   );
 }
 
@@ -120,7 +129,9 @@ export function AgentConfigForm({
   const effort: AgentThinkingLevel =
     value.thinkingLevel && thinkingLevels.includes(value.thinkingLevel)
       ? value.thinkingLevel
-      : thinkingLevels[0] ?? "medium";
+      : thinkingLevels.includes("high")
+        ? "high"
+        : thinkingLevels[thinkingLevels.length - 1] ?? "high";
 
   const policy: AgentRespondPolicy = value.respondPolicy ?? "all";
 
@@ -135,8 +146,7 @@ export function AgentConfigForm({
   return (
     <Flex direction="column" gap="4">
       {/* Model */}
-      <Box>
-        <FieldLabel>Model</FieldLabel>
+      <Field label="Model">
         {modelEditable ? (
           <ModelPicker
             catalog={catalog}
@@ -154,14 +164,14 @@ export function AgentConfigForm({
             </Text>
           </Flex>
         )}
-      </Box>
+      </Field>
 
       {/* Effort — only for reasoning models */}
       {showEffort && (
-        <Box>
-          <FieldLabel hint="How much the model thinks before answering.">Effort</FieldLabel>
+        <Field label="Effort" hint="How much the model thinks before answering.">
           <SegmentedControl.Root
             value={effort}
+            style={{ width: "100%" }}
             onValueChange={(v) => set({ thinkingLevel: v as AgentThinkingLevel })}
           >
             {thinkingLevels.map((lvl) => (
@@ -170,30 +180,25 @@ export function AgentConfigForm({
               </SegmentedControl.Item>
             ))}
           </SegmentedControl.Root>
-        </Box>
+        </Field>
       )}
 
       {/* Autonomy */}
-      <Box>
-        <FieldLabel hint="Manual asks before each tool call; Full-auto runs everything.">
-          Autonomy
-        </FieldLabel>
+      <Field label="Autonomy" hint="Manual asks before each tool call; Full-auto runs everything.">
         <SegmentedControl.Root
           value={String(value.approvalLevel ?? 2)}
+          style={{ width: "100%" }}
           onValueChange={(v) => set({ approvalLevel: Number(v) as AgentApprovalLevel })}
         >
           <SegmentedControl.Item value="0">{APPROVAL_LABELS["0"]}</SegmentedControl.Item>
           <SegmentedControl.Item value="1">{APPROVAL_LABELS["1"]}</SegmentedControl.Item>
           <SegmentedControl.Item value="2">{APPROVAL_LABELS["2"]}</SegmentedControl.Item>
         </SegmentedControl.Root>
-      </Box>
+      </Field>
 
       {/* Reactiveness — only with >1 agent */}
       {showReactiveness && (
-        <Box>
-          <FieldLabel hint="When this agent replies in a multi-agent channel.">
-            Reactiveness
-          </FieldLabel>
+        <Field label="Reactiveness" hint="When this agent replies in a multi-agent channel.">
           <SegmentedControl.Root
             value={
               policy === "all"
@@ -247,19 +252,18 @@ export function AgentConfigForm({
               })}
             </Flex>
           )}
-        </Box>
+        </Field>
       )}
 
       {/* Handle — matters for @-mentions in multi-agent channels */}
       {showHandle && (
-        <Box>
-          <FieldLabel hint="Used to @mention this agent.">Handle</FieldLabel>
+        <Field label="Handle" hint="Used to @mention this agent.">
           <TextField.Root
             value={value.handle ?? ""}
             onChange={(e) => set({ handle: e.target.value })}
             placeholder="agent"
           />
-        </Box>
+        </Field>
       )}
 
       {/* Advanced */}
@@ -274,15 +278,17 @@ export function AgentConfigForm({
         </Text>
         {showAdvanced && (
           <Box mt="2">
-            <FieldLabel hint="Appended to the workspace system prompt.">
-              System prompt (optional)
-            </FieldLabel>
-            <TextArea
-              value={value.systemPrompt ?? ""}
-              onChange={(e) => set({ systemPrompt: e.target.value })}
-              placeholder="Extra instructions for this agent…"
-              rows={4}
-            />
+            <Field
+              label="System prompt (optional)"
+              hint="Appended to the workspace system prompt."
+            >
+              <TextArea
+                value={value.systemPrompt ?? ""}
+                onChange={(e) => set({ systemPrompt: e.target.value })}
+                placeholder="Extra instructions for this agent…"
+                rows={4}
+              />
+            </Field>
           </Box>
         )}
       </Box>
