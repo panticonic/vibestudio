@@ -118,6 +118,70 @@ describe("PanelRuntimeCoordinator", () => {
     expect(coordinator.hasClientHostConnection("desktop-host", "shell:other")).toBe(false);
   });
 
+  it("adopts a missing runtime lease from a registered CDP host connection", () => {
+    const eventService = { emit: vi.fn() };
+    const coordinator = new PanelRuntimeCoordinator({
+      eventService: eventService as unknown as EventService,
+    });
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+      supportsCdp: true,
+    });
+
+    const lease = coordinator.adoptHostLeaseForSlot(
+      "panel:tree/slot-a",
+      "panel:nav-entry-a",
+      "headless-host"
+    );
+
+    expect(lease).toMatchObject({
+      slotId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:nav-entry-a",
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      supportsCdp: true,
+    });
+    expect(lease?.connectionId).toMatch(/^adopted-cdp-panel:tree\/slot-a-/);
+    expect(coordinator.resolveHostForSlot("panel:tree/slot-a")).toEqual({
+      hostConnectionId: "headless-host",
+      supportsCdp: true,
+    });
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "panel:runtimeLeaseChanged",
+      expect.objectContaining({
+        slotId: "panel:tree/slot-a",
+        runtimeEntityId: "panel:nav-entry-a",
+        next: expect.objectContaining({ clientSessionId: "headless-session" }),
+      })
+    );
+  });
+
+  it("does not adopt over an existing lease held by a different host", () => {
+    const { coordinator } = createCoordinator();
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+    });
+    coordinator.acquire("panel:nav-entry-a", {
+      slotId: "panel:tree/slot-a",
+      clientSessionId: "desktop-a",
+      connectionId: "desktop-runtime",
+    });
+
+    expect(
+      coordinator.adoptHostLeaseForSlot("panel:tree/slot-a", "panel:nav-entry-a", "headless-host")
+    ).toBeNull();
+    expect(coordinator.resolveHostForSlot("panel:tree/slot-a")).toEqual({
+      hostConnectionId: "desktop-a",
+      supportsCdp: true,
+    });
+  });
+
   it("records mobile clients as non-CDP-capable holders", () => {
     const coordinator = new PanelRuntimeCoordinator();
     coordinator.registerClient({
@@ -321,6 +385,112 @@ describe("PanelRuntimeCoordinator", () => {
     expect(result).toMatchObject({ assigned: false, reason: "already_held" });
     expect(coordinator.resolveHostForSlot("panel:tree/slot-ui")).toEqual({
       hostConnectionId: "desktop-host",
+      supportsCdp: true,
+    });
+  });
+
+  it("replaces an unavailable desktop UI lease with a live desktop host", () => {
+    const eventService = { emit: vi.fn() };
+    const closeConnection = vi.fn();
+    const coordinator = new PanelRuntimeCoordinator({
+      eventService: eventService as unknown as EventService,
+    });
+    coordinator.setCloseConnection(closeConnection);
+    coordinator.registerClient({
+      clientSessionId: "desktop-old",
+      hostConnectionId: "desktop-old-host",
+      label: "Desktop Old",
+      platform: "desktop",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.registerClient({
+      clientSessionId: "desktop-new",
+      hostConnectionId: "desktop-new-host",
+      label: "Desktop New",
+      platform: "desktop",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.acquire("panel:nav-ui", {
+      slotId: "panel:tree/slot-ui",
+      clientSessionId: "desktop-old",
+      connectionId: "desktop-old-runtime",
+    });
+
+    const result = coordinator.ensureDefaultCdpHostForSlot("panel:tree/slot-ui", "panel:nav-ui", {
+      isHostAvailable: (hostConnectionId) => hostConnectionId !== "desktop-old-host",
+      replaceUnavailableLease: true,
+    });
+
+    expect(result).toMatchObject({
+      assigned: true,
+      lease: {
+        clientSessionId: "desktop-new",
+        hostConnectionId: "desktop-new-host",
+        platform: "desktop",
+      },
+    });
+    expect(coordinator.resolveHostForSlot("panel:tree/slot-ui")).toEqual({
+      hostConnectionId: "desktop-new-host",
+      supportsCdp: true,
+    });
+    expect(closeConnection).toHaveBeenCalledWith(
+      "panel:nav-ui",
+      "desktop-old-runtime",
+      4091,
+      "Panel runtime lease revoked"
+    );
+    expect(eventService.emit).toHaveBeenLastCalledWith(
+      "panel:runtimeLeaseChanged",
+      expect.objectContaining({
+        slotId: "panel:tree/slot-ui",
+        runtimeEntityId: "panel:nav-ui",
+        reason: "acquired",
+        next: expect.objectContaining({ clientSessionId: "desktop-new" }),
+      })
+    );
+  });
+
+  it("does not move an unavailable desktop UI lease to headless", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    coordinator.registerClient({
+      clientSessionId: "desktop-old",
+      hostConnectionId: "desktop-old-host",
+      label: "Desktop Old",
+      platform: "desktop",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+      loadOnLeaseAssignment: true,
+    });
+    coordinator.acquire("panel:nav-ui", {
+      slotId: "panel:tree/slot-ui",
+      clientSessionId: "desktop-old",
+      connectionId: "desktop-old-runtime",
+    });
+
+    const result = coordinator.ensureDefaultCdpHostForSlot("panel:tree/slot-ui", "panel:nav-ui", {
+      isHostAvailable: (hostConnectionId) => hostConnectionId !== "desktop-old-host",
+      replaceUnavailableLease: true,
+    });
+
+    expect(result).toMatchObject({
+      assigned: false,
+      reason: "no_default_cdp_host",
+      lease: { clientSessionId: "desktop-old", hostConnectionId: "desktop-old-host" },
+    });
+    expect(coordinator.resolveHostForSlot("panel:tree/slot-ui")).toEqual({
+      hostConnectionId: "desktop-old-host",
       supportsCdp: true,
     });
   });

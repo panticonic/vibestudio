@@ -36,6 +36,10 @@ interface CdpBridgeOptions {
   authenticateHostProvider?: (token: string, hostConnectionId: string) => boolean;
   canRegisterHostProvider?: (hostConnectionId: string, ownerCallerId?: string) => boolean;
   resolveHostForTarget?: (targetId: string) => string | null;
+  recoverHostLeaseForTarget?: (
+    targetId: string,
+    hostConnectionId: string
+  ) => string | null | Promise<string | null>;
   getTargetInfo?: (targetId: string) => CdpTargetInfo | null | Promise<CdpTargetInfo | null>;
   /** Check if a targetId corresponds to a known panel in the registry. */
   isPanelKnown?: (targetId: string) => boolean | Promise<boolean>;
@@ -125,6 +129,10 @@ export class CdpBridge {
   private authenticateHostProvider: (token: string, hostConnectionId: string) => boolean;
   private canRegisterHostProvider: (hostConnectionId: string, ownerCallerId?: string) => boolean;
   private resolveHostForTarget?: (targetId: string) => string | null;
+  private recoverHostLeaseForTarget?: (
+    targetId: string,
+    hostConnectionId: string
+  ) => string | null | Promise<string | null>;
   private getTargetInfo?: (
     targetId: string
   ) => CdpTargetInfo | null | Promise<CdpTargetInfo | null>;
@@ -160,6 +168,7 @@ export class CdpBridge {
       ((token) => constantTimeStringEqual(token, this.adminToken));
     this.canRegisterHostProvider = options.canRegisterHostProvider ?? (() => true);
     this.resolveHostForTarget = options.resolveHostForTarget;
+    this.recoverHostLeaseForTarget = options.recoverHostLeaseForTarget;
     this.getTargetInfo = options.getTargetInfo;
     this.isPanelKnown = options.isPanelKnown ?? (() => true);
     this.onTargetClientPinChange = options.onTargetClientPinChange;
@@ -565,7 +574,10 @@ export class CdpBridge {
         if (!this.isActiveProvider(hostConnectionId, providerWs)) {
           break;
         }
-        const leaseHostId = this.resolveHostForTarget?.(msg.targetId);
+        let leaseHostId = this.resolveHostForTarget?.(msg.targetId);
+        if (!leaseHostId && hostConnectionId && this.recoverHostLeaseForTarget) {
+          leaseHostId = await this.recoverHostLeaseForTarget(msg.targetId, hostConnectionId);
+        }
         if (this.resolveHostForTarget && !leaseHostId) {
           log.info(`Rejecting cdp:register for ${msg.targetId}: no active CDP-capable lease`);
           if (providerWs.readyState === WebSocket.OPEN) {

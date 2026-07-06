@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
@@ -706,6 +706,32 @@ describe("CdpBridge authentication", () => {
       reason: "no_cdp_capable_lease",
     });
     expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(false);
+  });
+
+  it("recovers a missing lease before accepting provider target registration", async () => {
+    let holder: string | null = null;
+    const recoverHostLeaseForTarget = vi.fn(async (_targetId: string, hostConnectionId: string) => {
+      holder = hostConnectionId;
+      return hostConnectionId;
+    });
+    const harness = await createHarness({
+      resolveHostForTarget: () => holder,
+      recoverHostLeaseForTarget,
+    });
+    const provider = await connectHostProviderOnly(harness, "headless-host");
+
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/browser-1", tabId: 123 })
+    );
+    await waitForTargetRegistered(harness);
+
+    expect(recoverHostLeaseForTarget).toHaveBeenCalledWith("panel:tree/browser-1", "headless-host");
+    expect(harness.bridge.isTargetRegisteredForHost("panel:tree/browser-1", "headless-host")).toBe(
+      true
+    );
+    expect(
+      harness.bridge.getCdpEndpoint("panel:tree/browser-1", "panel:tree/panel-1")
+    ).not.toBeNull();
   });
 
   it("ignores unregister messages from providers that did not register the target", async () => {

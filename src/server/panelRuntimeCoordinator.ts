@@ -22,6 +22,7 @@ const LEASE_RECONNECT_GRACE_MS = 3000;
 
 type DefaultCdpHostOptions = {
   isHostAvailable?: (hostConnectionId: string) => boolean;
+  replaceUnavailableLease?: boolean;
 };
 
 export type RuntimeLeaseClose = (
@@ -179,6 +180,34 @@ export class PanelRuntimeCoordinator {
     return null;
   }
 
+  adoptHostLeaseForSlot(
+    slotId: string,
+    runtimeEntityId: string,
+    hostConnectionId: string
+  ): PanelRuntimeLease | null {
+    const normalizedSlotId = asPanelSlotId(slotId);
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const existing = this.leases.get(entityId) ?? this.leaseForSlot(normalizedSlotId);
+    if (existing) {
+      if (existing.hostConnectionId === hostConnectionId && existing.supportsCdp) return existing;
+      return null;
+    }
+
+    const client = this.clientForHostConnection(hostConnectionId);
+    if (!client || client.supportsCdp === false) return null;
+
+    return this.writeLease(
+      entityId,
+      {
+        slotId,
+        clientSessionId: client.clientSessionId,
+        connectionId: `adopted-cdp-${slotId}-${randomUUID()}`,
+        hostConnectionId,
+      },
+      "acquired"
+    );
+  }
+
   /**
    * Pick the default CDP host for a PROGRAMMATIC panel (no UI launcher).
    *
@@ -193,11 +222,26 @@ export class PanelRuntimeCoordinator {
    * (matches the "degrade to desktop" requirement). Regression guard: 6ab6c7ca
    * flipped this to desktop-first, sending programmatic panels to the headed
    * host where capture hangs.
+   *
+   * `preferredPlatform` is only for stale-lease recovery. Visible UI leases
+   * must recover onto the same platform; only server-created default CDP leases
+   * may fall back to the programmatic default order.
    */
-  getDefaultCdpHostClient(options: DefaultCdpHostOptions = {}): ClientSession | null {
+  getDefaultCdpHostClient(
+    options: DefaultCdpHostOptions = {},
+    preferredPlatform?: PanelRuntimeLease["platform"]
+  ): ClientSession | null {
     const candidates = [...this.clients.values()].sort((a, b) => {
-      const rank = (client: ClientSession) => (client.platform === "headless" ? 0 : 1);
-      return rank(a) - rank(b);
+      const defaultRank = (client: ClientSession) => (client.platform === "headless" ? 0 : 1);
+      const rank = (client: ClientSession) =>
+        preferredPlatform
+          ? client.platform === preferredPlatform
+            ? 0
+            : 1
+          : client.platform === "headless"
+            ? 0
+            : 1;
+      return rank(a) - rank(b) || defaultRank(a) - defaultRank(b);
     });
     for (const client of candidates) {
       const hostConnectionId = client.hostConnectionId ?? client.clientSessionId;
@@ -225,12 +269,26 @@ export class PanelRuntimeCoordinator {
     const existing = this.leases.get(entityId) ?? null;
     if (existing) {
       if (!existing.supportsCdp) return { assigned: false, reason: "mobile_held", lease: existing };
+      if (
+        options.replaceUnavailableLease &&
+        options.isHostAvailable &&
+        !options.isHostAvailable(existing.hostConnectionId)
+      ) {
+        return this.replaceUnavailableCdpLease(entityId, existing, options);
+      }
       return { assigned: false, reason: "already_held", lease: existing };
     }
 
     for (const lease of this.leases.values()) {
       if (lease.slotId !== normalizedSlotId) continue;
       if (!lease.supportsCdp) return { assigned: false, reason: "mobile_held", lease };
+      if (
+        options.replaceUnavailableLease &&
+        options.isHostAvailable &&
+        !options.isHostAvailable(lease.hostConnectionId)
+      ) {
+        return this.replaceUnavailableCdpLease(entityId, lease, options);
+      }
       return { assigned: false, reason: "already_held", lease };
     }
 
@@ -487,11 +545,63 @@ export class PanelRuntimeCoordinator {
     );
   }
 
+  private replaceUnavailableCdpLease(
+    runtimeEntityId: PanelEntityId,
+    existing: PanelRuntimeLease,
+    options: DefaultCdpHostOptions
+  ):
+    | { assigned: true; lease: PanelRuntimeLease }
+    | { assigned: false; reason: "no_default_cdp_host"; lease: PanelRuntimeLease } {
+    const wasDefaultCdpLease = this.defaultCdpLeaseConnections.has(existing.connectionId);
+    const client = this.getDefaultCdpHostClient(options, existing.platform);
+    if (!client || (!wasDefaultCdpLease && client.platform !== existing.platform)) {
+      return { assigned: false, reason: "no_default_cdp_host", lease: existing };
+    }
+    this.defaultCdpLeaseConnections.delete(existing.connectionId);
+    this.clearExpiry(existing.runtimeEntityId);
+    this.leases.delete(existing.runtimeEntityId);
+    this.closeConnection?.(
+      existing.runtimeEntityId,
+      existing.connectionId,
+      4091,
+      "Panel runtime lease revoked"
+    );
+    this.emitChange(existing.runtimeEntityId, existing.slotId, existing, null, "revoked");
+    return {
+      assigned: true,
+      lease: this.writeLease(
+        runtimeEntityId,
+        {
+          slotId: existing.slotId,
+          clientSessionId: client.clientSessionId,
+          connectionId: `default-cdp-${existing.slotId}-${randomUUID()}`,
+          hostConnectionId: client.hostConnectionId,
+        },
+        "acquired",
+        { defaultCdpLease: wasDefaultCdpLease }
+      ),
+    };
+  }
+
   private shouldReassignDefaultCdpLease(
     lease: PanelRuntimeLease,
     wasDefaultCdpLease = this.defaultCdpLeaseConnections.has(lease.connectionId)
   ): boolean {
     return wasDefaultCdpLease && lease.platform !== "headless";
+  }
+
+  private leaseForSlot(slotId: PanelSlotId): PanelRuntimeLease | null {
+    for (const lease of this.leases.values()) {
+      if (lease.slotId === slotId) return lease;
+    }
+    return null;
+  }
+
+  private clientForHostConnection(hostConnectionId: string): ClientSession | null {
+    for (const client of this.clients.values()) {
+      if ((client.hostConnectionId ?? client.clientSessionId) === hostConnectionId) return client;
+    }
+    return null;
   }
 
   private clearExpiry(runtimeEntityId: PanelEntityId): void {

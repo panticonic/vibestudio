@@ -211,6 +211,7 @@ function createOrchestrator(
     ),
   };
   const cdpHost = {
+    registerTarget: vi.fn(),
     cleanupPanelAccess: vi.fn(),
     unregisterTarget: vi.fn(),
   };
@@ -402,6 +403,33 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(shellCore.notifyFocused).not.toHaveBeenCalled();
     expect(panelView.setViewVisible).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
+  });
+
+  it("repairs a missing runtime lease for an existing native view and registers CDP", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView, cdpHost, serverClient } = createOrchestrator(registry);
+    panelView.hasView.mockImplementation((panelId: string) => panelId === panel.id);
+    panelView.getWebContents.mockReturnValue({ id: 42, isDestroyed: () => false } as never);
+
+    await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
+      panelId: panel.id,
+      status: "loaded",
+      focused: false,
+      loaded: true,
+    });
+
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "acquire", [
+      expect.stringMatching(/^panel:nav-panel:tree\/panel-1$/),
+      expect.objectContaining({
+        slotId: panel.id,
+        clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      }),
+    ]);
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+    expect(cdpHost.registerTarget).toHaveBeenCalledWith(panel.id, 42);
   });
 });
 

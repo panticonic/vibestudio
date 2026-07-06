@@ -2,27 +2,24 @@
  * Browser transport entry point — compiled to an IIFE by the build system and
  * served as `__transport.js` under each panel route.
  *
- * Panels no longer open a direct `ws://…/rpc` WebSocket. Panel RPC rides the
- * **shell bridge** (`__vibestudioShell` — Electron `contextBridge` on desktop, the
- * React-Native `postMessage` bridge on mobile), which the host muxes onto its
- * single WebRTC control channel as the panel's own logical session. The panel
- * runtime's `createPanelTransport()` consumes that bridge directly, so this
- * entry no longer constructs any transport global.
+ * Panel RPC rides the **shell bridge** (`__vibestudioShell` — Electron
+ * `contextBridge` on desktop, the React-Native `postMessage` bridge on mobile),
+ * which the host muxes onto its control channel as the panel's own logical
+ * session. Headless Chromium has no preload/postMessage host boundary, so this
+ * entry installs a fallback shell bridge backed by the panel's own `/rpc`
+ * WebSocket when the host has not already exposed one.
  *
- * Its remaining job is to apply early `stateArgs:updated` events the host pushes
- * over the bridge before the panel bundle's runtime is up.
+ * It also applies early `stateArgs:updated` events the host pushes over the
+ * bridge before the panel bundle's runtime is up.
  *
  * Timing: configLoader runs as a blocking <script> and sets the panel globals
- * (and `__vibestudioShell` is exposed by the host preload/injection) before
- * dynamically loading this script.
+ * before dynamically loading this script. Host preload/injection may already
+ * have exposed `__vibestudioShell`; otherwise we synthesize it here before the
+ * panel bundle starts.
  */
 
 import { applyStateArgsSnapshot } from "@vibestudio/shared/panel/applyStateArgsSnapshot";
-import type { RpcEnvelope } from "@vibestudio/rpc";
-
-type ShellEnvelopeBridge = {
-  onEnvelope?: (handler: (envelope: RpcEnvelope) => void) => () => void;
-};
+import { installFallbackShellBridge } from "./browserShellBridge.js";
 
 type RuntimeEventMessage = {
   type: "event";
@@ -46,11 +43,7 @@ function isRuntimeEventMessage(message: unknown): message is RuntimeEventMessage
 // back to the panel's logical session. This early listener applies them before
 // the panel bundle's runtime takes over; applyStateArgsSnapshot is idempotent.
 
-const shell = (
-  globalThis as typeof globalThis & {
-    __vibestudioShell?: ShellEnvelopeBridge;
-  }
-).__vibestudioShell as ShellEnvelopeBridge | undefined;
+const shell = installFallbackShellBridge();
 
 shell?.onEnvelope?.((envelope) => {
   const message = envelope.message;

@@ -1507,6 +1507,7 @@ function createWindow(): void {
 
   // Setup application menu (uses shell webContents for menu events)
   if (viewManager) setMenuViewManager(viewManager);
+  setMenuEventService(eventService);
   if (!IS_HEADLESS_HOST)
     setupMenu(mainWindow, viewManager.getShellWebContents(), {
       onHistoryBack: () => {

@@ -35,7 +35,7 @@ import {
   getPanelStateArgs,
 } from "@vibestudio/shared/panel/accessors";
 import { isBrowserPanelSource, isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
-import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { asPanelSlotId, isPanelEntityId } from "@vibestudio/shared/panel/ids";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import { PanelManager } from "@vibestudio/shared/shell/panelManager";
 import type {
@@ -450,14 +450,20 @@ export async function createServerPanelTreeBridge(
     parentId,
     contextId: getPanelContextId(panel),
   });
-  const ensureDefaultLoaded = async (panelId: string) => {
+  const ensureDefaultLoaded = async (
+    panelId: string,
+    options: { replaceUnavailableLease?: boolean } = {}
+  ) => {
     await sync();
     const runtimeEntityId = await panelManager.getCurrentEntityId(asPanelSlotId(panelId));
     const cdpBridge = deps.container.get<import("./cdpBridge.js").CdpBridge>("cdpBridge");
     let assigned = deps.panelRuntimeCoordinator?.ensureDefaultCdpHostForSlot(
       panelId,
       runtimeEntityId,
-      { isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId) }
+      {
+        isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId),
+        replaceUnavailableLease: options.replaceUnavailableLease,
+      }
     );
     if (
       assigned &&
@@ -470,7 +476,10 @@ export async function createServerPanelTreeBridge(
         assigned = deps.panelRuntimeCoordinator?.ensureDefaultCdpHostForSlot(
           panelId,
           runtimeEntityId,
-          { isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId) }
+          {
+            isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId),
+            replaceUnavailableLease: options.replaceUnavailableLease,
+          }
         );
       }
     }
@@ -493,13 +502,16 @@ export async function createServerPanelTreeBridge(
         code: "panel_host_command_unavailable_mobile_held",
       });
     }
-    if (holder && !cdpBridge.isProviderConnected(holder.hostConnectionId)) {
-      throw Object.assign(new Error(`CDP host provider unavailable for panel: ${panelId}`), {
-        code: "panel_host_command_unavailable_cdp_host",
+    const holderProviderUnavailable =
+      holder && !cdpBridge.isProviderConnected(holder.hostConnectionId);
+    if (
+      !holder ||
+      holderProviderUnavailable ||
+      !cdpBridge.isTargetRegisteredForHost(panelId, holder.hostConnectionId)
+    ) {
+      const loaded = await ensureDefaultLoaded(panelId, {
+        replaceUnavailableLease: Boolean(holderProviderUnavailable),
       });
-    }
-    if (!holder || !cdpBridge.isTargetRegisteredForHost(panelId, holder.hostConnectionId)) {
-      const loaded = await ensureDefaultLoaded(panelId);
       if (loaded.status === "mobile_held" || loaded.status === "no_default_cdp_host") {
         throw panelHostCommandAssignmentError(panelId, loaded.status);
       }
@@ -508,6 +520,11 @@ export async function createServerPanelTreeBridge(
     if (holder && !holder.supportsCdp) {
       throw Object.assign(new Error(`Panel ${panelId} is held by a non-CDP host`), {
         code: "panel_host_command_unavailable_mobile_held",
+      });
+    }
+    if (holder && !cdpBridge.isProviderConnected(holder.hostConnectionId)) {
+      throw Object.assign(new Error(`CDP host provider unavailable for panel: ${panelId}`), {
+        code: "panel_host_command_unavailable_cdp_host",
       });
     }
     if (holder) {
@@ -1176,6 +1193,18 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             if (!resolved) return null;
             return resolved.supportsCdp ? resolved.hostConnectionId : null;
           },
+          recoverHostLeaseForTarget: async (targetId, hostConnectionId) => {
+            const target = await requestPanelMetadataForServices(targetId);
+            if (!target || !target.runtimeEntityId || !isPanelEntityId(target.runtimeEntityId)) {
+              return null;
+            }
+            const lease = deps.panelRuntimeCoordinator?.adoptHostLeaseForSlot(
+              targetId,
+              target.runtimeEntityId,
+              hostConnectionId
+            );
+            return lease?.supportsCdp ? lease.hostConnectionId : null;
+          },
           getTargetInfo: async (targetId) => {
             const target = await requestPanelMetadataForServices(targetId);
             if (!target) return null;
@@ -1283,10 +1312,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             );
           }
           const coordinator = deps.panelRuntimeCoordinator;
-          if (!holder && coordinator) {
+          if ((!holder || !bridge.isProviderConnected(holder.hostConnectionId)) && coordinator) {
+            const replaceUnavailableLease = Boolean(holder);
             const assign = () =>
               coordinator.ensureDefaultCdpHostForSlot(panelId, runtimeEntityId, {
                 isHostAvailable: (hostConnectionId) => bridge.isProviderConnected(hostConnectionId),
+                replaceUnavailableLease,
               });
             let assigned = assign();
             if (
