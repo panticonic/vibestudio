@@ -506,6 +506,9 @@ return {
   build: await rpc.call("main", "build.inspectBuildProvenance", [
     "@workspace-skills/system-testing",
   ]),
+  serverLogs: await rpc.call("main", "serverLog.query", [
+    { level: "warn", limit: 100 },
+  ]),
 };
 ```
 
@@ -650,6 +653,8 @@ with ordinary smoke testing:
   separate error buffer through `handle.cdp.consoleHistory()`
 - unit diagnostics must expose persisted worker/DO/extension logs and separate
   error buffers through `workspace.units.diagnostics(name)`
+- server host logs must be accessible through `serverLog.query/tail/stats`, and
+  live following must use `server-log:append` or the `about/server-logs` viewer
 - GAD diagnostic APIs must provide bounded summaries for storage,
   publication, turn, invocation, hash, branch, and file/state probes
 - harness failures must surface visibly for thrown evals, huge eval returns,

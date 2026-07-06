@@ -190,6 +190,12 @@ host-captured console history. Renderer lifecycle failures such as crashes,
 failed loads, and unresponsive renderers are recorded in the historical error
 buffer with `source: "lifecycle"`.
 
+Use the server host log stream for failures outside the renderer, such as panel
+broker errors, build/reload scheduling, workerd supervision, reconnects, and
+startup/shutdown. Query `services.serverLog.query(...)` from eval or open
+`about/server-logs` to follow live; the full contract is in
+`../server-logs/SKILL.md`.
+
 Use the page object returned by `handle.cdp.lightweightPage()` for automation:
 
 ```ts

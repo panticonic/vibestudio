@@ -27,6 +27,11 @@ panel.
 | [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                 |
 | [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                       |
 
+For workspace server host logs, use the separate
+[server-logs](../server-logs/SKILL.md) skill. It covers the read-only
+`serverLog` service, bounded queries, and live following through
+`server-log:append` or the `about/server-logs` viewer.
+
 ## Execution Modes
 
 All code runs through the same compile pipeline (Sucrase transform + CJS

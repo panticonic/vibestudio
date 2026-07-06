@@ -5,6 +5,12 @@ looks inconsistent. Prefer bounded inspector APIs first. Hydrated history APIs
 are for targeted follow-up after you know the exact event, envelope, digest, or
 state hash you need.
 
+If the suspected failure is in host orchestration rather than GAD state itself
+— server startup/shutdown, projection scheduling, RPC dispatch, workerd
+supervision, reconnects, or build/reload events — inspect the workspace server
+host logs with `services.serverLog.query(...)` or the `about/server-logs` live
+viewer. See `../server-logs/SKILL.md` for querying and live following.
+
 Do not query raw branch tables such as `trajectory_branches`; that table is not
 part of the current public GAD schema. If an inspector points you to a specific
 artifact and SQL is still necessary, first discover the current schema with a

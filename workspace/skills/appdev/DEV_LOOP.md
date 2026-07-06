@@ -163,6 +163,10 @@ For terminal apps:
 - Expect `available` when the build is trusted but no process is running, and
   `running` when the runner has spawned the process.
 - Inspect stdout/stderr with `workspace.units.logs(appName)`.
+- Inspect host runner/reconcile failures with `serverLog.query` (eval:
+  `services.serverLog.query(...)`; app/panel/worker:
+  `rpc.call("main", "serverLog.query", [{ ... }])`) or the
+  `about/server-logs` live viewer; see `../server-logs/SKILL.md`.
 - Test pushed updates and rollback while the terminal app is running; the runner
   should replace the process with the selected trusted build.
 
@@ -181,6 +185,12 @@ node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$V
 node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units restart @workspace-apps/remote-cli
 node scripts/vibestudio-admin.mjs --url http://localhost:39139 --admin-token "$VIBESTUDIO_ADMIN_TOKEN" units logs @workspace-apps/remote-cli --limit 120
 ```
+
+From app, panel, worker, or eval contexts, use `workspace.units.*` for the app
+process and `serverLog.*` for the host server. In eval, `services.serverLog.*`
+is the convenience client; elsewhere use `rpc.call("main", "serverLog.query",
+[{ ... }])`. `serverLog.query/tail/stats` is read-only and supports live
+following through `server-log:append`; humans can open `about/server-logs`.
 
 For a full terminal app smoke:
 

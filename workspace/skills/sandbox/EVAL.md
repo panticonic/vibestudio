@@ -153,6 +153,11 @@ eval({ code: `
 `console.log/warn/error/info/debug` output is captured during the run and
 returned to the agent in the result's `console` field.
 
+This is only the eval run's own console output. To debug the workspace server
+host process itself, query `services.serverLog.tail/query/stats` from eval, or
+open the `about/server-logs` viewer for a live follow. See
+`../server-logs/SKILL.md`.
+
 ## Result Shape
 
 `eval.run` returns `{ success, console, returnValue?, error?, scopeKeys? }`:
@@ -662,6 +667,7 @@ return await rpc.call("main", "gad.inspectChannelEnvelopes", [{ channelId, limit
 return await rpc.call("main", "gad.inspectTurnState", [{ branchId }]);
 return await rpc.call("main", "gad.inspectInvocationState", [{ transportCallId }]);
 return await rpc.call("main", "gad.inspectPublicationIntegrity", [{ channelId }]);
+return await services.serverLog.query({ level: "warn", contains: "BuildV2", limit: 100 });
 ```
 
 If you need a large artifact, store the full bytes/text in the **blobstore** and

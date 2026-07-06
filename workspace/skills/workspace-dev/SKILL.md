@@ -23,6 +23,11 @@ mobile React Native, or terminal targets), use the `appdev` skill instead.
 | [TOOLS.md](TOOLS.md)                   | Agent tools reference                                                                                                                   |
 | [create-project.ts](create-project.ts) | Project scaffolding helpers (importable via eval `imports` parameter)                                                           |
 
+For host-process debugging while developing workspace units, pair the relevant
+unit/panel diagnostics below with the [server-logs](../server-logs/SKILL.md)
+skill. `serverLog` captures the workspace server's own logs and supports live
+following through `server-log:append` and the `about/server-logs` viewer.
+
 ## Interaction Patterns
 
 See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERNS.md) for when to use inline UI vs eval for side-effect actions. In short: if an action involves choices or could fail, prefer rendering an inline UI that lets the user trigger it and reports results back via `chat.publish`.

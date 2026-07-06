@@ -218,6 +218,13 @@ CDP automation lives under `handle.cdp` and is available for panel-tree targets 
 
 Use `handle.snapshot()` for an agent-readable view of the running panel. Use `handle.tree()`, `handle.state()`, and `handle.routes()` for deeper workspace-panel inspection. Use typecheck before launch when the change is more than a small text edit.
 
+For runtime failures, choose the narrowest log surface first: panel
+`handle.diagnostics(...)` for renderer console/lifecycle state,
+`workspace.units.diagnostics(name)` for a panel/worker/DO/extension/app unit,
+and `serverLog` for host server behavior such as build scheduling, workerd
+supervision, RPC dispatch, reconnects, or startup/shutdown. See
+`../server-logs/SKILL.md` for host log querying and live following.
+
 ## Forking Existing Projects
 
 A fork copies an existing repo to a new path **preserving history** — the new

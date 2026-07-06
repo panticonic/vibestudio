@@ -92,6 +92,15 @@ console.log("Unit sample:", units.slice(0, 5).map((unit) => unit.id));
 returns the catalog entry for that id. Use `workspace.units.*` for source unit
 inspection, diagnostics, logs, versions, restart, and rollback.
 
+Workspace host logs are exposed through the service catalog, not as an
+`@workspace/runtime` namespace. Use `services.serverLog.tail/query/stats` in
+eval, or raw RPC calls such as
+`rpc.call("main", "serverLog.query", [{ level: "warn", limit: 100 }])`.
+Live following uses `rpc.call("main", "events.subscribe",
+["server-log:append"])`; humans can open the `about/server-logs` viewer. See
+[`server-logs`](../server-logs/SKILL.md) for the full contract and cleanup
+pattern.
+
 ## Notifications
 
 Use `notifications.show()` for host chrome notifications:

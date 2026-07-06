@@ -377,6 +377,26 @@ channel checkpoints, and recent lifecycle/debug events. Do not add sleeps or
 timeouts to diagnose these stalls; inspect the debug state and fix the blocked
 operation. See `../../../docs/agent-debug-port.md` for the full field guide.
 
+## Host Server Logs
+
+Use `workspace.units.logs(name)` and `workspace.units.diagnostics(name)` for the
+panel, worker, DO, extension, or app unit itself. Use `serverLog` when the
+failure may be in the workspace server around that unit: build/reconcile,
+workerd supervision, routing, RPC dispatch, gateway reconnects, idle exit, or
+startup/shutdown.
+
+```ts
+const recent = await rpc.call("main", "serverLog.query", [
+  { level: "warn", limit: 100 },
+]);
+const build = await rpc.call("main", "serverLog.query", [
+  { tag: "BuildV2", limit: 100 },
+]);
+```
+
+For live following, open `about/server-logs` or subscribe to
+`server-log:append` as documented in `../server-logs/SKILL.md`.
+
 ## Blobstore (content-addressable bytes)
 
 The per-workspace blobstore stores arbitrary content keyed by sha256 digest.

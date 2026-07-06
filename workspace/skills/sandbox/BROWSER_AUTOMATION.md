@@ -163,6 +163,11 @@ The same historical capture includes renderer lifecycle failures such as
 `render-process-gone`, failed main-frame loads, and unresponsive renderer
 events.
 
+If the symptom is outside the renderer — panel broker errors, build/reload
+scheduling, workerd supervision, server reconnects, or startup/shutdown — use
+the host log stream instead: `services.serverLog.query(...)` from eval, or the
+`about/server-logs` live viewer. See `../server-logs/SKILL.md`.
+
 `page.url()` follows the Playwright shape: it returns a string synchronously,
 not a `Promise`. Do not `await page.url()` or attach `.then()` / `.catch()` to
 it. Use `await page.evaluate(() => location.href)` only when you need the page
