@@ -463,6 +463,24 @@ describe("AppHost", () => {
     });
   });
 
+  it("registers existing approved Electron apps when reusing the active build after restart", async () => {
+    const { host, buildSystem, entityCache, graphNode } = makeHarness();
+    installApp(host, graphNode);
+
+    expect(entityCache.resolveActive("@workspace-apps/shell")).toBeNull();
+
+    await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
+    await host.whenSettled();
+
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(entityCache.resolveActive("@workspace-apps/shell")).toMatchObject({
+      id: "@workspace-apps/shell",
+      kind: "app",
+      source: { repoPath: "apps/shell", effectiveVersion: "ev-app" },
+      status: "active",
+    });
+  });
+
   it("surfaces push rebuild failures and keeps the previous app build active", async () => {
     const { host, buildSystem, eventService, notificationService, graphNode } = makeHarness();
     installApp(host, graphNode);
@@ -2107,6 +2125,79 @@ describe("AppHost", () => {
     expect(host.registry.get(graphNode.name)).toMatchObject({
       status: "running",
       activeBundleKey: "rn-preflight-key",
+    });
+  });
+
+  it("does not restage React Native approval for an unchanged trusted app while provider starts", async () => {
+    const { host, buildSystem, approvalQueue, approvalCoordinator, graphNode } = makeHarness({
+      useApprovalCoordinator: true,
+    });
+    setAppManifestTarget(graphNode, "react-native", ["notifications"]);
+    const provider = {
+      name: "@workspace-extensions/react-native",
+      activeEv: "ev-provider",
+      activeBuildKey: "provider-build",
+      contractVersion: "vibestudio-build-provider-v1",
+    };
+    const providerDep = {
+      [`build-provider:${provider.name}`]:
+        "ev-provider:provider-build:vibestudio-build-provider-v1",
+    };
+    installAppEntry(host, graphNode, {
+      target: "react-native",
+      activeBundleKey: "rn-existing-key",
+      activeEv: "ev-app",
+      capabilities: ["notifications"],
+    });
+    host.registry.patch(graphNode.name, { activeExternalDeps: providerDep });
+    const rnBuild = {
+      dir: path.join(
+        path.dirname(graphNode.path),
+        "..",
+        "..",
+        "state",
+        "builds",
+        "rn-existing-key"
+      ),
+      metadata: {
+        ev: "ev-app",
+        sourceStateHash: "state:test",
+        details: {
+          kind: "app",
+          target: "react-native",
+          integrity: "sha256-rn-app",
+          rnHostAbi: "rn-host-1",
+          provider,
+        },
+      },
+      artifacts: [
+        {
+          path: "index.android.bundle",
+          role: "primary",
+          contentType: "application/javascript; charset=utf-8",
+          encoding: "utf8",
+          platform: "android",
+          integrity: "sha256-android",
+          content: "android bundle",
+        },
+      ],
+    };
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      key === "rn-existing-key" ? (rnBuild as never) : null
+    );
+    buildSystem.getBuildProviderDetails.mockReturnValue(null);
+
+    await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
+    await host.whenSettled();
+    approvalCoordinator?.publishPending("startup");
+    await flushAsyncWork();
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      status: "running",
+      activeBundleKey: "rn-existing-key",
+      activeExternalDeps: providerDep,
     });
   });
 
