@@ -107,6 +107,7 @@ export interface ProjectedInvocation {
     mode?: "fresh" | "fork";
     taskChannelId?: string;
     contextId?: string;
+    parentContextId?: string | null;
     childEntityId?: string;
     label?: string;
     merge?: "merged" | "conflicted" | "discarded";
@@ -220,7 +221,7 @@ function blocksWithDiagnostic(
 function upsertContentBlock(
   blocks: MessageBlockInput[] | undefined,
   blockId: string,
-  type: "text" | "thinking",
+  type: "text" | "thinking" | "toolcall-progress",
   text: string,
   replace: boolean | undefined
 ): MessageBlockInput[] {

@@ -156,22 +156,26 @@ function modelFailureOutcomeFromMessage(
   return modelFailureOutcome(new Error(message), request, opts);
 }
 
+function modelCallTraceEnabled(env?: Record<string, unknown>): boolean {
+  const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env;
+  return (
+    env?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "1" ||
+    env?.["VIBESTUDIO_MODEL_CALL_TRACE"] === true ||
+    processEnv?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "1" ||
+    processEnv?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "true" ||
+    env?.["VIBESTUDIO_LOG_LEVEL"] === "verbose" ||
+    processEnv?.["VIBESTUDIO_LOG_LEVEL"] === "verbose"
+  );
+}
+
 function traceModelCallStage(
   stage: string,
   descriptor: ModelCallEffect,
   extra?: Record<string, unknown>,
   env?: Record<string, unknown>
 ): void {
-  const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
-    .process?.env;
-  const traceEnabled =
-    env?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "1" ||
-    env?.["VIBESTUDIO_MODEL_CALL_TRACE"] === true ||
-    processEnv?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "1" ||
-    processEnv?.["VIBESTUDIO_MODEL_CALL_TRACE"] === "true" ||
-    env?.["VIBESTUDIO_LOG_LEVEL"] === "verbose" ||
-    processEnv?.["VIBESTUDIO_LOG_LEVEL"] === "verbose";
-  if (!traceEnabled) return;
+  if (!modelCallTraceEnabled(env)) return;
   console.info("[model-call] trace:", {
     stage,
     channelId: descriptor.channelId,
@@ -212,6 +216,7 @@ function stableShortHash(input: string): string {
 }
 
 function toPiMessages(messages: ModelMessage[]): Message[] {
+  assertToolResultsHaveAssistantCalls(messages);
   const out: Message[] = [];
   for (const message of messages) {
     if (message.role === "user") {
@@ -243,6 +248,44 @@ function toPiMessages(messages: ModelMessage[]): Message[] {
     }
   }
   return out;
+}
+
+function assertToolResultsHaveAssistantCalls(messages: ModelMessage[]): void {
+  const availableToolCalls = new Set<string>();
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      for (const block of message.blocks ?? []) {
+        const id = toolCallIdFromBlock(block);
+        if (id) availableToolCalls.add(id);
+      }
+      continue;
+    }
+    if (message.role !== "toolResult") continue;
+    const toolCallId = message.toolCallId ?? "";
+    if (toolCallId && availableToolCalls.has(toolCallId)) {
+      availableToolCalls.delete(toolCallId);
+      continue;
+    }
+    const label = [message.toolName, toolCallId].filter(Boolean).join(" ");
+    throw new Error(
+      `model transcript invariant violated: orphaned tool result${label ? ` ${label}` : ""}`
+    );
+  }
+  const danglingToolCall = availableToolCalls.values().next().value as string | undefined;
+  if (danglingToolCall) {
+    throw new Error(
+      `model transcript invariant violated: assistant tool call ${danglingToolCall} has no tool result`
+    );
+  }
+}
+
+function toolCallIdFromBlock(block: unknown): string | null {
+  if (!block || typeof block !== "object") return null;
+  const record = block as Record<string, unknown>;
+  const type = record["type"];
+  if (type !== "toolCall" && type !== "tool_call") return null;
+  const id = record["id"] ?? record["toolCallId"] ?? record["call_id"];
+  return typeof id === "string" && id.length > 0 ? id : null;
 }
 
 /** Journaled protocol blocks carry `content`; pi-ai message blocks carry
@@ -385,13 +428,152 @@ function deterministicTestModeModelOutcome(
   };
 }
 
+const SLOW_MODEL_CALL_WARN_INTERVAL_MS = 30_000;
+/** Re-emit the ephemeral tool-call progress line every this many argument
+ *  bytes (~a few times per second at typical stream rates). */
+const TOOLCALL_PROGRESS_EMIT_BYTES = 2_048;
+
+function formatKb(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+/** Best-effort tool name from a stream event's `partial` message (the last
+ *  toolCall content block carries the name once the provider has parsed it). */
+function toolCallNameFromEvent(event: Record<string, unknown>): string | null {
+  const partial = event["partial"];
+  if (!partial || typeof partial !== "object") return null;
+  const content = (partial as Record<string, unknown>)["content"];
+  if (!Array.isArray(content)) return null;
+  for (let i = content.length - 1; i >= 0; i -= 1) {
+    const block = content[i];
+    if (!block || typeof block !== "object") continue;
+    const record = block as Record<string, unknown>;
+    if (record["type"] !== "toolCall") continue;
+    const name = record["name"] ?? record["toolName"] ?? record["functionName"];
+    return typeof name === "string" && name.length > 0 ? name : null;
+  }
+  return null;
+}
+
+/** Live stage marker for the slow-call watchdog: which phase of the model
+ *  call is currently pending, and since when. Event accounting distinguishes
+ *  a legitimately long generation (delta-heavy) from a stream that spins on
+ *  ignored events (keepalives/status frames) and never terminates. */
+type ModelCallProgress = {
+  stage: string;
+  stageChangedAt: number;
+  startedAt: number;
+  eventCounts: Record<string, number>;
+  lastEventType: string | null;
+  totalEvents: number;
+  lastEventAt: number | null;
+  /** Largest gap between consecutive stream events since the last slow-call
+   *  warning — distinguishes a provider that throttles mid-stream (large gaps)
+   *  from a steady stream that is merely long (small gaps, high totals). */
+  maxEventGapMs: number;
+  /** Stage-transition timeline for the per-call completion summary. */
+  marks: Array<[string, number]>;
+};
+
+/** Pairwise phase durations from the stage timeline, keyed by the phase that
+ *  was running (e.g. `credential.resolve.start: 120` = 120ms resolving). */
+function phaseDurationsFromMarks(marks: Array<[string, number]>, endedAt: number): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (let i = 0; i < marks.length; i += 1) {
+    const [stage, at] = marks[i]!;
+    const nextAt = i + 1 < marks.length ? marks[i + 1]![1] : endedAt;
+    out[stage] = (out[stage] ?? 0) + (nextAt - at);
+  }
+  return out;
+}
+
 export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
   kind: "model_call",
 
-  async execute({ descriptor, state, signal, deps, onEphemeral }) {
+  async execute(args) {
+    const { descriptor } = args;
+    const progress: ModelCallProgress = {
+      stage: "start",
+      stageChangedAt: Date.now(),
+      startedAt: Date.now(),
+      eventCounts: {},
+      lastEventType: null,
+      totalEvents: 0,
+      lastEventAt: null,
+      maxEventGapMs: 0,
+      marks: [["start", Date.now()]],
+    };
+    // Stall diagnostics: several phases of a model call (credential resolve,
+    // blob hydration, the provider stream itself) ride host RPCs with no
+    // transport deadline — while any of them is pending, periodically name
+    // the offending stage in the log instead of hanging silently.
+    let eventsAtLastWarn = 0;
+    const slowTimer = setInterval(() => {
+      const eventsInWindow = progress.totalEvents - eventsAtLastWarn;
+      eventsAtLastWarn = progress.totalEvents;
+      const maxEventGapMs = progress.maxEventGapMs;
+      progress.maxEventGapMs = 0;
+      console.warn("[model-call] slow model call:", {
+        stage: progress.stage,
+        stageAgeMs: Date.now() - progress.stageChangedAt,
+        totalMs: Date.now() - progress.startedAt,
+        eventCounts: progress.eventCounts,
+        lastEventType: progress.lastEventType,
+        eventsInWindow,
+        eventsPerSecond:
+          Math.round((eventsInWindow / (SLOW_MODEL_CALL_WARN_INTERVAL_MS / 1000)) * 10) / 10,
+        maxEventGapMs,
+        channelId: descriptor.channelId,
+        messageId: descriptor.messageId,
+        provider: descriptor.request.provider,
+        model: descriptor.request.model,
+      });
+    }, SLOW_MODEL_CALL_WARN_INTERVAL_MS);
+    try {
+      return await executeModelCall(args, progress);
+    } finally {
+      clearInterval(slowTimer);
+      // Per-call phase summary: which phase the time went to. A session that
+      // "starts fast and crawls" shows its growth here — context-build/
+      // hydration (our storage path), time-to-first-event (provider prefill /
+      // prompt-cache miss), or stream rate (provider). Quick calls stay silent
+      // unless the fine-grained trace is enabled; slow ones always log.
+      const endedAt = Date.now();
+      const summaryWorthLogging =
+        endedAt - progress.startedAt >= 10_000 ||
+        modelCallTraceEnabled(args.deps.env);
+      if (summaryWorthLogging)
+        console.info("[model-call] finished:", {
+        totalMs: endedAt - progress.startedAt,
+        phaseMs: phaseDurationsFromMarks(progress.marks, endedAt),
+        totalEvents: progress.totalEvents,
+        eventCounts: progress.eventCounts,
+        channelId: descriptor.channelId,
+        messageId: descriptor.messageId,
+        provider: descriptor.request.provider,
+        model: descriptor.request.model,
+      });
+    }
+  },
+};
+
+async function executeModelCall(
+  {
+    descriptor,
+    state,
+    signal,
+    deps,
+    onEphemeral,
+  }: Parameters<EffectExecutor<ModelCallEffect>["execute"]>[0],
+  progress: ModelCallProgress
+): Promise<EffectOutcome | { deferred: true }> {
     const request = descriptor.request;
-    const trace = (stage: string, extra?: Record<string, unknown>) =>
+    const trace = (stage: string, extra?: Record<string, unknown>) => {
+      progress.stage = stage;
+      progress.stageChangedAt = Date.now();
+      progress.marks.push([stage, progress.stageChangedAt]);
       traceModelCallStage(stage, descriptor, extra, deps.env);
+    };
     trace("start");
 
     // Resolve the model first: credentials are URL-bound, so the lookup (and
@@ -516,6 +698,10 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
     } as never);
 
     const blockIds = new Map<number, string>();
+    const toolCallProgress = new Map<
+      number,
+      { name: string | null; argBytes: number; emitted: number }
+    >();
     let deltaCounter = 0;
     let sawFirstStreamEvent = false;
     const idleTimeoutMs = modelStreamIdleTimeoutMs(request);
@@ -540,6 +726,21 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
         });
         if (next.done) break;
         const event = next.value;
+        // Direct progress update (not `trace` — per-event tracing would spam):
+        // a healthy stream shows stage "streaming" with a fresh stageChangedAt.
+        progress.stage = "streaming";
+        progress.stageChangedAt = Date.now();
+        const eventArrivedAt = Date.now();
+        if (progress.lastEventAt !== null) {
+          const gap = eventArrivedAt - progress.lastEventAt;
+          if (gap > progress.maxEventGapMs) progress.maxEventGapMs = gap;
+        }
+        progress.lastEventAt = eventArrivedAt;
+        progress.totalEvents += 1;
+        const progressEventType = String(event["type"] ?? "unknown");
+        progress.eventCounts[progressEventType] =
+          (progress.eventCounts[progressEventType] ?? 0) + 1;
+        progress.lastEventType = progressEventType;
         if (!sawFirstStreamEvent) {
           sawFirstStreamEvent = true;
           trace("stream.first-event", {
@@ -549,7 +750,14 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
         const type = String(event["type"] ?? "");
         if (type === "text_delta" || type === "thinking_delta") {
           const index = Number(event["contentIndex"] ?? event["index"] ?? 0);
-          if (!blockIds.has(index)) {
+          // First delta for this block IN THIS EXECUTION replaces the block's
+          // accumulated text instead of appending. A retry of a retryably-failed
+          // attempt reuses the same messageId AND blockIds, and no terminal is
+          // published for the failed attempt — without `replace`, each retry's
+          // re-derived thinking/text concatenates onto the dead attempt's in the
+          // streaming card (the "word salad" wedge).
+          const isFirstDeltaForBlock = !blockIds.has(index);
+          if (isFirstDeltaForBlock) {
             blockIds.set(index, `${descriptor.messageId}:block:${index}`);
           }
           deltaCounter += 1;
@@ -562,6 +770,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
               blockId: blockIds.get(index) as never,
               type: type === "text_delta" ? "text" : "thinking",
               text: String(event["delta"] ?? event["text"] ?? ""),
+              ...(isFirstDeltaForBlock ? { replace: true } : {}),
             },
             createdAt: new Date().toISOString(),
           } as AgenticEvent;
@@ -570,6 +779,58 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
             channelId: descriptor.channelId,
             event: deltaEvent,
           });
+        } else if (
+          type === "toolcall_start" ||
+          type === "toolcall_delta" ||
+          type === "toolcall_end"
+        ) {
+          // Tool-call argument streaming is otherwise invisible: a model that
+          // writes a whole file through tool args streams for minutes with a
+          // dead-silent card ("looks hung"). Emit a throttled, self-replacing
+          // progress line on a dedicated ephemeral block; the durable terminal
+          // replaces blocks wholesale, so it vanishes on completion.
+          const index = Number(event["contentIndex"] ?? event["index"] ?? 0);
+          if (type === "toolcall_start") {
+            toolCallProgress.set(index, { name: toolCallNameFromEvent(event), argBytes: 0, emitted: 0 });
+          }
+          const tracked = toolCallProgress.get(index) ?? { name: null, argBytes: 0, emitted: 0 };
+          if (type === "toolcall_delta") {
+            tracked.argBytes += String(event["delta"] ?? "").length;
+            if (!tracked.name) tracked.name = toolCallNameFromEvent(event);
+          }
+          toolCallProgress.set(index, tracked);
+          const shouldEmit =
+            type === "toolcall_start" ||
+            type === "toolcall_end" ||
+            tracked.argBytes - tracked.emitted >= TOOLCALL_PROGRESS_EMIT_BYTES;
+          if (shouldEmit) {
+            tracked.emitted = tracked.argBytes;
+            // Machine-readable status line; the chat pill renders it with its
+            // own spinner/label chrome. `name|bytes|phase` keeps the payload a
+            // plain delta string (no protocol schema change beyond the type).
+            const text = JSON.stringify({
+              toolName: tracked.name,
+              argBytes: tracked.argBytes,
+              phase: type === "toolcall_end" ? "prepared" : "streaming",
+            });
+            onEphemeral({
+              kind: "signal-event",
+              channelId: descriptor.channelId,
+              event: {
+                kind: "message.delta",
+                actor: deps.selfRef,
+                causality: { messageId: descriptor.messageId as never },
+                payload: {
+                  protocol: AGENTIC_PROTOCOL_VERSION,
+                  blockId: `${descriptor.messageId}:toolcall-progress:${index}` as never,
+                  type: "toolcall-progress",
+                  text,
+                  replace: true,
+                },
+                createdAt: new Date().toISOString(),
+              } as AgenticEvent,
+            });
+          }
         }
       }
     } catch (err) {
@@ -672,6 +933,18 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       };
     }
     if (stopReason === "error") {
+      // Provider-reported terminal error (e.g. a WS close mid-generation).
+      // This path throws nothing, so without this log the failure is invisible
+      // in worker logs — only the journaled message.failed records it.
+      console.warn("[model-call] stream ended with provider error:", {
+        errorMessage: String(result["errorMessage"] ?? "model error"),
+        totalMs: Date.now() - progress.startedAt,
+        eventCounts: progress.eventCounts,
+        channelId: descriptor.channelId,
+        messageId: descriptor.messageId,
+        provider: request.provider,
+        model: request.model,
+      });
       return modelFailureOutcomeFromMessage(
         String(result["errorMessage"] ?? "model error"),
         request,
@@ -684,8 +957,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       stopReason: "completed",
       usage: (result["usage"] as Record<string, unknown>) ?? undefined,
     };
-  },
-};
+}
 
 function systemPromptForPolicy(
   workspacePrompt: string | undefined,

@@ -825,6 +825,122 @@ describe("AgentLoopDriver", () => {
     expect(recovered.driver.outbox.all()).toHaveLength(0);
   });
 
+  it("does not re-expand inherited parent tool calls when waking a forked child turn", async () => {
+    const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
+    const parentChannel = "parent-chan";
+    const parentLogId = ids.logIdForChannel(parentChannel);
+    const inheritedInvocationId = "call-parent-spawn";
+    await gad.callAs("do", "appendLogEvent", {
+      logId: parentLogId,
+      head: parentLogId,
+      logKind: "trajectory",
+      events: [
+        {
+          envelopeId: ids.messageTerminal("parent-msg"),
+          actor: { kind: "agent", id: "agent:parent", participantId: "agent:parent" },
+          payloadKind: "message.completed",
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            role: "assistant",
+            blocks: [
+              {
+                type: "toolCall",
+                id: inheritedInvocationId,
+                name: "spawn_subagent",
+                arguments: {
+                  protocol: "vibestudio.blob-ref.v1",
+                  digest: "blob-parent-spawn-args",
+                  size: 35,
+                  encoding: "json",
+                  originalBytes: 35,
+                },
+              },
+            ],
+            outcome: "completed",
+          },
+          causality: { messageId: "parent-msg" },
+        },
+        {
+          envelopeId: ids.invocationStart(inheritedInvocationId),
+          actor: { kind: "agent", id: "agent:parent", participantId: "agent:parent" },
+          payloadKind: "invocation.started",
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            name: "spawn_subagent",
+            invocationType: "tool",
+            request: {
+              protocol: "vibestudio.blob-ref.v1",
+              digest: "blob-parent-spawn-args",
+              size: 35,
+              encoding: "json",
+              originalBytes: 35,
+            },
+            transport: { kind: "local", awaiterId: inheritedInvocationId },
+            userVisible: true,
+          },
+          causality: { invocationId: inheritedInvocationId },
+        },
+      ],
+    });
+    await gad.callAs("do", "forkLog", {
+      fromLogId: parentLogId,
+      fromHead: parentLogId,
+      toLogId: LOG_ID,
+      toHead: LOG_ID,
+      atSeq: 2,
+    });
+
+    const childTurnId = ids.turnId(CHANNEL, "child-seed", "agent:self");
+    const childMessageId = ids.messageId(childTurnId, 0);
+    await gad.callAs("do", "appendLogEvent", {
+      logId: LOG_ID,
+      head: LOG_ID,
+      logKind: "trajectory",
+      events: [
+        {
+          envelopeId: ids.turnOpened(childTurnId),
+          actor: { kind: "agent", id: "agent:self", participantId: "agent:self" },
+          payloadKind: "turn.opened",
+          payload: { protocol: "agentic.trajectory.v1" },
+          causality: { turnId: childTurnId },
+        },
+        {
+          envelopeId: ids.messageStarted(childMessageId),
+          actor: { kind: "agent", id: "agent:self", participantId: "agent:self" },
+          payloadKind: "message.started",
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            role: "assistant",
+            modelRequest: {
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              thinkingLevel: "medium",
+              systemPromptHash: "blob:sys",
+              activeToolNames: ["read"],
+              contextThroughSeq: 3,
+              attemptId: ids.attemptId(childMessageId),
+            },
+          },
+          causality: { messageId: childMessageId, turnId: childTurnId },
+        },
+      ],
+    });
+
+    const harness = await makeHarness({ script: { model: [], tool: [] }, gad });
+
+    await expect(harness.driver.wake(CHANNEL)).resolves.toBeUndefined();
+
+    const rows = await gad.call<{ rows: Array<{ envelope_id: string }> }>(
+      "query",
+      `SELECT envelope_id FROM log_events WHERE log_id = '${LOG_ID}' ORDER BY seq`,
+      []
+    );
+    const localEnvelopeIds = rows.rows.map((row) => row.envelope_id);
+    expect(localEnvelopeIds).toContain(ids.messageTerminal(childMessageId));
+    expect(localEnvelopeIds).toContain(ids.messageStarted(ids.messageId(childTurnId, 1)));
+    expect(localEnvelopeIds).not.toContain(ids.invocationStart(inheritedInvocationId));
+  });
+
   it("parks a reset-aware model failure when replay missed the terminal cascade", async () => {
     const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
     const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });

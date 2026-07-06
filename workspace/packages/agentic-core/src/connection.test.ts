@@ -41,7 +41,12 @@ describe("ConnectionManager", () => {
       expect(config.rpc!.call).toHaveBeenCalledWith(
         CHANNEL_TARGET,
         "subscribe",
-        ["panel:panel-1", expect.any(Object)],
+        [
+          "panel:panel-1",
+          expect.objectContaining({
+            replayMessageLimit: 10_000,
+          }),
+        ],
       );
     });
     manager.disconnect();
@@ -52,5 +57,27 @@ describe("ConnectionManager", () => {
       "unsubscribe",
       ["panel:panel-1"],
     );
+  });
+
+  it("honors an explicit replay message limit", async () => {
+    const config = { ...createConfig(), replayMessageLimit: 1234 };
+    const manager = new ConnectionManager({ config, metadata, callbacks: {} });
+
+    const connectPromise = manager.connect({ channelId: "chat-1", methods: {} });
+    await vi.waitFor(() => {
+      expect(config.rpc.call).toHaveBeenCalledWith(
+        CHANNEL_TARGET,
+        "subscribe",
+        [
+          "panel:panel-1",
+          expect.objectContaining({
+            replayMessageLimit: 1234,
+          }),
+        ],
+      );
+    });
+    manager.disconnect();
+
+    await expect(connectPromise).rejects.toThrow("ready aborted");
   });
 });

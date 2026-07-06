@@ -30,6 +30,7 @@ import type {
   AgentState,
   AgentTurnMetadata,
   ModelRequestDescriptor,
+  SessionEntry,
 } from "./state.js";
 import type { LogEnvelope } from "@workspace/agentic-protocol";
 
@@ -211,6 +212,70 @@ function readAckEffects(opts: {
   return [...consumed].map((sourceMessageId) =>
     readAckEffect(opts.state.channelId, sourceMessageId, opts.turnId, opts.ctx)
   );
+}
+
+function compactSessionEntries(entries: SessionEntry[], keepCount = 8): SessionEntry[] {
+  const start = Math.max(0, entries.length - keepCount);
+  const keep = new Set<number>();
+  const toolCallOwner = new Map<string, number>();
+  const toolResultIndexes = new Map<string, number[]>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    if (index >= start) keep.add(index);
+    if (entry.kind === "assistant") {
+      for (const block of entry.blocks) {
+        const id = toolCallIdFromBlock(block);
+        if (id) toolCallOwner.set(id, index);
+      }
+      continue;
+    }
+    if (entry.kind === "tool-result") {
+      const indexes = toolResultIndexes.get(entry.invocationId) ?? [];
+      indexes.push(index);
+      toolResultIndexes.set(entry.invocationId, indexes);
+    }
+  }
+
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const index of [...keep]) {
+      const entry = entries[index]!;
+      if (entry.kind === "tool-result") {
+        const owner = toolCallOwner.get(entry.invocationId);
+        if (owner !== undefined && !keep.has(owner)) {
+          keep.add(owner);
+          changed = true;
+        }
+        continue;
+      }
+      if (entry.kind === "assistant") {
+        for (const block of entry.blocks) {
+          const id = toolCallIdFromBlock(block);
+          if (!id) continue;
+          for (const resultIndex of toolResultIndexes.get(id) ?? []) {
+            if (!keep.has(resultIndex)) {
+              keep.add(resultIndex);
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+  }
+  return entries.filter((_entry, index) => keep.has(index));
+}
+
+function toolCallIdFromBlock(block: unknown): string | null {
+  if (!block || typeof block !== "object") return null;
+  const record = block as Record<string, unknown>;
+  const type = record["type"];
+  if (type !== "toolCall" && type !== "tool_call") return null;
+  const id = record["id"] ?? record["toolCallId"] ?? record["call_id"];
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+function assistantBelongsToTurn(entry: SessionEntry, turnId: string): boolean {
+  return entry.kind === "assistant" && entry.messageId.startsWith(`m:${turnId}:`);
 }
 
 /** Mint a fresh private recv copy for a promoted after-turn message. A NEW
@@ -924,7 +989,7 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
     case "compact": {
       // Exact-entry compaction (model-summarized compaction is a follow-on).
       if (state.entries.length === 0) return EMPTY;
-      const keep = state.entries.slice(-8);
+      const keep = compactSessionEntries(state.entries);
       const turnId = state.openTurn?.turnId ?? "idle";
       return {
         append: [
@@ -980,9 +1045,10 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
         !afterOrphan.openTurn.interrupted &&
         !afterOrphan.inFlightModelCall
       ) {
+        const turnId = afterOrphan.openTurn.turnId;
         const lastAssistant = [...afterOrphan.entries]
           .reverse()
-          .find((entry) => entry.kind === "assistant");
+          .find((entry) => assistantBelongsToTurn(entry, turnId));
         if (lastAssistant && lastAssistant.kind === "assistant") {
           const settled = new Set(
             afterOrphan.entries

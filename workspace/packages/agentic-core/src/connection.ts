@@ -100,6 +100,7 @@ export class ConnectionManager {
         metadata: this.metadata,
         methods,
         replayMode: "stream",
+        replayMessageLimit: this.config.replayMessageLimit ?? 10_000,
         recoveryCoordinator: this.config.recoveryCoordinator,
       });
 
@@ -113,6 +114,16 @@ export class ConnectionManager {
 
       this._client = newClient;
       this._clientId = newClient.clientId ?? null;
+      console.info("[ConnectionManager] channel replay connected", {
+        channelId,
+        requestedContextId: contextId ?? null,
+        resolvedContextId: newClient.contextId ?? null,
+        replayMessageLimit: this.config.replayMessageLimit ?? 10_000,
+        totalMessageCount: newClient.totalMessageCount ?? null,
+        envelopeCount: newClient.envelopeCount ?? null,
+        firstEnvelopeSeq: newClient.firstEnvelopeSeq ?? null,
+        hasMoreBefore: newClient.hasMoreBefore ?? null,
+      });
 
       const unsubs: Array<() => void> = [];
 

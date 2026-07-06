@@ -8,7 +8,12 @@ import {
   applyAppend,
   type Scenario,
 } from "./scenario.js";
-import { initialAgentState, overlayInputConfig, type AgentLoopConfig } from "./state.js";
+import {
+  initialAgentState,
+  overlayInputConfig,
+  type AgentLoopConfig,
+  type SessionEntry,
+} from "./state.js";
 import { derivePendingEffects } from "./effects.js";
 import { defaultPolicies, publishPolicyPolicy } from "./policies/index.js";
 import { ids } from "./ids.js";
@@ -440,6 +445,122 @@ describe("agent-loop core lifecycle", () => {
     });
     const completed = s.log.filter((row) => row.payloadKind === "message.completed");
     expect(completed[completed.length - 1]!.payload).toMatchObject({ outcome: "empty" });
+  });
+
+  it("compacts without orphaning retained tool results from their assistant tool calls", () => {
+    const entries: SessionEntry[] = [
+      {
+        kind: "assistant",
+        seq: 1,
+        messageId: "msg-tool",
+        blocks: [
+          { type: "toolCall", id: "call-kept-result", name: "spawn_subagent", arguments: {} },
+          { type: "toolCall", id: "call-sibling", name: "read", arguments: {} },
+        ],
+      },
+      {
+        kind: "tool-result",
+        seq: 2,
+        invocationId: "call-sibling",
+        name: "read",
+        result: "contents",
+        isError: false,
+      },
+      { kind: "user", seq: 3, envelopeId: "env-3", content: "filler 3" },
+      { kind: "user", seq: 4, envelopeId: "env-4", content: "filler 4" },
+      {
+        kind: "tool-result",
+        seq: 5,
+        invocationId: "call-kept-result",
+        name: "spawn_subagent",
+        result: "spawned",
+        isError: false,
+      },
+      { kind: "user", seq: 6, envelopeId: "env-6", content: "filler 6" },
+      { kind: "user", seq: 7, envelopeId: "env-7", content: "filler 7" },
+      { kind: "user", seq: 8, envelopeId: "env-8", content: "filler 8" },
+      { kind: "user", seq: 9, envelopeId: "env-9", content: "filler 9" },
+      { kind: "user", seq: 10, envelopeId: "env-10", content: "filler 10" },
+      { kind: "user", seq: 11, envelopeId: "env-11", content: "filler 11" },
+      { kind: "user", seq: 12, envelopeId: "env-12", content: "filler 12" },
+    ];
+    const s = createScenario({
+      state: {
+        ...initialAgentState({ channelId: "chan-1", config: baseConfig }),
+        entries,
+        lastSeq: 12,
+      },
+      policies: defaultPolicies(),
+    });
+
+    dispatch(s, { type: "command", command: { kind: "compact" } });
+
+    expect(s.state.entries.map((entry) => entry.seq)).toEqual([1, 2, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(
+      s.log.find((row) => row.payloadKind === "system.compaction_recorded")?.payload
+    ).toMatchObject({
+      summary: "compacted 2 entries",
+    });
+  });
+
+  it("wake recovery does not re-expand inherited assistant tool calls from another turn", () => {
+    const childTurnId = ids.turnId("chan-1", "child-seed", "agent:self");
+    const childMessageId = ids.messageId(childTurnId, 0);
+    const state = initialAgentState({ channelId: "chan-1", config: baseConfig });
+    const s = createScenario({
+      state: {
+        ...state,
+        entries: [
+          {
+            kind: "assistant",
+            seq: 1,
+            messageId: "m:t:parent-channel:parent-trigger:parent-agent:0",
+            senderRef: { kind: "agent", id: "parent-agent", participantId: "parent-agent" },
+            blocks: [
+              {
+                type: "toolCall",
+                id: "call-parent-spawn",
+                name: "spawn_subagent",
+                arguments: { task: "inherited" },
+              },
+            ],
+          },
+        ],
+        openTurn: {
+          turnId: childTurnId,
+          openedAtSeq: 2,
+          modelCallCount: 1,
+          interrupted: false,
+          waitingCount: 0,
+        },
+        inFlightModelCall: {
+          messageId: childMessageId,
+          attemptId: ids.attemptId(childMessageId),
+          contextThroughSeq: 2,
+          request: {
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            thinkingLevel: "medium",
+            systemPromptHash: "blob:system-prompt",
+            activeToolNames: ["read", "write"],
+            contextThroughSeq: 2,
+            attemptId: ids.attemptId(childMessageId),
+          },
+        },
+        lastSeq: 3,
+      },
+      policies: defaultPolicies(),
+    });
+
+    dispatch(s, { type: "command", command: { kind: "wake" } });
+
+    expect(s.log.map((row) => row.envelopeId)).toEqual([
+      ids.messageTerminal(childMessageId),
+      ids.messageStarted(ids.messageId(childTurnId, 1)),
+    ]);
+    expect(s.log.some((row) => row.envelopeId === ids.invocationStart("call-parent-spawn"))).toBe(
+      false
+    );
   });
 
   it("multi-attempt: recoverable model failure retries with a fresh messageId", () => {
