@@ -6,6 +6,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const workspaceRoot = path.join(repoRoot, "workspace");
 const lockfile = path.join(workspaceRoot, "pnpm-lock.yaml");
 const modulesFile = path.join(workspaceRoot, "node_modules", ".modules.yaml");
+const installedLockfile = path.join(workspaceRoot, "node_modules", ".pnpm", "lock.yaml");
 
 function exists(file) {
   return fs.existsSync(file);
@@ -33,7 +34,8 @@ if (!exists(modulesFile)) {
   process.exit(1);
 }
 
-if (exists(lockfile) && mtimeMs(lockfile) > mtimeMs(modulesFile)) {
+const installStamp = Math.max(mtimeMs(modulesFile), mtimeMs(installedLockfile));
+if (exists(lockfile) && mtimeMs(lockfile) > installStamp) {
   console.error(
     [
       "[userland] workspace/pnpm-lock.yaml is newer than workspace/node_modules.",
