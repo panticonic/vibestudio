@@ -29,6 +29,7 @@ import type {
   ProjectedCustomMessage,
   ProjectedInvocation,
   ProjectedMessage,
+  ProjectedSystemNotice,
   ProjectedTurn,
 } from "@workspace/agentic-protocol";
 import {
@@ -40,10 +41,7 @@ import {
   readDiagnosticMetadata,
   summarizeMessageBlocks,
 } from "@workspace/agentic-protocol";
-import type {
-  InvocationCardPayload,
-  SubagentProgressEntry,
-} from "./invocation-card-payload.js";
+import type { InvocationCardPayload, SubagentProgressEntry } from "./invocation-card-payload.js";
 
 type StoredValueRefPreview = { preview?: string };
 
@@ -55,7 +53,10 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
       .map((turn) => turn.turnId as string)
   );
   const messages = Object.values(state.messages).flatMap((message) =>
-    projectedMessageToChatMessages(message, state.intendedRecipientsByMessage?.[message.messageId] ?? [])
+    projectedMessageToChatMessages(
+      message,
+      state.intendedRecipientsByMessage?.[message.messageId] ?? []
+    )
   );
   const invocations = Object.values(state.invocations).map(projectedInvocationToChatMessage);
   const approvals = Object.values(state.approvals).map(projectedApprovalToChatMessage);
@@ -108,6 +109,9 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   const custom = Object.values(state.customMessages).flatMap((item) =>
     projectedCustomMessageToChatMessage(item, state.messageTypes[item.typeId ?? ""])
   );
+  const systemNotices = Object.values(state.systemNotices ?? {}).map(
+    projectedSystemNoticeToChatMessage
+  );
   // Inline fork-annotation rows, positioned just after the message at their
   // fork point. `createdAtSeq` is when the annotation was announced on the
   // parent log; `forkPointId` is the transcript anchor.
@@ -159,6 +163,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     ...silentClosedTurns,
     ...inlineUi,
     ...custom,
+    ...systemNotices,
     ...forks,
     ...credentialRequests,
   ]
@@ -172,6 +177,35 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
       const { sortTime: _sortTime, ...rest } = message as ChatMessage & { sortTime?: number };
       return rest;
     });
+}
+
+function projectedSystemNoticeToChatMessage(
+  notice: ProjectedSystemNotice
+): ChatMessage & { sortTime: number } {
+  const title =
+    notice.kind === "model.local_fallback_continued"
+      ? "Continued on local fallback"
+      : notice.summary;
+  return {
+    id: `system:${notice.noticeId}`,
+    senderId: notice.actor.id,
+    content: notice.detail ?? notice.summary,
+    contentType: "diagnostic",
+    kind: "system",
+    complete: true,
+    diagnostic: {
+      code: notice.kind,
+      severity: "info",
+      title,
+      detail: notice.detail ?? notice.summary,
+    },
+    senderMetadata: {
+      name: notice.actor.displayName ?? notice.actor.id,
+      type: notice.actor.kind,
+      handle: notice.actor.id,
+    },
+    sortTime: Date.parse(notice.createdAt) || 0,
+  };
 }
 
 export function messageTypeDefinitionsFromChannelView(
@@ -567,6 +601,7 @@ function projectedMessageToChatMessages(
       replyTo: message.replyTo,
       mentions: message.mentions,
       tier: messageTier(message),
+      ...(message.role === "assistant" && message.model ? { model: message.model } : {}),
       ...(message.seq !== undefined ? { seq: message.seq } : {}),
       ...(message.saliency ? { saliency: message.saliency } : {}),
       ...(message.replaces ? { replaces: message.replaces } : {}),

@@ -81,7 +81,8 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
   const kind = envelope.payloadKind;
   const payload = payloadRecord(envelope);
   const causality = (envelope.causality ?? {}) as Record<string, unknown>;
-  const turnId = typeof causality["turnId"] === "string" ? (causality["turnId"] as string) : undefined;
+  const turnId =
+    typeof causality["turnId"] === "string" ? (causality["turnId"] as string) : undefined;
 
   // Only THIS agent's turn lifecycle drives its loop state. The shared channel log carries
   // every participant's events; a foreign-authored turn/message advances the fold position
@@ -148,6 +149,9 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
               modelCallCount: state.openTurn.modelCallCount + 1,
               // A new model call consumes any soft flush intent.
               ...(state.openTurn.pendingFlush ? { pendingFlush: undefined } : {}),
+              ...(state.openTurn.lastFailedModelRequest
+                ? { lastFailedModelRequest: undefined }
+                : {}),
             }
           : state.openTurn,
         // Steered messages covered by this call's context snapshot are consumed.
@@ -275,7 +279,10 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         ),
         pendingPrompt:
           state.pendingPrompt?.sourceMessageId === sourceMessageId
-            ? { ...state.pendingPrompt, content: withEditedBlocks(state.pendingPrompt.content, blocks) }
+            ? {
+                ...state.pendingPrompt,
+                content: withEditedBlocks(state.pendingPrompt.content, blocks),
+              }
             : state.pendingPrompt,
         deferredPostTurnQueue: state.deferredPostTurnQueue.map((deferred) =>
           deferred.sourceMessageId === sourceMessageId
@@ -317,7 +324,15 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       if (foreignAuthor) return state;
       const messageId = String(causality["messageId"] ?? "");
       if (state.inFlightModelCall && state.inFlightModelCall.messageId !== messageId) return state;
-      return { ...state, inFlightModelCall: null };
+      const failedRequest = state.inFlightModelCall?.request;
+      return {
+        ...state,
+        inFlightModelCall: null,
+        openTurn:
+          state.openTurn && failedRequest
+            ? { ...state.openTurn, lastFailedModelRequest: failedRequest }
+            : state.openTurn,
+      };
     }
 
     case kind === "invocation.started": {
@@ -456,7 +471,9 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         const waitReason = payload["waitReason"] ?? details["waitReason"];
         const reason = payload["reason"] ?? details["reason"];
         const failureCode = payload["failureCode"] ?? details["failureCode"];
-        const messageId = String(payload["messageId"] ?? details["messageId"] ?? causality["messageId"] ?? "");
+        const messageId = String(
+          payload["messageId"] ?? details["messageId"] ?? causality["messageId"] ?? ""
+        );
         const next: AgentState = {
           ...state,
           pendingCredentialWaits: {
@@ -516,6 +533,11 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         // closing. Does NOT set `interrupted`.
         return state.openTurn
           ? { ...state, openTurn: { ...state.openTurn, pendingFlush: "steers" } }
+          : state;
+      }
+      if (detailKind === "model.local_fallback_continued") {
+        return state.openTurn
+          ? { ...state, openTurn: { ...state.openTurn, failedOverToFallback: true } }
           : state;
       }
       return state;

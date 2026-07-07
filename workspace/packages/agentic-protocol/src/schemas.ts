@@ -113,6 +113,14 @@ const messageReplacesSchema = z
   .object({ messageId: idSchema, seq: z.number().int().nonnegative() })
   .strict();
 
+const messageModelPayloadSchema = z
+  .object({
+    ref: z.string(),
+    provider: z.string().optional(),
+    displayName: z.string().optional(),
+  })
+  .strict();
+
 const messageStartedPayloadSchema = z
   .object({
     protocol: protocolSchema,
@@ -145,6 +153,7 @@ const messageCompletedPayloadSchema = z
     blocks: z.array(messageBlockInputSchema).optional(),
     outcome: z.enum(MESSAGE_OUTCOMES),
     usage: usagePayloadSchema.optional(),
+    model: messageModelPayloadSchema.optional(),
     mentions: z.array(idSchema).optional(),
     replyTo: idSchema.optional(),
     to: z.array(participantSelectorSchema).optional(),

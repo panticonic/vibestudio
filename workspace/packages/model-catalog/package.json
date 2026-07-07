@@ -7,7 +7,8 @@
   "exports": {
     "./catalog": "./src/catalog.ts",
     "./modelRecommendations": "./src/modelRecommendations.ts",
-    "./providerConnect": "./src/providerConnect.ts"
+    "./providerConnect": "./src/providerConnect.ts",
+    "./testing": "./src/testing.ts"
   },
   "dependencies": {
     "@vibestudio/shared": "workspace:*"

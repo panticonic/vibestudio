@@ -91,6 +91,18 @@ export interface ProjectedCredentialRequest {
   publishedAt?: string;
 }
 
+export interface ProjectedSystemNotice {
+  noticeId: string;
+  actor: ActorRef;
+  kind: string;
+  summary: string;
+  detail?: string;
+  turnId?: string;
+  messageId?: string;
+  seq: number;
+  createdAt: string;
+}
+
 /**
  * A conversation fork rooted off this channel, folded from a durable
  * `channel.forked` envelope on the PARENT channel. `createdAtSeq` and `archived`
@@ -120,6 +132,7 @@ export interface ChannelViewState {
   actionBars: Record<string, ProjectedActionBar | undefined>;
   messageTypes: Record<string, ProjectedMessageTypeDefinition>;
   customMessages: Record<string, ProjectedCustomMessage>;
+  systemNotices: Record<string, ProjectedSystemNotice>;
   /** Direct-child forks rooted off this channel, in append (seq) order. */
   forks: ForkProjection[];
   turns: TurnMap;
@@ -145,6 +158,7 @@ export function createInitialChannelViewState(): ChannelViewState {
     actionBars: {},
     messageTypes: {},
     customMessages: {},
+    systemNotices: {},
     forks: [],
     turns: {},
     intendedRecipientsByMessage: {},
@@ -457,6 +471,40 @@ export function reduceChannelView(
     const payload = event.payload as Record<string, unknown>;
     const details = (payload["details"] ?? {}) as Record<string, unknown>;
     const sysKind = String(payload["kind"] ?? details["kind"] ?? "");
+    if (sysKind === "model.local_fallback_continued") {
+      const causality = (event.causality ?? {}) as Record<string, unknown>;
+      const summary =
+        typeof payload["summary"] === "string" && payload["summary"].trim()
+          ? payload["summary"].trim()
+          : "continued on local fallback";
+      const detail =
+        typeof details["summary"] === "string" && details["summary"].trim()
+          ? details["summary"].trim()
+          : undefined;
+      next = {
+        ...next,
+        systemNotices: {
+          ...next.systemNotices,
+          [parsed.envelopeId]: {
+            noticeId: parsed.envelopeId,
+            actor: event.actor,
+            kind: sysKind,
+            summary,
+            ...(detail ? { detail } : {}),
+            ...(event.turnId
+              ? { turnId: event.turnId }
+              : typeof causality["turnId"] === "string"
+                ? { turnId: causality["turnId"] }
+                : {}),
+            ...(typeof causality["messageId"] === "string"
+              ? { messageId: causality["messageId"] }
+              : {}),
+            seq: parsed.seq,
+            createdAt: event.createdAt,
+          },
+        },
+      };
+    }
     if (sysKind === "credential.wait_resolved" || sysKind === "credential.wait_expired") {
       const credKey = String(payload["credKey"] ?? details["credKey"] ?? "");
       if (credKey && credKey in next.credentialRequests) {

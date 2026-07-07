@@ -5,6 +5,7 @@ import type {
   EventKind,
   MessageBlockInput,
   MessageEditPayload,
+  MessageModelPayload,
   MessageReceiptPayload,
   MessageRetractPayload,
   ParticipantRef,
@@ -56,6 +57,7 @@ export interface ProjectedMessage {
   failureRecoverable?: boolean;
   updatedAt?: string;
   usage?: UsagePayload;
+  model?: MessageModelPayload;
   /** Explicit recipient selectors declared by the sender at send time. */
   to?: ParticipantSelector[];
   /** Recipients that accepted the message into inbound work, keyed by
@@ -421,6 +423,7 @@ export function applyMessageEvent(
     const to = "to" in payload ? payload.to : existing.to;
     const saliency = "saliency" in payload ? payload.saliency : existing.saliency;
     const replaces = "replaces" in payload ? payload.replaces : existing.replaces;
+    const model = "model" in payload ? payload.model : existing.model;
     return {
       ...messages,
       [messageId]: {
@@ -440,6 +443,7 @@ export function applyMessageEvent(
         completedAt: event.createdAt,
         updatedAt: event.createdAt,
         usage: "usage" in payload ? payload.usage : existing.usage,
+        ...(model !== undefined ? { model } : {}),
         seq: existing.seq ?? seq,
         ...(seq !== undefined ? { lastContentSeq: seq } : {}),
       },

@@ -9,6 +9,36 @@ import type { InvocationTransport, ParticipantRef } from "@workspace/agentic-pro
 
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
 
+/** How the executor authenticates a model call (design §6.3):
+ *  "url-bound" — resolve a stored URL-bound credential (suspends on absence);
+ *  "loopback"  — local llama.cpp server; key injected executor-side at call
+ *                time, never journaled. */
+export type ModelAuthMode = "url-bound" | "loopback";
+
+/**
+ * Serializable model descriptor — a pi-ai `Model` literal, journaled with
+ * every model request so replay never depends on the installed registry
+ * version (design docs/local-models-extension-design.md §6.2). Kept
+ * structural so agent-loop stays free of a pi-ai dependency; the vessel
+ * materializes it at the impure edge (settings write / artifact refresh).
+ * MUST stay secret-free: it rides catalog snapshots and the journal.
+ */
+export interface AgentModelSpec {
+  id: string;
+  name: string;
+  api: string;
+  provider: string;
+  baseUrl: string;
+  reasoning: boolean;
+  input: Array<"text" | "image">;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  thinkingLevelMap?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  compat?: Record<string, unknown>;
+}
+
 export type RespondPolicy =
   | "all"
   | "mentioned"
@@ -38,6 +68,16 @@ export interface RosterSnapshot {
 
 export interface AgentLoopConfig {
   model: string;
+  /** Materialized descriptor + auth for `model` (design §6.2/§6.3). The
+   *  vessel resolves these at the impure edge; the pure planner copies them
+   *  onto every request. Absent only in pre-refactor logs/fixtures — the
+   *  executor rejects requests without a spec (no registry fallback). */
+  modelSpec?: AgentModelSpec;
+  modelAuth?: ModelAuthMode;
+  /** Unattended provider-failure fallback (design §8). When present, the pure
+   *  loop can journal exactly one local retry without consulting a registry. */
+  fallbackModelRef?: string;
+  fallbackModelSpec?: AgentModelSpec;
   thinkingLevel: ThinkingLevel;
   approvalLevel: 0 | 1 | 2;
   respondPolicy: RespondPolicy;
@@ -121,6 +161,13 @@ export function overlayInputConfig(
 export interface ModelRequestDescriptor {
   provider: string;
   model: string;
+  /** Journaled pi-ai Model literal — the ONLY resolution path in the
+   *  executor (design §6.2); requests without it fail with a clear error.
+   *  For local models the journaled baseUrl documents what ran; the live
+   *  endpoint from ensureLoaded() wins at execution time (§6.3). */
+  modelSpec?: AgentModelSpec;
+  /** Auth mode copied from the catalog entry (design §6.3). Absent ⇒ "url-bound". */
+  auth?: ModelAuthMode;
   modelBaseUrl?: string;
   thinkingLevel: ThinkingLevel;
   systemPromptHash: string;
@@ -152,6 +199,11 @@ export interface OpenTurn {
    *  the queued steers) rather than close. Distinct from `interrupted` (a hard
    *  interrupt that closes the turn). Cleared when the next model call starts. */
   pendingFlush?: "steers";
+  /** True once this turn has auto-switched to the local fallback. */
+  failedOverToFallback?: boolean;
+  /** Captured by the fold when a model failure clears inFlightModelCall, so the
+   *  post-fold step can still apply provider/local guards. */
+  lastFailedModelRequest?: ModelRequestDescriptor;
 }
 
 export interface InFlightModelCall {
@@ -293,8 +345,7 @@ export interface AgentState {
   deferredPostTurnQueue: DeferredPrompt[];
 }
 
-export const GENESIS_LAST_HASH =
-  "0000000000000000000000000000000000000000000000000000000000000000";
+export const GENESIS_LAST_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
 export interface InitialStateInput {
   channelId: string;
@@ -332,12 +383,9 @@ export function initialAgentState(input: InitialStateInput): AgentState {
 }
 
 /** Derived turn status — replaces the old 8-state agent_turn_runs FSM. */
-export function derivedTurnStatus(state: AgentState):
-  | "idle"
-  | "starting"
-  | "running_model"
-  | "waiting_external"
-  | "continuing" {
+export function derivedTurnStatus(
+  state: AgentState
+): "idle" | "starting" | "running_model" | "waiting_external" | "continuing" {
   if (!state.openTurn) return "idle";
   if (state.inFlightModelCall) return "running_model";
   if (state.openTurn.modelCallCount === 0) return "starting";

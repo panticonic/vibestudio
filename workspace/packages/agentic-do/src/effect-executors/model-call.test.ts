@@ -31,7 +31,7 @@ const config: AgentLoopConfig = {
   roster: { participants: [] },
 };
 
-function descriptor(): ModelCallEffect {
+function descriptor(requestOverrides: Partial<ModelCallEffect["request"]> = {}): ModelCallEffect {
   return {
     effectId: "model:msg-1",
     kind: "model_call",
@@ -42,12 +42,28 @@ function descriptor(): ModelCallEffect {
     request: {
       provider: "test",
       model: "model",
+      // Journal-materialized spec (design §6.2) — the executor's only
+      // resolution path; requests without it fail with a model error.
+      modelSpec: {
+        id: "model",
+        name: "Test Model",
+        api: "openai-completions",
+        provider: "test",
+        baseUrl: "https://api.test.example/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+      },
+      auth: "url-bound",
       thinkingLevel: "medium",
       systemPromptHash: "sys",
       activeToolNames: [],
       contextThroughSeq: 0,
       attemptId: "attempt-1",
       streamOptions: { idleTimeoutMs: 25 },
+      ...requestOverrides,
     },
   };
 }
@@ -106,10 +122,99 @@ describe("modelCallExecutor", () => {
 
     expect(getApiKey).toHaveBeenCalledWith({
       providerId: "test",
-      modelBaseUrl: "https://model.test",
+      // Credential lookup keys off the journaled modelSpec's baseUrl now —
+      // the executor no longer consults the registry (design §6.2).
+      modelBaseUrl: "https://api.test.example/v1",
       requestId: "model:msg-1",
       idempotencyKey: "attempt-1",
     });
+    expect(mocks.stream).not.toHaveBeenCalled();
+  });
+
+  it("routes loopback auth through the local-models port, never the credential system", async () => {
+    const getApiKey = vi.fn(async () => ({ apiKey: "cloud-key" }));
+    const ensureLoaded = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:43117/v1" }));
+    const getLoopbackAuth = vi.fn(async () => ({ apiKey: "loopback-key" }));
+    const inputDeps = deps();
+    inputDeps.credentials.getApiKey = getApiKey;
+    inputDeps.localModels = { ensureLoaded, getLoopbackAuth };
+    let streamedModel: Record<string, unknown> | undefined;
+    let streamOptions: Record<string, unknown> | undefined;
+    const ephemerals: unknown[] = [];
+    mocks.stream.mockImplementation(
+      (model: Record<string, unknown>, _context, options: Record<string, unknown>) => {
+        streamedModel = model;
+        streamOptions = options;
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield { type: "text_delta", contentIndex: 0, delta: "hi" };
+          },
+          result: async () => ({
+            content: [{ type: "text", text: "hi" }],
+            stopReason: "stop",
+          }),
+        };
+      }
+    );
+
+    const outcome = await modelCallExecutor.execute({
+      descriptor: descriptor({
+        provider: "local",
+        model: "lfm2.5-1.2b",
+        auth: "loopback",
+        // Journaled placeholder port — the LIVE ensureLoaded endpoint must win.
+        modelSpec: {
+          id: "lfm2.5-1.2b",
+          name: "LFM2.5 1.2B Instruct",
+          api: "openai-completions",
+          provider: "local",
+          baseUrl: "http://127.0.0.1:0/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
+        },
+      }),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: inputDeps,
+      onEphemeral: (event) => ephemerals.push(event),
+    });
+
+    expect(outcome).toMatchObject({ kind: "model", stopReason: "completed" });
+    expect(getApiKey).not.toHaveBeenCalled();
+    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b");
+    expect(
+      ephemerals
+        .filter((event) => (event as { kind?: unknown }).kind === "signal-message")
+        .map((event) => JSON.parse(String((event as { content?: unknown }).content)))
+    ).toEqual([
+      { message: "Starting local model…" },
+      { message: "Loading LFM2.5 1.2B Instruct… (first use may download)" },
+    ]);
+    expect(streamOptions).toMatchObject({ apiKey: "loopback-key" });
+    // pi-ai constructs its client from model.baseUrl and IGNORES a baseUrl
+    // option — the live endpoint must be baked into the model literal.
+    expect(streamedModel).toMatchObject({ baseUrl: "http://127.0.0.1:43117/v1" });
+  });
+
+  it("fails a loopback request with a model error when the local-models port is absent", async () => {
+    const getApiKey = vi.fn(async () => ({ apiKey: "cloud-key" }));
+    const inputDeps = deps();
+    inputDeps.credentials.getApiKey = getApiKey;
+    delete inputDeps.localModels;
+
+    const outcome = await modelCallExecutor.execute({
+      descriptor: descriptor({ provider: "local", model: "lfm2.5-1.2b", auth: "loopback" }),
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: inputDeps,
+      onEphemeral: () => {},
+    });
+
+    expect(outcome).toMatchObject({ kind: "model", stopReason: "error" });
+    expect(getApiKey).not.toHaveBeenCalled();
     expect(mocks.stream).not.toHaveBeenCalled();
   });
 
@@ -208,6 +313,78 @@ describe("modelCallExecutor", () => {
     );
   });
 
+  it("parks interactive URL-bound auth stream failures behind credential reconnect", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const authError = Object.assign(
+      new Error("Provided authentication token is expired. Please try signing in again."),
+      { status: 401 }
+    );
+    mocks.stream.mockImplementation(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            throw authError;
+          },
+        };
+      },
+      result: async () => ({ content: [], stopReason: "stop" }),
+    }));
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: descriptor(),
+        state: initialAgentState({ channelId: "channel-1", config }),
+        signal: new AbortController().signal,
+        deps: deps(),
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({
+      kind: "model-suspended",
+      reason: "credential",
+      providerId: "test",
+      modelBaseUrl: "https://api.test.example/v1",
+      waitReason: "model_credential_reconnect_required",
+      diagnosticReason: expect.stringContaining("authentication token is expired"),
+      failureCode: "auth_or_credentials",
+    });
+  });
+
+  it("returns unattended URL-bound auth stream failures as model errors", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const authError = Object.assign(
+      new Error("Provided authentication token is expired. Please try signing in again."),
+      { status: 401 }
+    );
+    mocks.stream.mockImplementation(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => {
+            throw authError;
+          },
+        };
+      },
+      result: async () => ({ content: [], stopReason: "stop" }),
+    }));
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: descriptor({ turnMetadata: { origin: "heartbeat" } }),
+        state: initialAgentState({ channelId: "channel-1", config }),
+        signal: new AbortController().signal,
+        deps: deps(),
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({
+      kind: "model",
+      stopReason: "error",
+      failure: {
+        code: "auth_or_credentials",
+        reason: expect.stringContaining("authentication token is expired"),
+        recoverable: false,
+      },
+    });
+  });
+
   it("returns a terminal model failure for open provider circuit breakers", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.getModel.mockReturnValue({ baseUrl: "https://api.openai.com/v1" });
@@ -255,7 +432,6 @@ describe("modelCallExecutor", () => {
       contextWindow: 200_000,
       maxTokens: 64_000,
     };
-    mocks.getModel.mockReturnValue(providerModel);
     mocks.stream.mockImplementation((_model, _context, options) => {
       expect(options).toMatchObject({
         apiKey: "test-key",
@@ -286,7 +462,7 @@ describe("modelCallExecutor", () => {
 
     const ephemerals: unknown[] = [];
     const outcome = await modelCallExecutor.execute({
-      descriptor: descriptor(),
+      descriptor: descriptor({ modelSpec: providerModel as never }),
       state: initialAgentState({ channelId: "channel-1", config }),
       signal: new AbortController().signal,
       deps: deps(),
@@ -497,7 +673,9 @@ describe("modelCallExecutor", () => {
               kind: "assistant",
               seq: 1,
               messageId: "msg-tool",
-              blocks: [{ type: "toolCall", id: "call-missing-result", name: "read", arguments: {} }],
+              blocks: [
+                { type: "toolCall", id: "call-missing-result", name: "read", arguments: {} },
+              ],
             },
           ],
         },

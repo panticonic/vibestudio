@@ -114,8 +114,6 @@ export interface AgenticChatActions {
   defaultModelRef?: string | null;
   /** Full workspace default agent config (model + behavior) for new agents. */
   defaultAgentConfig?: DefaultAgentConfig | null;
-  /** Model refs ("provider:modelId") the panel has a usable credential for. */
-  connectedModelRefs?: string[];
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => Promise<void>;
   onBecomeVisible?: () => void;
@@ -126,6 +124,10 @@ export interface AgenticChatActions {
    * returned argv. Absent on hosts that don't wire agent-CLI launches.
    */
   onOpenClaudeCode?: (channelId: string) => Promise<void> | void;
+  /** Open the Local Models panel focused on a specific server's log. Wired
+   *  from a local model's red error dot in the model picker (item 6). Absent
+   *  on hosts that don't wire panel navigation. */
+  onOpenLocalModelsLog?: (server: "utility" | "main") => void;
 }
 
 /** Chat API exposed to sandboxed code (eval, inline_ui, action bars, feedback_custom) */

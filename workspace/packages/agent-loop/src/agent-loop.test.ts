@@ -12,6 +12,8 @@ import {
   initialAgentState,
   overlayInputConfig,
   type AgentLoopConfig,
+  type AgentModelSpec,
+  type AgentTurnMetadata,
   type SessionEntry,
 } from "./state.js";
 import { derivePendingEffects } from "./effects.js";
@@ -29,6 +31,20 @@ const baseConfig: AgentLoopConfig = {
   roster: { participants: [] },
 };
 
+const fallbackModelRef = "local:lfm2.5-1.2b";
+const fallbackModelSpec: AgentModelSpec = {
+  id: "lfm2.5-1.2b",
+  name: "LFM2.5 1.2B",
+  api: "openai-completions",
+  provider: "local",
+  baseUrl: "http://127.0.0.1:0/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8192,
+  maxTokens: 4096,
+};
+
 function scenario(
   opts: {
     approvalLevel?: 0 | 1 | 2;
@@ -37,6 +53,10 @@ function scenario(
     roster?: AgentLoopConfig["roster"];
     maxModelCallsPerTurn?: number | null;
     publishPolicy?: AgentLoopConfig["publishPolicy"];
+    model?: string;
+    modelSpec?: AgentModelSpec;
+    modelAuth?: AgentLoopConfig["modelAuth"];
+    fallback?: boolean;
   } = {}
 ): Scenario {
   return createScenario({
@@ -44,8 +64,12 @@ function scenario(
       channelId: "chan-1",
       config: {
         ...baseConfig,
+        model: opts.model ?? baseConfig.model,
         approvalLevel: opts.approvalLevel ?? 2,
         roster: opts.roster ?? baseConfig.roster,
+        ...(opts.modelSpec ? { modelSpec: opts.modelSpec } : {}),
+        ...(opts.modelAuth ? { modelAuth: opts.modelAuth } : {}),
+        ...(opts.fallback ? { fallbackModelRef, fallbackModelSpec } : {}),
         ...(opts.maxModelCallsPerTurn !== undefined
           ? { maxModelCallsPerTurn: opts.maxModelCallsPerTurn }
           : {}),
@@ -57,7 +81,12 @@ function scenario(
   });
 }
 
-function prompt(s: Scenario, envelopeId = "env-1", content = "hello"): void {
+function prompt(
+  s: Scenario,
+  envelopeId = "env-1",
+  content = "hello",
+  metadata?: AgentTurnMetadata
+): void {
   dispatch(s, {
     type: "command",
     command: {
@@ -66,6 +95,7 @@ function prompt(s: Scenario, envelopeId = "env-1", content = "hello"): void {
       source: { envelopeId },
       content,
       senderRef: { kind: "user", id: "panel:user", participantId: "panel:user" },
+      ...(metadata ? { metadata } : {}),
     },
   });
 }
@@ -578,6 +608,144 @@ describe("agent-loop core lifecycle", () => {
     // fresh attempt id
     const started = s.log.filter((row) => row.payloadKind === "message.started");
     expect(started).toHaveLength(2);
+  });
+
+  it("auto-failover: heartbeat provider failure continues once on local fallback", () => {
+    const s = scenario({ fallback: true });
+    prompt(s, "env-1", "background check", { origin: "heartbeat" });
+
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [],
+      stopReason: "error",
+      failure: {
+        code: "auth_or_credentials",
+        reason: "cloud credential expired",
+        recoverable: false,
+      },
+    });
+
+    const msg1 = ids.messageId(turn1, 1);
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(msg1)]);
+    const notice = s.log.find(
+      (row) =>
+        row.payloadKind === "system.event" &&
+        (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+    );
+    expect(notice?.publish).toBe(true);
+    expect(notice?.payload).toMatchObject({ summary: "continued on local fallback" });
+    const fallbackStarted = s.log.find((row) => row.envelopeId === ids.messageStarted(msg1))!;
+    const request = (fallbackStarted.payload as { modelRequest: Record<string, unknown> })
+      .modelRequest;
+    expect(request).toMatchObject({
+      provider: "local",
+      model: "lfm2.5-1.2b",
+      auth: "loopback",
+      modelSpec: fallbackModelSpec,
+      attemptId: ids.attemptId(msg1),
+    });
+    expect(s.state.openTurn?.failedOverToFallback).toBe(true);
+  });
+
+  it.each([undefined, "agent-initiated" as const])(
+    "does not auto-failover interactive provider failures (origin %s)",
+    (origin) => {
+      const s = scenario({ fallback: true });
+      prompt(s, "env-1", "hello", origin ? { origin } : undefined);
+
+      resolveEffect(s, ids.modelEffect(msg0), {
+        kind: "model",
+        blocks: [],
+        stopReason: "error",
+        failure: {
+          code: "auth_or_credentials",
+          reason: "cloud credential expired",
+          recoverable: false,
+        },
+      });
+
+      expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(1);
+      expect(
+        s.log.some(
+          (row) =>
+            row.payloadKind === "system.event" &&
+            (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+        )
+      ).toBe(false);
+      expect(s.state.openTurn).toBeNull();
+      expect(pendingEffectIds(s)).toEqual([]);
+    }
+  );
+
+  it("does not auto-failover twice in the same unattended turn", () => {
+    const s = scenario({ fallback: true });
+    prompt(s, "env-1", "background check", { origin: "scheduled" });
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [],
+      stopReason: "error",
+      failure: {
+        code: "auth_or_credentials",
+        reason: "cloud credential expired",
+        recoverable: false,
+      },
+    });
+
+    const msg1 = ids.messageId(turn1, 1);
+    resolveEffect(s, ids.modelEffect(msg1), {
+      kind: "model",
+      blocks: [],
+      stopReason: "error",
+      failure: {
+        code: "provider_overloaded_retryable",
+        reason: "local fallback overloaded",
+        recoverable: true,
+        retryAfterMs: 10_000,
+      },
+    });
+
+    expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(2);
+    expect(
+      s.log.filter(
+        (row) =>
+          row.payloadKind === "system.event" &&
+          (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+      )
+    ).toHaveLength(1);
+    expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([]);
+  });
+
+  it("does not auto-failover when the failed request was already local", () => {
+    const s = scenario({
+      fallback: true,
+      model: fallbackModelRef,
+      modelSpec: fallbackModelSpec,
+      modelAuth: "loopback",
+    });
+    prompt(s, "env-1", "background check", { origin: "heartbeat" });
+
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [],
+      stopReason: "error",
+      failure: {
+        code: "auth_or_credentials",
+        reason: "local fallback failed",
+        recoverable: false,
+      },
+    });
+
+    expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(1);
+    expect(
+      s.log.some(
+        (row) =>
+          row.payloadKind === "system.event" &&
+          (row.payload as { kind?: string }).kind === "model.local_fallback_continued"
+      )
+    ).toBe(false);
+    expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([]);
   });
 
   it("pauses terminal model usage-limit failures until the reset time", () => {

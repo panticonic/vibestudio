@@ -13,12 +13,20 @@ import type {
 } from "@workspace/agent-loop";
 import type { AgenticEvent, ParticipantRef } from "@workspace/agentic-protocol";
 
-export interface EphemeralEmit {
-  /** AgenticEvent shape broadcast as a channel `signal` (never durable). */
-  kind: "signal-event";
-  channelId: string;
-  event: AgenticEvent;
-}
+export type EphemeralEmit =
+  | {
+      /** AgenticEvent shape broadcast as a channel `signal` (never durable). */
+      kind: "signal-event";
+      channelId: string;
+      event: AgenticEvent;
+    }
+  | {
+      /** Plain channel signal payload for live-only UI pills (never durable). */
+      kind: "signal-message";
+      channelId: string;
+      content: string;
+      contentType?: string;
+    };
 
 export interface BlobReaderWriter {
   getText(digest: string): Promise<string | null>;
@@ -84,6 +92,18 @@ export class CredentialApprovalDeferredError extends Error {
   }
 }
 
+/** Bridge to the local-models extension (design §6.3). Only consulted for
+ *  requests with auth: "loopback"; the loopback api-key obtained here exists
+ *  solely in extension storage and in-flight request headers — callers must
+ *  never persist or journal it. */
+export interface LocalModelsPort {
+  /** Request-path start/load: boots the local server process if needed,
+   *  triggers the router load, returns the LIVE base URL (journaled ports
+   *  must never become load-bearing). */
+  ensureLoaded(modelId: string): Promise<{ baseUrl: string }>;
+  getLoopbackAuth(): Promise<{ apiKey: string }>;
+}
+
 export interface LocalToolPort {
   /** Execute a registered local tool. */
   run(input: {
@@ -125,6 +145,9 @@ export interface ExecutorDeps {
   blobstore: BlobReaderWriter;
   channel: ChannelCallPort;
   credentials: CredentialPort;
+  /** Absent when the local-models extension is not installed — loopback
+   *  requests then fail with a clear model error, never a suspend. */
+  localModels?: LocalModelsPort;
   localTools: LocalToolPort;
   http: HttpCallPort;
   callbackAddress: { source: string; className: string; objectKey: string };

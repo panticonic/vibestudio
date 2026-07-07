@@ -34,6 +34,7 @@ import {
   hydrateStoredValueRefs,
   type AgenticEvent,
   type LogEnvelope,
+  type MessageModelPayload,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import type { SqlStorage } from "@workspace/runtime/worker";
@@ -124,6 +125,48 @@ interface ScheduledModelResumeRow {
   messageId: string;
   resetAtMs: number;
   createdAt: number;
+}
+
+function modelProvenanceFromDescriptor(descriptor: EffectDescriptor): MessageModelPayload | null {
+  if (descriptor.kind !== "model_call") return null;
+  const ref = descriptor.request.provider
+    ? `${descriptor.request.provider}:${descriptor.request.model}`
+    : descriptor.request.model;
+  const specName = descriptor.request.modelSpec?.name;
+  const displayName = typeof specName === "string" && specName.trim() ? specName : ref;
+  return {
+    ref,
+    ...(descriptor.request.provider ? { provider: descriptor.request.provider } : {}),
+    displayName,
+  };
+}
+
+function withModelProvenance(descriptor: EffectDescriptor, items: AppendItem[]): AppendItem[] {
+  const model = modelProvenanceFromDescriptor(descriptor);
+  if (!model || descriptor.kind !== "model_call") return items;
+  return items.map((item) => {
+    if (
+      item.payloadKind !== "message.completed" ||
+      item.causality?.messageId !== descriptor.messageId ||
+      !item.payload ||
+      typeof item.payload !== "object"
+    ) {
+      return item;
+    }
+    return {
+      ...item,
+      payload: {
+        ...(item.payload as Record<string, unknown>),
+        model,
+      },
+    };
+  });
+}
+
+function isUnattendedModelRequest(descriptor: EffectDescriptor): boolean {
+  if (descriptor.kind !== "model_call") return false;
+  const origin = descriptor.request.turnMetadata?.origin;
+  return origin === "heartbeat" || origin === "scheduled";
 }
 
 function ensureScheduledModelResumeSchema(sql: SqlStorage): void {
@@ -611,9 +654,7 @@ export class AgentLoopDriver {
             deps,
             onEphemeral: () => {},
           })
-          .catch((err) =>
-            console.warn("[agent-loop-driver] eager publish_envelope failed:", err)
-          );
+          .catch((err) => console.warn("[agent-loop-driver] eager publish_envelope failed:", err));
       }
       this.outbox.insert(loop.logId, effect, this.initialDeadline(effect));
     }
@@ -924,7 +965,12 @@ export class AgentLoopDriver {
           releaseAbort();
           return;
         }
-        if (failure.code === "auth_or_credentials" && request?.provider) {
+        if (
+          failure.code === "auth_or_credentials" &&
+          request?.provider &&
+          request.auth !== "loopback" &&
+          !isUnattendedModelRequest(row.descriptor)
+        ) {
           await this.suspendOnCredential(
             loop,
             row,
@@ -1021,9 +1067,12 @@ export class AgentLoopDriver {
     for (let attempt = 0; envelopes === null; attempt += 1) {
       const items = this.transformOutcome(
         loop,
-        outcomeEvents(row.descriptor, outcome, {
-          now: new Date(this.deps.now()).toISOString(),
-        })
+        withModelProvenance(
+          row.descriptor,
+          outcomeEvents(row.descriptor, outcome, {
+            now: new Date(this.deps.now()).toISOString(),
+          })
+        )
       );
       try {
         envelopes = await this.append(loop, items);
@@ -1116,7 +1165,7 @@ export class AgentLoopDriver {
       if (policy.filterEphemeral) {
         const next = policy.filterEphemeral({
           state: loop.state,
-          emit: transformed,
+          emit: transformed as never,
         }) as EphemeralEmit | null | undefined;
         if (next === null) return;
         if (next !== undefined) transformed = next;

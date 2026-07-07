@@ -1,16 +1,24 @@
 /**
  * Model catalog shared types.
  *
- * The workspace model-settings service returns the STATIC pi catalog described
- * here — no credentials, no connection state. Connection status is computed
- * panel-side from the panel's own `credentials.listStoredCredentials()` so it
- * stays scoped to that caller's identity.
+ * The workspace model-settings service is the single authority on what a
+ * model IS (`modelSpec` — the journaled pi-ai Model literal) and whether it
+ * is USABLE right now (`availability`). Availability is worker-computed and
+ * shared by every consumer — picker, agent config, fallback logic, CLI
+ * (design docs/local-models-extension-design.md §7.1; this deliberately
+ * replaces the old panel-side connection heuristic). The snapshot carries
+ * availability STATES, never credential material, audiences, or the local
+ * loopback api-key — specs are secret-free by construction (§6.1).
  */
 
 export const MODEL_SETTINGS_SERVICE_PROTOCOL = "vibestudio.models.v1";
 /** Workspace config field holding the full default agent config (model + behavior). */
 export const WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD = "defaultAgentConfig";
 export const DEFAULT_AGENT_MODEL_REF = "openai-codex:gpt-5.5";
+/** The local provider id and the always-available fallback floor (design §5/§8). */
+export const LOCAL_PROVIDER_ID = "local";
+export const LOCAL_FALLBACK_MODEL_REF = "local:lfm2.5-1.2b";
+export const LOCAL_MODELS_EXTENSION_ID = "@workspace-extensions/local-models";
 
 /** Effort levels the agent harness accepts (subset of pi's ModelThinkingLevel). */
 export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high";
@@ -43,6 +51,41 @@ export interface ModelCatalogProvider {
   connectable: boolean;
 }
 
+/** How the executor authenticates calls to this model (design §6.3). */
+export type ModelAuthMode = "url-bound" | "loopback";
+
+/**
+ * Serializable pi-ai `Model` literal — journaled with every request so replay
+ * never depends on the installed registry (design §6.2). Secret-free: rides
+ * catalog snapshots and the journal. Mirrors agent-loop's AgentModelSpec.
+ */
+export interface PiModelSpec {
+  id: string;
+  name: string;
+  api: string;
+  provider: string;
+  baseUrl: string;
+  reasoning: boolean;
+  input: Array<"text" | "image">;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  thinkingLevelMap?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  compat?: Record<string, unknown>;
+}
+
+/** Live usability of a model (design §7.1) — worker-computed, shared by all
+ *  consumers. Cloud: credential presence (+ TTL'd probe). Local: extension
+ *  server state via models.changed events. */
+export type ModelAvailability =
+  | { state: "ready"; detail?: "running" | "credentialed" }
+  | { state: "startable"; detail: "will-load-on-use" }
+  | { state: "needs-setup"; detail: "no-credential" | "not-installed" }
+  | { state: "starting" }
+  | { state: "downloading"; progress: number; phase: "active" | "queued" | "paused" }
+  | { state: "error"; message: string };
+
 export interface ModelCatalogEntry {
   /** Stable "provider:modelId" form used as the agent's `model` config. */
   ref: string;
@@ -55,6 +98,8 @@ export interface ModelCatalogEntry {
   vision: boolean;
   contextWindow: number;
   maxTokens: number;
+  /** Local measured throughput on this hardware, when benchmarked. */
+  tokensPerSec?: number | null;
   /** Model-supported subset of the four agent thinking levels. */
   thinkingLevels: AgentThinkingLevel[];
   /** baseUrl contains "{...}" placeholders → not quick-connectable. */
@@ -63,6 +108,14 @@ export interface ModelCatalogEntry {
   connectable: boolean;
   /** Part of the curated flagship-newest recommended set. */
   recommended: boolean;
+  /** Explicit auth mode (design §6.3). */
+  auth: ModelAuthMode;
+  /** Live availability (design §7.1) — the picker's primary axis. */
+  availability: ModelAvailability;
+  /** The pi-ai Model this entry materializes to (design §6.2). */
+  modelSpec: PiModelSpec;
+  /** Gates tool schemas at config time (design §6.4). */
+  capabilities: { tools: boolean };
 }
 
 export interface ModelCatalog {
@@ -75,6 +128,9 @@ export interface ModelSettingsSnapshot {
   /** Resolved/validated default model (equals `defaultAgentConfig.model`). */
   defaultModel: string;
   defaultModelSource: "workspace" | "fallback";
+  /** Why the stored default was bypassed: absent from the catalog entirely,
+   *  or present but not currently usable (design §8). */
+  defaultModelFallbackReason?: "missing" | "unavailable";
   invalidDefaultModel?: string;
   /** Full default agent config (model + behavior) applied to new agents. */
   defaultAgentConfig: DefaultAgentConfig;

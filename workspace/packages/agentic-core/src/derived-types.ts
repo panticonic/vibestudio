@@ -10,7 +10,12 @@
  */
 
 import type { Attachment } from "@workspace/pubsub";
-import type { LifecycleMessageReasonCode, MessageTier, TurnReasonCode } from "@workspace/agentic-protocol";
+import type {
+  LifecycleMessageReasonCode,
+  MessageModelPayload,
+  MessageTier,
+  TurnReasonCode,
+} from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
 
 export type SandboxSource = { type: "code"; code: string } | { type: "file"; path: string };
@@ -229,6 +234,7 @@ export interface ChatMessage {
    * Absent ⇒ "primary". See MessageTier.
    */
   tier?: MessageTier;
+  model?: MessageModelPayload;
   attachments?: Attachment[];
   senderMetadata?: { name?: string; type?: string; handle?: string };
   disconnectedAgent?: DisconnectedAgentInfo;

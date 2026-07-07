@@ -4,6 +4,7 @@ import { GadWorkspaceDO } from "../../../workers/gad-store/index.js";
 import {
   ids,
   type AgentLoopConfig,
+  type AgentTurnMetadata,
   type EffectDescriptor,
   type EffectOutcome,
   type StepPolicy,
@@ -26,6 +27,20 @@ const config: AgentLoopConfig = {
   roster: { participants: [] },
 };
 
+const fallbackModelRef = "local:lfm2.5-1.2b";
+const fallbackModelSpec: NonNullable<AgentLoopConfig["fallbackModelSpec"]> = {
+  id: "lfm2.5-1.2b",
+  name: "LFM2.5 1.2B Instruct",
+  api: "openai-completions",
+  provider: "local",
+  baseUrl: "http://127.0.0.1:0/v1",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 8192,
+  maxTokens: 4096,
+};
+
 interface Script {
   /** queued model outcomes, consumed per model_call dispatch. */
   model: EffectOutcome[];
@@ -35,6 +50,7 @@ interface Script {
 
 async function makeHarness(opts: {
   script: Script;
+  config?: AgentLoopConfig;
   policies?: StepPolicy[];
   ephemeral?: EphemeralEmit;
   executorOverride?: DriverDeps["executorOverride"];
@@ -78,7 +94,7 @@ async function makeHarness(opts: {
     gad: {
       // The driver runs INSIDE the agent DO, so its gad-store calls are attributed
       // as a "do" — gad write methods (appendLogEvent/…) are `@rpc({ callers: ["do"] })`.
-      call: <T,>(method: string, args: Record<string, unknown>) => {
+      call: <T>(method: string, args: Record<string, unknown>) => {
         const fault = opts.gadFault?.(method);
         if (fault) return Promise.reject(fault);
         return gad.callAs<T>("do", method, args);
@@ -107,7 +123,7 @@ async function makeHarness(opts: {
     } as never, // fakes only touch blobstore
     selfRefFor:
       opts.selfRefFor ?? (() => ({ kind: "agent", id: "agent:self", participantId: "agent:self" })),
-    configFor: () => config,
+    configFor: () => opts.config ?? config,
     policiesFor: () => opts.policies ?? [],
     onEphemeral: (emit) => ephemerals.push(emit),
     broadcastStoredEnvelopes: async (channelId, envelopeIds) => {
@@ -139,7 +155,7 @@ async function settle(driver: AgentLoopDriver, rounds = 12): Promise<void> {
   }
 }
 
-function promptIncoming(envelopeId = "env-1", content = "hello") {
+function promptIncoming(envelopeId = "env-1", content = "hello", metadata?: AgentTurnMetadata) {
   return {
     type: "command" as const,
     command: {
@@ -148,6 +164,7 @@ function promptIncoming(envelopeId = "env-1", content = "hello") {
       source: { envelopeId },
       content,
       senderRef: { kind: "user" as const, id: "panel:user", participantId: "panel:user" },
+      ...(metadata ? { metadata } : {}),
     },
   };
 }
@@ -345,6 +362,30 @@ describe("AgentLoopDriver", () => {
     });
   });
 
+  it("stamps provider-qualified model provenance on assistant completions", async () => {
+    const harness = await makeHarness({
+      script: { model: [textReply("done")], tool: [] },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver);
+
+    const rows = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
+      "query",
+      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.completed' ORDER BY seq`,
+      []
+    );
+    const assistantCompleted = rows.rows
+      .map((row) => JSON.parse(row.payload_ref_json) as Record<string, unknown>)
+      .find((payload) => payload["role"] === "assistant");
+
+    expect(assistantCompleted?.["model"]).toMatchObject({
+      ref: "anthropic:claude-sonnet-4-6",
+      provider: "anthropic",
+      displayName: "anthropic:claude-sonnet-4-6",
+    });
+  });
+
   it("keeps equal effect ids isolated by branch", async () => {
     const harness = await makeHarness({
       script: { model: [], tool: [] },
@@ -513,14 +554,18 @@ describe("AgentLoopDriver", () => {
       isError: false,
     };
     await expect(
-      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL })
+      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, {
+        channelId: CHANNEL,
+      })
     ).resolves.toBe(true);
     await settle(harness.driver);
     const kindsAfterFirst = await logKinds(harness.gad);
 
     // Second delivery (the getRun poll backstop racing the onEvalComplete push) — idempotent no-op.
     await expect(
-      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL })
+      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, {
+        channelId: CHANNEL,
+      })
     ).resolves.toBe(false);
     await settle(harness.driver);
     expect(await logKinds(harness.gad)).toEqual(kindsAfterFirst);
@@ -545,7 +590,8 @@ describe("AgentLoopDriver", () => {
             } satisfies EffectExecutor)
           : null,
       // Fail ONLY the fold-load head read, and only while armed — appends still work.
-      gadFault: (method) => (faultArmed && method === "getLogHead" ? new Error("store unavailable") : null),
+      gadFault: (method) =>
+        faultArmed && method === "getLogHead" ? new Error("store unavailable") : null,
     });
 
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
@@ -555,7 +601,10 @@ describe("AgentLoopDriver", () => {
 
     const outcome: EffectOutcome = {
       kind: "tool",
-      result: { protocolContent: [{ type: "text", text: "[eval] ok" }], details: { success: true } },
+      result: {
+        protocolContent: [{ type: "text", text: "[eval] ok" }],
+        details: { success: true },
+      },
       isError: false,
     };
 
@@ -564,14 +613,18 @@ describe("AgentLoopDriver", () => {
     faultArmed = true;
     // The transient error PROPAGATES (no longer swallowed) — the caller's redrive/alarm retries.
     await expect(
-      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL })
+      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, {
+        channelId: CHANNEL,
+      })
     ).rejects.toThrow(/store unavailable/);
     // Critically: the outbox row is STILL parked (the outcome was not dropped, the row not deleted).
     expect(harness.driver.outbox.all()).toEqual([expect.objectContaining({ kind: "local_tool" })]);
 
     // Store recovers → the redelivery (the redrive/push backstop) settles the invocation normally.
     faultArmed = false;
-    await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL });
+    await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, {
+      channelId: CHANNEL,
+    });
     await settle(harness.driver);
     expect(harness.driver.outbox.all()).toHaveLength(0);
     const kinds = await logKinds(harness.gad);
@@ -705,6 +758,68 @@ describe("AgentLoopDriver", () => {
     ]);
   });
 
+  it("lets unattended executor auth throws continue on local fallback", async () => {
+    const modelDispatches: Array<{ provider: string; model: string; auth?: string }> = [];
+    const harness = await makeHarness({
+      config: { ...config, fallbackModelRef, fallbackModelSpec },
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) => {
+        if (descriptor.kind !== "model_call") return null;
+        return {
+          kind: "model_call",
+          async execute() {
+            modelDispatches.push({
+              provider: descriptor.request.provider,
+              model: descriptor.request.model,
+              auth: descriptor.request.auth,
+            });
+            if (descriptor.request.provider !== "local") {
+              throw Object.assign(
+                new Error("Provided authentication token is expired. Please try signing in again."),
+                { status: 401 }
+              );
+            }
+            return textReply("continued locally");
+          },
+        } satisfies EffectExecutor;
+      },
+    });
+
+    await harness.driver.handleIncoming(
+      CHANNEL,
+      promptIncoming("env-heartbeat", "background check", { origin: "heartbeat" })
+    );
+    await settle(harness.driver, 8);
+
+    expect(modelDispatches).toEqual([
+      { provider: "anthropic", model: "claude-sonnet-4-6", auth: undefined },
+      { provider: "local", model: "lfm2.5-1.2b", auth: "loopback" },
+    ]);
+    expect(harness.channelPublishes).not.toContainEqual(
+      expect.objectContaining({ payloadKind: CREDENTIAL_CONNECT_PAYLOAD_KIND })
+    );
+    const notices = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
+      "query",
+      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'system.event' ORDER BY seq`,
+      []
+    );
+    expect(notices.rows.map((row) => JSON.parse(row.payload_ref_json))).toContainEqual(
+      expect.objectContaining({ kind: "model.local_fallback_continued" })
+    );
+    const starts = await harness.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
+      "query",
+      `SELECT payload_ref_json FROM log_events WHERE log_id = '${LOG_ID}' AND payload_kind = 'message.started' ORDER BY seq`,
+      []
+    );
+    expect(JSON.parse(starts.rows.at(-1)!.payload_ref_json).modelRequest).toMatchObject({
+      provider: "local",
+      model: "lfm2.5-1.2b",
+      auth: "loopback",
+      modelSpec: fallbackModelSpec,
+    });
+    expect(harness.driver.outbox.all()).toEqual([]);
+  });
+
   it("does not mark a queued model call failed when wake races the pump", async () => {
     const harness = await makeHarness({
       script: { model: [textReply("done")], tool: [] },
@@ -768,11 +883,7 @@ describe("AgentLoopDriver", () => {
     });
     await recovered.driver.wake(CHANNEL);
 
-    expect(await logKinds(gad)).toEqual([
-      "message.completed",
-      "turn.opened",
-      "message.started",
-    ]);
+    expect(await logKinds(gad)).toEqual(["message.completed", "turn.opened", "message.started"]);
     expect(recovered.driver.outbox.all()[0]).toEqual(
       expect.objectContaining({
         kind: "model_call",

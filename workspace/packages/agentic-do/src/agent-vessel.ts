@@ -97,6 +97,14 @@ import {
   type EphemeralEmit,
   type ExecutorDeps,
 } from "./effect-executors/index.js";
+import {
+  LOCAL_FALLBACK_MODEL_REF,
+  LOCAL_MODELS_EXTENSION_ID,
+  LOCAL_PROVIDER_ID,
+  materializeModel,
+  type LocalModelDescriptor,
+  type MaterializedModel,
+} from "./model-spec.js";
 
 const DELTA_BATCH_MS = 100;
 const CHANNEL_STATE_CACHE_MS = 5_000;
@@ -862,6 +870,23 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           );
         },
       },
+      localModels: {
+        // Loopback model runtime (design §6.3). The key crosses this boundary
+        // per call and is never persisted vessel-side; the extension enforces
+        // do-kind + vessel-allowlist caller gating on getLoopbackAuth.
+        ensureLoaded: async (modelId) =>
+          await this.rpc.call<{ baseUrl: string }>("main", "extensions.invoke", [
+            LOCAL_MODELS_EXTENSION_ID,
+            "ensureLoaded",
+            [modelId],
+          ]),
+        getLoopbackAuth: async () =>
+          await this.rpc.call<{ apiKey: string }>("main", "extensions.invoke", [
+            LOCAL_MODELS_EXTENSION_ID,
+            "getLoopbackAuth",
+            [],
+          ]),
+      },
       credentials: {
         getApiKey: async ({ providerId, modelBaseUrl, requestId, idempotencyKey }) => {
           // Prefer URL-bound credentials when the model exposes a concrete
@@ -1051,7 +1076,23 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     );
   }
 
+  private sendOrderedSignalMessage(
+    channelId: string,
+    content: string,
+    contentType?: string
+  ): void {
+    void serializeByKey(this.signalChains, channelId, () =>
+      this.createChannelClient(channelId)
+        .sendSignal(this.participantId(), content, contentType)
+        .catch(() => {})
+    );
+  }
+
   private emitEphemeral(emit: EphemeralEmit): void {
+    if (emit.kind === "signal-message") {
+      this.sendOrderedSignalMessage(emit.channelId, emit.content, emit.contentType);
+      return;
+    }
     const buffer = this.deltaBuffers.get(emit.channelId) ?? { events: [], timer: null };
     buffer.events.push(emit.event);
     if (!buffer.timer) {
@@ -1173,14 +1214,29 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const settings = this.getAgentSettings();
     const publishPolicy = this.getPublishPolicy(channelId);
     const immediatePrompt = this.immediatePrompt(channelId);
+    const materialized = this.materializedModel(channelId, settings.model);
+    const fallbackMaterialized = this.materializedModel(channelId, LOCAL_FALLBACK_MODEL_REF);
+    const toolSchemasHash =
+      // Tool-capability gate (design §6.4): omit tool schemas at the source
+      // for models whose chat template can't parse them.
+      materialized && !materialized.toolsCapable
+        ? undefined
+        : (this.getStateValue(`agent:toolsHash:${channelId}`) ?? undefined);
     return {
       model: settings.model,
+      ...(materialized ? { modelSpec: materialized.spec, modelAuth: materialized.auth } : {}),
+      ...(fallbackMaterialized
+        ? {
+            fallbackModelRef: LOCAL_FALLBACK_MODEL_REF,
+            fallbackModelSpec: fallbackMaterialized.spec,
+          }
+        : {}),
       thinkingLevel: settings.thinkingLevel,
       approvalLevel: settings.approvalLevel,
       respondPolicy: settings.respondPolicy,
       systemPromptHash: this.getStateValue(`agent:promptHash:${channelId}`) ?? "",
       ...(immediatePrompt ? { immediatePrompt } : {}),
-      toolSchemasHash: this.getStateValue(`agent:toolsHash:${channelId}`) ?? undefined,
+      toolSchemasHash,
       activeToolNames: JSON.parse(
         this.getStateValue(`agent:toolNames:${channelId}`) ?? "[]"
       ) as string[],
@@ -1193,9 +1249,68 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     };
   }
 
+  /** Materialize the journaled model spec (design §6.2): local refs from the
+   *  cached extension entry (refreshed in ensurePromptArtifacts), cloud refs
+   *  from the pi-ai registry — an INPUT to materialization here at the impure
+   *  edge, never a resolution path in the executor. */
+  private materializedModel(channelId: string, ref: string): MaterializedModel | null {
+    const idx = ref.indexOf(":");
+    const providerId = idx === -1 ? "anthropic" : ref.slice(0, idx);
+    const modelId = idx === -1 ? ref : ref.slice(idx + 1);
+    let localEntry: LocalModelDescriptor | null = null;
+    if (providerId === LOCAL_PROVIDER_ID) {
+      const raw = this.getStateValue(`agent:localModelEntry:${channelId}`);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as LocalModelDescriptor;
+          if (parsed && parsed.slug === modelId) localEntry = parsed;
+        } catch {
+          // Corrupt cache — placeholder materialization covers this call;
+          // the next artifact refresh rewrites it.
+        }
+      }
+    }
+    return materializeModel(providerId, modelId, localEntry);
+  }
+
+  /** Cache the local-models extension entry for a `local:*` agent model so
+   *  the synchronous loopConfig() can materialize its journaled spec. Failure
+   *  is non-fatal: the placeholder spec keeps the call path alive and the
+   *  executor's ensureLoaded() supplies the live endpoint regardless. */
+  private async refreshLocalModelEntry(channelId: string): Promise<void> {
+    const model = this.getAgentSettings().model;
+    if (!model.startsWith(`${LOCAL_PROVIDER_ID}:`)) return;
+    const slug = model.slice(LOCAL_PROVIDER_ID.length + 1);
+    try {
+      const entries = await this.rpc.call<LocalModelDescriptor[]>("main", "extensions.invoke", [
+        LOCAL_MODELS_EXTENSION_ID,
+        "listModels",
+        [],
+      ]);
+      const entry = Array.isArray(entries)
+        ? (entries.find((candidate) => candidate?.slug === slug) ?? null)
+        : null;
+      if (!entry) return;
+      this.setStateValue(
+        `agent:localModelEntry:${channelId}`,
+        JSON.stringify({
+          slug: entry.slug,
+          displayName: entry.displayName,
+          baseUrl: entry.baseUrl,
+          contextWindow: entry.contextWindow,
+          maxTokens: entry.maxTokens,
+          toolsCapable: entry.toolsCapable,
+        } satisfies LocalModelDescriptor)
+      );
+    } catch (err) {
+      console.warn("[agent-vessel] local model entry refresh failed:", err);
+    }
+  }
+
   /** Compose + blob-spill the prompt/tool artifacts whose hashes ride every
    *  model request descriptor. Content-addressed: cheap to re-run. */
   protected async ensurePromptArtifacts(channelId: string): Promise<void> {
+    await this.refreshLocalModelEntry(channelId);
     try {
       const systemPrompt = await this.composePrompt(channelId);
       const registry = await this.toolRegistry(channelId);

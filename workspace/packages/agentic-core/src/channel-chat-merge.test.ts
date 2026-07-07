@@ -140,6 +140,34 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("projects assistant model provenance onto chat messages", () => {
+    const message: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-model") },
+      payload: {
+        ...textPayload("msg-model", "assistant", "done"),
+        model: {
+          ref: "local:lfm2.5-1.2b",
+          provider: "local",
+          displayName: "LFM2.5 1.2B Instruct",
+        },
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+
+    const state = [envelope(message, 1)].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
+      id: "msg-model",
+      model: {
+        ref: "local:lfm2.5-1.2b",
+        provider: "local",
+        displayName: "LFM2.5 1.2B Instruct",
+      },
+    });
+  });
+
   it("anchors fork annotation rows at forkPointId instead of creation seq", () => {
     const first: AgenticEvent<"message.completed"> = {
       kind: "message.completed",

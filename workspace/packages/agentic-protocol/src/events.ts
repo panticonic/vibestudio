@@ -197,6 +197,7 @@ export type MessagePayload =
       blocks?: MessageBlockInput[];
       outcome: MessageOutcome;
       usage?: UsagePayload;
+      model?: MessageModelPayload;
       mentions?: string[];
       replyTo?: MessageId;
       to?: ParticipantSelector[];
@@ -327,6 +328,12 @@ export interface UsagePayload {
   totalTokens?: number;
   costUsd?: number;
   metadata?: Record<string, unknown>;
+}
+
+export interface MessageModelPayload {
+  ref: string;
+  provider?: string;
+  displayName?: string;
 }
 
 export type InvocationTransport =

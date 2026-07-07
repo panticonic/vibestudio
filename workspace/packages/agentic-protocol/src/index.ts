@@ -88,6 +88,7 @@ export type {
   KnowledgeRelation,
   MessageBlockInput,
   MessageBlockType,
+  MessageModelPayload,
   MessagePayload,
   MessageRole,
   MessageTypeClearedPayload,
@@ -224,6 +225,7 @@ export type {
   ProjectedCustomMessage,
   ProjectedCustomMessageUpdate,
   ProjectedMessageTypeDefinition,
+  ProjectedSystemNotice,
 } from "./reducer-channel.js";
 export { createInitialChannelViewState, reduceChannelView } from "./reducer-channel.js";
 

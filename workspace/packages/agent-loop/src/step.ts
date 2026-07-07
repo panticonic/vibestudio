@@ -27,9 +27,12 @@ import { ids } from "./ids.js";
 import { classifyModelFailure, type ModelFailureInfo } from "./model-errors.js";
 import type {
   AgentLoopConfig,
+  AgentModelSpec,
   AgentState,
   AgentTurnMetadata,
+  ModelAuthMode,
   ModelRequestDescriptor,
+  OpenTurn,
   SessionEntry,
 } from "./state.js";
 import type { LogEnvelope } from "@workspace/agentic-protocol";
@@ -42,6 +45,17 @@ export interface StepOutput {
 export type StepFn = (state: AgentState, incoming: Incoming, ctx: StepContext) => StepOutput;
 
 const EMPTY: StepOutput = { append: [], effects: [] };
+const LOCAL_FALLBACK_NOTICE_KIND = "model.local_fallback_continued";
+
+const PROVIDER_LEVEL_FAILURE_CODES = new Set<ModelFailureInfo["code"]>([
+  "usage_limit_terminal",
+  "quota_exhausted_terminal",
+  "rate_limited_retryable",
+  "provider_overloaded_retryable",
+  "auth_or_credentials",
+  "circuit_breaker_open_terminal",
+  "unknown_retryable",
+]);
 
 export interface EphemeralSignal {
   kind: "signal-event";
@@ -55,6 +69,12 @@ function parseModel(model: string): { provider: string; model: string } {
   return { provider: model.slice(0, idx), model: model.slice(idx + 1) };
 }
 
+function isProviderLevelFailureCode(code: unknown): code is ModelFailureInfo["code"] {
+  return (
+    typeof code === "string" && PROVIDER_LEVEL_FAILURE_CODES.has(code as ModelFailureInfo["code"])
+  );
+}
+
 /** Build the next assistant message.started + its model_call effect.
  *  `itemsBefore` = number of append items that precede the message.started in
  *  the same batch (their seqs are part of the context snapshot). */
@@ -62,15 +82,27 @@ function modelStartItems(
   state: AgentState,
   turnId: string,
   modelCallCount: number,
-  itemsBefore: number
+  itemsBefore: number,
+  override?: {
+    modelRef: string;
+    modelSpec: AgentModelSpec;
+    auth: ModelAuthMode;
+  }
 ): { item: AppendItem; effect: ModelCallEffect } {
   const messageId = ids.messageId(turnId, modelCallCount);
   const attemptId = ids.attemptId(messageId);
   const config = turnConfig(state);
-  const { provider, model } = parseModel(config.model);
+  const { provider, model } = parseModel(override?.modelRef ?? config.model);
+  const modelSpec = override?.modelSpec ?? config.modelSpec;
+  const auth = override?.auth ?? config.modelAuth;
   const request: ModelRequestDescriptor = {
     provider,
     model,
+    // Journaled materialization (design §6.2/§6.3): the vessel resolved these
+    // at the impure edge; copying them here is what makes replay independent
+    // of the installed model registry.
+    ...(modelSpec ? { modelSpec } : {}),
+    ...(auth ? { auth } : {}),
     thinkingLevel: config.thinkingLevel,
     systemPromptHash: config.systemPromptHash,
     ...(config.immediatePrompt ? { immediatePrompt: config.immediatePrompt } : {}),
@@ -725,6 +757,73 @@ function nextModelCall(
   return { append: [item], effects: [effect, ...readAcks] };
 }
 
+function isUnattendedTurn(turn: OpenTurn): boolean {
+  return turn.metadata?.origin === "heartbeat" || turn.metadata?.origin === "scheduled";
+}
+
+function fallbackNoticeItem(
+  state: AgentState,
+  turn: OpenTurn,
+  failedMessageId: string,
+  fallbackModelRef: string
+): AppendItem {
+  return {
+    envelopeId: ids.systemEvent(turn.turnId, "local-fallback", state.lastSeq),
+    payloadKind: "system.event",
+    payload: {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      kind: LOCAL_FALLBACK_NOTICE_KIND,
+      summary: "continued on local fallback",
+      details: {
+        kind: LOCAL_FALLBACK_NOTICE_KIND,
+        failedMessageId,
+        fallbackModelRef,
+        summary: "continued on local fallback",
+      },
+    },
+    causality: { turnId: turn.turnId, messageId: failedMessageId as never },
+    publish: true,
+  };
+}
+
+function shouldFailOverToFallback(
+  state: AgentState,
+  turn: OpenTurn,
+  payload: Record<string, unknown>
+): { fallbackModelRef: string; fallbackModelSpec: AgentModelSpec } | null {
+  if (!isUnattendedTurn(turn)) return null;
+  if (turn.failedOverToFallback) return null;
+  if (!isProviderLevelFailureCode(payload["code"])) return null;
+  if (turn.lastFailedModelRequest?.provider === "local") return null;
+  const fallbackModelRef = state.config.fallbackModelRef;
+  const fallbackModelSpec = state.config.fallbackModelSpec;
+  if (!fallbackModelRef || !fallbackModelSpec) return null;
+  return { fallbackModelRef, fallbackModelSpec };
+}
+
+function fallbackModelCall(
+  state: AgentState,
+  ctx: StepContext,
+  turn: OpenTurn,
+  failedMessageId: string,
+  fallback: { fallbackModelRef: string; fallbackModelSpec: AgentModelSpec }
+): StepOutput {
+  const notice = fallbackNoticeItem(state, turn, failedMessageId, fallback.fallbackModelRef);
+  const { item, effect } = modelStartItems(state, turn.turnId, turn.modelCallCount, 1, {
+    modelRef: fallback.fallbackModelRef,
+    modelSpec: fallback.fallbackModelSpec,
+    auth: "loopback",
+  });
+  const readAcks = readAckEffects({
+    state,
+    contextThroughSeq: effect.request.contextThroughSeq,
+    freshSourceMessageIds: [],
+    turnId: turn.turnId,
+    ctx,
+  });
+  return { append: [notice, item], effects: [effect, ...readAcks] };
+}
+
 /**
  * One incremental flush step (an `Esc` / "Send now"): advance the pipeline by
  * exactly one step. Priority: queued steers first (deliver them within the open
@@ -1188,6 +1287,12 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
   if (kind === "message.failed") {
     const turn = state.openTurn;
     if (!turn || turn.interrupted) return EMPTY;
+    const failedMessageId = String(causality["messageId"] ?? "");
+    const fallback = shouldFailOverToFallback(state, turn, payload);
+    if (fallback) return fallbackModelCall(state, ctx, turn, failedMessageId, fallback);
+    if (turn.failedOverToFallback && isProviderLevelFailureCode(payload["code"])) {
+      return { append: [turnClosedItem(turn.turnId, { reason: "work_failed" })], effects: [] };
+    }
     if (typeof payload["resetAt"] === "string" && payload["resetAt"].trim()) {
       return {
         append: [

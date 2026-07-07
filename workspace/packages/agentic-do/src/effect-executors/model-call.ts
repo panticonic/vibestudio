@@ -6,7 +6,7 @@
  * `message.completed` with authoritative blocks.
  */
 
-import { getModel, stream, type Context, type Message } from "@earendil-works/pi-ai";
+import { stream, type Context, type Message } from "@earendil-works/pi-ai";
 import {
   buildModelContext,
   classifyModelFailure,
@@ -26,12 +26,15 @@ import {
   CredentialApprovalDeferredError,
   CredentialPendingError,
   type EffectExecutor,
+  type EphemeralEmit,
 } from "./types.js";
 import { modelCredentialReconnectOutcome } from "../model-credential-suspension.js";
 
 const DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const PI_REPLAY_METADATA_KEY = "pi";
 const MAX_PROVIDER_SESSION_ID_LENGTH = 64;
+const LOCAL_MODEL_SIGNAL_CONTENT_TYPE = "vibestudio-ext-working";
+const LOCAL_MODEL_PREFILL_POLL_MS = 1000;
 
 type PiReplayMetadata = {
   textSignature?: string;
@@ -48,6 +51,144 @@ class ModelStreamIdleTimeoutError extends Error {
 }
 
 type ModelStreamIdlePhase = "stream event" | "stream result";
+
+type OnEphemeral = (emit: EphemeralEmit) => void;
+
+function emitLocalModelStatus(onEphemeral: OnEphemeral, channelId: string, message: string): void {
+  onEphemeral({
+    kind: "signal-message",
+    channelId,
+    content: JSON.stringify({ message }),
+    contentType: LOCAL_MODEL_SIGNAL_CONTENT_TYPE,
+  });
+}
+
+function startLocalModelPrefillSignals(input: {
+  baseUrl: string;
+  apiKey: string;
+  signal: AbortSignal;
+  emit(message: string): void;
+}): () => void {
+  const slotsUrl = localModelSlotsUrl(input.baseUrl);
+  if (!slotsUrl || input.signal.aborted) return () => {};
+  const abort = new AbortController();
+  const abortFromParent = () => abort.abort(input.signal.reason);
+  input.signal.addEventListener("abort", abortFromParent, { once: true });
+  let stopped = false;
+  let lastPercent: number | null = null;
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    input.signal.removeEventListener("abort", abortFromParent);
+    abort.abort();
+  };
+
+  void (async () => {
+    while (!stopped && !abort.signal.aborted) {
+      if (!(await waitForPrefillPollDelay(abort.signal))) return;
+      let percent: number | null = null;
+      try {
+        const response = await fetch(slotsUrl, {
+          headers: { Authorization: `Bearer ${input.apiKey}` },
+          signal: abort.signal,
+        });
+        if (!response.ok) {
+          stop();
+          return;
+        }
+        percent = prefillPercentFromSlots(await response.json());
+      } catch {
+        stop();
+        return;
+      }
+      if (percent !== null && percent > 0 && percent !== lastPercent) {
+        lastPercent = percent;
+        input.emit(`Reading prompt ${percent}%…`);
+      }
+    }
+  })();
+
+  return stop;
+}
+
+function localModelSlotsUrl(baseUrl: string): string | null {
+  try {
+    return `${baseUrl.replace(/\/+$/u, "")}/slots`;
+  } catch {
+    return null;
+  }
+}
+
+function waitForPrefillPollDelay(signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, LOCAL_MODEL_PREFILL_POLL_MS);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function prefillPercentFromSlots(value: unknown): number | null {
+  const slots = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && Array.isArray((value as { slots?: unknown }).slots)
+      ? (value as { slots: unknown[] }).slots
+      : [value];
+  const percents = slots
+    .map(prefillPercentFromSlot)
+    .filter((percent): percent is number => percent !== null);
+  return percents.length > 0 ? Math.max(...percents) : null;
+}
+
+function prefillPercentFromSlot(value: unknown): number | null {
+  if (!value || typeof value !== "object") return null;
+  const slot = value as Record<string, unknown>;
+  const direct = firstFiniteNumber(slot, [
+    "prompt_progress",
+    "promptProgress",
+    "prefill_progress",
+    "prefillProgress",
+    "progress",
+  ]);
+  if (direct !== null) return normalizePercent(direct);
+
+  const processed = firstFiniteNumber(slot, [
+    "n_prompt_tokens_processed",
+    "prompt_tokens_processed",
+    "processed_prompt_tokens",
+    "n_past",
+  ]);
+  const total = firstFiniteNumber(slot, [
+    "n_prompt_tokens",
+    "prompt_tokens",
+    "prompt_tokens_total",
+    "n_prompt_total",
+  ]);
+  if (processed === null || total === null || total <= 0) return null;
+  return normalizePercent((processed / total) * 100);
+}
+
+function firstFiniteNumber(record: Record<string, unknown>, keys: string[]): number | null {
+  for (const key of keys) {
+    const value = record[key];
+    const numeric =
+      typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return null;
+}
+
+function normalizePercent(value: number): number {
+  const percent = value <= 1 ? value * 100 : value;
+  return Math.max(0, Math.min(100, Math.round(percent)));
+}
 
 async function withModelStreamIdleTimeout<T>(
   promise: Promise<T>,
@@ -110,6 +251,12 @@ function modelStreamIdleTimeoutReason(timeoutMs: number, phase: ModelStreamIdleP
   return `model_stream_idle_timeout: no ${phase} within ${timeoutMs}ms`;
 }
 
+function isUnattendedModelRequest(request: ModelCallEffect["request"]): boolean {
+  return (
+    request.turnMetadata?.origin === "heartbeat" || request.turnMetadata?.origin === "scheduled"
+  );
+}
+
 function modelFailureOutcome(
   err: unknown,
   request: ModelCallEffect["request"],
@@ -122,7 +269,11 @@ function modelFailureOutcome(
       now: new Date().toISOString(),
     })
   );
-  if (failure.code === "auth_or_credentials") {
+  if (
+    failure.code === "auth_or_credentials" &&
+    request.auth !== "loopback" &&
+    !isUnattendedModelRequest(request)
+  ) {
     return modelCredentialReconnectOutcome({
       providerId: request.provider,
       modelBaseUrl: opts.modelBaseUrl ?? request.modelBaseUrl,
@@ -477,7 +628,10 @@ type ModelCallProgress = {
 
 /** Pairwise phase durations from the stage timeline, keyed by the phase that
  *  was running (e.g. `credential.resolve.start: 120` = 120ms resolving). */
-function phaseDurationsFromMarks(marks: Array<[string, number]>, endedAt: number): Record<string, number> {
+function phaseDurationsFromMarks(
+  marks: Array<[string, number]>,
+  endedAt: number
+): Record<string, number> {
   const out: Record<string, number> = {};
   for (let i = 0; i < marks.length; i += 1) {
     const [stage, at] = marks[i]!;
@@ -540,19 +694,18 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       // unless the fine-grained trace is enabled; slow ones always log.
       const endedAt = Date.now();
       const summaryWorthLogging =
-        endedAt - progress.startedAt >= 10_000 ||
-        modelCallTraceEnabled(args.deps.env);
+        endedAt - progress.startedAt >= 10_000 || modelCallTraceEnabled(args.deps.env);
       if (summaryWorthLogging)
         console.info("[model-call] finished:", {
-        totalMs: endedAt - progress.startedAt,
-        phaseMs: phaseDurationsFromMarks(progress.marks, endedAt),
-        totalEvents: progress.totalEvents,
-        eventCounts: progress.eventCounts,
-        channelId: descriptor.channelId,
-        messageId: descriptor.messageId,
-        provider: descriptor.request.provider,
-        model: descriptor.request.model,
-      });
+          totalMs: endedAt - progress.startedAt,
+          phaseMs: phaseDurationsFromMarks(progress.marks, endedAt),
+          totalEvents: progress.totalEvents,
+          eventCounts: progress.eventCounts,
+          channelId: descriptor.channelId,
+          messageId: descriptor.messageId,
+          provider: descriptor.request.provider,
+          model: descriptor.request.model,
+        });
     }
   },
 };
@@ -567,44 +720,97 @@ async function executeModelCall(
   }: Parameters<EffectExecutor<ModelCallEffect>["execute"]>[0],
   progress: ModelCallProgress
 ): Promise<EffectOutcome | { deferred: true }> {
-    const request = descriptor.request;
-    const trace = (stage: string, extra?: Record<string, unknown>) => {
-      progress.stage = stage;
-      progress.stageChangedAt = Date.now();
-      progress.marks.push([stage, progress.stageChangedAt]);
-      traceModelCallStage(stage, descriptor, extra, deps.env);
+  const request = descriptor.request;
+  const trace = (stage: string, extra?: Record<string, unknown>) => {
+    progress.stage = stage;
+    progress.stageChangedAt = Date.now();
+    progress.marks.push([stage, progress.stageChangedAt]);
+    traceModelCallStage(stage, descriptor, extra, deps.env);
+  };
+  trace("start");
+
+  // Journal-materialized model resolution (design §6.2): the request carries
+  // the exact pi-ai Model literal the vessel resolved at the impure edge.
+  // There is no registry fallback in the executor — a spec-less request is
+  // a materialization bug and fails loudly.
+  const modelSpec = request.modelSpec;
+  if (!modelSpec) {
+    return {
+      kind: "model",
+      blocks: [],
+      stopReason: "error",
+      errorReason: `model spec missing for ${request.provider}:${request.model} (vessel materialization failed)`,
     };
-    trace("start");
+  }
+  const modelBaseUrl = request.modelBaseUrl ?? modelSpec.baseUrl;
 
-    // Resolve the model first: credentials are URL-bound, so the lookup (and
-    // any connect-card suspension) needs the model's base URL even when the
-    // request descriptor doesn't carry one — pi-ai's registry is the default.
-    const registryModel = getModel(request.provider as never, request.model as never) as
-      | { baseUrl?: string }
-      | undefined;
-    const modelBaseUrl =
-      request.modelBaseUrl ??
-      (typeof registryModel?.baseUrl === "string" ? registryModel.baseUrl : undefined);
+  const systemPromptPromise = deps.blobstore.getText(request.systemPromptHash);
+  const toolsJsonPromise = request.toolSchemasHash
+    ? deps.blobstore.getText(request.toolSchemasHash)
+    : Promise.resolve(null);
+  // The credential lookup below can return (suspend) or throw before these
+  // are awaited; detached no-op handlers prevent an unhandled rejection in
+  // that window. The awaited Promise.all still observes any real rejection.
+  systemPromptPromise.catch(() => {});
+  toolsJsonPromise.catch(() => {});
 
-    const systemPromptPromise = deps.blobstore.getText(request.systemPromptHash);
-    const toolsJsonPromise = request.toolSchemasHash
-      ? deps.blobstore.getText(request.toolSchemasHash)
-      : Promise.resolve(null);
-    // The credential lookup below can return (suspend) or throw before these
-    // are awaited; detached no-op handlers prevent an unhandled rejection in
-    // that window. The awaited Promise.all still observes any real rejection.
-    systemPromptPromise.catch(() => {});
-    toolsJsonPromise.catch(() => {});
+  const testModeOutcome = deterministicTestModeModelOutcome(descriptor, deps.env);
+  if (testModeOutcome) {
+    trace("test-mode.completed");
+    return testModeOutcome;
+  }
 
-    const testModeOutcome = deterministicTestModeModelOutcome(descriptor, deps.env);
-    if (testModeOutcome) {
-      trace("test-mode.completed");
-      return testModeOutcome;
+  let credentials: { apiKey: string; headers?: Record<string, string> };
+  // Live endpoint override: set for loopback (ensureLoaded's answer beats any
+  // journaled port — design §6.3) or when the request carries an explicit one.
+  let liveBaseUrl: string | undefined = request.modelBaseUrl;
+  const isLoopback = request.auth === "loopback";
+  if (isLoopback) {
+    // Local llama.cpp: no stored credential, no connect-card suspend. The
+    // loopback key is injected here at call time and exists only in
+    // extension storage and this in-flight request — never journaled.
+    const localModels = deps.localModels;
+    if (!localModels) {
+      return {
+        kind: "model",
+        blocks: [],
+        stopReason: "error",
+        errorReason:
+          "local model runtime unavailable (local-models extension not reachable from executor)",
+      };
     }
-
+    try {
+      const modelName =
+        typeof modelSpec.name === "string" && modelSpec.name.trim()
+          ? modelSpec.name
+          : request.model;
+      emitLocalModelStatus(onEphemeral, descriptor.channelId, "Starting local model…");
+      emitLocalModelStatus(
+        onEphemeral,
+        descriptor.channelId,
+        `Loading ${modelName}… (first use may download)`
+      );
+      trace("loopback.ensure-loaded.start", { model: request.model });
+      const [loaded, auth] = await Promise.all([
+        localModels.ensureLoaded(request.model),
+        localModels.getLoopbackAuth(),
+      ]);
+      liveBaseUrl = loaded.baseUrl;
+      credentials = { apiKey: auth.apiKey };
+      trace("loopback.ready", { baseUrl: loaded.baseUrl });
+    } catch (err) {
+      return {
+        kind: "model",
+        blocks: [],
+        stopReason: "error",
+        errorReason: `local model start failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
+  } else {
     // A pending connect suspends the turn, not fails it. Immutable prompt/tool
     // blob reads above can run concurrently with this lookup.
-    let credentials: { apiKey: string; headers?: Record<string, string> };
     try {
       trace("credential.resolve.start", { modelBaseUrl });
       credentials = await deps.credentials.getApiKey({
@@ -636,327 +842,343 @@ async function executeModelCall(
       }
       throw err;
     }
+  }
 
-    const [systemPromptRaw, toolsJson] = await Promise.all([systemPromptPromise, toolsJsonPromise]);
-    trace("context.blobs.loaded", {
-      hasSystemPrompt: systemPromptRaw !== null,
-      hasTools: toolsJson !== null,
-    });
-    const systemPrompt = systemPromptForPolicy(systemPromptRaw ?? undefined, request.turnMetadata?.contextPolicy);
-    const tools = toolsJson ? (JSON.parse(toolsJson) as Context["tools"]) : undefined;
+  const [systemPromptRaw, toolsJson] = await Promise.all([systemPromptPromise, toolsJsonPromise]);
+  trace("context.blobs.loaded", {
+    hasSystemPrompt: systemPromptRaw !== null,
+    hasTools: toolsJson !== null,
+  });
+  const systemPrompt = systemPromptForPolicy(
+    systemPromptRaw ?? undefined,
+    request.turnMetadata?.contextPolicy
+  );
+  const tools = toolsJson ? (JSON.parse(toolsJson) as Context["tools"]) : undefined;
 
-    const model = registryModel as ReturnType<typeof getModel>;
-    if (!model) {
-      return {
-        kind: "model",
-        blocks: [],
-        stopReason: "error",
-        errorReason: `unknown model ${request.provider}:${request.model}`,
-      };
-    }
+  // Storage boundary, model-input side: fold entries keep spilled fields
+  // (tool results, large user content) as blob refs — the model must see
+  // the actual bytes, never `vibestudio.blob-ref.v1` pointers (a model that
+  // reads pointer JSON emits garbage tool args and pointer-shaped paths).
+  const hydratedMessages = (await hydrateStoredValueRefs(
+    modelContextForPolicy(state, request.contextThroughSeq, request.turnMetadata?.contextPolicy),
+    { getText: (digest) => deps.blobstore.getText(digest) }
+  )) as ModelMessage[];
+  const immediatePrompt = request.immediatePrompt?.trim();
+  const messages = immediatePrompt
+    ? [...hydratedMessages, { role: "user" as const, content: immediatePrompt }]
+    : hydratedMessages;
+  const context: Context = {
+    ...(systemPrompt ? { systemPrompt } : {}),
+    messages: toPiMessages(messages),
+    ...(tools ? { tools } : {}),
+  };
+  trace("context.built", {
+    messageCount: context.messages.length,
+    toolCount: Array.isArray(context.tools) ? context.tools.length : undefined,
+  });
 
-    // Storage boundary, model-input side: fold entries keep spilled fields
-    // (tool results, large user content) as blob refs — the model must see
-    // the actual bytes, never `vibestudio.blob-ref.v1` pointers (a model that
-    // reads pointer JSON emits garbage tool args and pointer-shaped paths).
-    const hydratedMessages = (await hydrateStoredValueRefs(
-      modelContextForPolicy(state, request.contextThroughSeq, request.turnMetadata?.contextPolicy),
-      { getText: (digest) => deps.blobstore.getText(digest) }
-    )) as ModelMessage[];
-    const immediatePrompt = request.immediatePrompt?.trim();
-    const messages = immediatePrompt
-      ? [...hydratedMessages, { role: "user" as const, content: immediatePrompt }]
-      : hydratedMessages;
-    const context: Context = {
-      ...(systemPrompt ? { systemPrompt } : {}),
-      messages: toPiMessages(messages),
-      ...(tools ? { tools } : {}),
-    };
-    trace("context.built", {
-      messageCount: context.messages.length,
-      toolCount: Array.isArray(context.tools) ? context.tools.length : undefined,
-    });
+  const streamAbort = new AbortController();
+  let idleTimedOut = false;
+  if (signal.aborted) {
+    streamAbort.abort(signal.reason);
+  }
+  const forwardAbort = () => streamAbort.abort(signal.reason);
+  signal.addEventListener("abort", forwardAbort, { once: true });
 
-    const streamAbort = new AbortController();
-    let idleTimedOut = false;
-    if (signal.aborted) {
-      streamAbort.abort(signal.reason);
-    }
-    const forwardAbort = () => streamAbort.abort(signal.reason);
-    signal.addEventListener("abort", forwardAbort, { once: true });
+  trace("stream.start", {
+    modelBaseUrl: liveBaseUrl ?? modelBaseUrl,
+  });
+  // Live endpoint override must be baked INTO the model literal: pi-ai
+  // constructs its client from model.baseUrl and ignores any baseUrl
+  // option (verified against 0.78.0) — with a journaled loopback
+  // placeholder port, passing the spec unmodified dials a dead endpoint.
+  const effectiveSpec = liveBaseUrl ? { ...modelSpec, baseUrl: liveBaseUrl } : modelSpec;
+  const eventStream = stream(effectiveSpec as never, context, {
+    apiKey: credentials.apiKey,
+    ...(credentials.headers ? { headers: credentials.headers } : {}),
+    signal: streamAbort.signal,
+    sessionId: modelStreamSessionId(descriptor, deps.selfRef),
+    ...buildRawThinkingOptions(modelSpec as unknown as RawThinkingModel, request.thinkingLevel),
+  } as never);
+  let stopPrefillSignals: (() => void) | null =
+    isLoopback && liveBaseUrl
+      ? startLocalModelPrefillSignals({
+          baseUrl: liveBaseUrl,
+          apiKey: credentials.apiKey,
+          signal: streamAbort.signal,
+          emit: (message) => emitLocalModelStatus(onEphemeral, descriptor.channelId, message),
+        })
+      : null;
 
-    trace("stream.start", {
-      modelBaseUrl: request.modelBaseUrl ?? modelBaseUrl,
-    });
-    const eventStream = stream(model as never, context, {
-      apiKey: credentials.apiKey,
-      ...(credentials.headers ? { headers: credentials.headers } : {}),
-      ...(request.modelBaseUrl ? { baseUrl: request.modelBaseUrl } : {}), // explicit override only — registry models already carry their own baseUrl
-      signal: streamAbort.signal,
-      sessionId: modelStreamSessionId(descriptor, deps.selfRef),
-      ...buildRawThinkingOptions(model as RawThinkingModel, request.thinkingLevel),
-    } as never);
-
-    const blockIds = new Map<number, string>();
-    const toolCallProgress = new Map<
-      number,
-      { name: string | null; argBytes: number; emitted: number }
-    >();
-    let deltaCounter = 0;
-    let sawFirstStreamEvent = false;
-    const idleTimeoutMs = modelStreamIdleTimeoutMs(request);
-    let idleTimeoutPhase: ModelStreamIdlePhase | null = null;
-    try {
-      const iterator = (eventStream as AsyncIterable<Record<string, unknown>>)[
-        Symbol.asyncIterator
-      ]();
-      for (;;) {
-        const next = await withModelStreamIdleTimeout(iterator.next(), {
-          timeoutMs: idleTimeoutMs,
-          outerSignal: signal,
-          streamAbort,
-          phase: "stream event",
-          onIdleTimeout: () => {
-            idleTimedOut = true;
-            idleTimeoutPhase = "stream event";
-          },
-        }).catch((err) => {
-          if (err instanceof ModelStreamIdleTimeoutError) idleTimedOut = true;
-          throw err;
+  const blockIds = new Map<number, string>();
+  const toolCallProgress = new Map<
+    number,
+    { name: string | null; argBytes: number; emitted: number }
+  >();
+  let deltaCounter = 0;
+  let sawFirstStreamEvent = false;
+  const idleTimeoutMs = modelStreamIdleTimeoutMs(request);
+  let idleTimeoutPhase: ModelStreamIdlePhase | null = null;
+  try {
+    const iterator = (eventStream as AsyncIterable<Record<string, unknown>>)[
+      Symbol.asyncIterator
+    ]();
+    for (;;) {
+      const next = await withModelStreamIdleTimeout(iterator.next(), {
+        timeoutMs: idleTimeoutMs,
+        outerSignal: signal,
+        streamAbort,
+        phase: "stream event",
+        onIdleTimeout: () => {
+          idleTimedOut = true;
+          idleTimeoutPhase = "stream event";
+        },
+      }).catch((err) => {
+        if (err instanceof ModelStreamIdleTimeoutError) idleTimedOut = true;
+        throw err;
+      });
+      if (next.done) break;
+      const event = next.value;
+      // Direct progress update (not `trace` — per-event tracing would spam):
+      // a healthy stream shows stage "streaming" with a fresh stageChangedAt.
+      progress.stage = "streaming";
+      progress.stageChangedAt = Date.now();
+      const eventArrivedAt = Date.now();
+      if (progress.lastEventAt !== null) {
+        const gap = eventArrivedAt - progress.lastEventAt;
+        if (gap > progress.maxEventGapMs) progress.maxEventGapMs = gap;
+      }
+      progress.lastEventAt = eventArrivedAt;
+      progress.totalEvents += 1;
+      const progressEventType = String(event["type"] ?? "unknown");
+      progress.eventCounts[progressEventType] = (progress.eventCounts[progressEventType] ?? 0) + 1;
+      progress.lastEventType = progressEventType;
+      if (!sawFirstStreamEvent) {
+        sawFirstStreamEvent = true;
+        stopPrefillSignals?.();
+        stopPrefillSignals = null;
+        trace("stream.first-event", {
+          eventType: String(event["type"] ?? ""),
         });
-        if (next.done) break;
-        const event = next.value;
-        // Direct progress update (not `trace` — per-event tracing would spam):
-        // a healthy stream shows stage "streaming" with a fresh stageChangedAt.
-        progress.stage = "streaming";
-        progress.stageChangedAt = Date.now();
-        const eventArrivedAt = Date.now();
-        if (progress.lastEventAt !== null) {
-          const gap = eventArrivedAt - progress.lastEventAt;
-          if (gap > progress.maxEventGapMs) progress.maxEventGapMs = gap;
+      }
+      const type = String(event["type"] ?? "");
+      if (type === "text_delta" || type === "thinking_delta") {
+        const index = Number(event["contentIndex"] ?? event["index"] ?? 0);
+        // First delta for this block IN THIS EXECUTION replaces the block's
+        // accumulated text instead of appending. A retry of a retryably-failed
+        // attempt reuses the same messageId AND blockIds, and no terminal is
+        // published for the failed attempt — without `replace`, each retry's
+        // re-derived thinking/text concatenates onto the dead attempt's in the
+        // streaming card (the "word salad" wedge).
+        const isFirstDeltaForBlock = !blockIds.has(index);
+        if (isFirstDeltaForBlock) {
+          blockIds.set(index, `${descriptor.messageId}:block:${index}`);
         }
-        progress.lastEventAt = eventArrivedAt;
-        progress.totalEvents += 1;
-        const progressEventType = String(event["type"] ?? "unknown");
-        progress.eventCounts[progressEventType] =
-          (progress.eventCounts[progressEventType] ?? 0) + 1;
-        progress.lastEventType = progressEventType;
-        if (!sawFirstStreamEvent) {
-          sawFirstStreamEvent = true;
-          trace("stream.first-event", {
-            eventType: String(event["type"] ?? ""),
+        deltaCounter += 1;
+        const deltaEvent: AgenticEvent = {
+          kind: "message.delta",
+          actor: deps.selfRef,
+          causality: { messageId: descriptor.messageId as never },
+          payload: {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            blockId: blockIds.get(index) as never,
+            type: type === "text_delta" ? "text" : "thinking",
+            text: String(event["delta"] ?? event["text"] ?? ""),
+            ...(isFirstDeltaForBlock ? { replace: true } : {}),
+          },
+          createdAt: new Date().toISOString(),
+        } as AgenticEvent;
+        onEphemeral({
+          kind: "signal-event",
+          channelId: descriptor.channelId,
+          event: deltaEvent,
+        });
+      } else if (
+        type === "toolcall_start" ||
+        type === "toolcall_delta" ||
+        type === "toolcall_end"
+      ) {
+        // Tool-call argument streaming is otherwise invisible: a model that
+        // writes a whole file through tool args streams for minutes with a
+        // dead-silent card ("looks hung"). Emit a throttled, self-replacing
+        // progress line on a dedicated ephemeral block; the durable terminal
+        // replaces blocks wholesale, so it vanishes on completion.
+        const index = Number(event["contentIndex"] ?? event["index"] ?? 0);
+        if (type === "toolcall_start") {
+          toolCallProgress.set(index, {
+            name: toolCallNameFromEvent(event),
+            argBytes: 0,
+            emitted: 0,
           });
         }
-        const type = String(event["type"] ?? "");
-        if (type === "text_delta" || type === "thinking_delta") {
-          const index = Number(event["contentIndex"] ?? event["index"] ?? 0);
-          // First delta for this block IN THIS EXECUTION replaces the block's
-          // accumulated text instead of appending. A retry of a retryably-failed
-          // attempt reuses the same messageId AND blockIds, and no terminal is
-          // published for the failed attempt — without `replace`, each retry's
-          // re-derived thinking/text concatenates onto the dead attempt's in the
-          // streaming card (the "word salad" wedge).
-          const isFirstDeltaForBlock = !blockIds.has(index);
-          if (isFirstDeltaForBlock) {
-            blockIds.set(index, `${descriptor.messageId}:block:${index}`);
-          }
-          deltaCounter += 1;
-          const deltaEvent: AgenticEvent = {
-            kind: "message.delta",
-            actor: deps.selfRef,
-            causality: { messageId: descriptor.messageId as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              blockId: blockIds.get(index) as never,
-              type: type === "text_delta" ? "text" : "thinking",
-              text: String(event["delta"] ?? event["text"] ?? ""),
-              ...(isFirstDeltaForBlock ? { replace: true } : {}),
-            },
-            createdAt: new Date().toISOString(),
-          } as AgenticEvent;
+        const tracked = toolCallProgress.get(index) ?? { name: null, argBytes: 0, emitted: 0 };
+        if (type === "toolcall_delta") {
+          tracked.argBytes += String(event["delta"] ?? "").length;
+          if (!tracked.name) tracked.name = toolCallNameFromEvent(event);
+        }
+        toolCallProgress.set(index, tracked);
+        const shouldEmit =
+          type === "toolcall_start" ||
+          type === "toolcall_end" ||
+          tracked.argBytes - tracked.emitted >= TOOLCALL_PROGRESS_EMIT_BYTES;
+        if (shouldEmit) {
+          tracked.emitted = tracked.argBytes;
+          // Machine-readable status line; the chat pill renders it with its
+          // own spinner/label chrome. `name|bytes|phase` keeps the payload a
+          // plain delta string (no protocol schema change beyond the type).
+          const text = JSON.stringify({
+            toolName: tracked.name,
+            argBytes: tracked.argBytes,
+            phase: type === "toolcall_end" ? "prepared" : "streaming",
+          });
           onEphemeral({
             kind: "signal-event",
             channelId: descriptor.channelId,
-            event: deltaEvent,
+            event: {
+              kind: "message.delta",
+              actor: deps.selfRef,
+              causality: { messageId: descriptor.messageId as never },
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                blockId: `${descriptor.messageId}:toolcall-progress:${index}` as never,
+                type: "toolcall-progress",
+                text,
+                replace: true,
+              },
+              createdAt: new Date().toISOString(),
+            } as AgenticEvent,
           });
-        } else if (
-          type === "toolcall_start" ||
-          type === "toolcall_delta" ||
-          type === "toolcall_end"
-        ) {
-          // Tool-call argument streaming is otherwise invisible: a model that
-          // writes a whole file through tool args streams for minutes with a
-          // dead-silent card ("looks hung"). Emit a throttled, self-replacing
-          // progress line on a dedicated ephemeral block; the durable terminal
-          // replaces blocks wholesale, so it vanishes on completion.
-          const index = Number(event["contentIndex"] ?? event["index"] ?? 0);
-          if (type === "toolcall_start") {
-            toolCallProgress.set(index, { name: toolCallNameFromEvent(event), argBytes: 0, emitted: 0 });
-          }
-          const tracked = toolCallProgress.get(index) ?? { name: null, argBytes: 0, emitted: 0 };
-          if (type === "toolcall_delta") {
-            tracked.argBytes += String(event["delta"] ?? "").length;
-            if (!tracked.name) tracked.name = toolCallNameFromEvent(event);
-          }
-          toolCallProgress.set(index, tracked);
-          const shouldEmit =
-            type === "toolcall_start" ||
-            type === "toolcall_end" ||
-            tracked.argBytes - tracked.emitted >= TOOLCALL_PROGRESS_EMIT_BYTES;
-          if (shouldEmit) {
-            tracked.emitted = tracked.argBytes;
-            // Machine-readable status line; the chat pill renders it with its
-            // own spinner/label chrome. `name|bytes|phase` keeps the payload a
-            // plain delta string (no protocol schema change beyond the type).
-            const text = JSON.stringify({
-              toolName: tracked.name,
-              argBytes: tracked.argBytes,
-              phase: type === "toolcall_end" ? "prepared" : "streaming",
-            });
-            onEphemeral({
-              kind: "signal-event",
-              channelId: descriptor.channelId,
-              event: {
-                kind: "message.delta",
-                actor: deps.selfRef,
-                causality: { messageId: descriptor.messageId as never },
-                payload: {
-                  protocol: AGENTIC_PROTOCOL_VERSION,
-                  blockId: `${descriptor.messageId}:toolcall-progress:${index}` as never,
-                  type: "toolcall-progress",
-                  text,
-                  replace: true,
-                },
-                createdAt: new Date().toISOString(),
-              } as AgenticEvent,
-            });
-          }
         }
       }
-    } catch (err) {
-      signal.removeEventListener("abort", forwardAbort);
-      if (signal.aborted) {
-        return { kind: "model", blocks: [], stopReason: "aborted" };
-      }
-      if (idleTimedOut || err instanceof ModelStreamIdleTimeoutError) {
-        const timeoutMs = idleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
-        const phase = idleTimeoutPhase ?? "stream event";
-        const errorReason = modelStreamIdleTimeoutReason(timeoutMs, phase);
-        console.warn("[model-call] stream idle watchdog fired:", {
-          channelId: descriptor.channelId,
-          messageId: descriptor.messageId,
-          provider: request.provider,
-          model: request.model,
-          timeoutMs,
-          phase,
-        });
-        trace("stream.idle-timeout", { timeoutMs, phase });
-        return {
-          kind: "model",
-          blocks: [],
-          stopReason: "error",
-          errorReason,
-        };
-      }
-      // The journaled message.failed only keeps the message — log the stack
-      // here so a deterministic crash in the request path is traceable.
-      console.warn(
-        "[model-call] stream failed:",
-        err instanceof Error ? (err.stack ?? err.message) : String(err)
-      );
-      trace("stream.failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return modelFailureOutcome(err, request, { modelBaseUrl });
     }
-    void deltaCounter;
-
-    let result: Record<string, unknown>;
-    try {
-      trace("stream.result.start");
-      result = await withModelStreamIdleTimeout(
-        (eventStream as unknown as { result(): Promise<Record<string, unknown>> }).result(),
-        {
-          timeoutMs: idleTimeoutMs,
-          outerSignal: signal,
-          streamAbort,
-          phase: "stream result",
-          onIdleTimeout: () => {
-            idleTimedOut = true;
-            idleTimeoutPhase = "stream result";
-          },
-        }
-      );
-    } catch (err) {
-      if (signal.aborted) {
-        return { kind: "model", blocks: [], stopReason: "aborted" };
-      }
-      if (idleTimedOut || err instanceof ModelStreamIdleTimeoutError) {
-        const timeoutMs = idleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
-        const phase = idleTimeoutPhase ?? "stream result";
-        const errorReason = modelStreamIdleTimeoutReason(timeoutMs, phase);
-        console.warn("[model-call] stream idle watchdog fired:", {
-          channelId: descriptor.channelId,
-          messageId: descriptor.messageId,
-          provider: request.provider,
-          model: request.model,
-          timeoutMs,
-          phase,
-        });
-        trace("stream.idle-timeout", { timeoutMs, phase });
-        return {
-          kind: "model",
-          blocks: [],
-          stopReason: "error",
-          errorReason,
-        };
-      }
-      return modelFailureOutcome(
-        err instanceof Error ? err : new Error("model stream failed"),
-        request,
-        { modelBaseUrl }
-      );
-    } finally {
-      signal.removeEventListener("abort", forwardAbort);
+  } catch (err) {
+    stopPrefillSignals?.();
+    stopPrefillSignals = null;
+    signal.removeEventListener("abort", forwardAbort);
+    if (signal.aborted) {
+      return { kind: "model", blocks: [], stopReason: "aborted" };
     }
-    const content = Array.isArray(result["content"]) ? (result["content"] as unknown[]) : [];
-    const stopReason = String(result["stopReason"] ?? "stop");
-    trace("stream.result.completed", {
-      stopReason,
-      blockCount: content.length,
-    });
-    if (signal.aborted || stopReason === "aborted") {
-      return {
-        kind: "model",
-        blocks: toProtocolBlocks(content, descriptor.messageId),
-        stopReason: "aborted",
-      };
-    }
-    if (stopReason === "error") {
-      // Provider-reported terminal error (e.g. a WS close mid-generation).
-      // This path throws nothing, so without this log the failure is invisible
-      // in worker logs — only the journaled message.failed records it.
-      console.warn("[model-call] stream ended with provider error:", {
-        errorMessage: String(result["errorMessage"] ?? "model error"),
-        totalMs: Date.now() - progress.startedAt,
-        eventCounts: progress.eventCounts,
+    if (idleTimedOut || err instanceof ModelStreamIdleTimeoutError) {
+      const timeoutMs = idleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
+      const phase = idleTimeoutPhase ?? "stream event";
+      const errorReason = modelStreamIdleTimeoutReason(timeoutMs, phase);
+      console.warn("[model-call] stream idle watchdog fired:", {
         channelId: descriptor.channelId,
         messageId: descriptor.messageId,
         provider: request.provider,
         model: request.model,
+        timeoutMs,
+        phase,
       });
-      return modelFailureOutcomeFromMessage(
-        String(result["errorMessage"] ?? "model error"),
-        request,
-        { modelBaseUrl }
-      );
+      trace("stream.idle-timeout", { timeoutMs, phase });
+      return {
+        kind: "model",
+        blocks: [],
+        stopReason: "error",
+        errorReason,
+      };
     }
+    // The journaled message.failed only keeps the message — log the stack
+    // here so a deterministic crash in the request path is traceable.
+    console.warn(
+      "[model-call] stream failed:",
+      err instanceof Error ? (err.stack ?? err.message) : String(err)
+    );
+    trace("stream.failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return modelFailureOutcome(err, request, { modelBaseUrl });
+  }
+  void deltaCounter;
+  stopPrefillSignals?.();
+  stopPrefillSignals = null;
+
+  let result: Record<string, unknown>;
+  try {
+    trace("stream.result.start");
+    result = await withModelStreamIdleTimeout(
+      (eventStream as unknown as { result(): Promise<Record<string, unknown>> }).result(),
+      {
+        timeoutMs: idleTimeoutMs,
+        outerSignal: signal,
+        streamAbort,
+        phase: "stream result",
+        onIdleTimeout: () => {
+          idleTimedOut = true;
+          idleTimeoutPhase = "stream result";
+        },
+      }
+    );
+  } catch (err) {
+    if (signal.aborted) {
+      return { kind: "model", blocks: [], stopReason: "aborted" };
+    }
+    if (idleTimedOut || err instanceof ModelStreamIdleTimeoutError) {
+      const timeoutMs = idleTimeoutMs ?? DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS;
+      const phase = idleTimeoutPhase ?? "stream result";
+      const errorReason = modelStreamIdleTimeoutReason(timeoutMs, phase);
+      console.warn("[model-call] stream idle watchdog fired:", {
+        channelId: descriptor.channelId,
+        messageId: descriptor.messageId,
+        provider: request.provider,
+        model: request.model,
+        timeoutMs,
+        phase,
+      });
+      trace("stream.idle-timeout", { timeoutMs, phase });
+      return {
+        kind: "model",
+        blocks: [],
+        stopReason: "error",
+        errorReason,
+      };
+    }
+    return modelFailureOutcome(
+      err instanceof Error ? err : new Error("model stream failed"),
+      request,
+      { modelBaseUrl }
+    );
+  } finally {
+    signal.removeEventListener("abort", forwardAbort);
+  }
+  const content = Array.isArray(result["content"]) ? (result["content"] as unknown[]) : [];
+  const stopReason = String(result["stopReason"] ?? "stop");
+  trace("stream.result.completed", {
+    stopReason,
+    blockCount: content.length,
+  });
+  if (signal.aborted || stopReason === "aborted") {
     return {
       kind: "model",
       blocks: toProtocolBlocks(content, descriptor.messageId),
-      stopReason: "completed",
-      usage: (result["usage"] as Record<string, unknown>) ?? undefined,
+      stopReason: "aborted",
     };
+  }
+  if (stopReason === "error") {
+    // Provider-reported terminal error (e.g. a WS close mid-generation).
+    // This path throws nothing, so without this log the failure is invisible
+    // in worker logs — only the journaled message.failed records it.
+    console.warn("[model-call] stream ended with provider error:", {
+      errorMessage: String(result["errorMessage"] ?? "model error"),
+      totalMs: Date.now() - progress.startedAt,
+      eventCounts: progress.eventCounts,
+      channelId: descriptor.channelId,
+      messageId: descriptor.messageId,
+      provider: request.provider,
+      model: request.model,
+    });
+    return modelFailureOutcomeFromMessage(
+      String(result["errorMessage"] ?? "model error"),
+      request,
+      { modelBaseUrl }
+    );
+  }
+  return {
+    kind: "model",
+    blocks: toProtocolBlocks(content, descriptor.messageId),
+    stopReason: "completed",
+    usage: (result["usage"] as Record<string, unknown>) ?? undefined,
+  };
 }
 
 function systemPromptForPolicy(
@@ -976,7 +1198,10 @@ function systemPromptForPolicy(
   return parts.filter(Boolean).join("\n\n");
 }
 
-function appendPromptFile(prompt: string | undefined, promptFileContent?: string): string | undefined {
+function appendPromptFile(
+  prompt: string | undefined,
+  promptFileContent?: string
+): string | undefined {
   if (!promptFileContent) return prompt;
   return [prompt, promptFileContent].filter(Boolean).join("\n\n");
 }
@@ -1097,9 +1322,7 @@ export function toProtocolBlocks(content: unknown[], messageId: string): unknown
       // Recover name/args from the alternate keys some provider/pi-ai tool-call shapes
       // use (`toolName`/`functionName`; `input`/`args`). A missing `name` here is the
       // origin of the nameless "invocation" pill some tools (e.g. docs_*) showed.
-      const name = String(
-        record["name"] ?? record["toolName"] ?? record["functionName"] ?? ""
-      );
+      const name = String(record["name"] ?? record["toolName"] ?? record["functionName"] ?? "");
       const args = record["arguments"] ?? record["input"] ?? record["args"];
       if (!name) {
         // Diagnostic: the model block carried no usable tool name even after the
