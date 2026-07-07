@@ -1,0 +1,15 @@
+{
+  "name": "@workspace-extensions/local-models",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "displayName": "Local Models",
+    "entry": "index.ts",
+    "sourcemap": true,
+    "extension": {
+      "activationEvents": ["*"],
+      "streamingMethods": ["downloadModel", "tailServerLog"]
+    }
+  }
+}
