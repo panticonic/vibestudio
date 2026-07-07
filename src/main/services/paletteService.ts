@@ -17,9 +17,9 @@ import { requireChromeCaller } from "./appCapabilities.js";
  * was wrong: that is a chrome-trust capability leaf panels never hold, so
  * panel-contributed commands silently never registered.) list/run are
  * chrome-only (they enumerate / dispatch across panels) — gated via
- * {@link requireChromeCaller}: the hosted workspace shell resolves as
- * `kind:"app"` (apps/shell), so the old bare `kind === "shell"` check silently
- * rejected the real shell and dropped panel-contributed commands.
+ * {@link requireChromeCaller}: hosted workspace chrome resolves as
+ * `kind:"app"`, so the old bare `kind === "shell"` check silently rejected it
+ * and dropped panel-contributed commands.
  */
 export function createPaletteService(deps: {
   panelOrchestrator: PanelOrchestrator;

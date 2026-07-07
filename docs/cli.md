@@ -119,6 +119,30 @@ flag > environment > config > hosted default (`wss://signal.vibestudio.app`).
 Use `remote setup-signaling` only when you want to self-host the Cloudflare
 signaling worker.
 
+## Agent
+
+The agent CLI can attach durable sessions, call server RPC methods, inspect
+services, read logs/diagnostics, and use workspace skills:
+
+```sh
+vibestudio agent attach [NAME]
+vibestudio agent status [NAME]
+vibestudio agent call SERVICE.METHOD '[]'
+vibestudio agent services [NAME]
+vibestudio agent logs UNIT
+vibestudio agent diag UNIT
+```
+
+The planned headless turn command is present as a stub:
+
+```sh
+vibestudio agent turn --model <ref> --message "hello" [--json]
+```
+
+It currently prints `not yet wired`. This command should only be fully
+implemented once the CLI has existing channel create/join and agent-vessel turn
+plumbing to call.
+
 ## Mobile
 
 Install the checksum-verified Android prebuilt shell, or build the internal
@@ -169,14 +193,15 @@ Remote reach is WebRTC (pair by QR: signaling room + DTLS fingerprint); see
 
 The CLI exposes Git upstream workflows through `vibestudio vcs git ...`:
 `status`, `remote:set`, `enable`, `push`, `pull`, `publish`, `import`,
-`auto`, and `disable`. These commands dispatch to the trusted
-`@workspace-extensions/git-bridge` extension rather than running host-owned Git
-plumbing directly.
+`auto`, and `disable`. These commands dispatch to the host-known `gitInterop`
+service. Operations that need the Git upstream engine are fulfilled by the
+workspace manifest's configured `providers.gitInterop` extension rather than a
+host-hardcoded workspace package.
 
 Use `git.setSharedRemote()` and `git.configureUpstream()` from
 `@workspace/runtime` to declare a remote and opt a workspace repo into upstream
 tracking. Provider helpers such as the GitHub skill can then publish through the
-trusted `@workspace-extensions/git-bridge` extension.
+configured Git interop provider.
 
 See [git-upstream.md](./git-upstream.md) for the two-layer model, approvals,
 `git.upstreams` config, and divergence repair workflow.

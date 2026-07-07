@@ -21,7 +21,6 @@ const VCS_SERVICE_RESOLUTION = {
   objectKey: "workspace-gad",
   targetId: VCS_DO_TARGET,
 };
-const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
 
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
   const rpcBodies: RpcRequest[] = [];
@@ -692,7 +691,7 @@ describe("vibestudio vcs commands", () => {
     ).toBe(true);
   });
 
-  it("git status dispatches to git-bridge upstreamStatus and emits JSON rows", async () => {
+  it("git status dispatches to gitInterop.upstreamStatus and emits JSON rows", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const rows = [
@@ -717,14 +716,14 @@ describe("vibestudio vcs commands", () => {
 
     expect(rpcBodies).toEqual([
       {
-        method: "extensions.invoke",
-        args: [GIT_BRIDGE_EXTENSION, "upstreamStatus", [["panels/notes"], { fetch: true }]],
+        method: "gitInterop.upstreamStatus",
+        args: [["panels/notes"], { fetch: true }],
       },
     ]);
     expect(jsonOutput()).toEqual(rows);
   });
 
-  it("git push --force dispatches to git-bridge pushUpstream and exits zero for pushed in-sync results", async () => {
+  it("git push --force dispatches to gitInterop.pushUpstream and exits zero for pushed in-sync results", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const result = {
@@ -742,14 +741,14 @@ describe("vibestudio vcs commands", () => {
 
     expect(rpcBodies).toEqual([
       {
-        method: "extensions.invoke",
-        args: [GIT_BRIDGE_EXTENSION, "pushUpstream", ["panels/notes", { force: true }]],
+        method: "gitInterop.pushUpstream",
+        args: ["panels/notes", { force: true }],
       },
     ]);
     expect(jsonOutput()).toEqual(result);
   });
 
-  it("git remote set dispatches to git-bridge setRemote with the declared remote", async () => {
+  it("git remote set dispatches to gitInterop.setSharedRemote with the declared remote", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
     const result = {
@@ -781,18 +780,14 @@ describe("vibestudio vcs commands", () => {
 
     expect(rpcBodies).toEqual([
       {
-        method: "extensions.invoke",
+        method: "gitInterop.setSharedRemote",
         args: [
-          GIT_BRIDGE_EXTENSION,
-          "setRemote",
-          [
-            "panels/notes",
-            {
-              name: "origin",
-              url: "https://github.com/werg/notes.git",
-              branch: "main",
-            },
-          ],
+          "panels/notes",
+          {
+            name: "origin",
+            url: "https://github.com/werg/notes.git",
+            branch: "main",
+          },
         ],
       },
     ]);

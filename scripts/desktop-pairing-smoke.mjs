@@ -37,6 +37,16 @@ const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
 const defaultReadyFile = path.join(os.tmpdir(), `vibestudio-desktop-smoke-ready-${process.pid}.json`);
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
+const HOSTED_SHELL_APP = readWorkspacePackageName("apps", "shell");
+
+function readWorkspacePackageName(...segments) {
+  const pkgPath = path.join(repoRoot, "workspace", ...segments, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+  if (typeof pkg.name !== "string" || !pkg.name) {
+    throw new Error(`Workspace package at ${pkgPath} is missing a package name`);
+  }
+  return pkg.name;
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -354,7 +364,7 @@ async function waitForDesktopShell(app, timeoutMs) {
 
     if (snapshots.some((snapshot) => snapshot.hasHostedShellChrome)) {
       const hostView = await getHostViewDebugInfo(app).catch(() => null);
-      if (hostView?.visibleHostChromeAppId === "@workspace-apps/shell") {
+      if (hostView?.visibleHostChromeAppId === HOSTED_SHELL_APP) {
         return { snapshots, hostView, clickedApprovals };
       }
     }

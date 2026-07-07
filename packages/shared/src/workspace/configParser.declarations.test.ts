@@ -6,6 +6,7 @@ import {
   resolveWorkspaceTrustGrants,
   workspaceAppPackageName,
   workspaceExtensionPackageName,
+  workspaceProviderExtensionPackageName,
 } from "./configParser.js";
 
 const parse = (yaml: string) => parseWorkspaceConfigContentWithId(yaml, "test-ws");
@@ -17,6 +18,8 @@ singletonObjects:
     key: workspace-gad
 extensions:
   - source: extensions/browser-data
+  - source: extensions/git-bridge
+  - source: extensions/claude-code
 apps:
   - source: apps/shell
 providers:
@@ -28,6 +31,10 @@ providers:
     source: "@workspace/cdp-client"
   browserData:
     extension: extensions/browser-data
+  gitInterop:
+    extension: extensions/git-bridge
+  claudeCode:
+    extension: extensions/claude-code
 trust:
   chromeApps:
     - apps/shell
@@ -85,6 +92,17 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     expect(browserDataBrokerPackageName(parse("initPanels: []\n"))).toBeNull();
   });
 
+  it("resolves extension provider package names from provider slots", () => {
+    const config = parse(FULL_MANIFEST);
+    expect(workspaceProviderExtensionPackageName(config, "gitInterop")).toBe(
+      "@workspace-extensions/git-bridge"
+    );
+    expect(workspaceProviderExtensionPackageName(config, "claudeCode")).toBe(
+      "@workspace-extensions/claude-code"
+    );
+    expect(workspaceProviderExtensionPackageName(config, "missing")).toBeNull();
+  });
+
   it("rejects malformed trust lists", () => {
     expect(() => parse("trust:\n  chromeApps: apps/shell\n")).toThrow(/must be a list/);
     expect(() => parse("trust:\n  chromeApps:\n    - panels/chat\n")).toThrow(
@@ -113,9 +131,12 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     );
   });
 
-  it("rejects a browserData broker that is not a declared extension", () => {
+  it("rejects an extension provider that is not a declared extension", () => {
     expect(() =>
       parse("providers:\n  browserData:\n    extension: extensions/browser-data\n")
+    ).toThrow(/must also be declared under `extensions`/);
+    expect(() =>
+      parse("providers:\n  gitInterop:\n    extension: extensions/git-bridge\n")
     ).toThrow(/must also be declared under `extensions`/);
   });
 });

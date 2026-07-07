@@ -69,8 +69,6 @@ interface GitPublishResult {
   pushed: boolean;
 }
 
-const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
-
 /** Adapt the CLI RpcClient to the target-capable {@link RpcCallerLike} the
  *  userland `vcs` service client needs (P3: push is userland-dispatched). */
 function userlandRpcFor(client: RpcClient): RpcCallerLike {
@@ -970,10 +968,10 @@ function resolveGitRpcClient(): CliRpcClient {
   return new CliRpcClient(creds);
 }
 
-async function invokeGitBridge<T>(method: string, args: unknown[]): Promise<T> {
+async function invokeGitInterop<T>(method: string, args: unknown[]): Promise<T> {
   const client = resolveGitRpcClient();
   try {
-    return await client.call<T>("extensions.invoke", [GIT_BRIDGE_EXTENSION, method, args]);
+    return await client.call<T>(`gitInterop.${method}`, args);
   } finally {
     await client.close().catch(() => undefined);
   }
@@ -1059,7 +1057,7 @@ async function gitStatus(inv: ParsedInvocation): Promise<number> {
   try {
     const repos = collectOptionalRepos(inv);
     // One-shot CLI invocation: fetch so ahead/behind reflects the remote now.
-    const rows = await invokeGitBridge<GitUpstreamStatusRow[]>("upstreamStatus", [
+    const rows = await invokeGitInterop<GitUpstreamStatusRow[]>("upstreamStatus", [
       repos.length ? repos : null,
       { fetch: true },
     ]);
@@ -1082,7 +1080,7 @@ async function gitEnable(inv: ParsedInvocation): Promise<number> {
         ? { credentialId: optionalFlagString(inv, "credential") }
         : {}),
     };
-    const result = await invokeGitBridge("setUpstream", [repo, upstream]);
+    const result = await invokeGitInterop("setUpstream", [repo, upstream]);
     printResult(result, {
       json,
       human: () => {
@@ -1106,9 +1104,12 @@ async function gitDisable(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const repo = requireGitRepo(inv);
-    const result = await invokeGitBridge("removeUpstream", [repo]);
+    const result = await invokeGitInterop("removeUpstream", [repo]);
     if (inv.flags["forget-remote"] === true) {
-      await invokeGitBridge("removeRemote", [repo, optionalFlagString(inv, "remote") ?? "origin"]);
+      await invokeGitInterop("removeSharedRemote", [
+        repo,
+        optionalFlagString(inv, "remote") ?? "origin",
+      ]);
     }
     printResult(result, {
       json,
@@ -1128,7 +1129,7 @@ async function gitAuto(inv: ParsedInvocation): Promise<number> {
   try {
     const repo = requireGitRepo(inv);
     const enabled = inv.flags["off"] !== true;
-    const result = await invokeGitBridge("setAutoPush", [repo, enabled]);
+    const result = await invokeGitInterop("setAutoPush", [repo, enabled]);
     printResult(result, {
       json,
       human: () => console.log(`auto-push ${enabled ? "enabled" : "disabled"} for ${repo}`),
@@ -1151,7 +1152,7 @@ async function gitPush(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const repo = requireGitRepo(inv);
-    const result = await invokeGitBridge<GitPushUpstreamResult>("pushUpstream", [
+    const result = await invokeGitInterop<GitPushUpstreamResult>("pushUpstream", [
       repo,
       { force: inv.flags["force"] === true },
     ]);
@@ -1179,7 +1180,10 @@ async function gitPull(inv: ParsedInvocation): Promise<number> {
   try {
     const repo = requireGitRepo(inv);
     const dryRun = inv.flags["dry-run"] === true;
-    const result = await invokeGitBridge<GitPullUpstreamResult>("pullUpstream", [repo, { dryRun }]);
+    const result = await invokeGitInterop<GitPullUpstreamResult>("pullUpstream", [
+      repo,
+      { dryRun },
+    ]);
     printResult(result, {
       json,
       human: () => {
@@ -1208,7 +1212,7 @@ async function gitPublish(inv: ParsedInvocation): Promise<number> {
     if (inv.flags["private"] === true && inv.flags["public"] === true) {
       throw new UsageError("choose only one of --private or --public");
     }
-    const result = await invokeGitBridge<GitPublishResult>("publishRepo", [
+    const result = await invokeGitInterop<GitPublishResult>("publishRepo", [
       {
         repoPath: repo,
         ...(optionalFlagString(inv, "provider")
@@ -1243,10 +1247,10 @@ async function gitImport(inv: ParsedInvocation): Promise<number> {
     if (!url) throw new UsageError("missing Git URL");
     const repoPath = requireFlagString(inv, "path");
     const branch = optionalFlagString(inv, "branch");
-    const result = await invokeGitBridge("importRepo", [
+    const result = await invokeGitInterop("importProject", [
       {
-        url,
         path: repoPath,
+        remote: { name: "origin", url, ...(branch ? { branch } : {}) },
         ...(branch ? { branch } : {}),
         ...(optionalFlagString(inv, "credential")
           ? { credentialId: optionalFlagString(inv, "credential") }
@@ -1278,7 +1282,7 @@ async function gitRemoteSet(inv: ParsedInvocation): Promise<number> {
       url: requireFlagString(inv, "url"),
       ...(optionalFlagString(inv, "branch") ? { branch: optionalFlagString(inv, "branch") } : {}),
     };
-    const result = await invokeGitBridge("setRemote", [repo, remote]);
+    const result = await invokeGitInterop("setSharedRemote", [repo, remote]);
     printResult(result, {
       json,
       human: () => console.log(`set ${repo} remote ${remote.name} -> ${remote.url}`),
@@ -1294,7 +1298,7 @@ async function gitRemoteRemove(inv: ParsedInvocation): Promise<number> {
   try {
     const repo = requireGitRepo(inv);
     const remoteName = optionalFlagString(inv, "name") ?? inv.positionals[0] ?? "origin";
-    const result = await invokeGitBridge("removeRemote", [repo, remoteName]);
+    const result = await invokeGitInterop("removeSharedRemote", [repo, remoteName]);
     printResult(result, {
       json,
       human: () => console.log(`removed ${repo} remote ${remoteName}`),
@@ -1373,7 +1377,7 @@ const vcsGitCommands: VcsGitCommand[] = [
   },
   {
     name: "import",
-    summary: "Import an external Git repo through the git-bridge extension",
+    summary: "Import an external Git repo through gitInterop",
     usage: "vibestudio vcs git import URL --path REPOPATH [--branch main] [--credential ID]",
     flags: [GIT_URL_FLAG, GIT_PATH_FLAG, GIT_BRANCH_FLAG, GIT_CREDENTIAL_FLAG, JSON_FLAG],
     run: gitImport,

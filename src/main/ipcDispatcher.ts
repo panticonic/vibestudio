@@ -378,9 +378,9 @@ export class IpcDispatcher {
           // services are reachable without a shared routing-list update.
           if (callerKind === "shell") {
             // electron-main / bootstrap launch gate are native-host `shell`
-            // principals — they reach the server on the admin connection. The
-            // workspace shell renderer is an `app` (apps/shell) and takes the
-            // app branch below; there is no longer a shell→app panelTree proxy.
+            // principals — they reach the server on the admin connection.
+            // Hosted workspace chrome is an `app` and takes the app branch
+            // below; there is no longer a shell→app panelTree proxy.
             result = await callServer(
               this.deps.serverClient,
               service,

@@ -184,6 +184,12 @@ export function setupTestApi(
     entry.records.push({ ...diagnostic, timestamp: Date.now() });
   };
 
+  const hostedShellCaller = (): { callerId: string; callerKind: "app" } => {
+    const appId = panelView?.getViewManager().getVisibleHostChromeAppId();
+    if (!appId) throw new Error("No hosted shell app is visible");
+    return { callerId: appId, callerKind: "app" };
+  };
+
   global.__testApi = {
     getPanelTree(): Panel[] {
       const result: Panel[] = [];
@@ -219,10 +225,13 @@ export function setupTestApi(
 
     async createPanel(parentId, source, options) {
       const { stateArgs, ...createOptions } = options ?? {};
-      return panelOrchestrator.createPanel(parentId, source, createOptions, stateArgs, {
-        callerId: "@workspace-apps/shell",
-        callerKind: "app",
-      });
+      return panelOrchestrator.createPanel(
+        parentId,
+        source,
+        createOptions,
+        stateArgs,
+        hostedShellCaller()
+      );
     },
 
     async closePanel(id) {
@@ -398,13 +407,15 @@ export function setupTestApi(
           nativeSlots: [],
         };
       }
-      const hostedShellId = "@workspace-apps/shell";
+      const hostedShellAppId = viewManager.getVisibleHostChromeAppId();
       return {
-        visibleHostChromeAppId: viewManager.getVisibleHostChromeAppId(),
+        visibleHostChromeAppId: hostedShellAppId,
         shell: viewManager.getViewInfo("shell"),
-        hostedShell: viewManager.getViewInfo(hostedShellId),
+        hostedShell: hostedShellAppId ? viewManager.getViewInfo(hostedShellAppId) : null,
         shellUrl: viewManager.getWebContents("shell")?.getURL() ?? null,
-        hostedShellUrl: viewManager.getWebContents(hostedShellId)?.getURL() ?? null,
+        hostedShellUrl: hostedShellAppId
+          ? (viewManager.getWebContents(hostedShellAppId)?.getURL() ?? null)
+          : null,
         nativeSlots: viewManager.getNativePanelSlotDebugInfo(),
       };
     },

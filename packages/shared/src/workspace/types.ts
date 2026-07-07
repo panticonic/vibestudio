@@ -309,7 +309,7 @@ export interface WorkspaceAppDecl {
 }
 
 /**
- * A provider slot naming the workspace unit that fulfils one host-integrated
+ * A provider slot naming the workspace package that fulfils one host-integrated
  * role (eval engine, portable runtime, CDP client). `source` is the unit's
  * build-graph identity — a package name (e.g. `"@workspace/eval"`) or a
  * workspace-relative repo path. The host resolves it through the build
@@ -320,15 +320,12 @@ export interface WorkspaceUnitProviderDecl {
 }
 
 /**
- * The extension that brokers access to the credential-holding browser-data
- * store. `extension` follows the same identity convention as `extensions[]`
- * (`extensions/name` or `@workspace-extensions/name`) and must also appear in
- * the declared `extensions[]` list. The host derives from it:
- *  - the only extension callerId the BrowserDataDO accepts directly, and
- *  - the `extensions:<name>::import-complete` event clients subscribe to.
- * Absent ⇒ extension-mediated browser-data access is disabled.
+ * A provider slot naming the workspace extension that fulfils one
+ * host-integrated role. `extension` follows the same identity convention as
+ * `extensions[]` (`extensions/name` or `@workspace-extensions/name`) and must
+ * also appear in the declared `extensions[]` list.
  */
-export interface WorkspaceBrowserDataProviderDecl {
+export interface WorkspaceExtensionProviderDecl {
   extension: string;
 }
 
@@ -352,7 +349,11 @@ export interface WorkspaceProvidersDecl {
   /** The CDP client library seeded into eval runs that reference CDP. */
   cdpClient?: WorkspaceUnitProviderDecl;
   /** The browser-data broker extension. */
-  browserData?: WorkspaceBrowserDataProviderDecl;
+  browserData?: WorkspaceExtensionProviderDecl;
+  /** Extension-backed external Git upstream engine used by gitInterop. */
+  gitInterop?: WorkspaceExtensionProviderDecl;
+  /** Extension-backed Claude Code launch/session adapter. */
+  claudeCode?: WorkspaceExtensionProviderDecl;
 }
 
 /**
@@ -468,7 +469,7 @@ export interface WorkspaceConfig {
   apps?: WorkspaceAppDecl[];
   /**
    * Provider slots: which workspace units fulfil host-integrated roles
-   * (eval engine/runtime, cdp client, vcs store, browser-data broker). A
+   * (eval engine/runtime, cdp client, git interop, browser-data broker). A
    * missing slot cleanly disables the corresponding host feature.
    */
   providers?: WorkspaceProvidersDecl;

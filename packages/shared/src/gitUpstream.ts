@@ -1,8 +1,8 @@
 /**
- * Wire shapes of the git-bridge extension's upstream API
- * (`extensions.invoke("@workspace-extensions/git-bridge", …)`), shared by the
- * engine itself, the runtime `git.*` client, the CLI `vcs git` group, and the
- * gad-browser Git tab so the contract is declared exactly once.
+ * Wire shapes of the external Git upstream API. Host callers reach this through
+ * the `gitInterop.*` service; workspace/userland callers may still use the
+ * configured provider directly where appropriate. The shared types keep the
+ * contract declared exactly once.
  */
 
 export type GitUpstreamState =

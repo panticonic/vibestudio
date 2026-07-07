@@ -213,6 +213,7 @@ export interface ExtensionHostDeps {
   registerBuildProvider?: (provider: BuildProvider) => void;
   unregisterBuildProvider?: (target: BuildProviderTarget, name: string) => void;
   onWorkspaceUnitsChanged?: (reason: string) => void;
+  resolveProviderExtensionName?: (provider: string) => string | null;
 }
 
 export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
@@ -501,6 +502,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     switch (method) {
       case "invoke":
         return this.invoke(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
+      case "invokeProvider":
+        return this.invokeProvider(
+          ctx,
+          args[0] as string,
+          args[1] as string,
+          args[2] as unknown[]
+        );
       case "invokeStream":
         return this.invokeStream(ctx, args[0] as string, args[1] as string, args[2] as unknown[]);
       case "streamingMethods":
@@ -606,6 +614,24 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     } finally {
       this.clearTrackedInvocation(invocation);
     }
+  }
+
+  async invokeProvider(
+    ctx: ServiceContext,
+    provider: string,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown> {
+    const name = this.deps.resolveProviderExtensionName?.(provider);
+    if (!name) {
+      throw new ServiceError(
+        "extensions",
+        "invokeProvider",
+        `No extension provider declared for providers.${provider}`,
+        "ENOENT"
+      );
+    }
+    return this.invoke(ctx, name, method, args);
   }
 
   /**

@@ -218,6 +218,11 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `gitInterop.removeSharedRemote` | Remove a named shared Git remote declaration for a workspace unit from meta/vibestudio.yml and sync the repo's git config; may prompt for capability approval. |
 | `gitInterop.setUpstream` | Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml; may prompt for capability approval. No network egress happens here. |
 | `gitInterop.removeUpstream` | Remove upstream tracking for a workspace repo from meta/vibestudio.yml; may prompt for capability approval. |
+| `gitInterop.setAutoPush` | Toggle auto-push on an already declared upstream, persisting the change to meta/vibestudio.yml; may prompt for capability approval. |
+| `gitInterop.upstreamStatus` | Return external Git upstream status for tracked repos. The configured gitInterop provider performs any Git/network work. |
+| `gitInterop.pushUpstream` | Export protected main and push it to the repo's declared upstream through the configured gitInterop provider. |
+| `gitInterop.pullUpstream` | Fetch/pull a declared upstream and import upstream changes into protected main through the configured gitInterop provider. |
+| `gitInterop.publishRepo` | Create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider. |
 | `gitInterop.importProject` | Clone an external Git project into the workspace at the requested path and record its remote in meta/vibestudio.yml; clones over the network and may prompt for config-write approval. |
 | `gitInterop.completeWorkspaceDependencies` | Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results. |
 

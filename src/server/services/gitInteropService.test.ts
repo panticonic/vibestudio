@@ -366,6 +366,88 @@ describe("gitInteropService", () => {
     expect(fs.existsSync(projectedConfigPath)).toBe(false);
   });
 
+  it("toggles auto-push as a host-owned manifest mutation", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = {
+      id: "test",
+      git: {
+        remotes: {
+          projects: {
+            bgkit: {
+              origin: "https://github.com/werg/bgkit.git",
+            },
+          },
+        },
+        upstreams: {
+          projects: {
+            bgkit: {
+              remote: "origin",
+              branch: "main",
+              autoPush: false,
+            },
+          },
+        },
+      },
+    };
+    fs.writeFileSync(
+      path.join(workspacePath, "meta", "vibestudio.yml"),
+      YAML.stringify(workspaceConfig),
+      "utf-8"
+    );
+    const invokeGitProvider = vi.fn();
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      invokeGitProvider,
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await service.handler(serviceContext(), "setAutoPush", ["projects/bgkit", true]);
+
+    expect(invokeGitProvider).not.toHaveBeenCalled();
+    const config = YAML.parse(
+      fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
+    ) as WorkspaceConfig;
+    expect(config.git?.upstreams?.["projects"]?.["bgkit"]).toEqual({
+      remote: "origin",
+      branch: "main",
+      autoPush: true,
+    });
+  });
+
+  it("delegates upstream engine operations to the configured provider", async () => {
+    const ctx = serviceContext();
+    const providerResult = [
+      {
+        repoPath: "projects/bgkit",
+        remote: "origin",
+        branch: "main",
+        autoPush: false,
+        state: "in-sync",
+        aheadBy: 0,
+        behindBy: 0,
+      },
+    ];
+    const invokeGitProviderMock = vi.fn(async () => providerResult);
+    const invokeGitProvider = invokeGitProviderMock as unknown as NonNullable<
+      Parameters<typeof createGitInteropService>[0]["invokeGitProvider"]
+    >;
+    const service = createGitInteropService({
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      invokeGitProvider,
+    });
+
+    await expect(
+      service.handler(ctx, "upstreamStatus", [["projects/bgkit"], { fetch: true }])
+    ).resolves.toBe(providerResult);
+
+    expect(invokeGitProviderMock).toHaveBeenCalledWith(ctx, "upstreamStatus", [
+      ["projects/bgkit"],
+      { fetch: true },
+    ]);
+  });
+
   it("removing a declared remote also removes upstream tracking that points at it", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = {

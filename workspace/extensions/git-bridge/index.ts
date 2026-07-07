@@ -11,8 +11,9 @@
  *  - raw Node disk access for the git checkouts under `workspace/<repoPath>`
  *  - extension storage for bridge-private markers/checkout maps
  *
- * Consumers (the host's gitInterop dependency-import flow, agents, panels)
- * reach it through `extensions.invoke("@workspace-extensions/git-bridge", …)`.
+ * Host consumers reach it through the manifest-declared `providers.gitInterop`
+ * slot and the `gitInterop.*` service; userland consumers can still call the
+ * installed extension API directly when they intentionally depend on it.
  */
 
 import { GitBridge, type BridgeHost } from "./bridge.js";
@@ -100,8 +101,7 @@ function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
 // Intentionally NOT registered in the WorkspaceExtensions type registry:
-// git-bridge is host/agent infrastructure invoked over the extension RPC
-// (`extensions.invoke`), not a panel-facing client library.
+// git-bridge is host/agent infrastructure, not a panel-facing client library.
 
 export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("git-bridge activating");

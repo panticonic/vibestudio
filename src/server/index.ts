@@ -404,8 +404,12 @@ async function main() {
   // durable VCS store. The host's attach/follower and workerd's bootstrap
   // main-binding resolve through it; there is no separate provider slot.
   const { resolveVcsStoreBinding } = await import("./userlandServices.js");
-  const { resolveWorkspaceTrustGrants, resolveHostTargetDecl, browserDataBrokerPackageName } =
-    await import("@vibestudio/shared/workspace/configParser");
+  const {
+    resolveWorkspaceTrustGrants,
+    resolveHostTargetDecl,
+    browserDataBrokerPackageName,
+    workspaceProviderExtensionPackageName,
+  } = await import("@vibestudio/shared/workspace/configParser");
   const { setWorkspaceAppTrust } = await import("@vibestudio/shared/chromeTrust");
   const restartBoundManifestChanges = (
     previousConfig: typeof workspaceConfig,
@@ -1178,9 +1182,9 @@ async function main() {
       },
     });
   }
-  // Git interchange semantics (P5c part 2) live in the trusted git-bridge
-  // EXTENSION (workspace/extensions/git-bridge); the host keeps only this
-  // policy/dispatch service (approvals and config writes).
+  // Git interchange semantics live behind the manifest-declared
+  // providers.gitInterop extension. The host keeps only this policy/dispatch
+  // service (approvals, config writes, and provider invocation).
   const { createWorkspaceConfigMainWriter } = await import("./workspaceConfigWriter.js");
   const workspaceConfigWriter = createWorkspaceConfigMainWriter({
     workspacePath,
@@ -1188,18 +1192,31 @@ async function main() {
     refs: refService,
     vcs: workspaceVcs,
   });
-  const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
+  const invokeGitInteropProvider = async <T>(
+    ctx: import("@vibestudio/shared/serviceDispatcher").ServiceContext,
+    method: string,
+    args: unknown[]
+  ): Promise<T> => {
+    const extensionName = workspaceProviderExtensionPackageName(workspaceConfig, "gitInterop");
+    if (!extensionName) {
+      throw new Error(
+        "Git upstream provider is unavailable: meta/vibestudio.yml declares no `providers.gitInterop.extension`"
+      );
+    }
+    const host = extensionHostForGateway;
+    if (!host) {
+      throw new Error("Git upstream provider is unavailable: extension host not started");
+    }
+    return (await host.invoke(ctx, extensionName, method, args)) as T;
+  };
   const gitInteropDefinition = createGitInteropService({
     treeScanner,
     workspacePath,
     workspaceConfig,
     cloneRepo: async (ctx, repoPath) => {
-      const host = extensionHostForGateway;
-      if (!host) {
-        throw new Error("git-bridge extension unavailable: extension host not started");
-      }
-      await host.invoke(ctx, GIT_BRIDGE_EXTENSION, "cloneRepo", [{ repoPath }]);
+      await invokeGitInteropProvider(ctx, "cloneRepo", [{ repoPath }]);
     },
+    invokeGitProvider: invokeGitInteropProvider,
     approvalQueue,
     grantStore: capabilityGrantStore,
     hasAppCapability: (callerId, capability) =>
@@ -1219,16 +1236,12 @@ async function main() {
       .filter((change) => change.stateHash !== null)
       .map((change) => change.repoPath);
     if (repos.length === 0) return;
-    const host = extensionHostForGateway;
-    if (!host) return;
-    void host
-      .invoke(
-        { caller: createVerifiedCaller("server", "server") },
-        GIT_BRIDGE_EXTENSION,
-        "onMainAdvanced",
-        [repos]
-      )
-      .catch((err) => console.warn("[GitUpstream] forward failed:", err));
+    if (!extensionHostForGateway) return;
+    void invokeGitInteropProvider(
+      { caller: createVerifiedCaller("server", "server") },
+      "onMainAdvanced",
+      [repos]
+    ).catch((err) => console.warn("[GitUpstream] forward failed:", err));
   });
   const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
     try {
@@ -2157,6 +2170,8 @@ async function main() {
         readWorkspaceFileAtCommit,
         getContextIdForCaller: (callerId) => entityCache.resolveContext(callerId),
         getGatewayUrl: () => getLocalGatewayUrl("extension startup"),
+        resolveProviderExtensionName: (provider) =>
+          workspaceProviderExtensionPackageName(workspaceConfig, provider),
         onWorkspaceUnitsChanged: (reason) =>
           hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason),
         extensionTransport: {

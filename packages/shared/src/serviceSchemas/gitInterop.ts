@@ -31,6 +31,12 @@ const IMPORT_PROJECT_ACCESS: MethodAccessDescriptor = {
 const COMPLETE_DEPENDENCIES_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
+const UPSTREAM_STATUS_ACCESS: MethodAccessDescriptor = {
+  sensitivity: "read",
+};
+const UPSTREAM_OPERATION_ACCESS: MethodAccessDescriptor = {
+  sensitivity: "write",
+};
 
 export const gitRemoteSchema = z.object({
   name: z.string().describe('Git remote name, e.g. "origin".'),
@@ -126,6 +132,83 @@ export type GitCompleteWorkspaceDependenciesResult = z.infer<
   typeof gitCompleteWorkspaceDependenciesResultSchema
 >;
 
+const gitUpstreamStatusStateSchema = z.enum([
+  "in-sync",
+  "ahead",
+  "behind",
+  "diverged",
+  "auth-failed",
+  "error",
+  "exporting",
+  "pushing",
+  "local-only",
+]);
+
+const gitUpstreamStatusOptionsSchema = z.object({
+  remote: z.string().optional(),
+  branch: z.string().optional(),
+  credentialId: z.string().optional(),
+  fetch: z.boolean().optional(),
+});
+
+const gitUpstreamStatusRowSchema = z.object({
+  repoPath: z.string(),
+  remote: z.string().optional(),
+  branch: z.string().optional(),
+  autoPush: z.boolean(),
+  state: gitUpstreamStatusStateSchema,
+  aheadBy: z.number(),
+  behindBy: z.number(),
+  lastPushedSha: z.string().optional(),
+  lastPushedAt: z.number().optional(),
+  lastError: z.string().optional(),
+});
+
+const gitOverwritePreviewSchema = z.object({
+  count: z.number(),
+  commits: z.array(z.object({ sha: z.string(), summary: z.string() })),
+});
+
+const gitPushUpstreamResultSchema = z.object({
+  exported: z.number(),
+  headCommit: z.string().nullable(),
+  pushed: z.boolean(),
+  status: gitUpstreamStatusStateSchema,
+  overwrites: gitOverwritePreviewSchema.optional(),
+});
+
+const gitPullUpstreamResultSchema = z.object({
+  behindBy: z.number(),
+  aheadBy: z.number(),
+  incoming: z.array(z.object({ sha: z.string(), summary: z.string() })),
+  imported: z.object({ changed: z.boolean().optional(), stateHash: z.string().optional() }).optional(),
+});
+
+const gitPublishRepoSchema = z.object({
+  repoPath: z.string(),
+  provider: z.string().optional(),
+  name: z.string().optional(),
+  private: z.boolean().optional(),
+  description: z.string().optional(),
+  remote: z.string().optional(),
+  branch: z.string().optional(),
+  credentialId: z.string().optional(),
+  authorEmail: z.string().optional(),
+  authorName: z.string().optional(),
+  force: z.boolean().optional(),
+});
+
+const gitPublishResultSchema = z.object({
+  repoPath: z.string(),
+  provider: z.string(),
+  remoteUrl: z.string(),
+  webUrl: z.string(),
+  owner: z.string(),
+  exported: z.number(),
+  headCommit: z.string().nullable(),
+  pushed: z.boolean(),
+});
+
 export const gitInteropMethods = defineServiceMethods({
   setSharedRemote: {
     description:
@@ -183,6 +266,58 @@ export const gitInteropMethods = defineServiceMethods({
     returns: gitUpstreamsSchema.optional(),
     access: UPSTREAM_REMOVE_ACCESS,
     examples: [{ args: ["projects/bgkit"] }],
+  },
+  setAutoPush: {
+    description:
+      "Toggle auto-push on an already declared upstream, persisting the change to meta/vibestudio.yml; may prompt for capability approval.",
+    args: z.tuple([
+      z.string().describe("Workspace-relative repo/unit path the upstream belongs to."),
+      z.boolean().optional().describe("Whether auto-push should be enabled. Defaults to true."),
+    ]),
+    returns: gitUpstreamsSchema.optional(),
+    access: UPSTREAM_WRITE_ACCESS,
+    examples: [{ args: ["projects/bgkit", true] }],
+  },
+  upstreamStatus: {
+    description:
+      "Return external Git upstream status for tracked repos. The configured gitInterop provider performs any Git/network work.",
+    args: z.tuple([
+      z.union([z.string(), z.array(z.string()), z.null()]).optional(),
+      gitUpstreamStatusOptionsSchema.optional(),
+    ]),
+    returns: z.array(gitUpstreamStatusRowSchema),
+    access: UPSTREAM_STATUS_ACCESS,
+    examples: [{ args: [["projects/bgkit"], { fetch: true }] }],
+  },
+  pushUpstream: {
+    description:
+      "Export protected main and push it to the repo's declared upstream through the configured gitInterop provider.",
+    args: z.tuple([
+      z.string().describe("Workspace-relative repo/unit path to push."),
+      z.object({ force: z.boolean().optional() }).optional(),
+    ]),
+    returns: gitPushUpstreamResultSchema,
+    access: UPSTREAM_OPERATION_ACCESS,
+    examples: [{ args: ["projects/bgkit", { force: false }] }],
+  },
+  pullUpstream: {
+    description:
+      "Fetch/pull a declared upstream and import upstream changes into protected main through the configured gitInterop provider.",
+    args: z.tuple([
+      z.string().describe("Workspace-relative repo/unit path to pull."),
+      z.object({ dryRun: z.boolean().optional() }).optional(),
+    ]),
+    returns: gitPullUpstreamResultSchema,
+    access: UPSTREAM_OPERATION_ACCESS,
+    examples: [{ args: ["projects/bgkit", { dryRun: true }] }],
+  },
+  publishRepo: {
+    description:
+      "Create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider.",
+    args: z.tuple([gitPublishRepoSchema]),
+    returns: gitPublishResultSchema,
+    access: UPSTREAM_OPERATION_ACCESS,
+    examples: [{ args: [{ repoPath: "projects/bgkit", private: true }] }],
   },
   importProject: {
     description:

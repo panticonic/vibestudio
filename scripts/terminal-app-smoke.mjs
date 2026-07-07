@@ -9,8 +9,17 @@ import { WebSocket } from "ws";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
 
 const READY_FILE = path.join(os.tmpdir(), `vibestudio-terminal-smoke-${process.pid}.json`);
-const REMOTE_CLI = "@workspace-apps/remote-cli";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REMOTE_CLI = readWorkspacePackageName("apps", "remote-cli");
+
+function readWorkspacePackageName(...segments) {
+  const pkgPath = path.join(repoRoot, "workspace", ...segments, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+  if (typeof pkg.name !== "string" || !pkg.name) {
+    throw new Error(`Workspace package at ${pkgPath} is missing a package name`);
+  }
+  return pkg.name;
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -350,7 +359,7 @@ async function main() {
 
     const gate = await launchTerminalWithGate(url, shellToken, events);
     const running = await waitForRunning(url, shellToken, events);
-    await waitForLogLine(url, shellToken, events, "Connected as @workspace-apps/remote-cli");
+    await waitForLogLine(url, shellToken, events, `Connected as ${REMOTE_CLI}`);
     await waitForLogLine(url, shellToken, events, "Workspace units:");
     console.log(
       `[terminal-smoke] ${REMOTE_CLI} ${running.status} build=${String(running.activeBundleKey).slice(0, 12)} approvals=${gate.approvalsResolved}`

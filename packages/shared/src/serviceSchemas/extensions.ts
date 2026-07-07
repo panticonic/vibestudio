@@ -73,6 +73,14 @@ export const extensionsMethods = defineServiceMethods({
     access: INVOKE_ACCESS,
     examples: [{ args: ["shell", "exec", [{ command: "echo hi" }]] }],
   },
+  invokeProvider: {
+    description:
+      "Invoke a method on the extension declared for a manifest provider slot. Throws when the provider slot is not declared or the extension is not running.",
+    args: z.tuple([z.string(), z.string(), z.array(z.unknown())]),
+    returns: z.unknown(),
+    access: INVOKE_ACCESS,
+    examples: [{ args: ["claudeCode", "prepare", [{ channelId: "chan_123" }]] }],
+  },
   // invokeStream intentionally declares no return schema: the result is a raw
   // streaming Response, not a wire-serializable value.
   invokeStream: {

@@ -241,9 +241,15 @@ describe("allowlist matching", () => {
     ).toBe(false);
   });
 
-  it("treats a missing specifier as a whole-file allow", () => {
+  it("matches whole-file entries, but does not allowlist hard import violations", () => {
     expect(matchesAllowlistEntry(finding, { file: "src/server/foo.ts" })).toBe(true);
-    expect(isAllowlisted(finding, [{ file: "src/server/foo.ts" }])).toBe(true);
+    expect(isAllowlisted(finding, [{ file: "src/server/foo.ts" }])).toBe(false);
+    expect(
+      isAllowlisted(
+        { ...finding, category: "workspace-reference" },
+        [{ file: "src/server/foo.ts" }]
+      )
+    ).toBe(true);
   });
 
   it("filters by category when present", () => {
@@ -255,15 +261,6 @@ describe("allowlist matching", () => {
 
 describe("defaultReason", () => {
   it("assigns the documented seed reasons", () => {
-    expect(defaultReason({ file: "src/server/foo.ts", category: "import-violation" })).toBe(
-      "pending-fix-2026-07: being removed by parallel cleanup"
-    );
-    expect(defaultReason({ file: "src/server/foo.test.ts", category: "import-violation" })).toBe(
-      "DO/workspace integration test"
-    );
-    expect(
-      defaultReason({ file: "workspace/workers/foo.ts", category: "workspace-host-import" })
-    ).toContain("must not import host-private");
     expect(
       defaultReason({ file: "src/server/buildV2/builder.ts", category: "workspace-reference" })
     ).toContain("workspace-reference baseline");
@@ -303,7 +300,7 @@ describe("CLI (child process against a temp fixture dir)", () => {
     }
   });
 
-  it("passes once the finding is allowlisted", () => {
+  it("still fails when a hard import finding is allowlisted", () => {
     const dir = makeFixtureDir();
     try {
       fs.mkdirSync(path.join(dir, "scripts"), { recursive: true });
@@ -320,8 +317,9 @@ describe("CLI (child process against a temp fixture dir)", () => {
           ],
         })
       );
-      const { code } = run(dir);
-      expect(code).toBe(0);
+      const { code, stderr } = run(dir);
+      expect(code).toBe(1);
+      expect(stderr).toContain("import-violation");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -359,9 +357,13 @@ describe("CLI (child process against a temp fixture dir)", () => {
     }
   });
 
-  it("--update-allowlist writes an allowlist that then passes", () => {
+  it("--update-allowlist writes only soft references and never masks hard imports", () => {
     const dir = makeFixtureDir();
     try {
+      fs.writeFileSync(
+        path.join(dir, "src", "bad.ts"),
+        `const soft = "@workspace-apps/shell";\nimport x from "@workspace/thing";\nexport const y = x;\n`
+      );
       const updated = run(dir, ["--update-allowlist"]);
       expect(updated.code).toBe(0);
       const written = JSON.parse(
@@ -370,10 +372,10 @@ describe("CLI (child process against a temp fixture dir)", () => {
       expect(written.entries).toHaveLength(1);
       expect(written.entries[0]).toMatchObject({
         file: "src/bad.ts",
-        specifier: "@workspace/thing",
-        category: "import-violation",
+        specifier: "@workspace-apps/shell",
+        category: "workspace-reference",
       });
-      expect(run(dir).code).toBe(0);
+      expect(run(dir).code).toBe(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

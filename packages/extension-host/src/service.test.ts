@@ -50,6 +50,7 @@ function makeHost(
     unregisterBuildProvider?: ReturnType<typeof vi.fn>;
     recordUnitLog?: ReturnType<typeof vi.fn>;
     getContextIdForCaller?: (callerId: string) => string | null;
+    resolveProviderExtensionName?: (provider: string) => string | null;
     readWorkspaceFileAtCommit?: ExtensionHostDeps["readWorkspaceFileAtCommit"];
     gitDefaultBranch?: "main" | "master";
     installed?: boolean;
@@ -180,6 +181,7 @@ function makeHost(
     approvalQueue,
     getGatewayUrl: () => "http://127.0.0.1:3000",
     getContextIdForCaller: overrides.getContextIdForCaller,
+    resolveProviderExtensionName: overrides.resolveProviderExtensionName,
     readWorkspaceFileAtCommit: overrides.readWorkspaceFileAtCommit ?? (async () => null),
     extensionTransport: overrides.extensionTransport ?? {
       call: vi.fn(async () => {
@@ -217,6 +219,33 @@ function makeHost(
 }
 
 describe("ExtensionHost invocation attribution", () => {
+  it("invokes extensions through a configured provider slot", async () => {
+    const extensionTransport = {
+      call: vi.fn(async () => "ok"),
+    };
+    const { host, extensionNode } = makeHost({
+      extensionTransport,
+      resolveProviderExtensionName: (provider) =>
+        provider === "gitInterop" ? "@workspace-extensions/git-tools" : null,
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invokeProvider(panelCtx("panel-1"), "gitInterop", "upstreamStatus", [])
+    ).resolves.toBe("ok");
+
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invoke",
+      "upstreamStatus",
+      [],
+      expect.objectContaining({
+        extensionName: extensionNode.name,
+        method: "upstreamStatus",
+      })
+    );
+  });
+
   it("passes caller context id through extension invocations", async () => {
     const extensionTransport = {
       call: vi.fn(async () => "ok"),

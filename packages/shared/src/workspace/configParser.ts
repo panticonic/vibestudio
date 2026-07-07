@@ -312,6 +312,14 @@ export function workspaceExtensionPackageName(source: string): string {
   return `${WORKSPACE_EXTENSION_PACKAGE_SCOPE}${repoPath.slice("extensions/".length)}`;
 }
 
+export type WorkspaceExtensionProviderName = "browserData" | "gitInterop" | "claudeCode";
+
+const WORKSPACE_EXTENSION_PROVIDERS = new Set<string>([
+  "browserData",
+  "gitInterop",
+  "claudeCode",
+]);
+
 function validateUnitSourceList(
   values: unknown,
   kind: CanonicalUnitKind,
@@ -384,6 +392,27 @@ function requireProviderSource(value: unknown, field: string): string {
   return source.trim();
 }
 
+function providerExtensionRepoPath(
+  config: WorkspaceConfig,
+  provider: WorkspaceExtensionProviderName,
+): string | null {
+  const declared = (config.providers?.[provider] as { extension?: unknown } | undefined)
+    ?.extension;
+  if (declared === undefined) return null;
+  const repoPath = canonicalUnitRepoPath(declared, EXTENSION_UNIT, `providers.${provider}.extension`);
+  const isDeclared = (config.extensions ?? []).some(
+    (extension) =>
+      typeof extension?.source === "string" &&
+      canonicalUnitRepoPath(extension.source, EXTENSION_UNIT, "extensions[].source") === repoPath,
+  );
+  if (!isDeclared) {
+    throw new Error(
+      `meta/vibestudio.yml: \`providers.${provider}.extension\` (${repoPath}) must also be declared under \`extensions\``,
+    );
+  }
+  return repoPath;
+}
+
 function validateProviders(config: WorkspaceConfig): void {
   const providers = config.providers;
   if (providers === undefined) return;
@@ -399,26 +428,15 @@ function validateProviders(config: WorkspaceConfig): void {
   if (providers.cdpClient !== undefined) {
     requireProviderSource(providers.cdpClient, "providers.cdpClient");
   }
-  if (providers.browserData !== undefined) {
-    const decl = providers.browserData;
+  for (const provider of WORKSPACE_EXTENSION_PROVIDERS) {
+    const decl = providers[provider as WorkspaceExtensionProviderName];
+    if (decl === undefined) continue;
     if (decl === null || typeof decl !== "object" || Array.isArray(decl)) {
-      throw new Error("meta/vibestudio.yml: `providers.browserData` must be a mapping with an `extension`");
-    }
-    const repoPath = canonicalUnitRepoPath(
-      (decl as { extension?: unknown }).extension,
-      EXTENSION_UNIT,
-      "providers.browserData.extension",
-    );
-    const declared = (config.extensions ?? []).some(
-      (extension) =>
-        typeof extension?.source === "string" &&
-        canonicalUnitRepoPath(extension.source, EXTENSION_UNIT, "extensions[].source") === repoPath,
-    );
-    if (!declared) {
       throw new Error(
-        `meta/vibestudio.yml: \`providers.browserData.extension\` (${repoPath}) must also be declared under \`extensions\``,
+        `meta/vibestudio.yml: \`providers.${provider}\` must be a mapping with an \`extension\``,
       );
     }
+    providerExtensionRepoPath(config, provider as WorkspaceExtensionProviderName);
   }
 }
 
@@ -467,7 +485,22 @@ export function resolveHostTargetDecl(
  * (`@workspace-extensions/name`), or null when no broker is declared.
  */
 export function browserDataBrokerPackageName(config: WorkspaceConfig): string | null {
-  const declared = config.providers?.browserData?.extension;
+  return workspaceProviderExtensionPackageName(config, "browserData");
+}
+
+/**
+ * Resolve a manifest-declared extension provider slot to a package name
+ * (`@workspace-extensions/name`). Unknown/missing slots return null; malformed
+ * declared slots throw during config parsing before callers get here.
+ */
+export function workspaceProviderExtensionPackageName(
+  config: WorkspaceConfig,
+  provider: string,
+): string | null {
+  if (!WORKSPACE_EXTENSION_PROVIDERS.has(provider)) return null;
+  const declared = (config.providers?.[provider as WorkspaceExtensionProviderName] as
+    | { extension?: unknown }
+    | undefined)?.extension;
   if (typeof declared !== "string" || declared.trim().length === 0) return null;
   return workspaceExtensionPackageName(declared);
 }

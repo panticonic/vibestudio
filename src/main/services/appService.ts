@@ -76,7 +76,7 @@ export function createAppService(deps: {
 
         case "openWorkspacePath": {
           // Chrome-only (cross-workspace surface). The hosted shell resolves as
-          // kind:"app" (apps/shell), so gate on authorized chrome, not kind.
+          // kind:"app", so gate on authorized chrome, not kind.
           requireChromeCaller(ctx, deps.getViewManager(), "app.openWorkspacePath");
           const info = await workspaceClient?.getInfo();
           const workspacePath = info?.path;

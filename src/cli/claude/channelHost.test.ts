@@ -145,8 +145,9 @@ describe("resolveBridgeConfig", () => {
     );
     const invocations: Array<{ method: string }> = [];
     const client = fakeClient({
-      "extensions.invoke": (args) => {
-        const [, method, methodArgs] = args as [string, string, unknown[]];
+      "extensions.invokeProvider": (args) => {
+        const [provider, method, methodArgs] = args as [string, string, unknown[]];
+        expect(provider).toBe("claudeCode");
         invocations.push({ method });
         if (method === "resolvePrimaryChannel") return { channelId: "chan-9" };
         if (method === "prepare") {
@@ -184,8 +185,9 @@ describe("resolveBridgeConfig", () => {
     fs.mkdirSync(elsewhere, { recursive: true });
     const warnings: string[] = [];
     const client = fakeClient({
-      "extensions.invoke": (args) => {
-        const [, method] = args as [string, string];
+      "extensions.invokeProvider": (args) => {
+        const [provider, method] = args as [string, string];
+        expect(provider).toBe("claudeCode");
         if (method === "prepare") return preparedFor(contextFolder);
         throw new Error(`unexpected ${method}`);
       },
@@ -214,8 +216,9 @@ describe("resolveBridgeConfig", () => {
     const realFolder = path.join(tmpRoot, "actual-context");
     fs.mkdirSync(realFolder, { recursive: true });
     const client = fakeClient({
-      "extensions.invoke": (args) => {
-        const [, method] = args as [string, string];
+      "extensions.invokeProvider": (args) => {
+        const [provider, method] = args as [string, string];
+        expect(provider).toBe("claudeCode");
         if (method === "resolvePrimaryChannel") return { channelId: "chan-9" };
         if (method === "prepare") return preparedFor(realFolder);
         throw new Error(`unexpected ${method}`);

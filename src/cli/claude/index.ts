@@ -13,12 +13,11 @@ import { resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
 /**
  * `vibestudio claude` command group. The CLI stays Claude-agnostic apart from
  * the command name: all Claude-Code-specific knowledge lives in the
- * `@workspace-extensions/claude-code` extension (launch orchestration) and the
- * `channel-host` bridge (Claude-side protocol). The CLI reaches the extension
- * purely over RPC (`extensions.invoke`) — no workspace imports.
+ * workspace-owned Claude Code extension (launch orchestration) and the
+ * `channel-host` bridge (Claude-side protocol). The CLI reaches the configured
+ * provider purely over RPC (`extensions.invokeProvider`) — no workspace imports.
  */
-
-const EXTENSION = "@workspace-extensions/claude-code";
+const CLAUDE_CODE_PROVIDER = "claudeCode";
 
 /** Structural mirror of the extension's PrepareResult (no workspace import). */
 interface PrepareResult {
@@ -124,7 +123,7 @@ function spawnClaude(prepared: PrepareResult): Promise<number> {
 }
 
 async function invokeExtension<T>(client: RpcClient, method: string, args: unknown[]): Promise<T> {
-  return await client.call<T>("extensions.invoke", [EXTENSION, method, args]);
+  return await client.call<T>("extensions.invokeProvider", [CLAUDE_CODE_PROVIDER, method, args]);
 }
 
 // ---------------------------------------------------------------------------

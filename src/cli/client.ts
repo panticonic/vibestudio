@@ -970,8 +970,8 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
   // The `claude` group self-parses (it supports a bare launcher invocation plus
-  // `emit`/`channel-host` subcommands) and calls the claude-code extension over
-  // RPC — it deliberately owns no `CliCommand` entries.
+  // `emit`/`channel-host` subcommands) and calls the configured Claude Code
+  // provider over RPC — it deliberately owns no `CliCommand` entries.
   if (group === "claude") {
     return await runClaudeGroup(rest);
   }

@@ -6,15 +6,15 @@ history and an external Git host such as GitHub. It is intentionally two-layered
 1. **GAD main is the workspace source of truth.** Agents, panels, workers, and
    apps commit to Vibestudio repo logs and advance protected `main` through the
    VCS surface.
-2. **A local Git checkout is the interchange format.** The trusted
-   `@workspace-extensions/git-bridge` extension exports protected `main` into
+2. **A local Git checkout is the interchange format.** The manifest-declared
+   `providers.gitInterop` extension exports protected `main` into
    `workspace/<repoPath>` as normal Git commits with GAD trailers, then pushes
    those commits to the configured upstream. Pulls travel the opposite way:
-   fetch into the local checkout, import the checkout tree through git-bridge,
-   then publish the imported state onto protected `main`.
+   fetch into the local checkout, import the checkout tree through the Git
+   interop provider, then publish the imported state onto protected `main`.
 
 The host owns policy, approvals, credential injection, workspace config writes,
-and extension dispatch. Provider behavior and external Git transport stay in
+and provider dispatch. Provider behavior and external Git transport stay in
 userland-owned helpers or extensions.
 
 ## Configuration
@@ -133,8 +133,8 @@ services unless it is pure policy glue. The provider should:
   claiming setup is complete.
 - Configure `git.remotes` and `git.upstreams` through the runtime `git`
   namespace rather than editing `meta/vibestudio.yml` directly.
-- Call git-bridge through `extensions.invoke("@workspace-extensions/git-bridge",
-method, args)` or typed runtime wrappers for publish, pull, push, and status.
+- Call the host `gitInterop.*` service or typed runtime wrappers for publish,
+  pull, push, and status; the host resolves the configured provider.
 - Keep provider-specific branch defaults, repository creation, fork selection,
   and permission advice in the provider package or extension.
 - Surface divergence in provider language, but hand repair back to the shared

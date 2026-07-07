@@ -64,8 +64,10 @@ type GitInteropServiceDeps = {
     summary: string;
     operation: "push" | "import";
   }) => Promise<boolean>;
-  /** Extension-owned clone/import operation. Host owns only policy + config writes. */
+  /** Provider-owned clone/import operation. Host owns only policy + config writes. */
   cloneRepo?: (ctx: ServiceContext, repoPath: string) => Promise<void>;
+  /** Provider-owned upstream Git engine operations. */
+  invokeGitProvider?: <T>(ctx: ServiceContext, method: string, args: unknown[]) => Promise<T>;
 };
 
 type WorkspaceTreeNode = {
@@ -215,6 +217,55 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
           return nextConfig.git?.upstreams;
         }
 
+        case "setAutoPush": {
+          const [repoPath, enabledInput] = args as [string, boolean | undefined];
+          if (!deps.workspacePath) throw new Error("No workspace path configured");
+          if (!deps.workspaceConfig) throw new Error("Workspace config is unavailable");
+          const { normalizedRepoPath } = resolveWorkspaceRepoPath(deps.workspacePath, repoPath);
+          const validRepoPath = normalizeWorkspaceRepoPath(normalizedRepoPath);
+          const existing = getDeclaredUpstreamForRepo(deps.workspaceConfig, validRepoPath);
+          if (!existing) throw new Error(`No upstream tracking is declared for ${validRepoPath}`);
+          const enabled = enabledInput !== false;
+          const nextUpstream: WorkspaceGitUpstreamConfig = {
+            remote: existing.remote,
+            ...(existing.branch ? { branch: existing.branch } : {}),
+            autoPush: enabled,
+            ...(existing.credentialId ? { credentialId: existing.credentialId } : {}),
+            ...(existing.authorEmail ? { authorEmail: existing.authorEmail } : {}),
+            ...(existing.authorName ? { authorName: existing.authorName } : {}),
+          };
+
+          await ensureUpstreamPermission(ctx, deps, validRepoPath, "set", nextUpstream);
+          const nextConfig = setDeclaredUpstreamInConfig(
+            deps.workspaceConfig,
+            validRepoPath,
+            nextUpstream
+          );
+          await persistWorkspaceConfigChange(ctx, deps, {
+            nextConfig,
+            summary: workspaceConfigUpstreamSummary(validRepoPath, nextUpstream, "set"),
+            operation: "push",
+          });
+          await propagateSharedRemote(deps, validRepoPath);
+          return nextConfig.git?.upstreams;
+        }
+
+        case "upstreamStatus": {
+          return invokeGitProvider(deps, ctx, "upstreamStatus", args);
+        }
+
+        case "pushUpstream": {
+          return invokeGitProvider(deps, ctx, "pushUpstream", args);
+        }
+
+        case "pullUpstream": {
+          return invokeGitProvider(deps, ctx, "pullUpstream", args);
+        }
+
+        case "publishRepo": {
+          return invokeGitProvider(deps, ctx, "publishRepo", args);
+        }
+
         case "importProject": {
           const [request] = args as [ImportWorkspaceRepoRequest];
           return importWorkspaceRepo(ctx, deps, request);
@@ -230,6 +281,18 @@ export function createGitInteropService(deps: GitInteropServiceDeps): ServiceDef
       }
     },
   };
+}
+
+async function invokeGitProvider<T>(
+  deps: Pick<GitInteropServiceDeps, "invokeGitProvider">,
+  ctx: ServiceContext,
+  method: string,
+  args: unknown[]
+): Promise<T> {
+  if (!deps.invokeGitProvider) {
+    throw new Error("Git upstream provider is unavailable");
+  }
+  return deps.invokeGitProvider<T>(ctx, method, args);
 }
 
 async function completeWorkspaceDependencies(

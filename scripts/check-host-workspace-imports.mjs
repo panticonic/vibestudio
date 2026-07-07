@@ -32,12 +32,13 @@
 // Cross-boundary integration tests live under `tests/workspace-integration/`;
 // that neutral harness is intentionally excluded from both directions.
 //
-// Findings are checked against scripts/host-boundary-allowlist.json. Any finding
-// not covered by an allowlist entry causes a non-zero exit.
+// Soft workspace-reference findings are checked against
+// scripts/host-boundary-allowlist.json. Hard import findings are never
+// allowlistable.
 //
 // Flags:
 //   (none)              check mode; exit 1 if any non-allowlisted finding.
-//   --update-allowlist  regenerate the allowlist to cover all current findings
+//   --update-allowlist  regenerate the allowlist to cover current soft findings
 //                       (preserving existing reasons); always exit 0.
 //
 // Dependency-free apart from `typescript` (already a repo dependency).
@@ -123,8 +124,7 @@ export function looksPathLike(specifier) {
 }
 
 /**
- * Does this file count as a test context? Used to (a) tag import-violations in
- * tests with a distinct allowlist reason and (b) SKIP the noisy
+ * Does this file count as a test context? Used to skip the noisy
  * workspace-reference (string-literal) category entirely, since fixtures and
  * assertions routinely embed `@workspace...` strings.
  */
@@ -281,16 +281,14 @@ export function matchesAllowlistEntry(finding, entry) {
 }
 
 export function isAllowlisted(finding, allowlist) {
+  if (finding.category === "import-violation" || finding.category === "workspace-host-import") {
+    return false;
+  }
   return allowlist.some((entry) => matchesAllowlistEntry(finding, entry));
 }
 
 /** Reason assigned to a freshly-seeded finding (see task description). */
 export function defaultReason(finding) {
-  if (isTestContext(finding.file)) return "DO/workspace integration test";
-  if (finding.category === "workspace-host-import")
-    return "workspace code must not import host-private implementation";
-  if (finding.category === "import-violation")
-    return "pending-fix-2026-07: being removed by parallel cleanup";
   return "workspace-reference baseline 2026-07: pre-existing host reference to workspace path/scope";
 }
 
@@ -368,6 +366,7 @@ function updateAllowlist(root) {
   const seen = new Set();
   const entries = [];
   for (const finding of findings) {
+    if (finding.category !== "workspace-reference") continue;
     const key = dedupeKey(finding);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -390,7 +389,7 @@ function updateAllowlist(root) {
   );
   const out = {
     $comment:
-      "Host/workspace boundary allowlist. Non-allowlisted findings from scripts/check-host-workspace-imports.mjs fail CI. Regenerate with `node scripts/check-host-workspace-imports.mjs --update-allowlist`. An entry with no `specifier` covers the whole file; `category` is optional.",
+      "Host/workspace boundary allowlist for soft workspace-reference findings only. Hard import findings from scripts/check-host-workspace-imports.mjs are never allowlistable. Regenerate soft references with `node scripts/check-host-workspace-imports.mjs --update-allowlist`. An entry with no `specifier` covers the whole file; `category` is optional.",
     entries,
   };
   const target = path.join(root, ALLOWLIST_PATH);
@@ -398,9 +397,7 @@ function updateAllowlist(root) {
   fs.writeFileSync(target, JSON.stringify(out, null, 2) + "\n");
   const byCategory = countByCategory(entries);
   console.log(`Wrote ${entries.length} allowlist entries to ${ALLOWLIST_PATH}`);
-  console.log(`  import-violation: ${byCategory["import-violation"] ?? 0}`);
   console.log(`  workspace-reference: ${byCategory["workspace-reference"] ?? 0}`);
-  console.log(`  workspace-host-import: ${byCategory["workspace-host-import"] ?? 0}`);
 }
 
 function countByCategory(items) {
@@ -417,7 +414,7 @@ function check(root) {
 
   if (violations.length === 0) {
     console.log(
-      `Host/workspace boundary OK (${findings.length} finding(s), all allowlisted; ${allowedCount} covered).`
+      `Host/workspace boundary OK (${findings.length} finding(s); ${allowedCount} soft reference(s) covered; hard import violations: 0).`
     );
     return 0;
   }
@@ -433,10 +430,10 @@ function check(root) {
   }
   const counts = countByCategory(violations);
   console.error(
-    `Summary: ${violations.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-reference: ${counts["workspace-reference"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}. (${allowedCount} finding(s) allowlisted.)`
+    `Summary: ${violations.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-reference: ${counts["workspace-reference"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}. (${allowedCount} soft reference(s) covered.)`
   );
   console.error(
-    `\nIf these are expected, add them to ${ALLOWLIST_PATH} (or run with --update-allowlist).`
+    `\nSoft workspace-reference findings can be added to ${ALLOWLIST_PATH} (or regenerated with --update-allowlist). Hard import findings must be removed.`
   );
   return 1;
 }

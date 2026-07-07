@@ -164,9 +164,9 @@ export function createRemoteCredService(deps: {
   return {
     name: "remoteCred",
     description: "Manage the Electron-side remote-server credential store",
-    // The workspace shell renderer (apps/shell, connection-management) is an
-    // `app`; native-host `shell` also calls here. App callers are gated to
-    // authorized chrome (panel-hosting) so no arbitrary app can manage creds.
+    // Hosted workspace chrome is an `app`; native-host `shell` also calls here.
+    // App callers are gated to authorized chrome (panel-hosting) so no arbitrary
+    // app can manage creds.
     policy: { allowed: ["shell", "app"] },
     methods: remoteCredMethods,
     handler: async (_ctx, method, args) => {

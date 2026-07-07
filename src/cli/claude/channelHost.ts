@@ -9,8 +9,8 @@
  *
  * With a launch profile env (VIBESTUDIO_AGENT_TOKEN et al) it attaches
  * directly; with none it ADOPTS (plan §8.3): discovers the context from the
- * cwd marker, calls the claude-code extension's `prepare` under the paired
- * device credential (which gates on a workspace-side first-adoption approval),
+ * cwd marker, calls the configured Claude Code provider's `prepare` under the
+ * paired device credential (which gates on a workspace-side first-adoption approval),
  * and proceeds identically. All Claude-side protocol knowledge lives here and
  * nowhere else (plan §11 containment).
  */
@@ -40,7 +40,7 @@ import { findContextMarker } from "./context.js";
 export const LINKED_AGENT_EVENT = "linked-agent:event";
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const REATTACH_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-const EXTENSION = "@workspace-extensions/claude-code";
+const CLAUDE_CODE_PROVIDER = "claudeCode";
 
 export interface BridgeConfig {
   mode: "launched" | "adopted";
@@ -239,7 +239,7 @@ function isInside(child: string, parent: string): boolean {
 }
 
 async function invokeExtension<T>(client: RpcClient, method: string, args: unknown[]): Promise<T> {
-  return await client.call<T>("extensions.invoke", [EXTENSION, method, args]);
+  return await client.call<T>("extensions.invokeProvider", [CLAUDE_CODE_PROVIDER, method, args]);
 }
 
 // ---------------------------------------------------------------------------
