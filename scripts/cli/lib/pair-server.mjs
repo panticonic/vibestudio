@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseSignalingEndpoint, printConnectBanner } from "./connect-utils.mjs";
+import { printConnectBanner, resolveSignalingUrl } from "./connect-utils.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -23,7 +23,6 @@ function parsePort(value, label) {
 
 export function parsePairArgs(argv, config) {
   const signalEnv = signalEnvFor(config);
-  const configuredSignalUrl = firstDefined(signalEnv.map((key) => process.env[key]));
   const options = {
     port: parsePort(
       firstDefined(config.portEnv.map((key) => process.env[key])) ?? "3030",
@@ -32,7 +31,8 @@ export function parsePairArgs(argv, config) {
     appRoot: null,
     dev: process.env[config.devEnv] === "1",
     help: false,
-    signalUrl: configuredSignalUrl ?? null,
+    signalUrl: undefined,
+    signalSource: "default",
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +51,7 @@ export function parsePairArgs(argv, config) {
       options.appRoot = argv[++i] ?? "";
     } else if (arg === "--signal-url" || arg === "--signaling-url") {
       options.signalUrl = argv[++i] ?? "";
+      options.signalSource = "flag";
     } else if (arg === "--dev" || arg === "--ephemeral") {
       options.dev = true;
     } else if (arg === "--no-init") {
@@ -63,7 +64,9 @@ export function parsePairArgs(argv, config) {
   }
 
   if (!options.help) {
-    options.signalUrl = resolveSignalingEndpoint(options.signalUrl, signalEnv);
+    const resolved = resolveSignalingEndpoint(options.signalUrl, signalEnv, config);
+    options.signalUrl = resolved.url;
+    options.signalSource = resolved.source;
   }
   return options;
 }
@@ -85,7 +88,7 @@ Options:
   --app-root <path>
       Application root passed to the server.
   --signal-url, --signaling-url <url>
-      WebRTC signaling endpoint. Defaults through ${signalEnvFor(config).join(", ")}.
+      WebRTC signaling endpoint. Resolution: flag > ${signalEnvFor(config).join(", ")} > config > hosted default.
       Use wss:// or https:// for remote endpoints; ws:// and http:// are only
       accepted for loopback development.
   --dev, --ephemeral
@@ -122,7 +125,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
   console.log(`[${config.logPrefix}] Loopback host: ${LOOPBACK_HOST}`);
   console.log(`[${config.logPrefix}] Gateway port: ${options.port}`);
-  console.log(`[${config.logPrefix}] Signaling: ${options.signalUrl}`);
+  console.log(`[${config.logPrefix}] Signaling: ${options.signalUrl} (${options.signalSource})`);
   if (options.dev) {
     console.log(`[${config.logPrefix}] Dev workspace: fresh template copy, deleted on exit`);
   }
@@ -146,7 +149,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   // WebRTC pairing material advertised by the running server (the seam between
   // the server's WebRTC cert + per-invite rooms and this banner). `room`/`fp`/
   // `sig` come from the server; until all three plus a pairing code arrive the
-  // banner waits. `deepLink`/`qrDeepLink` are the server's OWN per-invite links
+  // banner waits. `deepLink`/`pairUrl` are the server's OWN per-invite links
   // (v=2: each invite has its own room, so codes must not be recombined with
   // another invite's room locally).
   let pairing = { room: null, fp: null, sig: null };
@@ -154,6 +157,8 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   let qrPairingCode = null;
   let deepLink = null;
   let qrDeepLink = null;
+  let pairUrl = null;
+  let qrPairUrl = null;
   let bannerPrinted = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
@@ -181,6 +186,8 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       qrPairingCode = null;
       deepLink = null;
       qrDeepLink = null;
+      pairUrl = null;
+      qrPairUrl = null;
       bannerPrinted = false;
       if (ownedReadyDir) {
         try {
@@ -213,8 +220,14 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       if (typeof advertised.deepLink === "string" && advertised.deepLink) {
         deepLink = advertised.deepLink;
       }
+      if (typeof advertised.pairUrl === "string" && advertised.pairUrl) {
+        pairUrl = advertised.pairUrl;
+      }
       if (typeof advertised.qrDeepLink === "string" && advertised.qrDeepLink) {
         qrDeepLink = advertised.qrDeepLink;
+      }
+      if (typeof advertised.qrPairUrl === "string" && advertised.qrPairUrl) {
+        qrPairUrl = advertised.qrPairUrl;
       }
     }
     if (typeof payload?.pairingCode === "string" && payload.pairingCode) {
@@ -257,8 +270,8 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       title: config.bannerTitle,
       pairing: { room: pairing.room, fp: pairing.fp, sig: pairing.sig, code: pairingCode },
       qrPairingCode,
-      deepLink,
-      qrDeepLink,
+      qrDeepLink: qrPairUrl || pairUrl || qrDeepLink,
+      deepLink: pairUrl || deepLink,
       deepLinkLabel: config.deepLinkLabel,
       instructions: config.instructions,
     });
@@ -416,17 +429,11 @@ function signalEnvFor(config) {
     : DEFAULT_SIGNAL_ENV;
 }
 
-function resolveSignalingEndpoint(raw, signalEnv) {
-  if (!raw) {
-    throw new Error(
-      `Missing WebRTC signaling endpoint. Set ${signalEnv.join(
-        " or "
-      )} or pass --signal-url <wss://...>. Pairing cannot start without signaling because the server would not start its WebRTC answerer.`
-    );
-  }
-  const parsed = parseSignalingEndpoint(raw);
-  if (parsed.kind === "error") {
-    throw new Error(`Invalid WebRTC signaling endpoint: ${parsed.reason}`);
-  }
-  return parsed.url;
+function resolveSignalingEndpoint(raw, signalEnv, config) {
+  return resolveSignalingUrl({
+    flag: raw,
+    env: process.env,
+    envKeys: signalEnv,
+    configUrl: typeof config.signalingUrl === "string" ? config.signalingUrl : undefined,
+  });
 }

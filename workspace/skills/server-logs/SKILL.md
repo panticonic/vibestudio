@@ -99,6 +99,10 @@ streaming prefer polling `query({ sinceSeq })` in a loop — it is cheap
   server that already exited.
 - `<workspace>/state/logs/server.log` — raw stdout/stderr of a
   desktop-spawned detached server (unstructured; truncated per spawn).
+- Deployed remote boxes use the systemd user unit:
+  `vibestudio remote deploy logs <user@host>` or
+  `ssh <host> journalctl --user -u vibestudio-server -f`. Pairing, doctor,
+  identity, and WebRTC ingress failures should be visible there.
 
 ## Good citizenship
 

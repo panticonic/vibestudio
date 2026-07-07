@@ -21,8 +21,9 @@ Remote startup is a two-step WebRTC flow:
 1. Pair with the server hub and store a device credential.
 2. Select a workspace, which returns a workspace-scoped WebRTC pairing invite.
 
-`vibestudio remote pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"`
-exchanges a pairing invite over the pipe and stores the hub credential.
+`vibestudio remote pair "https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2"`
+or the equivalent `vibestudio://connect?...` link exchanges a pairing invite
+over the pipe and stores the hub credential.
 `vibestudio remote select <name>` pairs to the selected workspace's room and keeps
 the hub credential for later workspace listing/selection.
 
@@ -104,10 +105,14 @@ new client bootstrap material.
 - Remote clients pair through WebRTC using a signaling room plus DTLS
   fingerprint pinning. Do not add public-ingress, VPN, or cleartext-host
   exceptions for RPC reachability.
-- Prefer verified app-link/universal-link routes for mobile OAuth callbacks.
-- `vibestudio://connect` is for pairing bootstrap, not OAuth callbacks.
-- Mobile OAuth callbacks should use verified app-link/universal-link routes
-  where configured.
+- Pairing QR codes should use the HTTPS carrier
+  `https://vibestudio.app/pair#...`; machine/CLI surfaces may keep the
+  `vibestudio://connect?...` carrier. Both use the same parser and payload.
+- Pairing invites are complete artifacts: `deepLink`, `pairUrl`, `room`, `fp`,
+  `code`, and `sig` are non-null. Do not reintroduce bare-code or nullable-link
+  handling.
+- `vibestudio://connect` is for pairing bootstrap. OAuth callbacks use the
+  platform-specific OAuth seam and must not trigger pairing reset.
 
 ## Recovery And UX
 

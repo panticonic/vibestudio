@@ -245,8 +245,7 @@ async function connect(opts: {
 describe.runIf(RUN)("WebRTC real-native end-to-end (node-datachannel, v2)", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rtc-e2e-"));
   const cert = ensurePersistentCert({
-    certificatePemFile: path.join(tmp, "server.pem"),
-    keyPemFile: path.join(tmp, "server.key"),
+    identityPemFile: path.join(tmp, "identity.pem"),
   });
   const harnesses: Harness[] = [];
 

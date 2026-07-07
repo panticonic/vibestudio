@@ -59,9 +59,7 @@ function makeSessionRecord(
   };
 }
 
-// `deepLink` is no longer minted server-side: the full WebRTC pairing link needs
-// the answerer's room/fp (assembled at the pairing banner, not the auth service).
-type PairingCodeResponse = { code: string; serverUrl: string; deepLink?: string };
+type PairingCodeResponse = { code: string; serverUrl: string; deepLink: string; pairUrl: string };
 type ConnectionInfoResponse = { serverUrl: string; workspaceId: string };
 type IssueDeviceResponse = {
   deviceId: string;
@@ -89,6 +87,18 @@ type DevicesResponse = {
   devices: Array<{ deviceId: string; label: string; platform: string }>;
 };
 type RevokeDeviceResponse = { revoked: boolean };
+
+const testPairing = {
+  fp: "AA".repeat(32),
+  sig: "wss://signal.test/",
+  ice: "all" as const,
+};
+
+function testIngress() {
+  return {
+    armRoom: () => undefined,
+  };
+}
 
 describe("auth service device credentials", () => {
   let gateway: Gateway;
@@ -121,7 +131,9 @@ describe("auth service device credentials", () => {
         protocol: "http",
         externalHost: "127.0.0.1",
         gatewayPort,
+        pairing: testPairing,
       }),
+      getWebRtcIngress: testIngress,
       connectionGrants,
       auditLog: {
         append: async (entry) => {
@@ -148,7 +160,7 @@ describe("auth service device credentials", () => {
         appId: "@workspace-apps/mobile",
         buildKey: "rn-key",
         effectiveVersion: "ev-mobile",
-        rnHostAbi: "rn-host-1",
+        rnHostAbi: "rn-host-2",
         integrity: "sha256-mobile",
         artifacts: [
           {
@@ -189,8 +201,8 @@ describe("auth service device credentials", () => {
     expect(pairing.status).toBe(200);
     expect(pairing.body.code).toMatch(/^[A-Za-z0-9_-]{16,}$/);
     expect(pairing.body.serverUrl).toBe(gatewayUrl);
-    // The full WebRTC deep link (room/fp/sig) is assembled by the answerer, not here.
-    expect(pairing.body.deepLink).toBeNull();
+    expect(pairing.body.deepLink).toContain("vibestudio://connect?");
+    expect(pairing.body.pairUrl).toContain("https://vibestudio.app/pair#");
 
     const issued = await postJson<IssueDeviceResponse>(
       "/_r/s/auth/issue-device",
@@ -246,7 +258,7 @@ describe("auth service device credentials", () => {
     expect(bootstrap.body.workspaceId).toBe("workspace_test");
     expect(bootstrap.body.bootstrap).toMatchObject({
       appId: "@workspace-apps/mobile",
-      rnHostAbi: "rn-host-1",
+      rnHostAbi: "rn-host-2",
       integrity: "sha256-mobile",
       artifacts: [expect.objectContaining({ platform: "android" })],
     });
@@ -314,7 +326,9 @@ describe("auth service device credentials", () => {
         protocol: "http",
         externalHost: "127.0.0.1",
         gatewayPort: 3030,
+        pairing: testPairing,
       }),
+      getWebRtcIngress: testIngress,
       hasAppCapability: (callerId, capability) =>
         callerId === "@workspace-apps/remote-cli" && capability === "connection-management",
     });
@@ -337,7 +351,8 @@ describe("auth service device credentials", () => {
     )) as PairingCodeResponse;
     expect(invite.code).toMatch(/^[A-Za-z0-9_-]{16,}$/);
     expect(invite.serverUrl).toBe("http://127.0.0.1:3030");
-    expect(invite.deepLink).toBeNull();
+    expect(invite.deepLink).toContain("vibestudio://connect?");
+    expect(invite.pairUrl).toContain("https://vibestudio.app/pair#");
 
     await expect(
       authService.definition.handler(
@@ -654,7 +669,9 @@ describe("auth service pairing invite flow", () => {
         protocol: "http",
         externalHost: "127.0.0.1",
         gatewayPort,
+        pairing: testPairing,
       }),
+      getWebRtcIngress: testIngress,
     });
     dispatcher.registerService(authService.definition);
     dispatcher.markInitialized();

@@ -727,11 +727,13 @@ async function main() {
     [extensionHostForGateway, appHostForGateway].filter(
       (host): host is TrustedUnitHostInstance => host !== null
     );
+  let startupWorkspaceUnitReconcile: Promise<void> | null = null;
   const { HostTargetLaunchCoordinator } = await import("./hostTargetLaunchCoordinator.js");
   const hostTargetLaunchCoordinator = new HostTargetLaunchCoordinator({
     approvalQueue,
     eventService,
     startupApprovals: unitApprovalCoordinator,
+    awaitStartupUnitReconcile: () => startupWorkspaceUnitReconcile ?? Promise.resolve(),
     getAppHost: () => appHostForGateway,
     getTrustedUnitHosts: trustedUnitHosts,
   });
@@ -3383,8 +3385,8 @@ async function main() {
               protocol,
               externalHost: hostConfig.externalHost,
               gatewayPort,
-              // Lets createPairingInvite mint a real vibestudio://connect deep link
-              // (per-invite room + fp/sig); null when WebRTC is off ⇒ null deepLink.
+              // Lets createPairingInvite mint complete pair artifacts
+              // (per-invite room + fp/sig + scheme deep link + HTTPS pair URL).
               pairing: webrtcPairing ?? undefined,
             };
           },
@@ -3592,23 +3594,25 @@ async function main() {
   await container.startAll();
 
   // ── WebRTC ingress pool (now that rpcServerForGateway is live) ──
-  // Activated when VIBESTUDIO_WEBRTC_SIGNAL_URL is set (off by default ⇒ loopback
-  // co-located mode is unaffected). The server presents a persistent DTLS cert
+  // Activated by default. The server presents a persistent DTLS cert
   // (stable QR `fp`) and arms ONE answerer pipe per signaling room: one room per
   // already-paired device (persisted on the device record) plus one per
   // outstanding pairing invite (plan §2.1 — the per-server singleton room and
   // its room file are gone). See docs/webrtc-local-e2e.md.
-  const webrtcSignalUrl = process.env["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
-  if (webrtcSignalUrl && rpcServerForGateway) {
+  const { resolveSignalingUrl } = await import("@vibestudio/shared/connect");
+  const webrtcSignalUrl = resolveSignalingUrl({ env: process.env }).url;
+  if (rpcServerForGateway) {
     try {
       const { startWebRtcIngress } = await import("./webrtcIngress.js");
       const { ensurePersistentCert } = await import("../main/webrtc/cert.js");
+      const { assertNodeDatachannelAvailable } =
+        await import("../main/webrtc/nodeDatachannelPeer.js");
+      assertNodeDatachannelAvailable();
       const pathMod = await import("node:path");
       const certDir = pathMod.join(appRoot, ".vibestudio", "webrtc");
       const cert = ensurePersistentCert({
-        certificatePemFile:
-          process.env["VIBESTUDIO_WEBRTC_CERT"] ?? pathMod.join(certDir, "server.pem"),
-        keyPemFile: process.env["VIBESTUDIO_WEBRTC_KEY"] ?? pathMod.join(certDir, "server.key"),
+        identityPemFile:
+          process.env["VIBESTUDIO_WEBRTC_IDENTITY"] ?? pathMod.join(certDir, "identity.pem"),
       });
       const iceTransportPolicy: import("@vibestudio/shared/connect").TurnPolicy =
         process.env["VIBESTUDIO_WEBRTC_ICE"] === "relay" ? "relay" : "all";
@@ -3644,11 +3648,10 @@ async function main() {
         }
       }
     } catch (error) {
-      // Fail loud (the operator asked for WebRTC ingress) but do not abort the
-      // loopback gateway — local co-located clients still work. Notably a
-      // CertIdentityError (half-provisioned identity) lands here: log + skip.
-      console.error(
-        `[webrtc-ingress] failed to start: ${error instanceof Error ? error.message : String(error)}`
+      throw new Error(
+        `[webrtc-ingress] failed to start; refusing loopback-only startup: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
     }
   }
@@ -3656,8 +3659,7 @@ async function main() {
   // ── Startup pairing invites (banner + ready file) ──
   // Minted through the SAME per-invite path as auth.createPairingInvite: when
   // the ingress pool is live each invite gets a fresh room armed on the pool
-  // and a real vibestudio://connect (v=2) deep link; without WebRTC they are bare
-  // codes redeemable over the loopback gateway.
+  // and complete pair artifacts. Without WebRTC, minting fails loud.
   const { mintPairingInvite } = await import("./services/auth/model.js");
   const startupInvites =
     process.env["VIBESTUDIO_DISABLE_STARTUP_PAIRING"] !== "1"
@@ -3828,7 +3830,7 @@ async function main() {
       }
     }
   };
-  const startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
+  startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
@@ -3923,11 +3925,11 @@ async function main() {
       if (startupQrPairingCode) {
         console.log(`  QR pairing code: ${startupQrPairingCode}`);
       }
-      if (startupInvite?.deepLink) {
-        console.log(`  Pairing link: ${startupInvite.deepLink}`);
+      if (startupInvite?.pairUrl) {
+        console.log(`  Pair URL:     ${startupInvite.pairUrl}`);
       }
-      if (startupQrInvite?.deepLink) {
-        console.log(`  QR pairing link: ${startupQrInvite.deepLink}`);
+      if (startupQrInvite?.pairUrl) {
+        console.log(`  QR Pair URL:  ${startupQrInvite.pairUrl}`);
       }
       console.log(
         `  Pairing TTL:  ${Math.round(DEFAULT_PAIRING_CODE_TTL_MS / 60_000)} minutes (server exits if unused)`
@@ -3944,16 +3946,15 @@ async function main() {
         rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
         adminToken,
-        // The WebRTC pairing material (present only when the ingress pool is
-        // active); remote clients pair from this, not from a connect/public
-        // URL. `room`/`deepLink` come from the startup invite (per-invite
-        // rooms) — the hub reads `deepLink` when surfacing child pairing.
+        // The WebRTC pairing material and complete startup invite artifacts.
         pairing: webrtcPairing
           ? {
               ...webrtcPairing,
-              room: startupInvite?.room ?? null,
-              deepLink: startupInvite?.deepLink ?? null,
-              qrDeepLink: startupQrInvite?.deepLink ?? null,
+              room: startupInvite?.room,
+              deepLink: startupInvite?.deepLink,
+              pairUrl: startupInvite?.pairUrl,
+              qrDeepLink: startupQrInvite?.deepLink,
+              qrPairUrl: startupQrInvite?.pairUrl,
             }
           : null,
         pairingCode: startupPairingCode,

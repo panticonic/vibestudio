@@ -234,19 +234,39 @@ async function startSignaling(port) {
   throw new Error("wrangler dev (signaling) did not become healthy");
 }
 
-// Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
-// vibestudio://connect?...` line it logs once it has joined the signaling room and
-// computed its DTLS fingerprint. Attach this BEFORE the link can be printed so no
-// chunk is missed.
+function extractPairingLink(text) {
+  return text.match(/vibestudio:\/\/connect\?\S+/)?.[0]
+    ?? text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0]
+    ?? null;
+}
+
+function buildConnectDeepLinkFromLog(loggedLink) {
+  const parsed = parseConnectLink(loggedLink);
+  if (parsed.kind !== "ok") {
+    throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
+  }
+  return createConnectDeepLink({
+    room: parsed.room,
+    fp: parsed.fp,
+    code: parsed.code,
+    sig: parsed.sig,
+    ice: parsed.ice,
+    srv: parsed.srv,
+  });
+}
+
+// Watch the answerer's stdout for either pairing carrier. Human-facing server
+// banners print https pair URLs; command-line smoke injection uses the canonical
+// vibestudio:// carrier rebuilt from the same payload.
 function waitForPairingLink(serverChild, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buffer = "";
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
-      if (match) {
+      const link = extractPairingLink(buffer);
+      if (link) {
         cleanup();
-        resolve(match[0]);
+        resolve(link);
       }
     };
     const cleanup = () => {
@@ -257,7 +277,7 @@ function waitForPairingLink(serverChild, timeoutMs) {
       cleanup();
       reject(
         new Error(
-          "Timed out waiting for the server's [webrtc-answerer] pairing link. " +
+          "Timed out waiting for the server's pairing link. " +
             "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
         )
       );
@@ -586,8 +606,8 @@ async function main() {
     const signalUrl = `ws://127.0.0.1:${signalPort}`;
 
     // 2. The disposable server, as a WebRTC answerer. The server mints the
-    //    per-invite room + pairing code itself and logs the vibestudio://connect
-    //    link whose `fp` pins its persistent DTLS cert.
+    //    per-invite room + pairing code itself and logs a pairing link whose
+    //    `fp` pins its persistent DTLS cert.
     const serverArgs = createServerArgs(options.readyFile);
     const serverInvocation = createServerInvocation(serverArgs);
     const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
@@ -620,20 +640,14 @@ async function main() {
     );
     readyInfo = ready;
 
-    // 3. Parse the answerer's pairing link and rebuild the deep link with the
-    //    canonical builder (the server contributed `fp`; we own room/code/sig).
+    // 3. Parse the answerer's pairing link and rebuild the scheme deep link
+    //    with the canonical builder for argv injection.
     const loggedLink = await pairingLinkPromise;
-    const parsed = parseConnectLink(loggedLink);
+    const deepLink = buildConnectDeepLinkFromLog(loggedLink);
+    const parsed = parseConnectLink(deepLink);
     if (parsed.kind !== "ok") {
       throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
     }
-    const deepLink = createConnectDeepLink({
-      room: parsed.room,
-      fp: parsed.fp,
-      code: parsed.code,
-      sig: parsed.sig,
-      ice: parsed.ice,
-    });
     console.log(`[desktop-smoke] WebRTC pairing: room=${parsed.room} fp=${parsed.fp}`);
     console.log(`[desktop-smoke] Deep link: ${deepLink}`);
 

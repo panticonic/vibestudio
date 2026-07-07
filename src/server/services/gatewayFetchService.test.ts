@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as http from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { GZIP_MARKER_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { createGatewayFetchService } from "./gatewayFetchService.js";
+
+const MOBILE_APP_BOOTSTRAP_PATH = "/_r/s/auth/mobile-app-bootstrap";
 
 interface CapturedRequest {
   method: string;
@@ -52,9 +54,12 @@ async function startFakeGateway(
   return { port, requests };
 }
 
-function ctxWithBody(body?: ReadableStream<Uint8Array>): ServiceContext {
+function ctxWithBody(
+  body?: ReadableStream<Uint8Array>,
+  kind: CallerKind = "panel"
+): ServiceContext {
   return {
-    caller: { runtime: { id: "panel:test", kind: "panel" } },
+    caller: { runtime: { id: `${kind}:test`, kind } },
     ...(body ? { body } : {}),
   } as unknown as ServiceContext;
 }
@@ -193,6 +198,7 @@ describe("gatewayFetchService — panel-origin path allowlist", () => {
 
   it("REJECTS /_r/s/ management routes and never touches the gateway", async () => {
     for (const path of [
+      MOBILE_APP_BOOTSTRAP_PATH,
       "/_r/s/auth/issue-device",
       "/_r/s/workspaces/default",
       "/_r/s/webhookIngress/sub-1",
@@ -241,5 +247,74 @@ describe("gatewayFetchService — panel-origin path allowlist", () => {
     const { response, requests } = await fetchPath("/apps/shell/sub/../bundle.js");
     expect(response?.status).toBe(200);
     expect(requests[0]?.url).toBe("/apps/shell/bundle.js");
+  });
+});
+
+describe("gatewayFetchService — mobile native bootstrap exception", () => {
+  it("allows trusted shell/app callers to POST the exact mobile bootstrap route", async () => {
+    const gateway = await startFakeGateway();
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    for (const kind of ["shell", "app"] as const) {
+      const response = (await service.handler(
+        ctxWithBody(streamOf(`{"caller":"${kind}"}`), kind),
+        "fetch",
+        [
+          {
+            path: MOBILE_APP_BOOTSTRAP_PATH,
+            method: "post",
+            headers: { "content-type": "application/json" },
+          },
+        ]
+      )) as Response;
+      expect(response.status, kind).toBe(200);
+    }
+
+    expect(gateway.requests).toHaveLength(2);
+    expect(gateway.requests[0]).toMatchObject({
+      method: "POST",
+      url: MOBILE_APP_BOOTSTRAP_PATH,
+      contentType: "application/json",
+      body: '{"caller":"shell"}',
+    });
+    expect(gateway.requests[1]).toMatchObject({
+      method: "POST",
+      url: MOBILE_APP_BOOTSTRAP_PATH,
+      contentType: "application/json",
+      body: '{"caller":"app"}',
+    });
+  });
+
+  it("rejects panel callers even when they POST the exact mobile bootstrap route", async () => {
+    const gateway = await startFakeGateway();
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    try {
+      await service.handler(ctxWithBody(streamOf("{}")), "fetch", [
+        { path: MOBILE_APP_BOOTSTRAP_PATH, method: "POST" },
+      ]);
+      throw new Error("expected gateway.fetch to reject");
+    } catch (err) {
+      const error = err as Error & { code?: string };
+      expect(error.code).toBe("EACCES");
+      expect(error.message).toContain("panel origin");
+    }
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it("rejects shell callers unless the mobile bootstrap request is POST", async () => {
+    const gateway = await startFakeGateway();
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    try {
+      await service.handler(ctxWithBody(undefined, "shell"), "fetch", [
+        { path: MOBILE_APP_BOOTSTRAP_PATH, method: "GET" },
+      ]);
+      throw new Error("expected gateway.fetch to reject");
+    } catch (err) {
+      const error = err as Error & { code?: string };
+      expect(error.code).toBe("EACCES");
+    }
+    expect(gateway.requests).toHaveLength(0);
   });
 });

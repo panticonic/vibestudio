@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -16,6 +17,7 @@ import {
 } from "./credentialStore.js";
 import {
   createPairingInvite,
+  createPairingInviteWithAdmin,
   listRemoteWorkspaces,
   pairRemoteServer,
   selectRemoteWorkspace,
@@ -52,6 +54,11 @@ import {
 } from "./output.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const require = createRequire(import.meta.url);
+const qrcode = require("qrcode-terminal") as {
+  generate(value: string, options?: { small?: boolean }): void;
+};
+const DEFAULT_REMOTE_INVITE_URL = "http://127.0.0.1:3030";
 
 // ───────────────────────────────────────────────────────────────────────────
 // remote commands
@@ -64,7 +71,11 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
   if (typeof inv.flags["code"] === "string") opts.code = inv.flags["code"];
   if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
   const positional = inv.positionals[0];
-  if (positional?.startsWith("vibestudio://")) opts.link = positional;
+  if (
+    positional?.startsWith("vibestudio://") ||
+    positional?.startsWith("https://vibestudio.app/pair")
+  )
+    opts.link = positional;
   else if (positional) opts.url = positional;
   try {
     const creds = await pairRemoteServer(opts);
@@ -145,8 +156,6 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
 async function remoteInvite(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const creds = loadCliCredentials();
-    if (!creds) throw new AuthError("not paired");
     let ttlMs: number | undefined;
     if (typeof inv.flags["ttl-ms"] === "string") {
       const value = Number(inv.flags["ttl-ms"]);
@@ -155,23 +164,65 @@ async function remoteInvite(inv: ParsedInvocation): Promise<number> {
       }
       ttlMs = value;
     }
-    if (!creds.hubUrl) throw new AuthError("stored credential is missing a hub URL; pair again");
-    const inviteCreds = isWebRtcCredential(creds) ? creds : { ...creds, url: creds.hubUrl };
-    const invite = await createPairingInvite(inviteCreds, { ttlMs });
+    const workspace =
+      typeof inv.flags["workspace"] === "string" && inv.flags["workspace"].trim()
+        ? inv.flags["workspace"].trim()
+        : undefined;
+    const explicitUrl =
+      typeof inv.flags["url"] === "string" && inv.flags["url"].trim()
+        ? inv.flags["url"].trim()
+        : undefined;
+    const adminToken =
+      typeof inv.flags["admin-token"] === "string" && inv.flags["admin-token"].trim()
+        ? inv.flags["admin-token"].trim()
+        : undefined;
+    const localAdminUrl = explicitUrl ?? remoteInviteUrlFromPort(inv.flags["port"]);
+    const creds = loadCliCredentials();
+    let invite;
+    if (creds && !explicitUrl && !adminToken) {
+      if (isWebRtcCredential(creds)) {
+        invite = await createPairingInvite(creds, { ttlMs, workspace });
+      } else {
+        if (!creds.hubUrl) {
+          throw new AuthError(
+            "stored credential is missing a hub URL; pair again, or pass --url/--admin-token"
+          );
+        }
+        invite = await createPairingInvite({ ...creds, url: creds.hubUrl }, { ttlMs, workspace });
+      }
+    } else {
+      invite = await createPairingInviteWithAdmin({
+        url: localAdminUrl,
+        adminToken,
+        ttlMs,
+        workspace,
+      });
+    }
     printResult(invite, {
       json,
       human: () => {
         console.log(`Pairing code: ${invite.code}`);
-        console.log(`Pair URL: ${invite.deepLink}`);
+        console.log(`Pair URL: ${invite.pairUrl}`);
         if (typeof invite.expiresAt === "number") {
           console.log(`Expires: ${new Date(invite.expiresAt).toISOString()}`);
         }
+        console.log();
+        qrcode.generate(invite.pairUrl, { small: true });
       },
     });
     return 0;
   } catch (error) {
     return printError(error, { json });
   }
+}
+
+function remoteInviteUrlFromPort(flag: ParsedInvocation["flags"][string] | undefined): string {
+  if (typeof flag !== "string" || !flag.trim()) return DEFAULT_REMOTE_INVITE_URL;
+  const port = Number(flag);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new UsageError(`--port must be an integer from 1 to 65535, got: ${flag}`);
+  }
+  return `http://127.0.0.1:${port}`;
 }
 
 async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
@@ -408,6 +459,41 @@ function scriptCommand(
 }
 
 const remoteCommands: CliCommand[] = [
+  scriptCommand(
+    "remote",
+    "deploy",
+    "remote-deploy.mjs",
+    "Deploy/manage a systemd user remote server",
+    {
+      usage:
+        "vibestudio remote deploy <user@host> [--artifact <tgz>] [--signal-url <url>] [--port 3030] [--workspace default]",
+      passthroughHelp: true,
+    }
+  ),
+  scriptCommand("remote", "doctor", "remote-doctor.mjs", "Run remote WebRTC preflight checks", {
+    usage: "vibestudio remote doctor [--signal-url <url>] [--identity <identity.pem>]",
+    passthroughHelp: true,
+  }),
+  scriptCommand(
+    "remote",
+    "repair-identity",
+    "remote-repair-identity.mjs",
+    "Regenerate the WebRTC identity file",
+    {
+      usage: "vibestudio remote repair-identity --yes [--identity <identity.pem>]",
+      passthroughHelp: true,
+    }
+  ),
+  scriptCommand(
+    "remote",
+    "setup-signaling",
+    "remote-setup-signaling.mjs",
+    "Deploy/configure the signaling Worker",
+    {
+      usage: "vibestudio remote setup-signaling [--url <wss-url>]",
+      passthroughHelp: true,
+    }
+  ),
   scriptCommand("remote", "serve", "remote-serve.mjs", "Start a QR/deep-link pairing server", {
     aliases: ["server"],
     usage: "vibestudio remote serve [--port 3030]",
@@ -431,8 +517,15 @@ const remoteCommands: CliCommand[] = [
     group: "remote",
     name: "invite",
     summary: "Create a pairing invite for another device",
-    usage: "vibestudio remote invite [--ttl-ms <milliseconds>]",
-    flags: [{ name: "ttl-ms", takesValue: true }, JSON_FLAG],
+    usage: "vibestudio remote invite [--workspace <name>] [--ttl-ms <milliseconds>] [--port 3030]",
+    flags: [
+      { name: "workspace", takesValue: true },
+      { name: "ttl-ms", takesValue: true },
+      { name: "port", takesValue: true },
+      { name: "url", takesValue: true },
+      { name: "admin-token", takesValue: true },
+      JSON_FLAG,
+    ],
     run: remoteInvite,
   },
   {
@@ -801,7 +894,7 @@ const mobileCommands: CliCommand[] = [
     passthroughHelp: true,
   }),
   scriptCommand("mobile", "dev", "mobile-dev.mjs", "Metro + local server + debug APK", {
-    usage: "vibestudio mobile dev [--avd <name>] [--device <serial>]",
+    usage: "vibestudio mobile dev [--platform android|ios] [--avd <name>] [--device <serial>]",
   }),
   scriptCommand(
     "mobile",
@@ -809,24 +902,35 @@ const mobileCommands: CliCommand[] = [
     "mobile-smoke.mjs",
     "Verify the installed internal APK can pair and reach the workspace app",
     {
-      usage: "vibestudio mobile smoke [options]",
+      usage: "vibestudio mobile smoke [--platform android|ios] [options]",
       passthroughHelp: true,
     }
   ),
-  scriptCommand("mobile", "build", "mobile-install.mjs", "Build the trusted internal APK", {
-    aliases: ["apk"],
-    usage: "vibestudio mobile build",
-    prependArgs: ["--build-only"],
-  }),
   scriptCommand("mobile", "install", "mobile-install.mjs", "Install the internal APK", {
-    usage: "vibestudio mobile install [--device <serial>] [--launch]",
+    usage: "vibestudio mobile install [--platform android|ios] [--device <serial>] [--launch]",
   }),
   scriptCommand("mobile", "logs", "mobile-logs.mjs", "Tail app logs from a device", {
-    usage: "vibestudio mobile logs [--device <serial>]",
+    usage: "vibestudio mobile logs [--platform android|ios] [--device <serial>]",
   }),
-  scriptCommand("mobile", "emulator", "mobile-emulator.mjs", "Start an Android emulator", {
-    usage: "vibestudio mobile emulator [--avd <name>]",
-  }),
+  scriptCommand(
+    "mobile",
+    "emulator",
+    "mobile-emulator.mjs",
+    "Start an Android emulator or iOS simulator",
+    {
+      usage:
+        "vibestudio mobile emulator [--platform android|ios] [--avd <name>] [--simulator <name>]",
+    }
+  ),
+  scriptCommand(
+    "mobile",
+    "doctor",
+    "mobile-doctor.mjs",
+    "Run mobile toolchain and provisioning checks",
+    {
+      usage: "vibestudio mobile doctor [--json]",
+    }
+  ),
 ];
 
 /**

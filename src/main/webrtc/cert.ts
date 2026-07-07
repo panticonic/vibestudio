@@ -25,6 +25,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 export interface PersistentCert {
+  identityPemFile: string;
   certificatePemFile: string;
   keyPemFile: string;
   /** DTLS SHA-256 fingerprint as uppercase colon-separated hex (the QR `fp`). */
@@ -47,6 +48,7 @@ export class CertIdentityError extends Error {
 }
 
 type IdentityFileState = "absent" | "empty" | "present";
+const CERT_BLOCK_PATTERN = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/;
 
 /**
  * Classify a persistent-identity file: absent (no such path), empty
@@ -81,7 +83,9 @@ function describeIdentityFile(
  * the cert with no live peer needed (§11).
  */
 export function pemFingerprint(pem: string | Buffer): string {
-  return new X509Certificate(pem).fingerprint256;
+  const text = Buffer.isBuffer(pem) ? pem.toString("utf8") : pem;
+  const certBlock = text.match(CERT_BLOCK_PATTERN)?.[0] ?? text;
+  return new X509Certificate(certBlock).fingerprint256;
 }
 
 /** SHA-256 fingerprint of a PEM certificate on disk (throws if missing/malformed). */
@@ -101,56 +105,72 @@ export function certFileFingerprint(certificatePemFile: string): string {
  * the only deliberate re-mint is deleting BOTH files.
  */
 export function ensurePersistentCert(opts: {
-  certificatePemFile: string;
-  keyPemFile: string;
+  identityPemFile: string;
   /** Subject/issuer CN for a freshly minted cert. Irrelevant to DTLS pinning. */
   commonName?: string;
 }): PersistentCert {
-  const { certificatePemFile, keyPemFile } = opts;
-  const certState = classifyIdentityFile(certificatePemFile);
-  const keyState = classifyIdentityFile(keyPemFile);
+  const { identityPemFile } = opts;
+  const identityState = classifyIdentityFile(identityPemFile);
+  const legacyCertFile = path.join(path.dirname(identityPemFile), "server.pem");
+  const legacyKeyFile = path.join(path.dirname(identityPemFile), "server.key");
+  const legacyCertState = classifyIdentityFile(legacyCertFile);
+  const legacyKeyState = classifyIdentityFile(legacyKeyFile);
 
   const consequence =
-    "re-minting would break every paired device's DTLS pin; delete BOTH files to " +
-    "deliberately re-mint, or restore the missing one";
+    "regenerate with `vibestudio remote repair-identity` after accepting that all paired devices must re-pair";
 
-  if (certState === "present" && keyState === "present") {
+  if (legacyCertState !== "absent" || legacyKeyState !== "absent") {
+    throw new CertIdentityError(
+      "[webrtc-cert] deleted two-file identity layout is present; refusing to start:\n" +
+        `  ${describeIdentityFile("legacy cert", legacyCertFile, legacyCertState)}\n` +
+        `  ${describeIdentityFile("legacy key", legacyKeyFile, legacyKeyState)}\n` +
+        `  identity (${identityPemFile}): ${identityState}\n` +
+        `${consequence}.`
+    );
+  }
+
+  if (identityState === "present") {
     // Already provisioned — reuse so the fingerprint stays stable across restarts.
     let fingerprint: string;
     try {
-      fingerprint = certFileFingerprint(certificatePemFile);
+      fingerprint = certFileFingerprint(identityPemFile);
     } catch (error) {
       throw new CertIdentityError(
-        "[webrtc-cert] persistent identity is half-provisioned; refusing to start:\n" +
-          `  ${describeIdentityFile("cert", certificatePemFile, "corrupt")} (${
+        "[webrtc-cert] persistent identity is corrupt; refusing to start:\n" +
+          `  ${describeIdentityFile("identity", identityPemFile, "corrupt")} (${
             error instanceof Error ? error.message : String(error)
           })\n` +
-          `  ${describeIdentityFile("key", keyPemFile, keyState)}\n` +
           `${consequence}.`
       );
     }
     console.log(`[webrtc-cert] reusing persistent identity ${fingerprint}`);
-    return { certificatePemFile, keyPemFile, fingerprint };
+    return {
+      identityPemFile,
+      certificatePemFile: identityPemFile,
+      keyPemFile: identityPemFile,
+      fingerprint,
+    };
   }
 
-  if (certState === "absent" && keyState === "absent") {
+  if (identityState === "absent") {
     // First provision: mint a fresh identity and persist both PEMs.
     const { certPem, keyPem } = generateSelfSignedEcCert(opts.commonName);
-    fs.mkdirSync(path.dirname(keyPemFile), { recursive: true });
-    fs.mkdirSync(path.dirname(certificatePemFile), { recursive: true });
-    // Key first (0600), then cert — so a crash never leaves a cert without its key.
-    writeFileAtomic(keyPemFile, keyPem, 0o600);
-    writeFileAtomic(certificatePemFile, certPem, 0o644);
+    fs.mkdirSync(path.dirname(identityPemFile), { recursive: true });
+    writeFileAtomic(identityPemFile, `${certPem}\n${keyPem}`, 0o600);
     const fingerprint = pemFingerprint(certPem);
     console.log(`[webrtc-cert] minted new identity ${fingerprint}`);
-    return { certificatePemFile, keyPemFile, fingerprint };
+    return {
+      identityPemFile,
+      certificatePemFile: identityPemFile,
+      keyPemFile: identityPemFile,
+      fingerprint,
+    };
   }
 
-  // Half-state: exactly one file present, or a file exists but is empty. Refuse.
+  // Empty/corrupt identity. Refuse.
   throw new CertIdentityError(
-    "[webrtc-cert] persistent identity is half-provisioned; refusing to start:\n" +
-      `  ${describeIdentityFile("cert", certificatePemFile, certState)}\n` +
-      `  ${describeIdentityFile("key", keyPemFile, keyState)}\n` +
+    "[webrtc-cert] persistent identity is invalid; refusing to start:\n" +
+      `  ${describeIdentityFile("identity", identityPemFile, identityState)}\n` +
       `${consequence}.`
   );
 }
@@ -209,7 +229,13 @@ export function generateSelfSignedEcCert(commonName = "vibestudio-webrtc"): {
 
 function writeFileAtomic(file: string, data: string, mode: number): void {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  fs.writeFileSync(tmp, data, { mode });
+  const fd = fs.openSync(tmp, "w", mode);
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, file);
 }
 

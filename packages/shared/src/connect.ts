@@ -1,5 +1,8 @@
 export const CONNECT_DEEP_LINK_SCHEME = "vibestudio:";
 export const CONNECT_DEEP_LINK_HOST = "connect";
+export const PAIR_LINK_ORIGIN = "https://vibestudio.app";
+export const PAIR_LINK_PATH = "/pair";
+export const DEFAULT_SIGNAL_URL = "wss://signal.vibestudio.app/";
 export const PAIRING_CODE_PATTERN = /^[A-Za-z0-9_-]{16,512}$/;
 export const WORKSPACE_ROUTE_PREFIX = "/_workspace/";
 /** Signaling rendezvous room id (UUID or base64url token). */
@@ -14,6 +17,8 @@ const FINGERPRINT_HEX_PATTERN = /^[0-9A-Fa-f]{64}$/;
 export const PAIRING_PROTOCOL_VERSION = 2;
 
 export type TurnPolicy = "all" | "relay";
+export type ConnectLinkCarrier = "scheme" | "https";
+export type SignalingResolutionSource = "flag" | "env" | "config" | "default";
 
 /**
  * The WebRTC pairing payload carried in the QR / deep link. Replaces the old
@@ -42,6 +47,7 @@ export interface ConnectPairing {
 export type ConnectLink =
   | ({ kind: "ok" } & ConnectPairing)
   | { kind: "error"; reason: string };
+export type SignalingResolution = { url: string; source: SignalingResolutionSource };
 type QueryParseResult =
   | { kind: "ok"; values: Map<string, string> }
   | { kind: "error"; reason: string };
@@ -52,7 +58,7 @@ export function normalizeFingerprint(fp: string): string {
   return fp.replace(/[:\s]/g, "").toUpperCase();
 }
 
-export function createConnectDeepLink(pairing: ConnectPairing): string {
+function encodeConnectParams(pairing: ConnectPairing): string {
   const params: string[] = [
     `room=${encodeURIComponent(pairing.room)}`,
     `fp=${encodeURIComponent(pairing.fp)}`,
@@ -62,7 +68,26 @@ export function createConnectDeepLink(pairing: ConnectPairing): string {
     `ice=${encodeURIComponent(pairing.ice ?? "all")}`,
   ];
   if (pairing.srv) params.push(`srv=${encodeURIComponent(pairing.srv)}`);
-  return `vibestudio://connect?${params.join("&")}`;
+  return params.join("&");
+}
+
+export function createConnectLink(
+  pairing: ConnectPairing,
+  carrier: ConnectLinkCarrier = "scheme"
+): string {
+  const params = encodeConnectParams(pairing);
+  if (carrier === "https") {
+    return `${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}#${params}`;
+  }
+  return `vibestudio://connect?${params}`;
+}
+
+export function createConnectDeepLink(pairing: ConnectPairing): string {
+  return createConnectLink(pairing, "scheme");
+}
+
+export function createConnectPairUrl(pairing: ConnectPairing): string {
+  return createConnectLink(pairing, "https");
 }
 
 export function appendServerPath(baseUrl: string | URL, suffix: string): URL {
@@ -143,17 +168,35 @@ export function parseConnectLink(raw: string): ConnectLink {
   }
 
   const prefix = `${CONNECT_DEEP_LINK_SCHEME}//${CONNECT_DEEP_LINK_HOST}`;
-  if (!raw.startsWith(prefix)) {
-    return { kind: "error", reason: "Not a vibestudio://connect link" };
+  const httpsPrefix = `${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}`;
+  let rawParams: string;
+  if (raw.startsWith(prefix)) {
+    const queryStart = raw.indexOf("?");
+    if (queryStart < 0) {
+      return { kind: "error", reason: "Deep link is missing pairing parameters" };
+    }
+    // Manual (non-`new URL()`) query parse — the vibestudio: custom scheme is not
+    // URL-parseable on RN/Hermes (asserted by connect.test.ts).
+    rawParams = raw.slice(queryStart + 1);
+  } else if (raw.startsWith(httpsPrefix)) {
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      return { kind: "error", reason: "Pair URL is not a valid URL" };
+    }
+    if (url.origin !== PAIR_LINK_ORIGIN || url.pathname !== PAIR_LINK_PATH) {
+      return { kind: "error", reason: "Not a Vibestudio pair URL" };
+    }
+    if (!url.hash || url.hash === "#") {
+      return { kind: "error", reason: "Pair URL is missing pairing parameters" };
+    }
+    rawParams = url.hash.slice(1);
+  } else {
+    return { kind: "error", reason: "Not a vibestudio://connect link or Vibestudio pair URL" };
   }
 
-  const queryStart = raw.indexOf("?");
-  if (queryStart < 0) {
-    return { kind: "error", reason: "Deep link is missing pairing parameters" };
-  }
-  // Manual (non-`new URL()`) query parse — the vibestudio: custom scheme is not
-  // URL-parseable on RN/Hermes (asserted by connect.test.ts).
-  const params = parseQuery(raw.slice(queryStart + 1));
+  const params = parseQuery(rawParams);
   if (params.kind === "error") return params;
 
   // Version gate FIRST so every stale link — whatever its exact shape — gets
@@ -202,6 +245,33 @@ export function parseConnectLink(raw: string): ConnectLink {
     ice: (ice as TurnPolicy | undefined) ?? "all",
     srv: params.values.get("srv") || undefined,
   };
+}
+
+export function resolveSignalingUrl(options: {
+  flag?: string | null;
+  env?: Record<string, string | undefined>;
+  envKeys?: readonly string[];
+  configUrl?: string | null;
+  defaultUrl?: string;
+}): SignalingResolution {
+  const envKeys = options.envKeys ?? ["VIBESTUDIO_WEBRTC_SIGNAL_URL"];
+  const env = options.env ?? {};
+  const candidates: Array<{ value: string | null | undefined; source: SignalingResolutionSource }> = [
+    { value: options.flag, source: "flag" },
+    {
+      value: envKeys.map((key) => env[key]).find((value) => value !== undefined && value !== ""),
+      source: "env",
+    },
+    { value: options.configUrl, source: "config" },
+    { value: options.defaultUrl ?? DEFAULT_SIGNAL_URL, source: "default" },
+  ];
+  const selected = candidates.find((candidate) => candidate.value !== undefined && candidate.value !== "");
+  const raw = selected?.value ?? DEFAULT_SIGNAL_URL;
+  const parsed = parseSignalingEndpoint(raw);
+  if (parsed.kind === "error") {
+    throw new Error(`Invalid WebRTC signaling endpoint from ${selected?.source ?? "default"}: ${parsed.reason}`);
+  }
+  return { url: parsed.url, source: selected?.source ?? "default" };
 }
 
 /** The signaling endpoint is a public wss/https URL (ws/http allowed for loopback dev). */

@@ -268,7 +268,7 @@ describe("ApprovalSheet", () => {
     const onResolveExternalAgent = jest.fn(async () => undefined);
     const { getByText, getByTestId } = renderSheet(externalAgent, { onResolveExternalAgent });
 
-    expect(getByText("Claude Code wants to run Bash")).toBeTruthy();
+    expect(getByText("External agent wants to run Bash")).toBeTruthy();
     expect(getByText("npm install")).toBeTruthy();
 
     fireEvent.press(getByTestId("approval-action-allow"));

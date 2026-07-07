@@ -584,17 +584,8 @@ export class PanelManager {
     const nextSnapshot = this.createNavigationSnapshot(panel, source, opts);
     const title = this.titleFor(slotId, nextSnapshot.source);
 
-    const currentEntityId =
+    const previousEntityId =
       this.currentEntityBySlot.get(slotId) ?? this.deriveEntityIdFromPanel(panel);
-    if (currentEntityId) {
-      await this.runtime.retireEntity(currentEntityId).catch((error: unknown) => {
-        log.warn(
-          `Failed to retire panel entity ${currentEntityId} on navigate: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
-    }
 
     const historyEntryKey = mintHistoryEntryKey();
     const stateArgsPayload = (nextSnapshot.stateArgs ?? {}) as Record<string, unknown>;
@@ -632,6 +623,16 @@ export class PanelManager {
     }
 
     this.indexPanel(slotId, title, nextSnapshot.source);
+
+    if (previousEntityId && previousEntityId !== entityId) {
+      await this.runtime.retireEntity(previousEntityId).catch((error: unknown) => {
+        log.warn(
+          `Failed to retire panel entity ${previousEntityId} on navigate: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
+    }
 
     return {
       panelId: slotId,

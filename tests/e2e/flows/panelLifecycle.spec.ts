@@ -22,35 +22,41 @@ test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 test.describe("Panel Persistence", () => {
   // This test launches the app twice, so it needs a longer timeout
   test("panels persist across app restarts", async () => {
-    test.setTimeout(120000); // 2 minutes for double app launch
+    test.setTimeout(240000); // Double app launch plus slow Electron teardown.
     const workspacePath = createManagedTestWorkspace();
+    let testApp: Awaited<ReturnType<typeof launchTestApp>> | null = null;
 
-    // First session: create panels
-    let testApp = await launchTestApp({ workspace: workspacePath });
+    try {
+      // First session: create panels
+      testApp = await launchTestApp({ workspace: workspacePath });
 
-    // Wait for initialization
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+      // Wait for initialization
+      await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    // Get initial panel tree
-    const initialTree = await getPanelTree(testApp.app);
+      // Get initial panel tree
+      await getPanelTree(testApp.app);
 
-    // Save workspace path for restart
-    // Close app using cleanup (which has a timeout to prevent hanging)
-    await testApp.cleanup();
+      // Save workspace path for restart
+      // Close app using cleanup (which has a timeout to prevent hanging)
+      await testApp.cleanup();
+      testApp = null;
 
-    // Restart with same workspace
-    testApp = await launchTestApp({ workspace: workspacePath });
+      // Restart with same workspace
+      testApp = await launchTestApp({ workspace: workspacePath });
 
-    // Wait for initialization
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+      // Wait for initialization
+      await new Promise((resolve) => setTimeout(resolve, 3000));
 
-    // Get panel tree after restart
-    const restoredTree = await getPanelTree(testApp.app);
+      // Get panel tree after restart
+      const restoredTree = await getPanelTree(testApp.app);
 
-    // All panels persist across restarts
-    expect(restoredTree.length).toBeGreaterThanOrEqual(0);
-
-    await testApp.cleanup();
-    removeManagedTestWorkspace(workspacePath);
+      // All panels persist across restarts
+      expect(restoredTree.length).toBeGreaterThanOrEqual(0);
+    } finally {
+      if (testApp) {
+        await testApp.cleanup().catch(() => undefined);
+      }
+      removeManagedTestWorkspace(workspacePath);
+    }
   });
 });

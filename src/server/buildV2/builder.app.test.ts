@@ -208,7 +208,7 @@ describe("buildUnit app builds", () => {
             target: "react-native",
             renderer: "index.tsx",
             rnComponentName: "VibestudioMobile",
-            rnHostAbi: "rn-host-1",
+            rnHostAbi: "rn-host-2",
           },
         },
       })
@@ -247,7 +247,7 @@ describe("buildUnit app builds", () => {
           },
         ],
         metadata: {
-          rnHostAbi: "rn-host-1",
+          rnHostAbi: "rn-host-2",
           platform: "ios",
         },
       }),
@@ -273,7 +273,7 @@ describe("buildUnit app builds", () => {
         target: "react-native",
         platform: "ios",
         integrity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/),
-        rnHostAbi: "rn-host-1",
+        rnHostAbi: "rn-host-2",
         provider: {
           name: "@workspace-extensions/react-native-provider",
           activeEv: "ev-provider",

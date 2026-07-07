@@ -247,19 +247,23 @@ function validateClientConfigUrls(authorizeUrl: string, tokenUrl: string): void 
   }
 }
 
-function validateOAuthCredentialRequest(request: InternalOAuthConnectionRequest): void {
+function validateOAuthCredentialRequest(
+  request: InternalOAuthConnectionRequest,
+  redirectStrategy: OAuthRedirectStrategy
+): void {
   validateClientConfigUrls(
     canonicalUrl(request.flow.authorizeUrl),
     canonicalUrl(request.flow.tokenUrl)
   );
   const redirect = new URL(request.redirectUri);
-  if (
-    !(
-      (redirect.protocol === "http:" && isLoopbackHost(redirect.hostname)) ||
-      redirect.protocol === "https:"
-    )
-  ) {
-    throw new Error("OAuth redirectUri must be host-created loopback HTTP or public HTTPS");
+  const validRedirect =
+    (redirect.protocol === "http:" && isLoopbackHost(redirect.hostname)) ||
+    redirect.protocol === "https:" ||
+    (redirectStrategy === "app-scheme" && isAppSchemeOAuthRedirect(redirect));
+  if (!validRedirect) {
+    throw new Error(
+      "OAuth redirectUri must be host-created loopback HTTP, public HTTPS, or vibestudio app-scheme OAuth"
+    );
   }
   if (redirect.hash || redirect.search) {
     throw new Error("OAuth redirectUri must not include query parameters or a fragment");
@@ -339,7 +343,12 @@ function isLoopbackHost(hostname: string): boolean {
   return !!ipv4 && Number(ipv4[1]) === 127;
 }
 
-type OAuthRedirectStrategy = "loopback" | "public" | "client-forwarded" | "client-loopback";
+type OAuthRedirectStrategy =
+  | "loopback"
+  | "public"
+  | "client-forwarded"
+  | "client-loopback"
+  | "app-scheme";
 
 function buildClientLoopbackRedirectUri(
   redirect: NonNullable<ConnectCredentialRequest["redirect"]>
@@ -362,27 +371,100 @@ function buildClientLoopbackRedirectUri(
   return `http://${host}:${port}${callbackPath}`;
 }
 
+function buildAppSchemeRedirectUri(
+  redirect: NonNullable<ConnectCredentialRequest["redirect"]>,
+  request: AuthCodeConnectRequest
+): string {
+  if (redirect.callbackUri) {
+    const uri = new URL(redirect.callbackUri);
+    if (!isAppSchemeOAuthRedirect(uri) || uri.search || uri.hash) {
+      throw new OAuthConnectionError(
+        "redirect_unavailable",
+        "app-scheme OAuth redirects must be vibestudio://oauth/callback/<provider> without query or fragment"
+      );
+    }
+    return uri.toString();
+  }
+  const provider = oauthProviderSlugForRequest(request);
+  return `vibestudio://oauth/callback/${provider}`;
+}
+
+function isAppSchemeOAuthRedirect(uri: URL): boolean {
+  if (uri.protocol !== "vibestudio:" || uri.hostname !== "oauth") return false;
+  if (!uri.pathname.startsWith("/callback/")) return false;
+  const provider = uri.pathname.slice("/callback/".length).replace(/\/+$/, "");
+  return /^[a-z0-9][a-z0-9._-]{0,63}$/i.test(provider) && !provider.includes("/");
+}
+
+function oauthProviderSlugForRequest(request: AuthCodeConnectRequest): string {
+  const candidates = [
+    request.credential.metadata?.["modelProviderId"],
+    request.credential.metadata?.["providerId"],
+    request.flow.clientConfigId,
+    request.credential.label,
+  ];
+  for (const candidate of candidates) {
+    const slug = String(candidate ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64);
+    if (slug && /^[a-z0-9]/.test(slug)) return slug;
+  }
+  return "credential";
+}
+
 function buildClientLoopbackHandoff(
   tx: OAuthConnectionTransaction,
   state: string
 ): {
   transactionId: string;
   redirectUri: string;
-  host: string;
+  host: "localhost" | "127.0.0.1";
   port: number;
   callbackPath: string;
   state: string;
   timeoutMs: number;
 } {
   const redirect = new URL(tx.redirectUri);
+  const host = redirect.hostname;
+  if (host !== "localhost" && host !== "127.0.0.1") {
+    throw new OAuthConnectionError(
+      "redirect_unavailable",
+      "client-loopback handoff has an invalid host"
+    );
+  }
   return {
     transactionId: tx.id,
     redirectUri: tx.redirectUri,
-    host: redirect.hostname,
+    host,
     port: Number(redirect.port),
     callbackPath: redirect.pathname,
     state,
     timeoutMs: Math.max(1_000, tx.expiresAt - Date.now() - CLIENT_LOOPBACK_TIMEOUT_SKEW_MS),
+  };
+}
+
+function buildAppSchemeHandoff(
+  tx: OAuthConnectionTransaction,
+  state: string
+): {
+  transactionId: string;
+  redirectUri: string;
+  callbackScheme: "vibestudio";
+  state: string;
+  timeoutMs: number;
+  prefersEphemeral: boolean;
+} {
+  const timeoutMs = Math.max(1_000, tx.expiresAt - Date.now() - CLIENT_LOOPBACK_TIMEOUT_SKEW_MS);
+  return {
+    transactionId: tx.id,
+    redirectUri: tx.redirectUri,
+    callbackScheme: "vibestudio",
+    state,
+    timeoutMs,
+    prefersEphemeral: false,
   };
 }
 
@@ -1057,6 +1139,19 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         throw new OAuthConnectionError(
           "client_not_authorized",
           "client-loopback callbacks require a transaction id"
+        );
+      }
+      if (
+        tx.deliveryCallerId !== ctx.caller.runtime.id ||
+        tx.deliveryCallerKind !== ctx.caller.runtime.kind
+      ) {
+        throw new OAuthConnectionError("client_not_authorized");
+      }
+    } else if (tx.redirectStrategy === "app-scheme") {
+      if (!request.transactionId) {
+        throw new OAuthConnectionError(
+          "client_not_authorized",
+          "app-scheme callbacks require a transaction id"
         );
       }
       if (
@@ -2452,6 +2547,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       } else if (redirectStrategy === "client-loopback") {
         transactionId = randomUUID();
         redirectUri = buildClientLoopbackRedirectUri(redirect);
+      } else if (redirectStrategy === "app-scheme") {
+        transactionId = randomUUID();
+        redirectUri = buildAppSchemeRedirectUri(redirect, request);
       } else {
         throw new OAuthConnectionError("redirect_unavailable");
       }
@@ -2462,7 +2560,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         stateParam,
       });
       const oauthRequest = await resolveAuthCodeConnectionRequest(request, redirectUri);
-      validateOAuthCredentialRequest(oauthRequest);
+      validateOAuthCredentialRequest(oauthRequest, redirectStrategy);
       const identity = resolveApprovalIdentity(ctx);
       const audience = normalizeUrlAudiences(oauthRequest.credential.audience);
       const injection = normalizeCredentialInjection(oauthRequest.credential.injection);
@@ -2495,10 +2593,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       const started = createOAuthAuthorizeRequest(oauthRequest, stateParam);
       callback?.expectState(started.state);
       const openMode = request.browser ?? "external";
-      if (redirectStrategy === "client-loopback" && openMode !== "external") {
+      if (
+        (redirectStrategy === "client-loopback" || redirectStrategy === "app-scheme") &&
+        openMode !== "external"
+      ) {
         throw new OAuthConnectionError(
           "unsupported_browser_mode",
-          "client-loopback OAuth requires an external browser"
+          `${redirectStrategy} OAuth requires an external browser`
         );
       }
       const browserResolution = await resolveBrowserHandoffTarget(ctx, explicitHandoffTarget);
@@ -2509,7 +2610,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           browserHandoffUnavailableMessage(browserResolution.diagnostics)
         );
       }
-      if (redirectStrategy === "client-loopback") {
+      if (redirectStrategy === "client-loopback" || redirectStrategy === "app-scheme") {
         tx.deliveryCallerId = browserTarget.deliveryCallerId;
         tx.deliveryCallerKind = browserTarget.deliveryCallerKind;
       }
@@ -2519,6 +2620,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         callerKind: ctx.caller.runtime.kind,
         ...(redirectStrategy === "client-loopback"
           ? { oauthLoopback: buildClientLoopbackHandoff(tx, started.state) }
+          : {}),
+        ...(redirectStrategy === "app-scheme"
+          ? { oauthAppScheme: buildAppSchemeHandoff(tx, started.state) }
           : {}),
       };
       let browserDelivery: BrowserHandoffDeliveryResult;

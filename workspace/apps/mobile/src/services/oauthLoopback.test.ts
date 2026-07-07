@@ -1,4 +1,4 @@
-import { Linking, NativeModules } from "react-native";
+import { Linking, NativeModules, Platform } from "react-native";
 import { handleExternalOpen } from "./oauthLoopback";
 import { setApprovedAppCapabilities } from "./appCapabilities";
 
@@ -10,6 +10,9 @@ const mockWait = jest.fn(async () => ({
   state: "state-1",
 }));
 const mockStop = jest.fn(async () => undefined);
+const mockAuthSessionStart = jest.fn(async () => ({
+  url: "vibestudio://oauth/callback/openai-codex?code=code-1&state=state-1",
+}));
 const mockCall = jest.fn(async () => undefined);
 
 function createShellClient() {
@@ -23,6 +26,7 @@ function createShellClient() {
 }
 
 beforeEach(() => {
+  Object.defineProperty(Platform, "OS", { value: "android", configurable: true });
   setApprovedAppCapabilities(["open-external"]);
   (Linking as unknown as { openURL: typeof mockOpenURL }).openURL = mockOpenURL;
   (NativeModules as unknown as { OAuthLoopback: unknown }).OAuthLoopback = {
@@ -30,10 +34,14 @@ beforeEach(() => {
     wait: mockWait,
     stop: mockStop,
   };
+  (NativeModules as unknown as { VibestudioAuthSession: unknown }).VibestudioAuthSession = {
+    start: mockAuthSessionStart,
+  };
   mockOpenURL.mockClear();
   mockStart.mockClear();
   mockWait.mockClear();
   mockStop.mockClear();
+  mockAuthSessionStart.mockClear();
   mockCall.mockClear();
 });
 
@@ -109,6 +117,61 @@ describe("oauthLoopback", () => {
       },
     ]);
     expect(mockStop).not.toHaveBeenCalled();
+  });
+
+  it("uses ASWebAuthenticationSession for iOS app-scheme OAuth and forwards callback", async () => {
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
+
+    await handleExternalOpen(createShellClient(), {
+      url: "https://auth.example.test/oauth",
+      oauthAppScheme: {
+        transactionId: "tx-1",
+        redirectUri: "vibestudio://oauth/callback/openai-codex",
+        callbackScheme: "vibestudio",
+        state: "state-1",
+        timeoutMs: 60_000,
+        prefersEphemeral: true,
+      },
+    });
+
+    expect(mockAuthSessionStart).toHaveBeenCalledWith({
+      authUrl: "https://auth.example.test/oauth",
+      callbackScheme: "vibestudio",
+      prefersEphemeral: true,
+      timeoutMs: 60_000,
+    });
+    expect(mockOpenURL).not.toHaveBeenCalled();
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockCall).toHaveBeenCalledWith("main", "credentials.forwardOAuthCallback", [
+      {
+        transactionId: "tx-1",
+        url: "vibestudio://oauth/callback/openai-codex?code=code-1&state=state-1",
+        state: "state-1",
+      },
+    ]);
+  });
+
+  it("refuses Android loopback handoffs on iOS", async () => {
+    Object.defineProperty(Platform, "OS", { value: "ios", configurable: true });
+
+    await expect(
+      handleExternalOpen(createShellClient(), {
+        url: "https://auth.example.test/oauth",
+        oauthLoopback: {
+          transactionId: "tx-1",
+          redirectUri: "http://localhost:1455/auth/callback",
+          host: "localhost",
+          port: 1455,
+          callbackPath: "/auth/callback",
+          state: "state-1",
+          timeoutMs: 60_000,
+        },
+      })
+    ).rejects.toThrow(/app-scheme OAuth/);
+
+    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockOpenURL).not.toHaveBeenCalled();
+    expect(mockCall).not.toHaveBeenCalled();
   });
 
   it("stops listener when browser open fails", async () => {

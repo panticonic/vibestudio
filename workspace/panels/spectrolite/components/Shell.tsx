@@ -23,6 +23,7 @@ import {
 } from "@radix-ui/react-icons";
 import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { useApp, useAppState } from "../app/context";
+import { spectroliteE2EHooksEnabled } from "../app/e2eHooks";
 import { WikilinkContext } from "../mdx/components";
 import { resolveWikilinkTarget } from "../mdx/wikilink";
 import { EditorPane } from "./EditorPane";
@@ -37,6 +38,14 @@ import { MobileSidebar } from "./mobile/MobileSidebar";
 import { BacklinksPanel } from "./BacklinksPanel";
 import { FileTree } from "./FileTree";
 import { QuickOpenDialog } from "./QuickOpen";
+
+type SpectroliteViewE2EGlobal = typeof globalThis & {
+  __spectroliteE2EView__?: {
+    openBacklinks(): void;
+    openFiles(): void;
+    openSettings(): void;
+  };
+};
 
 function pathToTitle(relPath: string): string {
   const name = relPath.split("/").pop() ?? relPath;
@@ -167,6 +176,22 @@ function DesktopWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQ
   const [filesOpen, setFilesOpen] = useState(false);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!spectroliteE2EHooksEnabled()) return;
+    const hook = {
+      openBacklinks: () => setBacklinksOpen(true),
+      openFiles: () => setFilesOpen(true),
+      openSettings: () => setSettingsOpen(true),
+    };
+    const g = globalThis as SpectroliteViewE2EGlobal;
+    g.__spectroliteE2EView__ = hook;
+    return () => {
+      if (g.__spectroliteE2EView__ === hook) {
+        delete g.__spectroliteE2EView__;
+      }
+    };
+  }, []);
 
   return (
     <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
@@ -312,7 +337,10 @@ function MobileWorkspace({ theme, onQuickOpen }: { theme: "light" | "dark"; onQu
         mobile
         trailing={
           activePath ? (
-            <span data-testid="spectrolite-mobile-actions">
+            <span
+              data-testid="spectrolite-mobile-actions"
+              style={{ display: "inline-flex", flexShrink: 0, maxWidth: "100%" }}
+            >
               <SendToScribe size="2" compact />
             </span>
           ) : null

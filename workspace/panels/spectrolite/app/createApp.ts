@@ -19,12 +19,14 @@ import { createStore, type Store } from "./store";
 import { initialState, type PendingSuggestion, type SpectroliteState } from "./state";
 import { SessionController } from "./sessionController";
 import { VaultController, type VaultStarterDoc } from "./vaultController";
+import { normalizeVaultPath } from "./vaultContext";
 import { PublishController } from "./publishController";
 import { createViewStateStore, type ViewStateStore } from "../coedit/viewState";
 import { parseFrontmatter, diffDependencies } from "../mdx/frontmatter";
 import { prefetchDependencies } from "../mdx/depPrefetch";
 import type { Collision } from "../coedit/blockReconcile";
 import { resolveContextId, type InstalledAgentRecord } from "../bootstrap";
+import { spectroliteE2EHooksEnabled } from "./e2eHooks";
 
 interface PersistedStateArgs {
   channelName?: string;
@@ -100,14 +102,37 @@ export interface SuggestionResolution {
 
 export type SuggestionApplier = (resolution: SuggestionResolution) => void;
 
+type SpectroliteE2EGlobal = typeof globalThis & {
+  __spectroliteE2E__?: {
+    addAgent(agentId: string): Promise<void>;
+    openFile(path: string): void;
+    removeAgent(handle: string): Promise<void>;
+    switchVault(): Promise<void>;
+    snapshot(): {
+      availableAgents: Array<{ id: string; className: string }>;
+      channelName: string | null;
+      contextId: string | null;
+      installedAgents: Array<{ handle: string; className: string; key: string }>;
+      lastAdd: {
+        agentId: string | null;
+        error: string | null;
+        status: "idle" | "pending" | "resolved" | "rejected";
+      };
+      repoRoot: string | null;
+      roster: Array<{ handle: string; status: string }>;
+    };
+  };
+};
+
 export function createSpectroliteApp(): SpectroliteApp {
   const args = panel.stateArgs.get<PersistedStateArgs>();
   const contextId = resolveContextId(args.contextId, runtimeContextId) ?? null;
   const pendingStarterDoc = parsePendingStarterDoc(args.pendingStarterDoc);
+  const repoRoot = typeof args.repoRoot === "string" ? normalizeVaultPath(args.repoRoot) : null;
   const store = createStore(initialState({
     contextId,
     channelName: args.channelName ?? null,
-    repoRoot: args.repoRoot ?? null,
+    repoRoot,
     openPath: args.openPath ?? null,
     installedAgents: args.installedAgents ?? [],
   }));
@@ -139,7 +164,7 @@ export function createSpectroliteApp(): SpectroliteApp {
   let commitActiveDocFn: CommitActiveDoc | null = null;
   const publish = new PublishController(
     vcs,
-    args.repoRoot ?? "",
+    repoRoot ?? "",
     () => (reloadActiveDocFn ? reloadActiveDocFn() : Promise.resolve()),
     (message) => (commitActiveDocFn ? commitActiveDocFn(message) : Promise.resolve(null))
   );
@@ -209,7 +234,12 @@ export function createSpectroliteApp(): SpectroliteApp {
   let started = false;
   let offPublishHead: (() => void) | null = null;
   let offPublishWorking: (() => void) | null = null;
-  return {
+  let startupRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const refreshVaultSidebars = (): void => {
+    void vault.refreshPaths();
+    void publish.refresh();
+  };
+  const spectroliteApp: SpectroliteApp = {
     store,
     session,
     vault,
@@ -276,8 +306,14 @@ export function createSpectroliteApp(): SpectroliteApp {
       void session.start();
       if (store.getState().repoRoot !== null) {
         void createPendingStarterDoc();
-        void vault.refreshPaths();
-        void publish.refresh();
+        if (store.getState().activePath) {
+          startupRefreshTimer = setTimeout(() => {
+            startupRefreshTimer = null;
+            refreshVaultSidebars();
+          }, 1000);
+        } else {
+          refreshVaultSidebars();
+        }
       }
       offPublishHead = vcs.subscribeHead(vaultHead, () => {
         void publish.refresh();
@@ -292,6 +328,59 @@ export function createSpectroliteApp(): SpectroliteApp {
       offPublishHead = null;
       offPublishWorking = null;
       session.dispose();
+      if (startupRefreshTimer) {
+        clearTimeout(startupRefreshTimer);
+        startupRefreshTimer = null;
+      }
+      const g = globalThis as SpectroliteE2EGlobal;
+      if (g.__spectroliteE2E__ === e2e) {
+        delete g.__spectroliteE2E__;
+      }
     },
   };
+  let lastE2EAdd: ReturnType<
+    NonNullable<SpectroliteE2EGlobal["__spectroliteE2E__"]>["snapshot"]
+  >["lastAdd"] = { agentId: null, error: null, status: "idle" };
+  const e2e = {
+    async addAgent(agentId: string) {
+      lastE2EAdd = { agentId, error: null, status: "pending" };
+      try {
+        await spectroliteApp.session.addAgent(agentId);
+        lastE2EAdd = { agentId, error: null, status: "resolved" };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        lastE2EAdd = { agentId, error: message, status: "rejected" };
+        throw err;
+      }
+    },
+    openFile: (path: string) => spectroliteApp.openFile(path),
+    removeAgent: (handle: string) => spectroliteApp.session.removeAgent(handle),
+    switchVault: () => spectroliteApp.vault.switchVault(),
+    snapshot() {
+      const state = spectroliteApp.store.getState();
+      return {
+        availableAgents: state.availableAgents.map((agent) => ({
+          id: agent.id,
+          className: agent.className,
+        })),
+        channelName: state.channelName,
+        contextId: state.contextId,
+        installedAgents: state.installedAgents.map((agent) => ({
+          handle: agent.handle,
+          className: agent.className,
+          key: agent.key,
+        })),
+        lastAdd: lastE2EAdd,
+        repoRoot: state.repoRoot,
+        roster: state.roster.map((agent) => ({
+          handle: agent.handle,
+          status: agent.status,
+        })),
+      };
+    },
+  };
+  if (spectroliteE2EHooksEnabled()) {
+    (globalThis as SpectroliteE2EGlobal).__spectroliteE2E__ = e2e;
+  }
+  return spectroliteApp;
 }

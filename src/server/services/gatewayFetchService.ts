@@ -77,6 +77,18 @@ const fetchDescriptorSchema = z
   })
   .strict();
 
+const MOBILE_APP_BOOTSTRAP_PATH = "/_r/s/auth/mobile-app-bootstrap";
+
+function trustedMobileBootstrapTarget(
+  ctx: Parameters<NonNullable<ServiceDefinition["handler"]>>[0],
+  descriptor: GatewayFetchDescriptor
+): string | null {
+  const callerKind = ctx.caller.runtime.kind;
+  if (callerKind !== "shell" && callerKind !== "app") return null;
+  if ((descriptor.method ?? "GET").toUpperCase() !== "POST") return null;
+  return descriptor.path === MOBILE_APP_BOOTSTRAP_PATH ? MOBILE_APP_BOOTSTRAP_PATH : null;
+}
+
 export function createGatewayFetchService(deps: {
   /** Resolved loopback gateway port (lazy — finalized only after gateway start). */
   getGatewayPort: () => number;
@@ -96,7 +108,8 @@ export function createGatewayFetchService(deps: {
     // allowlist (assetPathPolicy — panel assets, /_r/w/ worker routes, /_a/ app
     // artifacts; NEVER /_r/s/ management routes or /rpc), and appended to the
     // loopback gateway (no external origin), so this grants nothing beyond the
-    // same gateway-relative assets.
+    // same gateway-relative assets. The only management-route exception is the
+    // exact mobile native bootstrap POST, and only for trusted shell/app callers.
     policy: { allowed: ["shell", "app", "panel", "worker", "do"] },
     methods: {
       fetch: {
@@ -118,6 +131,8 @@ export function createGatewayFetchService(deps: {
       }
 
       const descriptor = args[0] as GatewayFetchDescriptor;
+      const trustedTarget = trustedMobileBootstrapTarget(ctx, descriptor);
+
       // AUTHORITATIVE panel-origin path allowlist (defense in depth — see
       // assetPathPolicy). This service is reachable from the panel/loopback
       // origin, and the gateway namespace it proxies into includes management
@@ -129,18 +144,35 @@ export function createGatewayFetchService(deps: {
       // path exactly like `fetch()` will (dot segments, backslash host escapes
       // like "/\evil.example"), and the normalized `decision.target` — not the
       // raw input — is what gets fetched, so check and fetch cannot diverge.
-      const decision = checkPanelGatewayPath(descriptor.path);
-      if (!decision.allowed) {
+      // Native mobile shell/app bootstrap is intentionally not a panel-origin
+      // asset fetch: it redeems the already paired device credential for the
+      // approved React Native app manifest. Keep that hole exact, method-bound,
+      // and principal-bound; every other path still uses the panel policy.
+      let target = trustedTarget;
+      if (!target) {
+        const decision = checkPanelGatewayPath(descriptor.path);
+        if (!decision.allowed) {
+          throw new ServiceError(
+            serviceName,
+            method,
+            `gateway.fetch rejected: ${decision.reason}`,
+            decision.denied === "policy" ? "EACCES" : "EINVAL"
+          );
+        }
+        target = decision.target;
+      }
+
+      if (!target) {
         throw new ServiceError(
           serviceName,
           method,
-          `gateway.fetch rejected: ${decision.reason}`,
-          decision.denied === "policy" ? "EACCES" : "EINVAL"
+          "gateway.fetch rejected: no gateway target resolved",
+          "EINVAL"
         );
       }
 
       const port = deps.getGatewayPort();
-      const url = `http://127.0.0.1:${port}${decision.target}`;
+      const url = `http://127.0.0.1:${port}${target}`;
 
       // STREAMING both ways (via the pipe's stream path, handleWsStreamRequest):
       // the response body rides the bulk channel chunked under the data-channel

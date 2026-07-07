@@ -1,4 +1,4 @@
-import { NativeModules } from "react-native";
+import { NativeModules, Platform } from "react-native";
 import type { ShellClient } from "./shellClient";
 import { openExternalUrl } from "./nativeCapabilities";
 export interface OAuthLoopbackHandoff {
@@ -13,6 +13,15 @@ export interface OAuthLoopbackHandoff {
 export interface ExternalOpenPayload {
     url?: string;
     oauthLoopback?: OAuthLoopbackHandoff;
+    oauthAppScheme?: OAuthAppSchemeHandoff;
+}
+export interface OAuthAppSchemeHandoff {
+    transactionId: string;
+    redirectUri: string;
+    callbackScheme: "vibestudio";
+    state: string;
+    timeoutMs: number;
+    prefersEphemeral?: boolean;
 }
 interface OAuthLoopbackNativeModule {
     start(options: {
@@ -30,6 +39,14 @@ interface OAuthLoopbackNativeModule {
     }>;
     stop(): Promise<void>;
 }
+interface VibestudioAuthSessionNativeModule {
+    start(options: {
+        authUrl: string;
+        callbackScheme: "vibestudio";
+        prefersEphemeral?: boolean;
+        timeoutMs?: number;
+    }): Promise<{ url: string }>;
+}
 function getNativeModule(): OAuthLoopbackNativeModule {
     const nativeModule = NativeModules["OAuthLoopback"] as OAuthLoopbackNativeModule | undefined;
     if (!nativeModule) {
@@ -37,9 +54,42 @@ function getNativeModule(): OAuthLoopbackNativeModule {
     }
     return nativeModule;
 }
+function getAuthSessionNativeModule(): VibestudioAuthSessionNativeModule {
+    const nativeModule = NativeModules["VibestudioAuthSession"] as
+        | VibestudioAuthSessionNativeModule
+        | undefined;
+    if (!nativeModule) {
+        throw new Error("iOS OAuth auth-session support is not available in this build");
+    }
+    return nativeModule;
+}
 export async function handleExternalOpen(shellClient: ShellClient, payload: ExternalOpenPayload): Promise<void> {
     if (!payload.url)
         return;
+    if (payload.oauthAppScheme) {
+        if (Platform.OS !== "ios") {
+            throw new Error("app-scheme OAuth handoffs require iOS ASWebAuthenticationSession");
+        }
+        const authSession = getAuthSessionNativeModule();
+        const handoff = payload.oauthAppScheme;
+        const result = await authSession.start({
+            authUrl: payload.url,
+            callbackScheme: handoff.callbackScheme,
+            prefersEphemeral: handoff.prefersEphemeral,
+            timeoutMs: handoff.timeoutMs,
+        });
+        const callbackUrl = result.url;
+        const state = new URL(callbackUrl).searchParams.get("state") ?? undefined;
+        if (state !== handoff.state) {
+            throw new Error("OAuth state mismatch");
+        }
+        await shellClient.credentialService.forwardOAuthCallback({
+            transactionId: handoff.transactionId,
+            url: callbackUrl,
+            state,
+        });
+        return;
+    }
     if (!payload.oauthLoopback) {
         const oauthError = describeMissingLoopback(payload.url);
         if (oauthError) {
@@ -47,6 +97,9 @@ export async function handleExternalOpen(shellClient: ShellClient, payload: Exte
         }
         await openExternalUrl(payload.url);
         return;
+    }
+    if (Platform.OS === "ios") {
+        throw new Error("Android OAuth loopback handoff cannot run on iOS; retry with app-scheme OAuth.");
     }
     const native = getNativeModule();
     const loopback = payload.oauthLoopback;

@@ -42,6 +42,7 @@ vi.mock("./paths.js", () => ({
 vi.mock("./utils.js", () => ({ isDev: () => mockIsDev() }));
 
 const ORIGINAL_ARGV = process.argv.slice();
+const ORIGINAL_AUTO_APPROVE_STARTUP_UNITS = process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
 
 function setArgv(args: string[]) {
   process.argv = [...ORIGINAL_ARGV.slice(0, 2), ...args];
@@ -62,6 +63,7 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
   beforeEach(async () => {
     setArgv([]);
+    delete process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
     mockResolveWorkspaceName.mockReset();
     mockResolveWorkspaceName.mockReturnValue(null);
     mockResolveLocalWorkspaceStartup.mockClear();
@@ -73,6 +75,11 @@ describe("resolveStartupMode interactive desktop policy", () => {
 
   afterEach(() => {
     setArgv([]);
+    if (ORIGINAL_AUTO_APPROVE_STARTUP_UNITS === undefined) {
+      delete process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"];
+    } else {
+      process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = ORIGINAL_AUTO_APPROVE_STARTUP_UNITS;
+    }
   });
 
   it("launches the local default/last workspace by default", () => {
@@ -244,6 +251,26 @@ describe("resolveStartupMode interactive desktop policy", () => {
     expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
       kind: "local",
       workspaceName: "default",
+      autoApproveStartupUnits: true,
+    });
+  });
+
+  it("honors the startup-unit auto-approval env for explicit workspaces", () => {
+    process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] = "1";
+    setArgv(["--workspace", "e2e-explicit"]);
+    mockResolveLocalWorkspaceStartup.mockReturnValueOnce({
+      resolved: {
+        wsDir: "/tmp/vibestudio-e2e-explicit",
+        workspace: { config: { id: "e2e-explicit-id" } },
+        name: "e2e-explicit",
+        created: false,
+      },
+      isEphemeral: false,
+    });
+
+    expect(mod.resolveStartupMode(testCentralData(), { interactiveDesktop: true })).toMatchObject({
+      kind: "local",
+      workspaceName: "e2e-explicit",
       autoApproveStartupUnits: true,
     });
   });

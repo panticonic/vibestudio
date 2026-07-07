@@ -162,6 +162,23 @@ export interface EventPayloads {
     url: string;
     callerId: string;
     callerKind: CallerKind;
+    oauthLoopback?: {
+      transactionId: string;
+      redirectUri: string;
+      host: "localhost" | "127.0.0.1";
+      port: number;
+      callbackPath: string;
+      state: string;
+      timeoutMs: number;
+    };
+    oauthAppScheme?: {
+      transactionId: string;
+      redirectUri: string;
+      callbackScheme: "vibestudio";
+      state: string;
+      timeoutMs: number;
+      prefersEphemeral?: boolean;
+    };
   };
   "browser-panel:open": {
     url: string;

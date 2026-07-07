@@ -105,8 +105,7 @@ describe("live CLI smoke", () => {
       try {
         wrangler = await startCliSmokeSignaling();
         const cert = ensurePersistentCert({
-          certificatePemFile: path.join(tmp, "server.pem"),
-          keyPemFile: path.join(tmp, "server.key"),
+          identityPemFile: path.join(tmp, "identity.pem"),
         });
         const { server, deviceAuthStore } = makeCliSmokeServer(
           path.join(tmp, "auth", "devices.json")

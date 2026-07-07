@@ -42,6 +42,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       VIBESTUDIO_AUTH_STORE_PATH: "/hub/devices.json",
       VIBESTUDIO_WEBRTC_CERT: "/hub/server.pem",
       VIBESTUDIO_WEBRTC_KEY: "/hub/server.key",
+      VIBESTUDIO_WEBRTC_IDENTITY: "/hub/identity.pem",
       VIBESTUDIO_GATEWAY_PORT: "3030",
       VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
     } as NodeJS.ProcessEnv,
@@ -57,15 +58,12 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
 
     const stateA = path.join(getWorkspaceDir("alpha"), "state");
     expect(envA["VIBESTUDIO_AUTH_STORE_PATH"]).toBe(path.join(stateA, "auth", "devices.json"));
-    expect(envA["VIBESTUDIO_WEBRTC_CERT"]).toBe(path.join(stateA, "webrtc", "server.pem"));
-    expect(envA["VIBESTUDIO_WEBRTC_KEY"]).toBe(path.join(stateA, "webrtc", "server.key"));
+    expect(envA["VIBESTUDIO_WEBRTC_IDENTITY"]).toBe(path.join(stateA, "webrtc", "identity.pem"));
+    expect(envA["VIBESTUDIO_WEBRTC_CERT"]).toBeUndefined();
+    expect(envA["VIBESTUDIO_WEBRTC_KEY"]).toBeUndefined();
 
     // Distinct per child; never the hub's paths.
-    for (const key of [
-      "VIBESTUDIO_AUTH_STORE_PATH",
-      "VIBESTUDIO_WEBRTC_CERT",
-      "VIBESTUDIO_WEBRTC_KEY",
-    ]) {
+    for (const key of ["VIBESTUDIO_AUTH_STORE_PATH", "VIBESTUDIO_WEBRTC_IDENTITY"]) {
       expect(envA[key]).not.toBe(envB[key]);
       expect(envA[key]).not.toBe(base.baseEnv[key]);
       expect(envB[key]).not.toBe(base.baseEnv[key]);
@@ -99,7 +97,11 @@ function fakeRuntime(port: number, ready: Record<string, unknown>): WorkspaceRun
 const CHILD_INVITE = {
   code: "C".repeat(24),
   deepLink: `vibestudio://connect?room=child-room&fp=${"AA".repeat(32)}&code=${"C".repeat(24)}&sig=wss%3A%2F%2Fsignal.example%2F&v=2&ice=all`,
+  pairUrl: `https://vibestudio.app/pair#room=child-room&fp=${"AA".repeat(32)}&code=${"C".repeat(24)}&sig=wss%3A%2F%2Fsignal.example%2F&v=2&ice=all`,
   room: "child-room",
+  fp: "AA".repeat(32),
+  sig: "wss://signal.example/",
+  ice: "all",
   expiresInMs: 60_000,
   expiresAt: 1_000_060_000,
   serverId: "srv_child",
@@ -236,16 +238,24 @@ describe("hub RPC pairing surfacing (§5)", () => {
     expect(bodies).toEqual([{ ttlMs: 120_000 }]);
   });
 
-  it("auth.createPairingInvite without a workspace stays a hub-level bare code", async () => {
+  it("auth.createPairingInvite without a workspace infers the only running workspace", async () => {
+    const childPort = await listenFakeChild({ adminToken: "child-admin" });
+    const { state, shellToken } = makeState(fakeRuntime(childPort, { adminToken: "child-admin" }));
+    const hubPort = await listen((req, res) => void handleRpc(state, req, res));
+
+    const { status, body } = await rpc(hubPort, shellToken, "auth.createPairingInvite", [{}]);
+    expect(status).toBe(200);
+    expect(body["result"]).toEqual(CHILD_INVITE);
+    expect(state.deviceAuthStore.listDevices()).toEqual([]);
+  });
+
+  it("auth.createPairingInvite without a child admin token returns a workspace error, not a hub code", async () => {
     const { state, shellToken } = makeState(fakeRuntime(9, {}));
     const hubPort = await listen((req, res) => void handleRpc(state, req, res));
 
     const { status, body } = await rpc(hubPort, shellToken, "auth.createPairingInvite", [{}]);
     expect(status).toBe(200);
-    const result = body["result"] as Record<string, unknown>;
-    expect(result["deepLink"]).toBeNull();
-    expect(result["room"]).toBeNull();
-    // The hub-level code redeems against the HUB's own device store.
-    expect(state.deviceAuthStore.hasPendingPairingCode(result["code"] as string)).toBe(true);
+    expect(body["error"]).toMatch(/Failed to mint a pairing invite in workspace "dev"/);
+    expect(state.deviceAuthStore.listDevices()).toEqual([]);
   });
 });

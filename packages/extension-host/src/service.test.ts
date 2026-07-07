@@ -628,7 +628,7 @@ describe("ExtensionHost activation", () => {
             stream: { method: "buildArtifact", args: ["artifact-1"] },
           },
         ],
-        metadata: { rnHostAbi: "rn-host-1" },
+        metadata: { rnHostAbi: "rn-host-2" },
       })),
       streamCallTarget: vi.fn(async () => new Response("bundle")),
     };

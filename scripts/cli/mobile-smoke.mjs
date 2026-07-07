@@ -21,17 +21,8 @@ import { createConnectDeepLink, parseConnectLink } from "./lib/connect-utils.mjs
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
-const androidDir = path.join(repoRoot, "apps", "mobile", "android");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
-const defaultApkPath = path.join(
-  androidDir,
-  "app",
-  "build",
-  "outputs",
-  "apk",
-  "internal",
-  "app-internal.apk"
-);
+const androidDir = path.join(repoRoot, "apps", "mobile", "android");
 const defaultPackage = "app.vibestudio.mobile.internal";
 const defaultActivity = "app.vibestudio.mobile.MainActivity";
 const smokePrefix = "[VibestudioMobileSmoke]";
@@ -44,9 +35,9 @@ function sleep(ms) {
 
 function parseArgs(argv) {
   const options = {
+    platform: "android",
     avd: null,
     device: null,
-    apkPath: defaultApkPath,
     packageName: defaultPackage,
     activityName: defaultActivity,
     noBuild: false,
@@ -64,12 +55,12 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--") {
       throw new Error("Forwarding raw server flags is no longer supported");
+    } else if (arg === "--platform") {
+      options.platform = argv[++i] ?? "android";
     } else if (arg === "--avd") {
       options.avd = argv[++i] ?? null;
     } else if (arg === "--device") {
       options.device = argv[++i] ?? null;
-    } else if (arg === "--apk") {
-      options.apkPath = path.resolve(argv[++i] ?? "");
     } else if (arg === "--package") {
       options.packageName = argv[++i] ?? "";
     } else if (arg === "--activity") {
@@ -99,6 +90,9 @@ function parseArgs(argv) {
 
   if (!options.packageName) throw new Error("--package must not be empty");
   if (!options.activityName) throw new Error("--activity must not be empty");
+  if (options.platform !== "android" && options.platform !== "ios") {
+    throw new Error("--platform must be android or ios");
+  }
   return options;
 }
 
@@ -117,9 +111,9 @@ Usage:
   vibestudio mobile smoke [options]
 
 Runner options:
+  --platform <name>   android or ios. Defaults to android.
   --avd <name>        Start this AVD if no adb device is connected.
   --device <serial>   Target a specific adb device serial.
-  --apk <path>        Install a specific APK path.
   --package <id>      App package. Defaults to ${defaultPackage}.
   --activity <class>  Main activity class. Defaults to ${defaultActivity}.
   --no-build          Use the existing internal APK without rebuilding.
@@ -287,20 +281,31 @@ async function adbCaptureBuffer(device, ...args) {
   return runCommandBuffer("adb", makeAdbArgs(device, args));
 }
 
-async function runMobileInstall(options, { buildOnly = false } = {}) {
-  const args = [mobileInstallScript, "--apk", options.apkPath, "--package", options.packageName];
+async function runMobileInstall(options) {
+  const args = [
+    mobileInstallScript,
+    "--platform",
+    "android",
+    "--from-source",
+    "--package",
+    options.packageName,
+  ];
   if (options.device) args.push("--device", options.device);
   if (options.noBuild) args.push("--no-build");
-  if (buildOnly) {
-    args.push("--build-only");
-  } else {
-    if (!options.noReset) args.push("--reset-app");
-    args.push("--launch");
-  }
+  if (!options.noReset) args.push("--reset-app");
+  args.push("--launch");
   await runCommand(process.execPath, args, {
     cwd: repoRoot,
     env: process.env,
     label: "mobile-install",
+  });
+}
+
+async function buildAndroidApk() {
+  await runCommand("./gradlew", ["assembleInternal", "--rerun-tasks"], {
+    cwd: androidDir,
+    env: process.env,
+    label: "gradle",
   });
 }
 
@@ -374,7 +379,14 @@ function buildConnectLinkFromLog(loggedLink) {
     code: parsed.code,
     sig: parsed.sig,
     ice: parsed.ice,
+    srv: parsed.srv,
   });
+}
+
+function extractPairingLink(text) {
+  return text.match(/vibestudio:\/\/connect\?\S+/)?.[0]
+    ?? text.match(/https:\/\/vibestudio\.app\/pair#\S+/)?.[0]
+    ?? null;
 }
 
 function createServerArgs(readyFilePath) {
@@ -499,18 +511,18 @@ async function startSignaling(port, turn = null) {
   throw new Error("wrangler dev (signaling) did not become healthy");
 }
 
-// Watch the answerer's stdout for the `[webrtc-answerer] pairing link:
-// vibestudio://connect?...` line. Attach this BEFORE the link can be printed so no
-// chunk is missed.
+// Watch the answerer's stdout for either pairing carrier. Human-facing server
+// banners print https pair URLs; adb injection uses the canonical scheme carrier
+// rebuilt from the same payload.
 function waitForPairingLink(serverChild, timeoutMs) {
   return new Promise((resolve, reject) => {
     let buffer = "";
     const onData = (chunk) => {
       buffer += chunk.toString();
-      const match = buffer.match(/vibestudio:\/\/connect\?\S+/);
-      if (match) {
+      const link = extractPairingLink(buffer);
+      if (link) {
         cleanup();
-        resolve(match[0]);
+        resolve(link);
       }
     };
     const cleanup = () => {
@@ -521,7 +533,7 @@ function waitForPairingLink(serverChild, timeoutMs) {
       cleanup();
       reject(
         new Error(
-          "Timed out waiting for the server's [webrtc-answerer] pairing link. " +
+          "Timed out waiting for the server's pairing link. " +
             "Is node-datachannel built? Run `pnpm rebuild node-datachannel`."
         )
       );
@@ -573,7 +585,7 @@ function startLogcat(device, expectedPhases, deadlineMs) {
 
   const recordLine = (line) => {
     if (!line) return;
-    if (line.includes(smokePrefix)) {
+    if (line.includes(smokePrefix) || line.includes("VibestudioMobileSmokeProbe")) {
       console.log(`[smoke-log] ${line}`);
       recentLines.push(line);
       if (recentLines.length > 200) recentLines.shift();
@@ -626,14 +638,21 @@ function startLogcat(device, expectedPhases, deadlineMs) {
 
 async function waitForLogcatReady(device, logcat) {
   const phase = `logcat-ready-${Date.now()}`;
-  await adb(
-    device,
-    "shell",
-    "log",
-    "-t",
-    "VibestudioMobileSmokeProbe",
-    `${smokePrefix} phase=${phase}`
-  );
+  const deadlineMs = Date.now() + 10_000;
+  while (Date.now() < deadlineMs) {
+    await adbCapture(
+      device,
+      "shell",
+      "log",
+      "-t",
+      "VibestudioMobileSmokeProbe",
+      `${smokePrefix} phase=${phase}`
+    ).catch(() => null);
+    for (let i = 0; i < 8; i++) {
+      if (logcat.hasPhase(phase)) return;
+      await sleep(125);
+    }
+  }
   await logcat.waitForPhase(phase);
 }
 
@@ -1544,6 +1563,22 @@ async function main() {
     printHelp();
     return;
   }
+  if (options.platform === "ios") {
+    if (process.platform !== "darwin") {
+      throw new Error("iOS smoke requires macOS with Xcode and a booted simulator.");
+    }
+    await runCommand(process.execPath, [
+      path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
+      "--platform",
+      "ios",
+      "--simulator",
+      "--configuration",
+      "Debug",
+      "--launch",
+    ], { cwd: repoRoot, env: process.env, label: "mobile-install-ios" });
+    console.log("[mobile-smoke] iOS shell installed and launched; pair it with `vibestudio mobile pair`.");
+    return;
+  }
 
   const children = [];
   let cleanedUp = false;
@@ -1607,7 +1642,7 @@ async function main() {
     if (!options.noInstall) {
       await runMobileInstall(options);
     } else if (!options.noBuild) {
-      await runMobileInstall(options, { buildOnly: true });
+      await buildAndroidApk();
     }
 
     if (options.noInstall && !options.noReset) {

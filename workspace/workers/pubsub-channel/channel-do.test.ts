@@ -789,6 +789,7 @@ describe("PubSubChannel", () => {
                 "is not joined to channel channel-1; chat.callMethod is channel-scoped"
               ),
             }),
+            terminalOutcome: "tool_error",
             terminalReasonCode: "method_failed",
           }),
         }),

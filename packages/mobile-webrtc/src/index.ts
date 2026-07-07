@@ -11,6 +11,13 @@
 // before any `@vibestudio/rpc` module loads (TextDecoder/ReadableStream).
 import "./polyfills.js";
 
+export { RN_HOST_ABI, activateApprovedWorkspaceApp } from "./bundleDelivery.js";
+export type {
+  BundleDeliveryRpc,
+  BundleDeliveryTransport,
+  NativeBundleHost,
+  ActivateWorkspaceAppOptions,
+} from "./bundleDelivery.js";
 export { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 export {
   SHELL_CREDENTIAL_KEY,

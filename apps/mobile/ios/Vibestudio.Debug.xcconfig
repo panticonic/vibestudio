@@ -1,0 +1,7 @@
+#include "Pods/Target Support Files/Pods-Vibestudio/Pods-Vibestudio.debug.xcconfig"
+
+VIBESTUDIO_IOS_BUNDLE_ID = app.vibestudio.mobile
+VIBESTUDIO_IOS_SIGNING_STYLE = Automatic
+VIBESTUDIO_IOS_TEAM_ID =
+
+#include? "Signing.local.xcconfig"

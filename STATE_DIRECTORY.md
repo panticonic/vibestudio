@@ -121,15 +121,24 @@ attached to. It is validated against `GET /healthz` (matching `serverId` +
 choice. Both the desktop and the server may write this file; whole-file
 last-writer-wins is intentional for a single-user product.
 
-### `local-server-creds.json`
+### `device-credentials.json`
 
-Encrypted (Electron `safeStorage`) per-workspace device credentials for detached
-local servers (`src/main/services/localServerCredStore.ts`): a
-`Record<workspaceId, { deviceId, refreshToken, serverId, pairedAt }>`. Written after
-the shell redeems a startup pairing code over loopback; on later launches the shell
-reattaches with `refresh:<deviceId>:<refreshToken>` instead of re-pairing. Shares the
-encrypted-single-file mechanics (0600, fail-loud save, corrupt-tolerant load) with
-`webrtc-remote.json`.
+Encrypted (Electron `safeStorage`) paired-device credentials for both detached
+loopback workspace servers and WebRTC remote servers
+(`src/main/services/deviceCredentialStore.ts`). Entries are keyed by `serverId`
+and include `{ transport, deviceId, refreshToken, pairedAt }`; loopback entries
+also carry `workspaceId`, while WebRTC entries carry the pinned pairing material
+(`room`/`fp`/`sig`/`ice`/`srv`) minus the one-time code. On later launches the
+shell reattaches with `refresh:<deviceId>:<refreshToken>` instead of re-pairing.
+
+The previous split paired-device stores are not read or migrated.
+
+### `webrtc/identity.pem`
+
+Combined WebRTC DTLS certificate and private key used by the server answerer.
+The certificate SHA-256 fingerprint is embedded as `fp` in pairing links. Old
+`server.pem` / `server.key` remnants make startup fail so operators repair the
+identity explicitly with `vibestudio remote repair-identity --yes`.
 
 ### `workspaces/{name}/state/server-ready.json`
 

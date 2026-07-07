@@ -1256,6 +1256,21 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         );
       });
     }
+    const focusedPanelId = this.registry.getFocusedPanelId();
+    if (focusedPanelId && beforeIds.has(focusedPanelId) && view && !view.hasView(focusedPanelId)) {
+      const panel = this.registry.getPanel(focusedPanelId);
+      if (panel && !getPanelSource(panel).startsWith("browser:")) {
+        await this.loadSnapshotIntoView(focusedPanelId, getCurrentSnapshot(panel)).catch(
+          (error: unknown) => {
+            log.warn(
+              `[applyServerPanelTreeSnapshot] focused view recovery failed for ${focusedPanelId}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        );
+      }
+    }
     await this.syncRuntimeLeaseSnapshot().catch((error: unknown) => {
       log.warn(
         `[applyServerPanelTreeSnapshot] Failed to sync runtime leases: ${
@@ -1410,6 +1425,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     this.eventService.emit("panel:runtimeLeaseChanged", event);
     const disposition = classifyRuntimeLeaseChange(this.runtimeClientSessionId, event);
     if (disposition.kind === "unassigned") {
+      const currentLease = this.runtimeConnectionBySlot.get(slotId);
+      if (
+        currentLease &&
+        (currentLease.runtimeEntityId !== disposition.previous.runtimeEntityId ||
+          currentLease.connectionId !== disposition.previous.connectionId)
+      ) {
+        return;
+      }
+      const currentEntityId = await this.shellCore
+        .refreshSlotEntity(asPanelSlotId(slotId))
+        .catch(() => null);
+      if (currentEntityId && currentEntityId !== disposition.previous.runtimeEntityId) {
+        return;
+      }
       await this.unloadPanelIfPresent(slotId, "lease-transfer");
       return;
     }

@@ -67,20 +67,19 @@ describe("mintPairingInvite (room-per-invite, plan §2.1)", () => {
     );
   });
 
-  it("without WebRTC ingress the invite is a bare code (no room, no deep link)", () => {
+  it("without WebRTC ingress the invite fails loud", () => {
     const store = makeStore();
-    const bare = mintPairingInvite({ deviceAuthStore: store, pairing: null, ingress: null });
-    expect(bare.room).toBeNull();
-    expect(bare.deepLink).toBeNull();
-    expect(store.hasPendingPairingCode(bare.code)).toBe(true);
+    expect(() =>
+      mintPairingInvite({ deviceAuthStore: store, pairing: null, ingress: null })
+    ).toThrow(/WebRTC ingress is not ready/);
 
-    // A pairing seam WITHOUT a live pool must not fabricate an un-armed room.
     const { armer, armed } = makeArmer();
-    const seamOnly = mintPairingInvite({ deviceAuthStore: store, pairing: SEAM, ingress: null });
-    expect(seamOnly.room).toBeNull();
-    expect(seamOnly.deepLink).toBeNull();
-    const poolOnly = mintPairingInvite({ deviceAuthStore: store, pairing: null, ingress: armer });
-    expect(poolOnly.room).toBeNull();
+    expect(() =>
+      mintPairingInvite({ deviceAuthStore: store, pairing: SEAM, ingress: null })
+    ).toThrow(/WebRTC ingress is not ready/);
+    expect(() =>
+      mintPairingInvite({ deviceAuthStore: store, pairing: null, ingress: armer })
+    ).toThrow(/WebRTC ingress is not ready/);
     expect(armed).toEqual([]);
   });
 });
@@ -106,20 +105,21 @@ describe("createPairingInviteResponse", () => {
 
     expect(response.room).toBeTruthy();
     expect(response.deepLink).toContain(`room=${response.room}`);
+    expect(response.pairUrl).toContain("https://vibestudio.app/pair#");
+    expect(response.pairUrl).toContain(`room=${response.room}`);
     expect(response.deepLink).toContain("v=2");
     expect(response.expiresInMs).toBe(30_000);
     expect(armed).toEqual([{ room: response.room, meta: { inviteCode: response.code } }]);
     expect(store.hasPendingPairingCode(response.code)).toBe(true);
   });
 
-  it("stays a bare-code invite when WebRTC is off (loopback co-located mode)", () => {
+  it("fails when WebRTC is off", () => {
     const store = makeStore();
-    const response = createPairingInviteResponse({
-      ...baseDeps(store),
-      getConnectionInfo: () => ({ serverUrl: "http://127.0.0.1:3030" }),
-    });
-    expect(response.room).toBeNull();
-    expect(response.deepLink).toBeNull();
-    expect(store.hasPendingPairingCode(response.code)).toBe(true);
+    expect(() =>
+      createPairingInviteResponse({
+        ...baseDeps(store),
+        getConnectionInfo: () => ({ serverUrl: "http://127.0.0.1:3030" }),
+      })
+    ).toThrow(/WebRTC ingress is not ready/);
   });
 });

@@ -2,6 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet, Pressable, SafeAreaView, Alert } from "react-native";
 import type { StackNavigationProp } from "@react-navigation/stack";
 import { useAtomValue, useSetAtom } from "jotai";
+import { clearShellCredential } from "@vibestudio/mobile-webrtc";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import { clearCredentials, resetToNativeBootstrap } from "../services/auth";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
@@ -34,6 +35,9 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
     setPanelTree([]);
     setActivePanelId(null);
 
+    await clearShellCredential().catch((clearError) => {
+      console.warn("[SettingsScreen] Failed to clear WebRTC credentials:", clearError);
+    });
     try {
       await resetToNativeBootstrap();
     } catch (error) {

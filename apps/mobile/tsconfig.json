@@ -27,6 +27,7 @@
       "@vibestudio/browser-data": ["../../packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["../../packages/browser-data/src/client.ts"],
       "@vibestudio/rpc": ["../../packages/rpc/src/index.ts"],
+      "@vibestudio/rpc/*": ["../../packages/rpc/src/*"],
       "@vibestudio/types": ["../../packages/types/src/index.ts"]
     }
   },

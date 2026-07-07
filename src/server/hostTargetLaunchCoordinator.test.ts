@@ -35,6 +35,7 @@ function makeCoordinator(opts: {
   pending?: PendingUnitBatchApproval[];
   launch?: HostTargetLaunchResult;
   trustedUnits?: Array<{ kind: string; name: string; source: string; status: string }>;
+  awaitStartupUnitReconcile?: () => Promise<void> | void;
   /** The app source the AppHost resolves for react-native (manifest-driven
    *  selection); null mimics a workspace with no declared/selectable app. */
   rnAppSource?: string | null;
@@ -63,6 +64,7 @@ function makeCoordinator(opts: {
     },
     eventService: { emit },
     startupApprovals: { publishPending },
+    awaitStartupUnitReconcile: opts.awaitStartupUnitReconcile,
     getAppHost: () =>
       ({
         launchHostTarget,
@@ -93,6 +95,34 @@ describe("HostTargetLaunchCoordinator", () => {
     expect(result.status).toBe("approval-required");
     expect(launchHostTarget).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("waits for initial startup unit reconcile before deciding approvals are absent", async () => {
+    let releaseReconcile!: () => void;
+    const reconciled = new Promise<void>((resolve) => {
+      releaseReconcile = resolve;
+    });
+    const pending: PendingUnitBatchApproval[] = [];
+    const { coordinator, publishPending, launchHostTarget } = makeCoordinator({
+      pending,
+      awaitStartupUnitReconcile: async () => {
+        await reconciled;
+        pending.push(mobileApproval);
+      },
+    });
+
+    const resultPromise = coordinator.launch("react-native");
+    await Promise.resolve();
+
+    expect(publishPending).not.toHaveBeenCalled();
+    expect(launchHostTarget).not.toHaveBeenCalled();
+
+    releaseReconcile();
+    const result = await resultPromise;
+
+    expect(result.status).toBe("approval-required");
+    expect(publishPending).toHaveBeenCalledOnce();
+    expect(launchHostTarget).not.toHaveBeenCalled();
   });
 
   it("turns provider-inactive React Native startup into preparing while trusted units build without self-notifying", async () => {

@@ -2430,6 +2430,105 @@ describe("credentialService", () => {
     expect((await store.loadUrlBound((await pending).id))?.accessToken).toBe("token");
   });
 
+  it("supports authenticated app-scheme OAuth callbacks from the mobile app handoff", async () => {
+    const store = new MemoryCredentialStore();
+    const emit = vi.fn();
+    const eventService = targetedOpenEventService(emit);
+    const service = createCredentialService({
+      credentialStore: store as never,
+      eventService: eventService as never,
+      approvalQueue: approvingQueue() as never,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body as URLSearchParams;
+        expect(body.get("redirect_uri")).toBe("vibestudio://oauth/callback/openai-codex");
+        return new Response(
+          JSON.stringify({
+            access_token: "token",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        );
+      })
+    );
+
+    const pending = service.handler(
+      { caller: verifiedTestCaller("@workspace-apps/mobile", "app") },
+      "connect",
+      [
+        {
+          flow: {
+            type: "oauth2-auth-code-pkce",
+            authorizeUrl: "https://auth.example.test/oauth/authorize",
+            tokenUrl: "https://auth.example.test/oauth/token",
+            clientId: "client-1",
+          },
+          credential: {
+            label: "Example OAuth",
+            audience: [{ url: "https://api.example.test/", match: "origin" }],
+            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            metadata: { modelProviderId: "openai-codex" },
+          },
+          redirect: {
+            type: "app-scheme",
+          },
+          browser: "external",
+        },
+      ]
+    ) as Promise<StoredCredentialSummary>;
+
+    await vi.waitFor(() =>
+      expect(eventService.emitToCaller).toHaveBeenCalledWith(
+        "@workspace-apps/mobile",
+        "external-open:open",
+        expect.objectContaining({
+          callerId: "@workspace-apps/mobile",
+          callerKind: "app",
+          oauthAppScheme: expect.objectContaining({
+            redirectUri: "vibestudio://oauth/callback/openai-codex",
+            callbackScheme: "vibestudio",
+          }),
+        })
+      )
+    );
+    const payload = emit.mock.calls[0]![1] as {
+      url: string;
+      oauthAppScheme: { transactionId: string; state: string };
+    };
+    const authorizeUrl = new URL(payload.url);
+    expect(authorizeUrl.searchParams.get("redirect_uri")).toBe(
+      "vibestudio://oauth/callback/openai-codex"
+    );
+
+    await expect(
+      service.handler(
+        { caller: verifiedTestCaller("shell:other", "shell") },
+        "forwardOAuthCallback",
+        [
+          {
+            transactionId: payload.oauthAppScheme.transactionId,
+            url: `vibestudio://oauth/callback/openai-codex?code=code-1&state=${payload.oauthAppScheme.state}`,
+          },
+        ]
+      )
+    ).rejects.toMatchObject({ code: "client_not_authorized" });
+
+    await service.handler(
+      { caller: verifiedTestCaller("@workspace-apps/mobile", "app") },
+      "forwardOAuthCallback",
+      [
+        {
+          transactionId: payload.oauthAppScheme.transactionId,
+          url: `vibestudio://oauth/callback/openai-codex?code=code-1&state=${payload.oauthAppScheme.state}`,
+        },
+      ]
+    );
+
+    await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
+  });
+
   it("rejects client-loopback for OAuth1", async () => {
     const service = createCredentialService({
       credentialStore: new MemoryCredentialStore() as never,
@@ -2520,6 +2619,38 @@ describe("credentialService", () => {
     );
 
     await expect(pending).rejects.toMatchObject({ code: "redirect_mismatch" });
+  });
+
+  it("rejects app-scheme OAuth redirect URIs under non-app-scheme strategies", async () => {
+    const emit = vi.fn();
+    const service = createCredentialService({
+      credentialStore: new MemoryCredentialStore() as never,
+      eventService: targetedOpenEventService(emit) as never,
+      approvalQueue: approvingQueue() as never,
+    });
+
+    await expect(
+      service.handler({ caller: verifiedTestCaller("shell", "shell") }, "connect", [
+        {
+          flow: {
+            type: "oauth2-auth-code-pkce",
+            authorizeUrl: "https://auth.example.test/oauth/authorize",
+            tokenUrl: "https://auth.example.test/oauth/token",
+            clientId: "client-1",
+          },
+          credential: {
+            label: "Example OAuth",
+            audience: [{ url: "https://api.example.test/", match: "origin" }],
+            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          },
+          redirect: {
+            type: "client-forwarded",
+            callbackUri: "vibestudio://oauth/callback/openai-codex",
+          },
+        },
+      ])
+    ).rejects.toThrow(/app-scheme OAuth/);
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it("rejects public OAuth specs that include private browser handoff routing", async () => {

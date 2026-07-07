@@ -191,6 +191,9 @@ export function resolveLocalStartupMode(
     `[Workspace] Loaded: ${startup.resolved.wsDir} (id: ${startup.resolved.workspace.config.id})`
   );
   const isEphemeral = startup.isEphemeral || process.argv.includes(EPHEMERAL_WORKSPACE_ARG);
+  const autoApproveStartupUnits =
+    process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
+    (startup.resolved.name === "default" && startup.resolved.created && !isEphemeral);
   return {
     kind: "local",
     wsDir: startup.resolved.wsDir,
@@ -199,7 +202,6 @@ export function resolveLocalStartupMode(
     // A named launch tagged --ephemeral-workspace (the dev "new ephemeral workspace" button) is
     // disposable even though it was resolved by name; mark it so will-quit deletes it.
     isEphemeral,
-    autoApproveStartupUnits:
-      startup.resolved.name === "default" && startup.resolved.created && !isEphemeral,
+    autoApproveStartupUnits,
   };
 }

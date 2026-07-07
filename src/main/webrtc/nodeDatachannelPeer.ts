@@ -100,6 +100,10 @@ export function createNodeDatachannelProvider(
   };
 }
 
+export function assertNodeDatachannelAvailable(): void {
+  void loadNodeDatachannel();
+}
+
 // ===========================================================================
 // Pure helpers — no native dependency, individually unit-tested.
 // ===========================================================================

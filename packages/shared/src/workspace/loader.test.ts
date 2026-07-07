@@ -259,7 +259,7 @@ describe("initWorkspace", () => {
               target: "react-native",
               renderer: "App.tsx",
               rnComponentName: "Vibestudio",
-              rnHostAbi: "rn-host-1",
+              rnHostAbi: "rn-host-2",
               capabilities: ["notifications", "camera", "keychain", "clipboard", "open-external"],
             },
           },
@@ -340,7 +340,7 @@ describe("initWorkspace", () => {
             target: "react-native",
             renderer: "App.tsx",
             rnComponentName: "Vibestudio",
-            rnHostAbi: "rn-host-1",
+            rnHostAbi: "rn-host-2",
             capabilities: expect.arrayContaining([
               "notifications",
               "camera",

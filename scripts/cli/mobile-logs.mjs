@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 
 function parseArgs(argv) {
   const options = {
+    platform: "android",
     device: null,
     packageName: "app.vibestudio.mobile.internal",
     help: false,
@@ -14,6 +15,8 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--") {
       continue;
+    } else if (arg === "--platform") {
+      options.platform = argv[++i] ?? "android";
     } else if (arg === "--device") {
       options.device = argv[++i] ?? null;
     } else if (arg === "--package") {
@@ -25,6 +28,9 @@ function parseArgs(argv) {
     }
   }
 
+  if (options.platform !== "android" && options.platform !== "ios") {
+    throw new Error("--platform must be android or ios");
+  }
   return options;
 }
 
@@ -32,10 +38,12 @@ function printHelp() {
   console.log(`vibestudio mobile logs
 
 Usage:
-  vibestudio mobile logs
+  vibestudio mobile logs [--platform android]
+  vibestudio mobile logs --platform ios
   vibestudio mobile logs --device <adb-serial>
 
 Options:
+  --platform <name>  android or ios. Defaults to android.
   --device <serial>  Target a specific adb device.
   --package <id>     App package to inspect. Defaults to app.vibestudio.mobile.internal.
   --help             Show this help message.
@@ -69,6 +77,33 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printHelp();
+    return;
+  }
+  if (options.platform === "ios") {
+    if (process.platform !== "darwin") {
+      throw new Error("iOS logs require macOS. Use Console.app for hardware-device logs.");
+    }
+    if (options.device) {
+      throw new Error("iOS hardware-device logs are not streamed by this CLI; use Console.app with the device selected.");
+    }
+    console.log("[mobile-logs] Streaming iOS simulator logs for Vibestudio. Press Ctrl-C to stop.");
+    const child = spawn("xcrun", [
+      "simctl",
+      "spawn",
+      "booted",
+      "log",
+      "stream",
+      "--style",
+      "compact",
+      "--predicate",
+      'process == "Vibestudio"',
+    ], { stdio: "inherit" });
+    child.on("exit", (code, signal) => {
+      if (signal) process.kill(process.pid, signal);
+      else process.exit(code ?? 0);
+    });
+    process.on("SIGINT", () => child.kill("SIGINT"));
+    process.on("SIGTERM", () => child.kill("SIGTERM"));
     return;
   }
 

@@ -1,25 +1,30 @@
 # Vibestudio iOS Native Project
 
-The Xcode project file (`Vibestudio.xcodeproj/project.pbxproj`) is too complex
-to generate manually. Use React Native CLI to generate it:
+The checked-in Xcode project is authoritative. Do not regenerate it with
+`react-native init`; update `Vibestudio.xcodeproj/project.pbxproj` directly when
+native sources, build phases, or configurations change.
+
+## Local Signing
 
 ```bash
-# From the repository root:
-npx react-native init Vibestudio --directory temp-ios --version 0.79.2
-
-# Copy the generated iOS project files:
-cp -r temp-ios/ios/Vibestudio.xcodeproj mobile/ios/
-cp -r temp-ios/ios/Vibestudio mobile/ios/  # (merge with existing Info.plist)
-cp temp-ios/ios/Vibestudio/LaunchScreen.storyboard mobile/ios/Vibestudio/
-
-# Clean up:
-rm -rf temp-ios
+cp apps/mobile/ios/Signing.template.xcconfig apps/mobile/ios/Signing.local.xcconfig
+vibestudio mobile doctor
+vibestudio mobile install --platform ios --simulator --launch
 ```
 
-After generating, update the Xcode project:
-1. Set the bundle identifier to `app.vibestudio.mobile`
-2. Set the deployment target to iOS 15.0
-3. Add the `vibestudio` URL scheme in Info.plist for OAuth deep links
-4. Run `cd mobile/ios && pod install` to install CocoaPods dependencies
+`Signing.local.xcconfig` is gitignored and holds user-specific Apple signing
+settings. `scripts/cli/ios-entitlements.mjs` writes
+`apps/mobile/ios/Generated/Vibestudio.entitlements` during CLI/Xcode builds.
+Associated-domain entitlements are emitted only when
+`VIBESTUDIO_IOS_PAIR_HOST` or `VIBESTUDIO_IOS_ASSOCIATED_DOMAINS` is set; APNs
+is emitted only when `VIBESTUDIO_IOS_APS_ENV` is set.
 
-The `Info.plist` and `Podfile` are already configured for Vibestudio.
+## Pairing And OAuth
+
+The native host handles `vibestudio://connect` and
+`https://vibestudio.app/pair#...` pairing links, clears any active OTA bundle,
+and reloads the shipped bootstrap before React Native processes the link.
+
+iOS OAuth uses `VibestudioAuthSession` (`ASWebAuthenticationSession`) with
+`vibestudio://oauth/callback/<provider>` callbacks. Those OAuth-shaped URLs are
+not pairing links and are ignored by the normal deep-link router.

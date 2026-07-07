@@ -39,7 +39,7 @@ export function isConnectLinkForStoredServer(
 }
 
 function isConnectLink(rawUrl: string): boolean {
-  return rawUrl.startsWith("vibestudio://connect");
+  return rawUrl.startsWith("vibestudio://connect") || rawUrl.startsWith("https://vibestudio.app/pair");
 }
 
 function parseConsumedConnectLink(raw: string | null): ConsumedConnectLink | null {

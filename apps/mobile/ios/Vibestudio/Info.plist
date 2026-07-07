@@ -22,16 +22,16 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Vibestudio can use the camera for workspace apps that request camera access.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Vibestudio can use the microphone for workspace apps that request audio access.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
 		<string>fetch</string>
-	</array>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>armv7</string>
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
@@ -41,10 +41,10 @@
 	</array>
 	<!--
 		CFBundleURLTypes: registers the `vibestudio://connect` onboarding
-		scheme used by QR/link pairing. OAuth callbacks are accepted only
-		through the universal link declared in Vibestudio.entitlements; iOS
-		cannot path-scope custom schemes at registration time, so JS handlers
-		ignore any oauth-shaped vibestudio:// URL.
+		scheme used by QR/link pairing. The HTTPS pair link is accepted through
+		the generated Associated Domains entitlement. iOS cannot path-scope
+		custom schemes at registration time, so JS handlers ignore any
+		oauth-shaped vibestudio:// URL.
 	-->
 	<key>CFBundleURLTypes</key>
 	<array>

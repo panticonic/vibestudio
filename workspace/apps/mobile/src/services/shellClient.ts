@@ -1,7 +1,7 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { Panel, ThemeAppearance } from "@vibestudio/shared/types";
 import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
-import { Appearance } from "react-native";
+import { Appearance, Platform } from "react-native";
 import { WorkspaceClient } from "@vibestudio/shared/shell/workspaceClient";
 import { SettingsClient } from "@vibestudio/shared/shell/settingsClient";
 import { EventsClient } from "@vibestudio/shared/shell/eventsClient";
@@ -37,7 +37,6 @@ import { createBridgeAdapter } from "./bridgeAdapter";
 import { MobileRpcClient, type ConnectionStatus } from "./mobileTransport";
 import { createMobileShellCore } from "../shellCore/createMobileShellCore";
 import { startPanelAssetFacade, type PanelAssetFacade } from "./panelAssetFacade";
-import type { Credentials } from "./auth";
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { shellApprovalMethods } from "@vibestudio/shared/serviceSchemas/shellApproval";
@@ -68,6 +67,11 @@ export interface ShellClientConfig {
   onTreeUpdated?: (tree: Panel[]) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
 }
+
+export interface Credentials {
+  deviceId: string;
+  serverId: string;
+}
 function createShellApprovalClient(transport: MobileRpcClient) {
   return createTypedServiceClient("shellApproval", shellApprovalMethods, (service, method, args) =>
     transport.call("main", `${service}.${method}`, args)
@@ -82,8 +86,30 @@ function createPanelRuntimeClient(transport: MobileRpcClient) {
 
 function createCredentialsClient(transport: MobileRpcClient) {
   return createTypedServiceClient("credentials", credentialsMethods, (service, method, args) =>
-    transport.call("main", `${service}.${method}`, args)
+    transport.call("main", `${service}.${method}`, rewriteCredentialArgsForPlatform(method, args))
   );
+}
+
+function rewriteCredentialArgsForPlatform(method: string, args: unknown[]): unknown[] {
+  if (method !== "connect" || Platform.OS !== "ios") return args;
+  const [request, ...rest] = args as [unknown, ...unknown[]];
+  if (!request || typeof request !== "object" || Array.isArray(request)) return args;
+  const redirect = (request as { redirect?: unknown }).redirect;
+  if (!redirect || typeof redirect !== "object" || Array.isArray(redirect)) return args;
+  if ((redirect as { type?: unknown }).type !== "client-loopback") return args;
+  const callbackUri = (redirect as { callbackUri?: unknown }).callbackUri;
+  return [
+    {
+      ...(request as Record<string, unknown>),
+      redirect: {
+        ...(redirect as Record<string, unknown>),
+        type: "app-scheme",
+        ...(typeof callbackUri === "string" ? { callbackUri } : {}),
+      },
+      browser: "external",
+    },
+    ...rest,
+  ];
 }
 
 function createPushClient(transport: MobileRpcClient) {

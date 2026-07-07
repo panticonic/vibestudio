@@ -7,6 +7,11 @@ export function copyToClipboard(value: string): void {
   Clipboard.setString(value);
 }
 
+export async function readClipboardText(): Promise<string> {
+  requireApprovedAppCapability("clipboard", "clipboard read");
+  return Clipboard.getString();
+}
+
 export async function openExternalUrl(url: string): Promise<void> {
   requireApprovedAppCapability("open-external", "external URL open");
   await Linking.openURL(url);

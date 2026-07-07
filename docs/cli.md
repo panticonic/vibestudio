@@ -50,7 +50,7 @@ From a source checkout, run the built CLI directly without a global install:
 node dist/cli/client.mjs --help     # or: pnpm cli --help
 ```
 
-## Remote
+## Remote Pairing
 
 Start a phone/laptop pairing server:
 
@@ -73,6 +73,14 @@ vibestudio remote status
 vibestudio remote logout
 ```
 
+`remote invite` has two modes:
+
+- With a stored CLI credential, it asks the paired server to mint a workspace
+  invite.
+- On the server host, with no stored CLI credential, it uses the local admin
+  token against `http://127.0.0.1:<port>`; use `--port`, `--workspace`,
+  `--url`, or `--admin-token` when the defaults do not match the running server.
+
 Pairing saves a durable device credential. After pairing, desktop, mobile, and
 terminal hosts all choose a workspace, ask the server to launch their selected
 host target, and show the same privileged workspace-unit approval before
@@ -82,32 +90,60 @@ Desktop pairing and workspace selection happen in the desktop bootstrap UI.
 `terminal start` runs fully in the CLI; use `--yes` only for automation that
 should approve each startup request once.
 
-Credentials are stored in `~/.config/vibestudio/cli-credentials.json` with file
-mode `0600`. The CLI does not use a system keyring.
+CLI credentials are stored in `~/.config/vibestudio/cli-credentials.json` with
+file mode `0600`. The server's local admin token is stored separately in
+`~/.config/vibestudio/admin-token`.
+
+## Remote Deploy
+
+Deploy or manage a remote server over SSH/systemd:
+
+```sh
+vibestudio remote deploy user@host --port 3030 --workspace default --signal-url wss://signaling.example.workers.dev
+vibestudio remote deploy status user@host
+vibestudio remote deploy logs user@host
+vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
+vibestudio remote deploy remove user@host
+vibestudio remote doctor
+vibestudio remote repair-identity --yes
+```
+
+Deploy installs a `systemd --user` unit, enables linger, starts
+`vibestudio remote serve` bound to loopback, then runs `remote invite` and
+`remote doctor` over SSH. The post-start doctor checks the selected workspace
+child identity at
+`$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem`.
+
+`remote serve`, `mobile pair`, and server startup resolve signaling as:
+flag > environment > config > hosted default (`wss://signal.vibestudio.app`).
+Use `remote setup-signaling` only when you want to self-host the Cloudflare
+signaling worker.
 
 ## Mobile
 
-Build/install the trusted internal Android APK:
+Install the checksum-verified Android prebuilt shell, or build the internal
+contributor shell locally from source:
 
 ```sh
-vibestudio mobile build
 vibestudio mobile install --launch
-# or:
-pnpm cli mobile install --launch
+vibestudio mobile install --from-source --launch
+vibestudio mobile install --platform ios --simulator --launch
 ```
 
 Start the phone pairing server (pairing is over WebRTC — no Tailscale/HTTPS setup):
 
 ```sh
-export VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev
 vibestudio mobile pair --port 3030
 ```
 
-Run the local Android dev loop:
+Run the local mobile dev loop:
 
 ```sh
-vibestudio mobile dev
-vibestudio mobile logs
+vibestudio mobile dev --platform android
+vibestudio mobile dev --platform ios
+vibestudio mobile logs --platform android
+vibestudio mobile logs --platform ios
+vibestudio mobile doctor
 ```
 
 Run a clean installed-app pairing smoke against an emulator or attached device:
@@ -120,13 +156,13 @@ vibestudio mobile smoke --avd Pixel_8
 Useful flags:
 
 - `--device <adb-serial>` targets a specific Android device.
+- `--platform android|ios` selects the mobile target. iOS requires macOS + Xcode.
 - `--port <port>` chooses the local pairing server port.
-- `--signal-url <url>` chooses the WebRTC signaling endpoint; otherwise
-  `VIBESTUDIO_WEBRTC_SIGNAL_URL` is required.
+- `--signal-url <url>` chooses the WebRTC signaling endpoint; otherwise the hosted default is used.
 - `--dev` on `vibestudio mobile pair` offers a disposable template workspace named
   `dev` after pairing.
 
-Remote reach is WebRTC (pair by QR - signaling room + DTLS fingerprint); see
+Remote reach is WebRTC (pair by QR: signaling room + DTLS fingerprint); see
 [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) and [webrtc-local-e2e.md](./webrtc-local-e2e.md).
 
 ## Git Upstream

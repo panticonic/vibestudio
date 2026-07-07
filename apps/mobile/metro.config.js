@@ -1,4 +1,5 @@
 const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
+const fs = require("fs");
 const path = require("path");
 const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
 
@@ -7,6 +8,9 @@ const monorepoRoot = path.resolve(projectRoot, "..", "..");
 const workspaceAppRoot = process.env.VIBESTUDIO_WORKSPACE_APP_ROOT
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_APP_ROOT)
   : path.resolve(monorepoRoot, "workspace", "apps", "mobile");
+const workspaceNodeModules = process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES
+  ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES)
+  : path.resolve(monorepoRoot, "workspace", "node_modules");
 const nativeBoundary = createNativeBoundary(workspaceAppRoot);
 
 /**
@@ -38,14 +42,17 @@ const config = {
     workspaceAppRoot,
     // Root node_modules for hoisted dependencies
     path.resolve(monorepoRoot, "node_modules"),
-  ],
+    // Userland workspace dependencies for transitive @workspace/* packages.
+    workspaceNodeModules,
+  ].filter((candidate) => fs.existsSync(candidate)),
 
   resolver: {
     // Ensure Metro can find node_modules in both mobile/ and the monorepo root
     nodeModulesPaths: [
       path.resolve(projectRoot, "node_modules"),
       path.resolve(monorepoRoot, "node_modules"),
-    ],
+      workspaceNodeModules,
+    ].filter((candidate) => fs.existsSync(candidate)),
 
     resolveRequest: (context, moduleName, platform) => {
       nativeBoundary.guardNativeModuleImport(moduleName, context.originModulePath);
@@ -106,7 +113,6 @@ const config = {
       if (moduleName === "react-native-screens") {
         const localBase = path.resolve(projectRoot, "node_modules", "react-native-screens");
         const rootBase = path.resolve(monorepoRoot, "node_modules", "react-native-screens");
-        const fs = require("fs");
         const base = fs.existsSync(localBase) ? localBase : rootBase;
         const prebuilt = path.resolve(base, "lib", "commonjs", "index.js");
         return { type: "sourceFile", filePath: prebuilt };

@@ -34,8 +34,9 @@ wrangler secret put TURN_KEY_API_TOKEN     # …and its signing key
 ```
 
 `SIGNALING_ROOM` is a Durable Object (one instance per UUID room, WebSocket
-Hibernation so a room survives ICE-restart). Note the deployed URL, e.g.
-`wss://vibestudio-signaling.<account>.workers.dev` — that becomes `sig`.
+Hibernation so a room survives ICE-restart). The hosted default is
+`wss://signal.vibestudio.app`; self-hosted deployments can persist their URL with
+`vibestudio remote setup-signaling --url wss://...`.
 
 ## 2. Deploy the callback relay (only if you use OAuth / webhooks remotely)
 
@@ -53,31 +54,48 @@ is no per-server base URL — routing is multi-tenant.
 
 ## 3. Run the server as a WebRTC answerer
 
-Set `VIBESTUDIO_WEBRTC_SIGNAL_URL` to activate the answerer (off by default ⇒
-loopback co-located mode is unchanged):
+Run the server as a WebRTC answerer. Signaling resolves as flag > env > config >
+hosted default:
 
 ```bash
-VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev \
-  vibestudio-server --serve-panels --print-credentials
-# logs:  Pairing link: vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2
+vibestudio remote serve --port 3030
+# logs:  Pair URL: https://vibestudio.app/pair#room=…&fp=…&code=…&sig=…&v=2
 ```
 
 The server mints the per-invite signaling room and pairing code itself (one
 fresh room per invite; paired devices keep their own rooms).
 
-- The server presents a **persistent DTLS cert** at `<appRoot>/.vibestudio/webrtc/server.{pem,key}`
-  (override with `VIBESTUDIO_WEBRTC_CERT`/`VIBESTUDIO_WEBRTC_KEY`). Its SHA-256 is the
-  `fp` in the link — the client pins it, **fail-closed** on mismatch.
+- The server presents a **persistent DTLS identity**. `remote deploy` pins the
+  hub identity at `$HOME/.config/vibestudio/webrtc/identity.pem`; workspace
+  child answerers use
+  `$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem`.
+  Override with `VIBESTUDIO_WEBRTC_IDENTITY` only for explicit local setups. The
+  certificate SHA-256 is the `fp` in the link; the client pins it and
+  fail-closes on mismatch.
 - `VIBESTUDIO_WEBRTC_ICE=relay` forces TURN (needs the signaling TURN secrets above).
+- `vibestudio remote doctor` validates node-datachannel, signaling reachability,
+  `identity.pem`, and removed legacy env vars before deployment.
 - OAuth redirect URIs are minted from `VIBESTUDIO_RELAY_OAUTH_BASE_URL` (the relay
   origin); register that `…/oauth/callback` with your providers.
 
 The native `node-datachannel` module is loaded lazily on first connect; build it
 once with `pnpm rebuild node-datachannel`.
 
+For a managed SSH/systemd host, use:
+
+```bash
+vibestudio remote deploy user@host --port 3030 --workspace default
+vibestudio remote deploy logs user@host
+vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
+```
+
+Deploy starts the loopback server, mints a workspace-scoped invite via the
+remote host's local admin token, and doctors the selected workspace child
+identity.
+
 ## 4. Pair a client
 
-Scan/open the printed `vibestudio://connect?…` link from the desktop chooser, the
+Scan/open the printed `https://vibestudio.app/pair#…` URL from the desktop chooser, the
 mobile app, or the CLI. The client redeems the one-time `code` over
 the pipe, receives a durable device credential, and persists it (encrypted) for
 reconnects — see [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) for the

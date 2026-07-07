@@ -1,25 +1,23 @@
 #import <Foundation/Foundation.h>
 #import <React/RCTBridgeModule.h>
 #import <React/RCTReloadCommand.h>
-#import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
+#import <zlib.h>
 
 @interface VibestudioMobileHost : NSObject <RCTBridgeModule>
+@property(nonatomic, strong) NSFileHandle *bundleStream;
+@property(nonatomic, copy) NSString *bundleTransferPath;
+@property(nonatomic, copy) NSString *bundleFinalPath;
 @end
 
 @implementation VibestudioMobileHost
 
 RCT_EXPORT_MODULE();
 
-static NSString *const VibestudioKeychainService = @"app.vibestudio.mobile.host";
-static NSString *const VibestudioCredentialAccount = @"mobile-refresh";
 static NSString *const VibestudioActiveBundleLocalPath = @"activeBundle.localPath";
 static NSString *const VibestudioActiveBundleBuildKey = @"activeBundle.buildKey";
 static NSString *const VibestudioActiveBundleIntegrity = @"activeBundle.integrity";
 static NSString *const VibestudioActiveBundleSource = @"activeBundle.source";
-static NSString *const VibestudioWorkspaceAppCallerPrefix = @"app:apps/";
-static NSTimeInterval const VibestudioJsonPostTimeout = 120;
-static NSTimeInterval const VibestudioBundleDownloadTimeout = 30;
 
 + (BOOL)requiresMainQueueSetup
 {
@@ -32,33 +30,11 @@ static NSTimeInterval const VibestudioBundleDownloadTimeout = 30;
   return @{ @"firebaseConfigured": @(firebaseConfigured) };
 }
 
-RCT_EXPORT_METHOD(getCredentials:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
-{
-  @try {
-    NSDictionary *credential = [self loadCredential];
-    if (credential == nil) {
-      resolve(nil);
-      return;
-    }
-    NSMutableDictionary *publicCredential = [@{
-      @"serverUrl": credential[@"serverUrl"],
-      @"deviceId": credential[@"deviceId"],
-      @"serverId": credential[@"serverId"],
-    } mutableCopy];
-    if (credential[@"hubUrl"] != nil) publicCredential[@"hubUrl"] = credential[@"hubUrl"];
-    if (credential[@"workspaceName"] != nil) publicCredential[@"workspaceName"] = credential[@"workspaceName"];
-    if (credential[@"workspaceId"] != nil) publicCredential[@"workspaceId"] = credential[@"workspaceId"];
-    resolve(publicCredential);
-  } @catch (NSException *exception) {
-    reject(@"needs_repair", @"Stored mobile credentials could not be decrypted", nil);
-  }
-}
-
 RCT_EXPORT_METHOD(clearCredentials:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
-  [self clearStoredCredentials];
+  [self closeBundleStream];
+  [self clearActiveBundle];
   resolve(nil);
 }
 
@@ -66,7 +42,7 @@ RCT_EXPORT_METHOD(resetToNativeBootstrap:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
   @try {
-    [self clearStoredCredentials];
+    [self closeBundleStream];
     [self clearActiveBundle];
     resolve(@{ @"reloading": @YES });
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -78,205 +54,80 @@ RCT_EXPORT_METHOD(resetToNativeBootstrap:(RCTPromiseResolveBlock)resolve
   }
 }
 
-RCT_EXPORT_METHOD(pairServer:(NSString *)serverUrl
-                  code:(NSString *)code
+RCT_EXPORT_METHOD(appendBundleChunk:(NSString *)bytesBase64
+                  buildKey:(NSString *)buildKey
+                  artifactPath:(NSString *)artifactPath
+                  reset:(BOOL)reset
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-    @try {
-      NSString *normalizedUrl = [self normalizeServerUrl:serverUrl];
-      NSDictionary *response = [self postJson:normalizedUrl path:@"/_r/s/auth/complete-pairing" body:@{
-        @"code": code,
-        @"label": @"Mobile device",
-        @"platform": @"mobile",
-      }];
-      NSDictionary *credential = @{
-        @"serverUrl": normalizedUrl,
-        @"hubUrl": normalizedUrl,
-        @"deviceId": [self requiredString:response key:@"deviceId"],
-        @"refreshToken": [self requiredString:response key:@"refreshToken"],
-        @"serverId": [self requiredString:response key:@"serverId"],
-        @"workspaceId": @"",
-      };
-      [self saveCredential:credential];
-      resolve(@{
-        @"serverUrl": normalizedUrl,
-        @"hubUrl": normalizedUrl,
-        @"deviceId": credential[@"deviceId"],
-        @"serverId": credential[@"serverId"],
-      });
-    } @catch (NSException *exception) {
-      reject(@"pairing_failed", exception.reason, nil);
+  @try {
+    if (reset) {
+      [self closeBundleStream];
+      NSString *safeBuildKey = [self safePathSegment:buildKey];
+      NSString *safeArtifact = [self safePathSegment:artifactPath];
+      NSURL *cacheURL = [[NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask] firstObject];
+      NSURL *dirURL = [[cacheURL URLByAppendingPathComponent:@"vibestudio-rn" isDirectory:YES] URLByAppendingPathComponent:safeBuildKey isDirectory:YES];
+      [NSFileManager.defaultManager createDirectoryAtURL:dirURL withIntermediateDirectories:YES attributes:nil error:nil];
+      NSURL *finalURL = [dirURL URLByAppendingPathComponent:safeArtifact isDirectory:NO];
+      NSURL *transferURL = [dirURL URLByAppendingPathComponent:[safeArtifact stringByAppendingString:@".transfer"] isDirectory:NO];
+      [NSFileManager.defaultManager createFileAtPath:transferURL.path contents:nil attributes:nil];
+      self.bundleFinalPath = finalURL.path;
+      self.bundleTransferPath = transferURL.path;
+      self.bundleStream = [NSFileHandle fileHandleForWritingAtPath:transferURL.path];
+      if (self.bundleStream == nil) {
+        [NSException raise:@"VibestudioBundleAppendFailed" format:@"Could not open bundle transfer file"];
+      }
     }
-  });
+    if (self.bundleStream == nil) {
+      [NSException raise:@"VibestudioBundleAppendFailed" format:@"appendBundleChunk called before reset"];
+    }
+    NSData *chunk = [[NSData alloc] initWithBase64EncodedString:bytesBase64 options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    if (chunk == nil) {
+      [NSException raise:@"VibestudioBundleAppendFailed" format:@"Bundle chunk was not valid base64"];
+    }
+    [self.bundleStream writeData:chunk];
+    resolve(nil);
+  } @catch (NSException *exception) {
+    [self closeBundleStream];
+    reject(@"bundle_append_failed", exception.reason, nil);
+  }
 }
 
-RCT_EXPORT_METHOD(listWorkspaces:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
-{
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-    @try {
-      NSDictionary *credential = [self loadCredential];
-      if (credential == nil) {
-        [NSException raise:@"VibestudioNoCredentials" format:@"No mobile credentials are stored"];
-      }
-      NSString *hubUrl = [self optionalString:credential key:@"hubUrl"];
-      if (hubUrl.length == 0) {
-        [NSException raise:@"VibestudioNoHubURL" format:@"Stored credential is missing a hub URL"];
-      }
-      NSDictionary *response = [self postJson:hubUrl path:@"/_r/s/workspaces/list" body:@{
-        @"deviceId": credential[@"deviceId"],
-        @"refreshToken": credential[@"refreshToken"],
-      }];
-      NSArray *rawWorkspaces = [response[@"workspaces"] isKindOfClass:[NSArray class]]
-        ? response[@"workspaces"]
-        : @[];
-      NSMutableArray *workspaces = [NSMutableArray array];
-      for (NSDictionary *item in rawWorkspaces) {
-        if (![item isKindOfClass:[NSDictionary class]]) continue;
-        NSString *name = [self optionalString:item key:@"name"];
-        if (name.length == 0) continue;
-        NSMutableDictionary *entry = [@{
-          @"name": name,
-          @"lastOpened": item[@"lastOpened"] ?: @0,
-        } mutableCopy];
-        if ([item[@"running"] isKindOfClass:[NSNumber class]]) entry[@"running"] = item[@"running"];
-        if ([item[@"ephemeral"] isKindOfClass:[NSNumber class]]) entry[@"ephemeral"] = item[@"ephemeral"];
-        [workspaces addObject:entry];
-      }
-      resolve(@{ @"workspaces": workspaces });
-    } @catch (NSException *exception) {
-      reject(@"workspace_list_failed", exception.reason, nil);
-    }
-  });
-}
-
-RCT_EXPORT_METHOD(selectWorkspace:(NSString *)name
-                  source:(NSString *)source
+RCT_EXPORT_METHOD(finalizeBundleWrite:(NSString *)integrity
+                  gzip:(BOOL)gzip
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-    @try {
-      NSDictionary *credential = [self loadCredential];
-      if (credential == nil) {
-        [NSException raise:@"VibestudioNoCredentials" format:@"No mobile credentials are stored"];
-      }
-      NSString *hubUrl = [self optionalString:credential key:@"hubUrl"];
-      if (hubUrl.length == 0) {
-        [NSException raise:@"VibestudioNoHubURL" format:@"Stored credential is missing a hub URL"];
-      }
-      NSDictionary *selected = [self postJson:hubUrl path:@"/_r/s/workspaces/select" body:@{
-        @"deviceId": credential[@"deviceId"],
-        @"refreshToken": credential[@"refreshToken"],
-        @"name": name,
-      }];
-      NSString *workspaceUrl = [self normalizeWorkspaceServerUrl:[self requiredString:selected key:@"serverUrl"]];
-      NSString *workspaceName = [self optionalString:selected key:@"workspaceName"] ?: name;
-      NSMutableDictionary *selectedCredential = [credential mutableCopy];
-      selectedCredential[@"serverUrl"] = workspaceUrl;
-      selectedCredential[@"workspaceName"] = workspaceName;
-      NSDictionary *grantResponse = [self postJson:workspaceUrl path:@"/_r/s/auth/refresh-shell" body:@{
-        @"deviceId": selectedCredential[@"deviceId"],
-        @"refreshToken": selectedCredential[@"refreshToken"],
-      }];
-      selectedCredential[@"workspaceId"] = [self requiredString:grantResponse key:@"workspaceId"];
-      // Validate the shell grant BEFORE persisting. A rejected grant must never leave a
-      // half-updated workspace-scoped credential behind, or the next launch would treat it
-      // as a fully selected workspace and skip re-pairing despite having no usable grant.
-      NSDictionary *grant = [self shellGrantFromResponse:grantResponse credential:selectedCredential];
-      [self saveCredential:selectedCredential];
-      resolve(grant);
-    } @catch (NSException *exception) {
-      reject(@"workspace_select_failed", exception.reason, nil);
+  @try {
+    if (self.bundleStream == nil || self.bundleTransferPath.length == 0 || self.bundleFinalPath.length == 0) {
+      [NSException raise:@"VibestudioBundleFinalizeFailed" format:@"finalizeBundleWrite called before any chunk"];
     }
-  });
-}
-
-RCT_EXPORT_METHOD(issueConnectionGrant:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
-{
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-    @try {
-      NSDictionary *credential = [self loadCredential];
-      if (credential == nil) {
-        [NSException raise:@"VibestudioNoCredentials" format:@"No mobile credentials are stored"];
-      }
-      NSString *source = [self activeAppSource];
-      if (source.length == 0) {
-        resolve([self issueShellGrantForCredential:credential]);
-        return;
-      }
-      // An app source is active: an app-grant failure must FAIL CLOSED, not
-      // silently escalate to a shell grant (which carries strictly more
-      // authority). The outer @catch rejects so the bootstrap can surface the
-      // real "app unavailable / approval required" reason.
-      resolve([self issueAppGrantForCredential:credential source:source]);
-    } @catch (NSException *exception) {
-      reject(@"grant_failed", exception.reason, nil);
+    [self.bundleStream synchronizeFile];
+    [self closeBundleStream];
+    NSData *transferData = [NSData dataWithContentsOfFile:self.bundleTransferPath];
+    if (transferData == nil) {
+      [NSException raise:@"VibestudioBundleFinalizeFailed" format:@"Could not read bundle transfer file"];
     }
-  });
-}
-
-RCT_EXPORT_METHOD(prepareAppBundle:(NSString *)expectedRnHostAbi
-                  platform:(NSString *)platform
-                  source:(NSString *)source
-                  resolver:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
-{
-  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-    @try {
-      NSDictionary *credential = [self loadCredential];
-      if (credential == nil) {
-        [NSException raise:@"VibestudioNoCredentials" format:@"No mobile credentials are stored"];
-      }
-      NSMutableDictionary *body = [@{
-        @"deviceId": credential[@"deviceId"],
-        @"refreshToken": credential[@"refreshToken"],
-      } mutableCopy];
-      if ([source isKindOfClass:[NSString class]] && source.length > 0) {
-        body[@"source"] = source;
-      }
-      NSDictionary *response = [self postJson:credential[@"serverUrl"] path:@"/_r/s/auth/mobile-app-bootstrap" body:body];
-      NSDictionary *bootstrap = response[@"bootstrap"];
-      if (![bootstrap isKindOfClass:[NSDictionary class]]) {
-        [NSException raise:@"VibestudioBundleBootstrapInvalid" format:@"Mobile app bootstrap payload is invalid"];
-      }
-      NSString *rnHostAbi = [self requiredString:bootstrap key:@"rnHostAbi"];
-      if (![rnHostAbi isEqualToString:expectedRnHostAbi]) {
-        [NSException raise:@"VibestudioRnHostAbiMismatch" format:@"React Native host ABI mismatch: expected %@, got %@", expectedRnHostAbi, rnHostAbi];
-      }
-      NSDictionary *artifact = [self selectArtifact:bootstrap platform:platform];
-      NSString *artifactUrl = [self requiredString:artifact key:@"url"];
-      [self assertArtifactURL:artifactUrl sameOriginAsServer:credential[@"serverUrl"]];
-      NSData *bundleData = [self getData:artifactUrl];
-      NSString *integrity = [self requiredString:artifact key:@"integrity"];
-      [self verifySha256Integrity:integrity data:bundleData];
-      NSString *localPath = [self writeBundleData:bundleData buildKey:[self requiredString:bootstrap key:@"buildKey"] artifactPath:[self requiredString:artifact key:@"path"]];
-      if ([source isKindOfClass:[NSString class]] && source.length > 0) {
-        [[NSUserDefaults standardUserDefaults] setObject:source forKey:VibestudioActiveBundleSource];
-      } else {
-        [[NSUserDefaults standardUserDefaults] removeObjectForKey:VibestudioActiveBundleSource];
-      }
-      NSMutableDictionary *result = [@{
-        @"appId": [self requiredString:bootstrap key:@"appId"],
-        @"buildKey": [self requiredString:bootstrap key:@"buildKey"],
-        @"capabilities": [self requiredStringArray:bootstrap key:@"capabilities"],
-        @"rnHostAbi": rnHostAbi,
-        @"integrity": integrity,
-        @"platform": platform,
-        @"url": artifactUrl,
-        @"path": [self requiredString:artifact key:@"path"],
-        @"localPath": localPath,
-      } mutableCopy];
-      NSString *effectiveVersion = [self optionalString:bootstrap key:@"effectiveVersion"];
-      if (effectiveVersion != nil) result[@"effectiveVersion"] = effectiveVersion;
-      resolve(result);
-    } @catch (NSException *exception) {
-      reject(@"bundle_prepare_failed", exception.reason, nil);
+    NSData *bundleData = gzip ? [self gunzipData:transferData] : transferData;
+    [self verifySha256Integrity:integrity data:bundleData];
+    if (![bundleData writeToFile:self.bundleFinalPath atomically:YES]) {
+      [NSException raise:@"VibestudioBundleFinalizeFailed" format:@"Could not write prepared React Native bundle"];
     }
-  });
+    [NSFileManager.defaultManager removeItemAtPath:self.bundleTransferPath error:nil];
+    NSString *localPath = self.bundleFinalPath;
+    self.bundleTransferPath = nil;
+    self.bundleFinalPath = nil;
+    resolve(@{ @"localPath": localPath });
+  } @catch (NSException *exception) {
+    [self closeBundleStream];
+    if (self.bundleTransferPath.length > 0) {
+      [NSFileManager.defaultManager removeItemAtPath:self.bundleTransferPath error:nil];
+    }
+    self.bundleTransferPath = nil;
+    self.bundleFinalPath = nil;
+    reject(@"bundle_finalize_failed", exception.reason, nil);
+  }
 }
 
 RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
@@ -313,90 +164,13 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   }
 }
 
-- (NSDictionary *)issueShellGrantForCredential:(NSDictionary *)credential
+- (void)closeBundleStream
 {
-  NSDictionary *response = [self postJson:credential[@"serverUrl"] path:@"/_r/s/auth/refresh-shell" body:@{
-    @"deviceId": credential[@"deviceId"],
-    @"refreshToken": credential[@"refreshToken"],
-  }];
-  return [self shellGrantFromResponse:response credential:credential];
-}
-
-- (NSDictionary *)shellGrantFromResponse:(NSDictionary *)response credential:(NSDictionary *)credential
-{
-  NSString *callerId = [self optionalString:response key:@"callerId"] ?: @"";
-  NSString *shellToken = [self optionalString:response key:@"shellToken"] ?: @"";
-  NSString *responseDeviceId = [self optionalString:response key:@"deviceId"];
-  if (![self isMobileShellCaller:callerId deviceId:credential[@"deviceId"]]) {
-    [NSException raise:@"VibestudioShellGrantInvalid" format:@"Mobile shell grant response did not include this device's shell principal"];
+  @try {
+    [self.bundleStream closeFile];
+  } @catch (__unused NSException *exception) {
   }
-  if (shellToken.length == 0) {
-    [NSException raise:@"VibestudioShellGrantInvalid" format:@"Mobile shell grant response did not include a shell token"];
-  }
-  if (responseDeviceId.length > 0 && ![responseDeviceId isEqualToString:credential[@"deviceId"]]) {
-    [NSException raise:@"VibestudioShellGrantInvalid" format:@"Mobile shell grant response device did not match the stored credential"];
-  }
-  NSMutableDictionary *result = [@{
-    @"serverUrl": credential[@"serverUrl"],
-    @"deviceId": credential[@"deviceId"],
-    @"callerId": callerId,
-    @"connectionGrant": shellToken,
-    @"serverId": [self requiredString:response key:@"serverId"],
-    @"workspaceId": [self requiredString:response key:@"workspaceId"],
-  } mutableCopy];
-  NSString *serverBootId = [self optionalString:response key:@"serverBootId"];
-  if (serverBootId != nil) result[@"serverBootId"] = serverBootId;
-  return result;
-}
-
-- (NSDictionary *)issueAppGrantForCredential:(NSDictionary *)credential source:(NSString *)source
-{
-  NSMutableDictionary *body = [@{
-    @"deviceId": credential[@"deviceId"],
-    @"refreshToken": credential[@"refreshToken"],
-    @"principal": @"react-native-app",
-  } mutableCopy];
-  if ([source isKindOfClass:[NSString class]] && source.length > 0) {
-    body[@"source"] = source;
-  }
-  NSDictionary *response = [self postJson:credential[@"serverUrl"] path:@"/_r/s/auth/refresh-principal-grant" body:body];
-  NSString *callerId = [self optionalString:response key:@"callerId"] ?: @"";
-  NSString *connectionGrant = [self optionalString:response key:@"connectionGrant"] ?: @"";
-  NSString *responseDeviceId = [self optionalString:response key:@"deviceId"];
-  if (![self isWorkspaceMobileAppCaller:callerId deviceId:credential[@"deviceId"]]) {
-    [NSException raise:@"VibestudioAppGrantInvalid" format:@"Mobile app grant response did not include a workspace mobile app principal"];
-  }
-  if (connectionGrant.length == 0) {
-    [NSException raise:@"VibestudioAppGrantInvalid" format:@"Mobile app grant response did not include a connection grant"];
-  }
-  if (responseDeviceId.length > 0 && ![responseDeviceId isEqualToString:credential[@"deviceId"]]) {
-    [NSException raise:@"VibestudioAppGrantInvalid" format:@"Mobile app grant response device did not match the stored credential"];
-  }
-  NSMutableDictionary *result = [@{
-    @"serverUrl": credential[@"serverUrl"],
-    @"deviceId": credential[@"deviceId"],
-    @"callerId": callerId,
-    @"connectionGrant": connectionGrant,
-  } mutableCopy];
-  NSNumber *expiresAt = response[@"expiresAt"];
-  if ([expiresAt isKindOfClass:[NSNumber class]]) result[@"expiresAt"] = expiresAt;
-  NSString *serverBootId = [self optionalString:response key:@"serverBootId"];
-  result[@"serverId"] = [self requiredString:response key:@"serverId"];
-  if (serverBootId != nil) result[@"serverBootId"] = serverBootId;
-  result[@"workspaceId"] = [self requiredString:response key:@"workspaceId"];
-  return result;
-}
-
-- (NSString *)activeAppSource
-{
-  NSString *source = [[NSUserDefaults standardUserDefaults] stringForKey:VibestudioActiveBundleSource];
-  return source.length > 0 ? source : nil;
-}
-
-- (void)clearStoredCredentials
-{
-  [self deleteCredential];
-  [[NSUserDefaults standardUserDefaults] removeObjectForKey:VibestudioActiveBundleSource];
+  self.bundleStream = nil;
 }
 
 - (void)clearActiveBundle
@@ -409,117 +183,37 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   [defaults synchronize];
 }
 
-- (BOOL)isWorkspaceMobileAppCaller:(NSString *)callerId deviceId:(NSString *)deviceId
+- (NSData *)gunzipData:(NSData *)data
 {
-  return [callerId hasPrefix:VibestudioWorkspaceAppCallerPrefix] &&
-    deviceId.length > 0 &&
-    [callerId hasSuffix:[@":" stringByAppendingString:deviceId]];
-}
-
-- (BOOL)isMobileShellCaller:(NSString *)callerId deviceId:(NSString *)deviceId
-{
-  return deviceId.length > 0 && [callerId isEqualToString:[@"shell:" stringByAppendingString:deviceId]];
-}
-
-- (NSDictionary *)postJson:(NSString *)serverUrl path:(NSString *)path body:(NSDictionary *)body
-{
-  NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"%@%@", serverUrl, path]];
-  NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-  request.HTTPMethod = @"POST";
-  request.timeoutInterval = VibestudioJsonPostTimeout;
-  [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-  request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-
-  dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-  __block NSData *responseData = nil;
-  __block NSHTTPURLResponse *httpResponse = nil;
-  __block NSError *requestError = nil;
-  NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-    responseData = data;
-    httpResponse = (NSHTTPURLResponse *)response;
-    requestError = error;
-    dispatch_semaphore_signal(semaphore);
-  }];
-  [task resume];
-  dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
-
-  if (requestError != nil) {
-    [NSException raise:@"VibestudioAuthRequestFailed" format:@"%@", requestError.localizedDescription];
+  if (data.length == 0) return [NSData data];
+  z_stream stream;
+  memset(&stream, 0, sizeof(stream));
+  stream.next_in = (Bytef *)data.bytes;
+  stream.avail_in = (uInt)data.length;
+  int status = inflateInit2(&stream, 16 + MAX_WBITS);
+  if (status != Z_OK) {
+    [NSException raise:@"VibestudioBundleFinalizeFailed" format:@"Could not initialize gzip decoder"];
   }
-  NSDictionary *json = @{};
-  if (responseData.length > 0) {
-    json = [NSJSONSerialization JSONObjectWithData:responseData options:0 error:nil] ?: @{};
-  }
-  if (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
-    NSString *message = [json[@"error"] isKindOfClass:[NSString class]] ? json[@"error"] : [NSString stringWithFormat:@"Auth request failed (%ld)", (long)httpResponse.statusCode];
-    [NSException raise:@"VibestudioAuthRequestFailed" format:@"%@", message];
-  }
-  return json;
-}
-
-- (NSData *)getData:(NSString *)urlString
-{
-  NSURL *url = [NSURL URLWithString:urlString];
-  NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-  request.HTTPMethod = @"GET";
-  request.timeoutInterval = VibestudioBundleDownloadTimeout;
-
-  dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-  __block NSData *responseData = nil;
-  __block NSHTTPURLResponse *httpResponse = nil;
-  __block NSError *requestError = nil;
-  NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-    responseData = data ?: [NSData data];
-    httpResponse = (NSHTTPURLResponse *)response;
-    requestError = error;
-    dispatch_semaphore_signal(semaphore);
-  }];
-  [task resume];
-  dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
-
-  if (requestError != nil) {
-    [NSException raise:@"VibestudioBundleRequestFailed" format:@"%@", requestError.localizedDescription];
-  }
-  if (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
-    NSString *message = [[NSString alloc] initWithData:responseData encoding:NSUTF8StringEncoding] ?: @"";
-    [NSException raise:@"VibestudioBundleRequestFailed" format:@"Bundle artifact request failed (%ld): %@", (long)httpResponse.statusCode, message];
-  }
-  return responseData ?: [NSData data];
-}
-
-- (void)assertArtifactURL:(NSString *)artifactUrl sameOriginAsServer:(NSString *)serverUrl
-{
-  NSURLComponents *artifact = [NSURLComponents componentsWithString:artifactUrl];
-  NSURLComponents *server = [NSURLComponents componentsWithString:serverUrl];
-  NSString *artifactScheme = artifact.scheme.lowercaseString ?: @"";
-  NSString *serverScheme = server.scheme.lowercaseString ?: @"";
-  BOOL validScheme = [artifactScheme isEqualToString:@"http"] || [artifactScheme isEqualToString:@"https"];
-  BOOL sameOrigin =
-    validScheme &&
-    [artifactScheme isEqualToString:serverScheme] &&
-    artifact.host.length > 0 &&
-    [artifact.host caseInsensitiveCompare:server.host ?: @""] == NSOrderedSame &&
-    [[self normalizedPortForComponents:artifact] isEqualToNumber:[self normalizedPortForComponents:server]];
-  if (!sameOrigin) {
-    [NSException raise:@"VibestudioBundleBootstrapInvalid" format:@"React Native bundle artifact URL is outside the paired server origin"];
-  }
-}
-
-- (NSDictionary *)selectArtifact:(NSDictionary *)bootstrap platform:(NSString *)platform
-{
-  NSArray *artifacts = bootstrap[@"artifacts"];
-  if (![artifacts isKindOfClass:[NSArray class]]) {
-    [NSException raise:@"VibestudioBundleBootstrapInvalid" format:@"Mobile app bootstrap artifacts are invalid"];
-  }
-  for (id item in artifacts) {
-    if (![item isKindOfClass:[NSDictionary class]]) continue;
-    NSDictionary *artifact = item;
-    if (![[self optionalString:artifact key:@"role"] isEqualToString:@"primary"]) continue;
-    NSString *artifactPlatform = [self optionalString:artifact key:@"platform"];
-    if ([artifactPlatform isEqualToString:platform]) return artifact;
-  }
-  [NSException raise:@"VibestudioBundleBootstrapInvalid" format:@"No primary React Native bundle artifact is available for %@", platform];
-  return @{};
+  NSMutableData *out = [NSMutableData dataWithLength:64 * 1024];
+  NSMutableData *result = [NSMutableData data];
+  do {
+    if (stream.total_out >= result.length + out.length) {
+      [out setLength:out.length * 2];
+    }
+    stream.next_out = (Bytef *)out.mutableBytes;
+    stream.avail_out = (uInt)out.length;
+    status = inflate(&stream, Z_NO_FLUSH);
+    if (status != Z_OK && status != Z_STREAM_END) {
+      inflateEnd(&stream);
+      [NSException raise:@"VibestudioBundleFinalizeFailed" format:@"Gzipped bundle transfer could not be decoded"];
+    }
+    NSUInteger produced = out.length - stream.avail_out;
+    if (produced > 0) {
+      [result appendBytes:out.bytes length:produced];
+    }
+  } while (status != Z_STREAM_END);
+  inflateEnd(&stream);
+  return result;
 }
 
 - (void)verifySha256Integrity:(NSString *)integrity data:(NSData *)data
@@ -538,20 +232,6 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   if ([actual caseInsensitiveCompare:expected] != NSOrderedSame) {
     [NSException raise:@"VibestudioBundleIntegrityMismatch" format:@"React Native bundle integrity mismatch"];
   }
-}
-
-- (NSString *)writeBundleData:(NSData *)data buildKey:(NSString *)buildKey artifactPath:(NSString *)artifactPath
-{
-  NSString *safeBuildKey = [self safePathSegment:buildKey];
-  NSString *safeArtifact = [self safePathSegment:artifactPath];
-  NSURL *cacheURL = [[NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask] firstObject];
-  NSURL *dirURL = [[cacheURL URLByAppendingPathComponent:@"vibestudio-rn" isDirectory:YES] URLByAppendingPathComponent:safeBuildKey isDirectory:YES];
-  [NSFileManager.defaultManager createDirectoryAtURL:dirURL withIntermediateDirectories:YES attributes:nil error:nil];
-  NSURL *fileURL = [dirURL URLByAppendingPathComponent:safeArtifact isDirectory:NO];
-  if (![data writeToURL:fileURL atomically:YES]) {
-    [NSException raise:@"VibestudioBundleCacheWriteFailed" format:@"Could not write prepared React Native bundle"];
-  }
-  return fileURL.path;
 }
 
 - (NSString *)validatedPreparedBundlePath:(NSString *)localPath
@@ -580,152 +260,6 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
     }
   }
   return out.length > 0 ? out : @"bundle";
-}
-
-- (void)saveCredential:(NSDictionary *)credential
-{
-  NSData *data = [NSJSONSerialization dataWithJSONObject:credential options:0 error:nil];
-  [self deleteCredential];
-  NSDictionary *query = @{
-    (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-    (__bridge id)kSecAttrService: VibestudioKeychainService,
-    (__bridge id)kSecAttrAccount: VibestudioCredentialAccount,
-    (__bridge id)kSecAttrAccessible: (__bridge id)kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-    (__bridge id)kSecValueData: data,
-  };
-  OSStatus status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);
-  if (status != errSecSuccess) {
-    [NSException raise:@"VibestudioKeychainSaveFailed" format:@"Could not store mobile credentials (%d)", (int)status];
-  }
-}
-
-- (NSDictionary *)loadCredential
-{
-  NSDictionary *query = @{
-    (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-    (__bridge id)kSecAttrService: VibestudioKeychainService,
-    (__bridge id)kSecAttrAccount: VibestudioCredentialAccount,
-    (__bridge id)kSecReturnData: @YES,
-    (__bridge id)kSecMatchLimit: (__bridge id)kSecMatchLimitOne,
-  };
-  CFTypeRef item = NULL;
-  OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &item);
-  if (status == errSecItemNotFound) return nil;
-  if (status != errSecSuccess) {
-    [NSException raise:@"VibestudioKeychainLoadFailed" format:@"Could not load mobile credentials (%d)", (int)status];
-  }
-  NSData *data = (__bridge_transfer NSData *)item;
-  NSDictionary *credential = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-  if (![credential isKindOfClass:[NSDictionary class]]) {
-    [NSException raise:@"VibestudioCredentialRepair" format:@"Stored credential payload is invalid"];
-  }
-  [self requiredString:credential key:@"serverUrl"];
-  [self requiredString:credential key:@"deviceId"];
-  [self requiredString:credential key:@"refreshToken"];
-  [self requiredString:credential key:@"serverId"];
-  return credential;
-}
-
-- (void)deleteCredential
-{
-  NSDictionary *query = @{
-    (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
-    (__bridge id)kSecAttrService: VibestudioKeychainService,
-    (__bridge id)kSecAttrAccount: VibestudioCredentialAccount,
-  };
-  SecItemDelete((__bridge CFDictionaryRef)query);
-}
-
-- (NSString *)normalizeServerUrl:(NSString *)serverUrl
-{
-  NSString *trimmed = [serverUrl stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-  NSURLComponents *components = [NSURLComponents componentsWithString:trimmed];
-  NSString *scheme = components.scheme.lowercaseString ?: @"";
-  if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
-    [NSException raise:@"VibestudioInvalidServerURL" format:@"Pairing server URL must use http or https"];
-  }
-  if (components.host.length == 0 || components.user.length > 0 || components.password.length > 0) {
-    [NSException raise:@"VibestudioInvalidServerURL" format:@"Pairing server URL must be an origin"];
-  }
-  if (
-    (components.path.length > 0 && ![components.path isEqualToString:@"/"]) ||
-    components.query.length > 0 ||
-    components.fragment.length > 0
-  ) {
-    [NSException raise:@"VibestudioInvalidServerURL" format:@"Pairing server URL must not include a path, query, or fragment"];
-  }
-  components.scheme = scheme;
-  components.path = @"";
-  components.query = nil;
-  components.fragment = nil;
-  components.user = nil;
-  components.password = nil;
-  return components.string;
-}
-
-- (NSString *)normalizeWorkspaceServerUrl:(NSString *)serverUrl
-{
-  NSString *trimmed = [serverUrl stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-  NSURLComponents *components = [NSURLComponents componentsWithString:trimmed];
-  NSString *scheme = components.scheme.lowercaseString ?: @"";
-  if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
-    [NSException raise:@"VibestudioInvalidServerURL" format:@"Workspace server URL must use http or https"];
-  }
-  if (components.host.length == 0 || components.user.length > 0 || components.password.length > 0) {
-    [NSException raise:@"VibestudioInvalidServerURL" format:@"Workspace server URL must include a host"];
-  }
-  if (components.query.length > 0 || components.fragment.length > 0) {
-    [NSException raise:@"VibestudioInvalidServerURL" format:@"Workspace server URL must not include a query or fragment"];
-  }
-  components.scheme = scheme;
-  while ([components.path hasSuffix:@"/"] && components.path.length > 1) {
-    components.path = [components.path substringToIndex:components.path.length - 1];
-  }
-  if ([components.path isEqualToString:@"/"]) components.path = @"";
-  components.query = nil;
-  components.fragment = nil;
-  components.user = nil;
-  components.password = nil;
-  return components.string;
-}
-
-- (NSNumber *)normalizedPortForComponents:(NSURLComponents *)components
-{
-  if (components.port != nil) return components.port;
-  NSString *scheme = components.scheme.lowercaseString ?: @"";
-  if ([scheme isEqualToString:@"https"]) return @443;
-  if ([scheme isEqualToString:@"http"]) return @80;
-  return @-1;
-}
-
-- (NSString *)requiredString:(NSDictionary *)dictionary key:(NSString *)key
-{
-  id value = dictionary[key];
-  if (![value isKindOfClass:[NSString class]] || [value length] == 0) {
-    [NSException raise:@"VibestudioMissingField" format:@"Missing credential field: %@", key];
-  }
-  return value;
-}
-
-- (NSString *)optionalString:(NSDictionary *)dictionary key:(NSString *)key
-{
-  id value = dictionary[key];
-  if (![value isKindOfClass:[NSString class]] || [value length] == 0) return nil;
-  return value;
-}
-
-- (NSArray *)requiredStringArray:(NSDictionary *)dictionary key:(NSString *)key
-{
-  id value = dictionary[key];
-  if (![value isKindOfClass:[NSArray class]]) {
-    [NSException raise:@"VibestudioMissingField" format:@"Missing string array field: %@", key];
-  }
-  for (id item in (NSArray *)value) {
-    if (![item isKindOfClass:[NSString class]] || [item length] == 0) {
-      [NSException raise:@"VibestudioInvalidField" format:@"Invalid string array field: %@", key];
-    }
-  }
-  return value;
 }
 
 @end

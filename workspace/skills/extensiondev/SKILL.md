@@ -36,6 +36,10 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 5. **Prefer ESM**. For external CommonJS packages, use default imports + destructure (`import pkg from "x"; const { fn } = pkg`). Named imports from CJS are blocked.
 6. **No `console.log` in production paths.** Use `ctx.log.{debug,info,warn,error}` so logs land in the workspace-unit stream (`workspace.units.logs(name)`). `console.*` is captured too, but as `source: "stdout"` / `"stderr"` instead of structured records.
 7. **A push into `main` is the dev signal.** Edit working content (`vcs.edit`), `vcs.commit({ message })`, then `vcs.push({ repoPaths })` — the build-gated, ff-only `main`-head advance triggers an extension update approval and the manager rebuilds + replaces the running process. Working/committed context-head work alone does nothing. There is no `extensions.reload` for source changes.
+8. **Every extension ships a repo-local `SKILL.md`.** Put it at
+   `workspace/extensions/<name>/SKILL.md` and document the extension's RPC
+   surface, logs, trust boundaries, and any remote-server topology assumptions.
+   This is part of done for new extensions.
 
 ## Quick start
 

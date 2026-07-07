@@ -1,69 +1,12 @@
 /**
- * Auth service -- device pairing and native-held app connection grants.
+ * Native host control seam.
  *
- * The durable refresh credential is owned by the native host. RN JS only sees
- * non-secret connection metadata and one-time WebSocket connection grants.
+ * Pairing, reconnect, and durable refresh credentials live in
+ * @vibestudio/mobile-webrtc. The workspace app only needs native reset and
+ * bundle activation controls.
  */
 
 import { NativeModules } from "react-native";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
-
-export class StoredCredentialsNeedRepairError extends Error {
-  constructor(
-    message = "Stored mobile credentials were created by an older Vibestudio build and cannot be reused. Scan a new pairing QR code to reconnect."
-  ) {
-    super(message);
-    this.name = "StoredCredentialsNeedRepairError";
-  }
-}
-
-// Non-secret connection metadata held by the native host. The server URL is
-// gone — remote reach is an encrypted WebRTC pipe pinned to the server's DTLS
-// fingerprint (held natively), so JS only sees identity metadata + one-time
-// connection grants.
-export interface Credentials {
-  workspaceName?: string;
-  deviceId: string;
-  serverId: string;
-  workspaceId?: string;
-}
-
-export interface ServerPairingResponse {
-  deviceId: string;
-  serverId: string;
-}
-
-export interface RemoteWorkspaceEntry {
-  name: string;
-  lastOpened: number;
-  running?: boolean;
-  ephemeral?: boolean;
-}
-
-export interface ConnectionGrantResponse {
-  connectionGrant: string;
-  callerId: string;
-  deviceId: string;
-  expiresAt?: number;
-  serverId: string;
-  serverBootId?: string;
-  workspaceId: string;
-}
-
-export type PairingResponse = Credentials & ConnectionGrantResponse;
-
-export interface PreparedAppBundle {
-  appId: string;
-  buildKey: string;
-  effectiveVersion?: string;
-  capabilities: AppCapability[];
-  rnHostAbi: string;
-  integrity: string;
-  platform: string;
-  url: string;
-  path: string;
-  localPath: string;
-}
 
 export interface ActivatePreparedAppBundleResult {
   activated: boolean;
@@ -93,18 +36,8 @@ export function isWorkspaceMobileHostCallerId(callerId: string, deviceId?: strin
 }
 
 interface VibestudioMobileHostNative {
-  getCredentials(): Promise<Credentials | null>;
   clearCredentials(): Promise<void>;
   resetToNativeBootstrap(): Promise<ResetToNativeBootstrapResult>;
-  pairServer(serverUrl: string, code: string): Promise<ServerPairingResponse>;
-  listWorkspaces(): Promise<{ workspaces: RemoteWorkspaceEntry[] }>;
-  selectWorkspace(name: string, source: string | null): Promise<PairingResponse>;
-  issueConnectionGrant(): Promise<ConnectionGrantResponse>;
-  prepareAppBundle(
-    expectedRnHostAbi: string,
-    platform: "android" | "ios",
-    source: string | null
-  ): Promise<PreparedAppBundle>;
   activatePreparedAppBundle(
     localPath: string,
     buildKey: string,
@@ -115,36 +48,9 @@ interface VibestudioMobileHostNative {
 function nativeHost(): VibestudioMobileHostNative {
   const module = NativeModules["VibestudioMobileHost"] as VibestudioMobileHostNative | undefined;
   if (!module) {
-    throw new Error(
-      "VibestudioMobileHost native module is unavailable; mobile credentials cannot be handled in JS"
-    );
+    throw new Error("VibestudioMobileHost native module is unavailable");
   }
   return module;
-}
-
-export async function getCredentials(): Promise<Credentials | null> {
-  try {
-    const credentials = await nativeHost().getCredentials();
-    if (!credentials) return null;
-    if (
-      typeof credentials.deviceId !== "string" ||
-      credentials.deviceId.length === 0 ||
-      typeof credentials.serverId !== "string" ||
-      credentials.serverId.length === 0
-    ) {
-      await clearCredentials().catch(() => {});
-      throw new StoredCredentialsNeedRepairError(
-        "Stored mobile credentials are incomplete. Scan a new pairing QR code to reconnect."
-      );
-    }
-    return credentials;
-  } catch (error) {
-    if (isNativeRepairError(error)) {
-      await clearCredentials().catch(() => {});
-      throw new StoredCredentialsNeedRepairError();
-    }
-    throw error;
-  }
 }
 
 export async function clearCredentials(): Promise<void> {
@@ -159,65 +65,11 @@ export async function resetToNativeBootstrap(): Promise<ResetToNativeBootstrapRe
   return response;
 }
 
-export async function pairServer(serverUrl: string, code: string): Promise<ServerPairingResponse> {
-  const response = await nativeHost().pairServer(serverUrl, code);
-  if (typeof response.deviceId !== "string" || typeof response.serverId !== "string") {
-    throw new Error("Native host returned an invalid server pairing response");
-  }
-  return response;
-}
-
-export async function listWorkspaces(): Promise<RemoteWorkspaceEntry[]> {
-  const response = await nativeHost().listWorkspaces();
-  if (!response || !Array.isArray(response.workspaces)) {
-    throw new Error("Native host returned an invalid workspace list");
-  }
-  return response.workspaces.filter(
-    (entry): entry is RemoteWorkspaceEntry =>
-      entry &&
-      typeof entry === "object" &&
-      typeof (entry as RemoteWorkspaceEntry).name === "string"
-  );
-}
-
-export async function selectWorkspace(
-  name: string,
-  source?: string | null
-): Promise<PairingResponse> {
-  const response = await nativeHost().selectWorkspace(name, source ?? null);
-  validateNativeHostGrant(response, "Workspace selection response");
-  return response;
-}
-
-export async function issueConnectionGrant(): Promise<ConnectionGrantResponse> {
-  const response = await nativeHost().issueConnectionGrant();
-  validateNativeHostGrant(response, "Native host response");
-  return response;
-}
-
-export async function prepareAppBundle(
-  expectedRnHostAbi: string,
-  platform: "android" | "ios",
-  source?: string | null
-): Promise<PreparedAppBundle> {
-  const response = await nativeHost().prepareAppBundle(expectedRnHostAbi, platform, source ?? null);
-  if (
-    typeof response.appId !== "string" ||
-    typeof response.buildKey !== "string" ||
-    !Array.isArray(response.capabilities) ||
-    response.capabilities.some((capability) => typeof capability !== "string") ||
-    typeof response.rnHostAbi !== "string" ||
-    typeof response.integrity !== "string" ||
-    typeof response.localPath !== "string"
-  ) {
-    throw new Error("Native host returned an invalid prepared app bundle");
-  }
-  return response;
-}
-
-export async function activatePreparedAppBundle(
-  bundle: Pick<PreparedAppBundle, "localPath" | "buildKey" | "integrity">
-): Promise<ActivatePreparedAppBundleResult> {
+export async function activatePreparedAppBundle(bundle: {
+  localPath: string;
+  buildKey: string;
+  integrity: string;
+}): Promise<ActivatePreparedAppBundleResult> {
   const response = await nativeHost().activatePreparedAppBundle(
     bundle.localPath,
     bundle.buildKey,
@@ -227,35 +79,4 @@ export async function activatePreparedAppBundle(
     throw new Error("Native host returned an invalid app bundle activation result");
   }
   return response;
-}
-
-function isNativeRepairError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const maybe = error as { code?: unknown; message?: unknown };
-  return (
-    maybe.code === "needs_repair" ||
-    String(maybe.message ?? "")
-      .toLowerCase()
-      .includes("repair")
-  );
-}
-
-function validateNativeHostGrant(
-  response: Partial<ConnectionGrantResponse>,
-  source: string
-): asserts response is ConnectionGrantResponse {
-  if (
-    typeof response.connectionGrant !== "string" ||
-    response.connectionGrant.length === 0 ||
-    typeof response.callerId !== "string" ||
-    typeof response.deviceId !== "string" ||
-    response.deviceId.length === 0 ||
-    !isWorkspaceMobileHostCallerId(response.callerId, response.deviceId) ||
-    typeof response.serverId !== "string" ||
-    response.serverId.length === 0 ||
-    typeof response.workspaceId !== "string" ||
-    response.workspaceId.length === 0
-  ) {
-    throw new Error(`${source} did not include a valid mobile host connection grant`);
-  }
 }

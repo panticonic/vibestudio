@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   type ConnectPairing,
   createConnectDeepLink,
+  createConnectPairUrl,
+  DEFAULT_SIGNAL_URL,
   isLoopbackHost,
   isSelectedWorkspaceUrl,
   normalizeFingerprint,
   parseConnectLink,
   parseConnectServerUrl,
   parseSignalingEndpoint,
+  resolveSignalingUrl,
   selectedWorkspaceNameFromUrl,
   selectedWorkspaceUrl,
   serverCdpHostWsUrl,
@@ -38,6 +41,21 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       v: 2,
       ice: "all",
       srv: undefined,
+    });
+  });
+
+  it("round-trips the https pair carrier with identical payload semantics", () => {
+    const link = createConnectPairUrl({ ...PAIR, srv: "remote box" });
+    expect(link).toMatch(/^https:\/\/vibestudio\.app\/pair#/);
+    expect(parseConnectLink(link)).toEqual({
+      kind: "ok",
+      room: PAIR.room,
+      fp: PAIR.fp,
+      code: PAIR.code,
+      sig: "wss://signal.example/",
+      v: 2,
+      ice: "all",
+      srv: "remote box",
     });
   });
 
@@ -127,6 +145,30 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
     expect(parseSignalingEndpoint("ws://example.com/").kind).toBe("error");
   });
 
+  it("resolves signaling URL by flag > env > config > hosted default", () => {
+    expect(resolveSignalingUrl({ env: {} })).toEqual({
+      url: DEFAULT_SIGNAL_URL,
+      source: "default",
+    });
+    expect(resolveSignalingUrl({ configUrl: "wss://config.example", env: {} })).toEqual({
+      url: "wss://config.example/",
+      source: "config",
+    });
+    expect(
+      resolveSignalingUrl({
+        configUrl: "wss://config.example",
+        env: { VIBESTUDIO_WEBRTC_SIGNAL_URL: "wss://env.example" },
+      })
+    ).toEqual({ url: "wss://env.example/", source: "env" });
+    expect(
+      resolveSignalingUrl({
+        flag: "wss://flag.example",
+        env: { VIBESTUDIO_WEBRTC_SIGNAL_URL: "wss://env.example" },
+        configUrl: "wss://config.example",
+      })
+    ).toEqual({ url: "wss://flag.example/", source: "flag" });
+  });
+
   describe("isLoopbackHost (replaces isTrustedCleartextHost — loopback only)", () => {
     it("trusts loopback and the Android emulator alias", () => {
       for (const h of ["localhost", "127.0.0.1", "127.1.2.3", "10.0.2.2", "::1"]) {
@@ -155,11 +197,19 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
   // (a static specifier would trip TS7016 / implicit-any).
   type ConnectUtilsMirror = {
     createConnectDeepLink: (pairing: ConnectPairing) => string;
+    createConnectPairUrl: (pairing: ConnectPairing) => string;
     parseConnectLink: (raw: string) => unknown;
     parseConnectServerUrl: (raw: string) => unknown;
     parseSignalingEndpoint: (raw: string) => unknown;
     normalizeFingerprint: (fp: string) => string;
     isLoopbackHost: (host: string) => boolean;
+    resolveSignalingUrl: (options: {
+      flag?: string | null;
+      env?: Record<string, string | undefined>;
+      envKeys?: readonly string[];
+      configUrl?: string | null;
+      defaultUrl?: string;
+    }) => unknown;
   };
   const loadMirror = async (): Promise<ConnectUtilsMirror> => {
     const scriptUrl = new URL("../../../scripts/cli/lib/connect-utils.mjs", import.meta.url);
@@ -172,6 +222,9 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       const link = createConnectDeepLink(PAIR);
       expect(mirror.createConnectDeepLink(PAIR)).toBe(link);
       expect(mirror.parseConnectLink(link)).toEqual(parseConnectLink(link));
+      const pairUrl = createConnectPairUrl(PAIR);
+      expect(mirror.createConnectPairUrl(PAIR)).toBe(pairUrl);
+      expect(mirror.parseConnectLink(pairUrl)).toEqual(parseConnectLink(pairUrl));
       const withSrv = createConnectDeepLink({ ...PAIR, srv: "home", ice: "relay" });
       expect(mirror.createConnectDeepLink({ ...PAIR, srv: "home", ice: "relay" })).toBe(withSrv);
       expect(mirror.parseConnectLink(withSrv)).toEqual(parseConnectLink(withSrv));
@@ -185,6 +238,8 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
         createConnectDeepLink({ ...PAIR, code: "short" }),
         createConnectDeepLink({ ...PAIR, sig: "ws://signal.example/" }),
         createConnectDeepLink({ ...PAIR, v: 1 }), // stale protocol version → re-pair
+        "https://vibestudio.app/pair",
+        "https://example.com/pair#v=2",
       ]) {
         expect(mirror.parseConnectLink(bad)).toEqual(parseConnectLink(bad));
       }
@@ -207,6 +262,17 @@ describe("connect deep links (WebRTC pairing grammar)", () => {
       for (const url of ["http://127.0.0.1:3030", "http://192.168.1.20:3030", "https://server.example", "ftp://x"]) {
         expect(mirror.parseConnectServerUrl(url)).toEqual(parseConnectServerUrl(url));
       }
+    });
+
+    it("resolves signaling endpoints identically", async () => {
+      const mirror = await loadMirror();
+      const options = {
+        flag: "wss://flag.example",
+        env: { VIBESTUDIO_WEBRTC_SIGNAL_URL: "wss://env.example" },
+        configUrl: "wss://config.example",
+      };
+      expect(mirror.resolveSignalingUrl(options)).toEqual(resolveSignalingUrl(options));
+      expect(mirror.resolveSignalingUrl({ env: {} })).toEqual(resolveSignalingUrl({ env: {} }));
     });
   });
 });

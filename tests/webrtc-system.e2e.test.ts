@@ -167,8 +167,7 @@ async function rpcEcho(conn: PairedConnection, marker: string): Promise<void> {
 describe.runIf(RUN)("WebRTC complete system e2e (wrangler-dev signaling + ingress pool + createPairedConnection)", () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rtc-sys-"));
   const cert = ensurePersistentCert({
-    certificatePemFile: path.join(tmp, "server.pem"),
-    keyPemFile: path.join(tmp, "server.key"),
+    identityPemFile: path.join(tmp, "identity.pem"),
   });
   let deviceAuthStore: DeviceAuthStore;
   let dispatched: Array<{ service: string; method: string; args: unknown[] }> = [];

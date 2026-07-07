@@ -40,6 +40,7 @@ function isPortOpen(host, port, timeoutMs = 500) {
 
 function parseArgs(argv) {
   const options = {
+    platform: "android",
     avd: null,
     device: null,
     resetApp: false,
@@ -53,6 +54,8 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--") {
       throw new Error("Forwarding raw server flags is no longer supported");
+    } else if (arg === "--platform") {
+      options.platform = argv[++i] ?? "android";
     } else if (arg === "--avd") {
       options.avd = argv[++i] ?? null;
     } else if (arg === "--device") {
@@ -72,6 +75,9 @@ function parseArgs(argv) {
     }
   }
 
+  if (options.platform !== "android" && options.platform !== "ios") {
+    throw new Error("--platform must be android or ios");
+  }
   return options;
 }
 
@@ -79,9 +85,10 @@ function printHelp() {
   console.log(`vibestudio mobile dev
 
 Usage:
-  vibestudio mobile dev [options]
+  vibestudio mobile dev [--platform android|ios] [options]
 
 Runner options:
+  --platform <name> android or ios. Defaults to android.
   --avd <name>      Start this AVD if no device is connected
   --device <serial> Use a specific adb device serial
   --reset-app       Clear app data before launch
@@ -343,6 +350,50 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printHelp();
+    return;
+  }
+  if (options.platform === "ios") {
+    if (process.platform !== "darwin") {
+      throw new Error("iOS dev requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac.");
+    }
+    const startedChildren = [];
+    try {
+      if (!options.noMetro && !(await isPortOpen("127.0.0.1", metroPort))) {
+        const pnpmStart = createPnpmInvocation(["start"]);
+        const metroChild = spawnManaged(pnpmStart.command, pnpmStart.args, {
+          cwd: mobileDir,
+          env: {
+            ...process.env,
+            REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
+          },
+          label: "metro",
+        });
+        startedChildren.push(metroChild);
+        await waitForSpawn(metroChild, pnpmStart.command, pnpmStart.args);
+        await sleep(3000);
+      }
+      if (!options.noInstall) {
+        await runCommand(process.execPath, [
+          path.join(repoRoot, "scripts", "cli", "mobile-install.mjs"),
+          "--platform",
+          "ios",
+          "--simulator",
+          "--configuration",
+          "Debug",
+          ...(options.noLaunch ? [] : ["--launch"]),
+        ], { cwd: repoRoot, env: process.env, label: "mobile-install-ios" });
+      }
+      console.log("[mobile-dev] iOS shell is running. Start pairing with: vibestudio mobile pair");
+      await new Promise((resolve) => {
+        process.once("SIGINT", resolve);
+        process.once("SIGTERM", resolve);
+      });
+    } finally {
+      for (const child of startedChildren.reverse()) {
+        if (child.exitCode == null && !child.killed) child.kill("SIGTERM");
+      }
+      await Promise.all(startedChildren.map((child) => waitForChildExit(child)));
+    }
     return;
   }
 

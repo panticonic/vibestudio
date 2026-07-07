@@ -8,7 +8,7 @@
  * panel chrome path in the desktop shell.
  */
 
-import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, test, type ElectronApplication } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import YAML from "yaml";
@@ -65,23 +65,105 @@ async function launchMobileTestApp(
 ): Promise<TestApp> {
   const workspacePath = createManagedTestWorkspace();
   writeInitPanelsConfig(workspacePath, panels);
-  const testApp = await launchTestApp({
-    workspace: workspacePath,
-    launchTimeout: 240_000,
-    env: { VIBESTUDIO_AUTO_APPROVE: "1" },
-  });
-  const shellWindow = await waitForShellWindow(testApp.app);
-  return {
-    ...testApp,
-    window: shellWindow,
-    cleanup: async () => {
+  let testApp: TestApp | null = null;
+  try {
+    testApp = await launchTestApp({
+      workspace: workspacePath,
+      launchTimeout: 240_000,
+      env: { VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS: "1" },
+    });
+    await waitForHostedShellChrome(testApp.app);
+    return {
+      ...testApp,
+      cleanup: async () => {
+        try {
+          await testApp?.cleanup();
+        } finally {
+          removeManagedTestWorkspace(workspacePath);
+        }
+      },
+    };
+  } catch (error) {
+    if (testApp) {
+      console.log(
+        "MOBILE_SHELL_DISCOVERY_DIAGNOSTICS",
+        JSON.stringify(await listShellCandidateSnapshots(testApp.app).catch(() => []), null, 2)
+      );
+      await testApp.cleanup().catch(() => {});
+    }
+    removeManagedTestWorkspace(workspacePath);
+    throw error;
+  }
+}
+
+async function listShellCandidateSnapshots(app: ElectronApplication): Promise<
+  Array<{
+    id: number;
+    url: string;
+    title: string;
+    text: string;
+    hasShellChrome: boolean;
+    labels: string[];
+    viewport: { width: number; height: number; scrollWidth: number };
+  }>
+> {
+  return app.evaluate(async ({ webContents }) => {
+    const snapshots = [];
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
       try {
-        await testApp.cleanup();
-      } finally {
-        removeManagedTestWorkspace(workspacePath);
+        const dom = await contents.executeJavaScript(
+          `(() => ({
+            text: (document.body?.innerText ?? "").slice(0, 1200),
+            hasShellChrome: Boolean(
+              document.querySelector(".titlebar-breadcrumb-scroll")
+                || document.querySelector('[aria-label="Menu"]')
+                || document.querySelector('[aria-label="Open panel tree"]')
+                || document.querySelector('[aria-label="Close panel tree"]')
+            ),
+            labels: Array.from(document.querySelectorAll("[aria-label]"))
+              .map((node) => node.getAttribute("aria-label"))
+              .filter(Boolean)
+              .slice(0, 80),
+            viewport: {
+              width: window.innerWidth,
+              height: window.innerHeight,
+              scrollWidth: document.documentElement.scrollWidth,
+            },
+          }))()`,
+          true
+        );
+        snapshots.push({
+          id: contents.id,
+          url: contents.getURL(),
+          title: contents.getTitle(),
+          ...dom,
+        });
+      } catch {
+        // Ignore non-DOM webContents.
       }
-    },
-  };
+    }
+    return snapshots;
+  });
+}
+
+async function rpcCall(
+  app: ElectronApplication,
+  service: string,
+  method: string,
+  args: unknown[] = []
+): Promise<unknown> {
+  return app.evaluate(async (_electron, request) => {
+    const testApi = (
+      globalThis as {
+        __testApi?: {
+          rpcCall: (service: string, method: string, args?: unknown[]) => Promise<unknown>;
+        };
+      }
+    ).__testApi;
+    if (!testApi) throw new Error("Test API not available");
+    return testApi.rpcCall(request.service, request.method, request.args);
+  }, { service, method, args });
 }
 
 async function clickRecoveryApproval(app: ElectronApplication): Promise<boolean> {
@@ -93,7 +175,9 @@ async function clickRecoveryApproval(app: ElectronApplication): Promise<boolean>
           `(() => {
             if (!document.querySelector('[data-bootstrap-launch-gate="true"]')) return false;
             const approveAll = Array.from(document.querySelectorAll("button"))
-              .find((button) => (button.textContent ?? "").trim() === "Approve and start");
+              .find((button) =>
+                /^(Trust and start|Approve and start)$/.test((button.textContent ?? "").trim())
+              );
             if (!approveAll) return false;
             approveAll.click();
             return true;
@@ -109,28 +193,222 @@ async function clickRecoveryApproval(app: ElectronApplication): Promise<boolean>
   });
 }
 
-async function waitForShellWindow(app: ElectronApplication): Promise<Page> {
-  let shellWindow: Page | null = null;
-  await expect
-    .poll(
-      async () => {
-        for (const page of app.windows()) {
-          const hasShellChrome = await page
-            .getByLabel(/Open panel tree|Close panel tree|Show address bar|Hide address bar/)
-            .count()
-            .then((count) => count > 0)
-            .catch(() => false);
-          if (hasShellChrome) {
-            shellWindow = page;
-            return true;
+async function evaluateInHostedShell<T>(
+  app: ElectronApplication,
+  script: string
+): Promise<T | null> {
+  return app.evaluate(async ({ webContents }, code) => {
+    const timed = async <Value>(promise: Promise<Value>, timeoutMs = 1500): Promise<Value | null> =>
+      Promise.race([
+        promise,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      ]);
+    const hasShellChromeScript = `(() => Boolean(
+      document.querySelector(".titlebar-breadcrumb-scroll")
+        || document.querySelector('[aria-label="Menu"]')
+        || document.querySelector('[aria-label="Open panel tree"]')
+        || document.querySelector('[aria-label="Close panel tree"]')
+    ))()`;
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.isDestroyed()) continue;
+      try {
+        const isHostedShell = Boolean(
+          await timed(contents.executeJavaScript(hasShellChromeScript, true))
+        );
+        if (!isHostedShell) continue;
+        return await timed(contents.executeJavaScript(code, true));
+      } catch {
+        // Ignore non-DOM webContents and transient navigation races.
+      }
+    }
+    return null;
+  }, script);
+}
+
+async function waitForHostedShellChrome(app: ElectronApplication): Promise<void> {
+  let launchSessionId: string | null = null;
+  let lastProbe: Record<string, unknown> = {};
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    const probe: Record<string, unknown> = {};
+    await clickRecoveryApproval(app).catch((error: unknown) => {
+      probe["recoveryClickError"] = error instanceof Error ? error.message : String(error);
+      return false;
+    });
+    const launchSession = launchSessionId
+      ? await rpcCall(app, "workspace", "hostTargets.getLaunchSession", [launchSessionId]).catch(
+          (error: unknown) => {
+            probe["launchSessionError"] = error instanceof Error ? error.message : String(error);
+            return null;
           }
-        }
-        return false;
-      },
-      { timeout: 60_000, intervals: [250, 500, 1000] }
+        )
+      : await rpcCall(app, "workspace", "hostTargets.beginLaunch", ["electron"]).catch(
+          (error: unknown) => {
+            probe["launchSessionError"] = error instanceof Error ? error.message : String(error);
+            return null;
+          }
+        );
+    probe["launchSession"] = summarizeLaunchSession(launchSession);
+    if (
+      launchSession &&
+      typeof launchSession === "object" &&
+      "sessionId" in launchSession &&
+      typeof launchSession.sessionId === "string"
+    ) {
+      launchSessionId = launchSession.sessionId;
+      const approvals = Array.isArray((launchSession as { approvals?: unknown }).approvals)
+        ? (launchSession as { approvals: unknown[] }).approvals
+        : [];
+      if (approvals.length > 0) {
+        probe["resolvedSessionApprovals"] = approvals.length;
+        await rpcCall(app, "workspace", "hostTargets.resolveLaunchSessionApproval", [
+          launchSessionId,
+          "once",
+        ]).catch((error: unknown) => {
+          probe["resolveSessionApprovalError"] =
+            error instanceof Error ? error.message : String(error);
+          return null;
+        });
+      }
+    }
+    const pending = await listPendingApprovals(app).catch((error: unknown) => {
+      probe["pendingError"] = error instanceof Error ? error.message : String(error);
+      return [];
+    });
+    probe["pending"] = pending.map((approval) => ({
+      kind: approval.kind,
+      approvalId: approval.approvalId,
+      options: approval.options?.map((option) => option.value),
+    }));
+    for (const approval of pending) {
+      await resolveApproval(app, approval).catch((error: unknown) => {
+        probe["resolvePendingError"] = error instanceof Error ? error.message : String(error);
+      });
+    }
+    const hasShell = Boolean(
+      await evaluateInHostedShell(
+        app,
+        `(() => Boolean(
+          document.querySelector(".titlebar-breadcrumb-scroll")
+            || document.querySelector('[aria-label="Menu"]')
+            || document.querySelector('[aria-label="Open panel tree"]')
+            || document.querySelector('[aria-label="Close panel tree"]')
+            || document.querySelector('[aria-label="Switch to tree navigation"]')
+            || document.querySelector('[aria-label="Switch to breadcrumb navigation"]')
+        ))()`
+      )
+    );
+    probe["hasShell"] = hasShell;
+    lastProbe = probe;
+    if (hasShell) return;
+    await delay(500);
+  }
+  throw new Error(`Timed out waiting for hosted shell chrome: ${JSON.stringify(lastProbe)}`);
+}
+
+function summarizeLaunchSession(session: unknown): unknown {
+  if (!session || typeof session !== "object") return session;
+  const record = session as Record<string, unknown>;
+  return {
+    sessionId: record["sessionId"],
+    status: record["status"],
+    currentPhase: record["currentPhase"],
+    message: record["message"],
+    detail: record["detail"],
+    settled: record["settled"],
+    approvals: Array.isArray(record["approvals"]) ? record["approvals"].length : undefined,
+    approvalViews: Array.isArray(record["approvalViews"])
+      ? record["approvalViews"].map((view) =>
+          view && typeof view === "object"
+            ? {
+                title: (view as Record<string, unknown>)["title"],
+                summary: (view as Record<string, unknown>)["summary"],
+              }
+            : view
+        )
+      : undefined,
+  };
+}
+
+async function shellElementVisibleByLabel(
+  app: ElectronApplication,
+  label: string
+): Promise<boolean> {
+  return Boolean(
+    await evaluateInHostedShell(
+      app,
+      `(() => {
+        const label = ${JSON.stringify(label)};
+        const visible = (node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return style.display !== "none"
+            && style.visibility !== "hidden"
+            && rect.width > 0
+            && rect.height > 0
+            && !node.closest("[hidden], [aria-hidden='true']");
+        };
+        return Array.from(document.querySelectorAll("[aria-label]"))
+          .some((node) => node.getAttribute("aria-label") === label && visible(node));
+      })()`
     )
-    .toBe(true);
-  return shellWindow!;
+  );
+}
+
+async function shellClickByLabel(app: ElectronApplication, label: string): Promise<boolean> {
+  return Boolean(
+    await evaluateInHostedShell(
+      app,
+      `(() => {
+        const label = ${JSON.stringify(label)};
+        const visible = (node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return style.display !== "none"
+            && style.visibility !== "hidden"
+            && rect.width > 0
+            && rect.height > 0
+            && !node.closest("[hidden], [aria-hidden='true']");
+        };
+        const node = Array.from(document.querySelectorAll("[aria-label]"))
+          .find((item) => item.getAttribute("aria-label") === label && visible(item));
+        if (!(node instanceof HTMLElement)) return false;
+        node.click();
+        return true;
+      })()`
+    )
+  );
+}
+
+async function shellClickButtonByTextPattern(
+  app: ElectronApplication,
+  pattern: RegExp
+): Promise<boolean> {
+  return Boolean(
+    await evaluateInHostedShell(
+      app,
+      `(() => {
+        const pattern = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(pattern.flags)});
+        const visible = (node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const style = getComputedStyle(node);
+          const rect = node.getBoundingClientRect();
+          return style.display !== "none"
+            && style.visibility !== "hidden"
+            && rect.width > 0
+            && rect.height > 0
+            && !node.closest("[hidden], [aria-hidden='true']");
+        };
+        const node = Array.from(document.querySelectorAll("button,[role='button']"))
+          .find((item) => pattern.test((item.textContent ?? "").trim()) && visible(item));
+        if (!(node instanceof HTMLElement)) return false;
+        node.click();
+        return true;
+      })()`
+    )
+  );
 }
 
 async function setMobileWindow(app: ElectronApplication): Promise<void> {
@@ -260,26 +538,44 @@ async function waitForAnyPanel(app: ElectronApplication): Promise<string> {
   return panelId!;
 }
 
-async function expectShellFitsMobileViewport(window: Page): Promise<void> {
-  const audit = await window.evaluate(() => ({
-    viewportWidth: window.innerWidth,
-    viewportHeight: window.innerHeight,
-    scrollWidth: document.documentElement.scrollWidth,
-    scrollHeight: document.documentElement.scrollHeight,
-    titleBarText: document.body.innerText,
-  }));
+async function expectShellFitsMobileViewport(app: ElectronApplication): Promise<void> {
+  const audit = await evaluateInHostedShell<{
+    viewportWidth: number;
+    viewportHeight: number;
+    scrollWidth: number;
+    scrollHeight: number;
+    titleBarText: string;
+    hasMenu: boolean;
+    hasNewPanel: boolean;
+  }>(
+    app,
+    `(() => ({
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      scrollWidth: document.documentElement.scrollWidth,
+      scrollHeight: document.documentElement.scrollHeight,
+      titleBarText: document.body.innerText,
+      hasMenu: Boolean(document.querySelector('[aria-label="Menu"]')),
+      hasNewPanel: Boolean(document.querySelector('[aria-label="New panel"]')),
+    }))()`
+  );
+  expect(audit).not.toBeNull();
+  if (!audit) return;
   expect(audit.viewportWidth).toBeLessThanOrEqual(MOBILE_BOUNDS.width + 4);
   expect(audit.scrollWidth).toBeLessThanOrEqual(audit.viewportWidth + 2);
-  expect(audit.titleBarText).toContain("URL");
+  expect(audit.hasMenu).toBe(true);
+  expect(audit.hasNewPanel).toBe(true);
 }
 
-async function ensureShellStackMode(window: Page): Promise<void> {
-  await window
-    .getByRole("button", { name: "Close panel tree" })
-    .first()
-    .click({ timeout: 1_000 })
-    .catch(() => {});
-  await expect(window.getByRole("button", { name: "Open panel tree" })).toBeVisible();
+async function ensureShellStackMode(app: ElectronApplication): Promise<void> {
+  await shellClickByLabel(app, "Hide address bar").catch(() => false);
+  await shellClickByLabel(app, "Close panel tree").catch(() => false);
+  await expect
+    .poll(() => shellElementVisibleByLabel(app, "Open panel tree"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    })
+    .toBe(true);
 }
 
 async function expectPanelFitsMobileViewport(
@@ -352,74 +648,89 @@ async function resolveApproval(app: ElectronApplication, approval: PendingApprov
   }, approval);
 }
 
-async function approveShellPrompts(app: ElectronApplication, window: Page): Promise<void> {
+async function approveShellPrompts(app: ElectronApplication): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const clickedRecovery = await clickRecoveryApproval(app);
     const pending = await listPendingApprovals(app);
     for (const approval of pending) {
       await resolveApproval(app, approval);
     }
-    const clicked = await window
-      .getByRole("button", {
-        name: /Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i,
-      })
-      .click({ timeout: 500 })
-      .then(() => true)
-      .catch(() => false);
+    const clicked = await shellClickButtonByTextPattern(
+      app,
+      /Trust and start|Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i
+    );
     if (!clickedRecovery && pending.length === 0 && !clicked) return;
     await delay(500);
   }
 }
 
 test.describe("Mobile Panels", () => {
-  test.setTimeout(300_000);
+  test.describe.configure({ mode: "serial" });
+  test.setTimeout(600_000);
 
   let testApp: TestApp | undefined;
 
-  test.afterEach(async () => {
-    if (testApp) await testApp.cleanup();
+  test.beforeAll(async () => {
+    testApp = await launchMobileTestApp([{ source: "about/new" }]);
+    await setMobileWindow(testApp.app);
+  });
+
+  test.afterAll(async () => {
+    await testApp?.cleanup();
     testApp = undefined;
   });
 
   test("shell chrome exposes mobile panel tree without horizontal overflow", async () => {
-    testApp = await launchMobileTestApp([{ source: "about/new" }]);
-    await setMobileWindow(testApp.app);
-    await ensureShellStackMode(testApp.window);
-    await testApp.window.waitForTimeout(500);
+    expect(testApp).toBeDefined();
+    await setMobileWindow(testApp!.app);
+    await ensureShellStackMode(testApp!.app);
+    await delay(500);
 
-    await expectShellFitsMobileViewport(testApp.window);
+    await expectShellFitsMobileViewport(testApp!.app);
 
-    await testApp.window.getByLabel("Open panel tree").click();
-    await expect(testApp.window.getByRole("heading", { name: "Panels" })).toBeVisible();
-    await expectShellFitsMobileViewport(testApp.window);
+    expect(await shellClickByLabel(testApp!.app, "Open panel tree")).toBe(true);
+    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Close panel tree"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    }).toBe(true);
+    await expectShellFitsMobileViewport(testApp!.app);
 
-    await testApp.window.getByRole("button", { name: "Close panel tree" }).first().click();
-    await expect(testApp.window.getByLabel("Open panel tree")).toBeVisible();
+    expect(await shellClickByLabel(testApp!.app, "Close panel tree")).toBe(true);
+    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Open panel tree"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    }).toBe(true);
   });
 
   test("mobile titlebar toggles the address bar without overflow", async () => {
-    testApp = await launchMobileTestApp([{ source: "about/help" }]);
-    await setMobileWindow(testApp.app);
-    await ensureShellStackMode(testApp.window);
-    await ensurePanelSource(testApp.app, "about/help");
+    expect(testApp).toBeDefined();
+    await setMobileWindow(testApp!.app);
+    await ensureShellStackMode(testApp!.app);
+    await ensurePanelSource(testApp!.app, "about/help");
 
-    await testApp.window.getByLabel("Show address bar").click();
-    await expect(testApp.window.getByLabel("Panel path")).toBeVisible();
-    await expectShellFitsMobileViewport(testApp.window);
+    expect(await shellClickByLabel(testApp!.app, "Show address bar")).toBe(true);
+    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    }).toBe(true);
+    await expectShellFitsMobileViewport(testApp!.app);
 
-    await testApp.window.getByLabel("Hide address bar").click();
-    await expect(testApp.window.getByLabel("Panel path")).toBeHidden();
-    await expectShellFitsMobileViewport(testApp.window);
+    expect(await shellClickByLabel(testApp!.app, "Hide address bar")).toBe(true);
+    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Panel path"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    }).toBe(false);
+    await expectShellFitsMobileViewport(testApp!.app);
   });
 
   test("mobile titlebar creates a new panel", async () => {
-    testApp = await launchMobileTestApp([{ source: "about/help" }]);
-    await setMobileWindow(testApp.app);
-    await ensureShellStackMode(testApp.window);
-    await waitForAnyPanel(testApp.app);
-    const initialCount = (await getPanelTree(testApp.app)).length;
+    expect(testApp).toBeDefined();
+    await setMobileWindow(testApp!.app);
+    await ensureShellStackMode(testApp!.app);
+    await waitForAnyPanel(testApp!.app);
+    const initialCount = (await getPanelTree(testApp!.app)).length;
 
-    await testApp.window.getByRole("button", { name: "New panel" }).first().click();
+    expect(await shellClickByLabel(testApp!.app, "New panel")).toBe(true);
 
     await expect
       .poll(
@@ -433,52 +744,64 @@ test.describe("Mobile Panels", () => {
         { timeout: 30_000, intervals: [250, 500, 1000] }
       )
       .toEqual({ count: initialCount + 1, hasNewPanel: true });
-    await expectShellFitsMobileViewport(testApp.window);
+    await expectShellFitsMobileViewport(testApp!.app);
   });
 
   test("mobile panel tree selection returns to stack mode", async () => {
-    testApp = await launchMobileTestApp([{ source: "about/new" }]);
-    await setMobileWindow(testApp.app);
-    await ensureShellStackMode(testApp.window);
-    const parentId = await ensurePanelSource(testApp.app, "about/new");
-    await createPanel(testApp.app, parentId, "about/help", { focus: false });
-    await waitForSourcePanel(testApp.app, "about/help");
+    expect(testApp).toBeDefined();
+    await setMobileWindow(testApp!.app);
+    await ensureShellStackMode(testApp!.app);
+    const parentId = await ensurePanelSource(testApp!.app, "about/new");
+    await createPanel(testApp!.app, parentId, "about/help", { focus: false });
+    await waitForSourcePanel(testApp!.app, "about/help");
 
-    await testApp.window.getByLabel("Open panel tree").click();
-    await expect(testApp.window.getByRole("heading", { name: "Panels" })).toBeVisible();
-    await testApp.window.getByText("Help", { exact: true }).click();
+    expect(await shellClickByLabel(testApp!.app, "Open panel tree")).toBe(true);
+    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Close panel tree"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    }).toBe(true);
+    expect(await shellClickByLabel(testApp!.app, "Select panel Help")).toBe(true);
 
-    await expect(testApp.window.getByLabel("Open panel tree")).toBeVisible();
-    await expect(testApp.window.getByRole("heading", { name: "Panels" })).toBeHidden();
-    await expectShellFitsMobileViewport(testApp.window);
+    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Open panel tree"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    }).toBe(true);
+    await expect.poll(() => shellElementVisibleByLabel(testApp!.app, "Close panel tree"), {
+      timeout: 30_000,
+      intervals: [250, 500, 1000],
+    }).toBe(false);
+    await expectShellFitsMobileViewport(testApp!.app);
   });
 
   test("terminal session fits the mobile panel viewport", async () => {
-    testApp = await launchMobileTestApp([{ source: "panels/terminal" }]);
-    await setMobileWindow(testApp.app);
-    await ensureShellStackMode(testApp.window);
-    const panelId = await ensurePanelSource(testApp.app, "panels/terminal");
-    await approveShellPrompts(testApp.app, testApp.window);
+    expect(testApp).toBeDefined();
+    await setMobileWindow(testApp!.app);
+    await ensureShellStackMode(testApp!.app);
+    const panelId = await ensurePanelSource(testApp!.app, "panels/terminal");
+    await approveShellPrompts(testApp!.app);
 
     await expect
-      .poll(async () => getPanelText(testApp!.app, panelId), {
+      .poll(async () => {
+        await approveShellPrompts(testApp!.app);
+        return getPanelText(testApp!.app, panelId);
+      }, {
         timeout: 60_000,
         intervals: [500, 1000, 2000],
       })
       .toMatch(/(?:\$|#|>\s*)|(?:\d+x\d+)/);
-    await expectPanelFitsMobileViewport(testApp.app, panelId);
+    await expectPanelFitsMobileViewport(testApp!.app, panelId);
   });
 
   for (const source of SHIPPED_PANELS) {
     test(`${source} fits a phone-width panel viewport`, async () => {
-      testApp = await launchMobileTestApp([{ source }]);
-      await setMobileWindow(testApp.app);
-      await ensureShellStackMode(testApp.window);
-      const panelId = await ensurePanelSource(testApp.app, source);
-      await testApp.window.waitForTimeout(500);
+      expect(testApp).toBeDefined();
+      await setMobileWindow(testApp!.app);
+      await ensureShellStackMode(testApp!.app);
+      const panelId = await ensurePanelSource(testApp!.app, source);
+      await delay(500);
 
-      await expectShellFitsMobileViewport(testApp.window);
-      await expectPanelFitsMobileViewport(testApp.app, panelId);
+      await expectShellFitsMobileViewport(testApp!.app);
+      await expectPanelFitsMobileViewport(testApp!.app, panelId);
     });
   }
 

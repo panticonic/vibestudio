@@ -1,6 +1,8 @@
 #import "AppDelegate.h"
 
 #import <React/RCTBundleURLProvider.h>
+#import <React/RCTLinkingManager.h>
+#import <React/RCTReloadCommand.h>
 #import <UserNotifications/UserNotifications.h>
 #import <CommonCrypto/CommonDigest.h>
 
@@ -27,7 +29,10 @@
 static NSString *const VibestudioActiveBundleLocalPath = @"activeBundle.localPath";
 static NSString *const VibestudioActiveBundleBuildKey = @"activeBundle.buildKey";
 static NSString *const VibestudioActiveBundleIntegrity = @"activeBundle.integrity";
+static NSString *const VibestudioActiveBundleSource = @"activeBundle.source";
 static BOOL VibestudioBundleHasSha256Integrity(NSString *path, NSString *integrity);
+static BOOL VibestudioIsPairingURL(NSURL *url);
+static void VibestudioResetToNativeBootstrap(void);
 
 @implementation AppDelegate
 
@@ -50,6 +55,27 @@ static BOOL VibestudioBundleHasSha256Integrity(NSString *path, NSString *integri
   self.moduleName = @"Vibestudio";
   self.initialProps = @{};
   return [super application:application didFinishLaunchingWithOptions:launchOptions];
+}
+
+- (BOOL)application:(UIApplication *)application
+            openURL:(NSURL *)url
+            options:(NSDictionary<UIApplicationOpenURLOptionsKey,id> *)options
+{
+  if (VibestudioIsPairingURL(url)) {
+    VibestudioResetToNativeBootstrap();
+  }
+  return [RCTLinkingManager application:application openURL:url options:options];
+}
+
+- (BOOL)application:(UIApplication *)application
+continueUserActivity:(NSUserActivity *)userActivity
+ restorationHandler:(void (^)(NSArray<id<UIUserActivityRestoring>> * _Nullable))restorationHandler
+{
+  NSURL *url = userActivity.webpageURL;
+  if (VibestudioIsPairingURL(url)) {
+    VibestudioResetToNativeBootstrap();
+  }
+  return [RCTLinkingManager application:application continueUserActivity:userActivity restorationHandler:restorationHandler];
 }
 
 - (void)application:(UIApplication *)application
@@ -79,10 +105,7 @@ static BOOL VibestudioBundleHasSha256Integrity(NSString *path, NSString *integri
     return [NSURL fileURLWithPath:activeBundlePath];
   }
   if (activeBundlePath.length > 0) {
-    [defaults removeObjectForKey:VibestudioActiveBundleLocalPath];
-    [defaults removeObjectForKey:VibestudioActiveBundleBuildKey];
-    [defaults removeObjectForKey:VibestudioActiveBundleIntegrity];
-    [defaults synchronize];
+    VibestudioResetToNativeBootstrap();
   }
 #if DEBUG
   return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@"index"];
@@ -92,6 +115,31 @@ static BOOL VibestudioBundleHasSha256Integrity(NSString *path, NSString *integri
 }
 
 @end
+
+static BOOL VibestudioIsPairingURL(NSURL *url)
+{
+  if (url == nil) return NO;
+  NSString *scheme = url.scheme.lowercaseString ?: @"";
+  NSString *host = url.host.lowercaseString ?: @"";
+  NSString *path = url.path ?: @"";
+  if ([scheme isEqualToString:@"vibestudio"] && [host isEqualToString:@"connect"]) return YES;
+  if ([scheme isEqualToString:@"https"] && [host isEqualToString:@"vibestudio.app"] && [path isEqualToString:@"/pair"]) return YES;
+  return NO;
+}
+
+static void VibestudioResetToNativeBootstrap(void)
+{
+  NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+  [defaults removeObjectForKey:VibestudioActiveBundleLocalPath];
+  [defaults removeObjectForKey:VibestudioActiveBundleBuildKey];
+  [defaults removeObjectForKey:VibestudioActiveBundleIntegrity];
+  [defaults removeObjectForKey:VibestudioActiveBundleSource];
+  [defaults synchronize];
+  dispatch_async(dispatch_get_main_queue(), ^{
+    RCTReloadCommandSetBundleURL(nil);
+    RCTTriggerReloadCommandListeners(@"Vibestudio connect link reset");
+  });
+}
 
 static BOOL VibestudioBundleHasSha256Integrity(NSString *path, NSString *integrity)
 {

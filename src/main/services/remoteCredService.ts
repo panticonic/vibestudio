@@ -1,6 +1,3 @@
-import { app, safeStorage } from "electron";
-import * as fs from "node:fs";
-import * as path from "node:path";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
@@ -17,10 +14,11 @@ import {
   createConnectDeepLink,
 } from "@vibestudio/shared/connect";
 import {
-  createRemoteCredStore,
-  type RemoteCredStore,
+  clearStoredRemotePairing as clearStoredRemotePairingInStore,
+  loadStoredRemotePairing as loadStoredRemotePairingFromStore,
+  saveDeviceCredential,
   type StoredRemote,
-} from "./remoteCredStore.js";
+} from "./deviceCredentialStore.js";
 
 /**
  * Client-side persistence of a WebRTC remote pairing. A desktop client that has
@@ -31,27 +29,7 @@ import {
  *   - the durable device credential (`deviceId`/`refreshToken`) the server
  *     issued, so it can re-authenticate without re-pairing (`refresh:…`).
  *
- * The store is created lazily (on first use) so that `app.getPath("userData")`
- * is read AFTER the startup `app.setPath("userData", …)` call has run, and so the
- * module can be imported in non-Electron unit tests without touching safeStorage.
  */
-let storeSingleton: RemoteCredStore | null = null;
-function getStore(): RemoteCredStore {
-  if (!storeSingleton) {
-    storeSingleton = createRemoteCredStore({
-      filePath: path.join(app.getPath("userData"), "webrtc-remote.json"),
-      cipher: {
-        encrypt: (s) => safeStorage.encryptString(s),
-        decrypt: (b) => safeStorage.decryptString(b),
-        isAvailable: () => safeStorage.isEncryptionAvailable(),
-      },
-      fs,
-      dirname: path.dirname,
-    });
-  }
-  return storeSingleton;
-}
-
 function remoteCredentialPersistenceDisabled(): boolean {
   const value = process.env["VIBESTUDIO_DISABLE_REMOTE_CRED_PERSISTENCE"];
   return value === "1" || value === "true";
@@ -59,7 +37,7 @@ function remoteCredentialPersistenceDisabled(): boolean {
 
 /** Read the persisted WebRTC remote pairing, if any (consumed by serverSession). */
 export function loadStoredRemotePairing(): StoredRemote | null {
-  return getStore().load();
+  return loadStoredRemotePairingFromStore();
 }
 
 /**
@@ -69,7 +47,7 @@ export function loadStoredRemotePairing(): StoredRemote | null {
  * instead of re-dialing a dead pairing forever (a permanent-lockout otherwise).
  */
 export function clearStoredRemotePairing(): void {
-  getStore().clear();
+  clearStoredRemotePairingInStore();
 }
 
 /**
@@ -99,14 +77,14 @@ export function persistRotatedRemoteCredential(cred: {
   refreshToken: string;
 }): void {
   if (remoteCredentialPersistenceDisabled()) return;
-  const existing = getStore().load();
+  const existing = loadStoredRemotePairingFromStore();
   if (!existing) return;
   persistOrWarn("could not persist rotated credential", () =>
-    getStore().save({
+    saveDeviceCredential({
       ...existing,
       deviceId: cred.deviceId,
       refreshToken: cred.refreshToken,
-      pairedAt: Date.now(),
+      rotatedAt: Date.now(),
     })
   );
 }
@@ -119,7 +97,7 @@ export function persistRotatedRemoteCredential(cred: {
  */
 export function saveStoredRemote(value: StoredRemote): void {
   if (remoteCredentialPersistenceDisabled()) return;
-  persistOrWarn("could not persist remote pairing", () => getStore().save(value));
+  persistOrWarn("could not persist remote pairing", () => saveDeviceCredential(value));
 }
 
 export interface RemoteCredCurrent {
@@ -153,7 +131,13 @@ export interface DeviceRecord {
 
 export interface PairingInvite {
   code: string;
-  deepLink: string | null;
+  deepLink: string;
+  pairUrl: string;
+  room: string;
+  fp: string;
+  sig: string;
+  ice?: "all" | "relay";
+  srv?: string;
   serverUrl: string;
   expiresAt: number;
   expiresInMs: number;
@@ -163,12 +147,9 @@ export interface PairingInvite {
 }
 
 // `exchangePairingCode` (the throwaway redeem-then-relaunch) was removed: the
-// bootstrap chooser now hands a parsed pairing straight to
+// bootstrap now hands a parsed pairing straight to
 // `establishServerSession({ pendingPairing })`, and that single WebRTC pipe
-// authenticates with the one-time code and STAYS as the session — see
-// serverSession.establishFreshPairSession. The fresh credential is persisted via
-// `saveStoredRemote` (above) on `onPaired`, so the next launch reconnects with a
-// refresh token.
+// authenticates with the one-time code and stays as the session.
 
 function authClientFor(client: ServerClient) {
   return createTypedServiceClient("auth", authMethods, (svc, m, a) => client.call(svc, m, a));
@@ -306,7 +287,7 @@ export function createRemoteCredService(deps: {
         case "clear":
           // Forget the persisted WebRTC pairing; the next launch starts unpaired
           // (local chooser) until a new server is paired.
-          getStore().clear();
+          clearStoredRemotePairingInStore();
           return { ok: true };
         case "relaunch":
           relaunchApp();

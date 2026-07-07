@@ -67,7 +67,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   }
 
   const onPasteLink = () => {
-    const raw = window.prompt("Paste vibestudio:// pairing link");
+    const raw = window.prompt("Paste Vibestudio pairing link");
     if (!raw) return;
     const parsed = parseConnectLink(raw);
     if (parsed.kind === "error") {

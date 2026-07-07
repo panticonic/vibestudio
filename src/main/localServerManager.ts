@@ -23,11 +23,11 @@ import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
 import {
-  clearLocalServerCredential,
-  loadLocalServerCredential,
-  saveLocalServerCredential,
+  clearDeviceCredentialByWorkspaceId,
+  loadDeviceCredentialByWorkspaceId,
+  saveDeviceCredential,
   type LocalServerCredential,
-} from "./services/localServerCredStore.js";
+} from "./services/deviceCredentialStore.js";
 
 const log = createDevLogger("LocalServerManager");
 
@@ -140,7 +140,7 @@ export class LocalServerManager {
       log.info(
         `[attach] recorded server at :${record.gatewayPort} is gone or not ours — will spawn`
       );
-      clearLocalServerCredential(this.config.workspaceId);
+      clearDeviceCredentialByWorkspaceId(this.config.workspaceId);
       return null;
     }
     if (health.version !== this.config.appVersion) {
@@ -152,7 +152,7 @@ export class LocalServerManager {
       await this.terminateByRecord(record, health.pid);
       return null;
     }
-    const credential = loadLocalServerCredential(this.config.workspaceId);
+    const credential = loadDeviceCredentialByWorkspaceId(this.config.workspaceId);
     if (!credential || credential.serverId !== record.serverId) {
       // Healthy server but no credential to authenticate with: we cannot pair
       // (the startup pairing code was consumed). Stop it and respawn fresh.
@@ -292,12 +292,14 @@ export class LocalServerManager {
   persistPairedCredential(cred: { deviceId: string; refreshToken: string }): void {
     const record = this.config.centralData.getWorkspaceLocalServer(this.config.workspaceName);
     const credential: LocalServerCredential = {
+      transport: "loopback",
       deviceId: cred.deviceId,
       refreshToken: cred.refreshToken,
       serverId: record?.serverId ?? "",
+      workspaceId: this.config.workspaceId,
       pairedAt: Date.now(),
     };
-    saveLocalServerCredential(this.config.workspaceId, credential);
+    saveDeviceCredential(credential);
     // Reconnects (and the next launch) authenticate with the refresh credential.
     if (this.current) {
       this.current.authToken = `refresh:${cred.deviceId}:${cred.refreshToken}`;
@@ -381,7 +383,7 @@ export class LocalServerManager {
       await this.waitForExit(current.pid, requested);
     }
     this.config.centralData.clearWorkspaceLocalServer(this.config.workspaceName);
-    clearLocalServerCredential(this.config.workspaceId);
+    clearDeviceCredentialByWorkspaceId(this.config.workspaceId);
   }
 
   /** Detach without stopping: keep the record so the next launch reattaches. */
@@ -394,7 +396,7 @@ export class LocalServerManager {
     // pid (fall back to the recorded one).
     await this.waitForExit(livePid ?? record.pid, false);
     this.config.centralData.clearWorkspaceLocalServer(this.config.workspaceName);
-    clearLocalServerCredential(this.config.workspaceId);
+    clearDeviceCredentialByWorkspaceId(this.config.workspaceId);
   }
 
   private async waitForExit(pid: number, alreadyRequested: boolean): Promise<void> {

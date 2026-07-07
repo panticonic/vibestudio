@@ -8,8 +8,9 @@ function makeDeps(overrides: Partial<AppUpdatePromptDeps> = {}): {
 } {
   const alert = jest.fn();
   const ensureBundle = jest.fn().mockResolvedValue(undefined);
+  const shellClient = { transport: { streamReadable: jest.fn() } } as unknown as ShellClient;
   const deps: AppUpdatePromptDeps = {
-    shellClient: {} as unknown as ShellClient,
+    shellClient,
     pushToast: jest.fn(),
     prompted: new Set<string>(),
     selectedSource: null,
@@ -82,5 +83,16 @@ describe("handleMobileAppLifecycleEvent (update-available)", () => {
     handleMobileAppLifecycleEvent(event, deps);
     handleMobileAppLifecycleEvent(event, deps);
     expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it("installs through the active WebRTC transport", () => {
+    const { deps, alert, ensureBundle } = makeDeps();
+    handleMobileAppLifecycleEvent(
+      { type: "update-available", appId: "apps/mobile", buildKey: "build-2", source: "apps/mobile" },
+      deps
+    );
+    const buttons = alert.mock.calls[0][2];
+    buttons[1].onPress();
+    expect(ensureBundle).toHaveBeenCalledWith(deps.shellClient.transport, "apps/mobile");
   });
 });

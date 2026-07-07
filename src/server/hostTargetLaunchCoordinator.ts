@@ -54,6 +54,7 @@ export interface HostTargetLaunchCoordinatorDeps {
   approvalQueue: ApprovalQueueLike;
   eventService: Pick<EventService, "emit">;
   startupApprovals: StartupApprovalPublisher;
+  awaitStartupUnitReconcile?: () => Promise<void> | void;
   getAppHost(): AppHost | null;
   getTrustedUnitHosts(): TrustedUnitHostLike[];
 }
@@ -68,13 +69,16 @@ export class HostTargetLaunchCoordinator {
     return filterBootstrapApprovalsForTarget(this.deps.approvalQueue.listPending(), target);
   }
 
-  publishPendingStartupApprovals(target: HostTarget): PendingUnitBatchApproval[] {
+  async publishPendingStartupApprovals(target: HostTarget): Promise<PendingUnitBatchApproval[]> {
+    await this.deps.awaitStartupUnitReconcile?.();
     this.deps.startupApprovals.publishPending("startup");
     return this.pendingLaunchApprovals(target);
   }
 
-  pendingOrPublishedStartupApprovals(target: HostTarget): PendingUnitBatchApproval[] {
-    return this.publishPendingStartupApprovals(target);
+  async pendingOrPublishedStartupApprovals(
+    target: HostTarget
+  ): Promise<PendingUnitBatchApproval[]> {
+    return await this.publishPendingStartupApprovals(target);
   }
 
   async launch(target: HostTarget): Promise<HostTargetLaunchResult> {
@@ -166,7 +170,7 @@ export class HostTargetLaunchCoordinator {
   async ensureMobileHostReadyForPairing(
     source?: string | null
   ): Promise<MobileHostReadinessForPairing> {
-    const pendingBeforeLaunch = this.pendingOrPublishedStartupApprovals("react-native");
+    const pendingBeforeLaunch = await this.pendingOrPublishedStartupApprovals("react-native");
     if (pendingBeforeLaunch.length > 0) {
       const readiness = approvalRequiredReadiness(
         pendingBeforeLaunch,
@@ -186,7 +190,7 @@ export class HostTargetLaunchCoordinator {
       return readiness;
     }
 
-    const approvals = this.pendingOrPublishedStartupApprovals("react-native");
+    const approvals = await this.pendingOrPublishedStartupApprovals("react-native");
     if (
       approvals.length === 0 &&
       readiness.reason === "React Native build provider is not active"
@@ -228,7 +232,7 @@ export class HostTargetLaunchCoordinator {
   }
 
   private async resolveLaunch(target: HostTarget): Promise<HostTargetLaunchResult> {
-    const pending = this.pendingOrPublishedStartupApprovals(target);
+    const pending = await this.pendingOrPublishedStartupApprovals(target);
     if (pending.length > 0) return approvalRequiredResult(target, pending);
 
     const appHost = this.deps.getAppHost();
@@ -240,7 +244,7 @@ export class HostTargetLaunchCoordinator {
       launch.status === "unavailable" &&
       launch.reason === "React Native build provider is not active"
     ) {
-      const approvals = this.pendingOrPublishedStartupApprovals("react-native");
+      const approvals = await this.pendingOrPublishedStartupApprovals("react-native");
       if (approvals.length > 0) return approvalRequiredResult(target, approvals);
 
       const preparingDetails = this.reactNativePreparingDetails(launch.details);
@@ -257,7 +261,7 @@ export class HostTargetLaunchCoordinator {
     }
 
     if (launch.status === "unavailable") {
-      const approvals = this.pendingOrPublishedStartupApprovals(target);
+      const approvals = await this.pendingOrPublishedStartupApprovals(target);
       if (approvals.length > 0) return approvalRequiredResult(target, approvals);
     }
 

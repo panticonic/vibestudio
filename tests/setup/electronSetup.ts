@@ -280,6 +280,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
 
   // Wait for the app to initialize
   await window.waitForLoadState("domcontentloaded");
+  await waitForTestApiReady(app, launchTimeout, output);
 
   // Optionally open DevTools
   if (devTools) {
@@ -293,6 +294,8 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   const cleanup = async () => {
     const appProcess = child;
     const mainPid = appProcess.pid;
+    const readyFile = path.join(workspacePath, "state", "server-ready.json");
+    const detachedServerPid = readReadyFilePid(readyFile);
     // Use a timeout to prevent hanging on app.close()
     const closeWithTimeout = async (timeoutMs: number): Promise<void> => {
       return Promise.race([
@@ -312,16 +315,23 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       // parent can orphan workerd/extension children under the user session.
       try {
         killProcessTree(mainPid, "SIGKILL");
+        await waitForProcessExit(mainPid, 3000);
       } catch {
         // Process may already be dead
       }
     }
 
     cleanupKnownChildProcesses(mainPid);
+    cleanupKnownChildProcesses(detachedServerPid);
+    killProcessTree(detachedServerPid, "SIGTERM");
+    if (!(await waitForProcessExit(detachedServerPid, 3000))) {
+      killProcessTree(detachedServerPid, "SIGKILL");
+      await waitForProcessExit(detachedServerPid, 3000);
+    }
 
     if (ownsWorkspace) {
       try {
-        removeManagedTestWorkspace(workspacePath);
+        await removeManagedTestWorkspaceWithRetry(workspacePath);
       } catch (error) {
         console.warn("[TestSetup] Error removing workspace:", error);
       }
@@ -329,6 +339,79 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   };
 
   return { app, window, workspacePath, cleanup };
+}
+
+function readReadyFilePid(readyFile: string): number | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(readyFile, "utf8")) as { pid?: unknown };
+    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0
+      ? parsed.pid
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function waitForProcessExit(pid: number | undefined, timeoutMs: number): Promise<boolean> {
+  if (!pid || process.platform === "win32") return true;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !isProcessAlive(pid);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function removeManagedTestWorkspaceWithRetry(workspaceDir: string): Promise<void> {
+  let lastError: unknown = null;
+  for (const delayMs of [0, 100, 250, 500, 1000]) {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    try {
+      removeManagedTestWorkspace(workspaceDir);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function waitForTestApiReady(
+  app: ElectronApplication,
+  timeoutMs: number,
+  output: string[]
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown = null;
+  while (Date.now() < deadline) {
+    try {
+      const ready = await app.evaluate(() => {
+        return typeof (globalThis as { __testApi?: unknown }).__testApi !== "undefined";
+      });
+      if (ready) return;
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  const details = output.join("").trim();
+  const reason = lastError instanceof Error ? lastError.message : lastError ? String(lastError) : "";
+  throw new Error(
+    `Timed out waiting for VIBESTUDIO_TEST_MODE test API.${reason ? ` Last error: ${reason}` : ""}${
+      details ? `\n\nElectron output before test API timeout:\n${details}` : ""
+    }`
+  );
 }
 
 function cleanupKnownChildProcesses(mainPid: number | undefined): void {

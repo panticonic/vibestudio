@@ -616,6 +616,64 @@ describe("vibestudio CLI", () => {
     expect(output).toContain("missing a hub URL");
   });
 
+  it("creates a pairing invite through the local admin route when no CLI credential exists", async () => {
+    const credentialDir = path.join(tmpDir, ".config", "vibestudio");
+    fs.mkdirSync(credentialDir, { recursive: true });
+    fs.writeFileSync(path.join(credentialDir, "admin-token"), "admin_local");
+    const requests: Array<{ url: string; auth: string | null; body: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        requests.push({
+          url: String(url),
+          auth: new Headers(init?.headers).get("authorization"),
+          body: JSON.parse(String(init?.body ?? "{}")),
+        });
+        return new Response(
+          JSON.stringify({
+            code: "L".repeat(24),
+            deepLink: createConnectDeepLink(pairing("L".repeat(24))),
+            pairUrl: "https://vibestudio.app/pair#local",
+            room: "room-1111-2222",
+            fp: FP,
+            sig: "wss://signal.example/",
+          })
+        );
+      })
+    );
+
+    const { main } = await import("./client.js");
+    await expect(
+      main([
+        "remote",
+        "invite",
+        "--port",
+        "3035",
+        "--workspace",
+        "default",
+        "--ttl-ms",
+        "60000",
+        "--json",
+      ])
+    ).resolves.toBe(0);
+
+    expect(requests).toEqual([
+      {
+        url: "http://127.0.0.1:3035/_r/s/auth/create-pairing-code",
+        auth: "Bearer admin_local",
+        body: { ttlMs: 60_000, workspace: "default" },
+      },
+    ]);
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(JSON.parse(output)).toMatchObject({
+      code: "L".repeat(24),
+      pairUrl: "https://vibestudio.app/pair#local",
+    });
+  });
+
   it("pairs inline before starting the terminal app through the launch gate", async () => {
     const rpcMethods: string[] = [];
     const bodies: Array<{ url: string; body: unknown }> = [];
@@ -994,8 +1052,12 @@ export class HeadlessHost {
       .mocked(console.log)
       .mock.calls.map((call) => String(call[0]))
       .join("\n");
-    expect(output).toContain("vibestudio remote invite [--ttl-ms <milliseconds>]");
+    expect(output).toContain(
+      "vibestudio remote invite [--workspace <name>] [--ttl-ms <milliseconds>] [--port 3030]"
+    );
+    expect(output).toContain("--workspace <value>");
     expect(output).toContain("--ttl-ms <value>");
+    expect(output).toContain("--admin-token <value>");
     expect(output).toContain("--json");
     expect(output).toContain("Emit JSON");
     expect(console.error).not.toHaveBeenCalled();

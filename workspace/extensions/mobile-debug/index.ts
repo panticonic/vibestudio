@@ -36,7 +36,10 @@ export async function activate(ctx: ExtensionContext) {
   return {
     async doctor() {
       const adb = await hasCommand("adb");
+      const xcrun = await hasCommand("xcrun");
+      const xcodebuild = await hasCommand("xcodebuild");
       const devices = adb ? await listAdbDevices() : [];
+      const simulators = xcrun ? await listIosSimulators().catch(() => []) : [];
       const ready = devices.filter((device) => device.state === "device");
       const repoRoot = tryResolveRepoRoot(workspace.path);
       const apkPath = repoRoot ? defaultApkPath(repoRoot) : null;
@@ -44,16 +47,34 @@ export async function activate(ctx: ExtensionContext) {
       if (!repoRoot)
         issues.push("Could not locate Vibestudio repo root containing apps/mobile/android");
       if (!adb) issues.push("adb is not on PATH");
+      if (process.platform === "darwin") {
+        if (!xcrun) issues.push("xcrun is not on PATH");
+        if (!xcodebuild) issues.push("xcodebuild is not on PATH");
+        if (simulators.filter((device) => device.state === "Booted").length === 0)
+          issues.push("No booted iOS simulator");
+      }
       if (devices.some((device) => device.state === "unauthorized"))
         issues.push("Accept the Android USB debugging prompt");
       if (ready.length === 0) issues.push("No ready Android device");
       if (ready.length > 1) issues.push("Multiple ready devices; pass a serial");
       if (apkPath && !fs.existsSync(apkPath)) issues.push("Internal APK has not been built");
-      return { adb, device: ready[0], apkSigned: !!apkPath && fs.existsSync(apkPath), issues };
+      return {
+        adb,
+        xcrun,
+        xcodebuild,
+        device: ready[0],
+        iosSimulator: simulators.find((device) => device.state === "Booted"),
+        apkSigned: !!apkPath && fs.existsSync(apkPath),
+        issues,
+      };
     },
 
     async listDevices() {
       return listAdbDevices();
+    },
+
+    async listIosSimulators() {
+      return listIosSimulators();
     },
 
     async buildAndroid(raw?: { variant?: "internal" | "release" }) {
@@ -87,19 +108,18 @@ export async function activate(ctx: ExtensionContext) {
 
     async installAndroid(raw?: {
       device?: string;
-      apk?: string;
       resetApp?: boolean;
       launch?: boolean;
     }) {
       const repoRoot = requireRepoRoot(workspace.path);
       const args = [
+        "--from-source",
+        "--package",
+        defaultPackage,
         raw?.resetApp ? "--reset-app" : null,
         raw?.launch ? "--launch" : null,
         raw?.device ? "--device" : null,
         raw?.device ?? null,
-        raw?.apk ? "--apk" : null,
-        raw?.apk ?? null,
-        raw?.apk ? "--no-build" : null,
       ].filter((value): value is string => !!value);
       const script = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
       const command = formatCommand(process.execPath, [script, ...args]);
@@ -114,15 +134,66 @@ export async function activate(ctx: ExtensionContext) {
         details: [
           { label: "Command", value: markdownShellBlock(command), format: "markdown" },
           ...(raw?.device ? [{ label: "Device", value: raw.device }] : []),
-          ...(raw?.apk ? [{ label: "APK", value: raw.apk }] : []),
         ],
       });
       await run(process.execPath, [script, ...args], { cwd: repoRoot });
       return { packageName: defaultPackage };
     },
 
+    async installIos(raw?: {
+      device?: string;
+      simulator?: boolean;
+      configuration?: "Debug" | "Release" | "Internal";
+      launch?: boolean;
+    }) {
+      const repoRoot = requireRepoRoot(workspace.path);
+      const script = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
+      const args = [
+        "--platform",
+        "ios",
+        raw?.simulator !== false ? "--simulator" : null,
+        raw?.device ? "--device" : null,
+        raw?.device ?? null,
+        "--configuration",
+        raw?.configuration ?? "Debug",
+        raw?.launch ? "--launch" : null,
+      ].filter((value): value is string => !!value);
+      const command = formatCommand(process.execPath, [script, ...args]);
+      await requireApproval(ctx, {
+        id: `mobile.ios.install.${raw?.device ?? "simulator"}`,
+        title: "Install iOS app",
+        summary: [
+          "Build/install runs app code on the selected iOS simulator or device.",
+          "",
+          markdownShellBlock(command),
+        ].join("\n"),
+        details: [
+          { label: "Command", value: markdownShellBlock(command), format: "markdown" },
+          ...(raw?.device ? [{ label: "Device", value: raw.device }] : []),
+        ],
+      });
+      await run(process.execPath, [script, ...args], { cwd: repoRoot, errorCode: "EBUILD" });
+      return { bundleId: process.env["VIBESTUDIO_IOS_BUNDLE_ID"] ?? "app.vibestudio.mobile" };
+    },
+
     async launchAndroid(raw?: { device?: string; packageName?: string }) {
       await adb(raw?.device, ["shell", "monkey", "-p", raw?.packageName ?? defaultPackage, "1"]);
+    },
+
+    async launchIos(raw?: { device?: string; bundleId?: string }) {
+      requireMac("launch iOS apps");
+      const bundleId = raw?.bundleId ?? process.env["VIBESTUDIO_IOS_BUNDLE_ID"] ?? "app.vibestudio.mobile";
+      if (raw?.device) {
+        await run("xcrun", ["devicectl", "device", "process", "launch", "--device", raw.device, bundleId], {
+          cwd: process.cwd(),
+          errorCode: "EIOS",
+        });
+      } else {
+        await run("xcrun", ["simctl", "launch", "booted", bundleId], {
+          cwd: process.cwd(),
+          errorCode: "EIOS",
+        });
+      }
     },
 
     async clearAndroidApp(raw?: { device?: string; packageName?: string }) {
@@ -156,6 +227,18 @@ export async function activate(ctx: ExtensionContext) {
 
     async screenshot(raw?: { device?: string }) {
       const result = await adbCapture(raw?.device, ["exec-out", "screencap", "-p"]);
+      return { pngBase64: Buffer.from(result.stdout, "binary").toString("base64") };
+    },
+
+    async screenshotIos(raw?: { device?: string }) {
+      requireMac("capture iOS screenshots");
+      const args = ["simctl", "io", raw?.device ?? "booted", "screenshot", "-"];
+      const result = await runCapture("xcrun", args, {
+        cwd: process.cwd(),
+        encoding: "binary",
+        errorCode: "EIOS",
+      });
+      if (result.exitCode !== 0) throw new MobileDebugError("EIOS", result.stderr || result.stdout);
       return { pngBase64: Buffer.from(result.stdout, "binary").toString("base64") };
     },
 
@@ -195,6 +278,21 @@ export async function activate(ctx: ExtensionContext) {
         ? ["logcat", "-v", "time", raw.filter]
         : ["logcat", "-v", "time"];
       return streamAdb(raw?.device, args, streamArgs);
+    },
+
+    logsIos(raw?: { device?: string; predicate?: string }) {
+      requireMac("stream iOS simulator logs");
+      return streamProcess("xcrun", [
+        "simctl",
+        "spawn",
+        raw?.device ?? "booted",
+        "log",
+        "stream",
+        "--style",
+        "compact",
+        "--predicate",
+        raw?.predicate ?? 'process == "Vibestudio"',
+      ]);
     },
 
     async shell(raw: { device?: string; command: string; args?: string[] }) {
@@ -321,6 +419,36 @@ function pickDevice(devices: Array<{ serial: string; state: string }>, requested
   if (ready.length > 1)
     throw new MobileDebugError("ENODEVICE", "Multiple Android devices; pass a serial");
   return ready[0]!;
+}
+
+function requireMac(action: string): void {
+  if (process.platform !== "darwin") {
+    throw new MobileDebugError("EIOS_PLATFORM", `${action} requires macOS with Xcode`);
+  }
+}
+
+async function listIosSimulators(): Promise<
+  Array<{ udid: string; name: string; state: string; runtime: string }>
+> {
+  requireMac("list iOS simulators");
+  const result = await runCapture("xcrun", ["simctl", "list", "devices", "--json"], {
+    cwd: process.cwd(),
+    errorCode: "EIOS",
+  });
+  if (result.exitCode !== 0) {
+    throw new MobileDebugError("EIOS", result.stderr || result.stdout || "simctl list failed");
+  }
+  const parsed = JSON.parse(result.stdout) as {
+    devices?: Record<string, Array<{ udid?: string; name?: string; state?: string }>>;
+  };
+  const out: Array<{ udid: string; name: string; state: string; runtime: string }> = [];
+  for (const [runtime, devices] of Object.entries(parsed.devices ?? {})) {
+    for (const device of devices) {
+      if (!device.udid || !device.name || !device.state) continue;
+      out.push({ udid: device.udid, name: device.name, state: device.state, runtime });
+    }
+  }
+  return out;
 }
 
 function adbArgs(device: string | undefined, args: string[]): string[] {

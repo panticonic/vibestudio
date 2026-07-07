@@ -13,7 +13,7 @@
 import { useEffect, useState } from "react";
 import { Box, Flex, ScrollArea, Text } from "@radix-ui/themes";
 import { Link2Icon } from "@radix-ui/react-icons";
-import { vcs } from "@workspace/runtime";
+import { blobstore, vcs } from "@workspace/runtime";
 import { findBacklinks, type Backlink, type BacklinkReader } from "../state/backlinks";
 import { useApp, useAppState } from "../app/context";
 
@@ -27,6 +27,7 @@ export function BacklinksPanel({ onOpened }: { onOpened?: () => void }) {
   const root = useAppState((s) => s.repoRoot);
   const activePath = useAppState((s) => s.activePath);
   const paths = useAppState((s) => s.paths);
+  const pathContentHashes = useAppState((s) => s.pathContentHashes);
   const [backlinks, setBacklinks] = useState<Backlink[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -39,15 +40,20 @@ export function BacklinksPanel({ onOpened }: { onOpened?: () => void }) {
     setLoading(true);
     const mapping = app.vault.mapping();
     const readFile: BacklinkReader = async (relPath) => {
+      const digest = pathContentHashes[relPath];
+      if (digest) {
+        const text = await blobstore.getText(digest).catch(() => null);
+        if (text !== null) return text;
+      }
       const file = await vcs.readFile("", mapping.toVcsPath(relPath)).catch(() => null);
       return file && file.content.kind === "text" ? file.content.text : null;
     };
-    void findBacklinks(root, activePath, paths, { readFile })
+    void findBacklinks(root, activePath, paths, { concurrency: 96, readFile })
       .then((bl) => { if (!cancelled) setBacklinks(bl); })
       .catch(() => { if (!cancelled) setBacklinks([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [app, root, activePath, paths]);
+  }, [app, root, activePath, paths, pathContentHashes]);
 
   if (!activePath) {
     return (

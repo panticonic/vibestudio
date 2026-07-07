@@ -99,6 +99,12 @@ export function TitleBar({
     setMode(nextMode);
   };
 
+  const handleMobileAddressToggleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    setAddressBarVisible(true);
+  };
+
   // Address-bar commands: after a navigate (Enter or picking a suggestion),
   // return to breadcrumb view. Browser controls (back/forward/reload) stay put.
   const handleAddressChromeCommand = (command: ChromeCommand) => {
@@ -162,6 +168,10 @@ export function TitleBar({
 
           <Box
             onClick={() => setAddressBarVisible(true)}
+            onKeyDown={handleMobileAddressToggleKeyDown}
+            role="button"
+            tabIndex={0}
+            aria-label="Show address bar"
             title="Edit address"
             style={
               {
@@ -219,13 +229,13 @@ export function TitleBar({
                   onChromeCommand={handleAddressChromeCommand}
                 />
               </Box>
-              <Tooltip content="Back to breadcrumbs">
+              <Tooltip content="Hide address bar">
                 <IconButton
                   variant="ghost"
                   size="2"
                   className="app-touch-target"
                   onClick={() => setAddressBarVisible(false)}
-                  aria-label="Back to breadcrumbs"
+                  aria-label="Hide address bar"
                 >
                   <Cross2Icon />
                 </IconButton>

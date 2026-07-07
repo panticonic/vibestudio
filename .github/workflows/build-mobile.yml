@@ -1,4 +1,4 @@
-name: Build Mobile APK
+name: Build Mobile Shell
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
 
 jobs:
   build-android:
-    name: Build Android APK
+    name: Build Android APK/AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -79,6 +79,7 @@ jobs:
         id: signing
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          IS_MOBILE_TAG: ${{ startsWith(github.ref, 'refs/tags/mobile-v') }}
         run: |
           # We deliberately only write the keystore file and the
           # NON-SECRET RELEASE_STORE_FILE / RELEASE_KEY_ALIAS pointers to
@@ -88,8 +89,12 @@ jobs:
           # compromised step (e.g. a tag-moved upload action) that
           # inherits the workspace.
           if [ -z "$KEYSTORE_BASE64" ]; then
+            if [ "$IS_MOBILE_TAG" = "true" ]; then
+              echo "mobile-v* tag builds require ANDROID_KEYSTORE_BASE64 and release signing secrets" >&2
+              exit 1
+            fi
             echo "has_keystore=false" >> "$GITHUB_OUTPUT"
-            echo "No release keystore configured, will build debug APK"
+            echo "No release keystore configured, PR build will use debug signing"
           else
             echo "has_keystore=true" >> "$GITHUB_OUTPUT"
             echo "$KEYSTORE_BASE64" | base64 -d > apps/mobile/android/app/release.keystore
@@ -97,7 +102,7 @@ jobs:
             echo "RELEASE_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> apps/mobile/android/gradle.properties
           fi
 
-      - name: Build release APK
+      - name: Build release APK and AAB
         # Passwords are injected via ORG_GRADLE_PROJECT_* so Gradle picks
         # them up as project properties (`RELEASE_STORE_PASSWORD`,
         # `RELEASE_KEY_PASSWORD`) without touching gradle.properties.
@@ -113,13 +118,24 @@ jobs:
           ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         working-directory: apps/mobile/android
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease bundleRelease --no-daemon
+
+      - name: Generate checksums
+        run: |
+          mkdir -p apps/mobile/android/app/build/outputs/release-artifacts
+          find apps/mobile/android/app/build/outputs -type f \( -name "*.apk" -o -name "*.aab" \) -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            > apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: vibestudio-mobile-${{ github.sha }}
-          path: apps/mobile/android/app/build/outputs/apk/release/*.apk
+          path: |
+            apps/mobile/android/app/build/outputs/apk/release/*.apk
+            apps/mobile/android/app/build/outputs/bundle/release/*.aab
+            apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS
           retention-days: 30
 
       - name: Create GitHub Release
@@ -131,5 +147,48 @@ jobs:
         # Refresh via Dependabot.
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: apps/mobile/android/app/build/outputs/apk/release/*.apk
+          files: |
+            apps/mobile/android/app/build/outputs/apk/release/*.apk
+            apps/mobile/android/app/build/outputs/bundle/release/*.aab
+            apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS
           generate_release_notes: true
+
+  build-ios:
+    name: Build iOS shell
+    runs-on: macos-15
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install CocoaPods
+        working-directory: apps/mobile/ios
+        run: pod install
+
+      - name: Generate entitlements
+        run: node scripts/cli/ios-entitlements.mjs --configuration Debug --output apps/mobile/ios/Generated/Vibestudio.entitlements
+
+      - name: Build iOS Debug simulator shell
+        working-directory: apps/mobile/ios
+        run: |
+          xcodebuild \
+            -workspace Vibestudio.xcworkspace \
+            -scheme Vibestudio \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS=Generated/Vibestudio.entitlements \
+            build

@@ -52,7 +52,7 @@ export class VaultController {
    */
   selectVault(contextPath: string, options?: { starterDoc?: VaultStarterDoc }): void {
     const repoRoot = normalizeVaultPath(contextPath);
-    const stateArgs: Record<string, unknown> = { repoRoot, openPath: undefined };
+    const stateArgs: Record<string, unknown> = { repoRoot };
     if (options?.starterDoc) stateArgs["pendingStarterDoc"] = options.starterDoc;
     void panel.reopen({
       contextId: vaultContextId(repoRoot),
@@ -64,7 +64,21 @@ export class VaultController {
 
   /** Forget the selection so the picker shows (reopen without a repoRoot). */
   async switchVault(): Promise<void> {
-    await panel.reopen({ stateArgs: { repoRoot: undefined, openPath: undefined } }).catch((err) => {
+    this.store.setState({
+      activeDeps: {},
+      activePath: null,
+      dirtyPaths: [],
+      installedAgents: [],
+      paths: [],
+      pathContentHashes: {},
+      pathsLoaded: false,
+      pathsLoading: false,
+      pendingSuggestions: [],
+      removedHandles: [],
+      repoRoot: null,
+      roster: [],
+    });
+    await panel.reopen({ stateArgs: { repoRoot: null } }).catch((err) => {
       console.warn("[Spectrolite] reopen for vault switch failed:", err);
     });
   }
@@ -73,7 +87,7 @@ export class VaultController {
     return this.pathsRefresh.run(async () => {
       const root = this.store.getState().repoRoot;
       if (root === null) {
-        this.store.setState({ paths: [], pathsLoading: false });
+        this.store.setState({ paths: [], pathContentHashes: {}, pathsLoading: false });
         return;
       }
       const mapping = vaultPathMapping(root);
@@ -82,15 +96,20 @@ export class VaultController {
       try {
         const entries = await vcs.listFiles();
         if (epoch !== this.pathsEpoch) return;
+        const pathContentHashes: Record<string, string> = {};
         const paths = entries
-          .map((entry) => mapping.toVaultRelPath(entry.path))
-          .filter((p): p is string => p !== null && /\.mdx$/i.test(p))
+          .flatMap((entry) => {
+            const relPath = mapping.toVaultRelPath(entry.path);
+            if (relPath === null || !/\.mdx$/i.test(relPath)) return [];
+            pathContentHashes[relPath] = entry.contentHash;
+            return [relPath];
+          })
           .sort((a, b) => a.localeCompare(b));
-        this.store.setState({ paths, pathsLoading: false, pathsLoaded: true });
+        this.store.setState({ paths, pathContentHashes, pathsLoading: false, pathsLoaded: true });
       } catch (err) {
         console.warn("[Spectrolite] listFiles failed:", err);
         if (epoch !== this.pathsEpoch) return;
-        this.store.setState({ paths: [], pathsLoading: false, pathsLoaded: true });
+        this.store.setState({ paths: [], pathContentHashes: {}, pathsLoading: false, pathsLoaded: true });
       }
     });
   }

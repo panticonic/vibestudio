@@ -23,6 +23,10 @@ const approvedRawMainCalls = new Set([
   // Help-text/documentation string: evalSurfaceHelp renders an example showing
   // eval users the raw call form for a low-level method — not an actual call site.
   "src/server/internalDOs/evalSurfaceHelp.ts:workers.listSources",
+  // Browser fallback shim: this builds a minimal shell bridge when preload did
+  // not inject one. It intentionally stays on the raw envelope transport.
+  "src/server/browserShellBridge.ts:panelTree.metadata",
+  "src/server/browserShellBridge.ts:panelTree.focus",
 ]);
 
 const rawMainCallPattern =

@@ -9,17 +9,16 @@ import WebSocket from "ws";
 export interface PairingInviteLike {
   connectUrl?: string;
   code: string;
-  deepLink?: string | null;
+  deepLink?: string;
+  pairUrl?: string;
   expiresAt?: number;
 }
 
 export function formatPairingInvite(invite: PairingInviteLike): string {
-  // The server mints the deep link from its WebRTC pairing material (room/fp/
-  // sig); the CLI has no such material, so it cannot synthesize one — a null
-  // deepLink means the server hasn't advertised pairing material yet.
   const expires = invite.expiresAt ? `\nExpires: ${new Date(invite.expiresAt).toISOString()}` : "";
   const lines = [`Pairing code: ${invite.code}`];
-  if (invite.deepLink) lines.push(`Pair URL: ${invite.deepLink}`);
+  if (invite.pairUrl) lines.push(`Pair URL: ${invite.pairUrl}`);
+  else if (invite.deepLink) lines.push(`Deep link: ${invite.deepLink}`);
   return `${lines.join("\n")}${expires}`;
 }
 

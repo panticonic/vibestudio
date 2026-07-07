@@ -60,6 +60,21 @@ jest.mock("react-native-haptic-feedback", () => ({
   trigger: jest.fn(),
 }));
 
+jest.mock("@react-native-community/netinfo", () => ({
+  __esModule: true,
+  default: {
+    addEventListener: jest.fn(() => jest.fn()),
+    fetch: jest.fn(async () => ({ isConnected: true, isInternetReachable: true })),
+  },
+}));
+
+jest.mock("react-native-webrtc", () => ({
+  mediaDevices: {},
+  RTCIceCandidate: jest.fn(),
+  RTCPeerConnection: jest.fn(),
+  RTCSessionDescription: jest.fn(),
+}));
+
 jest.mock(
   "@react-native-clipboard/clipboard",
   () => ({
@@ -87,44 +102,7 @@ NativeModules.VibestudioMobileHost = {
   firebaseConfigured: true,
   clearCredentials: jest.fn(async () => undefined),
   resetToNativeBootstrap: jest.fn(async () => ({ reloading: true })),
-  pairServer: jest.fn(async () => ({
-    serverUrl: "https://server.example",
-    hubUrl: "https://server.example",
-    deviceId: "dev_123",
-    serverId: "srv_123",
-  })),
-  listWorkspaces: jest.fn(async () => ({
-    workspaces: [{ name: "dev", lastOpened: 123, running: true }],
-  })),
-  selectWorkspace: jest.fn(async () => ({
-    serverUrl: "https://server.example/_workspace/dev",
-    hubUrl: "https://server.example",
-    workspaceName: "dev",
-    deviceId: "dev_123",
-    callerId: "shell:dev_123",
-    connectionGrant: "grant_123",
-    serverId: "srv_123",
-    workspaceId: "workspace_123",
-  })),
-  getCredentials: jest.fn(async () => null),
-  issueConnectionGrant: jest.fn(async () => ({
-    deviceId: "dev_123",
-    callerId: "shell:dev_123",
-    connectionGrant: "grant_123",
-    serverId: "srv_123",
-    workspaceId: "workspace_123",
-  })),
-  prepareAppBundle: jest.fn(async () => ({
-    appId: "@workspace-apps/mobile",
-    buildKey: "rn-key",
-    effectiveVersion: "ev-mobile",
-    capabilities: ["notifications", "keychain", "clipboard", "open-external", "panel-hosting"],
-    rnHostAbi: "rn-host-1",
-    integrity: "sha256-mobile",
-    platform: "ios",
-    url: "https://server.example/_a/rn-key/index.ios.bundle",
-    path: "index.ios.bundle",
-    localPath: "/cache/vibestudio-rn/rn-key/index.ios.bundle",
-  })),
+  appendBundleChunk: jest.fn(async () => undefined),
+  finalizeBundleWrite: jest.fn(async () => ({ localPath: "/bundle.js" })),
   activatePreparedAppBundle: jest.fn(async () => ({ activated: false })),
 };

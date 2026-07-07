@@ -29,6 +29,7 @@ Guide new users through understanding Vibestudio and getting their workspace set
 | `sandbox`          | Learning the eval tool, inline UI, runtime APIs                                                       |
 | `workspace-dev`    | Building and launching panels, workers, full development workflow                                     |
 | `appdev`           | Authoring trusted workspace apps under `apps/`: Electron shell, mobile React Native, terminal clients |
+| `remote-access`    | Deploying a remote server, pairing desktop/mobile clients, and troubleshooting WebRTC access           |
 
 ## First: Detect User Experience Level
 
@@ -95,7 +96,10 @@ chosen setup path.
 3. **API integrations** — Highlight concrete provider choices: Google Workspace, GitHub, Slack, model/API keys, web-search providers (Tavily / Brave / Exa for `web_search`), or custom OAuth/API provider. Do not gate this on browser data import.
 4. **Import browser data** — Use the `browser-import` skill only when the user wants cookies, bookmarks, passwords, or local browser state
 5. **First project** — Use the `workspace-dev` skill to scaffold and launch a panel
-6. **Explore** — Point to the `sandbox` skill for runtime API exploration
+6. **Connect devices** — If they want phone or remote-machine access, point them
+   to Devices → Connect a phone, or the `remote-access` skill for
+   `vibestudio remote deploy` / `remote invite`
+7. **Explore** — Point to the `sandbox` skill for runtime API exploration
 
 ### Returning Users
 

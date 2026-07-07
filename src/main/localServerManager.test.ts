@@ -19,14 +19,16 @@ vi.mock("./paths.js", () => ({
 }));
 
 const credStore = {
-  loadLocalServerCredential: vi.fn(),
-  saveLocalServerCredential: vi.fn(),
-  clearLocalServerCredential: vi.fn(),
+  loadDeviceCredentialByWorkspaceId: vi.fn(),
+  saveDeviceCredential: vi.fn(),
+  clearDeviceCredentialByWorkspaceId: vi.fn(),
 };
-vi.mock("./services/localServerCredStore.js", () => ({
-  loadLocalServerCredential: (...a: unknown[]) => credStore.loadLocalServerCredential(...a),
-  saveLocalServerCredential: (...a: unknown[]) => credStore.saveLocalServerCredential(...a),
-  clearLocalServerCredential: (...a: unknown[]) => credStore.clearLocalServerCredential(...a),
+vi.mock("./services/deviceCredentialStore.js", () => ({
+  loadDeviceCredentialByWorkspaceId: (...a: unknown[]) =>
+    credStore.loadDeviceCredentialByWorkspaceId(...a),
+  saveDeviceCredential: (...a: unknown[]) => credStore.saveDeviceCredential(...a),
+  clearDeviceCredentialByWorkspaceId: (...a: unknown[]) =>
+    credStore.clearDeviceCredentialByWorkspaceId(...a),
 }));
 
 const spawnMock = vi.fn();
@@ -111,9 +113,9 @@ const RECORD: ServerRecord = {
 
 beforeEach(() => {
   spawnMock.mockReset();
-  credStore.loadLocalServerCredential.mockReset();
-  credStore.saveLocalServerCredential.mockReset();
-  credStore.clearLocalServerCredential.mockReset();
+  credStore.loadDeviceCredentialByWorkspaceId.mockReset();
+  credStore.saveDeviceCredential.mockReset();
+  credStore.clearDeviceCredentialByWorkspaceId.mockReset();
 });
 
 afterEach(() => {
@@ -131,7 +133,7 @@ describe("LocalServerManager.attachOrSpawn — attach path", () => {
       version: APP_VERSION,
       pid: 2222,
     });
-    credStore.loadLocalServerCredential.mockReturnValue({
+    credStore.loadDeviceCredentialByWorkspaceId.mockReturnValue({
       deviceId: "dev-1",
       refreshToken: "tok-1",
       serverId: "server-abc",
@@ -162,11 +164,11 @@ describe("LocalServerManager.attachOrSpawn — fallthrough to spawn", () => {
 
   it("clears the record and spawns when healthz is dead", async () => {
     stubHealthz(null);
-    credStore.loadLocalServerCredential.mockReturnValue(null);
+    credStore.loadDeviceCredentialByWorkspaceId.mockReturnValue(null);
     const centralData = makeCentralData(RECORD);
     await expectSpawnFallthrough(centralData);
     expect(centralData.clearWorkspaceLocalServer).toHaveBeenCalled();
-    expect(credStore.clearLocalServerCredential).toHaveBeenCalledWith(WORKSPACE_ID);
+    expect(credStore.clearDeviceCredentialByWorkspaceId).toHaveBeenCalledWith(WORKSPACE_ID);
   });
 
   it("clears the record and spawns on serverId mismatch (imposter)", async () => {
@@ -178,7 +180,7 @@ describe("LocalServerManager.attachOrSpawn — fallthrough to spawn", () => {
     });
     const centralData = makeCentralData(RECORD);
     await expectSpawnFallthrough(centralData);
-    expect(credStore.clearLocalServerCredential).toHaveBeenCalledWith(WORKSPACE_ID);
+    expect(credStore.clearDeviceCredentialByWorkspaceId).toHaveBeenCalledWith(WORKSPACE_ID);
   });
 
   it("clears the record and spawns on workspaceId mismatch", async () => {
@@ -190,7 +192,7 @@ describe("LocalServerManager.attachOrSpawn — fallthrough to spawn", () => {
     });
     const centralData = makeCentralData(RECORD);
     await expectSpawnFallthrough(centralData);
-    expect(credStore.clearLocalServerCredential).toHaveBeenCalledWith(WORKSPACE_ID);
+    expect(credStore.clearDeviceCredentialByWorkspaceId).toHaveBeenCalledWith(WORKSPACE_ID);
   });
 
   it("SIGTERMs the old server and spawns on version mismatch", async () => {
@@ -219,7 +221,7 @@ describe("LocalServerManager.attachOrSpawn — fallthrough to spawn", () => {
       version: APP_VERSION,
       pid: 1111,
     });
-    credStore.loadLocalServerCredential.mockReturnValue(null);
+    credStore.loadDeviceCredentialByWorkspaceId.mockReturnValue(null);
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw new Error("ESRCH");
     });

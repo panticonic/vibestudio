@@ -21,7 +21,7 @@ import {
   activeWorkspaceNameAtom,
   loadRecentWorkspacesAtom,
   removeRecentWorkspaceAtom,
-  selectWorkspaceAtom,
+  chooseWorkspaceAtom,
   workspaceChooserDialogOpenAtom,
   wizardDialogOpenAtom,
   wizardFormDataAtom,
@@ -48,7 +48,7 @@ export function WorkspaceChooser() {
   const activeWorkspaceName = useAtomValue(activeWorkspaceNameAtom);
   const loadRecentWorkspaces = useSetAtom(loadRecentWorkspacesAtom);
   const removeRecentWorkspace = useSetAtom(removeRecentWorkspaceAtom);
-  const selectWorkspace = useSetAtom(selectWorkspaceAtom);
+  const chooseWorkspace = useSetAtom(chooseWorkspaceAtom);
   const setWorkspaceChooserOpen = useSetAtom(workspaceChooserDialogOpenAtom);
   const setWizardDialogOpen = useSetAtom(wizardDialogOpenAtom);
   const setWizardFormData = useSetAtom(wizardFormDataAtom);
@@ -63,15 +63,15 @@ export function WorkspaceChooser() {
     void loadRecentWorkspaces();
   }, [loadRecentWorkspaces, setWorkspaceError]);
 
-  const handleSelectWorkspace = async (ws: WorkspaceEntry) => {
+  const handleChooseWorkspace = async (ws: WorkspaceEntry) => {
     if (ws.name === activeWorkspaceName) {
       setWorkspaceChooserOpen(false);
       return;
     }
     try {
-      await selectWorkspace(ws.name);
+      await chooseWorkspace(ws.name);
     } catch (error) {
-      console.error("Failed to select workspace:", error);
+      console.error("Failed to choose workspace:", error);
     }
   };
 
@@ -191,7 +191,7 @@ export function WorkspaceChooser() {
                     key={ws.name}
                     workspace={ws}
                     isActive={ws.name === activeWorkspaceName}
-                    onSelect={() => handleSelectWorkspace(ws)}
+                    onSelect={() => handleChooseWorkspace(ws)}
                     onRemove={(e) => handleRemoveWorkspace(e, ws.name)}
                   />
                 ))}

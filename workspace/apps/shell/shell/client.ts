@@ -465,7 +465,7 @@ export interface TestConnectionResult {
   serverVersion?: string;
 }
 export interface ExchangePairingCodeArgs {
-  /** A `vibestudio://connect?...` pairing link carrying the WebRTC pairing material. */
+  /** A scheme or HTTPS pair link carrying the WebRTC pairing material. */
   link: string;
   label?: string;
 }
@@ -479,7 +479,13 @@ export interface DeviceRecord {
 }
 export interface PairingInvite {
   code: string;
-  deepLink: string | null;
+  deepLink: string;
+  pairUrl: string;
+  room: string;
+  fp: string;
+  sig: string;
+  ice?: "all" | "relay";
+  srv?: string;
   serverUrl: string;
   publicUrl?: string | null;
   expiresAt: number;

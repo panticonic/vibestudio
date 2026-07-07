@@ -19,12 +19,11 @@ import { createWebRtcServerClient } from "./webrtcServerClient.js";
 import { startPanelAssetFacade } from "./panelAssetFacade.js";
 import { relaunchApp } from "./relaunchApp.js";
 import {
+  loadDeviceCredentialByWorkspaceId,
   loadStoredRemotePairing,
-  persistRotatedRemoteCredential,
-  saveStoredRemote,
-} from "./services/remoteCredService.js";
-import { loadLocalServerCredential } from "./services/localServerCredStore.js";
-import type { StoredRemote } from "./services/remoteCredStore.js";
+  saveDeviceCredential,
+  type StoredRemote,
+} from "./services/deviceCredentialStore.js";
 import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
 import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
@@ -32,6 +31,7 @@ import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
+import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
 import { serverRpcWsUrl, type ConnectPairing } from "@vibestudio/shared/connect";
 
 const log = createDevLogger("ServerSession");
@@ -179,7 +179,7 @@ export async function establishServerSession(args: {
   // (a server restart invalidates the previous in-memory bearer).
   let cdpAuthToken = "";
   const refreshCdpAuthToken = async (): Promise<void> => {
-    const credential = loadLocalServerCredential(mode.workspaceId);
+    const credential = loadDeviceCredentialByWorkspaceId(mode.workspaceId);
     const port = localServerManager.getGatewayPort() ?? target.gatewayPort;
     if (!credential) return;
     try {
@@ -306,7 +306,13 @@ async function establishRemoteSession(
       getShellToken: () => `refresh:${stored.deviceId}:${stored.refreshToken}`,
       // A returning device re-auths with its refresh token; if the server rotates
       // it (delivered via onPaired), persist the fresh secret for next launch.
-      onPaired: (credential) => persistRotatedRemoteCredential(credential),
+      onPaired: (credential) =>
+        saveDeviceCredential({
+          ...stored,
+          deviceId: credential.deviceId,
+          refreshToken: credential.refreshToken,
+          rotatedAt: Date.now(),
+        }),
       onServerEvent: args.onServerEvent,
       onConnectionStatusChanged: args.onConnectionStatusChanged,
       onRecovery: args.onRecovery,
@@ -327,6 +333,9 @@ async function establishFreshPairSession(
   pairing: ConnectPairing,
   args: RemoteConnectArgs
 ): Promise<SessionConnection> {
+  const issuedCredential: { current: { deviceId: string; refreshToken: string } | null } = {
+    current: null,
+  };
   const serverClient = await connectRemoteViaWebRtc(pairing, {
     // The server assigns the real `shell:<deviceId>` principal when it redeems the
     // one-time code; we don't know that id yet, so dial with a stable selfId. (If
@@ -335,22 +344,33 @@ async function establishFreshPairSession(
     getShellToken: () => pairing.code,
     // Persist the issued device credential against the pairing material (minus the
     // one-time code) so the NEXT launch reconnects via refresh:<deviceId>:<token>.
-    onPaired: (credential) =>
-      saveStoredRemote({
-        pairing: {
-          room: pairing.room,
-          fp: pairing.fp,
-          sig: pairing.sig,
-          ice: pairing.ice,
-          srv: pairing.srv,
-        },
-        deviceId: credential.deviceId,
-        refreshToken: credential.refreshToken,
-        pairedAt: Date.now(),
-      }),
+    onPaired: (credential) => {
+      issuedCredential.current = credential;
+    },
     onServerEvent: args.onServerEvent,
     onConnectionStatusChanged: args.onConnectionStatusChanged,
     onRecovery: args.onRecovery,
+  });
+  if (!issuedCredential.current) {
+    throw new Error("Fresh WebRTC pairing completed without an issued device credential");
+  }
+  const authClient = createTypedServiceClient("auth", authMethods, (svc, m, a) =>
+    serverClient.call(svc, m, a)
+  );
+  const info = await authClient.getConnectionInfo();
+  saveDeviceCredential({
+    serverId: info.serverId,
+    transport: "webrtc",
+    pairing: {
+      room: pairing.room,
+      fp: pairing.fp,
+      sig: pairing.sig,
+      ice: pairing.ice,
+      srv: pairing.srv,
+    },
+    deviceId: issuedCredential.current.deviceId,
+    refreshToken: issuedCredential.current.refreshToken,
+    pairedAt: Date.now(),
   });
   log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
   return buildRemoteSessionConnection(serverClient);
@@ -417,9 +437,8 @@ async function buildRemoteSessionConnection(
     gatewayConfig,
     workerdPort: 0,
     workspaceId: wsInfo.config.id,
-    // TODO(remote): wsInfo.path is the REMOTE host's tree — panel manifests are
-    // not present locally. Full remote panel serving (manifests + assets over the
-    // bridge) is a follow-up; carried here so the session is labelled correctly.
+    // Remote manifests and assets are served through panelAssetFacade. The
+    // remote path remains metadata for labels and workspace identity only.
     workspacePath: wsInfo.path,
     statePath,
     workspaceConfig: wsInfo.config,

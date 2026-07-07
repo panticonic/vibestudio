@@ -26,6 +26,8 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Clipboard from "@react-native-clipboard/clipboard";
+import { Camera, useCameraDevice, useCodeScanner } from "react-native-vision-camera";
 import { parseConnectLink } from "@vibestudio/shared/connect";
 import {
   establishWebRtcConnection,
@@ -35,6 +37,7 @@ import {
   clearShellCredential,
   makeShellTokenProvider,
   deviceIdFromCallerId,
+  activateApprovedWorkspaceApp as activateApprovedWorkspaceAppShared,
 } from "@vibestudio/mobile-webrtc";
 import {
   formatCapabilities,
@@ -52,24 +55,16 @@ import {
 import { name as appName } from "./app.json";
 import { VibestudioLogo } from "./VibestudioLogo";
 
-const RN_HOST_ABI = "rn-host-1";
 const CONSUMED_CONNECT_LINK_KEY = "vibestudio:connect:consumed-url";
+const CONSUMED_CONNECT_LINK_TTL_MS = 10 * 60 * 1000;
 const nativeHost = NativeModules.VibestudioMobileHost;
 
 function smokePhase(phase) {
   console.log(`[VibestudioMobileSmoke] phase=${phase}`);
 }
 
-function platformName() {
-  return Platform.OS === "ios" ? "ios" : "android";
-}
-
-function missingNativeHostError() {
-  return new Error("VibestudioMobileHost native module is unavailable");
-}
-
 function parseConnectDeepLink(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibestudio://connect")) return null;
+  if (!isConnectLink(rawUrl)) return null;
   const parsed = parseConnectLink(rawUrl);
   if (parsed.kind === "error") throw new Error(parsed.reason);
   // New WebRTC pairing payload: a signaling rendezvous room + the server's pinned
@@ -95,225 +90,47 @@ function pairingLabel(pairing) {
 }
 
 async function markConnectLinkConsumed(rawUrl) {
-  if (typeof rawUrl !== "string" || !rawUrl.startsWith("vibestudio://connect")) return;
+  if (!isConnectLink(rawUrl)) return;
   await AsyncStorage.setItem(
     CONSUMED_CONNECT_LINK_KEY,
     JSON.stringify({ url: rawUrl, consumedAt: Date.now() })
   );
 }
 
-const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const B64_CODES = (() => {
-  const codes = new Uint8Array(64);
-  for (let i = 0; i < 64; i += 1) codes[i] = B64_ALPHABET.charCodeAt(i);
-  return codes;
-})();
-
-/** Standard base64-encode a Uint8Array (O(n), Hermes-safe — no btoa/Buffer). */
-function uint8ToBase64(bytes) {
-  const len = bytes.length;
-  const out = new Uint8Array(Math.ceil(len / 3) * 4);
-  let o = 0;
-  const fullEnd = len - (len % 3);
-  for (let i = 0; i < fullEnd; i += 3) {
-    const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2];
-    out[o++] = B64_CODES[(n >> 18) & 63];
-    out[o++] = B64_CODES[(n >> 12) & 63];
-    out[o++] = B64_CODES[(n >> 6) & 63];
-    out[o++] = B64_CODES[n & 63];
+async function consumeConnectLinkReplay(rawUrl) {
+  if (!isConnectLink(rawUrl)) return false;
+  let parsed = null;
+  try {
+    const raw = await AsyncStorage.getItem(CONSUMED_CONNECT_LINK_KEY);
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    return false;
   }
-  const rem = len - fullEnd;
-  if (rem === 1) {
-    const n = bytes[fullEnd] << 16;
-    out[o++] = B64_CODES[(n >> 18) & 63];
-    out[o++] = B64_CODES[(n >> 12) & 63];
-    out[o++] = 61;
-    out[o++] = 61;
-  } else if (rem === 2) {
-    const n = (bytes[fullEnd] << 16) | (bytes[fullEnd + 1] << 8);
-    out[o++] = B64_CODES[(n >> 18) & 63];
-    out[o++] = B64_CODES[(n >> 12) & 63];
-    out[o++] = B64_CODES[(n >> 6) & 63];
-    out[o++] = 61;
+  if (
+    !parsed ||
+    typeof parsed.url !== "string" ||
+    typeof parsed.consumedAt !== "number"
+  ) {
+    return false;
   }
-  const parts = [];
-  for (let p = 0; p < out.length; p += 0x8000) {
-    parts.push(String.fromCharCode.apply(null, out.subarray(p, p + 0x8000)));
+  const age = Date.now() - parsed.consumedAt;
+  const stale = age < 0 || age > CONSUMED_CONNECT_LINK_TTL_MS;
+  if (stale) {
+    await AsyncStorage.removeItem(CONSUMED_CONNECT_LINK_KEY).catch(() => {});
   }
-  return parts.join("");
+  return parsed.url === rawUrl && !stale;
 }
 
-/** Pick the primary RN bundle artifact for this platform from the bootstrap manifest. */
-function selectPrimaryArtifact(bootstrap, platform) {
-  const artifacts = Array.isArray(bootstrap?.artifacts) ? bootstrap.artifacts : [];
-  const artifact = artifacts.find((a) => a?.role === "primary" && a?.platform === platform);
-  if (!artifact) {
-    throw new Error(`No primary React Native bundle artifact for ${platform}`);
-  }
-  return artifact;
-}
-
-/**
- * Fetch + activate the approved workspace app bundle OVER THE WEBRTC PIPE.
- *
- * There is no reachable server URL in WebRTC mode, so the asset plane rides the
- * pipe too: the manifest (`/_r/s/auth/mobile-app-bootstrap`) and the bundle
- * artifact (`/_a/<buildKey>/...`) are both fetched via the `gateway.fetch`
- * streaming RPC (loopback fetch on the server, chunked over the bulk channel),
- * then handed to the native host (`prepareAppBundleFromBytes`) which verifies
- * integrity + writes the local file for `activatePreparedAppBundle` to reload.
- */
-/** Drain a `ReadableStream<Uint8Array>` into a single `Uint8Array`. */
-async function drainStream(body) {
-  const reader = body.getReader();
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value && value.length) {
-      chunks.push(value);
-      total += value.length;
-    }
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return out;
-}
-
-/**
- * Fetch a gateway asset over the pipe and return its bytes. Uses `streamReadable`
- * (not `stream`) because RN's whatwg-fetch `Response` cannot consume a
- * `ReadableStream` body — we read the decoded stream directly via `getReader()`.
- *
- * `bodyText` (optional) is the REQUEST body. It streams over the pipe's bulk
- * channel via `options.body` (plan §1.6) — never as a `body` field inside the
- * descriptor, which the server's strict schema rejects.
- */
-async function gatewayFetchBytes(connection, descriptor, bodyText) {
-  const body =
-    bodyText == null
-      ? undefined
-      : new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode(bodyText));
-            controller.close();
-          },
-        });
-  const decoded = await connection.rpc.streamReadable(
-    "main",
-    "gateway.fetch",
-    [descriptor],
-    body ? { body } : undefined
+function isConnectLink(rawUrl) {
+  return (
+    typeof rawUrl === "string" &&
+    (rawUrl.startsWith("vibestudio://connect") ||
+      rawUrl.startsWith("https://vibestudio.app/pair"))
   );
-  const bytes = await drainStream(decoded.body);
-  if (decoded.status !== 200) {
-    throw new Error(
-      `gateway.fetch ${descriptor.path} failed (${decoded.status}): ` +
-        new TextDecoder().decode(bytes).slice(0, 300)
-    );
-  }
-  return bytes;
-}
-
-/**
- * Stream a gateway asset over the pipe straight into the native bundle file, a
- * chunk at a time. Buffering the whole multi-MB bundle and base64-ing it in one
- * shot would block the JS thread (the WebRTC keepalive would miss and the pipe
- * would drop) and choke the bridge — so each ~bulk-channel chunk is base64'd and
- * appended natively, yielding between chunks.
- */
-async function streamArtifactToNative(connection, descriptor, buildKey, artifactPath) {
-  const decoded = await connection.rpc.streamReadable("main", "gateway.fetch", [descriptor]);
-  if (decoded.status !== 200) {
-    const bytes = await drainStream(decoded.body);
-    throw new Error(
-      `bundle artifact fetch failed (${decoded.status}): ` +
-        new TextDecoder().decode(bytes).slice(0, 300)
-    );
-  }
-  // The server gzips the body on the wire (descriptor.gzip) to keep the transfer
-  // small enough for react-native-webrtc's serialized bulk receive; the native host
-  // decompresses before verifying the uncompressed integrity. The header confirms it.
-  const gzipped = decoded.headers.some(
-    (h) => h[0].toLowerCase() === "x-vibestudio-content-gzip" && h[1] === "1"
-  );
-  const reader = decoded.body.getReader();
-  let first = true;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value && value.length) {
-      await nativeHost.appendBundleChunk(uint8ToBase64(value), buildKey, artifactPath, first);
-      first = false;
-    }
-  }
-  if (first) throw new Error("bundle artifact stream was empty");
-  return gzipped;
 }
 
 async function activateApprovedWorkspaceApp(connection, options = {}) {
-  if (!nativeHost) throw missingNativeHostError();
-  const stored = await loadShellCredential();
-  if (!stored) {
-    throw new Error(
-      "Pair this device with a trusted Vibestudio server before loading the workspace app."
-    );
-  }
-
-  // 1. Bootstrap manifest (the endpoint authenticates the device by its refresh
-  //    credential in the body, even though the pipe is already a shell session).
-  const bootstrapBody = {
-    deviceId: stored.deviceId,
-    refreshToken: stored.refreshToken,
-  };
-  if (typeof options.source === "string" && options.source.length > 0) {
-    bootstrapBody.source = options.source;
-  }
-  // The device-credential body streams via options.body (§1.6) — the fetch
-  // descriptor's strict schema rejects any inline `body` field.
-  const manifestBytes = await gatewayFetchBytes(
-    connection,
-    {
-      path: "/_r/s/auth/mobile-app-bootstrap",
-      method: "POST",
-      headers: { "content-type": "application/json" },
-    },
-    JSON.stringify(bootstrapBody)
-  );
-  const bootstrap = JSON.parse(new TextDecoder().decode(manifestBytes))?.bootstrap;
-  if (!bootstrap) throw new Error("Mobile app bootstrap returned no manifest");
-  if (bootstrap.rnHostAbi !== RN_HOST_ABI) {
-    throw new Error(
-      `React Native host ABI mismatch: expected ${RN_HOST_ABI}, got ${bootstrap.rnHostAbi}`
-    );
-  }
-  smokePhase("embedded-bundle-activate-start");
-  const buildKey = bootstrap.buildKey;
-  const artifact = selectPrimaryArtifact(bootstrap, platformName());
-  const integrity = artifact.integrity;
-  // `url` is absolute on the server origin; its pathname is the gateway path.
-  const artifactPath = new URL(artifact.url).pathname;
-  const nativeArtifactPath = artifact.path ?? artifactPath;
-
-  // 2. Stream the bundle straight into the native bundle file (chunked + gzipped on
-  //    the wire) — bundles are multiple MB; see streamArtifactToNative for why we
-  //    don't buffer and why we compress.
-  const gzipped = await streamArtifactToNative(
-    connection,
-    { path: artifactPath, method: "GET", gzip: true },
-    buildKey,
-    nativeArtifactPath
-  );
-
-  // 3. Native: decompress if needed, verify the bundle's integrity, then activate.
-  const prepared = await nativeHost.finalizeBundleWrite(integrity, gzipped);
-  await nativeHost.activatePreparedAppBundle(prepared.localPath, buildKey, integrity);
-  smokePhase("embedded-bundle-activate-complete");
+  await activateApprovedWorkspaceAppShared(connection, { ...options, nativeHost, smokePhase });
   return true;
 }
 
@@ -539,19 +356,20 @@ function VibestudioMobileHostBootstrap() {
   const [status, setStatus] = useState("Loading approved workspace app...");
   const [busy, setBusy] = useState(true);
   const [pendingConnect, setPendingConnect] = useState(null);
-  const [pendingWorkspaces, setPendingWorkspaces] = useState([]);
+  const [scannerOpen, setScannerOpen] = useState(false);
   const [launchGrant, setLaunchGrant] = useState(null);
   const [launchSession, setLaunchSession] = useState(null);
   const [approvals, setApprovals] = useState([]);
   const [openApprovalIds, setOpenApprovalIds] = useState(() => new Set());
   const launchGateGeneration = useRef(0);
+  const scannerLastValueRef = useRef(null);
+  const cameraDevice = useCameraDevice("back");
 
   const runLaunchGate = useCallback(async (grant, initialSession = null) => {
     const generation = ++launchGateGeneration.current;
     const isCurrent = () => generation === launchGateGeneration.current;
     setBusy(true);
     setApprovals([]);
-    setPendingWorkspaces([]);
     setOpenApprovalIds(new Set());
     setLaunchGrant(grant);
     const deadline = Date.now() + 120000;
@@ -689,21 +507,16 @@ function VibestudioMobileHostBootstrap() {
     }
   }, []);
 
-  const selectWorkspaceAndRun = useCallback(
-    async (workspaceName, consumedUrl = null) => {
-      setBusy(true);
-      setStatus(`Opening ${workspaceName}...`);
-      const grant = await nativeHost.selectWorkspace(workspaceName, null);
-      smokePhase("embedded-workspace-selected");
-      if (consumedUrl) {
-        await markConnectLinkConsumed(consumedUrl).catch(() => {});
-      }
-      setPendingConnect(null);
-      setPendingWorkspaces([]);
-      await runLaunchGate(grant);
+  const codeScanner = useCodeScanner({
+    codeTypes: ["qr"],
+    onCodeScanned: (codes) => {
+      const rawUrl = codes.find((code) => typeof code.value === "string" && code.value)?.value;
+      if (!rawUrl || scannerLastValueRef.current === rawUrl) return;
+      scannerLastValueRef.current = rawUrl;
+      setScannerOpen(false);
+      presentConnectLink(rawUrl);
     },
-    [runLaunchGate]
-  );
+  });
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -712,9 +525,12 @@ function VibestudioMobileHostBootstrap() {
     setStatus("Loading approved workspace app...");
     try {
       const initialUrl = await Linking.getInitialURL();
-      if (initialUrl && initialUrl.startsWith("vibestudio://connect")) {
-        presentConnectLink(initialUrl);
-        return;
+      if (isConnectLink(initialUrl)) {
+        const replay = await consumeConnectLinkReplay(initialUrl);
+        if (!replay) {
+          presentConnectLink(initialUrl);
+          return;
+        }
       }
       // A returning device reconnects over the SAME signaling room with its
       // stored refresh secret — no HTTP, no native credential read.
@@ -740,7 +556,7 @@ function VibestudioMobileHostBootstrap() {
     } finally {
       setBusy(false);
     }
-  }, [presentConnectLink, runLaunchGate, selectWorkspaceAndRun]);
+  }, [presentConnectLink, runLaunchGate]);
 
   const confirmPendingConnect = useCallback(async () => {
     if (!pendingConnect) return;
@@ -756,7 +572,6 @@ function VibestudioMobileHostBootstrap() {
         await markConnectLinkConsumed(pendingConnect.rawUrl).catch(() => {});
       }
       setPendingConnect(null);
-      setPendingWorkspaces([]);
       await runLaunchGate(connection);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
@@ -765,23 +580,46 @@ function VibestudioMobileHostBootstrap() {
     }
   }, [pendingConnect, runLaunchGate]);
 
-  const selectPendingWorkspace = useCallback(
-    async (workspaceName) => {
-      try {
-        await selectWorkspaceAndRun(workspaceName, pendingConnect?.rawUrl ?? null);
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : String(error));
-      } finally {
-        setBusy(false);
-      }
-    },
-    [pendingConnect, selectWorkspaceAndRun]
-  );
-
   const cancelPendingConnect = useCallback(() => {
     setPendingConnect(null);
-    setPendingWorkspaces([]);
     setStatus("Pairing cancelled.");
+  }, []);
+
+  const pasteConnectLink = useCallback(async () => {
+    setBusy(true);
+    try {
+      const rawUrl = (await Clipboard.getString()).trim();
+      if (!rawUrl) {
+        setStatus("Clipboard is empty. Copy a Vibestudio pairing link first.");
+        return;
+      }
+      presentConnectLink(rawUrl);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }, [presentConnectLink]);
+
+  const openScanner = useCallback(async () => {
+    setBusy(true);
+    try {
+      let permission = await Camera.getCameraPermissionStatus();
+      if (permission !== "granted") {
+        permission = await Camera.requestCameraPermission();
+      }
+      if (permission !== "granted") {
+        setStatus("Camera access is required to scan a Vibestudio pairing QR code.");
+        return;
+      }
+      scannerLastValueRef.current = null;
+      setScannerOpen(true);
+      setStatus("Scanning a Vibestudio pairing QR code...");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
   }, []);
 
   const toggleApprovalDetails = useCallback((approvalId) => {
@@ -799,7 +637,10 @@ function VibestudioMobileHostBootstrap() {
 
   useEffect(() => {
     const subscription = Linking.addEventListener("url", (event) => {
-      presentConnectLink(event.url);
+      void (async () => {
+        if (await consumeConnectLinkReplay(event.url)) return;
+        presentConnectLink(event.url);
+      })();
     });
     return () => subscription.remove();
   }, [presentConnectLink]);
@@ -807,7 +648,7 @@ function VibestudioMobileHostBootstrap() {
   const activeStep =
     approvals.length > 0
       ? "approve"
-      : pendingConnect || pendingWorkspaces.length > 0
+      : pendingConnect
         ? "pair"
         : "load";
 
@@ -901,40 +742,6 @@ function VibestudioMobileHostBootstrap() {
                 variant="danger"
               />
             </View>
-          ) : pendingWorkspaces.length > 0 ? (
-            <View style={styles.actions}>
-              <View style={styles.connectCard}>
-                <Text style={styles.eyebrow}>Workspace</Text>
-                <Text style={styles.sectionTitle}>Choose a workspace</Text>
-                <Text style={styles.hostLabel}>
-                  {pendingConnect ? pairingLabel(pendingConnect) : "Paired server"}
-                </Text>
-              </View>
-              {pendingWorkspaces.map((workspace) => (
-                <Pressable
-                  key={workspace.name}
-                  accessibilityRole="button"
-                  onPress={() => selectPendingWorkspace(workspace.name)}
-                  style={({ pressed }) => [
-                    styles.workspaceButton,
-                    pressed ? styles.buttonPressed : null,
-                  ]}
-                >
-                  <View>
-                    <Text style={styles.workspaceName}>{workspace.name}</Text>
-                    <Text style={styles.workspaceMeta}>
-                      {[
-                        workspace.ephemeral ? "temporary" : "saved",
-                        workspace.running ? "running" : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </Text>
-                  </View>
-                </Pressable>
-              ))}
-              <ActionButton title="Cancel" onPress={cancelPendingConnect} variant="secondary" />
-            </View>
           ) : pendingConnect ? (
             <View style={styles.actions}>
               <View style={styles.connectCard}>
@@ -947,10 +754,34 @@ function VibestudioMobileHostBootstrap() {
             </View>
           ) : (
             <View style={styles.actions}>
-              <Text style={styles.hint}>
-                Open a Vibestudio pairing link or scan a QR code from a trusted desktop or terminal.
-              </Text>
-              <ActionButton title="Retry" onPress={load} variant="secondary" />
+              {scannerOpen ? (
+                <View style={styles.scannerCard}>
+                  {cameraDevice ? (
+                    <Camera
+                      style={styles.cameraPreview}
+                      device={cameraDevice}
+                      isActive={scannerOpen}
+                      codeScanner={codeScanner}
+                    />
+                  ) : (
+                    <Text style={styles.hint}>No camera is available on this device.</Text>
+                  )}
+                  <ActionButton
+                    title="Cancel scan"
+                    onPress={() => setScannerOpen(false)}
+                    variant="secondary"
+                  />
+                </View>
+              ) : (
+                <>
+                  <Text style={styles.hint}>
+                    Open a Vibestudio pairing link or scan a QR code from a trusted desktop or terminal.
+                  </Text>
+                  <ActionButton title="Scan QR" onPress={openScanner} />
+                  <ActionButton title="Paste pairing link" onPress={pasteConnectLink} />
+                  <ActionButton title="Retry" onPress={load} variant="secondary" />
+                </>
+              )}
             </View>
           )}
         </View>
@@ -1210,6 +1041,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 8,
     padding: 14,
+  },
+  scannerCard: {
+    backgroundColor: "#101722",
+    borderColor: "#303a4f",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+    overflow: "hidden",
+    padding: 12,
+  },
+  cameraPreview: {
+    aspectRatio: 1,
+    borderRadius: 8,
+    minHeight: 260,
+    overflow: "hidden",
+    width: "100%",
   },
   hostLabel: {
     color: "#e6eaf2",

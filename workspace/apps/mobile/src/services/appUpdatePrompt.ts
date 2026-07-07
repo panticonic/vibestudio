@@ -1,5 +1,4 @@
 import { Alert } from "react-native";
-import { ensureNativeWorkspaceAppBundle } from "./appBootstrap";
 import type { ShellClient } from "./shellClient";
 import type { ToastInput } from "../state/toastAtoms";
 
@@ -23,8 +22,13 @@ export interface AppUpdatePromptDeps {
   selectedSource?: string | null;
   selectedAppId?: string | null;
   alert?: typeof Alert.alert;
-  ensureBundle?: typeof ensureNativeWorkspaceAppBundle;
+  ensureBundle?: EnsureBundleFn;
 }
+
+type EnsureBundleFn = (
+  transport: ShellClient["transport"],
+  source?: string | null
+) => Promise<unknown>;
 
 export function handleMobileAppLifecycleEvent(
   event: AppLifecyclePayload,
@@ -67,6 +71,14 @@ function normalizeSource(value: string): string {
   return value.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
 }
 
+async function defaultEnsureBundle(
+  transport: ShellClient["transport"],
+  source?: string | null
+): Promise<unknown> {
+  const { ensureNativeWorkspaceAppBundle } = await import("./appBootstrap");
+  return ensureNativeWorkspaceAppBundle(transport, source);
+}
+
 /**
  * Build a version-aware update message. Surfaces the target version (and the
  * version being replaced, when both are known) so the prompt isn't blind about
@@ -97,7 +109,7 @@ function promptMobileUpdate(event: AppLifecyclePayload, deps: AppUpdatePromptDep
   const promptKey = `${appId}:${event.buildKey ?? "unknown"}`;
   if (deps.prompted.has(promptKey)) return;
   deps.prompted.add(promptKey);
-  const ensureBundle = deps.ensureBundle ?? ensureNativeWorkspaceAppBundle;
+  const ensureBundle = deps.ensureBundle ?? defaultEnsureBundle;
   const alert = deps.alert ?? Alert.alert;
   alert("Mobile app update available", formatUpdateMessage(event, appId), [
     { text: "Later", style: "cancel" },
@@ -109,7 +121,9 @@ function promptMobileUpdate(event: AppLifecyclePayload, deps: AppUpdatePromptDep
             onPress: () => {
               void deps.shellClient.workspaces
                 .rollbackApp(appId)
-                .then(() => ensureBundle(event.source ?? deps.selectedSource ?? null))
+                .then(() =>
+                  ensureBundle(deps.shellClient.transport, event.source ?? deps.selectedSource ?? null)
+                )
                 .catch((error: unknown) => {
                   deps.pushToast({
                     title: "Rollback failed",
@@ -125,7 +139,7 @@ function promptMobileUpdate(event: AppLifecyclePayload, deps: AppUpdatePromptDep
     {
       text: "Install",
       onPress: () => {
-        void ensureBundle(event.source ?? deps.selectedSource ?? null).catch((error: unknown) => {
+        void ensureBundle(deps.shellClient.transport, event.source ?? deps.selectedSource ?? null).catch((error: unknown) => {
           deps.pushToast({
             title: "Update failed",
             message: error instanceof Error ? error.message : String(error),

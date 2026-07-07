@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { StoredRemote } from "./remoteCredStore.js";
+import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
 
 const mocks = vi.hoisted(() => ({
   app: {
@@ -13,23 +13,21 @@ const mocks = vi.hoisted(() => ({
     decryptString: vi.fn((b: Buffer) => b.toString("utf8")),
     isEncryptionAvailable: vi.fn(() => false),
   },
-  // In-memory backing for the (mocked) remoteCredStore so tests can drive the
+  // In-memory backing for the (mocked) unified store so tests can drive the
   // persisted-pairing state without touching disk or safeStorage.
   store: { value: null as StoredRemote | null },
 }));
 
 vi.mock("electron", () => ({ app: mocks.app, safeStorage: mocks.safeStorage }));
 
-vi.mock("./remoteCredStore.js", () => ({
-  createRemoteCredStore: () => ({
-    load: () => mocks.store.value,
-    save: (value: StoredRemote) => {
-      mocks.store.value = value;
-    },
-    clear: () => {
-      mocks.store.value = null;
-    },
-  }),
+vi.mock("./deviceCredentialStore.js", () => ({
+  loadStoredRemotePairing: () => mocks.store.value,
+  saveDeviceCredential: (value: DeviceCredentialEntry) => {
+    mocks.store.value = value.transport === "webrtc" ? (value as StoredRemote) : mocks.store.value;
+  },
+  clearStoredRemotePairing: () => {
+    mocks.store.value = null;
+  },
 }));
 
 const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
@@ -44,6 +42,8 @@ const localStartupMode = {
 };
 
 const sampleStored: StoredRemote = {
+  serverId: "srv_remote",
+  transport: "webrtc",
   pairing: { room: "room-abc", fp: "AA".repeat(32), sig: "wss://sig.example/" },
   deviceId: "dev_self",
   refreshToken: "refresh-secret",
@@ -157,7 +157,12 @@ describe("remoteCredService", () => {
       expect(args).toEqual([{ ttlMs: 60_000 }]);
       return {
         code: "A".repeat(24),
-        deepLink: null,
+        deepLink: `vibestudio://connect?room=room-abc&fp=${"AA".repeat(32)}&code=${"A".repeat(24)}&sig=wss%3A%2F%2Fsig.example%2F&v=2&ice=all`,
+        pairUrl: `https://vibestudio.app/pair#room=room-abc&fp=${"AA".repeat(32)}&code=${"A".repeat(24)}&sig=wss%3A%2F%2Fsig.example%2F&v=2&ice=all`,
+        room: "room-abc",
+        fp: "AA".repeat(32),
+        sig: "wss://sig.example/",
+        ice: "all",
         serverUrl: "http://127.0.0.1:3030",
         expiresAt: 123,
         expiresInMs: 60_000,

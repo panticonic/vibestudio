@@ -1133,6 +1133,32 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     expect(lastCall?.[0]).toBe("panel:tree/root");
   });
 
+  it("recovers a focused existing panel when a navigate snapshot arrives after its view was unloaded", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.repopulate([makePanel("panel:tree/root")]);
+    registry.updateSelectedPath("panel:tree/root");
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    const loadedPanels = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loadedPanels.add(panelId);
+    });
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [
+        makePanel("panel:tree/root", [], {
+          snapshot: { source: "panels/other", contextId: "ctx-other", options: {} },
+        }),
+      ],
+    });
+
+    expect(panelView.createViewForPanel).toHaveBeenCalled();
+    const lastCall = panelView.createViewForPanel.mock.calls.at(-1);
+    expect(lastCall?.[0]).toBe("panel:tree/root");
+    expect(lastCall?.[2]).toBe("ctx-other");
+  });
+
   it("pushes state-args-only authoritative changes to hosted panels", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     registry.repopulate([
@@ -1357,8 +1383,9 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView, cdpHost } = createOrchestrator(registry);
+    const { orchestrator, panelView, cdpHost, shellCore } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
+    shellCore.refreshSlotEntity.mockResolvedValue(asPanelEntityId("panel:nav-panel-1"));
 
     await orchestrator.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
@@ -1388,6 +1415,52 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       buildState: "pending",
       buildProgress: "Panel unloaded - will rebuild when focused",
     });
+  });
+
+  it("ignores an old lease release after the slot has navigated to a new entity", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(true);
+    shellCore.refreshSlotEntity.mockResolvedValue(asPanelEntityId("panel:nav-panel-1-next"));
+
+    const previous = {
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: asPanelEntityId("panel:nav-panel-1-old"),
+      clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      hostConnectionId: orchestrator.getRuntimeClientSessionId(),
+      connectionId: "old-desktop-conn",
+      holderLabel: "Desktop",
+      platform: "desktop" as const,
+      supportsCdp: true,
+      loadOnLeaseAssignment: false,
+      acquiredAt: 1,
+    };
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: previous.runtimeEntityId,
+      previous: null,
+      next: previous,
+      reason: "acquired",
+    });
+    panelView.destroyView.mockClear();
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 3 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: previous.runtimeEntityId,
+      previous,
+      next: null,
+      reason: "retired",
+    });
+
+    expect(shellCore.refreshSlotEntity).toHaveBeenCalledWith(asPanelSlotId(panel.id));
+    expect(panelView.destroyView).not.toHaveBeenCalled();
   });
 
   it("loads panels assigned to a load-on-assignment host without reacquiring the lease", async () => {

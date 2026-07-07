@@ -60,6 +60,8 @@ export interface SpectroliteState {
   repoRoot: string | null;
   /** Vault-relative `.mdx` paths for the active vault (from `vcs.listFiles`). */
   paths: string[];
+  /** Content digests for the active vault's `.mdx` paths, keyed by vault-relative path. */
+  pathContentHashes: Record<string, string>;
   pathsLoading: boolean;
   /** False until the first path scan for the current vault settles. */
   pathsLoaded: boolean;
@@ -100,6 +102,7 @@ export function initialState(args: {
 
     repoRoot: args.repoRoot,
     paths: [],
+    pathContentHashes: {},
     pathsLoading: false,
     pathsLoaded: false,
     dirtyPaths: [],

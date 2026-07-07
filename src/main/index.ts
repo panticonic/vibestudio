@@ -1766,6 +1766,9 @@ app.on("ready", async () => {
         isDev: isDev(),
       });
       const isEphemeral = choice.ephemeral;
+      const autoApproveStartupUnits =
+        process.env["VIBESTUDIO_AUTO_APPROVE_STARTUP_UNITS"] === "1" ||
+        (startup.resolved.name === "default" && startup.resolved.created && !isEphemeral);
       startupMode = {
         kind: "local",
         wsDir: startup.resolved.wsDir,
@@ -1774,8 +1777,7 @@ app.on("ready", async () => {
         // The chooser distinguishes the ephemeral button explicitly; the
         // resolved name path never tags ephemeral, so carry the user's intent.
         isEphemeral,
-        autoApproveStartupUnits:
-          startup.resolved.name === "default" && startup.resolved.created && !isEphemeral,
+        autoApproveStartupUnits,
       };
       workspaceId = startupMode.workspaceId;
       log.info(`[bootstrap] Local workspace chosen: ${workspaceId} (${startupMode.wsDir})`);

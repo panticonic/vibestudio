@@ -35,6 +35,11 @@ export const CreatePairingInviteArgsSchema = z.object({
     .max(60 * 60 * 1000)
     .optional()
     .describe("Invite lifetime in milliseconds (30s–1h); defaults to the server's standard TTL."),
+  workspace: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Workspace name to mint an invite for when calling the hub."),
 });
 
 /** The entity/context/channel binding surfaced for an `agent`-kind connection. */
@@ -93,9 +98,13 @@ export const authMethods = defineServiceMethods({
       code: z.string(),
       expiresInMs: z.number(),
       expiresAt: z.number(),
-      deepLink: z.string().nullable(),
-      // The invite's freshly minted signaling room (null without WebRTC ingress).
-      room: z.string().nullable(),
+      deepLink: z.string(),
+      pairUrl: z.string(),
+      room: z.string(),
+      fp: z.string(),
+      sig: z.string(),
+      ice: z.enum(["all", "relay"]).optional(),
+      srv: z.string().optional(),
     }),
     policy: { allowed: ["server", "shell", "app"] },
     access: AUTH_PAIRING_ACCESS,

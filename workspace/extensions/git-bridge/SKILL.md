@@ -1,6 +1,6 @@
 ---
 name: git-bridge
-description: Use the Vibestudio Git Bridge extension for GAD-native repository import/export, upstream status, publish, push, pull, clone, shared remote, and auto-push workflows. Use when Codex works on external Git connectivity for workspace repos, docs or code under workspace/extensions/git-bridge, git.upstreams/git.remotes behavior, protected-main to Git synchronization, GitHub/GitLab provider publishing through the bridge, or when deciding whether to use runtime Git APIs versus raw checkout Git commands.
+description: Use the Vibestudio Git Bridge extension for GAD-native repository import/export, upstream status, publish, push, pull, clone, shared remote, auto-push, and remote-server topology workflows. Use when Codex works on external Git connectivity for workspace repos, docs or code under workspace/extensions/git-bridge, git.upstreams/git.remotes behavior, protected-main to Git synchronization, GitHub/GitLab provider publishing through the bridge, or when deciding whether to use runtime Git APIs versus raw checkout Git commands.
 ---
 
 # Git Bridge
@@ -32,6 +32,19 @@ The host remains policy and dispatch only: capability approvals, workspace
 config writes, credential injection, extension invocation, and the protected
 single-writer import path. Do not add provider-specific Git transport, clone,
 push, status, or egress logic back into host services.
+
+## Remote Topology
+
+- The extension runs on the workspace server, not on the desktop client.
+- Disk paths are server-local. In a remote session, `workspace/<repoPath>` refers
+  to the remote server's checkout, even when the desktop UI is elsewhere.
+- Desktop and mobile clients reach Git Bridge only through RPC over the active
+  server connection. Do not add client-side filesystem shortcuts for remote
+  workspaces.
+- In remote scenarios, verify the expected files exist on the server host before
+  blaming desktop path handling.
+- Use `workspace.units.logs("@workspace-extensions/git-bridge")` and
+  `serverLog.query({ tag: "BuildV2" })` for remote diagnostics.
 
 ## Preferred APIs
 
@@ -183,6 +196,6 @@ pnpm --filter @vibestudio/shared test -- gitInterop
 
 Bridge regression coverage should protect trailers, deletion propagation,
 staging failure safety, path swaps, untracked-file preservation, import staging,
-ignored paths, and guarded force-push behavior. For broader changes touching
-runtime or panels, also run the relevant TypeScript check or package tests
-before handing off.
+ignored paths, guarded force-push behavior, and server-local checkout handling
+in remote sessions. For broader changes touching runtime or panels, also run
+the relevant TypeScript check or package tests before handing off.

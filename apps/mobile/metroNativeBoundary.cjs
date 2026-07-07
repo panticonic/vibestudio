@@ -54,6 +54,14 @@ function createNativeBoundary(workspaceAppRoot) {
       new Set(relativePaths.map((relativePath) => normalize(path.join(workspaceAppRoot, relativePath)))),
     ]),
   );
+  const nativeBootstrap = normalize(path.join(__dirname, "index.js"));
+  // Trusted PLATFORM code that runs before any downloaded workspace app bundle
+  // is active. It can read pairing links from Clipboard and persist connect-link
+  // replay state directly because no capability manifest exists until after
+  // pairing + app activation.
+  allowedByModule.get("@react-native-clipboard/clipboard")?.add(nativeBootstrap);
+  allowedByModule.get("@react-native-async-storage/async-storage")?.add(nativeBootstrap);
+
   // Trusted PLATFORM code that persists the device's WebRTC shell-reconnect
   // credential directly (not userland workspace surface, so not capability-gated):
   // the native host bootstrap (apps/mobile/index.js) and the shared WebRTC
@@ -68,14 +76,13 @@ function createNativeBoundary(workspaceAppRoot) {
   const asyncStorageAllowed = allowedByModule.get(
     "@react-native-async-storage/async-storage",
   );
-  asyncStorageAllowed?.add(normalize(path.join(__dirname, "index.js")));
   asyncStorageAllowed?.add(mobileWebRtcConnect);
   // The native host bootstrap (apps/mobile/index.js) is the out-of-tree trusted
   // consumer of the @vibestudio/mobile-webrtc capability; allowlist it by absolute
   // path alongside the workspace-app-relative shell consumers above.
   allowedByModule
     .get("@vibestudio/mobile-webrtc")
-    ?.add(normalize(path.join(__dirname, "index.js")));
+    ?.add(nativeBootstrap);
 
   return {
     guardNativeModuleImport(moduleName, originModulePath) {

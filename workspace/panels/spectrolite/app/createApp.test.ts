@@ -57,7 +57,7 @@ describe("createSpectroliteApp", () => {
     vi.clearAllMocks();
     runtimeMocks.stateArgs.current = {
       contextId: "vault-fresh",
-      repoRoot: "projects/fresh",
+      repoRoot: "/projects/fresh/",
       pendingStarterDoc: { path: "Welcome.mdx", content: "# Welcome\n" },
     };
     runtimeMocks.listFiles.mockResolvedValue([]);

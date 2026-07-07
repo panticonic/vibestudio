@@ -88,10 +88,58 @@ describe("VaultController", () => {
       contextId: vaultContextId("projects/fresh"),
       stateArgs: {
         repoRoot: "projects/fresh",
-        openPath: undefined,
         pendingStarterDoc: starterDoc,
       },
     });
     expect(runtimeMocks.edit).not.toHaveBeenCalled();
+  });
+
+  it("enters picker state and clears persisted repoRoot when switching vaults", async () => {
+    const store = makeStore();
+    store.setState({
+      activeDeps: { chart: "1.0.0" },
+      activePath: "E2E.mdx",
+      dirtyPaths: ["E2E.mdx"],
+      installedAgents: [{
+        agentId: "SilentAgentWorker",
+        className: "SilentAgentWorker",
+        handle: "scribe",
+        key: "scribe",
+        source: "workers/silent-agent-worker",
+      }],
+      paths: ["E2E.mdx"],
+      pathsLoaded: true,
+      pendingSuggestions: [{
+        id: "s",
+        vcsPath: "projects/default/E2E.mdx",
+        collision: {
+          fromIndex: 0,
+          toIndex: 1,
+          oldIds: ["a"],
+          oldTexts: ["old"],
+          newTexts: ["new"],
+          liveIds: ["a"],
+        },
+      }],
+      roster: [{ handle: "scribe", status: "live" }],
+    });
+    const controller = new VaultController(store, { onVaultSelected: () => {} });
+
+    await controller.switchVault();
+
+    expect(store.getState()).toMatchObject({
+      activeDeps: {},
+      activePath: null,
+      dirtyPaths: [],
+      installedAgents: [],
+      paths: [],
+      pathsLoaded: false,
+      pendingSuggestions: [],
+      repoRoot: null,
+      roster: [],
+    });
+    expect(runtimeMocks.reopen).toHaveBeenCalledWith({
+      stateArgs: { repoRoot: null },
+    });
   });
 });

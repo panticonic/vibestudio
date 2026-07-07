@@ -675,6 +675,13 @@ describe("PanelManager", () => {
     const manager = new PanelManager({ registry, ...deps });
 
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
+    const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
+    retireEntity.mockImplementationOnce(async (entityId) => {
+      expect(mem.state.slots.get(created.panelId)?.current_entity_id).not.toBe(entityId);
+      const entity = mem.state.entities.get(entityId);
+      mem.state.retired.push(entityId);
+      if (entity) entity.status = "retired";
+    });
 
     await manager.navigate(created.panelId, "panels/second", { ref: "feature" });
 

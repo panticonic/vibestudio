@@ -138,6 +138,7 @@ async function runReactNativeBundle(
       // local mobile smoke tests do not depend on the host inotify limit.
       CI: "1",
       VIBESTUDIO_WORKSPACE_APP_ROOT: input.sourcePath,
+      VIBESTUDIO_WORKSPACE_NODE_MODULES: path.join(input.workspaceRoot, "node_modules"),
     },
   });
 }

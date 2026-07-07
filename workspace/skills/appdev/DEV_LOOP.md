@@ -147,11 +147,38 @@ Useful smoke path:
 
 1. Start a pairable server.
 2. Install or launch a clean mobile host.
-3. Open a `vibestudio://connect?...` link.
+3. Open a `https://vibestudio.app/pair#...` or `vibestudio://connect?...` link.
 4. Verify native bootstrap completes pairing.
 5. Verify the host fetches the current platform bundle and reloads into the
    workspace app.
 6. Verify the workspace app can refresh a principal grant and connect RPC.
+
+Android emulator smoke:
+
+```bash
+node scripts/cli/mobile-smoke.mjs --platform android --avd <name>
+```
+
+iOS simulator loop:
+
+```bash
+vibestudio mobile dev --platform ios
+vibestudio mobile smoke --platform ios
+```
+
+iOS shell builds require macOS + Xcode + signing configuration. Use
+`vibestudio mobile doctor` to inspect signing, generated entitlements, Firebase,
+and APNs provisioning. The iOS workspace bundle is still built by the server and
+served over the same WebRTC pipe as Android.
+
+Full composition smoke:
+
+```bash
+pnpm smoke:full
+```
+
+That command runs the branded desktop pairing smoke, desktop Playwright e2e, and
+Android mobile smoke, writing logs under `test-results/full-system-smoke/`.
 
 ## Terminal App Loop
 

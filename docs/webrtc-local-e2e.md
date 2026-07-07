@@ -79,7 +79,7 @@ cd apps/signaling && wrangler dev --port 8787 --local &
 # 2. the server, with the ingress pool armed
 VIBESTUDIO_WEBRTC_SIGNAL_URL=ws://127.0.0.1:8787 pnpm server
 # → startup banner prints fresh invites:
-#      Pair URL:     vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2&ice=all
+#      Pair URL:     https://vibestudio.app/pair#room=…&fp=…&code=…&sig=…&v=2&ice=all
 #   and the pool logs:  [webrtc-ingress] armed room <uuid> (invite)
 ```
 
@@ -89,9 +89,9 @@ The server mints two startup invites (banner + ready file; disable with
 pool; redemption persists the room onto the device record, so returning
 devices reconnect into their own room after a restart.
 
-Optional env: `VIBESTUDIO_WEBRTC_CERT` / `VIBESTUDIO_WEBRTC_KEY` (cert paths, default
-`<appRoot>/.vibestudio/webrtc/server.{pem,key}`), `VIBESTUDIO_WEBRTC_ICE=relay` (force
-TURN). The server presents the persistent cert; its SHA-256 is the published `fp`.
+Optional env: `VIBESTUDIO_WEBRTC_IDENTITY` (combined identity path, default
+`<appRoot>/.vibestudio/webrtc/identity.pem`), `VIBESTUDIO_WEBRTC_ICE=relay` (force
+TURN). The server presents the persistent identity cert; its SHA-256 is the published `fp`.
 
 Observability (§9.8 relay alarm): every pipe connect logs
 `[webrtc-ingress] room=… device=… path=<host|srflx|relay>` and WARNS when the

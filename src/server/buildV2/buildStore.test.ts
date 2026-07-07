@@ -146,7 +146,7 @@ describe("build artifact helpers", () => {
           kind: "app" as const,
           target: "react-native" as const,
           integrity: "sha256-provider-supplied",
-          rnHostAbi: "rn-host-1",
+          rnHostAbi: "rn-host-2",
           provider: null,
         },
       };

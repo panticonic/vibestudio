@@ -1,5 +1,6 @@
 import * as os from "node:os";
 import {
+  isLoopbackHost,
   parseConnectLink,
   serverAuthRouteUrl,
   serverWorkspaceRouteUrl,
@@ -8,6 +9,7 @@ import {
   selectedWorkspacePath,
   type ConnectPairing,
 } from "@vibestudio/shared/connect";
+import { loadPersistedAdminToken } from "@vibestudio/shared/centralAuth";
 import { AuthError } from "./output.js";
 import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
@@ -32,12 +34,26 @@ export interface PairOptions {
 
 export interface PairingInvite {
   code: string;
-  deepLink: string | null;
-  /** Legacy WS server URL. WebRTC-paired servers no longer return one, so it is
-   * optional — the deep link (room/fp/sig) is the pairing material now. */
-  connectUrl?: string;
+  deepLink: string;
+  pairUrl: string;
+  room: string;
+  fp: string;
+  sig: string;
+  ice?: "all" | "relay";
+  srv?: string;
   serverUrl?: string;
   expiresAt?: number;
+  expiresInMs?: number;
+}
+
+export interface PairingInviteOptions {
+  ttlMs?: number;
+  workspace?: string;
+}
+
+export interface AdminPairingInviteOptions extends PairingInviteOptions {
+  url: string;
+  adminToken?: string;
 }
 
 interface WorkspaceSelectResult {
@@ -237,32 +253,60 @@ export async function selectRemoteWorkspace(
 
 export async function createPairingInvite(
   creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">,
-  options: { ttlMs?: number } = {}
+  options: PairingInviteOptions = {}
 ): Promise<PairingInvite> {
   const auth = typedClient("auth", authMethods, new RpcClient(creds));
-  // createPairingInvite has no `returns` schema yet — validate the shape here.
-  const result = (await auth.createPairingInvite(options.ttlMs ? { ttlMs: options.ttlMs } : {})) as
-    | Record<string, unknown>
-    | undefined;
-  if (!result || typeof result["code"] !== "string") {
+  return await auth.createPairingInvite(pairingInviteArgs(options));
+}
+
+export async function createPairingInviteWithAdmin(
+  options: AdminPairingInviteOptions
+): Promise<PairingInvite> {
+  const endpoint = new URL(options.url);
+  if (endpoint.protocol === "http:" && !isLoopbackHost(endpoint.hostname)) {
+    throw new AuthError(
+      "admin-token invite creation over cleartext HTTP is only allowed on loopback"
+    );
+  }
+  const adminToken = options.adminToken ?? loadPersistedAdminToken();
+  if (!adminToken) {
+    throw new AuthError(
+      "not paired and no local admin token found; run on the remote host or pass --admin-token"
+    );
+  }
+  const response = await fetch(serverAuthRouteUrl(endpoint, "create-pairing-code"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body: JSON.stringify(pairingInviteArgs(options)),
+  });
+  const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new AuthError(
+      remoteErrorMessage(body, `invite failed (${response.status} ${response.statusText})`)
+    );
+  }
+  if (typeof body["code"] !== "string" || typeof body["pairUrl"] !== "string") {
     throw new Error("invite failed: server returned an unexpected response");
   }
-  return {
-    // The server mints the deep link from its WebRTC pairing material (room/fp/
-    // sig); the CLI no longer has that material, so it cannot build one itself.
-    // A null deepLink means the server hasn't advertised pairing material yet.
-    code: result["code"],
-    deepLink: typeof result["deepLink"] === "string" ? result["deepLink"] : null,
-    connectUrl: typeof result["connectUrl"] === "string" ? result["connectUrl"] : undefined,
-    serverUrl: typeof result["serverUrl"] === "string" ? result["serverUrl"] : undefined,
-    expiresAt: typeof result["expiresAt"] === "number" ? result["expiresAt"] : undefined,
-  };
+  return body as unknown as PairingInvite;
 }
 
 function remoteErrorMessage(body: { error?: unknown; code?: unknown }, fallback: string): string {
   const message = typeof body.error === "string" ? body.error : fallback;
   const code = typeof body.code === "string" ? body.code : undefined;
   return code ? `${message} [${code}]` : message;
+}
+
+function pairingInviteArgs(options: PairingInviteOptions): { ttlMs?: number; workspace?: string } {
+  return {
+    ...(typeof options.ttlMs === "number" ? { ttlMs: options.ttlMs } : {}),
+    ...(typeof options.workspace === "string" && options.workspace.trim()
+      ? { workspace: options.workspace.trim() }
+      : {}),
+  };
 }
 
 function parsePairOptions(options: PairOptions): { url: string; code: string } {

@@ -497,34 +497,32 @@ describe("cert.ts — persistent ECDSA P-256 management", () => {
   });
 
   it("ensurePersistentCert persists once and stays stable across reload", () => {
-    const certFile = tmp("dtls-cert.pem");
-    const keyFile = tmp("dtls-key.pem");
-    const first = ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
-    expect(fs.existsSync(certFile)).toBe(true);
-    expect(fs.existsSync(keyFile)).toBe(true);
-    expect(first.fingerprint).toBe(certFileFingerprint(certFile));
+    const identityFile = tmp("identity.pem");
+    const first = ensurePersistentCert({ identityPemFile: identityFile });
+    expect(fs.existsSync(identityFile)).toBe(true);
+    expect(first.certificatePemFile).toBe(identityFile);
+    expect(first.keyPemFile).toBe(identityFile);
+    expect(first.fingerprint).toBe(certFileFingerprint(identityFile));
 
-    const before = fs.readFileSync(certFile, "utf8");
-    const second = ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    const before = fs.readFileSync(identityFile, "utf8");
+    const second = ensurePersistentCert({ identityPemFile: identityFile });
     // Reuse, not regenerate: identical bytes AND identical fingerprint.
-    expect(fs.readFileSync(certFile, "utf8")).toBe(before);
+    expect(fs.readFileSync(identityFile, "utf8")).toBe(before);
     expect(second.fingerprint).toBe(first.fingerprint);
   });
 
-  it("writes the private key with 0600 permissions", () => {
+  it("writes the combined identity with 0600 permissions", () => {
     if (process.platform === "win32") return; // POSIX mode bits are a no-op on Windows
-    const certFile = tmp("c.pem");
-    const keyFile = tmp("k.pem");
-    ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
-    expect(fs.statSync(keyFile).mode & 0o777).toBe(0o600);
+    const identityFile = tmp("mode-identity.pem");
+    ensurePersistentCert({ identityPemFile: identityFile });
+    expect(fs.statSync(identityFile).mode & 0o777).toBe(0o600);
   });
 
   it("logs on first mint and on reuse, keeping the fingerprint stable", () => {
-    const certFile = tmp("log-cert.pem");
-    const keyFile = tmp("log-key.pem");
+    const identityFile = tmp("log-identity.pem");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    const first = ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
-    const second = ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+    const first = ensurePersistentCert({ identityPemFile: identityFile });
+    const second = ensurePersistentCert({ identityPemFile: identityFile });
     const messages = log.mock.calls.map((c) => String(c[0]));
     log.mockRestore();
     expect(second.fingerprint).toBe(first.fingerprint);
@@ -541,15 +539,19 @@ describe("cert.ts — persistent ECDSA P-256 management", () => {
     ).toBe(true);
   });
 
-  it("throws CertIdentityError when the cert exists but the key is missing", () => {
-    const certFile = tmp("half-a-cert.pem");
-    const keyFile = tmp("half-a-key.pem");
+  it("throws CertIdentityError when legacy cert/key remnants exist", () => {
+    const dir = tmp("legacy-remnants");
+    fs.mkdirSync(dir, { recursive: true });
+    const identityFile = path.join(dir, "identity.pem");
+    const certFile = path.join(dir, "server.pem");
+    const keyFile = path.join(dir, "server.key");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
-    fs.rmSync(keyFile);
+    ensurePersistentCert({ identityPemFile: identityFile });
+    fs.writeFileSync(certFile, "legacy");
+    fs.writeFileSync(keyFile, "legacy");
     let err: unknown;
     try {
-      ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+      ensurePersistentCert({ identityPemFile: identityFile });
     } catch (e) {
       err = e;
     }
@@ -558,45 +560,24 @@ describe("cert.ts — persistent ECDSA P-256 management", () => {
     expect((err as CertIdentityError).code).toBe("CERT_IDENTITY_HALF_STATE");
     expect((err as Error).message).toContain(certFile);
     expect((err as Error).message).toContain(keyFile);
-    expect((err as Error).message).toContain("MISSING");
+    expect((err as Error).message).toContain("deleted two-file identity layout");
   });
 
-  it("throws CertIdentityError when the key exists but the cert is missing", () => {
-    const certFile = tmp("half-b-cert.pem");
-    const keyFile = tmp("half-b-key.pem");
+  it("throws CertIdentityError when the identity file exists but is empty/whitespace", () => {
+    const identityFile = tmp("empty-identity.pem");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
-    fs.rmSync(certFile);
+    ensurePersistentCert({ identityPemFile: identityFile });
+    fs.writeFileSync(identityFile, "   \n"); // whitespace-only → EMPTY, not present
     let err: unknown;
     try {
-      ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
+      ensurePersistentCert({ identityPemFile: identityFile });
     } catch (e) {
       err = e;
     }
     vi.restoreAllMocks();
     expect(err).toBeInstanceOf(CertIdentityError);
     expect((err as CertIdentityError).code).toBe("CERT_IDENTITY_HALF_STATE");
-    expect((err as Error).message).toContain(certFile);
-    expect((err as Error).message).toContain(keyFile);
-  });
-
-  it("throws CertIdentityError when a file exists but is empty/whitespace", () => {
-    const certFile = tmp("empty-cert.pem");
-    const keyFile = tmp("empty-key.pem");
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
-    fs.writeFileSync(certFile, "   \n"); // whitespace-only → EMPTY, not present
-    let err: unknown;
-    try {
-      ensurePersistentCert({ certificatePemFile: certFile, keyPemFile: keyFile });
-    } catch (e) {
-      err = e;
-    }
-    vi.restoreAllMocks();
-    expect(err).toBeInstanceOf(CertIdentityError);
-    expect((err as CertIdentityError).code).toBe("CERT_IDENTITY_HALF_STATE");
-    expect((err as Error).message).toContain(certFile);
-    expect((err as Error).message).toContain(keyFile);
+    expect((err as Error).message).toContain(identityFile);
     expect((err as Error).message).toContain("EMPTY");
   });
 });

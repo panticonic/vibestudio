@@ -41,7 +41,7 @@ export type RemoteCredSaveArgs = z.infer<typeof RemoteCredSaveArgsSchema>;
 export const RemoteCredPairingCodeArgsSchema = z.object({
   link: z
     .string()
-    .describe("A `vibestudio://connect?...` pairing link carrying the WebRTC pairing material."),
+    .describe("A `vibestudio://connect?...` or `https://vibestudio.app/pair#...` link carrying the WebRTC pairing material."),
   label: z.string().optional().describe("Human-readable label for the new device credential."),
 });
 export type RemoteCredPairingCodeArgs = z.infer<typeof RemoteCredPairingCodeArgsSchema>;
@@ -80,9 +80,13 @@ export type RemoteCredDeviceRecord = z.infer<typeof RemoteCredDeviceRecordSchema
 
 export const RemoteCredPairingInviteSchema = z.object({
   code: z.string(),
-  deepLink: z.string().nullable(),
-  // NOTE: no `connectUrl` — the producer (createPairingInviteResponse) emits
-  // `serverUrl` (the connection origin); consumers derive the rest from the code.
+  deepLink: z.string(),
+  pairUrl: z.string(),
+  room: z.string(),
+  fp: z.string(),
+  sig: z.string(),
+  ice: z.enum(["all", "relay"]).optional(),
+  srv: z.string().optional(),
   serverUrl: z.string(),
   publicUrl: z.string().nullable().optional(),
   protocol: z.enum(["http", "https"]).optional(),

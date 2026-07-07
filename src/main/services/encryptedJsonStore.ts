@@ -2,7 +2,7 @@
  * encryptedJsonStore — a generic, single-file encrypted-at-rest JSON store.
  *
  * The durable-secret persistence primitive shared by the client-side credential
- * stores (remoteCredStore, localServerCredStore). The store logic is pure (path,
+ * stores (currently the unified device credential store). The store logic is pure (path,
  * cipher, fs, dirname, and a validator injected) so it is unit-testable without
  * Electron; a service layer binds `app.getPath('userData')` + `safeStorage`.
  *

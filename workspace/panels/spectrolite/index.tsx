@@ -44,8 +44,11 @@ export default function SpectrolitePanel() {
     if (repoRoot === null) return;
     const want = vaultContextId(repoRoot);
     if (runtimeContextId && runtimeContextId !== want) {
-      void panel.reopen({ contextId: want, stateArgs: { repoRoot, openPath: app.store.getState().activePath ?? undefined } })
-        .catch((err) => console.warn("[Spectrolite] reopen to vault context failed:", err));
+      const activePath = app.store.getState().activePath;
+      void panel.reopen({
+        contextId: want,
+        stateArgs: activePath ? { repoRoot, openPath: activePath } : { repoRoot },
+      }).catch((err) => console.warn("[Spectrolite] reopen to vault context failed:", err));
     }
   }, [app]);
 

@@ -35,6 +35,30 @@ Layering: testkit = deterministic layer (exact assertions, CDP automation,
 profiling); system-testing = agentic layer (LLM-driven sessions judged by
 validators). Prefer testkit when expected behavior is exactly specifiable.
 
+## Full Remote/Mobile Smoke
+
+Use this when the question is "does remote access and mobile pairing work with
+the real clients?"
+
+```bash
+pnpm smoke:full
+```
+
+The harness writes forensics under `test-results/full-system-smoke/` and runs:
+
+- `pnpm build`
+- `scripts/desktop-pairing-smoke.mjs` with the branded Electron binary and
+  WebRTC pairing
+- `pnpm test:e2e` for desktop Playwright coverage
+- `scripts/cli/mobile-smoke.mjs --platform android` against adb/emulator,
+  asserting the mobile `smokePhase` ladder through pairing, OTA activation, and
+  panel WebView load
+
+If a phase fails, read that phase's log first, then the Electron/mobile logs
+collected by the underlying smoke. Missing adb/emulator, X11/Wayland display, or
+node-datachannel are environment failures; do not report the product as verified
+until the full harness has actually run green.
+
 ## Quick Start
 
 `HeadlessRunner.spawn()` creates an isolated agent context by default. This keeps

@@ -382,7 +382,7 @@ export interface OAuthAccountValidationSpec {
 }
 
 export interface OAuthLoopbackRedirectStrategy {
-  type?: "loopback" | "public" | "client-forwarded" | "client-loopback";
+  type?: "loopback" | "public" | "client-forwarded" | "client-loopback" | "app-scheme";
   host?: string;
   port?: number;
   callbackPath?: string;

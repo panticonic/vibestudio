@@ -876,7 +876,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
           }
         }}
         javaScriptEnabled
-        webviewDebuggingEnabled={Platform.OS === "android"}
+        webviewDebuggingEnabled
         domStorageEnabled
         mixedContentMode="never"
         allowsInlineMediaPlayback

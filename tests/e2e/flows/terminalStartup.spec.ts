@@ -154,7 +154,7 @@ async function approvePendingTerminalWork(app: ElectronApplication, window?: Pag
   if (window) {
     await window
       .getByRole("button", {
-        name: /Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i,
+        name: /Trust and start|Approve and start|Approve all|Approve push|Approve|Dev session|Install and run|Allow|Run once|Allow for session|Use this session/i,
       })
       .click({ timeout: 250 })
       .catch(() => {});

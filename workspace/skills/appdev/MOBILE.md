@@ -13,18 +13,16 @@ mobile UX can be updated through workspace app builds.
 
 The native host owns:
 
-- durable device credential storage
-- `vibestudio://connect` clean-install pairing
-- `/auth/complete-pairing`
-- `/auth/refresh-principal-grant`
-- `/auth/mobile-app-bootstrap`
-- platform artifact selection
+- `vibestudio://connect` and `https://vibestudio.app/pair#...` clean-install pairing
+- WebRTC shell credential persistence in JS secure storage
+- `/auth/mobile-app-bootstrap` over the active WebRTC pipe
+- streamed bundle writes from JS (`appendBundleChunk` / `finalizeBundleWrite`)
 - integrity verification
 - writing the bundle to native-owned storage
 - React Native reload onto the active bundle
 
 The bootstrap must not depend on workspace app code for first pairing. A clean
-install has no workspace bundle and no stored credentials yet.
+install has no workspace bundle and no stored WebRTC credential yet.
 
 ## Workspace Mobile App Responsibilities
 
@@ -38,7 +36,8 @@ The workspace mobile app owns:
 - RPC transport using a principal grant
 
 It should not directly hold long-lived refresh tokens. It should call native
-host wrappers to obtain short-lived grants or current connection bootstrap.
+host wrappers only for reset/activation; WebRTC transport credentials live in
+`@vibestudio/mobile-webrtc`.
 
 The workspace app bundle entry must register the same root component name the
 native host requests. The current native host requests `Vibestudio`, so the active
@@ -61,26 +60,25 @@ foreground login flow can miss approval pushes/actions.
 Clean install:
 
 1. Desktop/server creates a pairing invite.
-2. User opens a `vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2` link on the phone.
+2. User opens a `https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2` URL or `vibestudio://connect?...` link on the phone.
 3. Native bootstrap consumes the initial URL or URL event.
 4. Native bootstrap shows a trusted recovery-surface confirmation with the
    target server/workspace label from the link.
 5. After user confirmation, native bootstrap dials the WebRTC room, pins `fp`,
    and presents the one-time `code` as the first shell-session token.
-6. Native code stores the returned device credential plus `room`/`fp`/`sig`.
-7. Native bootstrap calls `listWorkspaces()` and asks the user to choose one.
-8. Native bootstrap calls `selectWorkspace(name)`, which pairs to the
-   workspace-scoped WebRTC room and returns a mobile shell grant.
-9. Native bootstrap calls `prepareAppBundle(rnHostAbi, platform, source)`.
-10. Native code verifies the selected platform artifact, writes
-   it to disk, and reloads into the workspace app.
+6. JS stores the returned device credential plus `room`/`fp`/`sig`.
+7. JS fetches `/auth/mobile-app-bootstrap` over the same WebRTC pipe.
+8. JS streams the chosen platform artifact to native chunk-by-chunk.
+9. Native verifies the decompressed bundle integrity, writes it to disk, and
+   reloads into the workspace app.
 
 Already paired:
 
-1. Bootstrap reads native credentials.
-2. If no workspace is selected, bootstrap resumes at workspace choice.
-3. Bootstrap issues a principal grant or prepares the active workspace app.
-4. Workspace app connects using native-provided connection material.
+1. Bootstrap reads the stored WebRTC credential from `@vibestudio/mobile-webrtc`.
+2. Bootstrap reconnects to the same signaling room with a refresh token.
+3. Bootstrap gates approvals, streams any required bundle update, and reloads.
+4. The workspace app uses the active WebRTC transport; native no longer issues
+   HTTP grants or lists/selects workspaces.
 
 ## Bootstrap Payload
 
@@ -106,7 +104,8 @@ Each primary artifact should include:
 - `url`
 
 The bootstrap can contain one platform artifact or multiple platform artifacts.
-The native host selects only the current platform.
+The JS bundle-delivery helper selects only the current platform and streams it to
+native.
 
 ## React Native Build Provider
 
@@ -123,8 +122,8 @@ If provider identity is missing, activation fails closed.
 ## Native ABI
 
 `rnHostAbi` is the contract between the workspace app bundle and the shipped
-native host. Bump it when the workspace app requires native modules or bootstrap
-behavior that older native hosts do not provide.
+native host. Current value: `rn-host-2`. Bump it when the workspace app requires
+native modules or bootstrap behavior that older native hosts do not provide.
 
 Do not silently load an app bundle with an ABI mismatch. The native host should
 fail clearly and keep the recovery surface available.

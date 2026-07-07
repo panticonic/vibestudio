@@ -71,6 +71,15 @@ describe("mobile Metro native capability boundary", () => {
     ).not.toThrow();
   });
 
+  it("permits the shipped native host bootstrap to read pasted pairing links", () => {
+    expect(() =>
+      boundary.guardNativeModuleImport(
+        "@react-native-clipboard/clipboard",
+        path.resolve("apps/mobile/index.js")
+      )
+    ).not.toThrow();
+  });
+
   it("permits the shared WebRTC transport package to persist the shell credential", () => {
     expect(() =>
       boundary.guardNativeModuleImport(
@@ -90,7 +99,8 @@ describe("mobile Metro native capability boundary", () => {
     const entrypoint = fs.readFileSync(path.resolve("apps/mobile/index.js"), "utf-8");
 
     expect(entrypoint).toContain("VibestudioMobileHost");
-    expect(entrypoint).toContain("prepareAppBundle");
+    expect(entrypoint).toContain("activateApprovedWorkspaceApp");
+    expect(entrypoint).not.toContain(["prepare", "App", "Bundle"].join(""));
     expect(entrypoint).not.toContain("workspace/apps/mobile");
     expect(entrypoint).not.toContain("../../workspace/apps");
   });

@@ -57,6 +57,7 @@
     "test:headless-panel-integration": "NODE_ENV=development node build.mjs && VIBESTUDIO_RUN_HEADLESS_PANEL_INTEGRATION=1 vitest run tests/headless-panel.integration.test.ts",
     "test:webrtc-e2e": "VIBESTUDIO_RUN_WEBRTC_E2E=1 vitest run tests/webrtc-native.e2e.test.ts tests/webrtc-system.e2e.test.ts",
     "test:desktop-pairing-smoke": "NODE_ENV=development node build.mjs && node scripts/desktop-pairing-smoke.mjs",
+    "smoke:full": "node scripts/full-system-smoke.mjs",
     "test:terminal-app-smoke": "NODE_ENV=development node build.mjs && node scripts/terminal-app-smoke.mjs",
     "test:watch": "vitest",
     "test:browser": "vitest run --config vitest.browser.config.ts",

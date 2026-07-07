@@ -1,15 +1,20 @@
 import React from "react";
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Linking,
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import type { StackNavigationProp } from "@react-navigation/stack";
 import { useAtomValue, useSetAtom } from "jotai";
 import type { RootStackParamList } from "../navigation/RootNavigator";
-import {
-  resetToNativeBootstrap,
-  StoredCredentialsNeedRepairError,
-  type Credentials,
-} from "../services/auth";
+import { resetToNativeBootstrap } from "../services/auth";
+import { readClipboardText } from "../services/nativeCapabilities";
 import { loadShellCredential, clearShellCredential } from "@vibestudio/mobile-webrtc";
-import { ShellClient } from "../services/shellClient";
+import { ShellClient, type Credentials } from "../services/shellClient";
 import {
   serverUrlAtom,
   isAuthenticatedAtom,
@@ -30,13 +35,6 @@ type LoginScreenNavigationProp = StackNavigationProp<RootStackParamList, "Login"
 
 interface LoginScreenProps {
   navigation: LoginScreenNavigationProp;
-}
-
-function missingWorkspaceMessage(credentials: Credentials | null): string {
-  if (!credentials) {
-    return "No selected workspace is stored on this device. Scan a Vibestudio pairing QR code to choose a workspace.";
-  }
-  return "This device is paired with a server, but no workspace is selected. Scan a Vibestudio pairing QR code to choose a workspace.";
 }
 
 export function LoginScreen({ navigation }: LoginScreenProps) {
@@ -66,6 +64,22 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     } catch (error) {
       setAuthLoading(false);
       setAuthError(error instanceof Error ? error.message : "Could not return to pairing.");
+    }
+  }, [setAuthError, setAuthLoading]);
+
+  const handlePastePairingLink = React.useCallback(async () => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const rawUrl = (await readClipboardText()).trim();
+      if (!rawUrl) {
+        throw new Error("Clipboard is empty. Copy a Vibestudio pairing link first.");
+      }
+      await clearShellCredential();
+      await Linking.openURL(rawUrl);
+    } catch (error) {
+      setAuthLoading(false);
+      setAuthError(error instanceof Error ? error.message : "Could not open pairing link.");
     }
   }, [setAuthError, setAuthLoading]);
 
@@ -131,11 +145,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         if (cancelled) return;
         setAuthLoading(false);
         const message =
-          error instanceof StoredCredentialsNeedRepairError
-            ? error.message
-            : error instanceof Error
-              ? error.message
-              : "Could not open the selected workspace.";
+          error instanceof Error ? error.message : "Could not open the selected workspace.";
         smokePhase("workspace-login-error", {
           message,
           name: error instanceof Error ? error.name : typeof error,
@@ -197,6 +207,14 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
               onPress={() => void handleResetToBootstrap()}
             >
               <Text style={[styles.buttonText, { color: colors.text }]}>Open pairing</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.secondaryButton, { borderColor: colors.border }]}
+              onPress={() => void handlePastePairingLink()}
+            >
+              <Text style={[styles.secondaryButtonText, { color: colors.text }]}>
+                Paste pairing link
+              </Text>
             </Pressable>
             <Pressable
               style={[styles.secondaryButton, { borderColor: colors.border }]}

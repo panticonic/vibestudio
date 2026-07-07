@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
-import { type ConnectPairing, createConnectDeepLink } from "@vibestudio/shared/connect";
+import {
+  type ConnectPairing,
+  createConnectDeepLink,
+  createConnectPairUrl,
+} from "@vibestudio/shared/connect";
 import { DEFAULT_PAIRING_CODE_TTL_MS, type DeviceAuthStore } from "../deviceAuthStore.js";
 
 /**
@@ -8,7 +12,7 @@ import { DEFAULT_PAIRING_CODE_TTL_MS, type DeviceAuthStore } from "../deviceAuth
  * signaling endpoint `sig`, plus optional turn policy / label). `code` AND
  * `room` are minted PER-INVITE (plan §2.1 — one signaling room per invite, not
  * one per server), so neither is part of the seam. The server-side WebRTC
- * wiring populates this; until it does, invites carry a null `deepLink`.
+ * wiring populates this; without it, invite minting fails.
  */
 export type ConnectPairingSeam = Omit<ConnectPairing, "code" | "room" | "v">;
 
@@ -40,9 +44,14 @@ export interface PairingInviteResponse extends ConnectionInfoResponse {
   code: string;
   expiresInMs: number;
   expiresAt: number;
-  deepLink: string | null;
-  /** The invite's freshly minted signaling room (null without WebRTC ingress). */
-  room: string | null;
+  deepLink: string;
+  pairUrl: string;
+  /** The invite's freshly minted signaling room. */
+  room: string;
+  fp: string;
+  sig: string;
+  ice?: ConnectPairing["ice"];
+  srv?: string;
 }
 
 export interface DeviceCredentialResponse {
@@ -90,10 +99,15 @@ export function connectionInfoResponse(deps: {
 
 export interface MintedPairingInvite {
   code: string;
-  room: string | null;
-  deepLink: string | null;
+  room: string;
+  deepLink: string;
+  pairUrl: string;
   expiresInMs: number;
   expiresAt: number;
+  fp: string;
+  sig: string;
+  ice?: ConnectPairing["ice"];
+  srv?: string;
 }
 
 /**
@@ -102,8 +116,8 @@ export interface MintedPairingInvite {
  * pool and embedded in the `vibestudio://connect` deep link. The room follows the
  * invite's lifecycle: redemption persists it onto the device record (the store
  * re-tags the armed room via `onPairingRoomRedeemed`); expiry unredeemed
- * releases it (`onPairingRoomReleased` → disarm). Without ingress (loopback
- * co-located mode) the invite is a bare code with a null deep link.
+ * releases it (`onPairingRoomReleased` → disarm). Without ingress, invite
+ * minting fails loud; there is no bare-code invite mode.
  */
 export function mintPairingInvite(deps: {
   deviceAuthStore: DeviceAuthStore;
@@ -113,20 +127,27 @@ export function mintPairingInvite(deps: {
 }): MintedPairingInvite {
   const expiresInMs = deps.ttlMs ?? DEFAULT_PAIRING_CODE_TTL_MS;
   const { pairing, ingress } = deps;
-  if (pairing && ingress) {
-    const room = randomUUID();
-    const code = deps.deviceAuthStore.createPairingCode(expiresInMs, { room });
-    ingress.armRoom(room, { inviteCode: code });
-    return {
-      code,
-      room,
-      deepLink: createConnectDeepLink({ ...pairing, room, code }),
-      expiresInMs,
-      expiresAt: Date.now() + expiresInMs,
-    };
+  if (!pairing || !ingress) {
+    throw new Error(
+      "Cannot create a pairing invite because WebRTC ingress is not ready. Run `vibestudio remote doctor` and repair signaling/identity before inviting devices."
+    );
   }
-  const code = deps.deviceAuthStore.createPairingCode(expiresInMs);
-  return { code, room: null, deepLink: null, expiresInMs, expiresAt: Date.now() + expiresInMs };
+  const room = randomUUID();
+  const code = deps.deviceAuthStore.createPairingCode(expiresInMs, { room });
+  ingress.armRoom(room, { inviteCode: code });
+  const payload = { ...pairing, room, code };
+  return {
+    code,
+    room,
+    deepLink: createConnectDeepLink(payload),
+    pairUrl: createConnectPairUrl(payload),
+    expiresInMs,
+    expiresAt: Date.now() + expiresInMs,
+    fp: pairing.fp,
+    sig: pairing.sig,
+    ice: pairing.ice,
+    srv: pairing.srv,
+  };
 }
 
 export function createPairingInviteResponse(
@@ -152,7 +173,12 @@ export function createPairingInviteResponse(
     expiresInMs: invite.expiresInMs,
     expiresAt: invite.expiresAt,
     deepLink: invite.deepLink,
+    pairUrl: invite.pairUrl,
     room: invite.room,
+    fp: invite.fp,
+    sig: invite.sig,
+    ice: invite.ice,
+    srv: invite.srv,
   };
 }
 

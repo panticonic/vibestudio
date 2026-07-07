@@ -16,13 +16,14 @@ Remote reach is **WebRTC**: the client and server establish one peer-to-peer, DT
 The server needs a **signaling endpoint** (a tiny Cloudflare Worker/DO that brokers the WebRTC offer/answer — it never sees your data). The server mints the per-invite signaling room and pairing code itself; point it at signaling and it prints a pairing link:
 
 ```
-VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://signaling.example.workers.dev \
-  vibestudio-server --serve-panels --print-credentials
-# → Pairing link: vibestudio://connect?room=…&fp=…&code=…&sig=…&v=2
+vibestudio remote serve --port 3030
+# → Pair URL: https://vibestudio.app/pair#room=…&fp=…&code=…&sig=…&v=2
 ```
 
-- The server presents a **persistent DTLS cert** (default `<appRoot>/.vibestudio/webrtc/server.{pem,key}`, overridable with `VIBESTUDIO_WEBRTC_CERT`/`VIBESTUDIO_WEBRTC_KEY`). Its SHA-256 is the `fp` in the link — the client pins it (**fail-closed** on mismatch), so a malicious signaling server cannot MitM.
+- Signaling resolves as flag > env > config > hosted default (`wss://signal.vibestudio.app`).
+- The server presents a **persistent DTLS identity** at `identity.pem` (override with `VIBESTUDIO_WEBRTC_IDENTITY`). Its certificate SHA-256 is the `fp` in the link — the client pins it (**fail-closed** on mismatch), so a malicious signaling server cannot MitM.
 - `VIBESTUDIO_WEBRTC_ICE=relay` forces TURN (set the signaling worker's `TURN_KEY_ID`/`TURN_KEY_API_TOKEN` secrets); host candidates suffice for LAN/loopback.
+- `vibestudio remote doctor` checks node-datachannel, signaling, the single identity file, and deleted legacy cert/key env vars.
 - For local development, run signaling on Cloudflare's local runtime (`cd apps/signaling && wrangler dev --local`) — see `docs/webrtc-local-e2e.md`.
 
 ### Dogfood mode from a source checkout
@@ -33,7 +34,7 @@ When the remote server is meant to edit Vibestudio itself, start it with `pnpm d
 
 The pairing link / QR carries everything the client needs (`room`, `fp`, `code`, `sig`); scanning or opening it establishes the WebRTC pipe and mints a **durable device credential** — no admin token leaves the server.
 
-- **CLI** — run `vibestudio remote pair "vibestudio://connect?…"` to pair over WebRTC. The CLI stores the device credential plus `room`/`fp`/`sig` pairing material and uses the shared `createPairedConnection()` bootstrap for later RPC calls.
+- **CLI** — run `vibestudio remote pair "https://vibestudio.app/pair#…"` to pair over WebRTC. The CLI stores the device credential plus `room`/`fp`/`sig` pairing material and uses the shared `createPairedConnection()` bootstrap for later RPC calls.
 - **Desktop (Electron)** — open the `vibestudio://connect?…` link (or scan the QR); the shell pairs over WebRTC and stores the device credential in the OS keychain. Once one client is connected, mint a fresh link for another device with `vibestudio remote invite`.
 - **Mobile** — scan the QR or follow a `vibestudio://connect?…` link from `vibestudio mobile pair` / **Pair another device**; the native host stores the credential via `react-native-keychain`.
 
@@ -60,7 +61,7 @@ Clicking the badge opens the connection dialog.
 |---|---|
 | Workspaces (`~/.config/vibestudio/workspaces/`) | Device credential (OS keychain) + pinned pairing (`room`/`fp`/`sig`) |
 | Credentials + consent state (`~/.config/vibestudio/credentials/`, `credentials-consent.sqlite`) | Theme / local UI preferences |
-| Persistent WebRTC cert (`<appRoot>/.vibestudio/webrtc/`) | Electron userData cache for remote mode |
+| Persistent WebRTC identity (`identity.pem`) | Electron userData cache for remote mode |
 | Durable Object state (`.databases/workerd-do/`) | |
 | Agent/worker execution | |
 

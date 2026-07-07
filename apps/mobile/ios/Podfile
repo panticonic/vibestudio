@@ -3,9 +3,18 @@
 
 platform :ios, '15.0'
 
-# Prepare React Native pods helper
-require_relative '../node_modules/react-native/scripts/react_native_pods'
-require_relative '../node_modules/@react-native-community/cli-platform-ios/native_modules'
+# Resolve React Native's CocoaPods helpers through Node so pnpm hoisting and the
+# workspace root layout work the same as a flat app-local node_modules install.
+require Pod::Executable.execute_command(
+  'node',
+  [
+    '-p',
+    'require.resolve("react-native/scripts/react_native_pods.rb", {paths: [process.argv[1]]})',
+    __dir__
+  ]
+).strip
+
+prepare_react_native_project!
 
 target 'Vibestudio' do
   config = use_native_modules!

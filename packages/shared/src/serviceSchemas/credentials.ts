@@ -507,7 +507,9 @@ export const GetClientConfigStatusParamsSchema = z
 
 export const OAuthRedirectStrategySchema = z
   .object({
-    type: z.enum(["loopback", "public", "client-forwarded", "client-loopback"]).optional(),
+    type: z
+      .enum(["loopback", "public", "client-forwarded", "client-loopback", "app-scheme"])
+      .optional(),
     host: z.string().optional(),
     port: z.number().int().min(0).max(65535).optional(),
     callbackPath: z.string().optional(),

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Box, Button, Callout, Code, Flex, Table, Text } from "@radix-ui/themes";
+import { Badge, Box, Button, Callout, Code, Dialog, Flex, Table, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import QRCode from "qrcode-terminal/vendor/QRCode/index.js";
 import QRErrorCorrectLevel from "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js";
@@ -13,6 +13,10 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   const [inviteBusy, setInviteBusy] = useState(false);
   const [copyLabel, setCopyLabel] = useState("Copy link");
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [knownDeviceIds, setKnownDeviceIds] = useState<Set<string>>(new Set());
+  const [pairedDevice, setPairedDevice] = useState<DeviceRecord | null>(null);
+  const [now, setNow] = useState(Date.now());
 
   const load = async () => {
     try {
@@ -26,6 +30,34 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (!connectOpen || !invite) return;
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, [connectOpen, invite]);
+
+  useEffect(() => {
+    if (!connectOpen || !invite || pairedDevice) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await remoteCred.listDevices();
+        if (cancelled) return;
+        setDevices(next);
+        const joined = next.find((device) => !knownDeviceIds.has(device.deviceId));
+        if (joined) setPairedDevice(joined);
+      } catch {
+        // The main error callout already covers explicit user-triggered failures.
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 2000);
+    void poll();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [connectOpen, invite, knownDeviceIds, pairedDevice]);
 
   const revoke = async (deviceId: string) => {
     setBusyId(deviceId);
@@ -43,9 +75,12 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   const createInvite = async () => {
     setInviteBusy(true);
     setCopyLabel("Copy link");
+    setPairedDevice(null);
     try {
       setError(null);
+      setKnownDeviceIds(new Set(devices.map((device) => device.deviceId)));
       setInvite(await remoteCred.createPairingInvite());
+      setConnectOpen(true);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -54,10 +89,16 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   };
 
   const copyInvite = async () => {
-    if (!invite?.deepLink) return;
-    await navigator.clipboard.writeText(invite.deepLink);
+    if (!invite) return;
+    await navigator.clipboard.writeText(invite.pairUrl);
     setCopyLabel("Copied");
   };
+
+  const remainingMs = invite ? Math.max(0, invite.expiresAt - now) : 0;
+  const remainingSeconds = Math.ceil(remainingMs / 1000);
+  const remaining = `${Math.floor(remainingSeconds / 60)}:${String(
+    remainingSeconds % 60
+  ).padStart(2, "0")}`;
 
   return (
     <Flex direction="column" gap="2" mt="4">
@@ -67,39 +108,57 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
         </Text>
         <Flex gap="2">
           <Button size="1" variant="soft" disabled={inviteBusy} onClick={() => void createInvite()}>
-            {inviteBusy ? "Creating..." : "Pair another device"}
+            {inviteBusy ? "Creating..." : "Connect a phone"}
           </Button>
           <Button size="1" variant="soft" onClick={() => void load()}>
             Refresh
           </Button>
         </Flex>
       </Flex>
-      {invite ? (
-        <Callout.Root size="1" color="green">
-          <Callout.Text>
-            <Flex direction="column" gap="2">
-              <Text>
-                Pairing code <Code>{invite.code}</Code> expires at {formatTime(invite.expiresAt)}.
-              </Text>
-              {invite.deepLink ? (
-                <Flex gap="3" align="start" wrap="wrap">
-                  <PairingQrCode value={invite.deepLink} />
-                  <Flex direction="column" gap="2" style={{ minWidth: 0, flex: "1 1 260px" }}>
-                    <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
-                      <Code>{invite.deepLink}</Code>
-                    </Box>
-                    <Box>
-                      <Button size="1" variant="soft" onClick={() => void copyInvite()}>
-                        {copyLabel}
-                      </Button>
-                    </Box>
-                  </Flex>
+      <Dialog.Root open={connectOpen} onOpenChange={setConnectOpen}>
+        <Dialog.Content maxWidth="560px">
+          <Dialog.Title>Connect a phone</Dialog.Title>
+          {invite ? (
+            <Flex direction="column" gap="4">
+              <Flex gap="4" align="start" wrap="wrap">
+                <PairingQrCode value={invite.pairUrl} size={248} />
+                <Flex direction="column" gap="3" style={{ minWidth: 0, flex: "1 1 220px" }}>
+                  <Text size="2">
+                    Scan this QR with the phone camera. No app yet? The link walks you through install.
+                  </Text>
+                  <Text size="2">
+                    Server <Code>{invite.srv ?? invite.serverId}</Code>
+                  </Text>
+                  <Text size="2">
+                    Expires in <Code>{remaining}</Code>
+                  </Text>
+                  <Badge color={pairedDevice ? "green" : "gray"} style={{ width: "fit-content" }}>
+                    {pairedDevice
+                      ? `Paired ${pairedDevice.label || pairedDevice.platform || "device"}`
+                      : "Waiting for device..."}
+                  </Badge>
                 </Flex>
-              ) : null}
+              </Flex>
+              <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
+                <Code>{invite.pairUrl}</Code>
+              </Box>
+              <Flex justify="between" align="center">
+                <Text size="1" color="gray">
+                  Pairing code {invite.code}
+                </Text>
+                <Flex gap="2">
+                  <Button size="2" variant="soft" onClick={() => void copyInvite()}>
+                    {copyLabel}
+                  </Button>
+                  <Dialog.Close>
+                    <Button size="2">Done</Button>
+                  </Dialog.Close>
+                </Flex>
+              </Flex>
             </Flex>
-          </Callout.Text>
-        </Callout.Root>
-      ) : null}
+          ) : null}
+        </Dialog.Content>
+      </Dialog.Root>
       {error ? (
         <Callout.Root size="1" color="amber">
           <Callout.Icon>
@@ -185,7 +244,7 @@ function formatTime(value: number | undefined): string {
   return new Date(value).toLocaleString();
 }
 
-function PairingQrCode({ value }: { value: string }) {
+function PairingQrCode({ value, size = 176 }: { value: string; size?: number }) {
   const matrix = useMemo(() => createQrMatrix(value), [value]);
   const quietZone = 4;
   const viewSize = matrix.length + quietZone * 2;
@@ -210,11 +269,11 @@ function PairingQrCode({ value }: { value: string }) {
     >
       <svg
         aria-label="Pairing QR code"
-        height="176"
+        height={size}
         role="img"
         shapeRendering="crispEdges"
         viewBox={`0 0 ${viewSize} ${viewSize}`}
-        width="176"
+        width={size}
       >
         <title>Pairing QR code</title>
         <rect fill="white" height={viewSize} width={viewSize} />

@@ -89,18 +89,18 @@ export const removeRecentWorkspaceAtom = atom(null, async (_get, set, name: stri
 });
 
 // =============================================================================
-// Workspace Selection State
+// Workspace Choice State
 // =============================================================================
 
 /**
- * Select and open a workspace (triggers app relaunch)
+ * Choose and open a workspace (triggers app relaunch)
  */
-export const selectWorkspaceAtom = atom(null, async (_get, _set, name: string) => {
+export const chooseWorkspaceAtom = atom(null, async (_get, _set, name: string) => {
   try {
     await workspace.select(name);
     // App will relaunch, no need to update state
   } catch (error) {
-    console.error("Failed to select workspace:", error);
+    console.error("Failed to choose workspace:", error);
     throw error;
   }
 });

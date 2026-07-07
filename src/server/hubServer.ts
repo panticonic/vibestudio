@@ -191,6 +191,21 @@ function listHubWorkspaces(state: HubRuntimeState): Array<Record<string, unknown
   return entries;
 }
 
+function resolveInviteWorkspace(state: HubRuntimeState, raw: unknown): string {
+  if (typeof raw === "string" && raw.trim()) return normalizeWorkspaceName(raw);
+  const runningWorkspaces = Array.from(state.runtimes.keys());
+  if (runningWorkspaces.length === 1) return normalizeWorkspaceName(runningWorkspaces[0]);
+  const workspaces = listHubWorkspaces(state);
+  if (workspaces.length === 1 && typeof workspaces[0]?.["name"] === "string") {
+    return normalizeWorkspaceName(workspaces[0]["name"]);
+  }
+  throw new Error(
+    workspaces.length === 0
+      ? "No workspace is configured; pass { workspace } after creating one."
+      : "Multiple workspaces are configured; pass { workspace } to mint a workspace-scoped WebRTC invite."
+  );
+}
+
 function isRuntimeRunning(state: HubRuntimeState, name: string): boolean {
   const runtime = state.runtimes.get(name);
   return !!runtime && "child" in runtime && runtime.child.exitCode === null;
@@ -359,35 +374,20 @@ async function handleAuthRoute(
         return;
       }
       const ttlMs = typeof body["ttlMs"] === "number" ? body["ttlMs"] : DEFAULT_PAIRING_CODE_TTL_MS;
-      // With `workspace`, the invite is minted IN the child (its own WebRTC
-      // ingress + device store, §5): the response is the child's invite, deep
-      // link included. Without it, the code is a hub-level credential for the
-      // hub's loopback surfaces — the hub runs no WebRTC ingress, so there is
-      // no deep link to mint (`deepLink`/`room` are null).
-      const workspace = typeof body["workspace"] === "string" ? body["workspace"] : null;
-      if (workspace) {
-        const runtime = await ensureWorkspaceRuntime(state, normalizeWorkspaceName(workspace));
-        const invite = await mintChildPairingInvite(runtime, ttlMs);
-        if (!invite) {
-          sendJson(res, 502, {
-            error: `Failed to mint a pairing invite in workspace "${workspace}"`,
-            code: "WORKSPACE_INVITE_FAILED",
-          });
-          return;
-        }
-        sendJson(res, 200, invite);
+      // With `workspace`, the invite is minted in the child runtime so the
+      // response carries that workspace server's WebRTC pairing material.
+      // Hub-level bare-code invites were removed with ingress-less pairing.
+      const workspace = resolveInviteWorkspace(state, body["workspace"]);
+      const runtime = await ensureWorkspaceRuntime(state, workspace);
+      const invite = await mintChildPairingInvite(runtime, ttlMs);
+      if (!invite) {
+        sendJson(res, 502, {
+          error: `Failed to mint a pairing invite in workspace "${workspace}"`,
+          code: "WORKSPACE_INVITE_FAILED",
+        });
         return;
       }
-      const code = state.deviceAuthStore.createPairingCode(ttlMs);
-      const info = connectionInfo(state);
-      sendJson(res, 200, {
-        ...info,
-        code,
-        expiresInMs: ttlMs,
-        expiresAt: Date.now() + ttlMs,
-        deepLink: null,
-        room: null,
-      });
+      sendJson(res, 200, invite);
       return;
     }
 
@@ -502,34 +502,18 @@ export async function handleRpc(
       const opts = asRecord(args[0]) ?? {};
       const ttlMs = typeof opts["ttlMs"] === "number" ? opts["ttlMs"] : DEFAULT_PAIRING_CODE_TTL_MS;
       // With `workspace`, the invite is minted IN the child (its own WebRTC
-      // ingress + device store, §5) and the child's invite — per-invite room,
-      // v=2 deep link — is returned as-is. Without it, the code is a hub-level
-      // credential for the hub's loopback surfaces (the hub runs no WebRTC
-      // ingress ⇒ `deepLink`/`room` are null).
-      const workspace = typeof opts["workspace"] === "string" ? opts["workspace"] : null;
-      if (workspace) {
-        const runtime = await ensureWorkspaceRuntime(state, normalizeWorkspaceName(workspace));
-        const invite = await mintChildPairingInvite(runtime, ttlMs);
-        if (!invite) {
-          sendJson(res, 200, {
-            error: `Failed to mint a pairing invite in workspace "${workspace}"`,
-          });
-          return;
-        }
-        sendJson(res, 200, { result: invite });
+      // ingress + device store, §5) and the child's complete invite is returned
+      // as-is. Hub-level bare-code invites were deleted with ingress-less mode.
+      const workspace = resolveInviteWorkspace(state, opts["workspace"]);
+      const runtime = await ensureWorkspaceRuntime(state, workspace);
+      const invite = await mintChildPairingInvite(runtime, ttlMs);
+      if (!invite) {
+        sendJson(res, 200, {
+          error: `Failed to mint a pairing invite in workspace "${workspace}"`,
+        });
         return;
       }
-      const code = state.deviceAuthStore.createPairingCode(ttlMs);
-      sendJson(res, 200, {
-        result: {
-          ...connectionInfo(state),
-          code,
-          expiresInMs: ttlMs,
-          expiresAt: Date.now() + ttlMs,
-          deepLink: null,
-          room: null,
-        },
-      });
+      sendJson(res, 200, { result: invite });
       return;
     }
     if (method === "auth.listDevices") {
@@ -748,8 +732,8 @@ async function ensureWorkspaceRuntime(
  * under its per-workspace state dir. The old wiring shared the hub's
  * `VIBESTUDIO_AUTH_STORE_PATH` across hub + all children (in-memory pairing codes
  * and device rows collided across processes — a validated bug), and left the
- * WebRTC cert paths to their shared `<appRoot>/.vibestudio/webrtc` default (every
- * child would present the SAME DTLS fingerprint). Children mint their own
+ * WebRTC identity path to their shared `<appRoot>/.vibestudio/webrtc` default
+ * (every child would present the SAME DTLS fingerprint). Children mint their own
  * invites and redeem their own pairing codes in-process.
  */
 export function buildWorkspaceChildEnv(input: {
@@ -768,14 +752,15 @@ export function buildWorkspaceChildEnv(input: {
     VIBESTUDIO_BIND_HOST: "127.0.0.1",
     VIBESTUDIO_WORKSPACE: input.childWorkspaceName,
     VIBESTUDIO_AUTH_STORE_PATH: path.join(childStateDir, "auth", "devices.json"),
-    VIBESTUDIO_WEBRTC_CERT: path.join(childStateDir, "webrtc", "server.pem"),
-    VIBESTUDIO_WEBRTC_KEY: path.join(childStateDir, "webrtc", "server.key"),
+    VIBESTUDIO_WEBRTC_IDENTITY: path.join(childStateDir, "webrtc", "identity.pem"),
     VIBESTUDIO_DISABLE_STARTUP_PAIRING: "1",
     VIBESTUDIO_FORCE_WORKSPACE_SERVER: "1",
     VIBESTUDIO_HUB_URL: input.hubUrl,
   };
   delete env["VIBESTUDIO_GATEWAY_PORT"];
   delete env["VIBESTUDIO_WORKSPACE_DIR"];
+  delete env["VIBESTUDIO_WEBRTC_CERT"];
+  delete env["VIBESTUDIO_WEBRTC_KEY"];
   if (input.ephemeral) {
     env["VIBESTUDIO_WORKSPACE_EPHEMERAL"] = "1";
   } else {

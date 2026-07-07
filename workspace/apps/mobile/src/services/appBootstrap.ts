@@ -1,19 +1,38 @@
-import { Platform } from "react-native";
+import { NativeModules } from "react-native";
+import {
+  activateApprovedWorkspaceApp,
+  type BundleDeliveryTransport,
+} from "@vibestudio/mobile-webrtc";
+import {
+  APP_CAPABILITIES_BY_TARGET,
+  type AppCapability,
+} from "@vibestudio/shared/unitManifest";
 import { hasApprovedAppCapability, setApprovedAppCapabilities } from "./appCapabilities";
-import { activatePreparedAppBundle, prepareAppBundle } from "./auth";
 import { registerBackgroundHandlers } from "./backgroundHandlers";
-
-const RN_HOST_ABI = "rn-host-1";
+import type { MobileRpcClient } from "./mobileTransport";
 
 export async function ensureNativeWorkspaceAppBundle(
+  transport: MobileRpcClient,
   source?: string | null
 ): Promise<{ reloading: boolean }> {
-  const platform = Platform.OS === "ios" ? "ios" : "android";
-  const prepared = await prepareAppBundle(RN_HOST_ABI, platform, source);
-  setApprovedAppCapabilities(prepared.capabilities);
+  let activated = false;
+  const bundleTransport: BundleDeliveryTransport = {
+    streamReadable: transport.streamReadable.bind(transport),
+  };
+  const reactNativeCapabilities = new Set<string>(APP_CAPABILITIES_BY_TARGET["react-native"]);
+  await activateApprovedWorkspaceApp(bundleTransport, {
+    source,
+    nativeHost: NativeModules["VibestudioMobileHost"],
+    onCapabilities: (capabilities) =>
+      setApprovedAppCapabilities(
+        capabilities.filter((capability): capability is AppCapability =>
+          reactNativeCapabilities.has(capability)
+        )
+      ),
+  });
   if (hasApprovedAppCapability("notifications")) {
     registerBackgroundHandlers();
   }
-  const activated = await activatePreparedAppBundle(prepared);
-  return { reloading: activated.activated };
+  activated = true;
+  return { reloading: activated };
 }
