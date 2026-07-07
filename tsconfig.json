@@ -23,15 +23,14 @@
     "paths": {
       "@vibestudio/browser-data": ["packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["packages/browser-data/src/client.ts"],
+      "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
       "@vibestudio/dev-log": ["packages/dev-log/src/index.ts"],
       "@vibestudio/durable": ["packages/durable/src/index.ts"],
       "@vibestudio/durable/test-utils": ["packages/durable/src/test-utils.ts"],
       "@vibestudio/env-paths": ["packages/env-paths/src/index.ts"],
       "@vibestudio/extension": ["packages/extension/src/index.ts"],
       "@vibestudio/extension-host": ["packages/extension-host/src/index.ts"],
-      "@vibestudio/extension-host/child-runtime": [
-        "packages/extension-host/src/childRuntime.ts"
-      ],
+      "@vibestudio/extension-host/child-runtime": ["packages/extension-host/src/childRuntime.ts"],
       "@vibestudio/git": ["packages/git/src/index.ts"],
       "@vibestudio/port-utils": ["packages/port-utils/src/index.ts"],
       "@vibestudio/process-adapter": ["packages/process-adapter/src/index.ts"],
@@ -43,14 +42,6 @@
       "@vibestudio/types": ["packages/types/src/index.ts"]
     }
   },
-  "include": [
-    "src/**/*",
-    "packages/**/*"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "**/dist",
-    "packages/mobile-webrtc"
-  ]
+  "include": ["src/**/*", "packages/**/*"],
+  "exclude": ["node_modules", "dist", "**/dist", "packages/mobile-webrtc"]
 }

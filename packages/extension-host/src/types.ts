@@ -1,15 +1,8 @@
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type {
-  ExtensionInvocation,
-  ExtensionSource,
-  RegistryEntry,
-} from "@vibestudio/extension";
+import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
+import type { ExtensionInvocation, ExtensionSource, RegistryEntry } from "@vibestudio/extension";
 
-export type {
-  ExtensionInvocation,
-  ExtensionSource,
-  RegistryEntry,
-};
+export type { ExtensionInvocation, ExtensionSource, RegistryEntry };
 
 export interface ExtensionHealth {
   state: "healthy" | "degraded" | "unhealthy";
@@ -30,7 +23,7 @@ export interface ExtensionProcessState {
 
 export interface ExtensionUserlandCaller {
   callerId: string;
-  callerKind: "panel" | "app" | "worker" | "do";
+  callerKind: CodeIdentityCallerKind;
   repoPath: string;
   effectiveVersion: string;
   contextId?: string;
@@ -41,7 +34,7 @@ export function invocationFromServiceContext(
   extensionName: string,
   method: string,
   requestId: string,
-  resolveContextId?: (callerId: string) => string | null,
+  resolveContextId?: (callerId: string) => string | null
 ): ExtensionInvocation {
   const directContextId = resolveContextId?.(ctx.caller.runtime.id) ?? null;
   const callerKind = ctx.caller.runtime.kind;
@@ -65,13 +58,14 @@ export function invocationFromServiceContext(
     const identity = ctx.caller.code;
     if (identity && identity.callerKind === ctx.caller.runtime.kind) {
       const chainContextId = resolveContextId?.(identity.callerId) ?? null;
-      (invocation as ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller }).chainCaller = {
-        callerId: identity.callerId,
-        callerKind: identity.callerKind,
-        repoPath: identity.repoPath,
-        effectiveVersion: identity.effectiveVersion,
-        ...(chainContextId ? { contextId: chainContextId } : {}),
-      };
+      (invocation as ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller }).chainCaller =
+        {
+          callerId: identity.callerId,
+          callerKind: identity.callerKind,
+          repoPath: identity.repoPath,
+          effectiveVersion: identity.effectiveVersion,
+          ...(chainContextId ? { contextId: chainContextId } : {}),
+        };
     }
   } else if (ctx.caller.runtime.kind === "extension" && ctx.chainCaller) {
     const contextId = resolveContextId?.(ctx.chainCaller.callerId) ?? null;

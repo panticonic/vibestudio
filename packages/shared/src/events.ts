@@ -70,6 +70,12 @@ export interface NotificationAction {
     | { type: "app.applyUpdate"; appId: string }
     | { type: "app.rollback"; appId: string; buildKey?: string }
     | { type: "workspace.restartUnit"; name: string };
+  invoke?: {
+    kind: "extension";
+    extension: string;
+    method: string;
+    args?: unknown[];
+  };
 }
 
 export interface NotificationDetail {

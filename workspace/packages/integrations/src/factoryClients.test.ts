@@ -1,5 +1,8 @@
 import type { RpcCaller } from "@vibestudio/rpc";
-import { createCredentialClient, type StoredCredentialSummary } from "@workspace/runtime/credentials";
+import {
+  createCredentialClient,
+  type StoredCredentialSummary,
+} from "@workspace/runtime/credentials";
 import { createGitHubClient } from "./github.js";
 import { createGmailClient } from "@workspace/gmail";
 import { createCalendarClient } from "./calendar.js";
@@ -15,11 +18,14 @@ import { createCalendarClient } from "./calendar.js";
  * the per-context memoization of the credential handle.
  */
 function makeMockEnv(
-  respond: (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Response,
+  respond: (
+    url: string,
+    init?: { method?: string; headers?: Record<string, string>; body?: string }
+  ) => Response
 ) {
   const stats = {
     resolveCalls: 0,
-    fetchCalls: [] as Array<{ url: string; method: string }>,
+    fetchCalls: [] as Array<{ url: string; method: string; body?: string }>,
   };
   const credential: StoredCredentialSummary = {
     id: "cred-mock",
@@ -52,7 +58,11 @@ function makeMockEnv(
         headers?: Record<string, string>;
         body?: string;
       };
-      stats.fetchCalls.push({ url: params.url, method: params.method });
+      stats.fetchCalls.push({
+        url: params.url,
+        method: params.method,
+        ...(params.body !== undefined ? { body: params.body } : {}),
+      });
       return respond(params.url, params);
     },
   };
@@ -72,7 +82,8 @@ describe("createGitHubClient", () => {
   it("memoizes the credential handle across method calls", async () => {
     const { credentials, stats } = makeMockEnv((url) => {
       if (url.endsWith("/user")) return jsonResponse({ login: "octocat", id: 1 });
-      if (url.endsWith("/user/repos")) return jsonResponse([{ id: 1, name: "spoon-knife", full_name: "octocat/spoon-knife" }]);
+      if (url.endsWith("/user/repos"))
+        return jsonResponse([{ id: 1, name: "spoon-knife", full_name: "octocat/spoon-knife" }]);
       return jsonResponse({}, { status: 404 });
     });
     const github = createGitHubClient(credentials);
@@ -89,7 +100,7 @@ describe("createGitHubClient", () => {
 
   it("constructs the right paths for issue methods", async () => {
     const { credentials, stats } = makeMockEnv(() =>
-      jsonResponse({ number: 7, title: "test", state: "open", html_url: "x", id: 1 }),
+      jsonResponse({ number: 7, title: "test", state: "open", html_url: "x", id: 1 })
     );
     const github = createGitHubClient(credentials);
 
@@ -106,9 +117,43 @@ describe("createGitHubClient", () => {
     expect(stats.fetchCalls.map((c) => c.method)).toEqual(["GET", "PATCH", "POST"]);
   });
 
+  it("creates repositories through the GitHub user repos API", async () => {
+    const { credentials, stats } = makeMockEnv(() =>
+      jsonResponse({
+        id: 1,
+        name: "demo",
+        full_name: "octocat/demo",
+        private: true,
+        html_url: "https://github.com/octocat/demo",
+        clone_url: "https://github.com/octocat/demo.git",
+        owner: { id: 1, login: "octocat", avatar_url: "", html_url: "", type: "User" },
+      })
+    );
+    const github = createGitHubClient(credentials);
+
+    const repo = await github.createRepo({
+      name: "demo",
+      private: true,
+      description: "Demo repo",
+    });
+
+    expect(repo).toEqual({
+      cloneUrl: "https://github.com/octocat/demo.git",
+      webUrl: "https://github.com/octocat/demo",
+      owner: "octocat",
+    });
+    expect(stats.fetchCalls).toEqual([
+      {
+        url: "https://api.github.com/user/repos",
+        method: "POST",
+        body: JSON.stringify({ name: "demo", private: true, description: "Demo repo" }),
+      },
+    ]);
+  });
+
   it("throws a typed error on non-2xx responses", async () => {
-    const { credentials } = makeMockEnv(() =>
-      new Response("forbidden", { status: 403, statusText: "Forbidden" }),
+    const { credentials } = makeMockEnv(
+      () => new Response("forbidden", { status: 403, statusText: "Forbidden" })
     );
     const github = createGitHubClient(credentials);
 
@@ -119,8 +164,10 @@ describe("createGitHubClient", () => {
 describe("createGmailClient", () => {
   it("memoizes the credential handle across method calls", async () => {
     const { credentials, stats } = makeMockEnv((url) => {
-      if (url.endsWith("/profile")) return jsonResponse({ emailAddress: "a@b.com", historyId: "100" });
-      if (url.endsWith("/labels")) return jsonResponse({ labels: [{ id: "INBOX", name: "INBOX" }] });
+      if (url.endsWith("/profile"))
+        return jsonResponse({ emailAddress: "a@b.com", historyId: "100" });
+      if (url.endsWith("/labels"))
+        return jsonResponse({ labels: [{ id: "INBOX", name: "INBOX" }] });
       return jsonResponse({});
     });
     const gmail = createGmailClient(credentials);
@@ -195,7 +242,7 @@ describe("createGmailClient header injection", () => {
         to: "a@b.com",
         subject: "Hello\r\nBcc: attacker@evil.com",
         body: "x",
-      }),
+      })
     ).rejects.toThrow(/header injection rejected/);
   });
 
@@ -207,7 +254,7 @@ describe("createGmailClient header injection", () => {
         to: "a@b.com\nBcc: attacker@evil.com",
         subject: "ok",
         body: "x",
-      }),
+      })
     ).rejects.toThrow(/header injection rejected/);
   });
 
@@ -220,7 +267,7 @@ describe("createGmailClient header injection", () => {
         subject: "ok",
         body: "x",
         headers: { "X-Bad\r\nInject": "y" },
-      }),
+      })
     ).rejects.toThrow(/invalid header name/);
   });
 });
@@ -228,7 +275,7 @@ describe("createGmailClient header injection", () => {
 describe("createCalendarClient", () => {
   it("memoizes the credential handle across method calls", async () => {
     const { credentials, stats } = makeMockEnv(() =>
-      jsonResponse({ items: [{ id: "primary", summary: "Primary" }] }),
+      jsonResponse({ items: [{ id: "primary", summary: "Primary" }] })
     );
     const cal = createCalendarClient(credentials);
 

@@ -537,6 +537,7 @@ export class RpcServer {
         extensionName: string,
         invocationToken: string
       ) => Pick<ExtensionInvocation, "caller" | "chainCaller"> | null;
+      resolveExtensionCodeIdentity?: (extensionName: string) => VerifiedCodeIdentity | null;
       /**
        * On-behalf-of invocation table for userland vcs-DO dispatches
        * (narrow-host-vcs §4): when a sandboxed caller's relay targets the DO
@@ -607,9 +608,12 @@ export class RpcServer {
     callerKind: CallerKind,
     agentBinding?: import("@vibestudio/shared/serviceDispatcher").AgentBinding
   ): VerifiedCaller {
-    const code = this.deps.entityCache
-      ? resolveCodeIdentity(this.deps.entityCache, callerId)
-      : null;
+    const code =
+      callerKind === "extension"
+        ? (this.deps.resolveExtensionCodeIdentity?.(callerId) ?? null)
+        : this.deps.entityCache
+          ? resolveCodeIdentity(this.deps.entityCache, callerId)
+          : null;
     return createVerifiedCaller(callerId, callerKind, code, agentBinding);
   }
 

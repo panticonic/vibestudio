@@ -17,14 +17,14 @@ Each extension runs in its **own forked Node process** (`utilityProcess.fork` in
 
 ## Extensions vs. panels vs. workers
 
-| | Extension | Panel | Worker |
-|---|---|---|---|
-| Process | Per-extension Node process | Isolated webview | Workerd isolate |
-| Runtime | Full Node + userland runtime | Userland runtime (browser) | Userland runtime (workerd) |
-| Lifecycle | Eager activation at server boot | Opened on user navigation | Spawned by request |
-| Reachable from outside | The `extensions` RPC service | Direct (URL) | Direct (RPC) |
-| Lives at | `workspace/extensions/<scope>/<name>/` | `workspace/panels/<name>/` | `workspace/workers/<name>/` |
-| Trust grant | Elevated approval (informed-consent UX) | Standard approvals per call | Standard approvals per call |
+|                        | Extension                               | Panel                       | Worker                      |
+| ---------------------- | --------------------------------------- | --------------------------- | --------------------------- |
+| Process                | Per-extension Node process              | Isolated webview            | Workerd isolate             |
+| Runtime                | Full Node + userland runtime            | Userland runtime (browser)  | Userland runtime (workerd)  |
+| Lifecycle              | Eager activation at server boot         | Opened on user navigation   | Spawned by request          |
+| Reachable from outside | The `extensions` RPC service            | Direct (URL)                | Direct (RPC)                |
+| Lives at               | `workspace/extensions/<scope>/<name>/`  | `workspace/panels/<name>/`  | `workspace/workers/<name>/` |
+| Trust grant            | Elevated approval (informed-consent UX) | Standard approvals per call | Standard approvals per call |
 
 Extensions are the only userland kind with full Node access. Panels and workers run inside V8 isolates with no host-Node primitives.
 
@@ -49,16 +49,16 @@ The registry is a small JSON in workspace state. It holds **operational state on
 
 ```ts
 interface RegistryEntry {
-  name: string;                  // "@workspace-extensions/git-tools"
+  name: string; // "@workspace-extensions/git-tools"
   version: string;
-  source: ExtensionSource;       // workspace repo + ref
+  source: ExtensionSource; // workspace repo + ref
   installedAt: number;
 
-  activeEv: string | null;       // workspace-source EV of the approved/running build
+  activeEv: string | null; // workspace-source EV of the approved/running build
   activeSourceHash: string | null;
   activeBundleKey: string | null;
   activeDependencyEvs: Record<string, string>; // workspace deps pinned into active bundle
-  activeExternalDeps: Record<string, string>;  // npm deps + versions captured at approval time
+  activeExternalDeps: Record<string, string>; // npm deps + versions captured at approval time
   activeRuntimeDepsKey: string | null; // persisted external dependency lock/materialization
 
   enabled: boolean;
@@ -95,12 +95,13 @@ A `BUILD_CACHE_VERSION` bump in buildV2 may change the cache **build key**, but 
 
 The manifest follows the **shared workspace-unit shape**: top-level keys under `vibestudio.*` are common to every unit kind, and a single kind-specific sub-block (`vibestudio.extension`, `vibestudio.worker`, `vibestudio.panel`) declares what kind the unit is. A unit must have exactly one kind-specific sub-block.
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `vibestudio.displayName` | string | package name | Human-readable name. Shared across all unit kinds. |
-| `vibestudio.entry` | string | `index.ts` (extension), `index.tsx` (panel), `index.ts` (worker) | Entry source file. Shared across kinds. |
-| `vibestudio.sourcemap` | boolean | `true` | Inline sourcemaps in the bundle. Shared across kinds (mandatory `true` for extensions in v1). |
-| `vibestudio.extension.activationEvents` | string[] | `["*"]` | When to activate. `"*"` = eager at startup. Other values fail validation in v1. |
+| Field                                   | Type     | Default                                                          | Description                                                                                   |
+| --------------------------------------- | -------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `vibestudio.displayName`                | string   | package name                                                     | Human-readable name. Shared across all unit kinds.                                            |
+| `vibestudio.entry`                      | string   | `index.ts` (extension), `index.tsx` (panel), `index.ts` (worker) | Entry source file. Shared across kinds.                                                       |
+| `vibestudio.sourcemap`                  | boolean  | `true`                                                           | Inline sourcemaps in the bundle. Shared across kinds (mandatory `true` for extensions in v1). |
+| `vibestudio.extension.activationEvents` | string[] | `["*"]`                                                          | When to activate. `"*"` = eager at startup. Other values fail validation in v1.               |
+
 The presence of `vibestudio.extension` is what marks the unit as an extension to the package graph. Manifests are validated against a JSON schema at install time and again at boot; validation failures fail closed (extension is not activated and an error is recorded in the registry).
 
 No `dist/` — extensions ship TypeScript source, the workspace build pipeline produces the runtime bundle. Cross-extension type sharing is not a first-class concern in v1.
@@ -141,9 +142,7 @@ export async function activate(ctx: ExtensionContext): Promise<GitToolsApi> {
 
   await ctx.storage.mkdir("cache");
 
-  ctx.subscriptions.push(
-    ctx.panel.onOpened(p => ctx.log.debug("panel opened", p.id)),
-  );
+  ctx.subscriptions.push(ctx.panel.onOpened((p) => ctx.log.debug("panel opened", p.id)));
 
   return {
     async blame(path: string) {
@@ -216,7 +215,7 @@ Returning `void` is valid — the extension is then fire-and-forget (only useful
 ```ts
 interface ExtensionContext {
   // Identity
-  readonly name: string;          // "@workspace-extensions/git-tools"
+  readonly name: string; // "@workspace-extensions/git-tools"
   readonly version: string;
 
   // Per-extension scratch, scoped to {userData}/extensions/storage/<workspaceId>/<name>/.
@@ -250,8 +249,8 @@ interface ExtensionContext {
   readonly fs: FsClient;
   readonly git: GitClient;
   readonly workspace: WorkspaceClient;
-  readonly rpc: RpcClient;                  // unified RPC for explicit targets
-  readonly workers: WorkersClient;          // userland service/DO discovery
+  readonly rpc: RpcClient; // unified RPC for explicit targets
+  readonly workers: WorkersClient; // userland service/DO discovery
   readonly credentials: CredentialsClient;
   readonly webhooks: WebhooksClient;
   readonly approvals: ApprovalsClient;
@@ -287,14 +286,14 @@ interface HealthClient {
   report(state: "healthy" | "degraded" | "unhealthy", detail?: HealthDetail): void;
   // Convenience wrappers — same as report() with the corresponding state.
   healthy(detail?: HealthDetail): void;
-  degraded(detail: HealthDetail): void;       // detail required — must say why
-  unhealthy(detail: HealthDetail): void;      // detail required — must say why
+  degraded(detail: HealthDetail): void; // detail required — must say why
+  unhealthy(detail: HealthDetail): void; // detail required — must say why
 }
 
 interface HealthDetail {
-  summary: string;                 // one-line description for the status row
-  reasons?: string[];              // optional bullets shown when the user drills in
-  retryAt?: number;                // epoch ms — if set, the UI shows a countdown
+  summary: string; // one-line description for the status row
+  reasons?: string[]; // optional bullets shown when the user drills in
+  retryAt?: number; // epoch ms — if set, the UI shows a countdown
 }
 
 interface ExtensionInvocationClient {
@@ -320,7 +319,23 @@ Clients on `ctx` are bound through the extension process's WebSocket connection 
 
 `ctx.approvals.requestForCaller(...)` is the extension-specific approval path. It reuses the existing userland approval request system, including the same subject/options model, grant storage, pending queue, and shell UI. The key difference is principal and issuer derivation: panels and workers still call `userlandApproval.request` directly and the service derives both the principal and default issuer from `ServiceContext`; extensions call through the extension host, and the host derives the principal from the current `ExtensionInvocation.userlandCaller` and the issuer from the extension identity. The extension never sends `repoPath`, `effectiveVersion`, `callerKind`, or issuer identity as trusted input.
 
-**Parity now, narrower later.** The starting set above mirrors what `@workspace/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host *substrate* (`fs`, `workspace`, `workers`, `credentials`, `approvals`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host *has to* provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
+**Parity now, narrower later.** The starting set above mirrors what `@workspace/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host _substrate_ (`fs`, `workspace`, `workers`, `credentials`, `approvals`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host _has to_ provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
+
+### Git upstream boundary
+
+Git upstream follows that migration rule. The host keeps only the substrate:
+workspace config writes, approval/capability checks, credential audience
+matching, egress injection, extension dispatch, and protected-main VCS
+publishing. The trusted `@workspace-extensions/git-bridge` extension owns local
+checkout import/export and upstream Git orchestration. Provider integrations
+such as GitHub own repository setup, provider-specific verification, and helper
+UX in userland packages or provider extensions.
+
+This gives a stable extension-owned host boundary: adding a provider should not
+add a new host service. A provider configures `git.remotes` and `git.upstreams`
+through the runtime `git` namespace, calls git-bridge through
+`ctx.extensions`/`extensions.invoke`, and uses host credentials only through
+URL-bound runtime clients. See [docs/git-upstream.md](./docs/git-upstream.md).
 
 Node's standard library is available globally inside the extension process — `import * as fs from "node:fs"`, child processes, native addons all work normally. There is no host-mediated wrapper; the extension is running in a real Node process.
 
@@ -345,7 +360,7 @@ Same WebSocket the panels use. The extension process dials the gateway with its 
 
 If an extension process exits unexpectedly (non-zero exit, signal, ready-handshake timeout), the manager respawns it with exponential backoff: `1s, 2s, 4s, 8s, 16s`. If five consecutive spawn attempts fail within 60 seconds, the extension is marked `error` in the registry, an `extensions:error` event is emitted, and a notification surfaces the failure to the user. After that, only an explicit `extensions.reload(name)` will attempt activation again.
 
-"Unexpected" is defined by the ready handshake: if the extension exited *before* sending `ready`, treat as a crash regardless of exit code. If it exited *after* `ready` with exit code 0, treat as intentional deactivation — no respawn, status `stopped` — until the next host restart or manual reload. Any non-zero exit code, or any signal-induced termination, is always a crash.
+"Unexpected" is defined by the ready handshake: if the extension exited _before_ sending `ready`, treat as a crash regardless of exit code. If it exited _after_ `ready` with exit code 0, treat as intentional deactivation — no respawn, status `stopped` — until the next host restart or manual reload. Any non-zero exit code, or any signal-induced termination, is always a crash.
 
 ## Reaching extensions from userland
 
@@ -402,12 +417,15 @@ The same client is exposed to panels and workers via `@workspace/runtime`, and t
 ```ts
 interface ExtensionsClient {
   // Calling an extension
-  use<K extends ExtensionName>(name: K, options?: { streamingMethods?: Iterable<string> }): WorkspaceExtensions[K];
+  use<K extends ExtensionName>(
+    name: K,
+    options?: { streamingMethods?: Iterable<string> }
+  ): WorkspaceExtensions[K];
   on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
   list(): Promise<RegistryEntry[]>;
 
   // Lifecycle — install/enable is declarative (meta/vibestudio.yml), not an API.
-  reload(name: ExtensionName): Promise<void>;                    // restart active approved build
+  reload(name: ExtensionName): Promise<void>; // restart active approved build
 }
 ```
 
@@ -475,14 +493,14 @@ Userland approval artifacts are namespaced for every issuer, not only extensions
 ```ts
 interface UserlandApprovalIssuer {
   kind: "panel" | "worker" | "extension";
-  id: string;              // callerId for panel/worker, extension name for extension
-  repoPath?: string;       // present for panel/worker issuers
+  id: string; // callerId for panel/worker, extension name for extension
+  repoPath?: string; // present for panel/worker issuers
   effectiveVersion?: string;
 }
 
 interface NamespacedUserlandApprovalSubject {
   issuer: UserlandApprovalIssuer;
-  local: UserlandApprovalSubject;  // the subject supplied by userland code
+  local: UserlandApprovalSubject; // the subject supplied by userland code
 }
 ```
 
@@ -608,9 +626,9 @@ The extensions a workspace uses are **declared** in `meta/vibestudio.yml` under 
 ```yaml
 # meta/vibestudio.yml
 extensions:
-  - source: extensions/@workspace-extensions/git-tools   # repo path or package name
-    ref: main          # optional, defaults to "main"
-    enabled: true       # optional, defaults to true; false = installed but stopped
+  - source: extensions/@workspace-extensions/git-tools # repo path or package name
+    ref: main # optional, defaults to "main"
+    enabled: true # optional, defaults to true; false = installed but stopped
 ```
 
 The server **reconciles** the registry against the declared set at two moments:
@@ -623,13 +641,13 @@ The remaining userland surface is read/diagnostic only:
 ```ts
 import { extensions } from "@workspace/runtime";
 
-await extensions.list();                                   // No approval — registry metadata
+await extensions.list(); // No approval — registry metadata
 await extensions.reload("@workspace-extensions/git-tools"); // Approval-gated; restarts active build
 ```
 
-| Method | Approval | Notes |
-|--------|----------|-------|
-| `list` | No | Returns `RegistryEntry[]` (full canonical shape from "Workspace layout") |
+| Method   | Approval           | Notes                                                                        |
+| -------- | ------------------ | ---------------------------------------------------------------------------- |
+| `list`   | No                 | Returns `RegistryEntry[]` (full canonical shape from "Workspace layout")     |
 | `reload` | `extension.reload` | Restarts the active approved build; rebuilds if the dependency graph changed |
 
 Source iteration still happens by editing in `workspace/extensions/<name>/` and pushing `main` / `master`; that push is gated by the existing source-push approval, with a 4-hour dev-session grant to avoid the per-push prompt while iterating. There is no `readFile` / `writeFile` over the RPC surface. Dependency changes are adopted on the next reconcile (startup or meta push) or via `reload`.
@@ -699,9 +717,9 @@ A workspace-wide RPC, mounted on the dispatcher as `workspace.units`:
 ```ts
 interface UnitsClient {
   list(): Promise<UnitStatus[]>;
-  watch(): AsyncIterable<UnitStatus[]>;       // observable for UIs
-  inspector(name: string): Promise<{ url: string } | null>;  // dev only
-  restart(name: string): Promise<void>;       // approval-gated for extensions
+  watch(): AsyncIterable<UnitStatus[]>; // observable for UIs
+  inspector(name: string): Promise<{ url: string } | null>; // dev only
+  restart(name: string): Promise<void>; // approval-gated for extensions
 }
 
 interface UnitStatus {
@@ -712,12 +730,12 @@ interface UnitStatus {
   lastBuiltAt: number;
   status: "running" | "stopped" | "error" | "pending-approval" | "building";
   lastError: string | null;
-  bindings?: Record<string, unknown>;          // worker-specific (DOs, env, …)
-  pendingApproval?: { kind: string; submittedAt: number };  // extension install/update
+  bindings?: Record<string, unknown>; // worker-specific (DOs, env, …)
+  pendingApproval?: { kind: string; submittedAt: number }; // extension install/update
   availableUpdate?: { reason: "dependency"; checkedAt: number }; // extension-specific
   respawn?: { attempts: number; nextAttemptAt: number | null };
-  inspectorUrl?: string;                       // when the unit was launched with --inspect
-  health?: UnitHealth;                         // self-reported when status === "running"
+  inspectorUrl?: string; // when the unit was launched with --inspect
+  health?: UnitHealth; // self-reported when status === "running"
 }
 
 interface UnitHealth {
@@ -727,7 +745,6 @@ interface UnitHealth {
   reportedAt: number;
   retryAt?: number;
 }
-
 ```
 
 This is the single surface a "running units" panel reads from. Pending install/update approvals surface as `pendingApproval`; extension source-push approvals stay in the git push UI. Dependency-only refreshes surface as `availableUpdate` until the user chooses to update. Crash respawn state surfaces in `respawn`. Build state surfaces as `building`. Self-reported operational health surfaces in `health` (see below). The panel sees all unit kinds in one inventory and is allowed to assume the schema is uniform.
@@ -740,11 +757,11 @@ This is the single surface a "running units" panel reads from. Pending install/u
 
 Extensions self-report via `ctx.health.report(state, detail)` or the convenience wrappers `ctx.health.healthy()` / `degraded(detail)` / `unhealthy(detail)`. The host writes the latest report to `UnitStatus.health`; consumers of `workspace.units.list()` and `watch()` see it.
 
-| State | Meaning | `detail` required |
-|-------|---------|---|
-| `healthy` | Operating normally. The default immediately after `activate()` resolves, until the extension says otherwise. | No |
-| `degraded` | Partially functional. Some callers may get correct results, others may get errors or stale data. The extension is *still trying*. | Yes — must explain what's degraded |
-| `unhealthy` | Cannot do its job. Calls into this extension will likely fail until something changes. | Yes — must explain why |
+| State       | Meaning                                                                                                                           | `detail` required                  |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `healthy`   | Operating normally. The default immediately after `activate()` resolves, until the extension says otherwise.                      | No                                 |
+| `degraded`  | Partially functional. Some callers may get correct results, others may get errors or stale data. The extension is _still trying_. | Yes — must explain what's degraded |
+| `unhealthy` | Cannot do its job. Calls into this extension will likely fail until something changes.                                            | Yes — must explain why             |
 
 `HealthDetail.summary` is a one-line description shown on the status row (`"FCM credentials expired"`, `"native libvips missing — falling back to JS encoder"`). `reasons` is an optional list of bullet points shown when the user expands the row. `retryAt` (epoch ms), when set, indicates when the extension expects the situation to resolve and gives the UI material to render a countdown.
 
@@ -813,7 +830,7 @@ A survey of `src/server/services/` against the extension fit criteria suggests t
 
 ### Workspace-wide refactors (touch panels and workers, not just extensions)
 
-These are migrations where the current in-host service is exposed on `ctx.*` to *all* userland — panels, workers, and (until now in this doc) extensions. Migrating them means dropping the `ctx.*` entry across the panel/worker runtime too, and codemodding every consumer to `extensions.use(...)`. The blast radius is much larger than for imageService, so they're deliberately not first canaries.
+These are migrations where the current in-host service is exposed on `ctx.*` to _all_ userland — panels, workers, and (until now in this doc) extensions. Migrating them means dropping the `ctx.*` entry across the panel/worker runtime too, and codemodding every consumer to `extensions.use(...)`. The blast radius is much larger than for imageService, so they're deliberately not first canaries.
 
 6. **AI runtime client** — removed from the runtime surface instead of migrated. The chat agent path already owns current model execution, and there were no active runtime callers left for the old package/client.
 
@@ -836,7 +853,7 @@ Listed here so future readers don't waste time considering them:
 - **Worker lifecycle** (`workerdService`, `workerService`, `workerLogService`) — co-equal infrastructure.
 - **Panel orchestration** (`workspace-sync`, `PanelStoreDO`).
 - **Core services other services use** (`blobstoreService`, `scopeService`, `metaService`, `notificationService`).
-- **Credential storage** (`credentialService`, `credentialLifecycle`) — host-rooted trust. Additional credential *backends* (hardware tokens, etc.) could be extensions; the core stays.
+- **Credential storage** (`credentialService`, `credentialLifecycle`) — host-rooted trust. Additional credential _backends_ (hardware tokens, etc.) could be extensions; the core stays.
 - **`auditService`** — security audit log. Could technically be an extension, but making auditing optional weakens it as a property. Keep in-host.
 
 ### Gaps surfaced by the migration plan

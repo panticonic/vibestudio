@@ -16,30 +16,16 @@
  */
 
 import { GitBridge, type BridgeHost } from "./bridge.js";
+import {
+  UpstreamEngine,
+  type PublishRepoInput,
+  type UpstreamStatusOptions,
+} from "./upstream.js";
+import type { ExtensionContextLike } from "./context.js";
 
 interface ResolvedServiceLike {
   kind?: string;
   targetId?: string;
-}
-
-interface ExtensionContextLike {
-  workspace: {
-    getInfo(): Promise<{ path: string }>;
-  };
-  workers: {
-    resolveService(query: string, objectKey?: string | null): Promise<unknown>;
-  };
-  rpc: {
-    call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
-  };
-  storage: {
-    mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
-    readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
-    writeFile(path: string, data: string | Uint8Array): Promise<void>;
-  };
-  log: {
-    info(message: string, fields?: Record<string, unknown>): void;
-  };
 }
 
 const VCS_SERVICE_PROTOCOL = "vibestudio.vcs.v1";
@@ -120,6 +106,8 @@ export type Api = Awaited<ReturnType<typeof activate>>;
 export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("git-bridge activating");
   const bridge = new GitBridge(createBridgeHost(ctx));
+  const upstream = new UpstreamEngine(ctx, bridge);
+  await upstream.activate();
   return {
     /**
      * Import a repo's current git checkout tree (`workspace/<repoPath>`) as a
@@ -137,6 +125,66 @@ export async function activate(ctx: ExtensionContextLike) {
      */
     exportRepoHead(repoPath: string, opts?: { authorName?: string; authorEmail?: string }) {
       return bridge.exportRepoHead(repoPath, opts);
+    },
+    onMainAdvanced(repoPaths: string[]) {
+      upstream.onMainAdvanced(repoPaths);
+      return { queued: repoPaths.length };
+    },
+    upstreamStatus(repoPaths?: string | string[], opts: UpstreamStatusOptions = {}) {
+      return upstream.upstreamStatus(
+        typeof repoPaths === "string" ? [repoPaths] : repoPaths,
+        opts
+      );
+    },
+    pushUpstream(repoPath: string, opts?: { force?: boolean }) {
+      return upstream.pushUpstream(repoPath, opts);
+    },
+    pullUpstream(repoPath: string, opts?: { dryRun?: boolean }) {
+      return upstream.pullUpstream(repoPath, opts);
+    },
+    publishRepo(
+      input:
+        | string
+        | PublishRepoInput,
+      opts: Omit<PublishRepoInput, "repoPath"> = {}
+    ) {
+      return typeof input === "string"
+        ? upstream.publishRepo({ repoPath: input, ...opts })
+        : upstream.publishRepo({ ...input, ...opts });
+    },
+    cloneRepo(input: { repoPath: string }) {
+      return upstream.cloneRepo(input);
+    },
+    importRepo(input: { url: string; path: string; branch?: string; credentialId?: string }) {
+      return upstream.importRepo(input);
+    },
+    setUpstream(
+      repoPath: string,
+      config: {
+        remote: string;
+        branch?: string;
+        autoPush?: boolean;
+        credentialId?: string;
+        authorEmail?: string;
+        authorName?: string;
+      }
+    ) {
+      return upstream.setUpstream(repoPath, config);
+    },
+    removeUpstream(repoPath: string) {
+      return upstream.removeUpstream(repoPath);
+    },
+    setAutoPush(repoPath: string, on?: boolean) {
+      return upstream.setAutoPush(repoPath, on);
+    },
+    setRemote(repoPath: string, remote: { name: string; url: string; branch?: string }) {
+      return upstream.setRemote(repoPath, remote);
+    },
+    removeRemote(repoPath: string, remoteName?: string) {
+      return upstream.removeRemote(repoPath, remoteName);
+    },
+    openGitTab(repoPath?: string) {
+      return upstream.openGitTab(repoPath);
     },
   };
 }

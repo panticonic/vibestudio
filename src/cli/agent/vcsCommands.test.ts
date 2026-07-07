@@ -21,6 +21,7 @@ const VCS_SERVICE_RESOLUTION = {
   objectKey: "workspace-gad",
   targetId: VCS_DO_TARGET,
 };
+const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
 
 function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
   const rpcBodies: RpcRequest[] = [];
@@ -689,6 +690,125 @@ describe("vibestudio vcs commands", () => {
         )
       )
     ).toBe(true);
+  });
+
+  it("git status dispatches to git-bridge upstreamStatus and emits JSON rows", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    const rows = [
+      {
+        repoPath: "panels/notes",
+        remote: "origin",
+        branch: "main",
+        autoPush: false,
+        state: "in-sync",
+        aheadBy: 0,
+        behindBy: 0,
+        lastPushedSha: "abc1234",
+        lastPushedAt: 123,
+      },
+    ];
+    const { rpcBodies } = stubServer(() => rows);
+
+    const { main } = await import("../client.js");
+    await expect(main(["vcs", "git", "status", "--repo", "panels/notes", "--json"])).resolves.toBe(
+      0
+    );
+
+    expect(rpcBodies).toEqual([
+      {
+        method: "extensions.invoke",
+        args: [GIT_BRIDGE_EXTENSION, "upstreamStatus", [["panels/notes"], { fetch: true }]],
+      },
+    ]);
+    expect(jsonOutput()).toEqual(rows);
+  });
+
+  it("git push --force dispatches to git-bridge pushUpstream and exits zero for pushed in-sync results", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    const result = {
+      exported: 1,
+      headCommit: "abc1234",
+      pushed: true,
+      status: "in-sync",
+    };
+    const { rpcBodies } = stubServer(() => result);
+
+    const { main } = await import("../client.js");
+    await expect(
+      main(["vcs", "git", "push", "--repo", "panels/notes", "--force", "--json"])
+    ).resolves.toBe(0);
+
+    expect(rpcBodies).toEqual([
+      {
+        method: "extensions.invoke",
+        args: [GIT_BRIDGE_EXTENSION, "pushUpstream", ["panels/notes", { force: true }]],
+      },
+    ]);
+    expect(jsonOutput()).toEqual(result);
+  });
+
+  it("git remote set dispatches to git-bridge setRemote with the declared remote", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    const result = {
+      repoPath: "panels/notes",
+      remote: {
+        name: "origin",
+        url: "https://github.com/werg/notes.git",
+        branch: "main",
+      },
+    };
+    const { rpcBodies } = stubServer(() => result);
+
+    const { main } = await import("../client.js");
+    await expect(
+      main([
+        "vcs",
+        "git",
+        "remote",
+        "set",
+        "--repo",
+        "panels/notes",
+        "--url",
+        "https://github.com/werg/notes.git",
+        "--branch",
+        "main",
+        "--json",
+      ])
+    ).resolves.toBe(0);
+
+    expect(rpcBodies).toEqual([
+      {
+        method: "extensions.invoke",
+        args: [
+          GIT_BRIDGE_EXTENSION,
+          "setRemote",
+          [
+            "panels/notes",
+            {
+              name: "origin",
+              url: "https://github.com/werg/notes.git",
+              branch: "main",
+            },
+          ],
+        ],
+      },
+    ]);
+    expect(jsonOutput()).toEqual(result);
+  });
+
+  it("git status --help renders nested status usage", async () => {
+    const { main } = await import("../client.js");
+    await expect(main(["vcs", "git", "status", "--help"])).resolves.toBe(0);
+
+    const logs = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logs).toContain("Usage: vibestudio vcs git status [--repo REPOPATH ...]");
+    expect(logs).not.toContain("Usage: vibestudio vcs git <status|enable");
   });
 
   it("maps failures to the exit-code conventions", async () => {

@@ -128,3 +128,19 @@ Useful flags:
 
 Remote reach is WebRTC (pair by QR - signaling room + DTLS fingerprint); see
 [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) and [webrtc-local-e2e.md](./webrtc-local-e2e.md).
+
+## Git Upstream
+
+The CLI exposes Git upstream workflows through `vibestudio vcs git ...`:
+`status`, `remote:set`, `enable`, `push`, `pull`, `publish`, `import`,
+`auto`, and `disable`. These commands dispatch to the trusted
+`@workspace-extensions/git-bridge` extension rather than running host-owned Git
+plumbing directly.
+
+Use `git.setSharedRemote()` and `git.configureUpstream()` from
+`@workspace/runtime` to declare a remote and opt a workspace repo into upstream
+tracking. Provider helpers such as the GitHub skill can then publish through the
+trusted `@workspace-extensions/git-bridge` extension.
+
+See [git-upstream.md](./git-upstream.md) for the two-layer model, approvals,
+`git.upstreams` config, and divergence repair workflow.

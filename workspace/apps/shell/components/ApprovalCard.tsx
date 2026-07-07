@@ -274,9 +274,7 @@ export function ApprovalCard({
               defaultOpen={shouldOpenApprovalDetails(approval)}
             />
             {approval.kind === "device-code" ? <DeviceCodeBody approval={approval} /> : null}
-            {approval.kind === "external-agent" ? (
-              <ExternalAgentBody approval={approval} />
-            ) : null}
+            {approval.kind === "external-agent" ? <ExternalAgentBody approval={approval} /> : null}
             {approval.kind === "client-config" ||
             approval.kind === "credential-input" ||
             approval.kind === "secret-input" ? (
@@ -553,25 +551,31 @@ function StandardApprovalActions({
         variant="surface"
         onClick={() => decide("once")}
       />
-      <DecisionButton
-        label={copy.session.label}
-        description={copy.session.description}
-        variant="surface"
-        onClick={() => decide("session")}
-      />
-      <DecisionButton
-        label={copy.repo.label}
-        description={copy.repo.description}
-        variant="surface"
-        onClick={() => decide("repo")}
-      />
-      <DecisionButton
-        label={copy.version.label}
-        description={copy.version.description}
-        color={isSevereCapability ? "red" : "sky"}
-        variant="solid"
-        onClick={() => decide("version")}
-      />
+      {copy.session && (
+        <DecisionButton
+          label={copy.session.label}
+          description={copy.session.description}
+          variant="surface"
+          onClick={() => decide("session")}
+        />
+      )}
+      {copy.repo && (
+        <DecisionButton
+          label={copy.repo.label}
+          description={copy.repo.description}
+          variant="surface"
+          onClick={() => decide("repo")}
+        />
+      )}
+      {copy.version && (
+        <DecisionButton
+          label={copy.version.label}
+          description={copy.version.description}
+          color={isSevereCapability ? "red" : "sky"}
+          variant="solid"
+          onClick={() => decide("version")}
+        />
+      )}
       <DecisionButton
         label="Deny"
         description={copy.denyDescription}
@@ -866,7 +870,11 @@ function ExternalAgentDetails({ approval }: { approval: PendingExternalAgentAppr
           }
         />
       ) : null}
-      <Detail icon={<LockClosedIcon />} label="Request id" value={<IdCode value={approval.requestId} />} />
+      <Detail
+        icon={<LockClosedIcon />}
+        label="Request id"
+        value={<IdCode value={approval.requestId} />}
+      />
     </>
   );
 }

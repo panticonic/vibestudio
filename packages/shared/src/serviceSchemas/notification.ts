@@ -38,6 +38,15 @@ export const NotificationActionSchema = z.object({
     ])
     .optional()
     .describe("Optional built-in command the shell runs when the action is taken."),
+  invoke: z
+    .object({
+      kind: z.literal("extension"),
+      extension: z.string(),
+      method: z.string(),
+      args: z.array(z.unknown()).optional(),
+    })
+    .optional()
+    .describe("Optional extension invocation the shell runs when the action is taken."),
 });
 
 export const NotificationDetailSchema = z.object({

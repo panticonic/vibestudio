@@ -43,7 +43,7 @@ export type GrantedDecision = "once" | "session" | "version" | "repo" | "deny";
 
 interface ApprovalQueueRequestBase {
   callerId: string;
-  callerKind: "panel" | "app" | "worker" | "do" | "system";
+  callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
   repoPath: string;
   effectiveVersion: string;
   requesterCategory?: ApprovalRequesterCategory;
@@ -326,7 +326,7 @@ export function createApprovalQueue(deps: {
   resolveTitle?: (entityId: string) => string | undefined;
   resolveRequester?: (input: {
     callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do" | "system";
+    callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
     repoPath: string;
     effectiveVersion: string;
     requesterCategory?: ApprovalRequesterCategory;

@@ -14,6 +14,7 @@ import {
 import { RPC_METHODS } from "@vibestudio/shared/approvalContract";
 import { appMethods } from "@vibestudio/shared/serviceSchemas/app";
 import { eventsMethods } from "@vibestudio/shared/serviceSchemas/events";
+import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
 import { menuMethods } from "@vibestudio/shared/serviceSchemas/menu";
 import { notificationMethods } from "@vibestudio/shared/serviceSchemas/notification";
 import { panelMethods } from "@vibestudio/shared/serviceSchemas/panel";
@@ -65,6 +66,11 @@ const appClient = createTypedServiceClient("app", appMethods, (service, method, 
 );
 const eventsClient = createTypedServiceClient("events", eventsMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
+);
+const extensionsClient = createTypedServiceClient(
+  "extensions",
+  extensionsMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const menuClient = createTypedServiceClient("menu", menuMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
@@ -538,6 +544,13 @@ export const notification = {
   ) => notificationClient.show(opts),
   reportAction: (id: string, actionId: string) => notificationClient.reportAction(id, actionId),
   dismiss: (id: string) => notificationClient.dismiss(id),
+};
+// =============================================================================
+// Extensions Service
+// =============================================================================
+export const extensions = {
+  invoke: (name: string, method: string, args: unknown[] = []) =>
+    extensionsClient.invoke(name, method, args),
 };
 // =============================================================================
 // Workspace Unit Service

@@ -71,7 +71,7 @@ export const userlandApprovalDetailSchema = z
 export const approvalPrincipalSchema = z
   .object({
     callerId: approvalCleanString("caller id", { min: 1, max: 200 }),
-    callerKind: z.enum(["panel", "app", "worker", "do"]),
+    callerKind: z.enum(["panel", "app", "worker", "do", "extension"]),
     repoPath: approvalCleanString("repo path", { min: 1, max: 300 }),
     effectiveVersion: approvalCleanString("effective version", { min: 1, max: 200 }),
     callerTitle: approvalCleanString("caller title", { max: 120 }).optional(),
@@ -124,7 +124,7 @@ export const userlandApprovalRequestSchema = z
     }
   });
 
-export type ApprovalRequesterKind = "panel" | "app" | "worker" | "do" | "system";
+export type ApprovalRequesterKind = "panel" | "app" | "worker" | "do" | "extension" | "system";
 
 export type ApprovalRequesterCategory =
   | "panel"
@@ -318,7 +318,7 @@ export type ExternalAgentApprovalResult = { behavior: "allow" | "deny" };
 /** The verified runtime caller that issued the prompt. Populated by the dispatcher. */
 export interface ApprovalPrincipal {
   callerId: string;
-  callerKind: "panel" | "app" | "worker" | "do";
+  callerKind: "panel" | "app" | "worker" | "do" | "extension";
   repoPath: string;
   effectiveVersion: string;
   /**
@@ -357,7 +357,7 @@ export interface UserlandApprovalIssuer {
 export interface UserlandApprovalGrant {
   principal: {
     callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do";
+    callerKind: "panel" | "app" | "worker" | "do" | "extension";
     repoPath?: string;
     effectiveVersion?: string;
   };
@@ -409,7 +409,7 @@ export interface PendingApprovalBase {
   callerId: string;
   // "system" is a host-initiated principal (e.g. workspace-startup extension
   // reconciliation), not a userland caller pretending to be one.
-  callerKind: "panel" | "app" | "worker" | "do" | "system";
+  callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
   repoPath: string;
   effectiveVersion: string;
   requestedAt: number;
@@ -450,6 +450,11 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
     label: string;
     remote: string;
     service?: string;
+    force?: boolean;
+    overwrites?: {
+      count: number;
+      commits: Array<{ sha: string; summary: string }>;
+    };
   };
   grantResource?: {
     bindingId: string;

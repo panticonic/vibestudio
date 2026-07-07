@@ -924,7 +924,7 @@ function wantsHelp(args: string[]): boolean {
 function wantsScriptHelp(args: string[]): boolean {
   for (const arg of args) {
     if (arg === "--") return false;
-    if (arg === "--help") return true;
+    if (arg === "--help" || arg === "-h") return true;
   }
   return false;
 }

@@ -215,6 +215,11 @@ interface CredentialUseContext {
     label: string;
     remote: string;
     service?: string;
+    force?: boolean;
+    overwrites?: {
+      count: number;
+      commits: Array<{ sha: string; summary: string }>;
+    };
   };
 }
 
@@ -3615,6 +3620,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       headers: request.headers ?? {},
       body: request.bodyBase64 ? Buffer.from(request.bodyBase64, "base64") : undefined,
       credentialId: request.credentialId,
+      gitIntent: request.gitIntent,
     });
     return {
       ...result,
@@ -4007,7 +4013,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       (ctx.caller.runtime.kind !== "panel" &&
         ctx.caller.runtime.kind !== "app" &&
         ctx.caller.runtime.kind !== "worker" &&
-        ctx.caller.runtime.kind !== "do")
+        ctx.caller.runtime.kind !== "do" &&
+        ctx.caller.runtime.kind !== "extension")
     ) {
       throw new Error("Credential caller is not granted");
     }

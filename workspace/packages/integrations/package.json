@@ -9,10 +9,12 @@
     "./calendar": "./src/calendar.ts",
     "./drive": "./src/drive.ts",
     "./github": "./src/github.ts",
+    "./remoteProviders": "./src/remoteProviders.ts",
     "./providers": "./src/providers.ts",
     "./github-issue-mirror": "./src/github-issue-mirror.ts"
   },
   "dependencies": {
+    "@vibestudio/credential-client": "workspace:*",
     "@workspace/runtime": "workspace:*"
   }
 }

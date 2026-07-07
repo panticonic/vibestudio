@@ -216,6 +216,8 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 |--------|-------------|
 | `gitInterop.setSharedRemote` | Declare or update the external Git remote shared across workspace contexts for a unit, persisting it to meta/vibestudio.yml and syncing it into the repo's git config; may prompt for capability approval. |
 | `gitInterop.removeSharedRemote` | Remove a named shared Git remote declaration for a workspace unit from meta/vibestudio.yml and sync the repo's git config; may prompt for capability approval. |
+| `gitInterop.setUpstream` | Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml; may prompt for capability approval. No network egress happens here. |
+| `gitInterop.removeUpstream` | Remove upstream tracking for a workspace repo from meta/vibestudio.yml; may prompt for capability approval. |
 | `gitInterop.importProject` | Clone an external Git project into the workspace at the requested path and record its remote in meta/vibestudio.yml; clones over the network and may prompt for config-write approval. |
 | `gitInterop.completeWorkspaceDependencies` | Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results. |
 

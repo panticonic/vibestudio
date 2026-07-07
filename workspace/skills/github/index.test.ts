@@ -9,6 +9,13 @@ const runtimeMock = vi.hoisted(() => ({
     fetch: vi.fn(),
     gitHttp: vi.fn(),
   },
+  extensions: {
+    invoke: vi.fn(),
+  },
+  git: {
+    setSharedRemote: vi.fn(),
+    configureUpstream: vi.fn(),
+  },
   openPanel: vi.fn(),
   openExternal: vi.fn(),
 }));
@@ -19,7 +26,9 @@ import {
   buildGitHubTokenSettingsUrl,
   getGitHubOnboardingStatus,
   openGitHubTokenSettings,
+  publishToGitHub,
   requestGitHubTokenCredential,
+  upstreamStatus,
   verifyGitHubCredential,
   verifyGitHubGitRemoteAccess,
 } from "./index.js";
@@ -61,6 +70,9 @@ describe("github skill facade", () => {
         body: (async function* () {})(),
       }),
     });
+    runtimeMock.extensions.invoke.mockResolvedValue([]);
+    runtimeMock.git.setSharedRemote.mockResolvedValue(undefined);
+    runtimeMock.git.configureUpstream.mockResolvedValue(undefined);
   });
 
   it("reports needs-token when no GitHub credential exists", async () => {
@@ -278,6 +290,91 @@ describe("github skill facade", () => {
 
     expect(runtimeMock.openExternal).toHaveBeenCalledWith(
       "https://github.com/settings/tokens/new"
+    );
+  });
+
+  it("unwraps git-bridge upstream status rows", async () => {
+    const row = {
+      repoPath: "projects/demo",
+      remote: "origin",
+      branch: "main",
+      autoPush: false,
+      state: "behind",
+      aheadBy: 0,
+      behindBy: 1,
+    };
+    runtimeMock.extensions.invoke.mockResolvedValue([row]);
+
+    await expect(
+      upstreamStatus({
+        repoPath: "projects/demo",
+        remoteName: "origin",
+        branch: "main",
+        credentialId: "cred-github",
+      })
+    ).resolves.toEqual(row);
+
+    expect(runtimeMock.extensions.invoke).toHaveBeenCalledWith(
+      "@workspace-extensions/git-bridge",
+      "upstreamStatus",
+      [["projects/demo"], { remote: "origin", branch: "main", credentialId: "cred-github" }]
+    );
+  });
+
+  it("passes publish options through to git-bridge", async () => {
+    runtimeMock.extensions.invoke.mockResolvedValue({
+      repoPath: "projects/demo",
+      provider: "github",
+      remote: "upstream",
+      branch: "trunk",
+      remoteUrl: "https://github.com/octo/demo.git",
+      webUrl: "https://github.com/octo/demo",
+      owner: "octo",
+      exported: 1,
+      headCommit: "abc123",
+      pushed: true,
+    });
+
+    await publishToGitHub({
+      repoPath: "projects/demo",
+      remoteName: "upstream",
+      remoteUrl: "https://github.com/octo/demo.git",
+      branch: "trunk",
+      credentialId: "cred-github",
+      configure: true,
+      autoPush: true,
+      authorName: "Bridge Bot",
+      authorEmail: "bridge@example.com",
+      force: true,
+    });
+
+    expect(runtimeMock.git.setSharedRemote).toHaveBeenCalledWith("projects/demo", {
+      name: "upstream",
+      url: "https://github.com/octo/demo.git",
+      branch: "trunk",
+    });
+    expect(runtimeMock.git.configureUpstream).toHaveBeenCalledWith("projects/demo", {
+      remote: "upstream",
+      branch: "trunk",
+      credentialId: "cred-github",
+      autoPush: true,
+      authorName: "Bridge Bot",
+      authorEmail: "bridge@example.com",
+    });
+    expect(runtimeMock.extensions.invoke).toHaveBeenCalledWith(
+      "@workspace-extensions/git-bridge",
+      "publishRepo",
+      [
+        "projects/demo",
+        {
+          remote: "upstream",
+          branch: "trunk",
+          credentialId: "cred-github",
+          authorName: "Bridge Bot",
+          authorEmail: "bridge@example.com",
+          force: true,
+        },
+      ]
     );
   });
 });

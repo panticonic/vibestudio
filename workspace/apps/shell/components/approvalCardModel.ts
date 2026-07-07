@@ -5,7 +5,11 @@
  * surface, a separate document with NO RPC). Keeping these helpers here lets the
  * card be hosted in the overlay without dragging in `../shell/client`.
  */
-import type { ApprovalDecision, PendingApproval } from "@vibestudio/shared/approvals";
+import type {
+  ApprovalDecision,
+  ApprovalRequesterKind,
+  PendingApproval,
+} from "@vibestudio/shared/approvals";
 import { getApprovalRiskTone, getRequesterCategoryLabel } from "@vibestudio/shared/approvalCopy";
 import type { DiffChangedFile, DiffReviewEntry } from "@workspace/ui";
 
@@ -15,7 +19,7 @@ export interface CallerInfo {
   /** Caller kind, formatted for display ("Panel" / "Worker" / "Service"). */
   kindLabel: string;
   /** Caller kind as accepted by the approval payload. */
-  kind: "panel" | "app" | "worker" | "do" | "system";
+  kind: ApprovalRequesterKind;
   /** Set when this caller refers to a panel that exists in the live tree. */
   panelId?: string;
   /** Truncated id, retained for the expandable details panel. */

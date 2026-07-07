@@ -20,10 +20,7 @@ import type { AppCapability, WorkspaceAppTarget } from "../unitManifest.js";
 
 export type { AppCapability, WorkspaceAppTarget };
 
-export {
-  WORKSPACE_APP_PACKAGE_SCOPE,
-  WORKSPACE_EXTENSION_PACKAGE_SCOPE,
-} from "./sourceDirs.js";
+export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE } from "./sourceDirs.js";
 
 /**
  * Standard model roles with fallback behavior
@@ -118,14 +115,19 @@ export interface GitConfig {
    * Example:
    * git:
    *   remotes:
- *     panels:
- *       chat:
- *         origin:
- *           url: https://github.com/example/chat.git
- *           branch: main
- *         ci: https://github.com/example/chat-ci.git
- */
+   *     panels:
+   *       chat:
+   *         origin:
+   *           url: https://github.com/example/chat.git
+   *           branch: main
+   *         ci: https://github.com/example/chat-ci.git
+   */
   remotes?: WorkspaceGitRemotesConfig;
+  /**
+   * Per-repo upstream tracking declarations. Presence enables tracking;
+   * `autoPush` controls whether exported commits are pushed unattended.
+   */
+  upstreams?: WorkspaceGitUpstreamsConfig;
 }
 
 export interface WorkspaceGitRemoteConfig {
@@ -143,7 +145,28 @@ export type WorkspaceGitRemoteDeclaration =
 
 export type WorkspaceGitRemotesConfig = Record<
   string,
-  Record<string, Record<string, WorkspaceGitRemoteDeclaration | null | undefined> | undefined> | undefined
+  | Record<string, Record<string, WorkspaceGitRemoteDeclaration | null | undefined> | undefined>
+  | undefined
+>;
+
+export interface WorkspaceGitUpstreamConfig {
+  /** Name of a declared shared remote for this repo. */
+  remote: string;
+  /** Remote branch; defaults to the declared remote branch, then main. */
+  branch?: string;
+  /** Push automatically after protected main advances. */
+  autoPush?: boolean;
+  /** Credential id used for credentialed git HTTP. */
+  credentialId?: string;
+  /** Optional exported-commit author email override. */
+  authorEmail?: string;
+  /** Optional exported-commit author name override. Suppresses per-actor names. */
+  authorName?: string;
+}
+
+export type WorkspaceGitUpstreamsConfig = Record<
+  string,
+  Record<string, WorkspaceGitUpstreamConfig | null | undefined> | undefined
 >;
 
 /**

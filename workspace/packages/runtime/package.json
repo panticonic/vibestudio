@@ -26,6 +26,7 @@
     "./internal/diagnostics": "./src/internal/diagnostics.ts"
   },
   "dependencies": {
+    "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/extension": "workspace:*",
     "@vibestudio/git": "workspace:*",
     "@workspace/harness": "workspace:*",

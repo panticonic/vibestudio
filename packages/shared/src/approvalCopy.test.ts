@@ -457,7 +457,7 @@ describe("approvalCopy", () => {
     expect(
       getStandardActionCopy(gitWrite as Extract<PendingApproval, { kind: "credential" }>).once.label
     ).toBe("Push once");
-    expect(getStandardActionCopy(repoBinding).repo.description).toContain(
+    expect(getStandardActionCopy(repoBinding).repo!.description).toContain(
       "GitHub repositories at github.com/acme/project"
     );
     expect(
@@ -465,19 +465,19 @@ describe("approvalCopy", () => {
         .label
     ).toBe("Open once");
     expect(getStandardActionCopy(workspaceSourceChange).once.label).toBe("Commit once");
-    expect(getStandardActionCopy(workspaceSourceChange).session.description).toContain(
+    expect(getStandardActionCopy(workspaceSourceChange).session!.description).toContain(
       "panels/spectrolite"
     );
     expect(getStandardActionCopy(networkEgress).once.label).toBe("Connect once");
-    expect(getStandardActionCopy(networkEgress).session.label).toBe("Allow this origin");
-    expect(getStandardActionCopy(networkEgress).session.description).toContain("localhost:42531");
-    expect(getStandardActionCopy(networkEgress).version.label).toBe("Trust version with network");
-    expect(getStandardActionCopy(networkEgress).repo.label).toBe("Trust repo with network");
-    expect(getStandardActionCopy(evalNetworkEgress).version.label).toBe(
+    expect(getStandardActionCopy(networkEgress).session!.label).toBe("Allow this origin");
+    expect(getStandardActionCopy(networkEgress).session!.description).toContain("localhost:42531");
+    expect(getStandardActionCopy(networkEgress).version!.label).toBe("Trust version with network");
+    expect(getStandardActionCopy(networkEgress).repo!.label).toBe("Trust repo with network");
+    expect(getStandardActionCopy(evalNetworkEgress).version!.label).toBe(
       "Trust identity with network"
     );
-    expect(getStandardActionCopy(evalCredential).version.label).toBe("Trust identity");
-    expect(getStandardActionCopy(evalCredential).version.description).toContain("runtime identity");
+    expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust identity");
+    expect(getStandardActionCopy(evalCredential).version!.description).toContain("runtime identity");
   });
 
   it("formats unit-batch action labels for mixed scheduled jobs and apps", () => {

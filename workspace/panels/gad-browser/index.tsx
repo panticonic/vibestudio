@@ -1,19 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Box,
+  Badge,
   Button,
+  DropdownMenu,
   Flex,
   Grid,
   Heading,
+  IconButton,
   ScrollArea,
+  Switch,
   Table,
   Tabs,
   Text,
+  Tooltip,
   Theme,
 } from "@radix-ui/themes";
-import { Cross2Icon, ExternalLinkIcon, ReloadIcon } from "@radix-ui/react-icons";
-import { blobstore, gad } from "@workspace/runtime";
+import {
+  Cross2Icon,
+  DotsHorizontalIcon,
+  DownloadIcon,
+  ExternalLinkIcon,
+  LightningBoltIcon,
+  ReloadIcon,
+  TrashIcon,
+  UploadIcon,
+} from "@radix-ui/react-icons";
+import { blobstore, extensions, gad } from "@workspace/runtime";
+import {
+  formatRelativeTime,
+  type GitUpstreamState,
+  type GitUpstreamStatusRow,
+} from "@vibestudio/shared/gitUpstream";
 import { useIsMobile, usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import {
   DiffViewer,
@@ -36,11 +55,21 @@ import {
 
 interface StateArgs {
   branchId?: string;
+  gitRepo?: string;
   /** Diff-review escape-hatch target (open in gad-browser). See `diffTarget.ts`. */
   diffTarget?: unknown;
 }
 
 type Row = Record<string, unknown>;
+type GitStatusRow = GitUpstreamStatusRow;
+
+interface GitPullPreview {
+  behindBy: number;
+  aheadBy: number;
+  incoming: Array<{ sha: string; summary: string }>;
+}
+
+const GIT_BRIDGE_EXTENSION = "@workspace-extensions/git-bridge";
 
 function asText(value: unknown): string {
   if (value == null) return "";
@@ -79,6 +108,220 @@ function DataTable({ rows, columns }: { rows: Row[]; columns: string[] }) {
         ))}
       </Table.Body>
     </Table.Root>
+  );
+}
+
+function gitStateColor(state: GitUpstreamState): ComponentProps<typeof Badge>["color"] {
+  if (state === "in-sync") return "green";
+  if (state === "ahead" || state === "exporting" || state === "pushing") return "blue";
+  if (state === "behind") return "amber";
+  if (state === "diverged" || state === "auth-failed" || state === "error") return "red";
+  return "gray";
+}
+
+function formatGitState(row: GitStatusRow): string {
+  if (row.state === "ahead") return `ahead ${row.aheadBy}`;
+  if (row.state === "behind") return `behind ${row.behindBy}`;
+  if (row.state === "diverged") return `diverged +${row.aheadBy}/+${row.behindBy}`;
+  return row.state;
+}
+
+
+function GitTab({
+  rows,
+  loading,
+  pendingRepo,
+  pullPreview,
+  onRefresh,
+  onPush,
+  onForcePush,
+  onPullPreview,
+  onConfirmPull,
+  onCancelPull,
+  onToggleAutoPush,
+  onDetach,
+  onViewDiff,
+}: {
+  rows: GitStatusRow[];
+  loading: boolean;
+  pendingRepo: string | null;
+  pullPreview: { repoPath: string; preview: GitPullPreview } | null;
+  onRefresh: () => void;
+  onPush: (repoPath: string) => void;
+  onForcePush: (repoPath: string) => void;
+  onPullPreview: (repoPath: string) => void;
+  onConfirmPull: () => void;
+  onCancelPull: () => void;
+  onToggleAutoPush: (repoPath: string, enabled: boolean) => void;
+  onDetach: (repoPath: string) => void;
+  onViewDiff: (repoPath: string) => void;
+}) {
+  return (
+    <Flex direction="column" gap="3" style={{ minWidth: 0 }}>
+      <Flex align="center" justify="between" gap="2" wrap="wrap">
+        <Text size="2" color="gray">
+          {rows.length} tracked repo{rows.length === 1 ? "" : "s"}
+        </Text>
+        <Button size="1" variant="soft" color="gray" onClick={onRefresh} disabled={loading}>
+          <ReloadIcon /> Refresh
+        </Button>
+      </Flex>
+      {pullPreview ? (
+        <Box
+          style={{
+            border: "1px solid var(--amber-a6)",
+            borderRadius: 6,
+            background: "var(--amber-a2)",
+            padding: "10px 12px",
+          }}
+        >
+          <Flex direction="column" gap="2">
+            <Flex align="center" justify="between" gap="2" wrap="wrap">
+              <Text size="2" weight="medium">
+                {pullPreview.repoPath} incoming {pullPreview.preview.incoming.length} commit(s)
+              </Text>
+              <Flex gap="2">
+                <Button size="1" variant="solid" onClick={onConfirmPull} disabled={loading}>
+                  Import
+                </Button>
+                <Button size="1" variant="soft" color="gray" onClick={onCancelPull}>
+                  Cancel
+                </Button>
+              </Flex>
+            </Flex>
+            {pullPreview.preview.incoming.length === 0 ? (
+              <Text size="2" color="gray">
+                No incoming commits.
+              </Text>
+            ) : (
+              <Flex direction="column" gap="1">
+                {pullPreview.preview.incoming.slice(0, 8).map((commit) => (
+                  <Text key={commit.sha} size="1" style={{ fontFamily: "monospace" }}>
+                    {commit.sha.slice(0, 7)} {commit.summary}
+                  </Text>
+                ))}
+              </Flex>
+            )}
+          </Flex>
+        </Box>
+      ) : null}
+      {rows.length === 0 ? (
+        <Text color="gray" size="2">
+          No upstreams configured.
+        </Text>
+      ) : (
+        <Table.Root size="1" variant="surface">
+          <Table.Header>
+            <Table.Row>
+              <Table.ColumnHeaderCell>Repo</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>State</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Remote</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Ahead</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Behind</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Last push</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Auto</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell>Actions</Table.ColumnHeaderCell>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {rows.map((row) => {
+              const busy =
+                pendingRepo === row.repoPath ||
+                row.state === "exporting" ||
+                row.state === "pushing";
+              const hasUpstream = row.state !== "local-only" && row.remote;
+              return (
+                <Table.Row key={row.repoPath}>
+                  <Table.Cell>
+                    <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                      {row.repoPath}
+                    </Text>
+                    {row.lastError ? (
+                      <Text size="1" color="red" truncate as="div">
+                        {row.lastError}
+                      </Text>
+                    ) : null}
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Badge color={gitStateColor(row.state)}>{formatGitState(row)}</Badge>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
+                      {row.remote && row.branch ? `${row.remote}/${row.branch}` : "-"}
+                    </Text>
+                  </Table.Cell>
+                  <Table.Cell>{row.aheadBy}</Table.Cell>
+                  <Table.Cell>{row.behindBy}</Table.Cell>
+                  <Table.Cell>{formatRelativeTime(row.lastPushedAt)}</Table.Cell>
+                  <Table.Cell>
+                    <Switch
+                      size="1"
+                      checked={row.autoPush}
+                      disabled={!hasUpstream || busy}
+                      onCheckedChange={(checked) => onToggleAutoPush(row.repoPath, checked)}
+                    />
+                  </Table.Cell>
+                  <Table.Cell>
+                    <Flex align="center" gap="1" wrap="nowrap">
+                      <Tooltip content="Push upstream">
+                        <IconButton
+                          size="1"
+                          variant={row.state === "ahead" ? "solid" : "soft"}
+                          disabled={!hasUpstream || busy}
+                          onClick={() => onPush(row.repoPath)}
+                        >
+                          <UploadIcon />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip content="Preview pull">
+                        <IconButton
+                          size="1"
+                          variant={
+                            row.state === "behind" || row.state === "diverged" ? "solid" : "soft"
+                          }
+                          color={row.state === "diverged" ? "amber" : undefined}
+                          disabled={!hasUpstream || busy}
+                          onClick={() => onPullPreview(row.repoPath)}
+                        >
+                          <DownloadIcon />
+                        </IconButton>
+                      </Tooltip>
+                      <DropdownMenu.Root>
+                        <DropdownMenu.Trigger>
+                          <IconButton size="1" variant="ghost" color="gray">
+                            <DotsHorizontalIcon />
+                          </IconButton>
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Content>
+                          <DropdownMenu.Item onClick={() => onViewDiff(row.repoPath)}>
+                            View diff
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            color="red"
+                            disabled={!hasUpstream || busy}
+                            onClick={() => onForcePush(row.repoPath)}
+                          >
+                            <LightningBoltIcon /> Force push
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Separator />
+                          <DropdownMenu.Item
+                            color="red"
+                            disabled={busy}
+                            onClick={() => onDetach(row.repoPath)}
+                          >
+                            <TrashIcon /> Detach
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Root>
+                    </Flex>
+                  </Table.Cell>
+                </Table.Row>
+              );
+            })}
+          </Table.Body>
+        </Table.Root>
+      )}
+    </Flex>
   );
 }
 
@@ -293,6 +536,13 @@ function App() {
   const [invocations, setInvocations] = useState<Row[]>([]);
   const [status, setStatus] = useState<Row[]>([]);
   const [integrity, setIntegrity] = useState<Row[]>([]);
+  const [gitRows, setGitRows] = useState<GitStatusRow[]>([]);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitPendingRepo, setGitPendingRepo] = useState<string | null>(null);
+  const [gitPullPreview, setGitPullPreview] = useState<{
+    repoPath: string;
+    preview: GitPullPreview;
+  } | null>(null);
   const [operationStatus, setOperationStatus] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const selectedBranch = useMemo(
@@ -336,6 +586,105 @@ function App() {
     }
   }
 
+  async function invokeGitBridge<T>(method: string, args: unknown[] = []): Promise<T> {
+    return (await extensions.invoke(GIT_BRIDGE_EXTENSION, method, args)) as T;
+  }
+
+  // fetchRemote only for the explicit Refresh action — after a push/pull the
+  // remote state is already known, and background reloads must stay local.
+  async function refreshGitStatus(showLoading = false, fetchRemote = false) {
+    if (showLoading) setGitLoading(true);
+    try {
+      const rows = await invokeGitBridge<GitStatusRow[]>("upstreamStatus", [
+        stateArgs.gitRepo ? [stateArgs.gitRepo] : null,
+        { fetch: fetchRemote },
+      ]);
+      setGitRows(rows);
+    } catch (err) {
+      setOperationStatus(`Git status failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      if (showLoading) setGitLoading(false);
+    }
+  }
+
+  async function runGitAction(repoPath: string, success: string, action: () => Promise<unknown>) {
+    setGitPendingRepo(repoPath);
+    setGitLoading(true);
+    try {
+      await action();
+      setOperationStatus(success);
+      await refreshGitStatus(false);
+    } catch (err) {
+      setOperationStatus(`Git action failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setGitPendingRepo(null);
+      setGitLoading(false);
+    }
+  }
+
+  function pushGit(repoPath: string) {
+    void runGitAction(repoPath, `Pushed ${repoPath}`, () =>
+      invokeGitBridge("pushUpstream", [repoPath, {}])
+    );
+  }
+
+  function forcePushGit(repoPath: string) {
+    void runGitAction(repoPath, `Force pushed ${repoPath}`, () =>
+      invokeGitBridge("pushUpstream", [repoPath, { force: true }])
+    );
+  }
+
+  function previewPullGit(repoPath: string) {
+    setGitPendingRepo(repoPath);
+    setGitLoading(true);
+    void invokeGitBridge<GitPullPreview>("pullUpstream", [repoPath, { dryRun: true }])
+      .then((preview) => {
+        setGitPullPreview({ repoPath, preview });
+        setOperationStatus("");
+      })
+      .catch((err) => {
+        setOperationStatus(
+          `Pull preview failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      })
+      .finally(() => {
+        setGitPendingRepo(null);
+        setGitLoading(false);
+      });
+  }
+
+  function confirmPullGit() {
+    const target = gitPullPreview;
+    if (!target) return;
+    setGitPullPreview(null);
+    void runGitAction(target.repoPath, `Imported upstream changes for ${target.repoPath}`, () =>
+      invokeGitBridge("pullUpstream", [target.repoPath, {}])
+    );
+  }
+
+  function toggleAutoPush(repoPath: string, enabled: boolean) {
+    void runGitAction(
+      repoPath,
+      `Auto-push ${enabled ? "enabled" : "disabled"} for ${repoPath}`,
+      () => invokeGitBridge("setAutoPush", [repoPath, enabled])
+    );
+  }
+
+  function detachUpstream(repoPath: string) {
+    void runGitAction(repoPath, `Detached upstream for ${repoPath}`, () =>
+      invokeGitBridge("removeUpstream", [repoPath])
+    );
+  }
+
+  function viewGitDiff(repoPath: string) {
+    const row = gitRows.find((entry) => entry.repoPath === repoPath);
+    if (row?.behindBy) {
+      previewPullGit(repoPath);
+      return;
+    }
+    setOperationStatus(`No incoming upstream diff preview is available for ${repoPath}`);
+  }
+
   async function checkIntegrity() {
     setLoading(true);
     try {
@@ -374,6 +723,7 @@ function App() {
   const paletteCommands = useMemo(
     () => [
       { id: "gad-refresh", label: "Refresh", section: "GAD Browser" },
+      { id: "gad-git-refresh", label: "Refresh Git Upstreams", section: "GAD Browser" },
       { id: "gad-check-integrity", label: "Check integrity", section: "GAD Browser" },
       { id: "gad-validate-hashes", label: "Validate hashes", section: "GAD Browser" },
       { id: "gad-replay-events", label: "Replay events", section: "GAD Browser" },
@@ -382,6 +732,7 @@ function App() {
   );
   usePaletteCommands(paletteCommands, (id) => {
     if (id === "gad-refresh") void refresh();
+    else if (id === "gad-git-refresh") void refreshGitStatus(true, true);
     else if (id === "gad-check-integrity") void checkIntegrity();
     else if (id === "gad-validate-hashes") void validateHashes();
     else if (id === "gad-replay-events") void replayEvents();
@@ -390,6 +741,36 @@ function App() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Fetch the remote once when the tab opens; the 10s poll stays local-only
+    // so an open panel never turns into steady network traffic.
+    const load = async (showLoading = false, fetchRemote = false) => {
+      if (showLoading) setGitLoading(true);
+      try {
+        const rows = await invokeGitBridge<GitStatusRow[]>("upstreamStatus", [
+          stateArgs.gitRepo ? [stateArgs.gitRepo] : null,
+          { fetch: fetchRemote },
+        ]);
+        if (!cancelled) setGitRows(rows);
+      } catch (err) {
+        if (!cancelled) {
+          setOperationStatus(
+            `Git status failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      } finally {
+        if (showLoading && !cancelled) setGitLoading(false);
+      }
+    };
+    void load(true, true);
+    const timer = window.setInterval(() => void load(false), 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [stateArgs.gitRepo]);
 
   // A newly-arrived diff-review target opens the Compare tab (the two-state
   // diff) and re-arms the Files-tab focus filter for the fallback path (also
@@ -404,6 +785,11 @@ function App() {
       .then((result) => setWorktreeHeads(result.rows))
       .catch(() => setWorktreeHeads([]));
   }, [diffTarget]);
+
+  useEffect(() => {
+    if (!stateArgs.gitRepo) return;
+    setActiveTab("git");
+  }, [stateArgs.gitRepo]);
 
   // Jump to a resolved branch: select its head and switch to Files or Events.
   function goToBranch(branchId: string, tab: "files" | "events") {
@@ -555,6 +941,7 @@ function App() {
                     {isMobile ? "Envelopes" : "Channel Envelopes"}
                   </Tabs.Trigger>
                   <Tabs.Trigger value="files">Files</Tabs.Trigger>
+                  <Tabs.Trigger value="git">Git</Tabs.Trigger>
                   <Tabs.Trigger value="invocations">Invocations</Tabs.Trigger>
                   <Tabs.Trigger value="integrity">Integrity</Tabs.Trigger>
                   <Tabs.Trigger value="status">Status</Tabs.Trigger>
@@ -625,6 +1012,23 @@ function App() {
                           columns={["path", "content_hash", "mode", "file_version_id"]}
                         />
                       )}
+                    </Tabs.Content>
+                    <Tabs.Content value="git">
+                      <GitTab
+                        rows={gitRows}
+                        loading={gitLoading}
+                        pendingRepo={gitPendingRepo}
+                        pullPreview={gitPullPreview}
+                        onRefresh={() => void refreshGitStatus(true, true)}
+                        onPush={pushGit}
+                        onForcePush={forcePushGit}
+                        onPullPreview={previewPullGit}
+                        onConfirmPull={confirmPullGit}
+                        onCancelPull={() => setGitPullPreview(null)}
+                        onToggleAutoPush={toggleAutoPush}
+                        onDetach={detachUpstream}
+                        onViewDiff={viewGitDiff}
+                      />
                     </Tabs.Content>
                     <Tabs.Content value="invocations">
                       <DataTable

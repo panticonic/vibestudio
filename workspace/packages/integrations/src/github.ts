@@ -1,8 +1,5 @@
-import { githubCredential } from "./providers.js";
-import type {
-  CredentialClient,
-  UrlCredentialHandle,
-} from "@workspace/runtime/credentials";
+import { bindingAudience, githubCredential } from "./providers.js";
+import type { CredentialClient, UrlCredentialHandle } from "@vibestudio/credential-client";
 
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_ACCEPT_HEADER = "application/vnd.github+json";
@@ -14,6 +11,7 @@ export const manifest = {
   endpoints: {
     github: [
       { url: "https://api.github.com/user", methods: ["GET"] },
+      { url: "https://api.github.com/user/repos", methods: ["GET", "POST"] },
       { url: "https://api.github.com/repos/*", methods: ["GET"] },
       { url: "https://api.github.com/repos/*/issues", methods: ["GET", "POST"] },
       { url: "https://api.github.com/repos/*/issues/*", methods: ["GET", "PATCH"] },
@@ -47,6 +45,7 @@ export interface GitHubRepo {
   private: boolean;
   owner: GitHubUser;
   html_url: string;
+  clone_url?: string;
   description?: string | null;
   default_branch?: string;
   [key: string]: unknown;
@@ -119,6 +118,24 @@ export interface CreateIssueParams {
   labels?: string[];
 }
 
+export interface CreateRepoParams {
+  name: string;
+  private: boolean;
+  description?: string;
+}
+
+export interface CreateRepoResult {
+  cloneUrl: string;
+  webUrl: string;
+  owner: string;
+}
+
+interface GitHubCreatedRepo extends GitHubRepo {
+  clone_url: string;
+  html_url: string;
+  owner: GitHubUser;
+}
+
 export interface GitHubIssueWebhookEvent {
   action?: string;
   issue?: GitHubIssue;
@@ -158,8 +175,8 @@ function toQueryParams(params?: object): string {
 
 /**
  * Per-context GitHub API client. Build one with `createGitHubClient`
- * (see below) from a `CredentialClient` — the constructor lazily
- * resolves the URL-bound credential once, then methods call its
+ * (see below) from a `CredentialClient` — the constructor resolves
+ * URL-bound credentials lazily, then methods call the handles'
  * `fetch` directly. No per-method `auth` parameter.
  */
 export interface UpdateIssueParams {
@@ -175,40 +192,56 @@ export interface GitHubClient {
   handle(): Promise<UrlCredentialHandle>;
   getUser(): Promise<GitHubUser>;
   listRepos(opts?: ListReposOptions): Promise<GitHubRepo[]>;
+  createRepo(params: CreateRepoParams): Promise<CreateRepoResult>;
   getRepo(owner: string, repo: string): Promise<GitHubRepo>;
   listIssues(owner: string, repo: string, opts?: ListIssuesOptions): Promise<GitHubIssue[]>;
   createIssue(owner: string, repo: string, params: CreateIssueParams): Promise<GitHubIssue>;
   getIssue(owner: string, repo: string, number: number): Promise<GitHubIssue>;
-  updateIssue(owner: string, repo: string, number: number, params: UpdateIssueParams): Promise<GitHubIssue>;
+  updateIssue(
+    owner: string,
+    repo: string,
+    number: number,
+    params: UpdateIssueParams
+  ): Promise<GitHubIssue>;
 }
 
 /**
  * Build a GitHub client bound to the given `CredentialClient`. The
- * credential handle is resolved on first use and memoized — methods
+ * credential handles are resolved on first use and memoized — methods
  * don't repeat audience lookup. The harness never sees the
  * underlying token; auth is injected by the credentialed fetcher.
  */
 export function createGitHubClient(credentials: CredentialClient): GitHubClient {
-  let handlePromise: Promise<UrlCredentialHandle> | null = null;
-  const handle = (): Promise<UrlCredentialHandle> => {
-    if (!handlePromise) {
-      const p = credentials.forAudience({
-        ...githubCredential,
-        label: githubCredential.displayName,
-      });
-      // Cache resolved success; clear the cache on rejection so a
-      // later call can retry after the user (e.g.) registers a
-      // credential mid-session.
-      p.catch(() => {
-        if (handlePromise === p) handlePromise = null;
-      });
-      handlePromise = p;
-    }
-    return handlePromise;
+  const memoizeHandle = (
+    resolveDescriptor: () => Parameters<CredentialClient["forAudience"]>[0]
+  ) => {
+    let handlePromise: Promise<UrlCredentialHandle> | null = null;
+    return (): Promise<UrlCredentialHandle> => {
+      if (!handlePromise) {
+        const p = credentials.forAudience(resolveDescriptor());
+        // Cache resolved success; clear the cache on rejection so a
+        // later call can retry after the user (e.g.) registers a
+        // credential mid-session.
+        p.catch(() => {
+          if (handlePromise === p) handlePromise = null;
+        });
+        handlePromise = p;
+      }
+      return handlePromise;
+    };
   };
+  const handle = memoizeHandle(() => ({
+    ...githubCredential,
+    label: githubCredential.displayName,
+  }));
+  const userHandle = memoizeHandle(() => bindingAudience(githubCredential, "github-user"));
 
-  const apiFetch = async <T>(path: string, init?: RequestInit): Promise<T> => {
-    const auth = await handle();
+  const apiFetch = async <T>(
+    path: string,
+    init?: RequestInit,
+    credentialHandle: () => Promise<UrlCredentialHandle> = handle
+  ): Promise<T> => {
+    const auth = await credentialHandle();
     const headers = new Headers(init?.headers);
     headers.set("Accept", GITHUB_ACCEPT_HEADER);
     if (init?.body && !headers.has("Content-Type")) {
@@ -218,7 +251,7 @@ export function createGitHubClient(credentials: CredentialClient): GitHubClient 
     if (!response.ok) {
       const bodyText = await response.text();
       throw new Error(
-        `GitHub API request failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`,
+        `GitHub API request failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText}` : ""}`
       );
     }
     return (await response.json()) as T;
@@ -228,13 +261,14 @@ export function createGitHubClient(credentials: CredentialClient): GitHubClient 
 
   return {
     handle,
-    getUser: () => apiFetch<GitHubUser>("/user"),
-    listRepos: (opts) => apiFetch<GitHubRepo[]>(`/user/repos${toQueryParams(opts)}`),
+    getUser: () => apiFetch<GitHubUser>("/user", undefined, userHandle),
+    listRepos: (opts) =>
+      apiFetch<GitHubRepo[]>(`/user/repos${toQueryParams(opts)}`, undefined, userHandle),
     getRepo: (owner, repo) => apiFetch<GitHubRepo>(`/repos/${enc(owner)}/${enc(repo)}`),
     listIssues: (owner, repo, opts) => {
       const labels = Array.isArray(opts?.labels) ? opts.labels.join(",") : opts?.labels;
       return apiFetch<GitHubIssue[]>(
-        `/repos/${enc(owner)}/${enc(repo)}/issues${toQueryParams({ ...opts, labels })}`,
+        `/repos/${enc(owner)}/${enc(repo)}/issues${toQueryParams({ ...opts, labels })}`
       );
     },
     createIssue: (owner, repo, params) =>
@@ -242,6 +276,21 @@ export function createGitHubClient(credentials: CredentialClient): GitHubClient 
         method: "POST",
         body: JSON.stringify(params),
       }),
+    createRepo: async (params) => {
+      const repo = await apiFetch<GitHubCreatedRepo>(
+        "/user/repos",
+        {
+          method: "POST",
+          body: JSON.stringify(params),
+        },
+        userHandle
+      );
+      return {
+        cloneUrl: repo.clone_url,
+        webUrl: repo.html_url,
+        owner: repo.owner.login,
+      };
+    },
     getIssue: (owner, repo, number) =>
       apiFetch<GitHubIssue>(`/repos/${enc(owner)}/${enc(repo)}/issues/${number}`),
     updateIssue: (owner, repo, number, params) =>

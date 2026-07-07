@@ -26,11 +26,7 @@
  * ```
  */
 
-export {
-  GitClient,
-  GitAuthError,
-  type FsPromisesLike,
-} from "./client.js";
+export { GitClient, GitAuthError, type FsPromisesLike } from "./client.js";
 export { initAndPush, type InitAndPushOptions } from "./convenience.js";
 
 export type {
@@ -38,6 +34,7 @@ export type {
   CloneOptions,
   PullOptions,
   PushOptions,
+  FetchResult,
   CommitOptions,
   FileStatus,
   StatusMatrixRow,

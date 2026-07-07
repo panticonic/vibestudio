@@ -19,6 +19,7 @@
     "build": "node build.mjs"
   },
   "dependencies": {
+    "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/extension": "workspace:*",
     "@vibestudio/process-adapter": "workspace:*",
     "@vibestudio/rpc": "workspace:*",

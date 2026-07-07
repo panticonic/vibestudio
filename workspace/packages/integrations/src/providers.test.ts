@@ -18,14 +18,16 @@ describe("provider credential catalogs", () => {
       "google-people",
       "google-identity",
     ]);
-    expect(GOOGLE_WORKSPACE_BROAD_SCOPES).toEqual(expect.arrayContaining([
-      "https://www.googleapis.com/auth/gmail.modify",
-      "https://www.googleapis.com/auth/calendar",
-      "https://www.googleapis.com/auth/drive",
-      "https://www.googleapis.com/auth/documents",
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/presentations",
-    ]));
+    expect(GOOGLE_WORKSPACE_BROAD_SCOPES).toEqual(
+      expect.arrayContaining([
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/presentations",
+      ])
+    );
   });
 
   it("scopes GitHub API grants to the requested repository", () => {
@@ -33,6 +35,14 @@ describe("provider credential catalogs", () => {
       id: "github-repos",
       audience: [{ url: "https://api.github.com/repos/", match: "path-prefix" }],
       grantResource: { type: "url-path-prefix", segmentCount: 3 },
+    });
+  });
+
+  it("scopes GitHub git HTTP grants to the requested repository", () => {
+    expect(githubBindings.gitHttp).toMatchObject({
+      id: "github-git-http",
+      audience: [{ url: "https://github.com/", match: "origin" }],
+      grantResource: { type: "url-path-prefix", segmentCount: 2 },
     });
   });
 });

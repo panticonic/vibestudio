@@ -30,6 +30,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { manifestHashForEntries, stateHashForRoot } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "../../workers/gad-store/index.js";
 import { GitBridge, type BridgeHost } from "./bridge.js";
+import { withRepoLock } from "./repoLocks.js";
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 
@@ -533,4 +534,93 @@ describe("git-bridge extension (real DO, memory host bridges)", () => {
       .map((e) => e.path);
     expect(paths).toEqual(["a.txt", "kept.txt"]);
   });
+
+  it("keeps per-actor author names when only authorEmail is overridden", async () => {
+    // Two transitions authored by the `user` actor (see commitRepo).
+    await commitRepo({ "a.txt": "one\n" });
+    await commitRepo({ "a.txt": "two\n" });
+
+    // Only the email is supplied: the author NAME must fall back to the
+    // transition's actor id (`user`), not to a fixed override.
+    const result = await bridge.exportRepoHead(REPO, { authorEmail: "person@example.com" });
+    expect(result.exported).toBe(2);
+
+    const authors = git(repoDir, ["log", "--format=%an <%ae>"])
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    expect(authors).toEqual([
+      "user <person@example.com>",
+      "user <person@example.com>",
+    ]);
+  });
+
+  it("serializes concurrent operations on the SAME repo via withRepoLock (start order = completion order)", async () => {
+    const order: string[] = [];
+    const gateA = deferred();
+    const gateB = deferred();
+    const flush = async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    };
+
+    const first = withRepoLock("packages/serial", async () => {
+      order.push("start-a");
+      await gateA.promise;
+      order.push("end-a");
+    });
+    const second = withRepoLock("packages/serial", async () => {
+      order.push("start-b");
+      await gateB.promise;
+      order.push("end-b");
+    });
+
+    // The second op cannot start until the first releases the per-repo lock.
+    await flush();
+    expect(order).toEqual(["start-a"]);
+
+    gateA.resolve();
+    await first;
+    await flush();
+    expect(order).toEqual(["start-a", "end-a", "start-b"]);
+
+    gateB.resolve();
+    await second;
+    expect(order).toEqual(["start-a", "end-a", "start-b", "end-b"]);
+  });
+
+  it("runs operations on DIFFERENT repos concurrently under withRepoLock", async () => {
+    const order: string[] = [];
+    const gate = deferred();
+    const flush = async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    };
+
+    const a = withRepoLock("packages/repo-x", async () => {
+      order.push("start-x");
+      await gate.promise;
+      order.push("end-x");
+    });
+    const b = withRepoLock("packages/repo-y", async () => {
+      order.push("start-y");
+      order.push("end-y");
+    });
+
+    // Different repos don't share a lock: both start before the first releases.
+    await flush();
+    expect(order).toContain("start-x");
+    expect(order).toContain("start-y");
+    expect(order).toContain("end-y");
+
+    gate.resolve();
+    await Promise.all([a, b]);
+    expect(order[order.length - 1]).toBe("end-x");
+  });
 });
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((res) => {
+    resolve = () => res();
+  });
+  return { promise, resolve };
+}

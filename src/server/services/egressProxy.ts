@@ -77,6 +77,14 @@ const CIRCUIT_FAILURE_THRESHOLD = 5;
 const CIRCUIT_OPEN_MS = 30_000;
 const WEBSOCKET_DIAGNOSTIC_BODY_LIMIT = 512;
 
+interface GitIntentMetadata {
+  force: boolean;
+  overwrites?: {
+    count: number;
+    commits: Array<{ sha: string; summary: string }>;
+  };
+}
+
 export interface CredentialStore {
   loadUrlBound(id: string): Promise<Credential | null> | Credential | null;
   listUrlBound?(): Promise<Credential[]> | Credential[];
@@ -552,6 +560,7 @@ export class EgressProxy {
     headers?: Record<string, string>;
     body?: Uint8Array;
     credentialId?: string;
+    gitIntent?: GitIntentMetadata;
   }): Promise<{
     url: string;
     method: string;
@@ -569,6 +578,7 @@ export class EgressProxy {
       inputHeaders: params.headers ?? {},
       credentialId: params.credentialId,
       credentialUse: "git-http",
+      gitIntent: params.gitIntent,
       initialBytesOut: bytesOut,
       replaySafe: false,
       execute: async (targetUrl, headers) => {
@@ -797,6 +807,7 @@ export class EgressProxy {
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
     credentialId?: string;
     credentialUse?: CredentialBindingUse;
+    gitIntent?: GitIntentMetadata;
     initialBytesOut?: number;
     maxRetries?: number;
     retryStatuses?: boolean;
@@ -825,6 +836,7 @@ export class EgressProxy {
         method: params.method,
         credentialId: params.credentialId,
         credentialUse: params.credentialUse ?? "fetch",
+        gitIntent: params.gitIntent,
       });
       const executionKey = executionPolicyKey(authorization, params.targetUrl);
       let maxAttempts =
@@ -930,6 +942,7 @@ export class EgressProxy {
     method: string;
     credentialId?: string;
     credentialUse: CredentialBindingUse;
+    gitIntent?: GitIntentMetadata;
   }): Promise<Authorization> {
     const caller = params.caller;
     const attribution = caller ? this.resolveAttribution(caller, params.credentialId) : null;
@@ -939,7 +952,8 @@ export class EgressProxy {
             params.targetUrl,
             attribution,
             params.credentialUse,
-            params.method
+            params.method,
+            params.gitIntent
           )
         : null;
       if (caller && attribution && !credential) {
@@ -978,11 +992,13 @@ export class EgressProxy {
     const callerId = params.caller?.runtime.id;
     if (
       callerId &&
-      !this.isCallerAllowed(credential, callerId, attribution, usage.sessionResource)
+      (params.gitIntent?.force ||
+        !this.isCallerAllowed(credential, callerId, attribution, usage.sessionResource))
     ) {
       await this.requestCredentialUseGrant(credential, binding, callerId, attribution, {
         targetUrl: params.targetUrl,
         method: params.method,
+        gitIntent: params.gitIntent,
       });
     }
 
@@ -1050,7 +1066,8 @@ export class EgressProxy {
     targetUrl: URL,
     attribution: RequestAttribution,
     use: CredentialBindingUse = "fetch",
-    method = "GET"
+    method = "GET",
+    gitIntent?: GitIntentMetadata
   ): Promise<Credential | null> {
     const listUrlBound = this.deps.credentialStore.listUrlBound;
     if (!listUrlBound) {
@@ -1075,6 +1092,7 @@ export class EgressProxy {
         }
         const usage = credentialUseResource(binding, targetUrl, method);
         if (
+          gitIntent?.force ||
           !this.isCallerAllowed(
             credential,
             attribution.callerId,
@@ -1090,6 +1108,7 @@ export class EgressProxy {
             {
               targetUrl,
               method,
+              gitIntent,
             }
           );
         }
@@ -1161,7 +1180,7 @@ export class EgressProxy {
     binding: CredentialBinding,
     callerId: string,
     attribution: RequestAttribution | null,
-    operation: { targetUrl: URL; method: string }
+    operation: { targetUrl: URL; method: string; gitIntent?: GitIntentMetadata }
   ): Promise<void> {
     if (!this.deps.approvalQueue || !attribution || !credential.id) {
       throw new ForwardRejection(
@@ -1171,6 +1190,14 @@ export class EgressProxy {
       );
     }
     const usage = credentialUseResource(binding, operation.targetUrl, operation.method);
+    const gitOperation =
+      binding.use === "git-http" || binding.use === "git-ssh"
+        ? {
+            ...describeGitHttpOperation(operation.targetUrl, operation.method),
+            ...(operation.gitIntent ? operation.gitIntent : {}),
+          }
+        : undefined;
+    const force = gitOperation?.force === true;
     const decision = await this.deps.approvalQueue.request({
       callerId,
       callerKind: attribution.callerKind,
@@ -1184,11 +1211,8 @@ export class EgressProxy {
       scopes: credential.scopes,
       credentialUse: binding.use,
       bindingLabel: binding.label,
-      grantResource: usage.sessionResource,
-      gitOperation:
-        binding.use === "git-http" || binding.use === "git-ssh"
-          ? describeGitHttpOperation(operation.targetUrl, operation.method)
-          : undefined,
+      grantResource: force ? undefined : usage.sessionResource,
+      gitOperation,
       oauthAuthorizeOrigin: credential.metadata?.["oauthAuthorizeOrigin"],
       oauthTokenOrigin: credential.metadata?.["oauthTokenOrigin"],
       oauthAudienceDomainMismatch: hasOAuthAudienceDomainMismatch(binding.audience, [
@@ -1204,6 +1228,9 @@ export class EgressProxy {
       );
     }
     if (decision === "once") {
+      return;
+    }
+    if (force) {
       return;
     }
     if (decision === "session") {

@@ -6,6 +6,7 @@ import type {
   CloneOptions,
   PullOptions,
   PushOptions,
+  FetchResult,
   CommitOptions,
   RepoStatus,
   FileStatus,
@@ -179,16 +180,16 @@ function describeGitOperationError(
   const remote = options.remote ?? "origin";
   const ref = options.ref ?? "(current branch)";
   const force = options.force ? ", force=true" : "";
-  return new Error(`git.${method} failed for ${options.dir} -> ${remote}/${ref}${force}: ${detail}`);
+  return new Error(
+    `git.${method} failed for ${options.dir} -> ${remote}/${ref}${force}: ${detail}`
+  );
 }
 
 /**
  * Check if content is binary by looking for null bytes in first 8KB
  */
 function isBinary(content: Uint8Array | string): boolean {
-  const bytes = typeof content === "string"
-    ? new TextEncoder().encode(content)
-    : content;
+  const bytes = typeof content === "string" ? new TextEncoder().encode(content) : content;
   const checkLength = Math.min(bytes.length, 8192);
   for (let i = 0; i < checkLength; i++) {
     if (bytes[i] === 0) return true;
@@ -236,10 +237,12 @@ function toDataUrl(data: Uint8Array, mimeType?: string): string {
 }
 
 function readUint32BE(bytes: Uint8Array, offset: number): number {
-  return (bytes[offset]! << 24) |
+  return (
+    (bytes[offset]! << 24) |
     (bytes[offset + 1]! << 16) |
     (bytes[offset + 2]! << 8) |
-    bytes[offset + 3]!;
+    bytes[offset + 3]!
+  );
 }
 
 function readUint16BE(bytes: Uint8Array, offset: number): number {
@@ -250,7 +253,10 @@ function readUint16LE(bytes: Uint8Array, offset: number): number {
   return bytes[offset]! | (bytes[offset + 1]! << 8);
 }
 
-function getImageDimensions(bytes: Uint8Array, mimeType?: string): { width: number; height: number } | undefined {
+function getImageDimensions(
+  bytes: Uint8Array,
+  mimeType?: string
+): { width: number; height: number } | undefined {
   if (bytes.length < 10) return undefined;
 
   if (mimeType === "image/png" && bytes.length >= 24) {
@@ -291,8 +297,14 @@ function getImageDimensions(bytes: Uint8Array, mimeType?: string): { width: numb
   if (mimeType === "image/webp" && bytes.length >= 30) {
     // WEBP container: RIFF....WEBP
     if (
-      bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-      bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46 &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50
     ) {
       const chunk = String.fromCharCode(bytes[12]!, bytes[13]!, bytes[14]!, bytes[15]!);
       if (chunk === "VP8X" && bytes.length >= 30) {
@@ -332,38 +344,46 @@ const DIFF_CONTEXT_LINES = 3;
 function generateDiff(oldContent: string, newContent: string): Hunk[] {
   // Check for oversized files
   if (oldContent.length > MAX_DIFF_SIZE || newContent.length > MAX_DIFF_SIZE) {
-    return [{
-      header: "@@ -1,1 +1,1 @@",
-      oldStart: 1,
-      oldLines: 1,
-      newStart: 1,
-      newLines: 1,
-      lines: [{
-        type: "context",
-        content: "(File too large to diff - showing summary only)",
-        oldLineNo: 1,
-        newLineNo: 1,
-      }],
-    }];
+    return [
+      {
+        header: "@@ -1,1 +1,1 @@",
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 1,
+        lines: [
+          {
+            type: "context",
+            content: "(File too large to diff - showing summary only)",
+            oldLineNo: 1,
+            newLineNo: 1,
+          },
+        ],
+      },
+    ];
   }
 
   const oldLines = oldContent.split("\n");
   const newLines = newContent.split("\n");
 
   if (oldLines.length > MAX_DIFF_LINES || newLines.length > MAX_DIFF_LINES) {
-    return [{
-      header: "@@ -1,1 +1,1 @@",
-      oldStart: 1,
-      oldLines: 1,
-      newStart: 1,
-      newLines: 1,
-      lines: [{
-        type: "context",
-        content: `(File has too many lines to diff: ${Math.max(oldLines.length, newLines.length)} lines)`,
-        oldLineNo: 1,
-        newLineNo: 1,
-      }],
-    }];
+    return [
+      {
+        header: "@@ -1,1 +1,1 @@",
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 1,
+        lines: [
+          {
+            type: "context",
+            content: `(File has too many lines to diff: ${Math.max(oldLines.length, newLines.length)} lines)`,
+            oldLineNo: 1,
+            newLineNo: 1,
+          },
+        ],
+      },
+    ];
   }
 
   // Use jsdiff's Myers algorithm implementation
@@ -380,7 +400,12 @@ function generateDiff(oldContent: string, newContent: string): Hunk[] {
   interface ChangeRegion {
     oldStart: number;
     newStart: number;
-    lines: Array<{ type: "add" | "delete" | "context"; content: string; oldLineNo?: number; newLineNo?: number }>;
+    lines: Array<{
+      type: "add" | "delete" | "context";
+      content: string;
+      oldLineNo?: number;
+      newLineNo?: number;
+    }>;
   }
 
   let currentRegion: ChangeRegion | null = null;
@@ -469,9 +494,9 @@ function generateDiff(oldContent: string, newContent: string): Hunk[] {
         // If we have more unchanged lines than 2x context, close this hunk
         if (lines.length > DIFF_CONTEXT_LINES * 2) {
           // Finalize hunk
-          const oldCount = currentRegion.lines.filter(l => l.type !== "add").length;
-          const newCount = currentRegion.lines.filter(l => l.type !== "delete").length;
-          currentRegion.lines.forEach(l => {
+          const oldCount = currentRegion.lines.filter((l) => l.type !== "add").length;
+          const newCount = currentRegion.lines.filter((l) => l.type !== "delete").length;
+          currentRegion.lines.forEach((l) => {
             // Ensure line numbers are set for context lines
             if (l.type === "context" && l.oldLineNo === undefined) {
               l.oldLineNo = oldLineNo;
@@ -497,8 +522,8 @@ function generateDiff(oldContent: string, newContent: string): Hunk[] {
 
   // Finalize any remaining region
   if (currentRegion) {
-    const oldCount = currentRegion.lines.filter(l => l.type !== "add").length;
-    const newCount = currentRegion.lines.filter(l => l.type !== "delete").length;
+    const oldCount = currentRegion.lines.filter((l) => l.type !== "add").length;
+    const newCount = currentRegion.lines.filter((l) => l.type !== "delete").length;
     hunks.push({
       header: `@@ -${currentRegion.oldStart},${oldCount} +${currentRegion.newStart},${newCount} @@`,
       oldStart: currentRegion.oldStart,
@@ -512,7 +537,9 @@ function generateDiff(oldContent: string, newContent: string): Hunk[] {
   return hunks;
 }
 
-function normalizeHunkSelections(selections: Array<{ hunkIndex: number; lineIndices?: number[] }>): Map<number, Set<number> | null> {
+function normalizeHunkSelections(
+  selections: Array<{ hunkIndex: number; lineIndices?: number[] }>
+): Map<number, Set<number> | null> {
   const map = new Map<number, Set<number> | null>();
   for (const selection of selections) {
     if (selection.lineIndices === undefined) {
@@ -665,7 +692,11 @@ function parseConflictMarkers(content: string): {
     i++;
     const oursStart = i + 1;
     const ours: string[] = [];
-    while (i < lines.length && !lines[i]!.startsWith("|||||||") && !lines[i]!.startsWith("=======")) {
+    while (
+      i < lines.length &&
+      !lines[i]!.startsWith("|||||||") &&
+      !lines[i]!.startsWith("=======")
+    ) {
       ours.push(lines[i]!);
       i++;
     }
@@ -749,7 +780,9 @@ export class GitClient {
       email: "panel@vibestudio.local",
     };
     this.methods = Object.getOwnPropertyNames(GitClient.prototype).filter(
-      (name) => name !== "constructor" && typeof (this as unknown as Record<string, unknown>)[name] === "function"
+      (name) =>
+        name !== "constructor" &&
+        typeof (this as unknown as Record<string, unknown>)[name] === "function"
     );
   }
 
@@ -762,7 +795,6 @@ export class GitClient {
     }
     throw new Error(`GitClient requires an absolute external Git URL, got "${repoPath}"`);
   }
-
 
   /**
    * Clone a repository
@@ -876,14 +908,14 @@ export class GitClient {
   /**
    * Fetch without merging
    */
-  async fetch(options: { dir: string; remote?: string; ref?: string }): Promise<void> {
+  async fetch(options: { dir: string; remote?: string; ref?: string }): Promise<FetchResult> {
     const checked = assertOptionsObject<{ dir: string; remote?: string; ref?: string }>(
       options,
       "fetch",
       "fetch({ dir: string, remote?: string, ref?: string })"
     );
     try {
-      await git.fetch({
+      const result = await git.fetch({
         fs: this.fs,
         http: this.http,
         dir: checked.dir,
@@ -891,6 +923,10 @@ export class GitClient {
         ref: checked.ref,
         singleBranch: true,
       });
+      return {
+        fetchHead: result.fetchHead ?? null,
+        fetchHeadDescription: result.fetchHeadDescription,
+      };
     } catch (err) {
       const authFailure = getAuthFailureInfo(err);
       if (authFailure) {
@@ -906,15 +942,16 @@ export class GitClient {
    */
   async push(
     dirOrOptions: string | PushOptions,
-    extraOptions?: Omit<PushOptions, "dir">,
+    extraOptions?: Omit<PushOptions, "dir">
   ): Promise<void> {
-    const options: PushOptions = typeof dirOrOptions === "string"
-      ? { dir: dirOrOptions, ...(extraOptions ?? {}) }
-      : assertOptionsObject<PushOptions>(
-          dirOrOptions,
-          "push",
-          "push({ dir: string, remote?: string, ref?: string, force?: boolean })"
-        );
+    const options: PushOptions =
+      typeof dirOrOptions === "string"
+        ? { dir: dirOrOptions, ...(extraOptions ?? {}) }
+        : assertOptionsObject<PushOptions>(
+            dirOrOptions,
+            "push",
+            "push({ dir: string, remote?: string, ref?: string, force?: boolean })"
+          );
     assertDirString(options.dir, "push");
 
     const onProgress = options.onProgress
@@ -934,6 +971,7 @@ export class GitClient {
         dir: options.dir,
         remote: options.remote ?? "origin",
         ref: options.ref,
+        remoteRef: options.remoteRef,
         force: options.force ?? false,
         onProgress,
       });
@@ -1006,11 +1044,12 @@ export class GitClient {
   async commit(
     dirOrOptions: string | CommitOptions,
     message?: string,
-    author?: CommitOptions["author"],
+    author?: CommitOptions["author"]
   ): Promise<string> {
-    const options: CommitOptions = typeof dirOrOptions === "string"
-      ? { dir: dirOrOptions, message: message!, author }
-      : dirOrOptions;
+    const options: CommitOptions =
+      typeof dirOrOptions === "string"
+        ? { dir: dirOrOptions, message: message!, author }
+        : dirOrOptions;
     if (!options.dir) {
       throw new Error("git.commit: 'dir' is required");
     }
@@ -1092,7 +1131,7 @@ export class GitClient {
         (head === 1 && stage === 2) || // Modified, fully staged (index === workdir)
         (head === 1 && stage === 3) || // Modified, staged with additional unstaged changes
         (head === 0 && stage === 2) || // New file, fully staged
-        (head === 0 && stage === 3);   // New file, staged with additional unstaged changes
+        (head === 0 && stage === 3); // New file, staged with additional unstaged changes
 
       // File is unstaged if the working tree differs from the index
       // stage=2 means index === workdir, so NO unstaged changes
@@ -1139,9 +1178,7 @@ export class GitClient {
 
     // Only include files with actual changes — unmodified files are noise
     // (a large repo can have thousands of unmodified files)
-    const changedFiles = files.filter(
-      (f) => f.status !== "unmodified" && f.status !== "ignored"
-    );
+    const changedFiles = files.filter((f) => f.status !== "unmodified" && f.status !== "ignored");
     const dirty = changedFiles.length > 0;
 
     return {
@@ -1175,6 +1212,37 @@ export class GitClient {
       ref,
       force: options.force,
     });
+  }
+
+  async fastForward(options: { dir: string; remote?: string; ref: string }): Promise<void> {
+    const checked = assertOptionsObject<{ dir: string; remote?: string; ref: string }>(
+      options,
+      "fastForward",
+      "fastForward({ dir: string, remote?: string, ref: string })"
+    );
+    try {
+      await git.fastForward({
+        fs: this.fs,
+        http: this.http,
+        dir: checked.dir,
+        remote: checked.remote ?? "origin",
+        ref: checked.ref,
+      });
+    } catch (err) {
+      const authFailure = getAuthFailureInfo(err);
+      if (authFailure) {
+        throw new GitAuthError(authFailure.message, authFailure.statusCode);
+      }
+      throw describeGitOperationError("fastForward", checked, err);
+    }
+  }
+
+  async resolveRef(dir: string, ref: string): Promise<string | null> {
+    try {
+      return await git.resolveRef({ fs: this.fs, dir, ref });
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1237,16 +1305,22 @@ export class GitClient {
   /**
    * Add a remote
    */
-  async addRemote(
-    dir: string,
-    name: string,
-    url: string
-  ): Promise<void> {
+  async addRemote(dir: string, name: string, url: string): Promise<void> {
     await git.addRemote({
       fs: this.fs,
       dir,
       remote: name,
       url: this.resolveUrl(url),
+    });
+  }
+
+  async setRemote(dir: string, name: string, url: string): Promise<void> {
+    await git.addRemote({
+      fs: this.fs,
+      dir,
+      remote: name,
+      url: this.resolveUrl(url),
+      force: true,
     });
   }
 
@@ -1299,9 +1373,8 @@ export class GitClient {
    * Accepts either positional args (dir, name) or an options object.
    */
   async createBranch(dirOrOptions: string | CreateBranchOptions, name?: string): Promise<void> {
-    const options: CreateBranchOptions = typeof dirOrOptions === "string"
-      ? { dir: dirOrOptions, name: name! }
-      : dirOrOptions;
+    const options: CreateBranchOptions =
+      typeof dirOrOptions === "string" ? { dir: dirOrOptions, name: name! } : dirOrOptions;
     await git.branch({
       fs: this.fs,
       dir: options.dir,
@@ -1390,6 +1463,40 @@ export class GitClient {
     }
   }
 
+  async compareRefs(
+    dir: string,
+    localRef: string,
+    remoteRef: string,
+    options: { maxDepth?: number } = {}
+  ): Promise<{ ahead: number; behind: number; diverged: boolean } | null> {
+    try {
+      const [localOid, remoteOid] = await Promise.all([
+        git.resolveRef({ fs: this.fs, dir, ref: localRef }),
+        git.resolveRef({ fs: this.fs, dir, ref: remoteRef }),
+      ]);
+      if (localOid === remoteOid) return { ahead: 0, behind: 0, diverged: false };
+      const bases = await git.findMergeBase({
+        fs: this.fs,
+        dir,
+        oids: [localOid, remoteOid],
+      });
+      const baseOid = bases[0];
+      if (!baseOid) return null;
+      const depth = options.maxDepth ?? 2000;
+      const [localLog, remoteLog] = await Promise.all([
+        git.log({ fs: this.fs, dir, ref: localOid, depth }),
+        git.log({ fs: this.fs, dir, ref: remoteOid, depth }),
+      ]);
+      const aheadIndex = localLog.findIndex((c) => c.oid === baseOid);
+      const behindIndex = remoteLog.findIndex((c) => c.oid === baseOid);
+      const ahead = aheadIndex === -1 ? localLog.length : aheadIndex;
+      const behind = behindIndex === -1 ? remoteLog.length : behindIndex;
+      return { ahead, behind, diverged: ahead > 0 && behind > 0 };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Get remote status for current branch
    */
@@ -1420,7 +1527,13 @@ export class GitClient {
   async log(
     dir: string,
     options?: { depth?: number; ref?: string }
-  ): Promise<Array<{ oid: string; message: string; author: { name: string; email: string; timestamp: number } }>> {
+  ): Promise<
+    Array<{
+      oid: string;
+      message: string;
+      author: { name: string; email: string; timestamp: number };
+    }>
+  > {
     const commits = await git.log({
       fs: this.fs,
       dir,
@@ -1524,7 +1637,11 @@ export class GitClient {
   /**
    * Read file content from a git ref (commit, HEAD, branch, tag)
    */
-  private async readFromRef(dir: string, filepath: string, ref: string = "HEAD"): Promise<ContentResult> {
+  private async readFromRef(
+    dir: string,
+    filepath: string,
+    ref: string = "HEAD"
+  ): Promise<ContentResult> {
     try {
       const commitOid = isFullOid(ref)
         ? ref
@@ -1585,7 +1702,7 @@ export class GitClient {
           // Signal that we have an OID but need to read the blob separately
           return { oid, exists: true };
         },
-      })) as Array<ContentResult & { oid?: string } | undefined>;
+      })) as Array<(ContentResult & { oid?: string }) | undefined>;
 
       const hit = results.find((r) => r !== undefined);
       if (!hit) {
@@ -1628,7 +1745,11 @@ export class GitClient {
     try {
       const content = await this.fsPromises.readFile(`${dir}/${filepath}`);
       const text = typeof content === "string" ? content : new TextDecoder().decode(content);
-      return { content: text, exists: true, raw: typeof content === "string" ? undefined : content };
+      return {
+        content: text,
+        exists: true,
+        raw: typeof content === "string" ? undefined : content,
+      };
     } catch (err) {
       // ENOENT means file doesn't exist - expected for deleted files
       const error = err as { code?: string };
@@ -1647,7 +1768,11 @@ export class GitClient {
   /**
    * Build a FileDiff from old and new content results
    */
-  private buildDiff(filepath: string, oldResult: ContentResult, newResult: ContentResult): FileDiff {
+  private buildDiff(
+    filepath: string,
+    oldResult: ContentResult,
+    newResult: ContentResult
+  ): FileDiff {
     const oldProbe = oldResult.raw ?? oldResult.content;
     const newProbe = newResult.raw ?? newResult.content;
     const binary = isBinary(oldProbe) || isBinary(newProbe);
@@ -1700,9 +1825,7 @@ export class GitClient {
 
     // If file is in index, compare against index content
     // If not in index, compare against HEAD
-    const oldResult = indexResult.exists
-      ? indexResult
-      : await this.readFromRef(dir, filepath);
+    const oldResult = indexResult.exists ? indexResult : await this.readFromRef(dir, filepath);
     const newResult = await this.readFromWorkingTree(dir, filepath);
 
     return this.buildDiff(filepath, oldResult, newResult);
@@ -1753,8 +1876,8 @@ export class GitClient {
       : await this.readFromRef(dir, filepath, "HEAD");
     const newResult = await this.readFromWorkingTree(dir, filepath);
 
-    const binary = isBinary(oldResult.raw ?? oldResult.content) ||
-      isBinary(newResult.raw ?? newResult.content);
+    const binary =
+      isBinary(oldResult.raw ?? oldResult.content) || isBinary(newResult.raw ?? newResult.content);
     if (binary) {
       throw new Error("Partial staging is not supported for binary files.");
     }
@@ -1806,7 +1929,8 @@ export class GitClient {
 
     if (!indexResult.exists) return;
 
-    const binary = isBinary(headResult.raw ?? headResult.content) ||
+    const binary =
+      isBinary(headResult.raw ?? headResult.content) ||
       isBinary(indexResult.raw ?? indexResult.content);
     if (binary) {
       throw new Error("Partial unstaging is not supported for binary files.");

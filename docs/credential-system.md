@@ -99,7 +99,9 @@ await credentials.connect({
         id: "google-gmail",
         label: "Google Gmail",
         use: "fetch",
-        audience: [{ url: "https://gmail.googleapis.com/gmail/v1/users/me/", match: "path-prefix" }],
+        audience: [
+          { url: "https://gmail.googleapis.com/gmail/v1/users/me/", match: "path-prefix" },
+        ],
         injection: {
           type: "header",
           name: "authorization",
@@ -247,15 +249,37 @@ const git = await credentials.connect({
     label: "GitHub SSH",
     audience: [{ url: "https://github.com/acme/project", match: "path-prefix" }],
     injection: { type: "ssh-key" },
-    bindings: [{
-      id: "git",
-      use: "git-ssh",
-      audience: [{ url: "https://github.com/acme/project", match: "path-prefix" }],
-      injection: { type: "ssh-key" },
-    }],
+    bindings: [
+      {
+        id: "git",
+        use: "git-ssh",
+        audience: [{ url: "https://github.com/acme/project", match: "path-prefix" }],
+        injection: { type: "ssh-key" },
+      },
+    ],
   },
 });
 ```
+
+## Git Upstream Credentials
+
+External Git remotes should use URL-bound credentials rather than embedded
+tokens in remote URLs. A provider can store a broad upstream grant once, then
+expose narrow local bindings for API calls and Git HTTP transport. GitHub uses
+this pattern with `github-user`, `github-repos`, `github-uploads`, and
+`github-git-http`.
+
+`git.upstreams.<section>.<repo>.credentialId` stores the credential selected for
+push/pull. The credential material remains host-owned: runtime code passes the
+credential id, and the host injects it only for matching Git HTTP URLs through
+`credentials.gitHttp()` or the git-bridge upstream methods. Remote URLs must not
+contain usernames, passwords, or tokens.
+
+Provider extensions should pair credential setup with repository verification:
+check the provider API or Git smart-HTTP discovery for the target repository,
+then configure `git.remotes` and `git.upstreams` through the runtime `git`
+namespace. See [git-upstream.md](./git-upstream.md) for the upstream approval
+model and provider-extension boundary.
 
 Browser-cookie and SAML cookie-session flows can use `browser: "internal"` or
 `browser: "external"`. External mode is backed by the shell-owned browser import

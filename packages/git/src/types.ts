@@ -56,10 +56,17 @@ export interface PushOptions {
   remote?: string;
   /** Branch to push (default: current branch) */
   ref?: string;
+  /** Remote ref to update, e.g. refs/heads/main. Defaults to ref. */
+  remoteRef?: string;
   /** Force push (use with caution) */
   force?: boolean;
   /** Progress callback */
   onProgress?: (progress: GitProgress) => void;
+}
+
+export interface FetchResult {
+  fetchHead: string | null;
+  fetchHeadDescription?: string | null;
 }
 
 /**
@@ -84,7 +91,7 @@ export interface FileStatus {
   /** File path relative to repo root */
   path: string;
   /** Overall status (union of index + working tree state) */
-  status: 'unmodified' | 'modified' | 'added' | 'deleted' | 'untracked' | 'ignored';
+  status: "unmodified" | "modified" | "added" | "deleted" | "untracked" | "ignored";
   /** Whether there are staged (index) changes for this path */
   staged: boolean;
   /** Whether there are unstaged (working tree) changes for this path */

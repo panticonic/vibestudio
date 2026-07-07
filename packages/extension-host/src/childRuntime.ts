@@ -19,6 +19,7 @@ import {
   type ExtensionsClient,
   type RegistryEntry,
 } from "@vibestudio/extension";
+import { createCredentialClient } from "@vibestudio/credential-client";
 
 import type { ExtensionInvocation } from "./types.js";
 import {
@@ -421,7 +422,7 @@ function createContext() {
       resolveDurableObject: (source: string, className: string, objectKey: string) =>
         rpcCall("workers.resolveDurableObject", [source, className, objectKey]),
     },
-    credentials: serviceProxy("credentials"),
+    credentials: createCredentialClient(getRuntimeBridge()),
     webhooks: serviceProxy("webhookIngress"),
     notifications: serviceProxy("notification"),
     extensions: createExtensionsClient(),

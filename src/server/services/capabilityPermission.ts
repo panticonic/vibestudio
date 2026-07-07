@@ -72,7 +72,7 @@ export async function requestCapabilityPermission(
   if (!callerKind) {
     return {
       allowed: false,
-      reason: "Capability caller is not an app, panel, worker, or durable object",
+      reason: "Capability caller is not an app, panel, worker, durable object, or extension",
     };
   }
 
@@ -196,8 +196,16 @@ export function withCapability<T>(
   );
 }
 
-export function normalizeCallerKind(kind: string): "panel" | "app" | "worker" | "do" | null {
-  if (kind === "panel" || kind === "app" || kind === "worker" || kind === "do") {
+export function normalizeCallerKind(
+  kind: string
+): "panel" | "app" | "worker" | "do" | "extension" | null {
+  if (
+    kind === "panel" ||
+    kind === "app" ||
+    kind === "worker" ||
+    kind === "do" ||
+    kind === "extension"
+  ) {
     return kind;
   }
   return null;

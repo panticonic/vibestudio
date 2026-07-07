@@ -7,6 +7,7 @@ import type {
   WorkspaceConfig,
   WorkspaceGitRemoteConfig,
   WorkspaceGitRemoteDeclaration,
+  WorkspaceGitUpstreamConfig,
 } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -27,6 +28,18 @@ export interface SyncDeclaredRemoteResult {
   applied: boolean;
   removedManaged: string[];
   remotes: ResolvedWorkspaceGitRemote[];
+}
+
+export interface ResolvedWorkspaceGitUpstream {
+  repoPath: string;
+  section: string;
+  repoKey: string;
+  remote: string;
+  branch: string;
+  autoPush: boolean;
+  credentialId?: string;
+  authorEmail?: string;
+  authorName?: string;
 }
 
 export function normalizeWorkspaceRepoPath(repoPath: string): string {
@@ -103,6 +116,106 @@ export function validateWorkspaceGitRemoteBranch(branchInput: string): string {
     throw new Error(`Invalid remote branch: ${branchInput}`);
   }
   return branch;
+}
+
+export function validateWorkspaceGitUpstream(
+  upstream: WorkspaceGitUpstreamConfig
+): WorkspaceGitUpstreamConfig {
+  if (!upstream || typeof upstream !== "object") {
+    throw new Error("Upstream declaration is required");
+  }
+  const remote = validateWorkspaceGitRemoteName(upstream.remote);
+  const branch =
+    upstream.branch === undefined ? undefined : validateWorkspaceGitRemoteBranch(upstream.branch);
+  const autoPush = upstream.autoPush === undefined ? undefined : Boolean(upstream.autoPush);
+  const credentialId = normalizeOptionalNonEmpty("credentialId", upstream.credentialId);
+  const authorEmail = normalizeOptionalNonEmpty("authorEmail", upstream.authorEmail);
+  const authorName = normalizeOptionalNonEmpty("authorName", upstream.authorName);
+  return {
+    remote,
+    ...(branch !== undefined ? { branch } : {}),
+    ...(autoPush !== undefined ? { autoPush } : {}),
+    ...(credentialId !== undefined ? { credentialId } : {}),
+    ...(authorEmail !== undefined ? { authorEmail } : {}),
+    ...(authorName !== undefined ? { authorName } : {}),
+  };
+}
+
+function normalizeOptionalNonEmpty(label: string, value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`Invalid ${label}: empty value`);
+  return normalized;
+}
+
+export function getDeclaredUpstreamForRepo(
+  config: WorkspaceConfig,
+  repoPathInput: string
+): ResolvedWorkspaceGitUpstream | null {
+  const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
+  const [section, ...repoParts] = repoPath.split("/");
+  const repoKey = repoParts.join("/");
+  const declaration = config.git?.upstreams?.[section!]?.[repoKey];
+  if (!declaration) return null;
+  const upstream = validateWorkspaceGitUpstream(declaration);
+  const remote = getDeclaredRemoteForRepo(config, repoPath, upstream.remote);
+  if (!remote) {
+    throw new Error(`Upstream remote "${upstream.remote}" is not declared for ${repoPath}`);
+  }
+  return {
+    repoPath,
+    section: section!,
+    repoKey,
+    remote: upstream.remote,
+    branch: upstream.branch ?? remote.branch ?? "main",
+    autoPush: upstream.autoPush ?? false,
+    ...(upstream.credentialId !== undefined ? { credentialId: upstream.credentialId } : {}),
+    ...(upstream.authorEmail !== undefined ? { authorEmail: upstream.authorEmail } : {}),
+    ...(upstream.authorName !== undefined ? { authorName: upstream.authorName } : {}),
+  };
+}
+
+export function getDeclaredUpstreams(config: WorkspaceConfig): ResolvedWorkspaceGitUpstream[] {
+  const entries: ResolvedWorkspaceGitUpstream[] = [];
+  for (const [section, repos] of Object.entries(config.git?.upstreams ?? {})) {
+    for (const repoKey of Object.keys(repos ?? {})) {
+      const repoPath = normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
+      const upstream = getDeclaredUpstreamForRepo(config, repoPath);
+      if (upstream) entries.push(upstream);
+    }
+  }
+  return entries.sort((a, b) => a.repoPath.localeCompare(b.repoPath));
+}
+
+export interface DeclaredUpstreamListing {
+  repoPath: string;
+  upstream: ResolvedWorkspaceGitUpstream | null;
+  /** Set when the declaration exists but does not resolve (e.g. its remote was removed). */
+  error?: string;
+}
+
+/**
+ * Tolerant variant of {@link getDeclaredUpstreams}: one unresolvable
+ * declaration (say, an upstream whose remote was deleted) yields an `error`
+ * entry instead of failing the whole enumeration.
+ */
+export function listDeclaredUpstreams(config: WorkspaceConfig): DeclaredUpstreamListing[] {
+  const entries: DeclaredUpstreamListing[] = [];
+  for (const [section, repos] of Object.entries(config.git?.upstreams ?? {})) {
+    for (const repoKey of Object.keys(repos ?? {})) {
+      const repoPath = normalizeWorkspaceRepoPath(repoKey ? `${section}/${repoKey}` : section);
+      try {
+        entries.push({ repoPath, upstream: getDeclaredUpstreamForRepo(config, repoPath) });
+      } catch (err) {
+        entries.push({
+          repoPath,
+          upstream: null,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+  return entries.sort((a, b) => a.repoPath.localeCompare(b.repoPath));
 }
 
 function validateWorkspaceGitRemoteEntry(
@@ -219,6 +332,59 @@ export function removeDeclaredRemoteFromConfig(
       remotes: {
         ...remotes,
         [section!]: sectionRemotes,
+      },
+    },
+  };
+}
+
+export function setDeclaredUpstreamInConfig(
+  config: WorkspaceConfig,
+  repoPathInput: string,
+  upstreamInput: WorkspaceGitUpstreamConfig
+): WorkspaceConfig {
+  const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
+  const [section, ...repoParts] = repoPath.split("/");
+  const repoKey = repoParts.join("/");
+  const upstream = validateWorkspaceGitUpstream(upstreamInput);
+  if (!getDeclaredRemoteForRepo(config, repoPath, upstream.remote)) {
+    throw new Error(`Upstream remote "${upstream.remote}" is not declared for ${repoPath}`);
+  }
+  const git = config.git ?? {};
+  const upstreams = git.upstreams ?? {};
+  const sectionUpstreams = upstreams[section!] ?? {};
+  return {
+    ...config,
+    git: {
+      ...git,
+      upstreams: {
+        ...upstreams,
+        [section!]: {
+          ...sectionUpstreams,
+          [repoKey]: upstream,
+        },
+      },
+    },
+  };
+}
+
+export function removeDeclaredUpstreamFromConfig(
+  config: WorkspaceConfig,
+  repoPathInput: string
+): WorkspaceConfig {
+  const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
+  const [section, ...repoParts] = repoPath.split("/");
+  const repoKey = repoParts.join("/");
+  const git = config.git ?? {};
+  const upstreams = git.upstreams ?? {};
+  const sectionUpstreams = { ...(upstreams[section!] ?? {}) };
+  delete sectionUpstreams[repoKey];
+  return {
+    ...config,
+    git: {
+      ...git,
+      upstreams: {
+        ...upstreams,
+        [section!]: sectionUpstreams,
       },
     },
   };

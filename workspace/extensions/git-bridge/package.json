@@ -14,8 +14,10 @@
     }
   },
   "dependencies": {
+    "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/git": "workspace:*",
     "@vibestudio/shared": "workspace:*",
+    "@workspace/integrations": "workspace:*",
     "@workspace/vcs-engine": "workspace:*",
     "ignore": "^5.3.2"
   }

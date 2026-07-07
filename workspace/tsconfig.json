@@ -23,6 +23,7 @@
     "paths": {
       "@vibestudio/browser-data": ["packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["packages/browser-data/src/client.ts"],
+      "@vibestudio/credential-client": ["packages/credential-client/src/index.ts"],
       "@vibestudio/dev-log": ["packages/dev-log/src/index.ts"],
       "@vibestudio/durable": ["packages/durable/src/index.ts"],
       "@vibestudio/durable/test-utils": ["packages/durable/src/test-utils.ts"],
@@ -103,6 +104,9 @@
       "@workspace/integrations": ["workspace/packages/integrations/src/index.ts"],
       "@workspace/integrations/calendar": ["workspace/packages/integrations/src/calendar.ts"],
       "@workspace/integrations/providers": ["workspace/packages/integrations/src/providers.ts"],
+      "@workspace/integrations/remoteProviders": [
+        "workspace/packages/integrations/src/remoteProviders.ts"
+      ],
       "@workspace/model-catalog/*": ["workspace/packages/model-catalog/src/*.ts"],
       "@workspace/channel-fork": ["workspace/packages/channel-fork/src/index.ts"],
       "@workspace/feeds": ["workspace/packages/feeds/src/index.ts"],

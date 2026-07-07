@@ -147,6 +147,32 @@ await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
 await client.push({ dir: "/repo" });
 ```
 
+For GAD-native repos, prefer the upstream bridge rather than pushing a checkout
+directly. `publishToGitHub()` can declare the shared remote, configure
+`git.upstreams`, export protected `main` through git-bridge, and ask git-bridge
+to publish to the remote:
+
+```ts
+import { publishToGitHub, upstreamStatus } from "@workspace-skills/github";
+
+const status = await upstreamStatus("projects/bgkit");
+if (status.state === "diverged") {
+  // Follow docs/git-upstream.md before publishing.
+}
+
+await publishToGitHub({
+  repoPath: "projects/bgkit",
+  remoteUrl: "https://github.com/owner/bgkit.git",
+  branch: "main",
+  credentialId: "cred_github_...",
+  configure: true,
+});
+```
+
+The helper invokes `@workspace-extensions/git-bridge` through the runtime
+`extensions` client. It does not receive the GitHub token; credential injection
+stays host-mediated.
+
 Use `client.status(dir)` for structured status. Use `client.statusMatrix(dir)`
 only when raw isomorphic-git HEAD/WORKDIR/STAGE tuples are needed.
 
@@ -176,6 +202,35 @@ git:
           branch: main
         ci: https://github.com/owner/my-panel-ci.git
 ```
+
+Upstream tracking is separate from remote declaration:
+
+```ts
+import { git } from "@workspace/runtime";
+
+await git.configureUpstream("panels/my-panel", {
+  remote: "origin",
+  branch: "main",
+  credentialId: "cred_github_...",
+  autoPush: false,
+});
+```
+
+This records:
+
+```yaml
+git:
+  upstreams:
+    panels:
+      my-panel:
+        remote: origin
+        branch: main
+        credentialId: cred_github_...
+        autoPush: false
+```
+
+For the full upstream model, approval matrix, and divergence playbook, see
+`docs/git-upstream.md`.
 
 To import a remote repository into workspace source, use `git.importProject()`
 with the destination path where it should live:

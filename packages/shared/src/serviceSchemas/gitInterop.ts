@@ -19,6 +19,12 @@ const SHARED_REMOTE_WRITE_ACCESS: MethodAccessDescriptor = {
 const SHARED_REMOTE_REMOVE_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
+const UPSTREAM_WRITE_ACCESS: MethodAccessDescriptor = {
+  sensitivity: "write",
+};
+const UPSTREAM_REMOVE_ACCESS: MethodAccessDescriptor = {
+  sensitivity: "write",
+};
 const IMPORT_PROJECT_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
@@ -36,6 +42,19 @@ export const gitRemoteSchema = z.object({
 });
 export type GitRemote = z.infer<typeof gitRemoteSchema>;
 
+export const gitUpstreamConfigSchema = z.object({
+  remote: z.string().describe('Declared remote name, e.g. "origin".'),
+  branch: z
+    .string()
+    .optional()
+    .describe("Remote branch to track; defaults to the remote branch or main."),
+  autoPush: z.boolean().optional().describe("Whether protected-main advances auto-push upstream."),
+  credentialId: z.string().optional().describe("Credential id used for credentialed git HTTP."),
+  authorEmail: z.string().optional().describe("Exported git commit author email override."),
+  authorName: z.string().optional().describe("Exported git commit author name override."),
+});
+export type GitUpstreamConfig = z.infer<typeof gitUpstreamConfigSchema>;
+
 const gitRemoteDeclarationSchema = z.union([
   z.string(),
   z.object({
@@ -48,6 +67,11 @@ export const gitSharedRemotesSchema = z.record(
   z.record(z.record(gitRemoteDeclarationSchema.nullable().optional()).optional()).optional()
 );
 export type GitSharedRemotes = z.infer<typeof gitSharedRemotesSchema>;
+
+export const gitUpstreamsSchema = z.record(
+  z.record(gitUpstreamConfigSchema.nullable().optional()).optional()
+);
+export type GitUpstreams = z.infer<typeof gitUpstreamsSchema>;
 
 export const gitImportProjectSchema = z.object({
   path: z
@@ -131,6 +155,34 @@ export const gitInteropMethods = defineServiceMethods({
     returns: gitSharedRemotesSchema.optional(),
     access: SHARED_REMOTE_REMOVE_ACCESS,
     examples: [{ args: ["projects/bgkit", "origin"] }],
+  },
+  setUpstream: {
+    description:
+      "Declare or update upstream tracking for a workspace repo, persisting it to meta/vibestudio.yml; may prompt for capability approval. No network egress happens here.",
+    args: z.tuple([
+      z.string().describe("Workspace-relative repo/unit path the upstream applies to."),
+      gitUpstreamConfigSchema,
+    ]),
+    returns: gitUpstreamsSchema.optional(),
+    access: UPSTREAM_WRITE_ACCESS,
+    examples: [
+      {
+        args: [
+          "projects/bgkit",
+          { remote: "origin", branch: "main", autoPush: false, credentialId: "github" },
+        ],
+      },
+    ],
+  },
+  removeUpstream: {
+    description:
+      "Remove upstream tracking for a workspace repo from meta/vibestudio.yml; may prompt for capability approval.",
+    args: z.tuple([
+      z.string().describe("Workspace-relative repo/unit path the upstream belongs to."),
+    ]),
+    returns: gitUpstreamsSchema.optional(),
+    access: UPSTREAM_REMOVE_ACCESS,
+    examples: [{ args: ["projects/bgkit"] }],
   },
   importProject: {
     description:

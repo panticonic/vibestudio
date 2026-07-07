@@ -47,6 +47,7 @@ import {
   type ManifestHashEntry,
 } from "@vibestudio/shared/contentTree/worktreeHash";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/workspace/remotes";
+import { withRepoLock } from "./repoLocks.js";
 
 export const VCS_MAIN_HEAD = "main";
 
@@ -234,8 +235,6 @@ async function loadIgnoreMatcher(
 
 export class GitBridge {
   private readonly git: GitClient;
-  /** Per-repo op serialization — concurrent bridge ops on one checkout race. */
-  private readonly locks = new Map<string, Promise<unknown>>();
 
   constructor(private readonly host: BridgeHost) {
     this.git = new GitClient(fsLike, {
@@ -252,16 +251,6 @@ export class GitBridge {
   private trace(message: string, details: Record<string, unknown>): void {
     if (process.env["VIBESTUDIO_DEBUG_GIT_BRIDGE"] !== "1") return;
     console.info(`[GitBridge] ${message}`, details);
-  }
-
-  private locked<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.locks.get(key) ?? Promise.resolve();
-    const next = prev.then(fn, fn);
-    this.locks.set(
-      key,
-      next.catch(() => {})
-    );
-    return next;
   }
 
   // -------------------------------------------------------------------------
@@ -297,7 +286,7 @@ export class GitBridge {
   }
 
   /** `workspace/<repoPath>` — a repo's own checkout dir (its `.git/`). */
-  private async repoGitDir(repoPath: string): Promise<string> {
+  async repoGitDir(repoPath: string): Promise<string> {
     return path.join(await this.host.workspaceRoot(), ...repoPath.split("/"));
   }
 
@@ -316,9 +305,8 @@ export class GitBridge {
     repoPath: string,
     opts: { authorName?: string; authorEmail?: string } = {}
   ): Promise<ExportResult> {
-    const repo = normalizeWorkspaceRepoPath(repoPath);
-    return this.locked(repo, async () => {
-      const result = await this.exportLocked(repo, opts);
+    return withRepoLock(repoPath, async (repo) => {
+      const result = await this.exportLockedInner(repo, opts);
       this.trace("export complete", {
         repo,
         exported: result.exported,
@@ -328,10 +316,11 @@ export class GitBridge {
     });
   }
 
-  private async exportLocked(
+  async exportLockedInner(
     repo: string,
     opts: { authorName?: string; authorEmail?: string }
   ): Promise<ExportResult> {
+    repo = normalizeWorkspaceRepoPath(repo);
     const gitDir = await this.repoGitDir(repo);
     const logId = `vcs:repo:${repo}`;
     const newestFirst = await this.host.store.vcsLog(repo, Number.MAX_SAFE_INTEGER, VCS_MAIN_HEAD);
@@ -505,11 +494,11 @@ export class GitBridge {
    * repo's protected `main` ref.
    */
   async importRepoTree(repoPath: string, opts: { summary?: string } = {}): Promise<ImportResult> {
-    const repo = normalizeWorkspaceRepoPath(repoPath);
-    return this.locked(repo, () => this.importLocked(repo, opts));
+    return withRepoLock(repoPath, (repo) => this.importLockedInner(repo, opts));
   }
 
-  private async importLocked(repo: string, opts: { summary?: string }): Promise<ImportResult> {
+  async importLockedInner(repo: string, opts: { summary?: string }): Promise<ImportResult> {
+    repo = normalizeWorkspaceRepoPath(repo);
     const gitDir = await this.repoGitDir(repo);
     const logId = `vcs:repo:${repo}`;
     const commitSha = await this.git.getCurrentCommit(gitDir);

@@ -21,7 +21,7 @@ import {
   ChevronRightIcon,
 } from "@radix-ui/react-icons";
 import { useShellEvent } from "../shell/useShellEvent";
-import { app, notification, workspaceUnits } from "../shell/client";
+import { app, extensions, notification, panel, workspaceUnits } from "../shell/client";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import { assertPresent } from "../utils/assertPresent";
 
@@ -65,6 +65,29 @@ function TypeIcon({ type }: { type: NotificationPayload["type"] }) {
     case "consent":
       return <LockClosedIcon />;
   }
+}
+
+function panelOpenInstruction(value: unknown): {
+  source: string;
+  stateArgs?: Record<string, unknown>;
+  name?: string;
+} | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const openPanel = (value as Record<string, unknown>)["openPanel"];
+  if (!openPanel || typeof openPanel !== "object" || Array.isArray(openPanel)) return null;
+  const record = openPanel as Record<string, unknown>;
+  if (typeof record["source"] !== "string") return null;
+  const stateArgs =
+    record["stateArgs"] &&
+    typeof record["stateArgs"] === "object" &&
+    !Array.isArray(record["stateArgs"])
+      ? (record["stateArgs"] as Record<string, unknown>)
+      : undefined;
+  return {
+    source: record["source"],
+    ...(typeof record["name"] === "string" ? { name: record["name"] } : {}),
+    ...(stateArgs ? { stateArgs } : {}),
+  };
 }
 
 export function NotificationBar() {
@@ -164,6 +187,28 @@ export function NotificationBar() {
             ttl: 0,
           });
         });
+      }
+      if (action.invoke?.kind === "extension") {
+        void extensions
+          .invoke(action.invoke.extension, action.invoke.method, action.invoke.args ?? [])
+          .then((result) => {
+            const open = panelOpenInstruction(result);
+            if (open) {
+              return panel.createPanel(open.source, {
+                name: open.name,
+                stateArgs: open.stateArgs,
+              });
+            }
+            return undefined;
+          })
+          .catch((err) => {
+            void notification.show({
+              type: "error",
+              title: "Action failed",
+              message: err instanceof Error ? err.message : String(err),
+              ttl: 0,
+            });
+          });
       }
       dismissNotification(notificationId);
     },
@@ -421,15 +466,7 @@ function NotificationDetails({
   );
 }
 
-function DiagnosticBlock({
-  title,
-  value,
-  mono,
-}: {
-  title: string;
-  value: string;
-  mono?: boolean;
-}) {
+function DiagnosticBlock({ title, value, mono }: { title: string; value: string; mono?: boolean }) {
   return (
     <Flex direction="column" gap="1">
       <Text size="1" weight="bold" color="gray">

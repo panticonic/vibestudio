@@ -10,6 +10,11 @@ import type {
   PendingUnitBatchApproval,
 } from "./approvals.js";
 
+/** Both git transports carry `gitOperation` metadata from the egress proxy. */
+function isGitCredentialUse(use: unknown): boolean {
+  return use === "git-http" || use === "git-ssh";
+}
+
 function truncateId(id: string, head = 8, tail = 4): string {
   if (id.length <= head + tail + 1) return id;
   return `${id.slice(0, head)}…${id.slice(-tail)}`;
@@ -141,7 +146,7 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
     if (isOAuthCredentialConnectionApproval(approval)) {
       return "Connection request";
     }
-    if (approval.credentialUse === "git-http") {
+    if (isGitCredentialUse(approval.credentialUse)) {
       return approval.gitOperation?.action === "write" ? "Git write" : "Git read";
     }
     return "Access request";
@@ -214,15 +219,18 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   return "Capability request";
 }
 
+export interface ApprovalActionCopy {
+  once: { label: string; description: string };
+  /** Null when the decision is not offered (e.g. force pushes are once-only). */
+  session: { label: string; description: string } | null;
+  version: { label: string; description: string } | null;
+  repo: { label: string; description: string } | null;
+  denyDescription: string;
+}
+
 export function getStandardActionCopy(
   approval: PendingCredentialApproval | PendingCapabilityApproval
-): {
-  once: { label: string; description: string };
-  session: { label: string; description: string };
-  version: { label: string; description: string };
-  repo: { label: string; description: string };
-  denyDescription: string;
-} {
+): ApprovalActionCopy {
   if (approval.kind === "credential") {
     if (isOAuthCredentialConnectionApproval(approval)) {
       return {
@@ -246,8 +254,22 @@ export function getStandardActionCopy(
         denyDescription: "Do not connect this service.",
       };
     }
-    if (approval.credentialUse === "git-http") {
+    if (isGitCredentialUse(approval.credentialUse)) {
       const isWrite = approval.gitOperation?.action === "write";
+      if (approval.gitOperation?.force) {
+        // Force pushes are once-only by design: no durable grant may cover
+        // overwriting remote history.
+        return {
+          once: {
+            label: "Allow once",
+            description: "Allow this force push once.",
+          },
+          session: null,
+          version: null,
+          repo: null,
+          denyDescription: "Do not allow this force push.",
+        };
+      }
       return {
         once: {
           label: isWrite ? "Push once" : "Read once",
@@ -555,7 +577,7 @@ export function getApprovalAttribution(approval: PendingApproval): ApprovalAttri
     // git + non-oauth use: the headline names the destination, so the chip
     // names the credential identity in play. OAuth connect headlines already
     // name the credential, so surface the account instead when we have one.
-    if (approval.credentialUse === "git-http") {
+    if (isGitCredentialUse(approval.credentialUse)) {
       return { relation: "using", target: approval.credentialLabel };
     }
     if (isOAuthCredentialConnectionApproval(approval)) {
@@ -776,10 +798,24 @@ export function getApprovalCopy(approval: PendingApproval): {
   }
 
   const audience = formatAudienceSummary(approval);
-  if (approval.credentialUse === "git-http") {
+  if (isGitCredentialUse(approval.credentialUse)) {
     const operation = approval.gitOperation;
     const remote = operation?.remote ? formatGitRemoteSummary(operation.remote) : audience;
     const label = operation?.label ?? "git operation";
+    if (operation?.force) {
+      const count = operation.overwrites?.count ?? 0;
+      return {
+        title: `Overwrite upstream commits on ${remote}`,
+        summary:
+          count > 0
+            ? `Overwrite ${count} upstream commit${count === 1 ? "" : "s"} on ${remote} using ${approval.credentialLabel}.`
+            : `Force push to ${remote} using ${approval.credentialLabel}.`,
+        warning:
+          count > 0
+            ? `Those commit${count === 1 ? "" : "s"} will be lost on the remote.`
+            : "This force push may overwrite remote history.",
+      };
+    }
     return {
       title: operation?.action === "write" ? `Push to ${remote}` : `Read from ${remote}`,
       summary: `Wants to ${label} on ${remote} using ${approval.credentialLabel}.`,
@@ -805,7 +841,9 @@ export function getApprovalCopy(approval: PendingApproval): {
   };
 }
 
-function userlandCallerKindLabel(kind: "panel" | "app" | "worker" | "do" | "system"): string {
+function userlandCallerKindLabel(
+  kind: "panel" | "app" | "worker" | "do" | "extension" | "system"
+): string {
   switch (kind) {
     case "panel":
       return "Panel";
@@ -815,6 +853,8 @@ function userlandCallerKindLabel(kind: "panel" | "app" | "worker" | "do" | "syst
       return "Worker";
     case "do":
       return "DO";
+    case "extension":
+      return "Extension";
     case "system":
       return "Workspace";
   }

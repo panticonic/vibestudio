@@ -3,7 +3,7 @@ import type {
   CredentialGrantResourceHint,
   CredentialInjection,
   UrlAudience,
-} from "@workspace/runtime/credentials";
+} from "@vibestudio/credential-client";
 
 export interface UrlCredentialDescriptor {
   id: string;
@@ -75,11 +75,7 @@ const repoResource: CredentialGrantResourceHint = {
   segmentCount: 3,
 };
 
-const googleFetch = (
-  id: string,
-  label: string,
-  audience: UrlAudience[],
-): CredentialBinding => ({
+const googleFetch = (id: string, label: string, audience: UrlAudience[]): CredentialBinding => ({
   id,
   label,
   use: "fetch",
@@ -158,6 +154,7 @@ export const githubBindings = {
     use: "git-http",
     audience: [{ url: "https://github.com/", match: "origin" }],
     injection: githubGitHttpInjection,
+    grantResource: { type: "url-path-prefix", segmentCount: 2 },
   },
 } satisfies Record<string, CredentialBinding>;
 
@@ -191,7 +188,7 @@ export function audiencesFromBindings(bindings: readonly CredentialBinding[]): U
 export function bindingAudience(
   descriptor: UrlCredentialDescriptor,
   bindingId: string,
-  opts: { credentialId?: string } = {},
+  opts: { credentialId?: string } = {}
 ): BindingAudienceDescriptor {
   const binding = descriptor.bindings.find((candidate) => candidate.id === bindingId);
   if (!binding) {

@@ -835,6 +835,18 @@ export const ProxyGitHttpParamsSchema = z
     credentialId: IdentifierSchema.optional().describe(
       "Explicit credential to inject; resolved from the URL when omitted."
     ),
+    gitIntent: z
+      .object({
+        force: z.boolean(),
+        overwrites: z
+          .object({
+            count: z.number().int().nonnegative(),
+            commits: z.array(z.object({ sha: z.string(), summary: z.string() })),
+          })
+          .optional(),
+      })
+      .optional()
+      .describe("Caller-declared git operation intent for approval copy and grant rules."),
   })
   .strict();
 

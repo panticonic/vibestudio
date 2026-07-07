@@ -14,6 +14,12 @@
       "reason": "RPC target name, not an import: adoption mode calls the claude-code extension's prepare over `extensions.invoke`"
     },
     {
+      "file": "src/cli/agent/vcsCommands.ts",
+      "specifier": "@workspace-extensions/git-bridge",
+      "category": "workspace-reference",
+      "reason": "RPC target name, not an import: the `vcs git` command group drives the git-bridge upstream engine over `extensions.invoke` (no workspace code linked in)"
+    },
+    {
       "file": "packages/shared/src/workspace/sourceDirs.ts",
       "specifier": "@workspace-about/",
       "category": "workspace-reference",

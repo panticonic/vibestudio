@@ -1178,7 +1178,7 @@ async function main() {
   }
   // Git interchange semantics (P5c part 2) live in the trusted git-bridge
   // EXTENSION (workspace/extensions/git-bridge); the host keeps only this
-  // policy/dispatch service (approvals, egress clone, config writes).
+  // policy/dispatch service (approvals and config writes).
   const { createWorkspaceConfigMainWriter } = await import("./workspaceConfigWriter.js");
   const workspaceConfigWriter = createWorkspaceConfigMainWriter({
     workspacePath,
@@ -1191,16 +1191,12 @@ async function main() {
     treeScanner,
     workspacePath,
     workspaceConfig,
-    egressProxy,
-    // W7: initialize a `vcs:repo:<path>` log per freshly cloned dependency by
-    // snapshotting its tree into the repo log at `main` (no lockfile/pinning).
-    // Dispatched to the git-bridge extension with the original caller context.
-    initRepoLog: async (ctx, repoPath) => {
+    cloneRepo: async (ctx, repoPath) => {
       const host = extensionHostForGateway;
       if (!host) {
         throw new Error("git-bridge extension unavailable: extension host not started");
       }
-      await host.invoke(ctx, GIT_BRIDGE_EXTENSION, "importRepoTree", [repoPath]);
+      await host.invoke(ctx, GIT_BRIDGE_EXTENSION, "cloneRepo", [{ repoPath }]);
     },
     approvalQueue,
     grantStore: capabilityGrantStore,
@@ -1209,19 +1205,29 @@ async function main() {
     workspaceConfigWouldChange: (nextConfig) => workspaceConfigWriter.wouldChange(nextConfig),
     persistWorkspaceConfig: (input) => workspaceConfigWriter.persist(input),
     onWorkspaceSourceChanged: async (_ctx, _summary) => {
-      // Phase-2 revision §5 (INTERIM — see design fork in the revision report):
-      // the actual repo→`main` publish for a git import already runs through
-      // `initRepoLog` → git-bridge `importRepoTree` → `importPublish` (gated,
-      // DO-owned). The removed `ctx:workspace` freshness scan is gone; here we
-      // only seed a `main` for any newly-present-on-disk repo that lacks one
-      // (set-if-absent, host-computed from disk), so a freshly cloned dependency
-      // is usable. NOT the §5 target (routing a caller-initiated import into the
-      // caller's `ctx:{id}` head, absent from `main` until pushed): that requires
-      // a new clone-into-context trigger and is surfaced as a design fork.
+      // The extension-owned clone path imports the checkout into GAD itself.
+      // The host only refreshes source-tree bookkeeping so a freshly cloned
+      // dependency is visible to existing workspace-unit queries.
       await workspaceVcs.ensureRepoLogsFromDisk();
     },
   });
   container.registerRpc(gitInteropDefinition);
+  refService.onRefsChanged((changes) => {
+    const repos = changes
+      .filter((change) => change.stateHash !== null)
+      .map((change) => change.repoPath);
+    if (repos.length === 0) return;
+    const host = extensionHostForGateway;
+    if (!host) return;
+    void host
+      .invoke(
+        { caller: createVerifiedCaller("server", "server") },
+        GIT_BRIDGE_EXTENSION,
+        "onMainAdvanced",
+        [repos]
+      )
+      .catch((err) => console.warn("[GitUpstream] forward failed:", err));
+  });
   const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
     try {
       const result = (await gitInteropDefinition.handler(
@@ -2070,6 +2076,8 @@ async function main() {
         redeemPairingCredential: createPairingRedeemer({ deviceAuthStore, tokenManager }),
         resolveExtensionInvocation: (extensionName, invocationToken) =>
           extensionHostForGateway?.resolveActiveInvocation(extensionName, invocationToken) ?? null,
+        resolveExtensionCodeIdentity: (extensionName) =>
+          extensionHostForGateway?.resolveCodeIdentity(extensionName) ?? null,
         // On-behalf-of tokens for userland vcs-DO dispatches (§4): the relay
         // mints one per dispatch to the single-writer DO; refs.updateMains
         // resolves it against the SAME table.

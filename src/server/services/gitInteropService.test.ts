@@ -8,16 +8,6 @@ import type { WorkspaceConfig } from "@vibestudio/shared/workspace/types";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
-const gitMocks = vi.hoisted(() => ({
-  clone: vi.fn(async () => undefined),
-}));
-
-vi.mock("@vibestudio/git", () => ({
-  GitClient: vi.fn().mockImplementation(() => ({
-    clone: gitMocks.clone,
-  })),
-}));
-
 import { createGitInteropService } from "./gitInteropService.js";
 
 function tempWorkspace(): string {
@@ -75,9 +65,9 @@ function diskConfigPersistence(workspacePath: string) {
 
 describe("gitInteropService", () => {
   it("imports a requested branch and persists it as a shared remote", async () => {
-    gitMocks.clone.mockClear();
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const cloneRepo = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
@@ -87,7 +77,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      egressProxy: { forwardGitHttp: vi.fn() },
+      cloneRepo,
       ...diskConfigPersistence(workspacePath),
     });
 
@@ -102,11 +92,7 @@ describe("gitInteropService", () => {
       },
     ]);
 
-    expect(gitMocks.clone).toHaveBeenCalledWith({
-      url: "https://github.com/werg/bgkit.git",
-      dir: path.join(workspacePath, "projects", "bgkit"),
-      ref: "vibestudio-bridge",
-    });
+    expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
     const config = YAML.parse(
       fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf-8")
     ) as WorkspaceConfig;
@@ -114,12 +100,17 @@ describe("gitInteropService", () => {
       url: "https://github.com/werg/bgkit.git",
       branch: "vibestudio-bridge",
     });
+    expect(config.git?.upstreams?.["projects"]?.["bgkit"]).toEqual({
+      remote: "origin",
+      branch: "vibestudio-bridge",
+      autoPush: false,
+    });
   });
 
   it("uses one config-write approval before importing a project that edits vibestudio.yml", async () => {
-    gitMocks.clone.mockClear();
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const cloneRepo = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
@@ -132,7 +123,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      egressProxy: { forwardGitHttp: vi.fn() },
+      cloneRepo,
       approvalQueue,
       grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
@@ -166,9 +157,9 @@ describe("gitInteropService", () => {
   });
 
   it("does not clone when config-write approval is denied", async () => {
-    gitMocks.clone.mockClear();
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const cloneRepo = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
       YAML.stringify({ id: "test" }),
@@ -181,7 +172,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      egressProxy: { forwardGitHttp: vi.fn() },
+      cloneRepo,
       approvalQueue,
       grantStore: grantStore(),
       ...diskConfigPersistence(workspacePath),
@@ -200,15 +191,14 @@ describe("gitInteropService", () => {
       ])
     ).rejects.toThrow("Workspace config edit denied");
 
-    expect(gitMocks.clone).not.toHaveBeenCalled();
+    expect(cloneRepo).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(workspacePath, "projects", "bgkit"))).toBe(false);
   });
 
-  it("keeps the approved config declaration when the clone fails", async () => {
-    gitMocks.clone.mockClear();
-    gitMocks.clone.mockRejectedValueOnce(new Error("network unavailable"));
+  it("keeps the approved config declaration when extension clone fails", async () => {
     const workspacePath = tempWorkspace();
     const workspaceConfig: WorkspaceConfig = { id: "test" };
+    const cloneRepo = vi.fn().mockRejectedValueOnce(new Error("network unavailable"));
     const sourceChanged = vi.fn(async () => undefined);
     fs.writeFileSync(
       path.join(workspacePath, "meta", "vibestudio.yml"),
@@ -219,7 +209,7 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      egressProxy: { forwardGitHttp: vi.fn() },
+      cloneRepo,
       approvalQueue: {
         request: vi.fn(async () => "once" as const),
       } as unknown as ApprovalQueue,
@@ -256,8 +246,8 @@ describe("gitInteropService", () => {
   });
 
   it("imports configured workspace dependencies without prompting for another approval", async () => {
-    gitMocks.clone.mockClear();
     const workspacePath = tempWorkspace();
+    const cloneRepo = vi.fn(async () => undefined);
     const workspaceConfig: WorkspaceConfig = {
       id: "test",
       git: {
@@ -268,6 +258,15 @@ describe("gitInteropService", () => {
                 url: "https://github.com/werg/bgkit.git",
                 branch: "vibestudio-bridge",
               },
+            },
+          },
+        },
+        upstreams: {
+          projects: {
+            bgkit: {
+              remote: "origin",
+              branch: "vibestudio-bridge",
+              autoPush: false,
             },
           },
         },
@@ -289,7 +288,7 @@ describe("gitInteropService", () => {
         invalidate: vi.fn(),
         getSourceTree: vi.fn(async () => ({ children: [] })),
       } as never,
-      egressProxy: { forwardGitHttp: vi.fn() },
+      cloneRepo,
       approvalQueue,
       grantStore: grantStore(),
       onWorkspaceSourceChanged: sourceChanged,
@@ -317,11 +316,7 @@ describe("gitInteropService", () => {
       failed: [],
     });
     expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(gitMocks.clone).toHaveBeenCalledWith({
-      url: "https://github.com/werg/bgkit.git",
-      dir: path.join(workspacePath, "projects", "bgkit"),
-      ref: "vibestudio-bridge",
-    });
+    expect(cloneRepo).toHaveBeenCalledWith(expect.anything(), "projects/bgkit");
     expect(sourceChanged).toHaveBeenCalledWith(
       panelServiceContext(),
       "Import workspace project projects/bgkit"
@@ -338,7 +333,6 @@ describe("gitInteropService", () => {
       workspacePath,
       workspaceConfig,
       treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
-      egressProxy: { forwardGitHttp: vi.fn() },
       workspaceConfigWouldChange: vi.fn(async () => true),
       persistWorkspaceConfig,
     });
@@ -370,5 +364,49 @@ describe("gitInteropService", () => {
       "https://github.com/werg/bgkit.git"
     );
     expect(fs.existsSync(projectedConfigPath)).toBe(false);
+  });
+
+  it("removing a declared remote also removes upstream tracking that points at it", async () => {
+    const workspacePath = tempWorkspace();
+    const workspaceConfig: WorkspaceConfig = {
+      id: "test",
+      git: {
+        remotes: {
+          panels: {
+            notes: {
+              origin: {
+                url: "https://github.com/werg/notes.git",
+                branch: "main",
+              },
+            },
+          },
+        },
+        upstreams: {
+          panels: {
+            notes: {
+              remote: "origin",
+              branch: "main",
+              autoPush: false,
+            },
+          },
+        },
+      },
+    };
+    fs.writeFileSync(
+      path.join(workspacePath, "meta", "vibestudio.yml"),
+      YAML.stringify(workspaceConfig),
+      "utf-8"
+    );
+    const service = createGitInteropService({
+      workspacePath,
+      workspaceConfig,
+      treeScanner: { invalidate: vi.fn(), getSourceTree: vi.fn() } as never,
+      ...diskConfigPersistence(workspacePath),
+    });
+
+    await service.handler(serviceContext(), "removeSharedRemote", ["panels/notes", "origin"]);
+
+    expect(workspaceConfig.git?.remotes?.["panels"]?.["notes"]).toBeUndefined();
+    expect(workspaceConfig.git?.upstreams?.["panels"]?.["notes"]).toBeUndefined();
   });
 });

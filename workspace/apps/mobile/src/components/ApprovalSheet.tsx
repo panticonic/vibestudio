@@ -39,6 +39,7 @@ import type {
   PendingUnitBatchApproval,
   PendingUserlandApproval,
   UserlandApprovalOption,
+  ApprovalRequesterKind,
 } from "@vibestudio/shared/approvals";
 import {
   parseApprovalMarkdown,
@@ -108,7 +109,7 @@ interface CallerInfo {
   /** Caller kind, formatted for display ("Panel" / "Worker" / "Service"). */
   kindLabel: string;
   /** Caller kind as accepted by the approval payload. */
-  kind: "panel" | "app" | "worker" | "do" | "system";
+  kind: ApprovalRequesterKind;
   /** Set when this caller refers to a panel that exists in the live tree. */
   panelId?: string;
   /** Truncated id, retained for the expandable details panel. */
@@ -1513,16 +1514,18 @@ function StandardActions({
           onPress={() => onChoose("once")}
           testID="approval-action-once"
         />
-        <DecisionButton
-          label={copy.version.label}
-          description={copy.version.description}
-          variant={isSevereCapability ? "dangerPrimary" : "primary"}
-          disabled={busy}
-          loading={pendingAction === "version"}
-          icon={isSevereCapability ? AlertTriangle : CheckCircle2}
-          onPress={() => onChoose("version")}
-          testID="approval-action-version"
-        />
+        {copy.version && (
+          <DecisionButton
+            label={copy.version.label}
+            description={copy.version.description}
+            variant={isSevereCapability ? "dangerPrimary" : "primary"}
+            disabled={busy}
+            loading={pendingAction === "version"}
+            icon={isSevereCapability ? AlertTriangle : CheckCircle2}
+            onPress={() => onChoose("version")}
+            testID="approval-action-version"
+          />
+        )}
         <DecisionButton
           label="Deny"
           description={copy.denyDescription}
@@ -1535,18 +1538,22 @@ function StandardActions({
         />
       </View>
       <View style={styles.actionRow}>
-        {SECONDARY_GRANT_DECISIONS.map((decision) => (
-          <DecisionButton
-            key={decision}
-            label={copy[decision].label}
-            description={copy[decision].description}
-            variant="outline"
-            disabled={busy}
-            loading={pendingAction === decision}
-            onPress={() => onChoose(decision)}
-            testID={`approval-action-${decision}`}
-          />
-        ))}
+        {SECONDARY_GRANT_DECISIONS.map((decision) => {
+          const decisionCopy = copy[decision];
+          if (!decisionCopy) return null;
+          return (
+            <DecisionButton
+              key={decision}
+              label={decisionCopy.label}
+              description={decisionCopy.description}
+              variant="outline"
+              disabled={busy}
+              loading={pendingAction === decision}
+              onPress={() => onChoose(decision)}
+              testID={`approval-action-${decision}`}
+            />
+          );
+        })}
       </View>
     </View>
   );

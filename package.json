@@ -137,6 +137,7 @@
     "@ghostery/adblocker": "^2.13.4",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@vibestudio/browser-data": "workspace:*",
+    "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",
     "@vibestudio/durable": "workspace:*",
     "@vibestudio/env-paths": "workspace:*",

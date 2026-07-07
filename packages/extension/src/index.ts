@@ -1,5 +1,6 @@
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
+import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
 import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
@@ -21,7 +22,7 @@ export interface ExtensionInvocation {
   };
   chainCaller?: {
     callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do";
+    callerKind: CodeIdentityCallerKind;
     repoPath: string;
     effectiveVersion: string;
     contextId?: string;
@@ -34,11 +35,20 @@ export interface UserlandApprovalRequest {
   summary?: string;
   warning?: string;
   details?: Array<{ label: string; value: string; format?: "plain" | "markdown" | "code" }>;
-  positiveEvidence?: Array<{ label: string; value: string; format?: "plain" | "markdown" | "code" }>;
+  positiveEvidence?: Array<{
+    label: string;
+    value: string;
+    format?: "plain" | "markdown" | "code";
+  }>;
   severity?: "standard" | "dangerous";
   defaultAction?: "allow" | "deny";
   promptOptions?: "scoped" | "choices";
-  options?: Array<{ value: string; label: string; description?: string; tone?: "primary" | "danger" | "neutral" }>;
+  options?: Array<{
+    value: string;
+    label: string;
+    description?: string;
+    tone?: "primary" | "danger" | "neutral";
+  }>;
 }
 
 export type UserlandApprovalChoice =
@@ -89,7 +99,7 @@ export interface ExtensionsClient {
    */
   use<K extends ExtensionName>(
     name: K,
-    options?: { streamingMethods?: Iterable<string> },
+    options?: { streamingMethods?: Iterable<string> }
   ): WorkspaceExtensions[K];
   on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
   list(): Promise<RegistryEntry[]>;
@@ -130,7 +140,7 @@ const PROMISE_MISUSE_PROPS = new Set<PropertyKey>(["catch", "finally"]);
 /** Typed `extensions.*` client over a `call(target, method, args)` transport. */
 function createExtensionsServiceClient(rpc: Pick<ExtensionsClientRpc, "call">) {
   return createTypedServiceClient("extensions", extensionsMethods, (service, method, args) =>
-    rpc.call("main", `${service}.${method}`, args),
+    rpc.call("main", `${service}.${method}`, args)
   );
 }
 
@@ -143,7 +153,7 @@ function createExtensionsServiceClient(rpc: Pick<ExtensionsClientRpc, "call">) {
 export function createExtensionProxy<T extends object>(
   rpc: Pick<ExtensionsClientRpc, "call" | "stream">,
   name: string,
-  resolveStreaming: (method: string) => boolean | Promise<boolean>,
+  resolveStreaming: (method: string) => boolean | Promise<boolean>
 ): T {
   const extensionsService = createExtensionsServiceClient(rpc);
   return new Proxy(Object.create(null), {
@@ -153,10 +163,10 @@ export function createExtensionProxy<T extends object>(
         return () => {
           throw new Error(
             `extensions.use(${JSON.stringify(
-              name,
+              name
             )}) is synchronous and returns an extension method proxy. ` +
               `Call an extension method and catch that Promise instead, e.g. ` +
-              `extensions.use(${JSON.stringify(name)}).method(...).catch(...).`,
+              `extensions.use(${JSON.stringify(name)}).method(...).catch(...).`
           );
         };
       }
@@ -203,7 +213,9 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
       return createExtensionProxy(
         rpc,
         name,
-        override ? (method) => override.has(method) : (method) => declaredStreaming(name).then((s) => s.has(method)),
+        override
+          ? (method) => override.has(method)
+          : (method) => declaredStreaming(name).then((s) => s.has(method))
       ) as WorkspaceExtensions[typeof name];
     },
     on(name, event, cb) {
@@ -237,13 +249,13 @@ export interface ExtensionFileHandle {
     buffer: Uint8Array,
     offset: number,
     length: number,
-    position: number | null,
+    position: number | null
   ): Promise<{ bytesRead: number; buffer: Uint8Array }>;
   write(
     buffer: Uint8Array,
     offset?: number,
     length?: number,
-    position?: number | null,
+    position?: number | null
   ): Promise<{ bytesWritten: number; buffer: Uint8Array }>;
   close(): Promise<void>;
   stat(): Promise<ExtensionFileStats>;
@@ -308,7 +320,12 @@ export interface ExtensionWorkspaceLike {
 }
 
 export interface ExtensionNotificationsLike {
-  show(notification: { id?: string; type?: string; title?: string; message?: string }): Promise<string>;
+  show(notification: {
+    id?: string;
+    type?: string;
+    title?: string;
+    message?: string;
+  }): Promise<string>;
   dismiss(id: string): Promise<void>;
 }
 
@@ -325,7 +342,12 @@ export interface ExtensionRpcLike {
   /** Call any unified RPC target, including `main`, `worker:*`, and `do:*`. */
   call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
   /** Open a streaming RPC call to any unified RPC target. */
-  stream(targetId: string, method: string, args: unknown[], options?: { signal?: AbortSignal }): Promise<Response>;
+  stream(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: { signal?: AbortSignal }
+  ): Promise<Response>;
   /** Subscribe to host-delivered events where supported by the runtime. */
   on(eventName: string, cb: (event: { payload: unknown }) => void): () => void;
 }

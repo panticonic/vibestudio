@@ -19,7 +19,7 @@ export const PRINCIPAL_KIND_REGISTRY = {
   },
   extension: {
     callerKind: "extension",
-    codeIdentity: false,
+    codeIdentity: true,
   },
   shell: {
     callerKind: "shell",

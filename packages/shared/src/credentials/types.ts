@@ -134,7 +134,14 @@ export interface StoreUrlBoundCredentialRequest {
   injection: CredentialInjection;
   bindings?: CredentialBinding[];
   material: {
-    type: "bearer-token" | "api-key" | "oauth1-token" | "cookie-session" | "saml-session" | "aws-sigv4" | "ssh-key";
+    type:
+      | "bearer-token"
+      | "api-key"
+      | "oauth1-token"
+      | "cookie-session"
+      | "saml-session"
+      | "aws-sigv4"
+      | "ssh-key";
     token: string;
   };
   accountIdentity?: Partial<AccountIdentity>;
@@ -179,7 +186,11 @@ export interface OAuthStoredClientSpec {
   revocationUrl?: string;
 }
 
-export type OAuthTokenAuthMethod = "none" | "client_secret_post" | "client_secret_basic" | "private_key_jwt";
+export type OAuthTokenAuthMethod =
+  | "none"
+  | "client_secret_post"
+  | "client_secret_basic"
+  | "private_key_jwt";
 
 export interface OAuth2AuthCodePkceFlowSpec {
   type: "oauth2-auth-code-pkce";
@@ -499,6 +510,13 @@ export interface ProxyGitHttpRequest {
   headers?: Record<string, string>;
   bodyBase64?: string;
   credentialId?: string;
+  gitIntent?: {
+    force: boolean;
+    overwrites?: {
+      count: number;
+      commits: Array<{ sha: string; summary: string }>;
+    };
+  };
 }
 
 export interface ProxyGitHttpResponse {
@@ -650,11 +668,14 @@ export interface AuditEntry {
 }
 
 export interface IntegrationManifest {
-  credentials?: Record<string, {
-    label: string;
-    audience: UrlAudience[];
-    injection: CredentialInjection;
-  }>;
+  credentials?: Record<
+    string,
+    {
+      label: string;
+      audience: UrlAudience[];
+      injection: CredentialInjection;
+    }
+  >;
   endpoints?: Record<string, EndpointDeclaration[]>;
 }
 

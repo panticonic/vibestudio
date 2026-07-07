@@ -7,6 +7,7 @@ import { extensionsMethods } from "@vibestudio/shared/serviceSchemas/extensions"
 import {
   ServiceError,
   type ServiceContext,
+  type VerifiedCodeIdentity,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -160,7 +161,7 @@ interface ApprovalQueueLike {
       | {
           kind: "capability";
           callerId: string;
-          callerKind: "panel" | "app" | "worker" | "do";
+          callerKind: "panel" | "app" | "worker" | "do" | "extension";
           repoPath: string;
           effectiveVersion: string;
           capability: string;
@@ -173,7 +174,7 @@ interface ApprovalQueueLike {
       | {
           kind: "unit-batch";
           callerId: string;
-          callerKind: "panel" | "app" | "worker" | "do" | "system";
+          callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
           repoPath: string;
           effectiveVersion: string;
           dedupKey?: string | null;
@@ -711,6 +712,17 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         | (ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller })
         | undefined) ?? null
     );
+  }
+
+  resolveCodeIdentity(extensionName: string): VerifiedCodeIdentity | null {
+    const entry = this.registry.get(extensionName);
+    if (!entry?.activeBundleKey || !entry.activeEv) return null;
+    return {
+      callerId: entry.name,
+      callerKind: "extension",
+      repoPath: entry.source.repo,
+      effectiveVersion: entry.activeEv,
+    };
   }
 
   private createTrackedInvocation(
