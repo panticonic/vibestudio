@@ -3,13 +3,16 @@
  */
 
 import { z } from "zod";
-import type { MethodAccessDescriptor } from "../servicePolicy.js";
+import type { MethodAccessDescriptor, ServicePolicy } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
 // Access descriptors shared across the auth method groups. These touch device
 // pairing/credentials, so even reads are connection-management 'admin'.
 const AUTH_READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
+};
+const AUTH_CONNECTION_INFO_POLICY: ServicePolicy = {
+  allowed: ["server", "shell", "app", "panel", "worker", "do", "extension", "agent"],
 };
 const AUTH_ADMIN_READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "admin",
@@ -77,6 +80,7 @@ export const authMethods = defineServiceMethods({
       "Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace.",
     args: z.tuple([]),
     returns: ConnectionInfoResponseSchema,
+    policy: AUTH_CONNECTION_INFO_POLICY,
     access: AUTH_READ_ACCESS,
   },
   createPairingInvite: {

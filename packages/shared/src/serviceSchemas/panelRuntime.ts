@@ -11,7 +11,7 @@ import type {
 } from "../panel/panelLease.js";
 import { asPanelEntityId, asPanelSlotId } from "../panel/ids.js";
 import type { SchemaCoversType } from "../schemaTypeGuard.js";
-import type { MethodAccessDescriptor } from "../servicePolicy.js";
+import type { MethodAccessDescriptor, ServicePolicy } from "../servicePolicy.js";
 import { defineServiceMethods } from "../typedServiceClient.js";
 
 // Access descriptors shared across the read/write method groups. `callers` is
@@ -19,6 +19,9 @@ import { defineServiceMethods } from "../typedServiceClient.js";
 // add doc/safety metadata.
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
+};
+const USERLAND_READ_POLICY: ServicePolicy = {
+  allowed: ["shell", "app", "server", "panel", "worker", "do"],
 };
 const REGISTER_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
@@ -152,6 +155,7 @@ export const panelRuntimeMethods = defineServiceMethods({
     description: "Get the current lease snapshot (version + all active panel runtime leases).",
     args: z.tuple([]),
     returns: runtimeLeaseSnapshotSchema,
+    policy: USERLAND_READ_POLICY,
     access: READ_ACCESS,
   },
   acquire: {

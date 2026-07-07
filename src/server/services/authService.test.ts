@@ -355,6 +355,49 @@ describe("auth service device credentials", () => {
     ).rejects.toThrow(/connection-management/);
   });
 
+  it("lets userland callers read connection info without widening device admin methods", async () => {
+    const authService = createAuthService({
+      tokenManager: new TokenManager(),
+      deviceAuthStore: new DeviceAuthStore(
+        path.join(
+          fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-auth-userland-")),
+          "devices.json"
+        )
+      ),
+      getServerBootId: () => "boot_userland",
+      getWorkspaceId: () => "workspace_userland",
+      getConnectionInfo: () => ({
+        serverUrl: "http://127.0.0.1:3030",
+        protocol: "http",
+        externalHost: "127.0.0.1",
+        gatewayPort: 3030,
+      }),
+    });
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(authService.definition);
+    dispatcher.markInitialized();
+
+    for (const kind of ["panel", "worker", "do"] as const) {
+      await expect(
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller(`${kind}:test`, kind) },
+          "auth",
+          "getConnectionInfo",
+          []
+        )
+      ).resolves.toMatchObject({ callerKind: kind, workspaceId: "workspace_userland" });
+    }
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("panel:test", "panel") },
+        "auth",
+        "listDevices",
+        []
+      )
+    ).rejects.toThrow(/not accessible to panel callers/);
+  });
+
   async function postJson<T>(
     pathname: string,
     body: unknown,
