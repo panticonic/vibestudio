@@ -167,7 +167,9 @@
       "completeWorkspaceDependencies": null,
       "importProject": null,
       "removeSharedRemote": null,
-      "setSharedRemote": null
+      "removeUpstream": null,
+      "setSharedRemote": null,
+      "setUpstream": null
     }
   },
   "hostLifecycle": {

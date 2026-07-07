@@ -479,17 +479,19 @@ describe("capabilityPermission", () => {
   });
 
   describe("normalizeCallerKind", () => {
-    it("accepts app, panel, worker, and do caller kinds", () => {
+    it("accepts app, panel, worker, do, and extension caller kinds", () => {
       expect(normalizeCallerKind("app")).toBe("app");
       expect(normalizeCallerKind("panel")).toBe("panel");
       expect(normalizeCallerKind("worker")).toBe("worker");
       expect(normalizeCallerKind("do")).toBe("do");
+      // Extensions are verified principals (minted code identity), so they
+      // participate in capability approvals and grant scoping.
+      expect(normalizeCallerKind("extension")).toBe("extension");
     });
 
-    it("rejects shell, server, and extension caller kinds", () => {
+    it("rejects shell and server caller kinds", () => {
       expect(normalizeCallerKind("shell")).toBeNull();
       expect(normalizeCallerKind("server")).toBeNull();
-      expect(normalizeCallerKind("extension")).toBeNull();
     });
   });
 
