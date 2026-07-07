@@ -1,9 +1,30 @@
-import React, { useCallback, useState } from "react";
-import { Badge, Box, Button, Card, Code, Dialog, DropdownMenu, Flex, IconButton, Text, TextArea } from "@radix-ui/themes";
-import { CopyIcon, CheckIcon, ChatBubbleIcon, ReloadIcon, Cross2Icon, DotsHorizontalIcon } from "@radix-ui/react-icons";
+import React, { useCallback, useContext, useEffect, useState } from "react";
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  Code,
+  Dialog,
+  DropdownMenu,
+  Flex,
+  IconButton,
+  Text,
+  TextArea,
+} from "@radix-ui/themes";
+import {
+  CopyIcon,
+  CheckIcon,
+  ChatBubbleIcon,
+  ReloadIcon,
+  Cross2Icon,
+  DotsHorizontalIcon,
+} from "@radix-ui/react-icons";
 import { CONTENT_TYPE_INLINE_UI, isClientParticipantType } from "@workspace/pubsub";
+import { LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
 import type { Participant } from "@workspace/pubsub";
 import { useOptionalChatContext } from "../context/ChatContext";
+import { ChatInputContext } from "../context/ChatInputContext";
 import { TypingIndicator } from "./TypingIndicator";
 import { MessageContent } from "./MessageContent";
 import { ImageGallery } from "./ImageGallery";
@@ -57,6 +78,50 @@ function errorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
+type ChatCallMethod = (
+  participantId: string,
+  method: string,
+  args: unknown,
+  options?: { timeoutMs?: number; signal?: AbortSignal }
+) => Promise<unknown>;
+
+const PROVIDER_LEVEL_FAILURE_CODES = new Set([
+  "usage_limit_terminal",
+  "quota_exhausted_terminal",
+  "rate_limited_retryable",
+  "provider_overloaded_retryable",
+  "auth_or_credentials",
+  "circuit_breaker_open_terminal",
+  "unknown_retryable",
+]);
+
+function chatCallMethod(chat: Record<string, unknown>): ChatCallMethod | null {
+  return typeof chat["callMethod"] === "function" ? (chat["callMethod"] as ChatCallMethod) : null;
+}
+
+function chatSend(
+  chat: Record<string, unknown>
+): ((content: string, opts?: unknown) => Promise<unknown>) | null {
+  return typeof chat["send"] === "function"
+    ? (chat["send"] as (content: string, opts?: unknown) => Promise<unknown>)
+    : null;
+}
+
+function modelRefFromSettings(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const model = (value as { model?: unknown }).model;
+  if (typeof model === "string") return model;
+  if (model && typeof model === "object") {
+    const nested = (model as { value?: unknown }).value;
+    if (typeof nested === "string") return nested;
+  }
+  return null;
+}
+
+function isProviderLevelFailureCode(code: unknown): boolean {
+  return typeof code === "string" && PROVIDER_LEVEL_FAILURE_CODES.has(code);
+}
+
 /**
  * Individual message card — wrapped in React.memo so it only re-renders
  * when its own message data or relevant callbacks change.
@@ -105,17 +170,86 @@ export const MessageCard = React.memo(function MessageCard({
   const [resumeScheduleState, setResumeScheduleState] = useState<
     "idle" | "scheduling" | "scheduled" | "failed"
   >("idle");
+  const [retryLocalState, setRetryLocalState] = useState<"idle" | "switching" | "ready" | "failed">(
+    "idle"
+  );
+  const [currentAgentModelRef, setCurrentAgentModelRef] = useState<string | null | undefined>(
+    undefined
+  );
+  const inputContext = useContext(ChatInputContext);
+  const callMethod = chatCallMethod(chat);
+  const sendFromChat = chatSend(chat);
+  const providerLevelModelFailure =
+    msg.contentType === "diagnostic" &&
+    msg.diagnostic?.code === "message_failed" &&
+    isProviderLevelFailureCode(msg.diagnostic.failureCode);
+  const currentAgentModelIsLocal =
+    typeof currentAgentModelRef === "string" && currentAgentModelRef.startsWith("local:");
+  const currentAgentModelKnown = currentAgentModelRef !== undefined;
+  const canRetryWithLocal =
+    providerLevelModelFailure &&
+    currentAgentModelKnown &&
+    !currentAgentModelIsLocal &&
+    Boolean(callMethod && (inputContext || sendFromChat));
+
+  useEffect(() => {
+    if (!providerLevelModelFailure || !callMethod) {
+      setCurrentAgentModelRef(undefined);
+      return;
+    }
+    let cancelled = false;
+    setCurrentAgentModelRef(undefined);
+    void callMethod(msg.senderId, "getAgentSettings", {})
+      .then((settings) => {
+        if (!cancelled) setCurrentAgentModelRef(modelRefFromSettings(settings));
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentAgentModelRef(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [callMethod, msg.senderId, providerLevelModelFailure]);
+
+  const handleRetryWithLocalModel = useCallback(async () => {
+    if (!callMethod) return;
+    setRetryLocalState("switching");
+    try {
+      const currentModel = await callMethod(msg.senderId, "getAgentSettings", {})
+        .then(modelRefFromSettings)
+        .catch(() => currentAgentModelRef ?? null);
+      if (!currentModel?.startsWith("local:")) {
+        await callMethod(msg.senderId, "setModel", { model: LOCAL_FALLBACK_MODEL_REF });
+        setCurrentAgentModelRef(LOCAL_FALLBACK_MODEL_REF);
+        if (selfId) {
+          void callMethod(selfId, "persist_agent_model", {
+            participantId: msg.senderId,
+            model: LOCAL_FALLBACK_MODEL_REF,
+          }).catch((err: unknown) => {
+            console.warn("[MessageCard] local model persistence failed:", err);
+          });
+        }
+      }
+      if (inputContext) {
+        inputContext.onInputChange("retry");
+      } else if (sendFromChat) {
+        await sendFromChat("retry", { tier: "primary" });
+      }
+      setRetryLocalState("ready");
+    } catch (err) {
+      console.warn("[MessageCard] Retry with local model failed:", err);
+      setRetryLocalState("failed");
+    }
+  }, [callMethod, currentAgentModelRef, inputContext, msg.senderId, selfId, sendFromChat]);
+
   const handleScheduleResumeAtReset = useCallback(async () => {
     const diagnostic = msg.diagnostic;
-    const callMethod = chat["callMethod"];
-    if (!diagnostic?.messageId || !diagnostic.resetAt || typeof callMethod !== "function") {
+    if (!diagnostic?.messageId || !diagnostic.resetAt || !callMethod) {
       return;
     }
     setResumeScheduleState("scheduling");
     try {
-      const result = await (
-        callMethod as (participantId: string, method: string, args: unknown) => Promise<unknown>
-      )(msg.senderId, "scheduleResumeAtReset", {
+      const result = await callMethod(msg.senderId, "scheduleResumeAtReset", {
         messageId: diagnostic.messageId,
         resetAt: diagnostic.resetAt,
       });
@@ -127,7 +261,7 @@ export const MessageCard = React.memo(function MessageCard({
     } catch {
       setResumeScheduleState("failed");
     }
-  }, [chat, msg.diagnostic, msg.senderId]);
+  }, [callMethod, msg.diagnostic, msg.senderId]);
 
   // Fork/edit affordances read fork state + the outbox editor from context.
   // Read optionally so the card still renders provider-less (tests, standalone
@@ -140,10 +274,13 @@ export const MessageCard = React.memo(function MessageCard({
   const [editMode, setEditMode] = useState<null | "outbox" | "fork">(null);
   const [editText, setEditText] = useState("");
   const [forkError, setForkError] = useState<string | null>(null);
-  const openEdit = useCallback((mode: "outbox" | "fork") => {
-    setEditText(msg.content);
-    setEditMode(mode);
-  }, [msg.content]);
+  const openEdit = useCallback(
+    (mode: "outbox" | "fork") => {
+      setEditText(msg.content);
+      setEditMode(mode);
+    },
+    [msg.content]
+  );
   const forkFromHere = useCallback(() => {
     setForkError(null);
     void forkState?.actions.forkFromMessage(msg).catch((err) => {
@@ -333,6 +470,27 @@ export const MessageCard = React.memo(function MessageCard({
                   </Button>
                 </Flex>
               )}
+              {canRetryWithLocal && (
+                <Flex align="center" gap="2" wrap="wrap">
+                  <Button
+                    size="1"
+                    variant="soft"
+                    color={retryLocalState === "failed" ? "red" : "blue"}
+                    disabled={retryLocalState === "switching" || retryLocalState === "ready"}
+                    onClick={handleRetryWithLocalModel}
+                    title="Switch this agent to the local fallback model and prepare a retry"
+                  >
+                    <ReloadIcon />
+                    {retryLocalState === "switching"
+                      ? "Switching"
+                      : retryLocalState === "ready"
+                        ? "Retry ready"
+                        : retryLocalState === "failed"
+                          ? "Retry local failed"
+                          : "Retry with local model"}
+                  </Button>
+                </Flex>
+              )}
             </Flex>
           </Flex>
         </Card>
@@ -399,6 +557,8 @@ export const MessageCard = React.memo(function MessageCard({
   const hasError = Boolean(msg.error);
   const hasContent = msg.content.length > 0;
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
+  const modelLabel = msg.model?.displayName || msg.model?.ref;
+  const showModelBadge = senderType === "agent" && Boolean(modelLabel);
   // Tier 2 (secondary salience) renders slighter — see styles.css. Absent ⇒ tier 1.
   const isSecondary = msg.tier === "secondary";
   const isSelfAuthored = Boolean(selfId && msg.senderId === selfId);
@@ -408,8 +568,7 @@ export const MessageCard = React.memo(function MessageCard({
   // An unread own message keeps the in-place outbox edit; a READ own message or
   // an agent message can only be forked (the `message.edited` reducer drops
   // edits once a recipient has read the message).
-  const isUnreadOutbox =
-    isSelfAuthored && (!msg.receipts || msg.receipts.aggregate === "pending");
+  const isUnreadOutbox = isSelfAuthored && (!msg.receipts || msg.receipts.aggregate === "pending");
   // Fork/edit menu available only once the message has a durable seq (fork point).
   const canFork = Boolean(forkState) && msg.seq !== undefined && !isStreaming && !msg.pending;
   const showForkMenu = canFork && msg.kind === "message";
@@ -420,10 +579,7 @@ export const MessageCard = React.memo(function MessageCard({
     return (
       <Box
         id={`message-${msg.id}`}
-        className={classNames(
-          "message-row",
-          isClient ? "message-row-client" : "message-row-agent"
-        )}
+        className={classNames("message-row", isClient ? "message-row-client" : "message-row-agent")}
       >
         <Card className="message-card message-card-tombstone">
           <Flex align="center" gap="2">
@@ -468,6 +624,23 @@ export const MessageCard = React.memo(function MessageCard({
                   @{senderInfo.handle}
                 </Text>
               </Box>
+              {showModelBadge && (
+                <Badge
+                  size="1"
+                  variant="soft"
+                  color="gray"
+                  title={modelLabel}
+                  style={{
+                    flexShrink: 1,
+                    maxWidth: 180,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {modelLabel}
+                </Badge>
+              )}
               {/* Copy lives in the header (right after the handle) to keep the
                   card bottom free for content + the delivery badge. */}
               {hasContent && !isStreaming && (
@@ -528,11 +701,11 @@ export const MessageCard = React.memo(function MessageCard({
                     </IconButton>
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Content align="end">
-                    <DropdownMenu.Item onSelect={forkFromHere}>
-                      Fork from here
-                    </DropdownMenu.Item>
+                    <DropdownMenu.Item onSelect={forkFromHere}>Fork from here</DropdownMenu.Item>
                     {isUnreadOutbox ? (
-                      <DropdownMenu.Item onSelect={() => openEdit("outbox")}>Edit</DropdownMenu.Item>
+                      <DropdownMenu.Item onSelect={() => openEdit("outbox")}>
+                        Edit
+                      </DropdownMenu.Item>
                     ) : (
                       <DropdownMenu.Item onSelect={() => openEdit("fork")}>
                         {isSelfAuthored ? "Edit & fork" : "Edit & fork (steer)"}

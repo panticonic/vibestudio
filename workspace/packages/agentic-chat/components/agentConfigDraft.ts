@@ -9,20 +9,24 @@ import type { AgentConfigDraft } from "./AgentConfigForm";
  */
 
 /**
- * Resolve a sensible default model ref: prefer the explicit workspace default,
- * then a recommended+connected model, then any connected model, then any
- * recommended model, then the first model in the catalog.
+ * Resolve a sensible default model ref (design §7.2): prefer the explicit
+ * workspace default, then availability order — recommended+ready, any ready,
+ * recommended+startable, any startable — then any recommended model, then the
+ * first model in the catalog. Availability is the worker-computed truth on
+ * every entry; no panel-side credential heuristics.
  */
 export function pickDefaultModel(
   catalog: ModelCatalog | null,
-  connected: ReadonlySet<string>,
   defaultModelRef?: string | null
 ): string {
   const models = catalog?.models ?? [];
+  const state = (m: (typeof models)[number]) => m.availability?.state ?? "needs-setup";
   return (
     (defaultModelRef && models.some((m) => m.ref === defaultModelRef) ? defaultModelRef : null) ??
-    models.find((m) => m.recommended && connected.has(m.ref))?.ref ??
-    models.find((m) => connected.has(m.ref))?.ref ??
+    models.find((m) => m.recommended && state(m) === "ready")?.ref ??
+    models.find((m) => state(m) === "ready")?.ref ??
+    models.find((m) => m.recommended && state(m) === "startable")?.ref ??
+    models.find((m) => state(m) === "startable")?.ref ??
     models.find((m) => m.recommended)?.ref ??
     models[0]?.ref ??
     ""
@@ -51,7 +55,6 @@ export function draftForAgent(
   agent: AvailableAgent | undefined,
   opts: {
     modelCatalog: ModelCatalog | null;
-    connectedRefs: ReadonlySet<string>;
     defaultModelRef?: string | null;
     /** Saved workspace defaults — layered over the agent manifest defaults so a
      *  freshly-seeded draft matches the saved defaults (the "Save as defaults"
@@ -68,7 +71,7 @@ export function draftForAgent(
     model:
       typeof defaults.model === "string"
         ? defaults.model
-        : pickDefaultModel(opts.modelCatalog, opts.connectedRefs, opts.defaultModelRef),
+        : pickDefaultModel(opts.modelCatalog, opts.defaultModelRef),
     thinkingLevel: ws?.thinkingLevel ?? defaults.thinkingLevel ?? "high",
     approvalLevel: ws?.approvalLevel ?? defaults.approvalLevel,
     respondPolicy: defaults.respondPolicy ?? (opts.showReactiveness ? "mentioned" : undefined),

@@ -70,7 +70,6 @@ interface UseDeferredAgentParams {
   onAddAgent?: (agentId?: string, config?: AgentSubscriptionConfig) => void | Promise<unknown>;
   availableAgents: AvailableAgent[];
   modelCatalog: ModelCatalog | null;
-  connectedModelRefs: string[];
   defaultModelRef?: string | null;
   /** Saved workspace default agent config — seeds the inline config draft. */
   defaultAgentConfig?: DefaultAgentConfig | null;
@@ -101,7 +100,6 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     onAddAgent,
     availableAgents,
     modelCatalog,
-    connectedModelRefs,
     defaultModelRef,
     defaultAgentConfig,
     initialPrompt,
@@ -133,8 +131,6 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   const flushTimerRef = useRef(0);
   const everHadAgentRef = useRef(false);
   const initialPromptEnqueuedRef = useRef(false);
-
-  const connectedRefs = useMemo(() => new Set(connectedModelRefs ?? []), [connectedModelRefs]);
 
   const agentPresent = useMemo(
     () => Object.values(participants).some((p) => isAgentParticipantType(p.metadata.type)),
@@ -180,13 +176,12 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     const agent = availableAgents.find((a) => a.id === agentId) ?? availableAgents[0];
     const seeded = seedDraftForAgent(agent, {
       modelCatalog,
-      connectedRefs,
       defaultModelRef,
       defaultAgentConfig,
       showReactiveness: false,
     });
     if (seeded.model || seeded.handle) setDraft(seeded);
-  }, [agentId, availableAgents, modelCatalog, connectedRefs, defaultModelRef, defaultAgentConfig, draft.model]);
+  }, [agentId, availableAgents, modelCatalog, defaultModelRef, defaultAgentConfig, draft.model]);
 
   const handleSetDraft = useCallback((next: AgentConfigDraft) => {
     draftTouchedRef.current = true;
@@ -203,7 +198,6 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       const agent = availableAgents.find((a) => a.id === id);
       const seeded = seedDraftForAgent(agent, {
         modelCatalog,
-        connectedRefs,
         defaultModelRef,
         defaultAgentConfig,
         showReactiveness: false,
@@ -211,7 +205,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       // Switching type reseeds behavior defaults but keeps a model the user chose.
       setDraft((cur) => ({ ...seeded, model: modelTouchedRef.current ? cur.model : seeded.model }));
     },
-    [availableAgents, modelCatalog, connectedRefs, defaultModelRef, defaultAgentConfig]
+    [availableAgents, modelCatalog, defaultModelRef, defaultAgentConfig]
   );
 
   const cancelQueued = useCallback((id: string) => {

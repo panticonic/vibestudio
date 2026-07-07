@@ -38,7 +38,6 @@ function renderForm(props: Partial<React.ComponentProps<typeof AgentConfigForm>>
     <Theme>
       <AgentConfigForm
         catalog={catalog}
-        connectedRefs={new Set(["prov:model-a", "prov:model-b"])}
         value={value}
         onChange={onChange}
         {...props}

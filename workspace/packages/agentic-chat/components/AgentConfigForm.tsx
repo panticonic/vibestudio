@@ -32,7 +32,6 @@ export interface AgentConfigDraft {
 
 export interface AgentConfigFormProps {
   catalog: ModelCatalog | null;
-  connectedRefs: ReadonlySet<string>;
   value: AgentConfigDraft;
   onChange: (next: AgentConfigDraft) => void;
   /** False in edit mode — model is read-only (switching model needs a restart). */
@@ -48,6 +47,8 @@ export interface AgentConfigFormProps {
   showHandle?: boolean;
   /** Other participants, for the "specific people" respond policy. */
   participants?: Array<{ id: string; label: string }>;
+  /** Deep-link a local model's error dot to the Local Models panel log (item 6). */
+  onOpenServerLog?: (server: "utility" | "main") => void;
 }
 
 const THINKING_LABELS: Record<AgentThinkingLevel, string> = {
@@ -89,7 +90,6 @@ function Field({
 
 export function AgentConfigForm({
   catalog,
-  connectedRefs,
   value,
   onChange,
   modelEditable = true,
@@ -98,6 +98,7 @@ export function AgentConfigForm({
   showReactiveness = false,
   showHandle = false,
   participants = [],
+  onOpenServerLog,
 }: AgentConfigFormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [savingDefault, setSavingDefault] = useState(false);
@@ -150,9 +151,9 @@ export function AgentConfigForm({
         {modelEditable ? (
           <ModelPicker
             catalog={catalog}
-            connectedRefs={connectedRefs}
             value={value.model}
             onChange={(ref) => set({ model: ref })}
+            onOpenServerLog={onOpenServerLog}
           />
         ) : (
           <Flex align="center" gap="2">

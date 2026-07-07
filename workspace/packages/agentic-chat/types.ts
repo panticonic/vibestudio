@@ -453,8 +453,6 @@ export interface ChatContextValue {
    *  workspace default — the ONLY path that writes it. Wired to the "Save as
    *  defaults" control in the agent config UI. */
   onSaveDefaults?: (config: DefaultAgentConfig) => Promise<void> | void;
-  /** Model refs ("provider:modelId") with a usable credential (panel-scoped). */
-  connectedModelRefs?: string[];
   onRemoveAgent?: (handle: string) => void;
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => void;
@@ -462,6 +460,9 @@ export interface ChatContextValue {
   onNewConversation?: () => void;
   /** Launch Claude Code as a linked agent in this conversation (§4.3). */
   onOpenClaudeCode?: (channelId: string) => Promise<void> | void;
+  /** Open the Local Models panel focused on a server's log (item 6) — wired
+   *  from a local model's red error dot in the picker. */
+  onOpenLocalModelsLog?: (server: "utility" | "main") => void;
 
   // Tool approval (optional)
   toolApproval?: ToolApprovalProps;

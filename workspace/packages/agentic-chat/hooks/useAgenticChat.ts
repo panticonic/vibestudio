@@ -1329,12 +1329,12 @@ Use package imports available to inline_ui plus relative imports for local helpe
   const defaultModelRef = actions?.defaultModelRef;
   const defaultAgentConfig = actions?.defaultAgentConfig;
   const onSaveDefaults = actions?.onSaveDefaults;
-  const connectedModelRefs = actions?.connectedModelRefs;
   const onRemoveAgent = actions?.onRemoveAgent ? handleRemoveAgent : undefined;
   const onFocusPanel = actions?.onFocusPanel;
   const onReloadPanel = actions?.onReloadPanel;
   const onNewConversation = actions?.onNewConversation;
   const onOpenClaudeCode = actions?.onOpenClaudeCode;
+  const onOpenLocalModelsLog = actions?.onOpenLocalModelsLog;
 
   // --- Deferred first-agent flow (inline config + pre-send delivery queue) ---
   const clearComposer = useCallback(() => {
@@ -1352,7 +1352,6 @@ Use package imports available to inline_ui plus relative imports for local helpe
     onAddAgent,
     availableAgents: availableAgents ?? [],
     modelCatalog: modelCatalog ?? null,
-    connectedModelRefs: connectedModelRefs ?? [],
     defaultModelRef,
     defaultAgentConfig,
     initialPrompt,
@@ -1436,12 +1435,12 @@ Use package imports available to inline_ui plus relative imports for local helpe
       defaultModelRef,
       defaultAgentConfig,
       onSaveDefaults,
-      connectedModelRefs,
       onRemoveAgent,
       onFocusPanel,
       onReloadPanel,
       onNewConversation,
       onOpenClaudeCode,
+      onOpenLocalModelsLog,
       toolApproval: chatTools.toolApprovalValue,
       // Fork UI is enabled only when the panel wired navigation handlers.
       forkState: forkNav ? forkState : undefined,
@@ -1509,12 +1508,12 @@ Use package imports available to inline_ui plus relative imports for local helpe
       defaultModelRef,
       defaultAgentConfig,
       onSaveDefaults,
-      connectedModelRefs,
       onRemoveAgent,
       onFocusPanel,
       onReloadPanel,
       onNewConversation,
       onOpenClaudeCode,
+      onOpenLocalModelsLog,
       chatTools.toolApprovalValue,
       forkNav,
       forkState,

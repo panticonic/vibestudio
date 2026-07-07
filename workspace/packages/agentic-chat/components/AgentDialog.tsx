@@ -38,14 +38,12 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     defaultModelRef,
     defaultAgentConfig,
     onSaveDefaults,
-    connectedModelRefs,
     onAddAgent,
     onReplaceAgent,
     onConnectProvider,
     onCallMethodResult,
+    onOpenLocalModelsLog,
   } = ctx;
-
-  const connectedRefs = useMemo(() => new Set(connectedModelRefs ?? []), [connectedModelRefs]);
 
   const agentParticipants = useMemo(
     () => Object.values(participants).filter((p) => isAgentParticipantType(p.metadata.type)),
@@ -87,12 +85,11 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     (agent = availableAgents[0]): AgentConfigDraft =>
       seedDraftForAgent(agent, {
         modelCatalog,
-        connectedRefs,
         defaultModelRef,
         defaultAgentConfig,
         showReactiveness,
       }),
-    [availableAgents, connectedRefs, defaultModelRef, defaultAgentConfig, modelCatalog, showReactiveness]
+    [availableAgents, defaultModelRef, defaultAgentConfig, modelCatalog, showReactiveness]
   );
 
   // Initialize when the dialog opens.
@@ -164,8 +161,12 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     () => modelCatalog?.models.find((m) => m.ref === draft.model) ?? null,
     [modelCatalog, draft.model]
   );
+  // Availability is the worker-computed truth (design §7.1) — a model that
+  // "needs setup" and is connectable gets the sign-in nudge.
   const needsConnect =
-    !!selectedModel && !connectedRefs.has(selectedModel.ref) && selectedModel.connectable;
+    !!selectedModel &&
+    selectedModel.availability?.state === "needs-setup" &&
+    selectedModel.connectable;
 
   const verb = mode === "switch" ? "Switch" : mode === "edit" ? "Save" : "Add";
   const title = mode === "switch" ? "Switch agent" : mode === "edit" ? "Agent settings" : "Add agent";
@@ -184,11 +185,13 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
       }
       const config = draftToConfig(draft);
       if (mode === "add") {
-        onAddAgent?.(agentId, config);
+        if (!onAddAgent) throw new Error("Adding agents is not available in this host.");
+        onAddAgent(agentId, config);
       } else if (mode === "switch" && targetParticipantId) {
+        if (!onReplaceAgent) throw new Error("Agent switching is not available in this host.");
         // Reuse the existing handle for a stable identity.
         config["handle"] = (targetParticipant?.metadata.handle as string) ?? config["handle"];
-        await onReplaceAgent?.(targetParticipantId, agentId, config);
+        await onReplaceAgent(targetParticipantId, agentId, config);
       } else if (mode === "edit" && targetParticipantId) {
         // Apply live settings (model is handled by "Restart with this model").
         await onCallMethodResult(targetParticipantId, "setApprovalLevel", {
@@ -229,6 +232,10 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
 
   const restartWithModel = useCallback(async () => {
     if (!targetParticipantId) return;
+    if (!onReplaceAgent) {
+      setError("Agent switching is not available in this host.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -242,7 +249,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
       }
       const config = draftToConfig(draft);
       config["handle"] = (targetParticipant?.metadata.handle as string) ?? config["handle"];
-      await onReplaceAgent?.(targetParticipantId, undefined, config);
+      await onReplaceAgent(targetParticipantId, undefined, config);
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -316,7 +323,6 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
           <Box>
             <AgentConfigForm
               catalog={modelCatalog}
-              connectedRefs={connectedRefs}
               value={draft}
               onChange={(next) => {
                 setDraftTouched(true);
@@ -329,6 +335,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
               showReactiveness={showReactiveness}
               showHandle={showHandle}
               participants={otherParticipants}
+              onOpenServerLog={onOpenLocalModelsLog}
             />
 
             {mode === "edit" && (
@@ -369,7 +376,9 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
                 {selectedModel.provider} isn't connected yet — you'll be asked to sign in.
               </Text>
             )}
-            {selectedModel && !selectedModel.connectable && !connectedRefs.has(selectedModel.ref) && (
+            {selectedModel &&
+              !selectedModel.connectable &&
+              selectedModel.availability?.state === "needs-setup" && (
               <Text size="1" color="gray" as="p" mt="2">
                 Connecting {selectedModel.provider} isn't supported here yet.
               </Text>

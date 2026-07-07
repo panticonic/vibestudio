@@ -34,6 +34,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
 }));
 
 import type { ChatMessage, InvocationCardPayload } from "@workspace/agentic-core";
+import { LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
 import { MessageList } from "./MessageList.js";
 import { SubagentRunCard } from "./SubagentRunCard.js";
 
@@ -276,6 +277,108 @@ describe("MessageList typing indicators (roster-based)", () => {
       });
     });
     expect(await screen.findByText("Scheduled")).toBeTruthy();
+  });
+
+  it("switches the live agent to the local model before persisting and sending retry", async () => {
+    const calls: Array<{ participantId: string; method: string; args: unknown }> = [];
+    const callMethod = vi.fn(async (participantId: string, method: string, args: unknown) => {
+      calls.push({ participantId, method, args });
+      if (method === "getAgentSettings") return { model: "openai-codex:gpt-5.3" };
+      return { ok: true };
+    });
+    const send = vi.fn(async () => undefined);
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "diagnostic:msg-provider-failed",
+            senderId: "agent-1",
+            contentType: "diagnostic",
+            kind: "system",
+            content: "The provider failed.",
+            complete: true,
+            diagnostic: {
+              messageId: "msg-provider-failed",
+              code: "message_failed",
+              failureCode: "provider_overloaded_retryable",
+              severity: "error",
+              title: "Provider overloaded",
+              detail: "The provider failed.",
+            },
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+        chat: { callMethod, send },
+      } as never)
+    );
+
+    const retryButton = await screen.findByRole("button", { name: /retry with local model/i });
+    calls.length = 0;
+
+    fireEvent.click(retryButton);
+
+    await waitFor(() => expect(send).toHaveBeenCalledWith("retry", { tier: "primary" }));
+    expect(calls.map((call) => [call.participantId, call.method])).toEqual([
+      ["agent-1", "getAgentSettings"],
+      ["agent-1", "setModel"],
+      ["user-1", "persist_agent_model"],
+    ]);
+    expect(calls[1]?.args).toEqual({ model: LOCAL_FALLBACK_MODEL_REF });
+    expect(calls[2]?.args).toEqual({
+      participantId: "agent-1",
+      model: LOCAL_FALLBACK_MODEL_REF,
+    });
+  });
+
+  it("does not mark local retry ready or send retry when live model switching fails", async () => {
+    const calls: Array<{ participantId: string; method: string; args: unknown }> = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const callMethod = vi.fn(async (participantId: string, method: string, args: unknown) => {
+      calls.push({ participantId, method, args });
+      if (method === "getAgentSettings") return { model: "openai-codex:gpt-5.3" };
+      if (method === "setModel") throw new Error("switch failed");
+      return { ok: true };
+    });
+    const send = vi.fn(async () => undefined);
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "diagnostic:msg-provider-failed-setmodel",
+            senderId: "agent-1",
+            contentType: "diagnostic",
+            kind: "system",
+            content: "The provider failed.",
+            complete: true,
+            diagnostic: {
+              messageId: "msg-provider-failed-setmodel",
+              code: "message_failed",
+              failureCode: "provider_overloaded_retryable",
+              severity: "error",
+              title: "Provider overloaded",
+              detail: "The provider failed.",
+            },
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+        chat: { callMethod, send },
+      } as never)
+    );
+
+    const retryButton = await screen.findByRole("button", { name: /retry with local model/i });
+    calls.length = 0;
+
+    fireEvent.click(retryButton);
+
+    expect(await screen.findByRole("button", { name: /retry local failed/i })).toBeTruthy();
+    expect(send).not.toHaveBeenCalled();
+    expect(calls.some((call) => call.method === "persist_agent_model")).toBe(false);
+    expect(screen.queryByText("Retry ready")).toBeNull();
+    warn.mockRestore();
   });
 
   it("shows a cancel control for a pending channel-method invocation (transportCallId)", () => {
@@ -760,9 +863,7 @@ describe("SubagentRunCard", () => {
     // Per-entry relative timestamps from the structured feed.
     expect(screen.getByText("5m")).toBeTruthy();
     expect(screen.getByText("2m")).toBeTruthy();
-    expect(
-      screen.getByText("Pilot-process one Google Drive PDF")
-    ).toBeTruthy();
+    expect(screen.getByText("Pilot-process one Google Drive PDF")).toBeTruthy();
     expect(
       document.body.querySelector(".subagent-description .message-prose .rt-r-weight-bold")
     ).toBeTruthy();

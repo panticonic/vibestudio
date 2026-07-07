@@ -4,6 +4,7 @@ import { Flex, Text } from "@radix-ui/themes";
 import { useChatContext } from "../context/ChatContext";
 import { useChatInputContext } from "../context/ChatInputContext";
 import { AgentSetupInline } from "./AgentSetupInline";
+import { FirstRunCard } from "./FirstRunCard";
 import { LinkedPermissionCards } from "./LinkedPermissionCards";
 import { MessageList } from "./MessageList";
 import { deriveActiveOutbox } from "./Outbox";
@@ -65,20 +66,25 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     return hiddenIds.size > 0 ? messages.filter((m) => !hiddenIds.has(m.id)) : messages;
   }, [connected, messages, selfId, participants]);
 
-  // While the spawned agent is starting, replace the "send a message" hint with
-  // an accurate status (the pre-send queue below the composer shows the spinner
-  // + the queued messages themselves).
-  const launchingEmptyState = useMemo<ReactNode>(
-    () =>
-      deferredAgent?.launching ? (
+  // Empty-transcript surface. While the spawned agent is starting, show an
+  // accurate status (the pre-send queue below the composer shows the spinner
+  // + the queued messages themselves). Otherwise, once replay has settled
+  // (`connected`) on a genuinely empty channel, show the first-run narrative
+  // card (item 9) — gating on `connected` avoids flashing it mid-replay for an
+  // existing conversation. MessageList only mounts this when there are zero
+  // items, so it self-hides the moment the first message lands.
+  const emptyState = useMemo<ReactNode>(() => {
+    if (deferredAgent?.launching) {
+      return (
         <Flex role="status" aria-live="polite" align="center" justify="center" style={{ height: "100%" }}>
           <Text color="gray" size="2">
             Preparing your agent…
           </Text>
         </Flex>
-      ) : undefined,
-    [deferredAgent?.launching]
-  );
+      );
+    }
+    return connected ? <FirstRunCard /> : undefined;
+  }, [deferredAgent?.launching, connected]);
 
   // Before the first agent exists, the message canvas hosts the inline setup
   // (armed config) instead of an empty transcript.
@@ -96,7 +102,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
       <SignalPills client={clientRef.current} />
       <LinkedPermissionCards client={clientRef.current} chat={chat} />
       <MessageList
-        emptyState={launchingEmptyState}
+        emptyState={emptyState}
         messages={transcriptMessages}
         participants={participants}
         selfId={selfId}

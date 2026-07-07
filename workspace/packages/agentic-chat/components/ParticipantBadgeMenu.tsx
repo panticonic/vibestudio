@@ -51,7 +51,9 @@ export function ParticipantBadgeMenu({
 
   // Get methods marked as menu items
   const menuMethods = useMemo(() => {
-    const metadata = participant.metadata as ChatParticipantMetadata & { methods?: MethodAdvertisement[] };
+    const metadata = participant.metadata as ChatParticipantMetadata & {
+      methods?: MethodAdvertisement[];
+    };
     const allMethods = metadata.methods ?? [];
     return allMethods.filter((m) => m.menu === true);
   }, [participant.metadata]);
@@ -88,7 +90,18 @@ export function ParticipantBadgeMenu({
 
   // Extract context usage from metadata (if available)
   const contextUsage = participant.metadata.contextUsage as ContextWindowUsage | undefined;
-  const hasContextUsage = contextUsage && (contextUsage.usagePercent !== undefined || contextUsage.session?.inputTokens);
+  const hasContextUsage =
+    contextUsage && (contextUsage.usagePercent !== undefined || contextUsage.session?.inputTokens);
+  const contextPressureWarning =
+    contextUsage?.usagePercent !== undefined && contextUsage.usagePercent >= 85 ? (
+      <Text
+        size="1"
+        color="amber"
+        style={{ marginLeft: 4, whiteSpace: "nowrap", fontSize: "10px" }}
+      >
+        Context almost full; older turns may be dropped.
+      </Text>
+    ) : null;
 
   // Render context usage ring or fallback to pulsing dot when active
   const statusIndicator = hasContextUsage ? (
@@ -142,8 +155,7 @@ export function ParticipantBadgeMenu({
             borderRadius: "50%",
             marginRight: 4,
             verticalAlign: "middle",
-            background:
-              linkedAttachment === "attached" ? "var(--green-9)" : "var(--gray-8)",
+            background: linkedAttachment === "attached" ? "var(--green-9)" : "var(--gray-8)",
           }}
         />
       ) : null}
@@ -191,14 +203,17 @@ export function ParticipantBadgeMenu({
   const showSettings = isAgent;
   if (!hasMenuItems && !showDebugConsole && !showRemove && !showSettings) {
     return (
-      <span style={{ position: "relative" }}>
-        <Badge color={color}>
-          @{participant.metadata.handle}
-          {linkedKindIndicator}
-          {planModeIndicator}
-          {statusIndicator}
-        </Badge>
-        {modelSubtitle}
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        <span style={{ position: "relative" }}>
+          <Badge color={color}>
+            @{participant.metadata.handle}
+            {linkedKindIndicator}
+            {planModeIndicator}
+            {statusIndicator}
+          </Badge>
+          {modelSubtitle}
+        </span>
+        {contextPressureWarning}
       </span>
     );
   }
@@ -206,76 +221,79 @@ export function ParticipantBadgeMenu({
   // Badge with dropdown menu when menu items or grant status to show
   return (
     <>
-      <span style={{ position: "relative" }}>
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger>
-            <Badge color={color} style={{ cursor: "pointer" }}>
-              @{participant.metadata.handle}
-              {linkedKindIndicator}
-              {planModeIndicator}
-              {statusIndicator}
-              <TriangleDownIcon
-                style={{
-                  marginLeft: 4,
-                  width: 10,
-                  height: 10,
-                  opacity: 0.6,
-                  ...(hasActiveMessage && !hasContextUsage && {
-                    animation: "pulse 1s ease-in-out infinite",
-                    opacity: 1,
-                  }),
-                }}
-              />
-            </Badge>
-          </DropdownMenu.Trigger>
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        <span style={{ position: "relative" }}>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              <Badge color={color} style={{ cursor: "pointer" }}>
+                @{participant.metadata.handle}
+                {linkedKindIndicator}
+                {planModeIndicator}
+                {statusIndicator}
+                <TriangleDownIcon
+                  style={{
+                    marginLeft: 4,
+                    width: 10,
+                    height: 10,
+                    opacity: 0.6,
+                    ...(hasActiveMessage &&
+                      !hasContextUsage && {
+                        animation: "pulse 1s ease-in-out infinite",
+                        opacity: 1,
+                      }),
+                  }}
+                />
+              </Badge>
+            </DropdownMenu.Trigger>
 
-        <DropdownMenu.Content>
-          {menuMethods.map((method) => (
-            <DropdownMenu.Item
-              key={method.name}
-              onSelect={() => handleMethodClick(method)}
-            >
-              {method.name}
-              {method.description && (
-                <Text size="1" color="gray" style={{ marginLeft: 8 }}>
-                  {method.description}
-                </Text>
+            <DropdownMenu.Content>
+              {menuMethods.map((method) => (
+                <DropdownMenu.Item key={method.name} onSelect={() => handleMethodClick(method)}>
+                  {method.name}
+                  {method.description && (
+                    <Text size="1" color="gray" style={{ marginLeft: 8 }}>
+                      {method.description}
+                    </Text>
+                  )}
+                </DropdownMenu.Item>
+              ))}
+              {/* Settings for agents */}
+              {showSettings && (
+                <>
+                  {menuMethods.length > 0 && <DropdownMenu.Separator />}
+                  <DropdownMenu.Item onSelect={() => setSettingsOpen(true)}>
+                    Settings…
+                  </DropdownMenu.Item>
+                </>
               )}
-            </DropdownMenu.Item>
-          ))}
-          {/* Settings for agents */}
-          {showSettings && (
-            <>
-              {menuMethods.length > 0 && <DropdownMenu.Separator />}
-              <DropdownMenu.Item onSelect={() => setSettingsOpen(true)}>
-                Settings…
-              </DropdownMenu.Item>
-            </>
-          )}
-          {/* Debug Console for agents */}
-          {showDebugConsole && (
-            <>
-              {(menuMethods.length > 0 || showSettings) && <DropdownMenu.Separator />}
-              <DropdownMenu.Item onSelect={() => onOpenDebugConsole(participant.metadata.handle)}>
-                Debug Console
-              </DropdownMenu.Item>
-            </>
-          )}
-          {/* Remove agent from channel */}
-          {showRemove && (
-            <>
-              <DropdownMenu.Separator />
-              <DropdownMenu.Item
-                color="red"
-                onSelect={() => onRemoveAgent(participant.metadata.handle)}
-              >
-                Remove Agent
-              </DropdownMenu.Item>
-            </>
-          )}
-        </DropdownMenu.Content>
-        </DropdownMenu.Root>
-        {modelSubtitle}
+              {/* Debug Console for agents */}
+              {showDebugConsole && (
+                <>
+                  {(menuMethods.length > 0 || showSettings) && <DropdownMenu.Separator />}
+                  <DropdownMenu.Item
+                    onSelect={() => onOpenDebugConsole(participant.metadata.handle)}
+                  >
+                    Debug Console
+                  </DropdownMenu.Item>
+                </>
+              )}
+              {/* Remove agent from channel */}
+              {showRemove && (
+                <>
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item
+                    color="red"
+                    onSelect={() => onRemoveAgent(participant.metadata.handle)}
+                  >
+                    Remove Agent
+                  </DropdownMenu.Item>
+                </>
+              )}
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+          {modelSubtitle}
+        </span>
+        {contextPressureWarning}
       </span>
 
       {selectedMethod && (

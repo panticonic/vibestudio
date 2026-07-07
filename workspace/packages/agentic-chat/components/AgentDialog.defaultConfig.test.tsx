@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Theme } from "@radix-ui/themes";
 import type { ReactNode } from "react";
 import type { AvailableAgent, ModelCatalog } from "@workspace/agentic-core";
+import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
 import { ChatContext } from "../context/ChatContext";
 import type { ChatContextValue } from "../types";
 import { AgentDialog } from "./AgentDialog";
@@ -47,21 +48,18 @@ const CATALOG: ModelCatalog = {
     },
   ],
   models: [
-    {
+    makeTestCatalogEntry({
       ref: "prov:model-a",
       id: "model-a",
       name: "Model A",
       provider: "prov",
       baseUrl: "https://example.test",
       reasoning: true,
-      vision: false,
       contextWindow: 1000,
       maxTokens: 100,
       thinkingLevels: ["low", "medium", "high"],
-      templatedBaseUrl: false,
-      connectable: true,
       recommended: true,
-    },
+    }),
   ],
 };
 
@@ -72,7 +70,6 @@ function context(overrides: Partial<ChatContextValue> = {}): ChatContextValue {
     availableAgents: [AGENT],
     modelCatalog: CATALOG,
     defaultModelRef: "prov:model-a",
-    connectedModelRefs: ["prov:model-a"],
     onAddAgent: vi.fn(),
     onReplaceAgent: vi.fn(),
     onConnectProvider: vi.fn(),

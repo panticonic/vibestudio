@@ -10,7 +10,7 @@ import { contextId, rpc, panel, buildPanelLink, createDurableObjectServiceClient
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Flex, Text, Theme } from "@radix-ui/themes";
+import { Button, Callout, Flex, Text, Theme } from "@radix-ui/themes";
 import { AgenticChat, ErrorBoundary, ReviewAndPickSurface } from "@workspace/agentic-chat";
 import type { ConnectionConfig, AgenticChatActions, ToolProvider, ForkNavHandlers, ReviewTarget } from "@workspace/agentic-chat";
 import { useAppTheme } from "@workspace/ui/panel";
@@ -20,12 +20,11 @@ import type { AvailableAgent, ModelCatalog, AgentSubscriptionConfig, ConnectProv
 import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   DEFAULT_AGENT_MODEL_REF,
+  LOCAL_MODELS_EXTENSION_ID,
   MODEL_SETTINGS_SERVICE_PROTOCOL,
   type DefaultAgentConfig,
   type ModelSettingsSnapshot,
 } from "@workspace/model-catalog/catalog";
-import { findMatchingUrlAudience } from "@vibestudio/shared/credentials/urlAudience";
-import type { UrlAudience } from "@vibestudio/shared/credentials/urlAudience";
 import type { DurableObjectServiceClient } from "@workspace/runtime";
 import {
   appendInstalledAgent,
@@ -44,16 +43,6 @@ function detectHostPlatform(): "mobile" | "electron" {
     return "mobile";
   }
   return "electron";
-}
-
-function modelHasMatchingCredential(baseUrl: string | undefined, audiences: UrlAudience[]): boolean {
-  if (!baseUrl?.trim() || /\{[^}]+\}/.test(baseUrl)) return false;
-  try {
-    return findMatchingUrlAudience(baseUrl, audiences) !== null;
-  } catch (err) {
-    console.warn("[ChatPanel] Ignoring invalid credential audience while matching model:", err);
-    return false;
-  }
 }
 
 /** Stable metadata object — avoids creating a new object every render */
@@ -205,8 +194,11 @@ export default function ChatPanel() {
   const [workspaceDefaultModelRef, setWorkspaceDefaultModelRef] = useState<string | null>(null);
   const [workspaceDefaultAgentConfig, setWorkspaceDefaultAgentConfig] =
     useState<DefaultAgentConfig | null>(null);
-  const [connectedModelRefs, setConnectedModelRefs] = useState<string[]>([]);
   const catalogRef = useRef<ModelCatalog | null>(null);
+  // "using the local fallback model" banner (design §8) — the ref it fell to,
+  // or null; dismissible per session.
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const [fallbackNoticeDismissed, setFallbackNoticeDismissed] = useState(false);
 
   const getModelSettingsService = useCallback(() => {
     modelSettingsServiceRef.current ??= createDurableObjectServiceClient(
@@ -221,6 +213,13 @@ export default function ChatPanel() {
     setModelCatalog(settings.catalog);
     setWorkspaceDefaultModelRef(settings.defaultModel);
     setWorkspaceDefaultAgentConfig(settings.defaultAgentConfig);
+    // Honest expectation-setting (design §8): when the default resolved to the
+    // local floor because nothing else is usable, say so above the chat.
+    setFallbackNotice(
+      settings.defaultModelSource === "fallback" && settings.defaultModel.startsWith("local:")
+        ? settings.defaultModel
+        : null
+    );
     return settings;
   }, [getModelSettingsService]);
 
@@ -372,6 +371,12 @@ export default function ChatPanel() {
     void panel.focusPanel(panelId);
   }, []);
 
+  // Deep-link from a local model's red error dot in the picker (item 6) to the
+  // Local Models panel, opened straight onto the failing server's log.
+  const handleOpenLocalModelsLog = useCallback((server: "utility" | "main") => {
+    void openPanel("panels/local-models", { focus: true, stateArgs: { openLog: server } });
+  }, []);
+
   // Launch a Claude Code session as a linked agent in this conversation (§4.3):
   // prepare via the claude-code extension (resolves the channel's context,
   // ensures the vessel, mints the agent credential, writes the launch profile),
@@ -446,38 +451,52 @@ export default function ChatPanel() {
     }).catch((err) => { console.warn("[ChatPanel] Failed to load worker sources:", err); });
   }, []);
 
-  // Model catalog (static pi data) + panel-scoped connection status. Connection
-  // is computed here so it stays scoped to this panel's own credentials rather
-  // than leaking global state.
-  const refreshConnectedRefs = useCallback(async () => {
-    const cat = catalogRef.current;
-    if (!cat) return;
-    try {
-      const creds = await rpc.call<Array<{ audience: UrlAudience[] }>>(
-        "main",
-        "credentials.listStoredCredentials",
-        [],
-      );
-      const audiences = creds.flatMap((c) => c.audience ?? []);
-      const refs = cat.models
-        .filter((m) => modelHasMatchingCredential(m.baseUrl, audiences))
-        .map((m) => m.ref);
-      setConnectedModelRefs(refs);
-    } catch (err) {
-      console.warn("[ChatPanel] Failed to load credentials for model picker:", err);
-    }
-  }, []);
-
+  // Availability (connected/startable/needs-setup) now arrives on every
+  // catalog entry from the model-settings worker — one shared source for all
+  // consumers (design §7.1). The old panel-scoped credential heuristic and
+  // its deliberate scoping boundary are gone with it.
   useEffect(() => {
     void (async () => {
       try {
         await loadModelSettings();
-        await refreshConnectedRefs();
       } catch (err) {
         console.warn("[ChatPanel] Failed to load model settings:", err);
       }
     })();
-  }, [loadModelSettings, refreshConnectedRefs]);
+  }, [loadModelSettings]);
+
+  useEffect(() => {
+    let disposed = false;
+    let refreshTimer: number | null = null;
+
+    const clearRefreshTimer = () => {
+      if (refreshTimer === null) return;
+      window.clearTimeout(refreshTimer);
+      refreshTimer = null;
+    };
+    const scheduleRefresh = () => {
+      if (disposed || refreshTimer !== null) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (disposed) return;
+        void loadModelSettings().catch((err) => {
+          console.warn("[ChatPanel] Failed to refresh model settings after local model event:", err);
+        });
+      }, 500);
+    };
+
+    const subscriptions = [
+      extensions.on(LOCAL_MODELS_EXTENSION_ID, "models.changed", scheduleRefresh),
+      extensions.on(LOCAL_MODELS_EXTENSION_ID, "server.state", scheduleRefresh),
+      extensions.on(LOCAL_MODELS_EXTENSION_ID, "download.progress", scheduleRefresh),
+    ];
+
+    return () => {
+      disposed = true;
+      clearRefreshTimer();
+      for (const subscription of subscriptions) subscription.dispose();
+    };
+  }, [loadModelSettings]);
 
   /** Build the subscription config for a new agent: workspace defaults, global
    *  agentConfig, then the per-agent config, with the resolved handle last.
@@ -636,12 +655,14 @@ export default function ChatPanel() {
     }
     try {
       await rpc.call("main", "credentials.connect", [request]);
-      await refreshConnectedRefs();
+      // Refetch the snapshot — availability is worker-computed, so the new
+      // credential shows up as `ready` entries in the next catalog.
+      await loadModelSettings();
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-  }, [refreshConnectedRefs]);
+  }, [loadModelSettings]);
 
   const handlePersistAgentModel = useCallback(async (
     _channelName: string,
@@ -702,11 +723,11 @@ export default function ChatPanel() {
     modelCatalog,
     defaultModelRef: workspaceDefaultModelRef,
     defaultAgentConfig: workspaceDefaultAgentConfig,
-    connectedModelRefs,
     onFocusPanel: handleFocusPanel,
     onReloadPanel: handleReloadPanel,
     onOpenClaudeCode: handleOpenClaudeCode,
-  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, workspaceDefaultAgentConfig, connectedModelRefs, handleFocusPanel, handleReloadPanel, handleOpenClaudeCode]);
+    onOpenLocalModelsLog: handleOpenLocalModelsLog,
+  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, workspaceDefaultAgentConfig, handleFocusPanel, handleReloadPanel, handleOpenClaudeCode, handleOpenLocalModelsLog]);
 
   // --- Fork navigation + review overlay ---------------------------------
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);
@@ -810,6 +831,32 @@ export default function ChatPanel() {
 
   return (
     <>
+      {fallbackNotice && !fallbackNoticeDismissed && (
+        <Theme appearance={theme} {...appTheme}>
+          <Callout.Root
+            color="amber"
+            size="1"
+            style={{ borderRadius: 0, paddingTop: 6, paddingBottom: 6 }}
+          >
+            <Flex align="center" justify="between" gap="3" style={{ width: "100%" }}>
+              <Callout.Text>
+                No cloud provider connected — using{" "}
+                <Text weight="medium">{fallbackNotice}</Text> on this device. Answers will be
+                simpler than a frontier model's.
+              </Callout.Text>
+              <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
+                <Button
+                  size="1"
+                  variant="soft"
+                  onClick={() => setFallbackNoticeDismissed(true)}
+                >
+                  OK
+                </Button>
+              </Flex>
+            </Flex>
+          </Callout.Root>
+        </Theme>
+      )}
       <AgenticChat
         config={config}
         channelName={channelName}

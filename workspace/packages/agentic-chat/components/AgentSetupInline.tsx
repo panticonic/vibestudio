@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { Box, Card, Flex, Text } from "@radix-ui/themes";
 import { ArrowDownIcon } from "@radix-ui/react-icons";
 import { useChatContext } from "../context/ChatContext";
@@ -12,9 +11,7 @@ import { AgentConfigForm } from "./AgentConfigForm";
  * settings are optional.
  */
 export function AgentSetupInline() {
-  const { deferredAgent, modelCatalog, connectedModelRefs, defaultAgentConfig, onSaveDefaults } =
-    useChatContext();
-  const connectedRefs = useMemo(() => new Set(connectedModelRefs ?? []), [connectedModelRefs]);
+  const { deferredAgent, modelCatalog, defaultAgentConfig, onSaveDefaults } = useChatContext();
 
   if (!deferredAgent) return null;
   const { draft, setDraft } = deferredAgent;
@@ -44,7 +41,6 @@ export function AgentSetupInline() {
             </Text>
             <AgentConfigForm
               catalog={modelCatalog ?? null}
-              connectedRefs={connectedRefs}
               value={draft}
               onChange={setDraft}
               modelEditable

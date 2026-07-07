@@ -53,7 +53,6 @@ function makeParams(m: Mocks, over: Partial<Params> = {}): Params {
     onAddAgent: m.onAddAgent,
     availableAgents: [AGENT],
     modelCatalog: null,
-    connectedModelRefs: [],
     defaultModelRef: null,
     channelName: "chat-test",
     messages: [],

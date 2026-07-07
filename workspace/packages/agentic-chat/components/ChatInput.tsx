@@ -1,11 +1,17 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Box, Button, Callout, Card, Flex, IconButton, Spinner, Text, TextArea } from "@radix-ui/themes";
 import { Cross2Icon } from "@radix-ui/react-icons";
+import {
+  isAgentParticipantType,
+  type AgentSubscriptionConfig,
+  type ModelCatalogEntry,
+} from "@workspace/agentic-core";
 import { useIsMobile, useTouchDevice, useViewportHeight } from "@workspace/react/responsive";
 import { useChatContext } from "../context/ChatContext";
 import { getMentionsFromInput, useChatInputContext } from "../context/ChatInputContext";
 import { ImageInput, getAttachmentInputsFromPendingImages } from "./ImageInput";
 import { MentionAutocomplete } from "./MentionAutocomplete";
+import { ModelCommandMenu } from "./ModelCommandMenu";
 import { SendButton } from "./SendButton";
 import { useMentionAutocomplete, type MentionCandidate } from "../hooks/useMentionAutocomplete";
 import {
@@ -14,6 +20,75 @@ import {
   validateImageFiles,
   type PendingImage,
 } from "../utils/imageUtils";
+
+/** Matches a whole-input `/model [query]` composer command (item 7). */
+const MODEL_COMMAND_RE = /^\/model(?:\s+(.*))?$/;
+const MODEL_MENU_LIMIT = 8;
+
+function isUsableEntry(model: ModelCatalogEntry): boolean {
+  const state = model.availability?.state;
+  return state === "ready" || state === "startable";
+}
+
+const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+const RESPOND_POLICIES = new Set([
+  "all",
+  "mentioned",
+  "mentioned-strict",
+  "mentioned-or-followup",
+  "from-participants",
+]);
+
+function modelSwitchConfigFromSettings(
+  settings: unknown,
+  model: string,
+  handle?: string
+): AgentSubscriptionConfig {
+  const source =
+    settings && typeof settings === "object" ? (settings as Record<string, unknown>) : {};
+  const config: AgentSubscriptionConfig = {
+    model,
+    ...(handle ? { handle } : {}),
+  };
+  const thinkingLevel = source["thinkingLevel"];
+  if (typeof thinkingLevel === "string" && THINKING_LEVELS.has(thinkingLevel)) {
+    config.thinkingLevel = thinkingLevel as AgentSubscriptionConfig["thinkingLevel"];
+  }
+  const approvalLevel = source["approvalLevel"];
+  if (approvalLevel === 0 || approvalLevel === 1 || approvalLevel === 2) {
+    config.approvalLevel = approvalLevel;
+  }
+  const respondPolicy = source["respondPolicy"];
+  if (typeof respondPolicy === "string" && RESPOND_POLICIES.has(respondPolicy)) {
+    config.respondPolicy = respondPolicy as AgentSubscriptionConfig["respondPolicy"];
+  }
+  const respondFrom = source["respondFrom"];
+  if (Array.isArray(respondFrom) && respondFrom.every((value) => typeof value === "string")) {
+    config.respondFrom = respondFrom;
+  }
+  const maxModelCallsPerTurn = source["maxModelCallsPerTurn"];
+  if (
+    maxModelCallsPerTurn === null ||
+    (typeof maxModelCallsPerTurn === "number" &&
+      Number.isFinite(maxModelCallsPerTurn) &&
+      maxModelCallsPerTurn > 0)
+  ) {
+    config.maxModelCallsPerTurn =
+      typeof maxModelCallsPerTurn === "number"
+        ? Math.floor(maxModelCallsPerTurn)
+        : maxModelCallsPerTurn;
+  }
+  const modelStreamIdleTimeoutMs = source["modelStreamIdleTimeoutMs"];
+  if (
+    modelStreamIdleTimeoutMs === null ||
+    (typeof modelStreamIdleTimeoutMs === "number" &&
+      Number.isFinite(modelStreamIdleTimeoutMs) &&
+      modelStreamIdleTimeoutMs > 0)
+  ) {
+    config.modelStreamIdleTimeoutMs = modelStreamIdleTimeoutMs;
+  }
+  return config;
+}
 
 const MAX_IMAGE_COUNT = 10;
 
@@ -34,6 +109,10 @@ export function ChatInput() {
     undoableAction,
     undoLastAction,
     pendingSendCount,
+    participants,
+    modelCatalog,
+    onReplaceAgent,
+    onCallMethodResult,
   } = useChatContext();
   const {
     input,
@@ -66,6 +145,90 @@ export function ChatInput() {
   const [showImageInput, setShowImageInput] = useState(false);
   const [selectedMentionIds, setSelectedMentionIds] = useState<Record<string, string>>({});
   const mentions = useMentionAutocomplete(allParticipants, selfId);
+
+  // --- `/model` composer quick-switcher (item 7) -------------------------
+  const [modelMenuIndex, setModelMenuIndex] = useState(0);
+  const [modelMenuPos, setModelMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const [modelSwitchNotice, setModelSwitchNotice] = useState<string | null>(null);
+
+  const modelQuery = useMemo(() => {
+    const match = MODEL_COMMAND_RE.exec(input);
+    return match ? (match[1] ?? "") : null;
+  }, [input]);
+
+  const modelCandidates = useMemo(() => {
+    if (modelQuery === null || !onReplaceAgent) return [];
+    const q = modelQuery.trim().toLowerCase();
+    const usable = (modelCatalog?.models ?? []).filter(isUsableEntry);
+    const matched = q
+      ? usable.filter(
+          (m) =>
+            m.name.toLowerCase().includes(q) ||
+            m.ref.toLowerCase().includes(q) ||
+            m.provider.toLowerCase().includes(q)
+        )
+      : usable;
+    return matched.slice(0, MODEL_MENU_LIMIT);
+  }, [modelQuery, modelCatalog, onReplaceAgent]);
+
+  const modelMenuOpen = modelQuery !== null && !!onReplaceAgent && modelCandidates.length > 0;
+
+  // Anchor the menu to the composer and keep the highlighted row in range as
+  // the candidate list narrows while typing.
+  useEffect(() => {
+    if (modelQuery === null) {
+      setModelMenuIndex(0);
+      return;
+    }
+    const rect = textAreaRef.current?.getBoundingClientRect();
+    if (rect) setModelMenuPos({ left: rect.left, top: rect.top });
+    setModelMenuIndex((i) => Math.min(i, Math.max(0, modelCandidates.length - 1)));
+  }, [modelQuery, modelCandidates.length]);
+
+  // Auto-dismiss the "switched to X" confirmation.
+  useEffect(() => {
+    if (!modelSwitchNotice) return;
+    const timer = window.setTimeout(() => setModelSwitchNotice(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [modelSwitchNotice]);
+
+  const switchModel = useCallback(
+    async (model: ModelCatalogEntry) => {
+      const agents = Object.values(participants).filter(
+        (p) => p.id !== selfId && isAgentParticipantType(p.metadata?.type as string | undefined)
+      );
+      if (agents.length === 0) {
+        setSendError("No agent in this conversation yet — add one first.");
+        return;
+      }
+      if (agents.length > 1) {
+        setSendError("Multiple agents here — use the model picker to choose which to switch.");
+        return;
+      }
+      if (!onReplaceAgent) {
+        setSendError("Model switching is not available in this host.");
+        return;
+      }
+      const agent = agents[0]!;
+      try {
+        const handle =
+          typeof agent.metadata?.handle === "string" ? agent.metadata.handle : undefined;
+        const settings = await onCallMethodResult(agent.id, "getAgentSettings", {});
+        await onReplaceAgent(
+          agent.id,
+          undefined,
+          modelSwitchConfigFromSettings(settings, model.ref, handle)
+        );
+        onInputChange("");
+        setModelMenuPos(null);
+        setModelSwitchNotice(model.name);
+        if (textAreaRef.current) textAreaRef.current.style.height = "auto";
+      } catch (error) {
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+    },
+    [participants, selfId, onReplaceAgent, onCallMethodResult, onInputChange]
+  );
 
   // Auto-resize textarea: rAF-coalesced onInput handler.
   const resizeRafRef = useRef(0);
@@ -134,6 +297,19 @@ export function ChatInput() {
     async (mode: "default" | "after-turn" = "default") => {
       try {
         setSendError(null);
+        // A `/model …` line is a command, never a chat message. If it resolves
+        // to models, switch to the top match; otherwise coach instead of
+        // sending the literal text to the agent.
+        if (modelQuery !== null) {
+          if (!onReplaceAgent) {
+            setSendError("Model switching is not available in this host.");
+            return;
+          }
+          const top = modelCandidates[modelMenuIndex] ?? modelCandidates[0];
+          if (top) await switchModel(top);
+          else setSendError("No available model matches — keep typing or use the model picker.");
+          return;
+        }
         const attachments =
           pendingImages.length > 0
             ? getAttachmentInputsFromPendingImages(pendingImages)
@@ -170,6 +346,11 @@ export function ChatInput() {
       mentions,
       hapticTick,
       hasOpenTurn,
+      modelQuery,
+      onReplaceAgent,
+      modelCandidates,
+      modelMenuIndex,
+      switchModel,
     ]
   );
 
@@ -219,6 +400,29 @@ export function ChatInput() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (modelMenuOpen) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setModelMenuIndex((i) => Math.min(modelCandidates.length - 1, i + 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setModelMenuIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onInputChange("");
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          const model = modelCandidates[modelMenuIndex];
+          if (model) void switchModel(model);
+          return;
+        }
+      }
       if (mentions.open) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -266,7 +470,19 @@ export function ChatInput() {
         }
       }
     },
-    [handleSendMessage, mentions, insertMention, input, agentBusy, flushOutboxAndInterrupt]
+    [
+      handleSendMessage,
+      mentions,
+      insertMention,
+      input,
+      agentBusy,
+      flushOutboxAndInterrupt,
+      modelMenuOpen,
+      modelCandidates,
+      modelMenuIndex,
+      switchModel,
+      onInputChange,
+    ]
   );
 
   const toggleImageInput = useCallback(() => {
@@ -349,6 +565,15 @@ export function ChatInput() {
               onSelect={insertMention}
             />
           )}
+          {modelMenuOpen && (
+            <ModelCommandMenu
+              candidates={modelCandidates}
+              selectedIndex={modelMenuIndex}
+              position={modelMenuPos}
+              onHighlight={setModelMenuIndex}
+              onSelect={switchModel}
+            />
+          )}
           <TextArea
             ref={textAreaRef}
             size="2"
@@ -394,6 +619,15 @@ export function ChatInput() {
           </Flex>
         )}
       </Card>
+
+      {/* Transient "/model" switch confirmation (item 7). */}
+      {modelSwitchNotice && (
+        <Box flexShrink="0" mt="1" className="chat-narration-pill-wrap" aria-live="polite">
+          <Box className="chat-narration-pill">
+            <Text size="1">Switched this agent to {modelSwitchNotice}</Text>
+          </Box>
+        </Box>
+      )}
 
       {/* Transient flush self-narration pill. */}
       {flushNarration && (
