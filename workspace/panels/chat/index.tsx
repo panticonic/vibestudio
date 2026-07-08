@@ -12,7 +12,14 @@ import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Text, Theme } from "@radix-ui/themes";
 import { AgenticChat, ErrorBoundary, ReviewAndPickSurface } from "@workspace/agentic-chat";
-import type { ConnectionConfig, AgenticChatActions, ToolProvider, ForkNavHandlers, ReviewTarget } from "@workspace/agentic-chat";
+import type {
+  ConnectionConfig,
+  AgenticChatActions,
+  ToolProvider,
+  ForkNavHandlers,
+  ReviewTarget,
+  NewConversationOptions,
+} from "@workspace/agentic-chat";
 import { useAppTheme } from "@workspace/ui/panel";
 import "@workspace/ui/tokens.css";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
@@ -359,8 +366,41 @@ export default function ChatPanel() {
     recoveryCoordinator,
   };
 
-  const handleNewConversation = useCallback(() => {
-    window.location.href = buildPanelLink("panels/chat");
+  const effectiveDefaultAgentConfig = useMemo<DefaultAgentConfig | null>(() => {
+    const globalConfig = stateArgs.agentConfig ?? {};
+    const model = typeof globalConfig["model"] === "string" ? globalConfig["model"] : undefined;
+    const thinkingLevel =
+      typeof globalConfig["thinkingLevel"] === "string"
+        ? (globalConfig["thinkingLevel"] as DefaultAgentConfig["thinkingLevel"])
+        : undefined;
+    const approvalLevel =
+      globalConfig["approvalLevel"] === 0 ||
+      globalConfig["approvalLevel"] === 1 ||
+      globalConfig["approvalLevel"] === 2
+        ? globalConfig["approvalLevel"]
+        : undefined;
+    if (!model && !thinkingLevel && approvalLevel === undefined) return workspaceDefaultAgentConfig;
+    return {
+      ...(workspaceDefaultAgentConfig ?? {}),
+      model: model ?? workspaceDefaultAgentConfig?.model ?? DEFAULT_AGENT_MODEL_REF,
+      ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(approvalLevel !== undefined ? { approvalLevel } : {}),
+    };
+  }, [stateArgs.agentConfig, workspaceDefaultAgentConfig]);
+
+  const handleNewConversation = useCallback((options?: NewConversationOptions) => {
+    const nextStateArgs: ChatStateArgs = {};
+    if (options?.initialPrompt) nextStateArgs.initialPrompt = options.initialPrompt;
+    if (options?.forceInitialPrompt !== undefined) {
+      nextStateArgs.forceInitialPrompt = options.forceInitialPrompt;
+    }
+    if (options?.agentConfig) nextStateArgs.agentConfig = options.agentConfig;
+    const hasStateArgs = Object.keys(nextStateArgs).length > 0;
+    const stateArgsForLink: Record<string, unknown> = { ...nextStateArgs };
+    window.location.href = buildPanelLink(
+      "panels/chat",
+      hasStateArgs ? { stateArgs: stateArgsForLink } : undefined
+    );
   }, []);
 
   const handleFocusPanel = useCallback((panelId: string) => {
@@ -722,12 +762,12 @@ export default function ChatPanel() {
     availableAgents,
     modelCatalog,
     defaultModelRef: workspaceDefaultModelRef,
-    defaultAgentConfig: workspaceDefaultAgentConfig,
+    defaultAgentConfig: effectiveDefaultAgentConfig,
     onFocusPanel: handleFocusPanel,
     onReloadPanel: handleReloadPanel,
     onOpenClaudeCode: handleOpenClaudeCode,
     onOpenLocalModelsLog: handleOpenLocalModelsLog,
-  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, workspaceDefaultAgentConfig, handleFocusPanel, handleReloadPanel, handleOpenClaudeCode, handleOpenLocalModelsLog]);
+  }), [handleNewConversation, handleAddAgent, handleReplaceAgent, handleConnectProvider, handlePersistAgentModel, saveDefaultAgentConfig, handleRemoveAgent, availableAgents, modelCatalog, workspaceDefaultModelRef, effectiveDefaultAgentConfig, handleFocusPanel, handleReloadPanel, handleOpenClaudeCode, handleOpenLocalModelsLog]);
 
   // --- Fork navigation + review overlay ---------------------------------
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget | null>(null);

@@ -560,6 +560,7 @@ describe("agent-loop core lifecycle", () => {
           turnId: childTurnId,
           openedAtSeq: 2,
           modelCallCount: 1,
+          consecutiveModelFailureCount: 0,
           interrupted: false,
           waitingCount: 0,
         },
@@ -608,6 +609,45 @@ describe("agent-loop core lifecycle", () => {
     // fresh attempt id
     const started = s.log.filter((row) => row.payloadKind === "message.started");
     expect(started).toHaveLength(2);
+  });
+
+  it("stops after repeated consecutive recoverable model failures", () => {
+    const s = scenario();
+    prompt(s);
+
+    for (let i = 0; i < 3; i += 1) {
+      const messageId = ids.messageId(turn1, i);
+      expect(pendingEffectIds(s)).toEqual([ids.modelEffect(messageId)]);
+      resolveEffect(s, ids.modelEffect(messageId), {
+        kind: "model",
+        blocks: [],
+        stopReason: "error",
+        errorReason: "overloaded",
+      });
+    }
+
+    expect(s.state.openTurn).toBeNull();
+    expect(pendingEffectIds(s)).toEqual([]);
+    expect(s.log.filter((row) => row.payloadKind === "message.started")).toHaveLength(3);
+    expect(s.log.filter((row) => row.payloadKind === "message.failed")).toHaveLength(3);
+    const diagnostic = s.log.find(
+      (row) => row.envelopeId === `diag:${turn1}:model-retry-limit-exceeded`
+    );
+    expect(diagnostic?.payload).toMatchObject({
+      blocks: [
+        {
+          metadata: {
+            code: "model_retry_limit_exceeded",
+            severity: "error",
+            limit: 3,
+            consecutiveModelFailureCount: 3,
+            turnId: turn1,
+          },
+        },
+      ],
+    });
+    const closed = s.log.find((row) => row.payloadKind === "turn.closed")!;
+    expect(closed.payload).toMatchObject({ reason: "model_retry_limit_exceeded" });
   });
 
   it("auto-failover: heartbeat provider failure continues once on local fallback", () => {

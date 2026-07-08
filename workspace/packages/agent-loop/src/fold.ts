@@ -104,6 +104,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           openedAtSeq: envelope.seq,
           reason: typeof payload["reason"] === "string" ? (payload["reason"] as string) : undefined,
           modelCallCount: 0,
+          consecutiveModelFailureCount: 0,
           interrupted: false,
           waitingCount: 0,
           ...(metadataFromPayload(payload) ? { metadata: metadataFromPayload(payload) } : {}),
@@ -184,6 +185,9 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         return {
           ...state,
           inFlightModelCall: null,
+          openTurn: state.openTurn
+            ? { ...state.openTurn, consecutiveModelFailureCount: 0 }
+            : state.openTurn,
           entries: [...state.entries, entry],
         };
       }
@@ -330,7 +334,11 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         inFlightModelCall: null,
         openTurn:
           state.openTurn && failedRequest
-            ? { ...state.openTurn, lastFailedModelRequest: failedRequest }
+            ? {
+                ...state.openTurn,
+                lastFailedModelRequest: failedRequest,
+                consecutiveModelFailureCount: state.openTurn.consecutiveModelFailureCount + 1,
+              }
             : state.openTurn,
       };
     }

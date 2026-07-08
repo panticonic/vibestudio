@@ -109,6 +109,23 @@ describe("classifyModelFailure", () => {
     });
   });
 
+  it("treats llama.cpp available-context errors as terminal context overflow", () => {
+    const failure = classifyModelFailure({
+      provider: "local",
+      status: 400,
+      rawReason:
+        "400 request (18364 tokens) exceeds the available context size (16384 tokens), try increasing it",
+      now,
+    });
+
+    expect(failure).toMatchObject({
+      code: "context_overflow_terminal",
+      recoverable: false,
+      reason:
+        "400 request (18364 tokens) exceeds the available context size (16384 tokens), try increasing it",
+    });
+  });
+
   it("treats open provider circuit breakers as terminal for the current turn", () => {
     const failure = classifyModelFailure({
       provider: "openai-codex",

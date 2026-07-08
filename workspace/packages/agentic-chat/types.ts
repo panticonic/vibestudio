@@ -10,6 +10,7 @@ export type {
   SandboxConfig,
   ToolProviderDeps,
   ToolProvider,
+  NewConversationOptions,
 } from "@workspace/agentic-core";
 
 // Pi message/event types — re-exported via agentic-core
@@ -52,6 +53,7 @@ import type {
   ConnectProviderResult,
   ModelCatalog,
   AgentSubscriptionConfig,
+  NewConversationOptions,
 } from "@workspace/agentic-core";
 
 // ===========================================================================
@@ -457,7 +459,7 @@ export interface ChatContextValue {
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => void;
   /** Start a fresh conversation (surfaced for the command palette). */
-  onNewConversation?: () => void;
+  onNewConversation?: (options?: NewConversationOptions) => void | Promise<void>;
   /** Launch Claude Code as a linked agent in this conversation (§4.3). */
   onOpenClaudeCode?: (channelId: string) => Promise<void> | void;
   /** Open the Local Models panel focused on a server's log (item 6) — wired

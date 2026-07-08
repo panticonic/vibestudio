@@ -425,7 +425,7 @@ function isContextOverflow(codeKey: string, message: string): boolean {
     codeKey === "request_too_large" ||
     codeKey === "context_length_exceeded" ||
     codeKey === "model_context_window_exceeded" ||
-    /\b(?:context window|context length|too many tokens|token limit|prompt is too long|input token count)\b/i.test(
+    /\b(?:context window|context length|available context size|too many tokens|token limit|prompt is too long|input token count)\b/i.test(
       message
     )
   );

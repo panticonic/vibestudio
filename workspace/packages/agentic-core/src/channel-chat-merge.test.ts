@@ -801,6 +801,38 @@ describe("chatMessagesFromChannelView", () => {
     ]);
   });
 
+  it("projects context overflow model failures with a specific title", () => {
+    const messageId = brandId<MessageId>("msg-local-overflow");
+    const failed: AgenticEvent<"message.failed"> = {
+      kind: "message.failed",
+      actor: agent,
+      causality: { messageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason:
+          "400 request (18364 tokens) exceeds the available context size (16384 tokens), try increasing it",
+        recoverable: false,
+        code: "context_overflow_terminal",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+
+    const state = [envelope(failed, 1)].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        id: "diagnostic:msg-local-overflow",
+        contentType: "diagnostic",
+        diagnostic: expect.objectContaining({
+          messageId: "msg-local-overflow",
+          title: "Context window exceeded",
+          failureCode: "context_overflow_terminal",
+          recoverable: false,
+        }),
+      }),
+    ]);
+  });
+
   it("projects model-call cap diagnostics with a specific title and code", () => {
     const messageId = brandId<MessageId>("diag-max-model-calls");
     const detail =

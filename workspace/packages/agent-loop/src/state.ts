@@ -189,6 +189,8 @@ export interface OpenTurn {
   reason?: string;
   /** count of message.started in this turn — drives messageId derivation. */
   modelCallCount: number;
+  /** Consecutive model failures since the last successful assistant message. */
+  consecutiveModelFailureCount: number;
   /** system.event {interrupt} seen since the turn opened (gates new model calls). */
   interrupted: boolean;
   /** count of turn.waiting events (drives waiting envelope id suffix). */

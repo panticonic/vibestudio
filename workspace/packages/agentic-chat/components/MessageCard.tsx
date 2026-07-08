@@ -22,6 +22,7 @@ import {
 } from "@radix-ui/react-icons";
 import { CONTENT_TYPE_INLINE_UI, isClientParticipantType } from "@workspace/pubsub";
 import { LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
+import type { AgentSubscriptionConfig } from "@workspace/agentic-core";
 import type { Participant } from "@workspace/pubsub";
 import { useOptionalChatContext } from "../context/ChatContext";
 import { ChatInputContext } from "../context/ChatInputContext";
@@ -107,15 +108,84 @@ function chatSend(
     : null;
 }
 
+function settingValue(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const maybeWrapped = value as { value?: unknown };
+  return "value" in maybeWrapped ? maybeWrapped.value : value;
+}
+
 function modelRefFromSettings(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
-  const model = (value as { model?: unknown }).model;
+  const model = settingValue((value as { model?: unknown }).model);
   if (typeof model === "string") return model;
-  if (model && typeof model === "object") {
-    const nested = (model as { value?: unknown }).value;
-    if (typeof nested === "string") return nested;
-  }
   return null;
+}
+
+function agentConfigFromSettings(
+  value: unknown,
+  fallbackModel: string | null | undefined
+): AgentSubscriptionConfig {
+  const config: AgentSubscriptionConfig = {};
+  const model = modelRefFromSettings(value) ?? fallbackModel;
+  if (model) config.model = model;
+  if (!value || typeof value !== "object") return config;
+  const record = value as Record<string, unknown>;
+  const thinkingLevel = settingValue(record["thinkingLevel"]);
+  if (
+    thinkingLevel === "minimal" ||
+    thinkingLevel === "low" ||
+    thinkingLevel === "medium" ||
+    thinkingLevel === "high"
+  ) {
+    config.thinkingLevel = thinkingLevel;
+  }
+  const approvalLevel = settingValue(record["approvalLevel"]);
+  if (
+    approvalLevel === 0 ||
+    approvalLevel === 1 ||
+    approvalLevel === 2
+  ) {
+    config.approvalLevel = approvalLevel;
+  }
+  const respondPolicy = settingValue(record["respondPolicy"]);
+  if (
+    respondPolicy === "all" ||
+    respondPolicy === "mentioned" ||
+    respondPolicy === "mentioned-strict" ||
+    respondPolicy === "mentioned-or-followup" ||
+    respondPolicy === "from-participants"
+  ) {
+    config.respondPolicy = respondPolicy;
+  }
+  const respondFromValue = settingValue(record["respondFrom"]);
+  if (Array.isArray(respondFromValue)) {
+    const respondFrom = respondFromValue.filter(
+      (item): item is string => typeof item === "string"
+    );
+    if (respondFrom.length > 0) config.respondFrom = respondFrom;
+  }
+  const maxModelCallsPerTurn = settingValue(record["maxModelCallsPerTurn"]);
+  if (
+    maxModelCallsPerTurn === null ||
+    (typeof maxModelCallsPerTurn === "number" &&
+      Number.isFinite(maxModelCallsPerTurn) &&
+      maxModelCallsPerTurn > 0)
+  ) {
+    config.maxModelCallsPerTurn =
+      typeof maxModelCallsPerTurn === "number"
+        ? Math.floor(maxModelCallsPerTurn)
+        : maxModelCallsPerTurn;
+  }
+  const modelStreamIdleTimeoutMs = settingValue(record["modelStreamIdleTimeoutMs"]);
+  if (
+    modelStreamIdleTimeoutMs === null ||
+    (typeof modelStreamIdleTimeoutMs === "number" &&
+      Number.isFinite(modelStreamIdleTimeoutMs) &&
+      modelStreamIdleTimeoutMs > 0)
+  ) {
+    config.modelStreamIdleTimeoutMs = modelStreamIdleTimeoutMs;
+  }
+  return config;
 }
 
 function isProviderLevelFailureCode(code: unknown): boolean {
@@ -173,16 +243,25 @@ export const MessageCard = React.memo(function MessageCard({
   const [retryLocalState, setRetryLocalState] = useState<"idle" | "switching" | "ready" | "failed">(
     "idle"
   );
+  const [cleanStartState, setCleanStartState] = useState<
+    "idle" | "starting" | "started" | "failed"
+  >("idle");
   const [currentAgentModelRef, setCurrentAgentModelRef] = useState<string | null | undefined>(
     undefined
   );
   const inputContext = useContext(ChatInputContext);
+  const chatContext = useOptionalChatContext();
   const callMethod = chatCallMethod(chat);
   const sendFromChat = chatSend(chat);
   const providerLevelModelFailure =
     msg.contentType === "diagnostic" &&
     msg.diagnostic?.code === "message_failed" &&
     isProviderLevelFailureCode(msg.diagnostic.failureCode);
+  const localContextOverflowFailure =
+    msg.contentType === "diagnostic" &&
+    msg.diagnostic?.code === "message_failed" &&
+    msg.diagnostic.failureCode === "context_overflow_terminal";
+  const shouldInspectCurrentAgentModel = providerLevelModelFailure || localContextOverflowFailure;
   const currentAgentModelIsLocal =
     typeof currentAgentModelRef === "string" && currentAgentModelRef.startsWith("local:");
   const currentAgentModelKnown = currentAgentModelRef !== undefined;
@@ -191,9 +270,14 @@ export const MessageCard = React.memo(function MessageCard({
     currentAgentModelKnown &&
     !currentAgentModelIsLocal &&
     Boolean(callMethod && (inputContext || sendFromChat));
+  const canStartCleanLocalChat =
+    localContextOverflowFailure &&
+    currentAgentModelKnown &&
+    currentAgentModelIsLocal &&
+    Boolean(chatContext?.onNewConversation && callMethod);
 
   useEffect(() => {
-    if (!providerLevelModelFailure || !callMethod) {
+    if (!shouldInspectCurrentAgentModel || !callMethod) {
       setCurrentAgentModelRef(undefined);
       return;
     }
@@ -209,7 +293,7 @@ export const MessageCard = React.memo(function MessageCard({
     return () => {
       cancelled = true;
     };
-  }, [callMethod, msg.senderId, providerLevelModelFailure]);
+  }, [callMethod, msg.senderId, shouldInspectCurrentAgentModel]);
 
   const handleRetryWithLocalModel = useCallback(async () => {
     if (!callMethod) return;
@@ -242,6 +326,23 @@ export const MessageCard = React.memo(function MessageCard({
     }
   }, [callMethod, currentAgentModelRef, inputContext, msg.senderId, selfId, sendFromChat]);
 
+  const handleStartCleanLocalChat = useCallback(async () => {
+    const onNewConversation = chatContext?.onNewConversation;
+    if (!onNewConversation || !callMethod) return;
+    setCleanStartState("starting");
+    try {
+      const settings = await callMethod(msg.senderId, "getAgentSettings", {}).catch(() => null);
+      const model = modelRefFromSettings(settings) ?? currentAgentModelRef ?? null;
+      await onNewConversation({
+        agentConfig: agentConfigFromSettings(settings, model),
+      });
+      setCleanStartState("started");
+    } catch (err) {
+      console.warn("[MessageCard] Clean local chat launch failed:", err);
+      setCleanStartState("failed");
+    }
+  }, [callMethod, chatContext, currentAgentModelRef, msg.senderId]);
+
   const handleScheduleResumeAtReset = useCallback(async () => {
     const diagnostic = msg.diagnostic;
     if (!diagnostic?.messageId || !diagnostic.resetAt || !callMethod) {
@@ -266,7 +367,6 @@ export const MessageCard = React.memo(function MessageCard({
   // Fork/edit affordances read fork state + the outbox editor from context.
   // Read optionally so the card still renders provider-less (tests, standalone
   // transcript views); the affordances simply stay hidden without a provider.
-  const chatContext = useOptionalChatContext();
   const forkState = chatContext?.forkState;
   const editPendingMessage = chatContext?.editPendingMessage;
   // Edit dialog: "outbox" edits the unread message in place; "fork" seeds an
@@ -488,6 +588,27 @@ export const MessageCard = React.memo(function MessageCard({
                         : retryLocalState === "failed"
                           ? "Retry local failed"
                           : "Retry with local model"}
+                  </Button>
+                </Flex>
+              )}
+              {canStartCleanLocalChat && (
+                <Flex align="center" gap="2" wrap="wrap">
+                  <Button
+                    size="1"
+                    variant="soft"
+                    color={cleanStartState === "failed" ? "red" : "blue"}
+                    disabled={cleanStartState === "starting" || cleanStartState === "started"}
+                    onClick={handleStartCleanLocalChat}
+                    title="Open a new chat with this local model and no previous transcript"
+                  >
+                    <ChatBubbleIcon />
+                    {cleanStartState === "starting"
+                      ? "Opening new chat"
+                      : cleanStartState === "started"
+                        ? "New chat opened"
+                        : cleanStartState === "failed"
+                          ? "New chat failed"
+                          : "New chat without history"}
                   </Button>
                 </Flex>
               )}

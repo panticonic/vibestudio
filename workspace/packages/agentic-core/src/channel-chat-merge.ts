@@ -667,6 +667,8 @@ function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotic
         ? "Model call limit reached"
         : metadata.failureCode === "usage_limit_terminal"
           ? "Model usage limit reached"
+          : metadata.failureCode === "context_overflow_terminal"
+            ? "Context window exceeded"
           : metadata.severity === "error"
             ? "Message failed"
             : "No assistant response",

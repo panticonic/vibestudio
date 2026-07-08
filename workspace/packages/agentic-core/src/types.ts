@@ -70,9 +70,18 @@ export interface ConnectProviderResult {
   error?: string;
 }
 
+export interface NewConversationOptions {
+  /** Optional first user message for the new conversation. */
+  initialPrompt?: string;
+  /** Send initialPrompt even if the opened channel later rehydrates history. */
+  forceInitialPrompt?: boolean;
+  /** Seed the first spawned agent without changing workspace defaults. */
+  agentConfig?: AgentSubscriptionConfig;
+}
+
 /** Inject platform-specific navigation */
 export interface AgenticChatActions {
-  onNewConversation?: () => void;
+  onNewConversation?: (options?: NewConversationOptions) => void | Promise<void>;
   /** Add a new agent to the channel, optionally with a full subscription config. */
   onAddAgent?: (
     channelName: string,

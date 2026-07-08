@@ -24,6 +24,7 @@ export type {
   SandboxConfig,
   ToolProviderDeps,
   ToolProvider,
+  NewConversationOptions,
 } from "./types.js";
 // Model catalog shared types (re-exported so chat/panel import one surface).
 export type {

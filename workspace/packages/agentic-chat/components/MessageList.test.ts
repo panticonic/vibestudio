@@ -35,6 +35,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
 
 import type { ChatMessage, InvocationCardPayload } from "@workspace/agentic-core";
 import { LOCAL_FALLBACK_MODEL_REF } from "@workspace/model-catalog/catalog";
+import { ChatContext } from "../context/ChatContext.js";
 import { MessageList } from "./MessageList.js";
 import { SubagentRunCard } from "./SubagentRunCard.js";
 
@@ -379,6 +380,73 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(calls.some((call) => call.method === "persist_agent_model")).toBe(false);
     expect(screen.queryByText("Retry ready")).toBeNull();
     warn.mockRestore();
+  });
+
+  it("opens a clean chat with the same local model after context overflow", async () => {
+    const callMethod = vi.fn(async (_participantId: string, method: string) => {
+      if (method === "getAgentSettings") {
+        return {
+          model: { value: "local:lfm2.5-230m" },
+          thinkingLevel: { value: "low" },
+          approvalLevel: { value: 1 },
+          respondPolicy: { value: "mentioned" },
+          respondFrom: { value: ["user-1"] },
+          maxModelCallsPerTurn: { value: 3.8 },
+          modelStreamIdleTimeoutMs: { value: 12_000 },
+        };
+      }
+      return { ok: true };
+    });
+    const onNewConversation = vi.fn(async () => undefined);
+
+    render(
+      React.createElement(
+        ChatContext.Provider,
+        { value: { onNewConversation } as never },
+        React.createElement(MessageList, {
+          messages: [
+            makeMessage({
+              id: "diagnostic:msg-local-overflow",
+              senderId: "agent-1",
+              contentType: "diagnostic",
+              kind: "system",
+              content:
+                "400 request (18364 tokens) exceeds the available context size (16384 tokens), try increasing it",
+              complete: true,
+              diagnostic: {
+                messageId: "msg-local-overflow",
+                code: "message_failed",
+                failureCode: "context_overflow_terminal",
+                severity: "error",
+                title: "Context window exceeded",
+                detail:
+                  "400 request (18364 tokens) exceeds the available context size (16384 tokens), try increasing it",
+              },
+            }),
+          ],
+          participants: {},
+          selfId: "user-1",
+          allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+          chat: { callMethod },
+        } as never)
+      )
+    );
+
+    const startButton = await screen.findByRole("button", { name: /new chat without history/i });
+    fireEvent.click(startButton);
+
+    await waitFor(() => expect(onNewConversation).toHaveBeenCalledTimes(1));
+    expect(onNewConversation).toHaveBeenCalledWith({
+      agentConfig: {
+        model: "local:lfm2.5-230m",
+        thinkingLevel: "low",
+        approvalLevel: 1,
+        respondPolicy: "mentioned",
+        respondFrom: ["user-1"],
+        maxModelCallsPerTurn: 3,
+        modelStreamIdleTimeoutMs: 12_000,
+      },
+    });
   });
 
   it("shows a cancel control for a pending channel-method invocation (transportCallId)", () => {

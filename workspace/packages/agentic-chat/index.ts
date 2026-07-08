@@ -11,6 +11,7 @@ export type {
   PendingAgentStatus,
   ConnectionConfig,
   AgenticChatActions,
+  NewConversationOptions,
   ToolProvider,
   ToolProviderDeps,
   ChatSandboxValue,

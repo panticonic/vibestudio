@@ -361,6 +361,7 @@ function promotePendingPrompt(
       turnId,
       openedAtSeq: state.lastSeq + 1,
       modelCallCount: 0,
+      consecutiveModelFailureCount: 0,
       interrupted: false,
       waitingCount: 0,
       ...(prompt.metadata ? { metadata: prompt.metadata } : {}),
@@ -394,6 +395,7 @@ function promoteSteersAsTurn(state: AgentState, ctx: StepContext): StepOutput {
       turnId,
       openedAtSeq: state.lastSeq + 1,
       modelCallCount: 0,
+      consecutiveModelFailureCount: 0,
       interrupted: false,
       waitingCount: 0,
       ...(head.metadata ? { metadata: head.metadata } : {}),
@@ -687,6 +689,7 @@ function hasFreshInput(state: AgentState): boolean {
 
 /** Optional per-turn model-call budget. Null means unlimited. */
 export const DEFAULT_MAX_MODEL_CALLS_PER_TURN: number | null = null;
+export const DEFAULT_MAX_CONSECUTIVE_MODEL_FAILURES = 3;
 
 function maxModelCallsPerTurn(state: AgentState): number | null {
   const configured = state.config.maxModelCallsPerTurn;
@@ -697,6 +700,47 @@ function maxModelCallsPerTurn(state: AgentState): number | null {
     return DEFAULT_MAX_MODEL_CALLS_PER_TURN;
   }
   return Math.floor(configured);
+}
+
+function modelRetryLimitExceeded(turn: OpenTurn): boolean {
+  return turn.consecutiveModelFailureCount >= DEFAULT_MAX_CONSECUTIVE_MODEL_FAILURES;
+}
+
+function modelRetryLimitItems(turn: OpenTurn): AppendItem[] {
+  const count = turn.consecutiveModelFailureCount;
+  return [
+    {
+      envelopeId: `diag:${turn.turnId}:model-retry-limit-exceeded`,
+      payloadKind: "message.completed",
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        blocks: [
+          {
+            type: "diagnostic",
+            content:
+              `Model retry limit reached for ${turn.turnId}: ` +
+              `${count} consecutive model failure(s) occurred, so this turn was stopped ` +
+              "to avoid an automatic retry loop.",
+            metadata: {
+              code: "model_retry_limit_exceeded",
+              severity: "error",
+              limit: DEFAULT_MAX_CONSECUTIVE_MODEL_FAILURES,
+              consecutiveModelFailureCount: count,
+              turnId: turn.turnId,
+            },
+          },
+        ],
+        outcome: "completed",
+      },
+      causality: {
+        messageId: `diag:${turn.turnId}:model-retry-limit-exceeded` as never,
+        turnId: turn.turnId,
+      },
+      publish: true,
+    },
+    turnClosedItem(turn.turnId, { reason: "model_retry_limit_exceeded" }),
+  ];
 }
 
 function nextModelCall(
@@ -743,6 +787,12 @@ function nextModelCall(
         },
         turnClosedItem(turn.turnId, { reason: "max_model_calls_per_turn" }),
       ],
+      effects: [],
+    };
+  }
+  if (modelRetryLimitExceeded(turn)) {
+    return {
+      append: modelRetryLimitItems(turn),
       effects: [],
     };
   }
@@ -954,6 +1004,7 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
           turnId,
           openedAtSeq: state.lastSeq + 2,
           modelCallCount: 0,
+          consecutiveModelFailureCount: 0,
           interrupted: false,
           waitingCount: 0,
           ...(turnMetadata(command) ? { metadata: turnMetadata(command) } : {}),
