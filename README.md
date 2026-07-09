@@ -83,6 +83,9 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 - `pnpm setup:npm-token` - Save the local npm publish token used by the release script
 - `pnpm publish:npm` - Build, stage, dry-run, publish, verify, and install-smoke the npm packages
 - `pnpm publish:npm:staged` - Reuse `dist/` and `dist-packages/` for an auth-only publish retry
+- `pnpm type-check:cloudflare` - Type-check the signaling and apex Cloudflare Workers
+- `pnpm deploy:cloudflare` - Deploy the signaling Worker and apex relay Worker
+- `pnpm smoke:cloudflare` - Smoke the deployed apex and signaling Workers
 - `pnpm start` - Start the app (requires prior build)
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier

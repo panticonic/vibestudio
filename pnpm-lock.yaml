@@ -482,15 +482,6 @@ importers:
         specifier: ^4.0.0
         version: 4.86.0(@cloudflare/workers-types@4.20260426.1)
 
-  apps/well-known:
-    devDependencies:
-      tsx:
-        specifier: ^4.0.0
-        version: 4.21.0
-      wrangler:
-        specifier: ^4.0.0
-        version: 4.86.0(@cloudflare/workers-types@4.20260426.1)
-
   packages/browser-data:
     dependencies:
       '@vibestudio/shared':

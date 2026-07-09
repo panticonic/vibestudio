@@ -15,11 +15,17 @@ compatibility_date = "2024-11-15"
 # Optional (defaults to 86400 = 24h):
 #   wrangler secret put TURN_TTL_SECONDS
 #
-# account_id and route/zone bindings are environment-specific. Set them under
-# your own [env.<name>] block or via CLOUDFLARE_ACCOUNT_ID.
+# account_id is environment-specific. Set CLOUDFLARE_ACCOUNT_ID in the deploy
+# shell or CI environment.
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
+
+# Production signaling endpoint used by the app's hosted default:
+#   wss://signal.vibestudio.app/
+[[routes]]
+pattern = "signal.vibestudio.app"
+custom_domain = true
 
 # The signaling room — one Durable Object instance per UUID room, persistent for
 # the connection's lifetime (WebSocket Hibernation API) so it can carry

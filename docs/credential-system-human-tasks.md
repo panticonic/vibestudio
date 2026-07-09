@@ -95,30 +95,31 @@ Follow-up TODOs:
 
 - TODO: Add DNS records for:
   - `vibestudio.app`
-- TODO: Bind `vibestudio.app` to the well-known static site and webhook relay
-  Worker routes.
-- TODO: Decide the production Vibestudio relay-to-server target for hosted/dev
-  deployments. For local-only development, expose the local gateway through an
-  explicit tunnel and set the relay's upstream to that tunnel URL.
+- TODO: Bind `vibestudio.app` to the apex webhook-relay Worker custom domain.
+  This single Worker owns `/`, `/pair`, `/.well-known/*`, `/oauth/callback/*`,
+  `/i/*`, and `/backhaul`.
+- TODO: Bind `signal.vibestudio.app` to the signaling Worker custom domain.
 - TODO: Configure Cloudflare secrets for the relay:
-  - `VIBESTUDIO_SERVER_BASE_URL`
   - `VIBESTUDIO_RELAY_SIGNING_SECRET`
+- TODO: Configure Cloudflare Realtime TURN secrets for the signaling Worker:
+  - `TURN_KEY_ID`
+  - `TURN_KEY_API_TOKEN`
 
 ### TODO: Mobile App Links
 
-- TODO: Fill `apps/well-known/config.json` with the real Apple Developer Team ID,
-  or set `VIBESTUDIO_APPLE_TEAM_ID` in CI/deploy.
-- TODO: Fill `apps/well-known/config.json` with Android release signing SHA256
-  fingerprints, or set `VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS` as a
-  comma-separated list in CI/deploy:
+- TODO: Set `VIBESTUDIO_APPLE_APP_ID` on the apex Worker to
+  `<teamId>.<bundleId>`.
+- TODO: Set `VIBESTUDIO_ANDROID_PACKAGE_NAME` and
+  `VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS` on the apex Worker:
   - upload key
   - Play App Signing key, if Play signing is enabled
-- TODO: Build and deploy the well-known site.
-- TODO: Verify:
+- TODO: Deploy the apex Worker.
+- TODO: Verify with `pnpm smoke:cloudflare:apex -- --expect-app-links`:
   - `https://vibestudio.app/.well-known/apple-app-site-association`
   - `https://vibestudio.app/.well-known/assetlinks.json`
 - TODO: Confirm iOS associated domains include `applinks:vibestudio.app`.
-- TODO: Confirm Android intent filters include `https://vibestudio.app/oauth/callback`.
+- TODO: Confirm Android intent filters include `https://vibestudio.app/oauth/callback`
+  and `https://vibestudio.app/pair`.
 - Done: OAuth callbacks are app-link/universal-link only. `vibestudio://` remains
   registered only for connect-link onboarding and is not accepted as an OAuth
   callback path.
@@ -191,19 +192,17 @@ Follow-up:
 - TODO: Add app restart/reconnect mobile OAuth tests once continuation tokens
   exist.
 
-### TODO: Well-Known Deployment Hardening
+### TODO: Apex Worker Deployment Hardening
 
-1. TODO: Extend `apps/well-known` build output with an explicit
-   `vibestudio.app` deployment checklist.
-2. Done: production builds fail if placeholder Team ID or Android fingerprints
-   remain; CI/deploy can provide those values via environment variables without
-   committing release identifiers to `config.json`.
-3. TODO: Add a small verification script that fetches both well-known URLs and checks:
+1. Done: the standalone Pages app is gone. The apex `apps/webhook-relay` Worker
+   owns pair links and app-link metadata.
+2. Done: `scripts/smoke-cloudflare-apex.mjs` fetches both well-known URLs and checks:
    - content type
    - cache headers
-   - Apple app ID
-   - Android package/fingerprints
-4. TODO: Wire that script into CI as a manual or environment-gated check.
+   - Apple app-link route coverage
+   - Android assetlinks presence
+3. TODO: Wire `pnpm smoke:cloudflare:apex -- --expect-app-links` into CI as a
+   manual or environment-gated check.
 
 ### Completed: Generic Public Webhook Ingress
 

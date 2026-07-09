@@ -8,9 +8,9 @@
  *   https://vibestudio.app/oauth/callback/<provider>?code=…&state=…
  *
  * The OS will only deliver these to *this* app once the AASA /
- * assetlinks.json verification (served by apps/well-known/) has bound the
- * host to our team-id + signing cert. Another app claiming the same host
- * cannot intercept.
+ * assetlinks.json verification (served by the apex apps/webhook-relay Worker)
+ * has bound the host to our team-id + signing cert. Another app claiming the
+ * same host cannot intercept.
  *
  * State binding: every authorize URL the server builds carries an
  * unguessable PKCE-bound `state`. The server owns the OAuth transaction

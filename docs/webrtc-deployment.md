@@ -1,114 +1,239 @@
-# WebRTC remote access — deployment
+# WebRTC Remote Access Deployment
 
-Remote clients reach a Vibestudio server over a peer-to-peer **WebRTC** pipe
-(DTLS-encrypted, paired by QR). Two small Cloudflare Workers support it; the
-server itself stays on loopback and needs **no public endpoint**.
+Remote clients reach a Vibestudio server over a peer-to-peer WebRTC pipe
+(DTLS-encrypted, paired by QR). The server itself stays on loopback and needs no
+public inbound port. Cloudflare hosts only the public coordination surfaces:
 
+```text
+desktop / mobile / CLI client                    home server / VPS
+         |  https://vibestudio.app/pair#...              |
+         v                                               v
+  +----------------------+  offer/answer/ICE  +-------------------------+
+  | signal.vibestudio.app|<------------------>| WebRTC answerer server  |
+  | Signaling Worker DO  |                    | loopback gateway only   |
+  +----------------------+                    +-------------------------+
+         |                                               ^
+         +----------- DTLS-pinned WebRTC pipe -----------+
+
+OAuth redirects / webhooks -> vibestudio.app apex Worker -> server backhaul
 ```
-   desktop / mobile / CLI client                      home server / VPS
-            │  vibestudio://connect?room&fp&code&sig          │
-            ▼                                                ▼
-   ┌─────────────────────┐   offer/answer   ┌──────────────────────────┐
-   │  signaling Worker    │◀────────────────▶│  server (WebRTC answerer) │
-   │  (SignalingRoom DO)  │   (no payload)   │  loopback gateway only    │
-   └─────────────────────┘                  └──────────────────────────┘
-            │  DTLS pinned by fp (fail-closed)                ▲
-            └───────────  peer-to-peer pipe  ─────────────────┘
 
-   OAuth redirects / inbound webhooks ─▶  webhook-relay Worker ─▶ server (backhaul)
+The signaling Worker blind-relays SDP/ICE and mints ICE servers. The apex Worker
+owns `/pair`, app-link verification, OAuth callbacks, webhook ingress, and the
+server backhaul. Neither Worker is a data-plane proxy for workspace traffic.
+
+## Cloudflare Zone
+
+1. Add `vibestudio.app` to Cloudflare.
+2. Import/recreate any existing DNS records.
+3. If DNSSEC is enabled at the registrar, disable it before changing
+   nameservers.
+4. Change the registrar nameservers to the Cloudflare-assigned nameservers.
+5. Wait until the zone is active in Cloudflare.
+
+The Worker custom domains are declared in Wrangler config:
+
+- `apps/signaling/wrangler.toml` -> `signal.vibestudio.app`
+- `apps/webhook-relay/wrangler.toml` -> `vibestudio.app`
+
+Do not deploy a separate Pages/static app at the apex. `apps/webhook-relay` is
+the single apex owner.
+
+## Local Preflight
+
+```bash
+pnpm type-check:cloudflare
 ```
 
-Neither Worker sees your data: **signaling** only brokers the WebRTC
-offer/answer, and the **relay** only forwards OAuth callbacks / webhooks over an
-authenticated backhaul socket the server opens.
+This type-checks both Cloudflare Workers before deployment.
 
-## 1. Deploy the signaling Worker
+## Signaling Worker
+
+Deploy target: `wss://signal.vibestudio.app/`
+
+TURN is optional for local/dev, but production should set it. Without TURN,
+connections may fail on symmetric or highly restricted NATs.
 
 ```bash
 cd apps/signaling
+
+# Required for reliable production NAT traversal.
+wrangler secret put TURN_KEY_ID
+wrangler secret put TURN_KEY_API_TOKEN
+
+# Optional; defaults to 86400 seconds.
+wrangler secret put TURN_TTL_SECONDS
+
 wrangler deploy
-# optional — only needed to traverse symmetric NAT (otherwise STUN suffices):
-wrangler secret put TURN_KEY_ID            # Cloudflare Realtime TURN credential id
-wrangler secret put TURN_KEY_API_TOKEN     # …and its signing key
-# optional: wrangler secret put TURN_TTL_SECONDS   (default 86400)
 ```
 
-`SIGNALING_ROOM` is a Durable Object (one instance per UUID room, WebSocket
-Hibernation so a room survives ICE-restart). The hosted default is
-`wss://signal.vibestudio.app`; self-hosted deployments can persist their URL with
-`vibestudio remote setup-signaling --url wss://...`.
+From the repo root, the deploy wrapper is:
 
-## 2. Deploy the callback relay (only if you use OAuth / webhooks remotely)
+```bash
+pnpm deploy:cloudflare:signaling
+```
+
+Smoke it:
+
+```bash
+pnpm smoke:cloudflare:signaling -- --expect-turn
+```
+
+The smoke checks:
+
+- `GET /healthz`
+- `GET /room/<test-room>/ice-servers`
+- a real two-role WebSocket relay through a Durable Object room
+- `x-signaling-turn: minted` when `--expect-turn` is set
+
+## Apex Worker
+
+Deploy target: `https://vibestudio.app/`
+
+Routes owned by this Worker:
+
+- `GET /`
+- `GET /pair`
+- `GET /.well-known/apple-app-site-association`
+- `GET /.well-known/assetlinks.json`
+- `GET /oauth/callback/*`
+- `POST /i/*`
+- `WS /backhaul`
+
+Configure secrets/vars:
 
 ```bash
 cd apps/webhook-relay
+
+# Required for relay backhaul auth and webhook envelope signing.
+wrangler secret put VIBESTUDIO_RELAY_SIGNING_SECRET
+
+# Required when mobile app-link / universal-link verification should be live.
+wrangler secret put VIBESTUDIO_APPLE_APP_ID
+wrangler secret put VIBESTUDIO_ANDROID_PACKAGE_NAME
+wrangler secret put VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS
+
 wrangler deploy
-wrangler secret put VIBESTUDIO_RELAY_SIGNING_SECRET   # backhaul auth + envelope signing
-# universal-link hosting for mobile OAuth deep links (plain vars or secrets):
-#   VIBESTUDIO_APPLE_APP_ID, VIBESTUDIO_ANDROID_PACKAGE_NAME, VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS
 ```
 
-`RELAY_REGISTRY` is one global DO: each home server opens one authenticated
-`/backhaul` WebSocket and claims its subscription ids (first-writer-wins). There
-is no per-server base URL — routing is multi-tenant.
-
-## 3. Run the server as a WebRTC answerer
-
-Run the server as a WebRTC answerer. Signaling resolves as flag > env > config >
-hosted default:
+From the repo root:
 
 ```bash
+pnpm deploy:cloudflare:apex
+```
+
+Smoke it:
+
+```bash
+pnpm smoke:cloudflare:apex
+```
+
+The smoke checks `/healthz`, `/`, `/pair`, and the two `.well-known` app-link
+documents.
+
+Before Apple/Android identifiers are configured, the smoke accepts `503` for the
+two `.well-known` routes so the apex Worker can be deployed early. Once app-link
+metadata is configured, run the strict check:
+
+```bash
+pnpm smoke:cloudflare:apex -- --expect-app-links
+```
+
+## Deploy Both Workers
+
+After the Cloudflare zone is active and secrets are configured:
+
+```bash
+pnpm deploy:cloudflare
+pnpm smoke:cloudflare
+```
+
+For a production readiness pass with TURN and app-link metadata enforced:
+
+```bash
+pnpm smoke:cloudflare:signaling -- --expect-turn
+pnpm smoke:cloudflare:apex -- --expect-app-links
+```
+
+## Run A Server
+
+Signaling resolves as flag > environment > config > hosted default:
+
+```bash
+vibestudio remote doctor --signal-url wss://signal.vibestudio.app/
 vibestudio remote serve --port 3030
-# logs:  Pair URL: https://vibestudio.app/pair#room=…&fp=…&code=…&sig=…&v=2
 ```
 
-The server mints the per-invite signaling room and pairing code itself (one
-fresh room per invite; paired devices keep their own rooms).
+The server prints a pair URL:
 
-- The server presents a **persistent DTLS identity**. `remote deploy` pins the
-  hub identity at `$HOME/.config/vibestudio/webrtc/identity.pem`; workspace
-  child answerers use
-  `$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem`.
-  Override with `VIBESTUDIO_WEBRTC_IDENTITY` only for explicit local setups. The
-  certificate SHA-256 is the `fp` in the link; the client pins it and
-  fail-closes on mismatch.
-- `VIBESTUDIO_WEBRTC_ICE=relay` forces TURN (needs the signaling TURN secrets above).
-- `vibestudio remote doctor` validates node-datachannel, signaling reachability,
-  `identity.pem`, and removed legacy env vars before deployment.
-- OAuth redirect URIs are minted from `VIBESTUDIO_RELAY_OAUTH_BASE_URL` (the relay
-  origin); register that `…/oauth/callback` with your providers.
+```text
+https://vibestudio.app/pair#room=...&fp=...&code=...&sig=...&v=2
+```
 
-The native `node-datachannel` module is loaded lazily on first connect; build it
-once with `pnpm rebuild node-datachannel`.
+The server presents a persistent DTLS identity. `remote deploy` pins the hub
+identity at:
 
-For a managed SSH/systemd host, use:
+```text
+$HOME/.config/vibestudio/webrtc/identity.pem
+```
+
+Workspace child answerers use:
+
+```text
+$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem
+```
+
+Override with `VIBESTUDIO_WEBRTC_IDENTITY` only for explicit local setups. The
+certificate SHA-256 is the `fp` in the pair link; clients pin it and fail closed
+on mismatch.
+
+Force a TURN-only pass when validating production NAT traversal:
 
 ```bash
-vibestudio remote deploy user@host --port 3030 --workspace default
+VIBESTUDIO_WEBRTC_ICE=relay vibestudio remote serve --port 3030
+```
+
+For a managed SSH/systemd host:
+
+```bash
+vibestudio remote deploy user@host --port 3030 --workspace default --signal-url wss://signal.vibestudio.app/
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
 ```
 
-Deploy starts the loopback server, mints a workspace-scoped invite via the
-remote host's local admin token, and doctors the selected workspace child
-identity.
+## Pair A Client
 
-## 4. Pair a client
+Open or scan the printed `https://vibestudio.app/pair#...` URL from desktop,
+mobile, or CLI. The client redeems the one-time pairing code over the WebRTC
+pipe, receives a durable device credential, and persists it for reconnects.
 
-Scan/open the printed `https://vibestudio.app/pair#…` URL from the desktop chooser, the
-mobile app, or the CLI. The client redeems the one-time `code` over
-the pipe, receives a durable device credential, and persists it (encrypted) for
-reconnects — see [webrtc-rpc-transport.md](./webrtc-rpc-transport.md) for the
-protocol and [webrtc-local-e2e.md](./webrtc-local-e2e.md) for a fully local
-rehearsal of all of the above with `wrangler dev`.
+## OAuth And Webhooks
 
-## Local rehearsal (no deploy)
+OAuth redirect URIs should use the apex Worker:
 
-Everything above runs against Cloudflare's local runtime:
+```text
+https://vibestudio.app/oauth/callback/<transactionId>
+```
+
+Set server-side relay origin configuration to the same apex origin when enabling
+remote OAuth/webhooks:
+
+```bash
+export VIBESTUDIO_RELAY_OAUTH_BASE_URL=https://vibestudio.app
+```
+
+The relay does not have a per-server upstream URL. Each home server opens an
+authenticated outbound `/backhaul` WebSocket and claims its own subscription ids.
+
+## Local Rehearsal
+
+Everything can still run against Cloudflare's local runtime:
 
 ```bash
 pnpm rebuild node-datachannel
-pnpm test:webrtc-e2e    # spawns `wrangler dev apps/signaling`, a real answerer,
-                        # and a client — covers connect, RPC, bulk stream, AND
-                        # the full QR-code → device-credential → refresh pairing.
+pnpm test:webrtc-e2e
 ```
+
+`pnpm test:webrtc-e2e` spawns `wrangler dev apps/signaling`, a real answerer,
+and a client. It covers connect, RPC, bulk stream, and the QR-code to
+device-credential pairing flow.

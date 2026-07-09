@@ -3,10 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import worker, { type Env } from "./index";
 
 // The Worker entry is a thin router: stateful routes go to the global
-// RelayRegistry DO; health + the universal-link host are served here. We stub
-// the DO namespace so we can assert routing without the workerd runtime.
+// RelayRegistry DO; health, /pair, /, and the universal-link host are served
+// here. We stub the DO namespace so we can assert routing without the workerd
+// runtime.
 
-function makeEnv(overrides: Partial<Env> = {}): { env: Env; stub: { fetch: ReturnType<typeof vi.fn> } } {
+function makeEnv(overrides: Partial<Env> = {}): {
+  env: Env;
+  stub: { fetch: ReturnType<typeof vi.fn> };
+} {
   const stub = { fetch: vi.fn(async () => new Response("from-do", { status: 222 })) };
   const env = {
     VIBESTUDIO_RELAY_SIGNING_SECRET: "relay-secret",
@@ -31,28 +35,54 @@ describe("webhook relay Worker — routing", () => {
     expect(stub.fetch).not.toHaveBeenCalled();
   });
 
+  it("serves the apex landing without touching the DO", async () => {
+    const { env, stub } = makeEnv();
+    const resp = await worker.fetch(new Request("https://vibestudio.app/"), env);
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get("content-type")).toContain("text/html");
+    expect(await resp.text()).toContain("Vibestudio");
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
+  it("serves the pair trampoline without seeing the private fragment", async () => {
+    const { env, stub } = makeEnv();
+    const resp = await worker.fetch(new Request("https://vibestudio.app/pair#room=secret"), env);
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get("content-type")).toContain("text/html");
+    const html = await resp.text();
+    expect(html).toContain("vibestudio://connect?");
+    expect(html).toContain("location.hash");
+    expect(html).not.toContain("room=secret");
+    expect(stub.fetch).not.toHaveBeenCalled();
+  });
+
   it("routes webhook ingress to the global RelayRegistry DO", async () => {
     const { env, stub } = makeEnv();
     const resp = await worker.fetch(
       new Request("https://vibestudio.app/i/sub-1?debug=1", { method: "POST", body: "{}" }),
-      env,
+      env
     );
     expect(stub.fetch).toHaveBeenCalledTimes(1);
-    expect((env.RELAY_REGISTRY.idFromName as any)).toHaveBeenCalledWith("global");
+    expect(env.RELAY_REGISTRY.idFromName as any).toHaveBeenCalledWith("global");
     expect(resp.status).toBe(222);
   });
 
   it("routes the OAuth landing to the DO", async () => {
     const { env, stub } = makeEnv();
-    await worker.fetch(new Request("https://vibestudio.app/oauth/callback/tx-1?code=c&state=s"), env);
+    await worker.fetch(
+      new Request("https://vibestudio.app/oauth/callback/tx-1?code=c&state=s"),
+      env
+    );
     expect(stub.fetch).toHaveBeenCalledTimes(1);
   });
 
   it("routes a backhaul WS upgrade to the DO", async () => {
     const { env, stub } = makeEnv();
     await worker.fetch(
-      new Request("https://vibestudio.app/backhaul?serverId=a&ts=1&sig=x", { headers: { upgrade: "websocket" } }),
-      env,
+      new Request("https://vibestudio.app/backhaul?serverId=a&ts=1&sig=x", {
+        headers: { upgrade: "websocket" },
+      }),
+      env
     );
     expect(stub.fetch).toHaveBeenCalledTimes(1);
   });
@@ -71,22 +101,29 @@ describe("webhook relay Worker — routing", () => {
 });
 
 describe("webhook relay Worker — universal-link host", () => {
-  it("serves the Apple App Site Association anchored on /oauth/callback/*", async () => {
+  it("serves the Apple App Site Association for OAuth and pairing links", async () => {
     const { env } = makeEnv();
     const resp = await worker.fetch(
       new Request("https://vibestudio.app/.well-known/apple-app-site-association"),
-      env,
+      env
     );
     expect(resp.status).toBe(200);
     expect(resp.headers.get("content-type")).toBe("application/json");
     const doc = (await resp.json()) as any;
     expect(doc.applinks.details[0].appIDs).toEqual(["ABCDE12345.app.vibestudio.mobile"]);
-    expect(doc.applinks.details[0].components[0]["/"]).toBe("/oauth/callback/*");
+    expect(doc.applinks.details[0].components.map((component: any) => component["/"])).toEqual([
+      "/oauth/callback/*",
+      "/oauth/linkback/*",
+      "/pair",
+    ]);
   });
 
   it("serves Android assetlinks", async () => {
     const { env } = makeEnv();
-    const resp = await worker.fetch(new Request("https://vibestudio.app/.well-known/assetlinks.json"), env);
+    const resp = await worker.fetch(
+      new Request("https://vibestudio.app/.well-known/assetlinks.json"),
+      env
+    );
     expect(resp.status).toBe(200);
     const doc = (await resp.json()) as any;
     expect(doc[0].target.package_name).toBe("app.vibestudio.mobile");
@@ -97,7 +134,7 @@ describe("webhook relay Worker — universal-link host", () => {
     const { env } = makeEnv({ VIBESTUDIO_APPLE_APP_ID: undefined });
     const resp = await worker.fetch(
       new Request("https://vibestudio.app/.well-known/apple-app-site-association"),
-      env,
+      env
     );
     expect(resp.status).toBe(503);
   });

@@ -3,6 +3,7 @@
  *
  * Plan §7: one public edge serving two profiles on one backhaul.
  *
+ *   - Pair landing:       GET  /pair                     -> custom-scheme trampoline
  *   - WEBHOOK (stateful):  POST /i/<subscriptionId>      -> RelayRegistry DO
  *   - OAUTH landing:       GET  /oauth/callback/...       -> RelayRegistry DO
  *   - Universal-link host: GET  /.well-known/apple-app-site-association
@@ -17,6 +18,8 @@
 
 import { RelayRegistry, type Env } from "./registry";
 import {
+  handleApexLanding,
+  handlePairLanding,
   buildAppleAppSiteAssociation,
   buildAssetlinks,
   universalLinkConfigFromEnv,
@@ -54,6 +57,13 @@ export default {
       return json({ ok: true });
     }
 
+    if (request.method === "GET" && url.pathname === "/") {
+      return handleApexLanding();
+    }
+    if (request.method === "GET" && url.pathname === "/pair") {
+      return handlePairLanding(url);
+    }
+
     // Universal-link host — anchors the relay's own origin so the mobile OS
     // deep-links /oauth/callback/* into the app. Fails loud when unconfigured
     // rather than serving a broken association.
@@ -69,7 +79,10 @@ export default {
     }
 
     // Everything stateful is owned by the global RelayRegistry DO.
-    if (url.pathname === "/backhaul" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+    if (
+      url.pathname === "/backhaul" &&
+      request.headers.get("upgrade")?.toLowerCase() === "websocket"
+    ) {
       return relayStub(env).fetch(request);
     }
     if (request.method === "POST" && url.pathname.startsWith("/i/")) {
@@ -84,8 +97,8 @@ export default {
 };
 
 function wellKnownJson(doc: unknown): Response {
-  // Apple rejects anything but application/json (silently). nosniff for parity
-  // with the dedicated well-known site.
+  // Apple rejects anything but application/json (silently). nosniff keeps the
+  // app-link verification surface deterministic across both mobile platforms.
   return new Response(JSON.stringify(doc), {
     headers: {
       "content-type": "application/json",

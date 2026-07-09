@@ -67,7 +67,11 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
   const registration = deps.lookup(transactionId);
   if (!registration || now > registration.expiresAt) {
     // Unknown or expired transaction — fail loud (covers replayed / stale links).
-    return htmlError(404, "Unknown sign-in", "This sign-in link is unknown or has expired. Start the connection again from Vibestudio.");
+    return htmlError(
+      404,
+      "Unknown sign-in",
+      "This sign-in link is unknown or has expired. Start the connection again from Vibestudio."
+    );
   }
 
   if (registration.platform === "mobile") {
@@ -77,7 +81,7 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
     return htmlError(
       200,
       "Open the Vibestudio app",
-      "This sign-in should have opened the Vibestudio app automatically. Make sure the app is installed, then start the connection again.",
+      "This sign-in should have opened the Vibestudio app automatically. Make sure the app is installed, then start the connection again."
     );
   }
 
@@ -90,10 +94,52 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
     error,
   });
   if (!delivered) {
-    return htmlError(503, "Server offline", "Could not reach your Vibestudio server to finish signing in. Make sure it is running, then start the connection again.");
+    return htmlError(
+      503,
+      "Server offline",
+      "Could not reach your Vibestudio server to finish signing in. Make sure it is running, then start the connection again."
+    );
   }
   deps.consume(transactionId);
   return htmlPage(200, "Sign-in complete", "You can close this window and return to Vibestudio.");
+}
+
+// ---- Pair-link landing -----------------------------------------------------
+
+/**
+ * HTTPS carrier for pairing QR codes (`https://vibestudio.app/pair#...`).
+ *
+ * The private pairing material lives in the URL fragment, so it is never sent
+ * to this Worker. The page reconstructs the native `vibestudio://connect?...`
+ * URL client-side and opens the installed app. Desktop browsers show the custom
+ * scheme for copy/retry; Android uses an intent URL for a better install/open
+ * handoff.
+ */
+export function handlePairLanding(url: URL): Response {
+  if (url.pathname !== "/pair")
+    return htmlError(404, "Not found", "This Vibestudio page does not exist.");
+  return new Response(PAIR_LANDING_HTML, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "public, max-age=300",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+export function handleApexLanding(): Response {
+  return new Response(
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vibestudio</title><body style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:42rem;margin:4rem auto;padding:0 1rem;line-height:1.5;color:#111"><h1>Vibestudio</h1><p>This host serves Vibestudio pairing, mobile app-link verification, OAuth callbacks, and webhook relay endpoints.</p><p><a href="/healthz">Health check</a></p></body>`,
+    {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "public, max-age=300",
+        "x-content-type-options": "nosniff",
+      },
+    }
+  );
 }
 
 // ---- Universal-link host (Apple App Site Association / Android assetlinks) ---
@@ -114,7 +160,9 @@ export function universalLinkConfigFromEnv(env: {
   return {
     appleAppIds: splitList(env.VIBESTUDIO_APPLE_APP_ID),
     androidPackageName: env.VIBESTUDIO_ANDROID_PACKAGE_NAME?.trim() || undefined,
-    androidFingerprints: splitList(env.VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS).map((f) => f.toUpperCase()),
+    androidFingerprints: splitList(env.VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS).map((f) =>
+      f.toUpperCase()
+    ),
   };
 }
 
@@ -140,7 +188,11 @@ export function buildAppleAppSiteAssociation(config: UniversalLinkConfig): unkno
       details: [
         {
           appIDs: config.appleAppIds,
-          components: [{ "/": "/oauth/callback/*", comment: "OAuth provider callbacks" }],
+          components: [
+            { "/": "/oauth/callback/*", comment: "OAuth provider callbacks" },
+            { "/": "/oauth/linkback/*", comment: "OAuth account-linking callbacks" },
+            { "/": "/pair", comment: "Pairing trampoline" },
+          ],
         },
       ],
     },
@@ -173,7 +225,7 @@ function htmlPage(status: number, title: string, body: string): Response {
     {
       status,
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
-    },
+    }
   );
 }
 
@@ -188,3 +240,56 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
+
+const PAIR_LANDING_HTML = `<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pair Vibestudio</title>
+<style>
+body{font:16px system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:32px;line-height:1.45;color:#111;background:#fff}
+main{max-width:680px;margin:0 auto}
+button{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 14px;border:1px solid #111;border-radius:6px;background:#111;color:#fff;text-decoration:none;font-weight:600}
+button:disabled{opacity:.5}
+code{overflow-wrap:anywhere}
+.muted{color:#555}
+</style>
+<main>
+  <h1>Pair Vibestudio</h1>
+  <p id="status">Preparing pairing link.</p>
+  <p><button id="open" type="button">Open in Vibestudio</button></p>
+  <p class="muted" id="install">If Vibestudio is not installed, build or install the mobile shell, then return to this page and open the link.</p>
+  <p><code id="link"></code></p>
+</main>
+<script>
+(() => {
+  const fragment = location.hash ? location.hash.slice(1) : "";
+  const status = document.getElementById("status");
+  const link = document.getElementById("link");
+  const open = document.getElementById("open");
+  if (!fragment) {
+    status.textContent = "This pair URL is missing its private fragment. Scan a fresh QR from Vibestudio.";
+    open.disabled = true;
+    return;
+  }
+  const scheme = "vibestudio://connect?" + fragment;
+  link.textContent = scheme;
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  const isIos = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const openLink = () => {
+    if (isAndroid) {
+      location.href = "intent://connect?" + fragment + "#Intent;scheme=vibestudio;package=app.vibestudio.mobile;end";
+      return;
+    }
+    location.href = scheme;
+  };
+  if (isAndroid) {
+    status.textContent = "Opening Vibestudio. If it does not open, install the Android shell and retry.";
+    setTimeout(openLink, 50);
+  } else if (isIos) {
+    status.textContent = "Tap Open in Vibestudio. If it is not installed, build the iOS shell on your Mac first.";
+  } else {
+    status.textContent = "Open this link on a phone with Vibestudio installed.";
+  }
+  open.addEventListener("click", openLink);
+})();
+</script>`;

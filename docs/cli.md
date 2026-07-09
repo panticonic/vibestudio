@@ -119,6 +119,18 @@ flag > environment > config > hosted default (`wss://signal.vibestudio.app`).
 Use `remote setup-signaling` only when you want to self-host the Cloudflare
 signaling worker.
 
+Production Cloudflare deploys are rooted in the repo scripts:
+
+```sh
+pnpm type-check:cloudflare
+pnpm deploy:cloudflare
+pnpm smoke:cloudflare
+```
+
+`signal.vibestudio.app` is owned by `apps/signaling`; `vibestudio.app` is owned by
+`apps/webhook-relay` for `/pair`, `.well-known`, OAuth callbacks, webhooks, and
+backhaul.
+
 ## Agent
 
 The agent CLI can attach durable sessions, call server RPC methods, inspect
