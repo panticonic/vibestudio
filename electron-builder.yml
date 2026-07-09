@@ -48,15 +48,10 @@ extraResources:
       - "tsconfig.integration.mobile.json"
       - "!**/node_modules/**"
       - "!**/.git/**"
-  # Sibling support directories referenced by workspace-template metadata:
-  # workspace/pnpm-workspace.yaml includes ../packages/* and workspace/package.json
-  # references ../patches/*.
-  - from: "packages"
-    to: "packages"
-    filter:
-      - "**/*"
-      - "!**/node_modules/**"
-      - "!**/.git/**"
+  # Sibling support directories referenced by workspace-template metadata.
+  # Host @vibestudio/* packages are not copied here; runtime builds resolve them
+  # from the installed app node_modules. Keep only shared patch files referenced
+  # by workspace/package.json.
   - from: "patches"
     to: "patches"
     filter:

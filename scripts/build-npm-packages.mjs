@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 // Stage the two publishable npm packages from a completed `pnpm build`:
 //
-//   dist-packages/server  → @vibestudio/server  (slim headless server, no electron)
-//   dist-packages/app     → @vibestudio/app     (full Electron desktop app)
+//   dist-packages/server  → @panticonic/vibestudio-server  (slim headless server, no electron)
+//   dist-packages/app     → @panticonic/vibestudio         (full Electron desktop app)
 //
 // The monorepo root stays private; this script synthesizes each package.json and
-// assembles its file tree. Workspace (@vibestudio/* + @workspace/*) packages are
-// not on npm, so they are vendored: the server bundle already inlines all of
-// them except @vibestudio/extension-host, which is vendored via a self-contained
-// publish build (so it resolves on any Node >=20 with no workspace:* / .ts at
-// runtime); the app vendors the whole workspace graph. Userland dependencies
+// assembles its file tree. Host @vibestudio/* packages are vendored under
+// vendor/ and copied into node_modules by postinstall. @workspace/* packages are
+// not host dependencies; they ship only as first-run workspace template source
+// and are built by the runtime workspace build system. Userland dependencies
 // include packages that require Node >=22.13, so the generated packages declare
 // the same floor.
 //
@@ -26,6 +25,8 @@ const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 const VERSION = rootPkg.version;
+const PUBLIC_APP_PACKAGE_NAME = "@panticonic/vibestudio";
+const PUBLIC_SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
 
 // Host-provided build deps that live in root devDependencies (browser polyfills
 // and alternative panel compilers) — needed to build the default template's
@@ -68,7 +69,11 @@ export const WORKSPACE_TEMPLATE_ROOT_FILES = [
   "tsconfig.integration.mobile.json",
 ];
 
-export const WORKSPACE_TEMPLATE_SUPPORT_DIRS = ["packages", "patches"];
+// Support dirs referenced by workspace/package.json metadata. Host packages are
+// intentionally not copied here: packaged runtime builds resolve @vibestudio/*
+// from the installed app node_modules (vendor/postinstall), not from a duplicate
+// sibling source tree.
+export const WORKSPACE_TEMPLATE_SUPPORT_DIRS = ["patches"];
 
 // Only run the build when invoked directly (`node scripts/build-npm-packages.mjs`),
 // not when imported (e.g. by the drift-guard test) — importing must be free of
@@ -110,11 +115,11 @@ function buildSelfContainedExtensionHost() {
 }
 
 // ---------------------------------------------------------------------------
-// @vibestudio/server
+// @panticonic/vibestudio-server
 // ---------------------------------------------------------------------------
 function stageServer() {
   const root = path.join(outRoot, "server");
-  console.log("• Staging @vibestudio/server…");
+  console.log(`• Staging ${PUBLIC_SERVER_PACKAGE_NAME}…`);
   mkdirp(root);
 
   // Server runtime files (see paths.ts / internalDoLoader.ts / headlessHostManager.ts).
@@ -133,7 +138,10 @@ function stageServer() {
 
   // Bin shims.
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
-  copyFile("scripts/vibestudio-server-shim.mjs", path.join(root, "scripts/vibestudio-server-shim.mjs"));
+  copyFile(
+    "scripts/vibestudio-server-shim.mjs",
+    path.join(root, "scripts/vibestudio-server-shim.mjs")
+  );
 
   // Vendor the host's @vibestudio/* packages under vendor/ (NOT node_modules). A
   // partial node_modules shipped in the tarball perturbs npm's reify ordering —
@@ -147,9 +155,10 @@ function stageServer() {
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
-    name: "@vibestudio/server",
+    name: PUBLIC_SERVER_PACKAGE_NAME,
     version: VERSION,
-    description: "Vibestudio headless server (build, git, channels, AI, agents) over WebSocket RPC.",
+    description:
+      "Vibestudio headless server (build, git, channels, AI, agents) over WebSocket RPC.",
     type: "module",
     license: rootPkg.license ?? "MIT",
     bin: {
@@ -157,7 +166,7 @@ function stageServer() {
       vibestudio: "scripts/vibestudio-launcher.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "workspace-template", "packages", "patches", "scripts"],
+    files: ["dist", "vendor", "workspace-template", "patches", "scripts"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
     dependencies: computeHostDependencies({ electron: false }),
@@ -166,11 +175,11 @@ function stageServer() {
 }
 
 // ---------------------------------------------------------------------------
-// @vibestudio/app
+// @panticonic/vibestudio
 // ---------------------------------------------------------------------------
 function stageApp() {
   const root = path.join(outRoot, "app");
-  console.log("• Staging @vibestudio/app…");
+  console.log(`• Staging ${PUBLIC_APP_PACKAGE_NAME}…`);
   mkdirp(root);
 
   // Full host build (main + all preloads + server-electron + cli + headless-host).
@@ -181,7 +190,10 @@ function stageApp() {
   stageWorkspaceTemplateSupport(root);
 
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
-  copyFile("scripts/vibestudio-server-shim.mjs", path.join(root, "scripts/vibestudio-server-shim.mjs"));
+  copyFile(
+    "scripts/vibestudio-server-shim.mjs",
+    path.join(root, "scripts/vibestudio-server-shim.mjs")
+  );
   copyFile("scripts/branded-electron.mjs", path.join(root, "scripts/branded-electron.mjs"));
   if (fs.existsSync(path.join(repoRoot, "build-resources"))) {
     copyTree(
@@ -200,7 +212,7 @@ function stageApp() {
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));
 
   writeJson(path.join(root, "package.json"), {
-    name: "@vibestudio/app",
+    name: PUBLIC_APP_PACKAGE_NAME,
     version: VERSION,
     productName: rootPkg.productName ?? "Vibestudio",
     description: rootPkg.description,
@@ -212,7 +224,7 @@ function stageApp() {
       "vibestudio-server": "scripts/vibestudio-server-shim.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "workspace", "packages", "patches", "scripts", "build-resources"],
+    files: ["dist", "vendor", "workspace", "patches", "scripts", "build-resources"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     dependencies: computeHostDependencies({ electron: true }),
     publishConfig: { access: "public" },

@@ -68,8 +68,8 @@ describe("packaged workspace template staging drift guard", () => {
     ]);
   });
 
-  it("stages the parent package graph and patches referenced by workspace metadata", () => {
-    expect([...WORKSPACE_TEMPLATE_SUPPORT_DIRS].sort()).toEqual(["packages", "patches"]);
+  it("stages only sibling patch files referenced by workspace metadata", () => {
+    expect([...WORKSPACE_TEMPLATE_SUPPORT_DIRS].sort()).toEqual(["patches"]);
   });
 
   it("keeps the native Electron workspace template self-contained", () => {

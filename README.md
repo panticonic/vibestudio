@@ -7,6 +7,7 @@ It's an environment in which you can combine agentic workflows similar to OpenCl
 Unlike many other agentic systems, vibestudio is sandboxed by default and has a privileged, out-of-band system for credentials management and access approval -- so instead of handing over your keys and nervously prompting agents to keep them from taking bad actions with the access you're giving them, you can maintain complete control over every privileged access.
 
 The vibestudio sandbox:
+
 - has a browser-style out-of-band approval system (similar to camera, microphone or storage access in normal browsers) and credential store for external providers.
 - includes a context-isolated file system per app / agent instance.
 - has facilities for building and debugging software within the system, including agents, apps and reusable packages.
@@ -24,7 +25,7 @@ Requires **Node.js 20+**. Both packages update via npm (re-run with `@latest`).
 Installs the GUI and the bundled server:
 
 ```bash
-npm install -g @vibestudio/app
+npm install -g @panticonic/vibestudio
 vibestudio             # launch the desktop app
 vibestudio --help      # CLI subcommands: remote, pair, mobile, fs, vcs, agent, eval, …
 ```
@@ -45,11 +46,11 @@ stops on its own. See [STATE_DIRECTORY.md](STATE_DIRECTORY.md) for the on-disk f
 ### Headless server (remote/home server; clients connect to it)
 
 ```bash
-npm install -g @vibestudio/server
+npm install -g @panticonic/vibestudio-server
 export VIBESTUDIO_WEBRTC_SIGNAL_URL=wss://vibestudio-signaling.<account>.workers.dev
 vibestudio remote serve --port 3030
 # quick one-off (no global install):
-npx -p @vibestudio/server vibestudio remote serve --signal-url wss://vibestudio-signaling.<account>.workers.dev --port 3030
+npx -p @panticonic/vibestudio-server vibestudio remote serve --signal-url wss://vibestudio-signaling.<account>.workers.dev --port 3030
 ```
 
 The server installs with no compiler (workerd/esbuild ship prebuilt binaries) and
@@ -78,11 +79,52 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 - `pnpm dev:webrtc` - Build, start a local workspace server as a WebRTC answerer, and launch Electron through the remote transport
 - `pnpm dev -- --auto-approve` - Start dev mode and automatically approve decision-style approval prompts
 - `pnpm build` - Production build
+- `pnpm stage:npm` - Build and stage the public npm packages under `dist-packages/`
+- `pnpm setup:npm-token` - Save the local npm publish token used by the release script
+- `pnpm publish:npm` - Build, stage, dry-run, publish, verify, and install-smoke the npm packages
+- `pnpm publish:npm:staged` - Reuse `dist/` and `dist-packages/` for an auth-only publish retry
 - `pnpm start` - Start the app (requires prior build)
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier
 - `pnpm format:check` - Check formatting
 - `pnpm type-check` - Type check without emitting
+
+### Publishing npm packages
+
+This repo's npm release flow is token-only. Use a granular npm access token with
+package read/write access and bypass 2FA enabled. Save it once on the release
+machine:
+
+```bash
+pnpm setup:npm-token
+```
+
+The token is written to `~/.config/vibestudio/npm-publish-token` with file mode
+`0600`. It can also be supplied per shell with `NPM_TOKEN` or `NODE_AUTH_TOKEN`.
+Use `pnpm setup:npm-token --path` to print the token path, `--remove` to delete
+the saved token, and `--stdin` to read a token from stdin.
+
+Run the full npm release:
+
+```bash
+pnpm publish:npm
+```
+
+That one command builds, stages, runs npm publish dry-runs, publishes
+`@panticonic/vibestudio-server` first, publishes `@panticonic/vibestudio`
+second, verifies both package versions on npm, then installs from npm into `/tmp`
+and runs the packaged CLI smoke checks.
+
+If the build/stage/dry-run already passed and only token or network access
+blocked publish, retry without rebuilding:
+
+```bash
+pnpm publish:npm:staged
+pnpm publish:npm:staged -- --package app   # if the server package already published
+```
+
+The staged retry uses the same publish, verification, and install-smoke checks;
+it only skips rebuilding the local artifacts.
 
 ## How It Works
 
@@ -157,7 +199,7 @@ HTTP.
 ### Prerequisites
 
 ```bash
-npm install -g @vibestudio/server
+npm install -g @panticonic/vibestudio-server
 ```
 
 For development from a source checkout instead: `pnpm bootstrap && pnpm build`.

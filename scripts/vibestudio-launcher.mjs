@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Unified `vibestudio` entry point for the npm-published packages.
 //
-// - @vibestudio/app ships this with Electron present: no args / `open` → launch
-//   the desktop GUI; a recognized verb (remote, pair, mobile, fs, vcs, agent,
-//   eval, --help, --version, ...) → delegate to the CLI client.
-// - @vibestudio/server ships the same file but without Electron: every invocation
-//   routes to the CLI (bare invocation prints CLI help).
+// - @panticonic/vibestudio ships this with Electron present: no args / `open` →
+//   launch the desktop GUI; a recognized verb (remote, pair, mobile, fs, vcs,
+//   agent, eval, --help, --version, ...) → delegate to the CLI client.
+// - @panticonic/vibestudio-server ships the same file but without Electron:
+//   every invocation routes to the CLI (bare invocation prints CLI help).
 //
 // Both variants pin VIBESTUDIO_APP_ROOT to the installed package so getAppRoot()
 // resolves against the package, not the user's shell cwd (npx / global installs

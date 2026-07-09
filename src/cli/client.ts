@@ -969,6 +969,10 @@ export async function main(argv: string[]): Promise<number> {
     printHelp();
     return 0;
   }
+  if (group === "--version" || group === "-v" || group === "version") {
+    console.log(packageVersion());
+    return 0;
+  }
   // The `claude` group self-parses (it supports a bare launcher invocation plus
   // `emit`/`channel-host` subcommands) and calls the configured Claude Code
   // provider over RPC — it deliberately owns no `CliCommand` entries.
@@ -1077,6 +1081,18 @@ function printGroupHelp(group: string): void {
 Usage:
 ${renderGroupHelp(commandRegistry, group)}
 `);
+}
+
+function packageVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    if (typeof pkg.version === "string" && pkg.version.length > 0) return pkg.version;
+  } catch {
+    // Fall through to a deterministic placeholder for unusual embedded launches.
+  }
+  return "0.0.0";
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

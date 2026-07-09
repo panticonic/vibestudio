@@ -61,7 +61,7 @@ describe("remote-deploy CLI", () => {
     const [preflight, install, service, postStart] = sshScripts(calls);
     expect(preflight).toContain("systemctl --user --version");
     expect(preflight).toContain("loginctl enable-linger");
-    expect(install).toContain("npm install -g '@vibestudio/server@");
+    expect(install).toContain("npm install -g '@panticonic/vibestudio-server@");
     expect(service).toContain("cat > $HOME/.config/systemd/user/vibestudio-server.service");
     expect(service).toContain(
       "Environment=VIBESTUDIO_WEBRTC_IDENTITY=%h/.config/vibestudio/webrtc/identity.pem"

@@ -34,15 +34,15 @@ separate Electron⇄server IPC mode.
 For a stable command on your PATH, install from npm:
 
 ```sh
-npm install -g @vibestudio/app        # GUI + the `vibestudio` CLI dispatcher
+npm install -g @panticonic/vibestudio        # GUI + the `vibestudio` CLI dispatcher
 # headless server box (CLI + daemon, no Electron):
-npm install -g @vibestudio/server
+npm install -g @panticonic/vibestudio-server
 ```
 
-`@vibestudio/app` provides `vibestudio` (bare invocation launches the GUI; subcommands
-run the CLI) and `vibestudio-server`. `@vibestudio/server` provides `vibestudio-server`
-plus the `vibestudio` CLI for pairing/remote management on a headless box. Update
-with `@latest`.
+`@panticonic/vibestudio` provides `vibestudio` (bare invocation launches the GUI;
+subcommands run the CLI) and `vibestudio-server`. `@panticonic/vibestudio-server`
+provides `vibestudio-server` plus the `vibestudio` CLI for pairing/remote
+management on a headless box. Update with `@latest`.
 
 From a source checkout, run the built CLI directly without a global install:
 

@@ -61,6 +61,9 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:packages/browser-data
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:packages/credential-client
       '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:packages/dev-log
@@ -172,6 +175,9 @@ importers:
       pathe:
         specifier: ^2.0.3
         version: 2.0.3
+      qrcode-terminal:
+        specifier: ^0.12.0
+        version: 0.12.0
       react:
         specifier: 19.0.0
         version: 19.0.0
@@ -263,9 +269,6 @@ importers:
       prettier:
         specifier: ^3.6.2
         version: 3.8.1
-      qrcode-terminal:
-        specifier: ^0.12.0
-        version: 0.12.0
       sql.js:
         specifier: ^1.14.0
         version: 1.14.1
@@ -507,6 +510,22 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jsdom@29.0.1)(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
+  packages/credential-client:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.9
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
   packages/dev-log:
     devDependencies:
       typescript:
@@ -550,6 +569,9 @@ importers:
 
   packages/extension-host:
     dependencies:
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../credential-client
       '@vibestudio/extension':
         specifier: workspace:*
         version: link:../extension
@@ -12407,7 +12429,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

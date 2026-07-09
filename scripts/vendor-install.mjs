@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// postinstall for the published @vibestudio/server and @vibestudio/app packages.
+// postinstall for the published @panticonic/vibestudio-server and
+// @panticonic/vibestudio packages.
 //
 // The host's @vibestudio/* packages ship under vendor/ rather than node_modules
 // because a partial node_modules in the published tarball perturbs npm's reify

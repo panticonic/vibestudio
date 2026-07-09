@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+const SERVER_PACKAGE_NAME = "@panticonic/vibestudio-server";
 
 export function parseArgs(argv) {
   const args = [...argv];
@@ -105,9 +106,9 @@ rm -f ${shellQuote(remoteArtifact)}
     console.log(`✓ Installed artifact        ${path.basename(options.artifact)}`);
   } else {
     await ssh(options.target, `set -e
-npm install -g ${shellQuote(`@vibestudio/server@${pkg.version}`)}
+npm install -g ${shellQuote(`${SERVER_PACKAGE_NAME}@${pkg.version}`)}
 `, hooks);
-    console.log(`✓ Installed package         @vibestudio/server@${pkg.version}`);
+    console.log(`✓ Installed package         ${SERVER_PACKAGE_NAME}@${pkg.version}`);
   }
   const unit = `[Unit]
 Description=Vibestudio remote server

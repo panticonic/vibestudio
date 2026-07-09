@@ -9,8 +9,8 @@ const require = createRequire(import.meta.url);
 // Publish mode (VIBESTUDIO_EXTHOST_PUBLISH=1) emits a fully self-contained bundle
 // into dist-publish/ for npm packaging: @vibestudio/extension and
 // @vibestudio/process-adapter are inlined too (on top of the always-inlined
-// source-only @vibestudio/shared + unit-host), so the published @vibestudio/server
-// can vendor *just* this package and resolve on any Node >=20 with no
+// source-only @vibestudio/shared + unit-host), so the published server package can
+// vendor *just* this package and resolve on any Node >=20 with no
 // workspace:* and no source-.ts imports at runtime. The default (dev/monorepo)
 // build keeps those two external to avoid the dual-package hazard for other
 // in-repo consumers (and skips the publish-only dist-publish/ output).

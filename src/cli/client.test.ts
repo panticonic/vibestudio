@@ -339,6 +339,15 @@ describe("vibestudio CLI", () => {
     expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("vibestudio-client"));
   });
 
+  it("prints the package version", async () => {
+    const expected = JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf8")).version;
+    const { main } = await import("./client.js");
+
+    await expect(main(["--version"])).resolves.toBe(0);
+
+    expect(console.log).toHaveBeenCalledWith(expected);
+  });
+
   it("keeps remote pairing available under the unified command", async () => {
     vi.stubGlobal(
       "fetch",

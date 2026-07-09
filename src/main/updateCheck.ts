@@ -5,7 +5,7 @@ const CHANNEL_ENV = "VIBESTUDIO_NPM_CHANNEL";
 
 /**
  * npm-channel update notice. The launcher (`scripts/vibestudio-launcher.mjs`) sets
- * `VIBESTUDIO_NPM_CHANNEL` to the installed package name (e.g. "@vibestudio/app")
+ * `VIBESTUDIO_NPM_CHANNEL` to the installed package name (e.g. "@panticonic/vibestudio")
  * when it launches the GUI from a global npm install. We then check the registry
  * for a newer version and surface a notification with the exact upgrade command.
  *
