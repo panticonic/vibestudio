@@ -40,4 +40,4 @@ class_name = "RelayRegistry"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["RelayRegistry"]
+new_sqlite_classes = ["RelayRegistry"]
