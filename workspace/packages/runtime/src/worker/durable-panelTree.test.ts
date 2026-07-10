@@ -140,7 +140,18 @@ describe("DurableObjectBase panelTree handles", () => {
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
       if (body.method === "panelTree.getRuntimeLease") {
-        return respond(init, { leased: true });
+        return respond(init, {
+          slotId: "slot-a",
+          runtimeEntityId: "panel:slot-a-current-entity",
+          clientSessionId: "desktop",
+          hostConnectionId: "desktop",
+          connectionId: "desktop",
+          holderLabel: "Desktop",
+          platform: "desktop",
+          supportsCdp: true,
+          loadOnLeaseAssignment: true,
+          acquiredAt: 1,
+        });
       }
       return respond(init, null);
     }) as typeof fetch;

@@ -38,6 +38,8 @@ export interface OpenPanelOptions {
   parentId?: string | null;
   name?: string;
   focus?: boolean;
+  contextId?: string;
+  ref?: string;
   stateArgs?: Record<string, unknown>;
 }
 
@@ -170,8 +172,8 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     ensureLoaded: (id) => callPanel("ensureLoaded", [id]),
     isLoaded: async (id) => {
       try {
-        const lease = await callPanel<{ leased?: boolean } | null>("getRuntimeLease", [id]);
-        return Boolean(lease?.leased);
+        const lease = await callPanel<Record<string, unknown> | null>("getRuntimeLease", [id]);
+        return lease !== null;
       } catch {
         return false;
       }
@@ -208,8 +210,9 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     stateArgs: {
       get: (id) => callPanel("getStateArgs", [id]),
       set: async (id, updates) => {
-        await callPanel("setStateArgs", [id, updates]);
+        const next = await callPanel<Record<string, unknown>>("setStateArgs", [id, updates]);
         options.onStateArgsSet?.(id);
+        return next;
       },
     },
     snapshot: (id) => callPanel("snapshot", [id]),
@@ -295,6 +298,8 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       id: string;
       title: string;
       kind: "workspace" | "browser";
+      parentId?: string | null;
+      contextId?: string;
       runtimeEntityId?: string | null;
       effectiveVersion?: string | null;
     }>("create", [source, { ...openOptions, parentId }]);
@@ -303,8 +308,8 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       title: result.title,
       source: result.kind === "browser" ? `browser:${source}` : source,
       kind: result.kind,
-      parentId,
-      contextId: "",
+      parentId: result.parentId ?? parentId,
+      contextId: result.contextId ?? openOptions?.contextId ?? "",
       runtimeEntityId: result.runtimeEntityId ?? null,
       effectiveVersion: result.effectiveVersion ?? null,
     });

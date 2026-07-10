@@ -224,7 +224,8 @@ export interface PanelHandle<
 
   readonly stateArgs: {
     get<TState = Record<string, unknown>>(): Promise<TState>;
-    set(updates: Record<string, unknown>): Promise<void>;
+    /** Merge a patch; use null to remove a key. Returns the full resulting state. */
+    set<TState = Record<string, unknown>>(updates: Record<string, unknown>): Promise<TState>;
   };
 
   /**

@@ -40,11 +40,11 @@ const snapshot = await handle.snapshot();
 await handle.close(); // close temporary panels opened for diagnostics/tests
 ```
 
-`openPanel(source)` opens a new panel for the main/pushed build; it does not take
-a build `ref`. `handle.navigate(source, { ref })` and
-`panelTree.navigate(id, source, { ref })` are the ref-capable replacement paths.
-Use `ref: \`ctx:${contextId}\`` only when you intentionally want code from that
-context branch. `contextId` without `ref` only changes filesystem/storage state.
+`openPanel(source)` opens a new panel for the main/pushed build. Pass
+`openPanel(source, { ref })`, `handle.navigate(source, { ref })`, or
+`panelTree.navigate(id, source, { ref })` when you intentionally want code from
+a specific ref such as `ctx:${contextId}`. `contextId` without `ref` only changes
+filesystem/storage state.
 
 Inside the current panel, use `panel.reopen({ source?, contextId?, stateArgs? })`
 for self-replacement of source/state args/context. `panel.reopen({ contextId })`

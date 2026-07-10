@@ -341,8 +341,9 @@ you to replace.
 ```ts
 await same.refresh();
 await same.focus();
-await same.stateArgs.set({ mode: "review" });
-const state = await same.stateArgs.get();
+const state = await same.stateArgs.set({ mode: "review" });
+// set() merges a patch and returns the full authoritative state.
+// Use null to remove a key: await same.stateArgs.set({ mode: null });
 await same.call.someExposedMethod();
 
 const page = await same.cdp.lightweightPage();
@@ -350,6 +351,12 @@ await page.title();
 page.url(); // string, synchronous like Playwright
 await same.click("button");
 ```
+
+`openPanel(source, { focus: true })` assigns a renderer and focuses the created
+panel. Without focus, call `await handle.ensureLoaded()` before interactive CDP
+work; `handle.isLoaded()` reports whether a runtime lease exists. Readable
+`handle.snapshot()` ensures a target is loaded and falls back to an
+accessibility-tree snapshot when the panel does not expose `_agent.snapshot`.
 
 `same.cdp.lightweightPage()` returns a Playwright-style page driven by our own
 lightweight, workerd-native CDP client (`@workspace/cdp-client`). It is the

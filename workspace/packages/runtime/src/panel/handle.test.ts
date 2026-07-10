@@ -113,6 +113,8 @@ function createRpcCall() {
           id: args[0],
           title: "Navigated",
         };
+      case "panelTree.setStateArgs":
+        return { mode: (args[1] as Record<string, unknown>)?.["mode"], preserved: true };
       default:
         return undefined;
     }
@@ -159,6 +161,10 @@ describe("PanelHandle", () => {
 
     await openPanel("panels/child");
     await openPanel("panels/root", { parentId: null });
+    await openPanel("panels/context", {
+      contextId: "ctx-next",
+      ref: "ctx:ctx-next",
+    });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", [
       "panels/child",
@@ -167,6 +173,10 @@ describe("PanelHandle", () => {
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", [
       "panels/root",
       { parentId: null },
+    ]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.create", [
+      "panels/context",
+      { contextId: "ctx-next", ref: "ctx:ctx-next", parentId: "panel-self" },
     ]);
   });
 
@@ -235,7 +245,10 @@ describe("PanelHandle", () => {
       wsEndpoint: "ws://localhost",
       token: "t",
     });
-    await typedChild.stateArgs.set({ mode: "live" });
+    await expect(typedChild.stateArgs.set({ mode: "live" })).resolves.toEqual({
+      mode: "live",
+      preserved: true,
+    });
 
     expect(rpcCall).toHaveBeenCalledWith("panel:child-entity", "ping", []);
     expect(rpcEmit).toHaveBeenCalledWith("panel:child-entity", "ready", { ok: true });
