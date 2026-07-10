@@ -184,11 +184,11 @@ For diagnostics that must work for hidden or unslotted panels, use the
 host-mediated operations on the handle:
 
 ```ts
-const shot = await handle.cdp.captureScreenshot({ format: "png" });
+const shot = await handle.cdp.screenshot({ format: "png" });
 const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 50 });
 ```
 
-`captureScreenshot()` returns `{ data, mimeType, width, height }`, where `data`
+`screenshot()` returns `{ data, mimeType, width, height }`, where `data`
 is base64. `consoleHistory()` returns host-captured messages from before and
 after the automation client connected. A lightweight page's
 `page.screenshot({ type: "jpeg", quality: 80 })` instead returns raw bytes.

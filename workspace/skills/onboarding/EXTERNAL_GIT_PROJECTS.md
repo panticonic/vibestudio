@@ -21,17 +21,18 @@ Supported parent directories are `panels`, `packages`, `workers`,
 
 Shared remotes live under `git.remotes.<parent>.<name>.<remoteName>`.
 
-Use a string when the default branch is enough:
+Every remote uses one object shape. Omit `branch` to use the remote's default:
 
 ```yaml
 git:
   remotes:
     projects:
       upstream:
-        origin: https://github.com/owner/upstream.git
+        origin:
+          url: https://github.com/owner/upstream.git
 ```
 
-Use an object when the workspace should clone a specific branch:
+Add `branch` when the workspace should clone a specific branch:
 
 ```yaml
 git:
@@ -42,6 +43,11 @@ git:
           url: https://github.com/owner/upstream.git
           branch: feature/workspace-integration
 ```
+
+An imported repo also has a matching entry under
+`git.upstreams.<parent>.<name>`. `git.importProject()` writes the remote and
+upstream together, with `autoPush: false`; a second `git.setUpstream()` call is
+not required.
 
 ## Import APIs
 
@@ -58,13 +64,13 @@ await git.importProject({
     url: "https://github.com/owner/upstream.git",
     branch: "feature/workspace-integration",
   },
-  branch: "feature/workspace-integration",
   credentialId: "cred_github_...",
 });
 ```
 
-The top-level `branch` field is accepted for DX and is harmonized into the
-remote declaration.
+The remote's `branch` is recorded on both the shared remote and matching
+upstream. The selected `credentialId`, when present, is recorded on the
+upstream.
 
 Use `git.setSharedRemote()` when the workspace repo already exists and you only
 need to record or update a shared remote:
@@ -92,7 +98,8 @@ console.log(result.imported, result.skipped, result.failed);
 On server startup, Vibestudio imports missing repos declared in
 `meta/vibestudio.yml` before declared unit reconciliation. That means a declared
 external panel, worker, skill, or package can be present before the normal
-startup build/reconcile path scans workspace source.
+startup build/reconcile path scans workspace source. Materializing a remote-only
+declaration also records its matching upstream with `autoPush: false`.
 
 Startup import trusts the existing workspace config declaration and does not
 prompt again. The approval boundary is the config edit that introduced the
@@ -100,12 +107,12 @@ remote declaration.
 
 ## Approvals
 
-`git.importProject()` uses one workspace config approval. The prompt names the
-external import and shows the config edit details: destination path, remote
-name, remote URL, and branch when present. After approval, Vibestudio writes
-`meta/vibestudio.yml` first, then clones. If the clone fails, the approved config
-declaration remains so startup or `git.completeWorkspaceDependencies()` can
-retry later.
+`git.importProject()` uses one workspace config approval covering both
+declarations. The prompt names the external import and shows the destination
+path, remote name, remote URL, and branch when present. After approval,
+Vibestudio writes both declarations to `meta/vibestudio.yml`, with auto-push
+disabled, then clones. If the clone fails, the approved config declarations
+remain so startup or `git.completeWorkspaceDependencies()` can retry later.
 
 ## Private Repos
 

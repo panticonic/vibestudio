@@ -130,7 +130,8 @@ Plain projects are still external Git-backed projects when imported that way:
   materialized into their `.git/config`. Use object declarations with `url` and
   `branch` when a workspace project must clone a non-default branch.
 - `git.importProject({ path: "projects/name", remote })` creates a canonical
-  workspace project from a remote and records the shared remote in `meta/vibestudio.yml`.
+  workspace project from a remote and records its shared remote plus matching
+  upstream (`autoPush: false`) in `meta/vibestudio.yml`.
 - Missing configured remotes are imported automatically at startup;
   `git.completeWorkspaceDependencies()` is available as an explicit retry or
   backfill operation.

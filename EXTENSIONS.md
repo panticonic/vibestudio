@@ -95,12 +95,13 @@ A `BUILD_CACHE_VERSION` bump in buildV2 may change the cache **build key**, but 
 
 The manifest follows the **shared workspace-unit shape**: top-level keys under `vibestudio.*` are common to every unit kind, and a single kind-specific sub-block (`vibestudio.extension`, `vibestudio.worker`, `vibestudio.panel`) declares what kind the unit is. A unit must have exactly one kind-specific sub-block.
 
-| Field                                   | Type     | Default                                                          | Description                                                                                   |
-| --------------------------------------- | -------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `vibestudio.displayName`                | string   | package name                                                     | Human-readable name. Shared across all unit kinds.                                            |
-| `vibestudio.entry`                      | string   | `index.ts` (extension), `index.tsx` (panel), `index.ts` (worker) | Entry source file. Shared across kinds.                                                       |
-| `vibestudio.sourcemap`                  | boolean  | `true`                                                           | Inline sourcemaps in the bundle. Shared across kinds (mandatory `true` for extensions in v1). |
-| `vibestudio.extension.activationEvents` | string[] | `["*"]`                                                          | When to activate. `"*"` = eager at startup. Other values fail validation in v1.               |
+| Field                                    | Type     | Default                                                          | Description                                                                                   |
+| ---------------------------------------- | -------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `vibestudio.displayName`                 | string   | package name                                                     | Human-readable name. Shared across all unit kinds.                                            |
+| `vibestudio.entry`                       | string   | `index.ts` (extension), `index.tsx` (panel), `index.ts` (worker) | Entry source file. Shared across kinds.                                                       |
+| `vibestudio.sourcemap`                   | boolean  | `true`                                                           | Inline sourcemaps in the bundle. Shared across kinds (mandatory `true` for extensions in v1). |
+| `vibestudio.extension.activationEvents`  | string[] | `["*"]`                                                          | When to activate. `"*"` = eager at startup. Other values fail validation in v1.               |
+| `vibestudio.extension.providerContracts` | object   | `{}`                                                             | Exact method lists implemented under manifest-selected provider namespaces.                   |
 
 The presence of `vibestudio.extension` is what marks the unit as an extension to the package graph. Manifests are validated against a JSON schema at install time and again at boot; validation failures fail closed (extension is not activated and an error is recorded in the registry).
 
@@ -172,7 +173,31 @@ export async function deactivate(): Promise<void> {
 }
 ```
 
-`activate` returns the extension's **public API** — a plain object whose own enumerable function properties are callable from the host via RPC. There is no per-method registration step and no allowlist captured at activation time. The dispatcher resolves a call by reading `api[method]` and checking `Object.hasOwn(api, method) && typeof api[method] === "function"` at the time of the call. Anything else (`then`, `constructor`, inherited prototype methods, non-function properties) returns `ENOMETHOD`.
+`activate` returns the extension's **public API** — a plain object whose own enumerable function properties are callable from the host via RPC. Public methods require no per-method registration. The dispatcher resolves a call by reading `api[method]` and checking `Object.hasOwn(api, method) && typeof api[method] === "function"` at the time of the call. Anything else (`then`, `constructor`, inherited prototype methods, non-function properties) returns `ENOMETHOD`.
+
+Provider implementations are a separate surface. An extension selected by a
+manifest provider slot declares the exact ordered method list in
+`vibestudio.extension.providerContracts` and returns the implementations under
+`activate().providerContracts.<slot>`. For example:
+
+```ts
+export async function activate(ctx: ExtensionContext) {
+  return {
+    providerContracts: {
+      browserData: {
+        async getHistory(query: HistoryQuery) {
+          return loadHistory(ctx, query);
+        },
+      },
+    },
+  };
+}
+```
+
+The source manifest, approved build metadata, activation result, and ready
+handshake must agree exactly. Provider methods are never copied onto the flat
+API and there is no fallback from `extensions.invokeProvider` to
+`extensions.invoke`. A stale pre-ABI-v3 bundle is rebuilt before activation.
 
 The API object is held by the extension process, not the host. The host knows the extension exposes some surface (recorded for `list`), and routes invocations across the wire.
 
@@ -333,9 +358,11 @@ UX in userland packages or provider extensions.
 
 This gives a stable extension-owned host boundary: adding a provider should not
 add a new host service. A provider configures `git.remotes` and `git.upstreams`
-through the runtime `git` namespace, calls git-bridge through
-`ctx.extensions`/`extensions.invoke`, and uses host credentials only through
-URL-bound runtime clients. See [docs/git-upstream.md](./docs/git-upstream.md).
+through the runtime `git` namespace and performs status, push, pull, publish,
+and import through that same typed client. The host `gitInterop` service resolves
+the manifest-declared provider slot; userland never names or invokes Git Bridge
+directly. Credential use remains URL-bound and host-mediated. See
+[docs/git-upstream.md](./docs/git-upstream.md).
 
 Node's standard library is available globally inside the extension process — `import * as fs from "node:fs"`, child processes, native addons all work normally. There is no host-mediated wrapper; the extension is running in a real Node process.
 
@@ -346,7 +373,7 @@ Each extension runs in its own forked Node process. The host owns an `ExtensionP
 - Spawns the process via `packages/process-adapter/` — `utilityProcess.fork` in Electron, `child_process.fork` in standalone Node.
 - Hands the child an environment containing the gateway URL, the bundle path, a per-extension WebSocket token, and the extension's identity.
 - Waits for a `ready` handshake (a message after the extension finishes `activate` and the WebSocket is connected).
-- Forwards `extensions.invoke` calls from the dispatcher to the extension process's WebSocket with a host-stamped `ExtensionInvocation` envelope.
+- Forwards flat `extensions.invoke` and namespaced `extensions.invokeProvider` calls to separate child-runtime handlers with a host-stamped `ExtensionInvocation` envelope.
 - Routes the extension's outbound RPC calls (`ctx.fs.write(...)` etc.) into the dispatcher as ordinary client calls.
 - Detects crashes, applies the crash policy (below), and respawns or marks `error`.
 
@@ -354,7 +381,7 @@ Per-extension cost: a fresh Node process (~30–100 MB RSS startup, ~150–500 m
 
 ### Transport
 
-Same WebSocket the panels use. The extension process dials the gateway with its per-extension token; from the dispatcher's perspective it looks like another RPC client, distinguished only by `callerKind: "extension"`. Host → extension calls (`extensions.invoke`) ride the same channel in reverse, as RPC events. No new transport is introduced.
+Same WebSocket the panels use. The extension process dials the gateway with its per-extension token; from the dispatcher's perspective it looks like another RPC client, distinguished only by `callerKind: "extension"`. Host → extension calls ride the same channel in reverse, as RPC events. Flat calls target `extension.invoke`; provider calls target `extension.invokeProvider` and carry the provider slot separately. No new transport is introduced.
 
 ### Crash policy
 
@@ -377,6 +404,7 @@ There is exactly one RPC entry point: the dispatcher service named `extensions`.
   policy: { allowed: ["panel", "worker", "shell", "extension"] },
   methods: {
     invoke:     { args: [z.string(), z.string(), z.array(z.unknown())] },
+    invokeProvider: { args: [z.string(), z.string(), z.array(z.unknown())] },
     invokeStream: { args: [z.string(), z.string(), z.array(z.unknown())] },
     streamingMethods: { args: [z.string()] },
     list:       { args: [] },
@@ -386,7 +414,7 @@ There is exactly one RPC entry point: the dispatcher service named `extensions`.
 }
 ```
 
-`invoke`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. `invoke` is still caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/vibestudio.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
+`invoke`, non-host-owned `invokeProvider`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. Both invocation paths are caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. Host-owned provider contracts such as `gitInterop` are reachable only through their typed host service, not public `extensions.invokeProvider`. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/vibestudio.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
 
 Consumers — panels, workers, and other extensions — use the same thin client from `@workspace/runtime`:
 
@@ -403,6 +431,11 @@ extensions.on("@workspace-extensions/git-tools", "indexed", (payload) => {
 ```
 
 `extensions.use()` returns a `Proxy` that turns property access into `rpc.call("main", "extensions.invoke", [name, prop, args])`. The proxy's `get` trap returns `undefined` for `then`, `Symbol.toPrimitive`, and other well-known protocol properties. Calls to a non-existent or stopped extension fail with `ENOEXT` at invocation time; the proxy itself is always defined.
+
+Provider clients call `extensions.invokeProvider(slot, method, args)`. Selection
+comes from `meta/vibestudio.yml`; clients do not resolve or name the extension
+package. The host verifies the active approved build declared that exact
+namespace and method, then dispatches only to `extension.invokeProvider`.
 
 Extension-to-extension calls are intentionally not delegated as the original panel/worker. The downstream extension sees the immediate extension caller and decides whether to serve that extension. If a panel/worker approval is needed for the composite operation, the upstream extension requests it before making the downstream call.
 
@@ -421,6 +454,8 @@ interface ExtensionsClient {
     name: K,
     options?: { streamingMethods?: Iterable<string> }
   ): WorkspaceExtensions[K];
+  invoke(name: ExtensionName | (string & {}), method: string, args: unknown[]): Promise<unknown>;
+  invokeProvider(provider: string, method: string, args: unknown[]): Promise<unknown>;
   on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
   list(): Promise<RegistryEntry[]>;
 
@@ -824,7 +859,7 @@ A survey of `src/server/services/` against the extension fit criteria suggests t
 
 3. **`pushService` + `approvalPushBridge`** — FCM push for mobile shells. Optional capability (only relevant if mobile push is wanted), self-contained, has its own credentials needs. Good test of `ctx.credentials` from an extension and of long-lived outbound connections.
 
-4. **`browserDataService`** — migrated to `@workspace-extensions/browser-data`. Bookmarks/history/cookies still persist through `BrowserDataDO`; the extension owns the public API, shell-only enforcement, import completion events, and operational health reporting.
+4. **`browserDataService`** — migrated to `@workspace-extensions/browser-data`. Bookmarks/history/cookies still persist through `BrowserDataDO`; the extension owns the `browserData` provider namespace, shell-only enforcement, import completion events, and operational health reporting.
 
 5. **`webhookIngressService`** — deferred until custom/public HTTP routes exist. Webhook URLs must be at fixed, upstream-configured paths (`/webhooks/github`, `/webhooks/stripe`), not under `/_r/ext/*`.
 
@@ -864,7 +899,12 @@ The imageService and typecheckService canaries cover the RPC migration shape and
 - **Port-claim mechanism for non-HTTP listeners.** Required for egressProxy. Defer until a candidate forces it.
 - **Scheduled-work primitive.** Email-sync-style "poll every 5 minutes, survive restarts" — works today with `setInterval` plus self-managed persistence, but ergonomically wants a `ctx.schedule(name, intervalOrCron, handler)` helper that uses the extension's storage. Defer; not blocking the first migrations.
 
-A "named capabilities" / `provides` mechanism was considered and rejected: paths suffice. The canonical name for a given capability (e.g. `@workspace-extensions/image-service`) is a convention, swapping implementations means uninstalling and installing a different extension at the same name, and migration from an in-host service drops `ctx.image` in favor of explicit `extensions.use(...)` calls at the call sites. Introducing a host-side capability registry would add provider conflict resolution, missing-provider semantics, and asymmetry in `ctx.*` (some entries host-direct, others extension-routed) — none of which buy more than the path-based convention already does.
+A general-purpose `provides` registry is still unnecessary for ordinary public
+extension APIs: canonical package names and `extensions.use(...)` suffice.
+Manifest provider slots are narrower and explicit. They exist only where the
+workspace configuration selects one extension for a platform role such as
+`browserData`, `claudeCode`, or the host-owned `gitInterop` contract; those APIs
+must use `extensions.invokeProvider` (or the owning typed host service).
 
 ## Future work
 

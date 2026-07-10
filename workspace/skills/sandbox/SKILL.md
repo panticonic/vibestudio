@@ -95,6 +95,12 @@ entity and can change after a panel navigation or reopen.
   "context-root absolute", not a host path like `/home/...`. Prefer
   `panels/chat/package.json` in examples and source edits because it is less
   ambiguous.
+- Workspace source paths have repo shape (`packages/<name>/…`,
+  `panels/<name>/…`, `meta/…`, etc.) and mutating them through `fs` is captured
+  as a VCS working edit. Platform-ignored paths and paths outside workspace
+  source repos are direct context-local scratch. For disposable files, prefer
+  `const path = await fs.mktemp("purpose")`; see
+  [EVAL.md](EVAL.md#filesystem-access) for copy/rename and cleanup examples.
 - Never use host absolute paths for workspace source such as
   `/home/user/.../workspace/panels/...`.
 
@@ -202,7 +208,7 @@ or `feedback_custom` rather than hand-written raw channel records.
 3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
 4. **Inline UI / action-bar components receive `{ props, chat }`** (NOT `scope`/`scopes` — the eval REPL scope is server-side and is not shared into rendered components) — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
 5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**
-6. **Workspace code builds from your working edits, in lockstep, even before you commit** — source under `packages/`, `panels/`, `workers/`, `skills/`, `apps/`, and `extensions/` is built from your context head's working state. The model is **edit → commit → push**: the `edit`/`write` tools and `vcs.edit({ edits })` record each change as a tracked *working* edit on your context head and project it to disk, so it takes effect for builds immediately. `vcs.commit({ message })` then seals those working edits as a messaged milestone (the message is mandatory; the edit itself is NOT a commit), and `vcs.push` advances `main` (fast-forward-only, build-gated). Do NOT edit source via `fs.writeFile` and expect it to build; the worktree is a projection and builds read GAD state, so edits must go through `edit`/`write`/`vcs.edit`.
+6. **Workspace code builds from your working edits, in lockstep, even before you commit** — source under `packages/`, `panels/`, `workers/`, `skills/`, `apps/`, and `extensions/` is built from your context head's working state. The model is **edit → commit → push**: the `edit`/`write` tools and `vcs.edit({ edits })` record each change as a tracked *working* edit on your context head and project it to disk, so it takes effect for builds immediately. `vcs.commit({ message })` then seals those working edits as a messaged milestone (the message is mandatory; the edit itself is NOT a commit), and `vcs.push` advances `main` (fast-forward-only, build-gated). Runtime `fs` mutations of repo source are captured as working edits too, so Node-like tools cannot bypass VCS; for intentional source authoring, prefer `edit`/`write`/`vcs.edit` because they make edit intent and provenance explicit.
 7. **Close temporary panels you open** — when eval opens a browser/workspace panel for diagnostics, scraping, setup, or testing, keep its handle and call `await handle.close()` in `finally` when done. Reuse an existing handle instead of opening duplicates. Leave a panel open only when the user explicitly asked to inspect or continue using it, or the workflow explicitly needs it to remain open.
 8. **Use DO workers for shared app data** — eval `db` is private scratch storage for the current EvalDO. User-facing databases should be Durable Object services with narrow RPC methods, manifest `policy.allowed`, and method-level `@rpc({ callers })`.
 

@@ -17,7 +17,12 @@ in a Node child process, not in the browser or a workerd isolate.
     "sourcemap": true,
     "extension": {
       "activationEvents": ["*"],
-      "dependencyMode": "auto"
+      "dependencyMode": "auto",
+      "providerContracts": {
+        "exampleProvider": {
+          "methods": ["read"]
+        }
+      }
     }
   }
 }
@@ -43,10 +48,33 @@ export async function activate(ctx) {
     async ping(value: string) {
       ctx.log.info("ping", { value });
       return `pong:${value}`;
-    }
+    },
   };
 }
 ```
+
+Provider methods are not public flat methods. A selected provider extension
+returns them under the same namespace declared in its manifest:
+
+```ts
+export async function activate(ctx) {
+  return {
+    providerContracts: {
+      exampleProvider: {
+        async read(input) {
+          return readValue(ctx, input);
+        },
+      },
+    },
+  };
+}
+```
+
+Callers use `extensions.invokeProvider("exampleProvider", "read", [input])`.
+The host selects the extension from the workspace manifest and dispatches to the
+child runtime's dedicated provider handler. It never falls back to flat
+`extensions.invoke`. The source manifest, ABI-v3 build metadata, activation
+result, and ready handshake must expose the same ordered contract.
 
 An extension can also export a default object with `fetch(request, ctx)` for
 HTTP-style routing.
@@ -70,6 +98,7 @@ not reliable across generated packages.
 The build metadata records:
 
 - extension runtime ABI
+- provider contract declarations
 - dependency mode
 - externalized runtime dependencies
 - per-dependency classification explanations

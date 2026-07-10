@@ -226,10 +226,13 @@ service. Operations that need the Git upstream engine are fulfilled by the
 workspace manifest's configured `providers.gitInterop` extension rather than a
 host-hardcoded workspace package.
 
-Use `git.setSharedRemote()` and `git.configureUpstream()` from
+Use `git.setSharedRemote()` and `git.setUpstream()` from
 `@workspace/runtime` to declare a remote and opt a workspace repo into upstream
-tracking. Provider helpers such as the GitHub skill can then publish through the
-configured Git interop provider.
+tracking. The runtime `git.*` methods use the same host `gitInterop.*` service as
+the CLI, and that service dispatches transport work through the configured
+`providers.gitInterop` extension. Runtime code does not invoke the extension by
+package name. Provider helpers such as the GitHub skill can then publish through
+the same routed API.
 
 See [git-upstream.md](./git-upstream.md) for the two-layer model, approvals,
 `git.upstreams` config, and divergence repair workflow.

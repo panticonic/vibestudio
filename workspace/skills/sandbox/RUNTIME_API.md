@@ -17,7 +17,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `id` | value |  |  |
 | `contextId` | value |  |  |
 | `rpc` | value |  | Portable RPC client (the full createRpcClient). |
-| `fs` | value |  |  |
+| `fs` | value |  | Per-context filesystem sandbox. Paths are context-root-relative. For valid workspace-repo paths, writeFile, appendFile, truncate, chmod, unlink/rmdir/rm, copyFile destinations, and supported renames into or within repos route through GAD working edits; tracked-to-scratch renames and open with write flags are rejected. mkdir and utimes remain direct filesystem operations. Platform-ignored paths and paths outside reserved workspace source roots are local scratch. |
 | `callMain` | value |  | Call a `main` (server) service method: callMain("fs.readFile", path). |
 | `parent` | value |  | This runtime's parent panel handle (a no-panel handle when there is none). |
 | `getParent` | value |  | Get the parent panel handle, or null when there is no parent. |
@@ -29,12 +29,12 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `openExternal` | value |  |  |
 | `workers` | namespace | `listSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService` | Worker discovery and manifest-declared service resolution. listSources() returns every launchable worker with its source, real manifest entry point, and Durable Object classes; lifecycle uses runtime.createEntity/retireEntity. |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `inspectStoredCredentials`, `revokeCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
-| `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
+| `git` | namespace | `setSharedRemote`, `removeSharedRemote`, `setUpstream`, `removeUpstream`, `setAutoPush`, `upstreamStatus`, `pushUpstream`, `pullUpstream`, `publishRepo`, `importProject`, `completeWorkspaceDependencies` | Typed external Git operations routed through the workspace's configured gitInterop provider. |
 | `vcs` | namespace | `edit`, `commit`, `discardEdits`, `readFile`, `listFiles`, `revert`, `status`, `log`, `diff`, `resolveHead`, `workspaceViewWithRepoAt`, `merge`, `abortMerge`, `pendingMerge`, `push`, `pushStatus`, `previewBuild`, `commitEdits`, `fileHistory`, `commitAncestors`, `editsByActor`, `editsByTurn`, `editsByInvocation`, `forkRepo`, `contextStatus`, `rebaseContext`, `recall` | Workspace GAD VCS (edit → commit → push): vcs.edit records tracked WORKING edits (no commit/build); vcs.commit folds them into a messaged snapshot per repo; push is the only main-advance (fast-forward-only, build-gated — diverged pushes reject, reconcile with vcs.merge). vcs.previewBuild builds working content on demand; status/fileHistory/commitEdits expose provenance. |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `inspectPublicationIntegrity`, `inspectTurnState`, `inspectInvocationState`, `inspectChannelRoster`, `inspectAgentHealth`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
-| `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `getBase64`, `delete`, `list`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
+| `blobstore` | namespace | `has`, `stat`, `putText`, `getText`, `getRange`, `getRangeBytes`, `grep`, `putBase64`, `putBytes`, `getBase64`, `delete`, `list`, `putTree`, `getTree`, `listTree`, `readFileAtTree`, `diffTrees`, `materializeTree` | Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Runtime-only putBytes(Uint8Array \| ArrayBuffer) losslessly encodes bytes through putBase64; MIME metadata is not stored. Persist large artifacts/screenshots and return the digest. Immutable file trees: putTree/getTree store and read tree objects, listTree/readFileAtTree walk a tree hash, diffTrees compares two trees. |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
-| `extensions` | namespace | `use`, `invoke`, `on`, `list`, `reload` |  |
+| `extensions` | namespace | `use`, `invoke`, `invokeProvider`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
@@ -65,8 +65,9 @@ context head and project it to disk, so rebuilt panels, workers, packages, or
 skills pick it up immediately. A working edit is not a commit: seal working edits
 as a messaged milestone with `vcs.commit({ message })`, then advance `main` with
 the fast-forward-only, build-gated `vcs.push`. Use `git` only for external
-project import, shared remotes, and build-event lookup. For external Git smart
-HTTP, construct `GitClient` from `@vibestudio/git` with `credentials.gitHttp()`.
+project import, shared remotes/upstreams, status, push/pull, and publication.
+For external Git smart HTTP, construct `GitClient` from `@vibestudio/git` with
+`credentials.gitHttp()`.
 For workspace-managed external repo declarations, startup auto-import, branches,
 approvals, and private repo retries, see
 `skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.

@@ -60,7 +60,7 @@ Allowed callers: `panel`, `app`, `worker`, `do`, `shell`, `server`, `extension`
 | `blobstore.getRange` | UTF-8 text slice. offset/length are BYTES (so they compose with stat.size); the returned string is UTF-8-decoded, so partial codepoints at slice boundaries become U+FFFD replacement chars. Use getRangeBytes for a raw binary slice. |
 | `blobstore.getRangeBytes` | Raw byte slice, base64-encoded on the wire so binary blobs (PDFs, images) round-trip intact. Decode with Buffer.from(result.bytesBase64, 'base64'). |
 | `blobstore.grep` | Search a blob's text for a regex pattern; returns matching lines with optional surrounding context, or null if the blob is absent. |
-| `blobstore.putBase64` | Store raw bytes from a base64 payload; returns content digest + byte size (idempotent by content). |
+| `blobstore.putBase64` | Store raw bytes from exactly one base64 string; returns content digest + byte size (idempotent by content). The blobstore stores bytes only: do not pass MIME/options metadata, and instead carry it alongside the returned digest. |
 | `blobstore.getBase64` | Full blob contents as a base64 string, or null if absent. |
 | `blobstore.putTree` | Store one immutable directory node (tree object) in the CAS from its entries; returns its `manifest:` tree hash (gad-manifest compatible). Every referenced child must already exist in the store — file contentHash blobs and dir childHash tree nodes are verified, so a tree hash can never be claimed while its objects are missing. Pass {root:true} to also store a `state:` root pointer and get the gad-compatible stateHash back. Idempotent by content. Build deep trees bottom-up (children before parents). |
 | `blobstore.getTree` | Entries of a tree object (one directory node), or null if absent. Accepts a `manifest:` node hash or a `state:` root pointer (resolved to its root node). |
@@ -161,40 +161,40 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 ## `fs`
 
-Per-context filesystem operations (sandboxed to context folder)
+Filesystem operations. Context-bound callers are sandboxed to their context folder; supported workspace-repo file mutations route through GAD working edits, while platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. An unchained extension granted the explicit host-fs-access capability is unrestricted and uses host filesystem paths.
 
 Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`, `agent`
 
 | Method | Description |
 |--------|-------------|
 | `fs.readFile` | Read a file's contents. Overloaded: with an `encoding` argument the bytes are decoded and returned as a string; without one, raw bytes are returned base64-encoded in a binary envelope. (Server/shell callers prepend a contextId as the first argument.) |
-| `fs.writeFile` | Write data to a file, replacing existing contents; context-scoped writes create missing parent directories. Data may be a UTF-8 string or a base64 binary envelope. GAD-tracked context paths commit through the VCS rather than the worktree. |
-| `fs.appendFile` | Append data to the end of a file; context-scoped appends create the file and missing parent directories when absent. Data may be a UTF-8 string or a base64 binary envelope. |
+| `fs.writeFile` | Write data to a file, replacing existing contents and creating missing parent directories. Paths are relative to a context-bound caller's root even when they start with '/'. For such callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots are context-local scratch writes. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
+| `fs.appendFile` | Append data to the end of a context-root-relative file, creating the file and missing parent directories when absent. For context-bound callers, a valid workspace-repo file becomes a GAD working edit; platform-ignored paths and paths outside reserved workspace source roots remain context-local scratch. Routed paths under reserved roots must use canonical casing and valid repo shape. Data may be a UTF-8 string or a base64 binary envelope. |
 | `fs.readdir` | List the entries of a directory; returns bare name strings, or Dirent-shaped objects with type flags when `withFileTypes` is set, optionally recursing into subdirectories. |
-| `fs.mkdir` | Create a directory; with `recursive` it creates missing parents and returns the first-created path (relative to the context root), otherwise returns undefined. |
-| `fs.rmdir` | Remove an empty directory; throws if the directory is not empty. |
-| `fs.rm` | Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. |
+| `fs.mkdir` | Create a directory directly on the context filesystem projection (not as a GAD working edit); with `recursive` it creates missing parents and returns the first-created path relative to the context root, otherwise returns undefined. |
+| `fs.rmdir` | Remove a directory. For context-bound callers, a valid workspace-repo path routes subtree removal through GAD; a scratch directory is removed directly and throws if it is not empty. |
+| `fs.rm` | Remove a file or directory; `recursive` deletes a directory's contents and `force` suppresses errors for missing paths. For context-bound callers, a valid workspace-repo path routes the removal through GAD; scratch paths are removed directly. |
 | `fs.stat` | Return metadata (type flags, size, mtime/ctime, mode) for a path, following symlinks to their target. |
 | `fs.lstat` | Like stat, but reports on the symlink itself rather than following it to its target. |
 | `fs.exists` | Return whether a path exists and is accessible to the caller. |
 | `fs.access` | Test a path's accessibility against the given fs.constants mode bits; resolves on success, throws on failure. |
-| `fs.unlink` | Delete a single file (not a directory). |
-| `fs.copyFile` | Copy a file from a source path to a destination path, overwriting the destination. |
-| `fs.rename` | Move or rename a file or directory from a source path to a destination path (also the atomic-write commit step for temp files moved into tracked paths). |
+| `fs.unlink` | Delete a single file (not a directory). For context-bound callers, a valid workspace-repo path routes the deletion through GAD; a scratch path is deleted directly. |
+| `fs.copyFile` | Copy a file between context-root-relative paths, overwriting the destination. For context-bound callers, a valid workspace-repo destination becomes a GAD working edit; a platform-ignored destination or one outside reserved workspace source roots stays context-local scratch. Routed destinations under reserved roots must use canonical casing and valid repo shape. |
+| `fs.rename` | Move or rename a context-root-relative file or directory. For context-bound callers, scratch-to-scratch renames are direct; scratch-to-repo and repo-to-repo moves become GAD working edits. Moving a tracked repo path out to scratch is rejected so source state cannot bypass VCS. Routed endpoints under reserved workspace source roots must use canonical casing and valid repo shape. |
 | `fs.realpath` | Resolve a path to its canonical form, returning it relative to the context root (sandboxed callers) or as an absolute host path (unrestricted callers). |
 | `fs.ensureMaterialized` | Materialize the given workspace path(s)/repo(s) (or 'all') into the context working folder. Context folders are SPARSE — only what is materialized exists on disk — so call this for the narrowest scope you need (a repo path like 'panels/chat', a section like 'panels', or specific paths) before reading them OUTSIDE the fs.* API (e.g. a grep/find subprocess). fs.* reads materialize on demand automatically. |
-| `fs.truncate` | Truncate (or zero-extend) a file to the given byte length (default 0). |
+| `fs.truncate` | Truncate (or zero-extend) a file to the given byte length (default 0). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch file is changed directly. |
 | `fs.readlink` | Read a symlink's target; absolute targets are relativized to the context root to avoid leaking host paths. |
-| `fs.chmod` | Change a path's Unix permission bits (mode). |
-| `fs.utimes` | Set a path's access and modification timestamps (seconds since the epoch). |
+| `fs.chmod` | Change a path's Unix permission bits (mode). For context-bound callers, a valid workspace-repo file routes through GAD; a scratch path is changed directly. |
+| `fs.utimes` | Set a path's access and modification timestamps (seconds since the epoch) directly on the context filesystem projection; this does not create a GAD working edit. |
 | `fs.grep` | Search file contents under the context root for a regex pattern (the first argument), returning matching lines with optional context; uses ripgrep when available with a pure-JS fallback, skipping .git, node_modules, symlinks, and binary files. |
 | `fs.glob` | Find files whose path matches a glob pattern (the first argument) under the context root, returned newest-first by mtime; skips .git, node_modules, and symlinks. |
-| `fs.open` | Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle. |
+| `fs.open` | Open a file with the given flags (default 'r') and optional mode, returning a server-tracked handleId for subsequent handleRead/handleWrite/handleStat/handleClose calls; handles are caller-scoped and auto-close after 5 minutes idle. For context-bound callers, write-capable flags are supported for scratch paths only and are rejected for GAD-tracked workspace-repo paths. |
 | `fs.handleRead` | Read up to `length` bytes from an open handle at the given position (null reads from the current offset), returning the bytes base64-encoded plus the count actually read. |
-| `fs.handleWrite` | Write data (UTF-8 string or base64 binary envelope) to an open handle at the given position (null appends at the current offset), returning the byte count written. |
+| `fs.handleWrite` | Write data (UTF-8 string or base64 binary envelope) to a write-capable handle at the given position (null uses the current offset), returning the byte count written. Context-bound callers cannot open GAD-tracked workspace-repo paths with write-capable flags, so their handle writes are scratch-only. |
 | `fs.handleClose` | Close an open file handle and release its server-side resources; a no-op if the handle is already gone. |
 | `fs.handleStat` | Return metadata (type flags, size, mtime/ctime, mode) for the file behind an open handle. |
-| `fs.mktemp` | Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative scratch path under it (for direct fs write-to-temp-then-rename patterns); the file itself is not created, the prefix is sanitized, and the path is not a tracked edit/VCS destination. |
+| `fs.mktemp` | Create the context's `.tmp/` directory if needed and return a fresh, unused root-relative scratch path under it (preferred for write-to-temp-then-rename patterns). The file itself is not created, the prefix is sanitized, and the path is not a tracked edit/VCS destination. |
 
 ## `gateway`
 
@@ -223,7 +223,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 | `gitInterop.pushUpstream` | Export protected main and push it to the repo's declared upstream through the configured gitInterop provider. |
 | `gitInterop.pullUpstream` | Fetch/pull a declared upstream and import upstream changes into protected main through the configured gitInterop provider. |
 | `gitInterop.publishRepo` | Create a provider repository, configure tracking, export protected main, and push through the configured gitInterop provider. |
-| `gitInterop.importProject` | Clone an external Git project into the workspace at the requested path and record its remote in meta/vibestudio.yml; clones over the network and may prompt for config-write approval. |
+| `gitInterop.importProject` | Clone an external Git project into the workspace at the requested path and record its remote and upstream in meta/vibestudio.yml; clones over the network and may prompt for config-write approval. |
 | `gitInterop.completeWorkspaceDependencies` | Clone every remote declared in meta/vibestudio.yml whose unit is not yet present in the workspace, skipping already-present or unsupported paths; returns per-unit imported/skipped/failed results. |
 
 ## `hostLifecycle`
@@ -321,7 +321,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 | `panelTree.focus` | Focus a panel, loading its runtime first if it is not already loaded. |
 | `panelTree.getRuntimeLease` | Return the current runtime lease held on a panel (which host/connection owns it), or null if unleased. |
 | `panelTree.getStateArgs` | Return the validated state-args currently bound to a panel. |
-| `panelTree.setStateArgs` | Replace a panel's state-args; returns the resulting validated state-args. |
+| `panelTree.setStateArgs` | Merge a patch into a panel's state-args (null removes a key); returns the full resulting validated state-args. |
 | `panelTree.reload` | Reload a panel's view in place, keeping its current snapshot. |
 | `panelTree.close` | Close a panel, removing it (and its subtree) from the tree. |
 | `panelTree.archive` | Archive a panel, removing it from the active tree while preserving its history. |
@@ -334,7 +334,7 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 | `panelTree.rebuildPanel` | Rebuild a panel's runtime artifacts from source without reloading its view. |
 | `panelTree.rebuildAndReload` | Rebuild a panel's runtime artifacts from source and then reload its view. |
 | `panelTree.updatePanelState` | Update a panel's live navigation state (url, page title, loading/back/forward flags) from the rendering surface. |
-| `panelTree.snapshot` | Return the current snapshot/configuration of a single panel. |
+| `panelTree.snapshot` | Return a readable snapshot of one loaded panel, using its agent snapshot when available and accessibility-tree fallback otherwise. |
 | `panelTree.callAgent` | Invoke a panel's in-process agent method (e.g. _agent.snapshot/_agent.tree/_agent.setMode) with optional arguments. |
 | `panelTree.metadata` | Return the full Panel metadata for a panel id, or null if it does not exist. |
 | `panelTree.getCollapsedIds` | Return the ids of panels that are currently collapsed in the tree UI. |

@@ -187,7 +187,6 @@ await git.importProject({
     url: "https://github.com/owner/example.git",
     branch: "feature/workspace-integration",
   },
-  branch: "feature/workspace-integration",
   credentialId: "cred_github_...",
 });
 ```
@@ -198,10 +197,11 @@ configured workspace repo is still missing. For private repos, pass a
 credential id on the retry call because startup auto-import has no interactive
 `credentialId` argument.
 
-`git.importProject()` uses one workspace config approval showing the destination
-path, remote URL, and branch. The durable declaration is written to
-`meta/vibestudio.yml` before clone so a failed clone can be retried from config.
-For the full model, see `skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
+`git.importProject()` uses one workspace config approval covering the shared
+remote and upstream; the prompt shows the destination path, remote URL, and
+branch. Both declarations are written to `meta/vibestudio.yml` before clone,
+with `autoPush: false`, so a failed clone can be retried from config. For the
+full model, see `skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
 
 ## Provider Setup UI Pattern
 

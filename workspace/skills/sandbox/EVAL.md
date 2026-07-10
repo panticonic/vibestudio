@@ -475,7 +475,10 @@ for the full app database pattern. The eval `db` is private to your EvalDO.
 
 ## Filesystem Access
 
-`fs` is injected and scoped to your current context — no contextId argument:
+`fs` is injected and scoped to your current context — no contextId argument.
+Relative paths and leading-slash paths are both context-root-relative: `"note.txt"`
+and `"/note.txt"` stay inside the context; the leading slash never names a host
+filesystem path.
 
 ```
 eval({ code: `
@@ -487,10 +490,36 @@ eval({ code: `
 Pass an encoding such as `"utf-8"` when reading text. Without an encoding,
 `fs.readFile` returns bytes, so string methods like `.replace()` will fail.
 
-Available methods: `readFile`, `writeFile`, `readdir`, `stat`, `mkdir`, `rm`,
-`exists`, `rename`. (Note: source edits that must take effect for builds go
-through the `edit`/`write` tools or `vcs.edit`, not `fs.writeFile` — see
-the VCS note below.)
+Use `await help("fs")` for the live surface. Common methods include `readFile`,
+`writeFile`, `appendFile`, `readdir`, `stat`, `mkdir`, `rm`, `exists`,
+`copyFile`, `rename`, `grep`, `glob`, and `mktemp`.
+
+For disposable files, let `mktemp` choose an untracked path. This is the
+canonical write → rename → content-match flow:
+
+```ts
+const source = await fs.mktemp("copy-rename");
+const renamed = `${source}.renamed`;
+const expected = "sandbox rename check\n";
+
+try {
+  await fs.writeFile(source, expected);
+  await fs.rename(source, renamed);
+  const actual = await fs.readFile(renamed, "utf-8");
+  if (actual !== expected) throw new Error("content mismatch after rename");
+} finally {
+  await fs.rm(source, { force: true });
+  await fs.rm(renamed, { force: true });
+}
+```
+
+Use `fs.copyFile(source, destination)` instead when both files should remain.
+Paths inside a workspace repo (`packages/<name>/…`, `panels/<name>/…`, etc.)
+are routed into that context's VCS working edits. Platform-ignored paths and
+paths outside workspace source repos stay as direct, context-local scratch
+files. Prefer `mktemp` for scratch to avoid collisions; for intentional source
+authoring, prefer the `edit`/`write` tools or `vcs.edit` so the edit and its
+provenance are explicit.
 
 ## Calling Services
 
@@ -770,17 +799,29 @@ return its digest, byte count, and a small head sample. Keep full objects in
 `scope` only for short-lived interactive follow-up.
 
 The blobstore is a curated runtime binding — reach it as `services.blobstore`
-(equivalently `import { blobstore } from "@workspace/runtime"`, or the raw
-`rpc.call("blobstore.<method>", [...])`). Read/write methods
+(equivalently `import { blobstore } from "@workspace/runtime"`, or a raw
+`rpc.call("main", "blobstore.<method>", [...])`). Read/write methods
 (`putText`/`putBase64`/`getText`/`getRange`/`grep`/…) work from agent eval; the
 admin methods (`delete`/`list`) are server-only. Raw calls
 use `rpc.call("main", "blobstore.<method>", [...])`. A binary
-artifact (e.g. a screenshot you captured) goes in as base64:
+artifact such as a `Uint8Array` screenshot can be stored directly:
+
+```ts
+const png = await page.screenshot();
+const { digest, size } = await services.blobstore.putBytes(png);
+return { digest, size, mimeType: "image/png" };
+```
+
+At the raw service boundary, use exactly one base64 string:
 
 ```ts
 const { digest, size } = await services.blobstore.putBase64(pngBase64);
-return { digest, size, kind: "image/png" };
+return { digest, size, mimeType: "image/png" };
 ```
+
+The content-addressed store records bytes only. Keep MIME type, filename, and
+other artifact metadata alongside the returned digest rather than passing them
+as extra `putBase64` arguments.
 
 Preferred return shape for large artifacts:
 

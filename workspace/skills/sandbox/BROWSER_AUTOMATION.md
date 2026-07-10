@@ -284,10 +284,7 @@ const items = await page.evaluate(() =>
 );
 
 // Pass arguments
-const text = await page.evaluate(
-  (sel) => document.querySelector(sel)?.textContent,
-  ".my-class"
-);
+const text = await page.evaluate((sel) => document.querySelector(sel)?.textContent, ".my-class");
 
 // Interact with the page
 await page.evaluate(() => {
@@ -297,11 +294,35 @@ await page.evaluate(() => {
 
 ### Screenshots
 
+Prefer the panel handle for a reliable whole-panel capture. It uses the active
+host directly (including hidden or unslotted panels) and returns base64 plus the
+actual media metadata:
+
 ```typescript
-const screenshot = await page.screenshot(); // PNG Uint8Array
-const full = await page.screenshot({ fullPage: true });
-const jpeg = await page.screenshot({ format: "jpeg", quality: 80 });
+import { blobstore } from "@workspace/runtime";
+
+const shot = await handle.cdp.screenshot({ format: "png" });
+const stored = await blobstore.putBase64(shot.data); // exactly one base64 argument
+return {
+  ...stored,
+  mimeType: shot.mimeType,
+  width: shot.width,
+  height: shot.height,
+};
 ```
+
+When you specifically need a screenshot from the lightweight page, it returns
+raw bytes. Store those bytes with the runtime convenience method:
+
+```typescript
+const png = await page.screenshot(); // PNG Uint8Array
+const jpeg = await page.screenshot({ type: "jpeg", quality: 80 });
+const stored = await blobstore.putBytes(png);
+return { ...stored, mimeType: "image/png" };
+```
+
+Blobstore content is addressed by bytes and does not store MIME metadata. Keep
+the MIME type beside the digest; do not pass it as a second `putBase64` argument.
 
 ### Close
 
@@ -340,18 +361,19 @@ work the page surface does not cover.
 
 The handle also has direct navigation methods (no page object needed):
 
-| Method                                             | Description                                                              |
-| -------------------------------------------------- | ------------------------------------------------------------------------ |
-| `handle.cdp.lightweightPage()`                     | Connect the lightweight CDP client and return the Playwright-style page  |
-| `handle.cdp.getCdpEndpoint()`                      | Get `{ wsEndpoint, token }` for raw `CdpConnection.connect`              |
-| `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer |
-| `handle.click(selector)`                           | Convenience wrapper for `handle.cdp.click(selector)`                     |
-| `handle.cdp.navigate(url)`                         | Load a URL                                                               |
-| `handle.cdp.goBack()`                              | Navigate back                                                            |
-| `handle.cdp.goForward()`                           | Navigate forward                                                         |
-| `handle.cdp.reload()`                              | Reload page                                                              |
-| `handle.cdp.stop()`                                | Stop loading                                                             |
-| `handle.close()`                                   | Close browser panel                                                      |
+| Method                                             | Description                                                                |
+| -------------------------------------------------- | -------------------------------------------------------------------------- |
+| `handle.cdp.lightweightPage()`                     | Connect the lightweight CDP client and return the Playwright-style page    |
+| `handle.cdp.getCdpEndpoint()`                      | Get `{ wsEndpoint, token }` for raw `CdpConnection.connect`                |
+| `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer   |
+| `handle.cdp.screenshot({ format, quality })`       | Capture through the active host; returns base64, MIME type, and dimensions |
+| `handle.click(selector)`                           | Convenience wrapper for `handle.cdp.click(selector)`                       |
+| `handle.cdp.navigate(url)`                         | Load a URL                                                                 |
+| `handle.cdp.goBack()`                              | Navigate back                                                              |
+| `handle.cdp.goForward()`                           | Navigate forward                                                           |
+| `handle.cdp.reload()`                              | Reload page                                                                |
+| `handle.cdp.stop()`                                | Stop loading                                                               |
+| `handle.close()`                                   | Close browser panel                                                        |
 
 ## Examples
 
@@ -397,9 +419,7 @@ await page.waitForSelector(".dashboard");
 console.log("Logged in, now at:", await page.evaluate(() => location.href));
 
 // Still logged in — same page, same session
-const dashboardData = await page.evaluate(() =>
-  document.querySelector(".stats")?.textContent
-);
+const dashboardData = await page.evaluate(() => document.querySelector(".stats")?.textContent);
 console.log("Dashboard:", dashboardData);
 ```
 
@@ -432,9 +452,7 @@ const title = await page.title();
 console.log("Page title:", title);
 
 // Check if logged in
-const isLoggedIn = await page.evaluate(() =>
-  document.querySelector("img.avatar") !== null
-);
+const isLoggedIn = await page.evaluate(() => document.querySelector("img.avatar") !== null);
 console.log(isLoggedIn ? "Logged in!" : "Not logged in");
 ```
 

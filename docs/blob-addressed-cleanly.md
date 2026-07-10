@@ -70,19 +70,21 @@
     * GIT INTERCHANGE moved to the trusted `git-bridge` workspace extension
       (workspace/extensions/git-bridge — a Node child process with disk access), built on
       platform primitives only: `@vibestudio/git` for git ops, the userland `vcs` service
-      (gad-store DO, `vcsLog`/`ingestWorktreeState`/`listStateFiles`, now extension-admitted)
+      (gad-store DO, `vcsLog`/`ingestWorktreeState`, extension-admitted)
       for VCS reads + import provenance, `blobstore.*` for gad-side content (import mirrors the
       scanned tree bottom-up via `putTree`; export materializes checkouts from `listTree` +
       `getBase64` with the extension's own disk writes — no `GadVcs.materializeState`), and
       `refs.readMain` for the import no-op check against the protected main. Export markers +
       checkout tracking maps live in extension storage (the DO's generic `getMarker`/`setMarker`
-      KV methods are DELETED). Consumers reach it via `extensions.invoke`.
+      KV methods are DELETED). The host reaches its strict provider contract only through the
+      manifest-selected `providers.gitInterop` slot; userland uses runtime `git.*`.
     * No host adopt surface remains: git import ingests onto staging lineage and publishes
       through the ordinary gad push path (`vcsPush` → `refs.updateMains({operation:"import"})`).
-    * Host `gitInterop` stays as a thin POLICY/DISPATCH shim (stable service name for the
-      runtime `git.*` namespace + startup dependency completion): approvals, egress-proxied
-      clone, and meta/vibestudio.yml writes are host substrate; its repo-log init hook now invokes
-      the extension. It carries ZERO gadVcs imports (structural tree-scanner type).
+    * Host `gitInterop` stays as the POLICY/DISPATCH boundary (stable service name for the
+      runtime `git.*` namespace + startup dependency completion): approvals and
+      meta/vibestudio.yml writes are host substrate, while clone and Git/network work execute in
+      the selected provider. The ref-change hook dispatches `onMainAdvanced` through the same
+      host-only contract. It carries ZERO gadVcs imports (structural tree-scanner type).
       `src/server/gadVcs/gitBridge.ts` (+ test) and `WorkspaceVcs.gadCall` are DELETED.
     * `blobstore`/`refs`/userland-`vcs` service policies admit `extension` callers.
 
