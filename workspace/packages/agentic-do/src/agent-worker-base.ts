@@ -41,8 +41,10 @@ import type {
   VcsProvenanceForFileResult,
   VcsProvenanceForSessionResult,
 } from "@vibestudio/shared/serviceSchemas/vcs";
+import { SUPPORTED_IMAGE_TYPES } from "@workspace/pubsub";
 import { AgentVesselBase, type AgentPromptResources, type ApprovalLevel } from "./agent-vessel.js";
 import { AgentHeartbeatLoop, type AgentHeartbeatLoopDeps } from "./agent-heartbeat-loop.js";
+import { readSayAttachments } from "./say-attachments.js";
 import {
   DEFAULT_APPROVAL_LEVEL,
   DEFAULT_MODEL,
@@ -419,18 +421,22 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     // publishPolicy governs whether model narration also publishes) + the
     // subagent supervision surface. The child-side `complete` tool is added
     // ONLY when this agent is itself a subagent.
-    return [...base, this.createSayTool(channelId), ...this.createSubagentTools(channelId)];
+    return [...base, this.createSayTool(channelId, fs), ...this.createSubagentTools(channelId)];
   }
 
   /** The generalized `say` tool: an explicit, deliberate channel utterance
    *  (saliency:"say"). Its messageId is derived from the tool-call id, so a
-   *  redriven invocation re-sends the SAME message (dedup), never a duplicate. */
-  private createSayTool(channelId: string): AgentTool<never> {
+   *  redriven invocation re-sends the SAME message (dedup), never a duplicate.
+   *  `attachments` names image files in the agent's working tree (the same fs
+   *  the read/write tools use), so a captured screenshot reaches the user by
+   *  path — the bytes never travel through the model. */
+  private createSayTool(channelId: string, fs: ReturnType<typeof createRpcFs>): AgentTool<never> {
     return {
       name: "say",
       label: "say",
       description:
-        "Send a concise, deliberate message to the channel. This is the explicit way to surface text to participants (e.g. when the agent publishes only on demand).",
+        "Send a concise, deliberate message to the channel. This is the explicit way to surface text to participants (e.g. when the agent publishes only on demand). " +
+        `To show the user an image (e.g. a screenshot you captured), save it as a file and list its path in attachments; supported types: ${SUPPORTED_IMAGE_TYPES.join(", ")}.`,
       parameters: {
         type: "object",
         properties: {
@@ -441,16 +447,31 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             items: { type: "string" },
             description: "Optional participant IDs to mention.",
           },
+          attachments: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Optional image file paths (in your working tree) to attach, e.g. screenshots. Rendered inline in the chat.",
+          },
         },
         required: ["content"],
       } as never,
       execute: async (toolCallId, params) => {
-        const input = params as { content?: unknown; replyTo?: unknown; mentions?: unknown };
+        const input = params as {
+          content?: unknown;
+          replyTo?: unknown;
+          mentions?: unknown;
+          attachments?: unknown;
+        };
         if (typeof input.content !== "string" || input.content.trim().length === 0) {
           throw new Error("say requires non-empty content");
         }
         const participantId = this.subscriptions.getParticipantId(channelId);
         if (!participantId) throw new Error("agent is not subscribed to the channel");
+        const paths = Array.isArray(input.attachments)
+          ? input.attachments.filter((path): path is string => typeof path === "string")
+          : [];
+        const attachments = await readSayAttachments(fs, paths);
         const descriptor = this.getEffectiveParticipantInfo(
           channelId,
           this.subscriptions.getConfig(channelId)
@@ -468,10 +489,15 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           mentions: Array.isArray(input.mentions)
             ? input.mentions.filter((mention): mention is string => typeof mention === "string")
             : undefined,
+          attachments: attachments.length > 0 ? attachments : undefined,
         });
+        const attachmentNote =
+          attachments.length > 0
+            ? ` with ${attachments.length} attachment${attachments.length === 1 ? "" : "s"} (${attachments.map((attachment) => attachment.name).join(", ")})`
+            : "";
         return {
-          content: [{ type: "text", text: `sent message ${messageId}` }],
-          details: { messageId },
+          content: [{ type: "text", text: `sent message ${messageId}${attachmentNote}` }],
+          details: { messageId, attachments: attachments.map((attachment) => attachment.name) },
         };
       },
     };
