@@ -91,7 +91,8 @@ type TestRpcServer = {
   checkRelayAuth(
     callerId: string,
     callerKind: string,
-    targetId: string
+    targetId: string,
+    method?: string
   ): { ok: boolean; reason?: string };
   sendToWs(ws: unknown, msg: unknown): void;
 };
@@ -732,6 +733,209 @@ describe("RpcServer relay behavior", () => {
     expect(
       testServer(server).checkRelayAuth("panel:nav-a", "panel", "worker:workers/example")
     ).toEqual({ ok: true });
+
+    expect(
+      testServer(server).checkRelayAuth(
+        "main",
+        "server",
+        "@workspace-extensions/git-bridge",
+        "extension.invoke"
+      )
+    ).toEqual({ ok: true });
+  });
+
+  it("replaces forged WS route identity with the authenticated panel principal", () => {
+    const { server, grantPanel } = createServer();
+    const sourceWs = createTestWs();
+    const target = createClientWithConnection("panel:nav-b", "target-conn");
+    registerClient(server, target);
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:route",
+      envelope: {
+        from: "main",
+        target: "panel:nav-b",
+        delivery: {
+          caller: { callerId: "main", callerKind: "server" },
+          idempotencyKey: "idem-forged-route",
+          readOnly: true,
+        },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "request",
+          requestId: "req-forged-route",
+          fromId: "main",
+          method: "tools.invoke",
+          args: ["publishRepo", []],
+        },
+      },
+    });
+
+    expect(target.ws.send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])).toEqual({
+      type: "ws:routed",
+      envelope: {
+        from: "panel:nav-a",
+        target: "panel:nav-b",
+        delivery: {
+          caller: { callerId: "panel:nav-a", callerKind: "panel" },
+          idempotencyKey: "idem-forged-route",
+          readOnly: true,
+        },
+        provenance: [{ callerId: "panel:nav-a", callerKind: "panel" }],
+        message: {
+          type: "request",
+          requestId: "req-forged-route",
+          fromId: "panel:nav-a",
+          method: "tools.invoke",
+          args: ["publishRepo", []],
+        },
+      },
+    });
+  });
+
+  it("replaces forged WS RPC identity before service dispatch and response attribution", async () => {
+    const { server, grantPanel } = createServer();
+    const sourceWs = createTestWs();
+    testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
+    testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
+    testServer(server).dispatcher.dispatch.mockResolvedValue({ ok: true });
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:rpc",
+      envelope: {
+        from: "main",
+        target: "main",
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "request",
+          requestId: "req-forged-rpc",
+          fromId: "main",
+          method: "workspace.getInfo",
+          args: [],
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(testServer(server).dispatcher.dispatch).toHaveBeenCalled());
+    expect(testServer(server).dispatcher.dispatch.mock.calls[0]![0]).toMatchObject({
+      caller: { runtime: { id: "panel:nav-a", kind: "panel" } },
+    });
+    const response = sourceWs.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)))
+      .find(
+        (message) => message.type === "ws:rpc" && message.envelope?.message?.type === "response"
+      );
+    expect(response).toMatchObject({
+      type: "ws:rpc",
+      envelope: {
+        from: "main",
+        target: "panel:nav-a",
+        provenance: [{ callerId: "panel:nav-a", callerKind: "panel" }],
+        message: { requestId: "req-forged-rpc", result: { ok: true } },
+      },
+    });
+  });
+
+  it("rejects a forged WS relay to an extension host-control method before delivery", () => {
+    const { server, grantPanel } = createServer();
+    const extensionId = "@workspace-extensions/git-bridge";
+    const sourceWs = createTestWs();
+    const target = createClientWithConnection(extensionId, "extension-conn");
+    target.caller = createVerifiedCaller(extensionId, "extension");
+    registerClient(server, target);
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:route",
+      envelope: {
+        from: "main",
+        target: extensionId,
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "request",
+          requestId: "req-host-control",
+          fromId: "main",
+          method: "extension.invoke",
+          args: ["publishRepo", [{ repoPath: "projects/demo" }]],
+        },
+      },
+    });
+
+    expect(target.ws.send).not.toHaveBeenCalled();
+    const rejection = sourceWs.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)))
+      .find(
+        (message) =>
+          message.type === "ws:routed" &&
+          message.envelope?.message?.requestId === "req-host-control"
+      );
+    expect(rejection).toMatchObject({
+      type: "ws:routed",
+      envelope: {
+        message: {
+          type: "response",
+          requestId: "req-host-control",
+          errorCode: "EACCES",
+          error: expect.stringContaining("cannot directly relay host-control method"),
+        },
+      },
+    });
+  });
+
+  it("rejects a forged WS stream relay to an extension host-control method before delivery", () => {
+    const { server, grantPanel } = createServer();
+    const extensionId = "@workspace-extensions/git-bridge";
+    const sourceWs = createTestWs();
+    const target = createClientWithConnection(extensionId, "extension-conn");
+    target.caller = createVerifiedCaller(extensionId, "extension");
+    registerClient(server, target);
+    testServer(server).handleAuth(sourceWs, grantPanel("panel:nav-a"), "conn-1");
+
+    sourceWs.emitMessage({
+      type: "ws:route",
+      envelope: {
+        from: "main",
+        target: extensionId,
+        delivery: { caller: { callerId: "main", callerKind: "server" } },
+        provenance: [{ callerId: "main", callerKind: "server" }],
+        message: {
+          type: "stream-request",
+          requestId: "stream-host-control",
+          fromId: "main",
+          method: "extension.invokeStream",
+          args: ["publishRepo", [{ repoPath: "projects/demo" }]],
+        },
+      },
+    });
+
+    expect(target.ws.send).not.toHaveBeenCalled();
+    const rejection = sourceWs.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)))
+      .find(
+        (message) =>
+          message.type === "ws:routed" &&
+          message.envelope?.message?.requestId === "stream-host-control"
+      );
+    expect(rejection).toMatchObject({
+      type: "ws:routed",
+      envelope: {
+        message: {
+          type: "stream-frame",
+          requestId: "stream-host-control",
+          frameType: FRAME_ERROR,
+        },
+      },
+    });
+    expect(JSON.parse(rejection.envelope.message.payload)).toMatchObject({
+      status: 403,
+      code: "EACCES",
+      message: expect.stringContaining("cannot directly relay host-control method"),
+    });
   });
 
   it("throws DO_NOT_CREATED when relaying to a DO with no registered entity record", async () => {

@@ -671,6 +671,39 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(body["error"]).not.toContain("cannot relay to unrelated panel");
     });
 
+    it("rejects an HTTP caller that forges host identity to relay extension control RPC", async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/rpc`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${setup.workerToken}`,
+        },
+        body: JSON.stringify({
+          from: "main",
+          target: "@workspace-extensions/git-bridge",
+          delivery: { caller: { callerId: "main", callerKind: "server" } },
+          provenance: [{ callerId: "main", callerKind: "server" }],
+          message: {
+            type: "request",
+            requestId: "http-host-control",
+            fromId: "main",
+            method: "extension.invoke",
+            args: ["publishRepo", [{ repoPath: "projects/demo" }]],
+          },
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const envelope = (await res.json()) as {
+        message?: { error?: string; errorCode?: string };
+      };
+      expect(envelope.message).toMatchObject({
+        errorCode: "EACCES",
+        error: expect.stringContaining("cannot directly relay host-control method"),
+      });
+      expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
+    });
+
     it("propagates readOnly metadata when relaying HTTP calls to workers", async () => {
       setup.server.setWorkerdUrl("http://127.0.0.1:8787");
       setup.server.setWorkerdGatewayToken("gateway-token");
@@ -736,6 +769,36 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error?: string };
       expect(body.error).toBe('callerId:"shell" cannot authenticate over HTTP RPC');
+      expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
+    });
+
+    it("rejects an HTTP stream caller that forges host identity for extension control RPC", async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/rpc/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${setup.workerToken}`,
+        },
+        body: JSON.stringify({
+          from: "main",
+          target: "@workspace-extensions/git-bridge",
+          delivery: { caller: { callerId: "main", callerKind: "server" } },
+          provenance: [{ callerId: "main", callerKind: "server" }],
+          message: {
+            type: "stream-request",
+            requestId: "http-stream-host-control",
+            fromId: "main",
+            method: "extension.invokeStream",
+            args: ["publishRepo", [{ repoPath: "projects/demo" }]],
+          },
+        }),
+      });
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({
+        errorCode: "EACCES",
+        error: expect.stringContaining("cannot directly relay host-control method"),
+      });
       expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
     });
 

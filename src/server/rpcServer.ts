@@ -13,6 +13,7 @@ import {
   createRpcClient,
   envelopeFromMessage,
   responseEnvelopeFor,
+  stampEnvelopeCaller,
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
@@ -44,6 +45,7 @@ import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/pro
 import type { ToolExecutionResult } from "@vibestudio/shared/types";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
+  authenticatedCallerOf,
   parseServiceMethod,
   createVerifiedCaller,
   isDeferredResult,
@@ -218,6 +220,7 @@ type ReconnectOutcome =
   | { kind: "no-waiter" };
 
 type RelayErrorCode =
+  | "EACCES"
   | "RECONNECT_GRACE_EXPIRED"
   | "SERVER_SHUTTING_DOWN"
   | "DO_CONTEXT_MISMATCH"
@@ -1130,14 +1133,15 @@ export class RpcServer {
 
     switch (msg.type) {
       case "ws:rpc": {
-        const envelope = (msg as { envelope?: RpcEnvelope }).envelope;
-        if (!envelope?.message) {
+        const inboundEnvelope = (msg as { envelope?: RpcEnvelope }).envelope;
+        if (!inboundEnvelope?.message) {
           log.warn("malformed ws:rpc frame without envelope", {
             callerId: client.caller.runtime.id,
             callerKind: client.caller.runtime.kind,
           });
           return;
         }
+        const envelope = stampEnvelopeCaller(inboundEnvelope, authenticatedCallerOf(client.caller));
         const rpcMessage = envelope.message;
         // If the message belongs to a server-initiated call via the client's RPC bridge,
         // route it to the client transport. Streaming responses use `stream-frame`; without
@@ -1163,7 +1167,7 @@ export class RpcServer {
       case "ws:tool-result":
         this.handleToolResult(msg.callId, msg.result as ToolExecutionResult);
         break;
-      case "ws:route":
+      case "ws:route": {
         if (!msg.envelope?.message) {
           log.warn("malformed ws:route frame without envelope", {
             callerId: client.caller.runtime.id,
@@ -1171,14 +1175,19 @@ export class RpcServer {
           });
           return;
         }
+        const routeEnvelope = stampEnvelopeCaller(
+          msg.envelope,
+          authenticatedCallerOf(client.caller)
+        );
         this.handleRoute(
           client,
-          msg.envelope.target,
-          msg.envelope.message,
+          routeEnvelope.target,
+          routeEnvelope.message,
           msg.targetConnectionId,
-          msg.envelope
+          routeEnvelope
         );
         break;
+      }
       case "ws:auth":
         // Ignore duplicate auth messages
         break;
@@ -1305,13 +1314,16 @@ export class RpcServer {
     targetConnectionId: string | undefined,
     routeEnvelope: RpcEnvelope
   ): void {
+    const method =
+      message.type === "request" || message.type === "stream-request" ? message.method : undefined;
     const auth = this.checkRelayAuth(
       client.caller.runtime.id,
       client.caller.runtime.kind,
-      targetId
+      targetId,
+      method
     );
     if (!auth.ok) {
-      this.sendRouteError(client, targetId, message, new Error(auth.reason));
+      this.sendRouteError(client, targetId, message, createRelayError(auth.reason, "EACCES"));
       return;
     }
 
@@ -1453,8 +1465,9 @@ export class RpcServer {
    *
    * For request-typed messages, sends a `ws:routed` carrying a response with
    * `requestId` echoed back so the client's RPC bridge can reject the matching
-   * promise. For response and event messages, surface the drop explicitly back
-   * to the sender.
+   * promise. Streaming requests receive an ERROR frame so their head promise
+   * settles too. For response and event messages, surface the drop explicitly
+   * back to the sender.
    */
   private sendRouteError(
     client: WsClientState,
@@ -1472,6 +1485,20 @@ export class RpcServer {
           requestId: message.requestId,
           error: errorMessage,
           ...(errorCode ? { errorCode } : {}),
+        }),
+      });
+      return;
+    }
+
+    if (message.type === "stream-request") {
+      this.sendToWs(client.ws, {
+        type: "ws:routed",
+        envelope: envelopeForWsDelivery(targetId, "unknown", client.caller.runtime.id, {
+          type: "stream-frame",
+          requestId: message.requestId,
+          fromId: targetId,
+          frameType: FRAME_ERROR,
+          payload: JSON.stringify({ status: 403, message: errorMessage, code: errorCode }),
         }),
       });
       return;
@@ -2048,8 +2075,8 @@ export class RpcServer {
     }
 
     // Relay to another target
-    const auth = this.checkRelayAuth(callerId, callerKind, targetId);
-    if (!auth.ok) throw new Error(auth.reason);
+    const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
+    if (!auth.ok) throw createRelayError(auth.reason, "EACCES");
     return await this.relayCall(callerId, callerKind, targetId, method, args, undefined, {
       ...(requestId ? { requestId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -2255,17 +2282,23 @@ export class RpcServer {
     const agentBinding = callerId === entry.callerId ? entry.agentBinding : undefined;
     const effectiveCaller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
 
+    if (!method) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing method" }));
+      return;
+    }
+
     if (targetId && targetId !== "main") {
+      const auth = this.checkRelayAuth(callerId, callerKind, targetId, method);
+      if (!auth.ok) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: auth.reason, errorCode: "EACCES" }));
+        return;
+      }
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({ error: "HTTP RPC streaming currently supports targetId 'main' only" })
       );
-      return;
-    }
-
-    if (!method) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Missing method" }));
       return;
     }
 
@@ -2770,15 +2803,26 @@ export class RpcServer {
   /**
    * Enforce authorization for relay calls/events.
    *
-   * RPC relay authorization is intentionally open between authenticated
-   * participants. Sensitive recipients must enforce their own method-level
-   * gates on receipt.
+   * RPC relay authorization is open between authenticated participants except
+   * for host-control RPC. Extension children expose their transport control
+   * plane under `extension.*`; userland must reach extension APIs through the
+   * host `extensions` service so provider exclusivity and service schemas are
+   * applied before the child runs.
    */
   private checkRelayAuth(
-    _callerId: string,
-    _callerKind: CallerKind,
-    _targetId: string
+    callerId: string,
+    callerKind: CallerKind,
+    targetId: string,
+    method?: string
   ): RelayAuthCheck {
+    if (callerKind !== "server" && typeof method === "string" && method.startsWith("extension.")) {
+      return {
+        ok: false,
+        reason:
+          `Caller ${callerId} (${callerKind}) cannot directly relay host-control method ` +
+          `${method} to ${targetId}; call the host extensions service instead`,
+      };
+    }
     return { ok: true };
   }
 
