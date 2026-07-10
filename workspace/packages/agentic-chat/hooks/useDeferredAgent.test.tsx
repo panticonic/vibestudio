@@ -3,15 +3,40 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Participant } from "@workspace/pubsub";
-import type { AvailableAgent } from "@workspace/agentic-core";
+import type { AvailableAgent, ModelCatalog } from "@workspace/agentic-core";
+import { makeTestCatalogEntry } from "@workspace/model-catalog/testing";
 import { useDeferredAgent } from "./useDeferredAgent";
 import type { ChatParticipantMetadata } from "../types";
+
+const WORKSPACE_MODEL = "openai-codex:gpt-5.6-sol";
+const PANEL_MODEL = "openai-codex:gpt-5.3-codex-spark";
+const USER_MODEL = "anthropic:claude-sonnet-4-6";
 
 const AGENT: AvailableAgent = {
   id: "workers/agent-worker",
   className: "AiChatWorker",
   name: "AI Chat",
   proposedHandle: "ai-chat",
+};
+
+const MODEL_CATALOG: ModelCatalog = {
+  providers: [],
+  models: [
+    makeTestCatalogEntry({
+      ref: WORKSPACE_MODEL,
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+    }),
+    makeTestCatalogEntry({
+      ref: PANEL_MODEL,
+      id: "gpt-5.3-codex-spark",
+      name: "GPT-5.3 Codex Spark",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+    }),
+  ],
 };
 
 const agentRoster = {
@@ -214,6 +239,224 @@ describe("useDeferredAgent", () => {
     rerender(makeParams(m, { initialPrompt: "do the thing", replaySettled: true }));
     await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
     expect(result.current.deferredAgent?.queued.map((q) => q.text)).toEqual(["do the thing"]);
+  });
+
+  it("launches an initialPrompt with the effective panel model when the catalog loads first", async () => {
+    const m = freshMocks();
+    const configured = {
+      initialPrompt: "run system tests",
+      modelCatalog: MODEL_CATALOG,
+      defaultModelRef: WORKSPACE_MODEL,
+      defaultAgentConfig: { model: PANEL_MODEL },
+    };
+    const { rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        ...configured,
+        availableAgents: [],
+        replaySettled: false,
+      }),
+    });
+
+    // Model settings arrive before the agent gallery. Once the gallery and
+    // replay are ready, the deferred auto-spawn must retain the panel override.
+    rerender(
+      makeParams(m, {
+        ...configured,
+        availableAgents: [AGENT],
+        replaySettled: true,
+      })
+    );
+
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(m.onAddAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ model: PANEL_MODEL })
+    );
+  });
+
+  it("launches an initialPrompt with the panel model before the catalog loads", async () => {
+    const m = freshMocks();
+    const { rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        initialPrompt: "run system tests",
+        availableAgents: [AGENT],
+        modelCatalog: null,
+        defaultModelRef: null,
+        defaultAgentConfig: { model: PANEL_MODEL },
+        replaySettled: true,
+      }),
+    });
+
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(m.onAddAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ model: PANEL_MODEL })
+    );
+
+    // A later catalog refresh must neither replace the snapshotted intent nor
+    // issue a second launch.
+    rerender(
+      makeParams(m, {
+        initialPrompt: "run system tests",
+        availableAgents: [AGENT],
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: PANEL_MODEL },
+        replaySettled: true,
+      })
+    );
+    await act(async () => Promise.resolve());
+    expect(m.onAddAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates an untouched draft when the effective model arrives after the catalog", async () => {
+    const m = freshMocks();
+    const { rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        initialPrompt: "run system tests",
+        availableAgents: [],
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: null,
+        replaySettled: true,
+      }),
+    });
+
+    // The prompt is already armed while the gallery is unavailable. The panel
+    // override and gallery then arrive together, which used to launch the stale
+    // catalog default because a non-empty draft was never reseeded.
+    rerender(
+      makeParams(m, {
+        initialPrompt: "run system tests",
+        availableAgents: [AGENT],
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: PANEL_MODEL },
+        replaySettled: true,
+      })
+    );
+
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(m.onAddAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ model: PANEL_MODEL })
+    );
+  });
+
+  it("preserves a user-selected model when effective defaults arrive late", async () => {
+    const m = freshMocks();
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        input: "run system tests",
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: null,
+      }),
+    });
+    await waitFor(() =>
+      expect(result.current.deferredAgent?.draft.model).toBe(WORKSPACE_MODEL)
+    );
+
+    act(() => {
+      const current = result.current.deferredAgent!.draft;
+      result.current.deferredAgent!.setDraft({ ...current, model: USER_MODEL });
+    });
+    rerender(
+      makeParams(m, {
+        input: "run system tests",
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: PANEL_MODEL },
+      })
+    );
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(m.onAddAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ model: USER_MODEL })
+    );
+  });
+
+  it("applies a late effective model when the user only touched another field", async () => {
+    const m = freshMocks();
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        input: "run system tests",
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: null,
+      }),
+    });
+    await waitFor(() =>
+      expect(result.current.deferredAgent?.draft.model).toBe(WORKSPACE_MODEL)
+    );
+
+    act(() => {
+      const current = result.current.deferredAgent!.draft;
+      result.current.deferredAgent!.setDraft({ ...current, approvalLevel: 1 });
+    });
+    rerender(
+      makeParams(m, {
+        input: "run system tests",
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: PANEL_MODEL },
+      })
+    );
+    await waitFor(() => expect(result.current.deferredAgent?.draft.model).toBe(PANEL_MODEL));
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+    expect(m.onAddAgent).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ model: PANEL_MODEL, approvalLevel: 1 })
+    );
+  });
+
+  it("retries an initialPrompt with the exact model used by its first launch attempt", async () => {
+    const m = freshMocks();
+    m.onAddAgent = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error("launch failed");
+      })
+      .mockResolvedValueOnce(undefined);
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        initialPrompt: "run system tests",
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: PANEL_MODEL },
+      }),
+    });
+    await waitFor(() => expect(result.current.deferredAgent?.launchFailed).toBe(true));
+    expect(m.onAddAgent).toHaveBeenNthCalledWith(
+      1,
+      undefined,
+      expect.objectContaining({ model: PANEL_MODEL })
+    );
+
+    // Changing defaults after the failed attempt must not mutate the committed
+    // launch intent used for a retry.
+    rerender(
+      makeParams(m, {
+        initialPrompt: "run system tests",
+        modelCatalog: MODEL_CATALOG,
+        defaultModelRef: WORKSPACE_MODEL,
+        defaultAgentConfig: { model: WORKSPACE_MODEL },
+      })
+    );
+    act(() => result.current.deferredAgent?.retryLaunch());
+
+    await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(2));
+    expect(m.onAddAgent).toHaveBeenNthCalledWith(
+      2,
+      undefined,
+      expect.objectContaining({ model: PANEL_MODEL })
+    );
   });
 
   it("never shows the setup card over an existing transcript (has-history guard)", () => {
