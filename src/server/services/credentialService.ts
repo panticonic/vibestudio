@@ -89,6 +89,7 @@ import {
 } from "./credentialSessionGrants.js";
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import { assertPresent } from "../../lintHelpers";
+import { getRelayOrigin, RELAY_URL_ENV } from "./relayBackhaulClient.js";
 
 const log = createDevLogger("CredentialService");
 type BrowserHandoffCallerKind = "app" | "panel" | "shell";
@@ -152,7 +153,14 @@ const PENDING_OAUTH_TTL_MS = 10 * 60 * 1000;
 const OAUTH_USERINFO_TIMEOUT_MS = 15_000;
 const DEFAULT_LOOPBACK_HOST = "127.0.0.1";
 const DEFAULT_CALLBACK_PATH = "/oauth/callback";
-const PUBLIC_OAUTH_CALLBACK_PATH = "/_r/s/credentials/oauth/callback";
+/**
+ * Canonical relay OAuth callback path. The transactionId is carried as the
+ * trailing path SEGMENT (`/oauth/callback/<transactionId>`), which is the single
+ * shape the relay routes (`/oauth/callback*`), the AASA/assetlinks claim
+ * (`/oauth/callback/*`), and the relay landing resolves. Server, relay, and the
+ * mobile deep-link handler all agree on exactly this path.
+ */
+const RELAY_OAUTH_CALLBACK_PATH = "/oauth/callback";
 const CLIENT_LOOPBACK_TIMEOUT_SKEW_MS = 5_000;
 const RESERVED_OAUTH_AUTHORIZE_PARAMS = new Set([
   "client_id",
@@ -301,37 +309,38 @@ function resolveDefaultRedirectStrategy(
   if (requested) return requested;
   // The "public" default routes the IdP through the callback relay (parity: desktop
   // + mobile share it). But the relay is optional — `pnpm dev` sets no
-  // VIBESTUDIO_RELAY_OAUTH_BASE_URL — and "public" then throws redirect_unavailable on
+  // VIBESTUDIO_RELAY_URL — and "public" then throws redirect_unavailable on
   // every connect that doesn't pass an explicit redirect. Fall back to loopback when
   // no relay is configured so co-located dev OAuth works; production configures the
   // relay and keeps the parity path. (Remote sessions still need the relay set — a
   // server-loopback redirect is unreachable from a remote browser by design.)
-  const relay = process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"];
-  return relay && relay.trim() ? "public" : "loopback";
+  return getRelayOrigin() ? "public" : "loopback";
 }
 
 /**
  * Build the OAuth `redirect_uri` that lands on the public callback RELAY (§7).
  *
- * The server has no public URL of its own; the IdP redirects to the relay, which
- * does a `state`/`transactionId`-keyed handoff back to the live server — mobile
- * via App-Links deep-link, desktop via the authenticated backhaul. PKCE keeps the
- * relay harmless: the `codeVerifier` never leaves this server, so even where the
- * relay sees the `code` it is useless. The callback-path constant is unchanged so
- * the relay and server agree on the route; only the host moves to the relay.
+ * The server has no public URL of its own; the IdP redirects to
+ * `<relay>/oauth/callback/<transactionId>`, and the relay does a
+ * transactionId-keyed handoff back to the live server — mobile via App-Links
+ * deep-link (the app forwards over the pipe), desktop via the authenticated
+ * backhaul. Carrying the transactionId in the PATH (not a query param) is what
+ * lets the relay landing resolve the transaction AND lets the mobile OS
+ * deep-link match the `/oauth/callback/*` App-Link component. PKCE keeps the
+ * relay harmless: the `codeVerifier` never leaves this server.
  *
  * Fails loud when unconfigured rather than silently falling back to a server URL
  * that no third party can reach.
  */
-function buildRelayOAuthCallbackUrl(): string {
-  const base = process.env["VIBESTUDIO_RELAY_OAUTH_BASE_URL"];
-  if (!base || !base.trim()) {
+function buildRelayOAuthCallbackUrl(transactionId: string): string {
+  const base = getRelayOrigin();
+  if (!base) {
     throw new OAuthConnectionError(
       "redirect_unavailable",
-      "OAuth callback relay is not configured — set VIBESTUDIO_RELAY_OAUTH_BASE_URL to the relay origin."
+      `OAuth callback relay is not configured — set ${RELAY_URL_ENV} to the relay origin.`
     );
   }
-  return `${base.trim().replace(/\/+$/, "")}${PUBLIC_OAUTH_CALLBACK_PATH}`;
+  return `${base}${RELAY_OAUTH_CALLBACK_PATH}/${encodeURIComponent(transactionId)}`;
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -509,6 +518,15 @@ interface CredentialServiceDeps {
   completeCapture?: (captureId: string, response: Record<string, unknown>) => void;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   runtimeInspector?: CredentialRuntimeInspector;
+  /**
+   * Announce a pending relay-routed OAuth transaction to the apex relay over the
+   * backhaul so the callback can be handed back to this server (§7). `desktop`
+   * transactions are pushed down the backhaul; `mobile` transactions are only
+   * registered so a failed deep-link renders a truthful "open the app" page.
+   */
+  relayOAuthRegistrar?: {
+    register(transactionId: string, platform: "mobile" | "desktop"): void;
+  };
 }
 
 interface SessionCredentialCapture {
@@ -579,7 +597,15 @@ class OAuthConnectionError extends Error {
   }
 }
 
-export function createCredentialService(deps: CredentialServiceDeps = {}): ServiceDefinition {
+export function createCredentialService(deps: CredentialServiceDeps = {}): ServiceDefinition & {
+  /** Resolve a desktop OAuth transaction pushed down the relay backhaul. */
+  resolveRelayOAuthCallback: (frame: {
+    transactionId: string;
+    state?: string;
+    code?: string;
+    error?: string;
+  }) => Promise<void>;
+} {
   const credentialStore = deps.credentialStore ?? new CredentialStore();
   const clientConfigStore = deps.clientConfigStore ?? new ClientConfigStore();
   const auditLog = deps.auditLog;
@@ -2392,10 +2418,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         redirectUri = callback.redirectUri;
       } else if (redirectStrategy === "public") {
         transactionId = randomUUID();
-        redirectUri = buildRelayOAuthCallbackUrl();
+        redirectUri = buildRelayOAuthCallbackUrl(transactionId);
       } else if (redirectStrategy === "client-forwarded") {
         transactionId = randomUUID();
-        redirectUri = redirect.callbackUri ?? buildRelayOAuthCallbackUrl();
+        redirectUri = redirect.callbackUri ?? buildRelayOAuthCallbackUrl(transactionId);
       } else {
         throw new OAuthConnectionError("redirect_unavailable");
       }
@@ -2407,6 +2433,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         redirectStrategy,
         stateParam,
       });
+      registerRelayOAuthIfNeeded(tx);
       const audience = normalizeUrlAudiences(request.credential.audience);
       const injection = normalizeCredentialInjection(request.credential.injection);
       const identity = resolveApprovalIdentity(ctx);
@@ -2540,10 +2567,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         redirectUri = callback.redirectUri;
       } else if (redirectStrategy === "public") {
         transactionId = randomUUID();
-        redirectUri = buildRelayOAuthCallbackUrl();
+        redirectUri = buildRelayOAuthCallbackUrl(transactionId);
       } else if (redirectStrategy === "client-forwarded") {
         transactionId = randomUUID();
-        redirectUri = redirect.callbackUri ?? buildRelayOAuthCallbackUrl();
+        redirectUri = redirect.callbackUri ?? buildRelayOAuthCallbackUrl(transactionId);
       } else if (redirectStrategy === "client-loopback") {
         transactionId = randomUUID();
         redirectUri = buildClientLoopbackRedirectUri(redirect);
@@ -2559,6 +2586,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         redirectStrategy,
         stateParam,
       });
+      registerRelayOAuthIfNeeded(tx);
       const oauthRequest = await resolveAuthCodeConnectionRequest(request, redirectUri);
       validateOAuthCredentialRequest(oauthRequest, redirectStrategy);
       const identity = resolveApprovalIdentity(ctx);
@@ -3875,6 +3903,57 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     return undefined;
   }
 
+  /**
+   * Announce a relay-routed transaction to the apex relay over the backhaul.
+   * `public` = desktop (the relay pushes {state,code} back down the backhaul);
+   * `client-forwarded` = mobile (the app forwards over the pipe — we still
+   * register so a failed deep-link renders a truthful landing).
+   */
+  function registerRelayOAuthIfNeeded(tx: OAuthConnectionTransaction): void {
+    if (!deps.relayOAuthRegistrar) return;
+    if (tx.redirectStrategy === "public") {
+      deps.relayOAuthRegistrar.register(tx.id, "desktop");
+    } else if (tx.redirectStrategy === "client-forwarded") {
+      deps.relayOAuthRegistrar.register(tx.id, "mobile");
+    }
+  }
+
+  /**
+   * Resolve a desktop OAuth transaction whose callback the relay pushed down the
+   * backhaul. Called by the relay backhaul client (NOT via RPC), so it resolves
+   * the pending in-memory transaction directly. Unknown/expired ids and non-
+   * desktop strategies are ignored (fail closed): the relay landing already
+   * responded, and a mismatched strategy means the callback arrived on the wrong
+   * path (a mobile tx must forward over the pipe, never the backhaul).
+   */
+  async function resolveRelayOAuthCallback(frame: {
+    transactionId: string;
+    state?: string;
+    code?: string;
+    error?: string;
+  }): Promise<void> {
+    const tx = oauthTransactions.get(frame.transactionId);
+    if (!tx) {
+      log.warn("relay OAuth callback for unknown/expired transaction", {
+        transactionId: frame.transactionId,
+      });
+      return;
+    }
+    if (tx.redirectStrategy !== "public") {
+      log.warn("relay OAuth callback on backhaul for a non-desktop transaction; ignoring", {
+        transactionId: frame.transactionId,
+        redirectStrategy: tx.redirectStrategy,
+      });
+      return;
+    }
+    await receiveOAuthCallback(tx, {
+      code: frame.code ?? null,
+      state: frame.state ?? null,
+      error: frame.error ?? null,
+      url: tx.redirectUri,
+    });
+  }
+
   async function loadActiveCredential(credentialId: string): Promise<Credential & { id: string }> {
     let credential = await credentialStore.loadUrlBound(credentialId);
     if (!credential?.id || credential.revokedAt) {
@@ -4369,50 +4448,14 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     },
   };
 
-  const publicCallbackHandler: ServiceRouteDecl["handler"] = async (req, res) => {
-    const url = new URL(req.url ?? "/", "http://placeholder");
-    const stateParam = url.searchParams.get("state") ?? undefined;
-    const tx = findOAuthTransactionByState(stateParam);
-    if (!tx) {
-      respondOAuthCallback(res, 400, "No matching OAuth connection is waiting for this callback.");
-      return;
-    }
-    const providerError = url.searchParams.get("error");
-    const callbackUrl = new URL(req.url ?? "/", tx.redirectUri);
-    await receiveOAuthCallback(tx, {
-      code: callbackUrl.searchParams.get("code") ?? callbackUrl.searchParams.get("oauth_verifier"),
-      state: callbackUrl.searchParams.get("state"),
-      error: providerError,
-      url: callbackUrl.toString(),
-    });
-    if (tx.state === "failed" || tx.state === "expired" || tx.state === "cancelled") {
-      respondOAuthCallback(
-        res,
-        400,
-        providerError
-          ? "The provider denied the connection."
-          : "OAuth callback could not be validated."
-      );
-    } else if (providerError) {
-      respondOAuthCallback(res, 400, "The provider denied the connection.");
-    } else if (!callbackUrl.searchParams.get("code")) {
-      respondOAuthCallback(res, 400, "Missing authorization code.");
-    } else {
-      respondOAuthCallback(res, 200, "Connection complete. You can close this window.");
-    }
-  };
+  // The home server has NO public inbound HTTP surface post-WebRTC cutover, so
+  // there is no server-hosted `/oauth/callback` route: desktop callbacks arrive
+  // over the authenticated backhaul (resolveRelayOAuthCallback), mobile over the
+  // pipe (forwardOAuthCallback), and co-located loopback via its own ephemeral
+  // http server (createLoopbackOAuthCallback). No public-inbound path remains.
+  const routes: ServiceRouteDecl[] = [];
 
-  const routes: ServiceRouteDecl[] = [
-    {
-      serviceName: "credentials",
-      path: "/oauth/callback",
-      methods: ["GET"],
-      auth: "public",
-      handler: publicCallbackHandler,
-    },
-  ];
-
-  return Object.assign(definition, { routes });
+  return Object.assign(definition, { routes, resolveRelayOAuthCallback });
 }
 
 function normalizeAccountIdentity(

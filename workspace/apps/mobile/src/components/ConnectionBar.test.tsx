@@ -43,9 +43,9 @@ describe("ConnectionBar", () => {
     alertSpy.mockRestore();
   });
 
-  it("omits re-pair when no handler is supplied and stays offline-aware", () => {
+  it("omits re-pair and offers only reconnect when disconnected and offline", () => {
     const store = createStore();
-    store.set(connectionStatusAtom, "connected");
+    store.set(connectionStatusAtom, "disconnected");
     store.set(networkReachableAtom, false);
 
     const alertSpy = jest.spyOn(Alert, "alert").mockImplementation(() => undefined);
@@ -56,12 +56,28 @@ describe("ConnectionBar", () => {
       </Provider>,
     );
 
-    // Offline forces the actionable state even if the transport reports connected.
     fireEvent.press(getByRole("button"));
     const buttons = (alertSpy.mock.calls[0]?.[2] ?? []) as AlertButton[];
     expect(buttons.map((button) => button.text)).toEqual(["Reconnect", "Cancel"]);
 
     alertSpy.mockRestore();
+  });
+
+  it("treats a live pipe as connected even when NetInfo reports no internet (LAN-only)", () => {
+    // A home server on Wi-Fi without internet is reachable over the WebRTC pipe:
+    // a connected status must NOT be overridden with a red "No network" bar.
+    const store = createStore();
+    store.set(connectionStatusAtom, "connected");
+    store.set(networkReachableAtom, false);
+
+    const { queryByRole } = render(
+      <Provider store={store}>
+        <ConnectionBar />
+      </Provider>,
+    );
+
+    // Connected ⇒ not a problem ⇒ not actionable, regardless of NetInfo.
+    expect(queryByRole("button")).toBeNull();
   });
 
   it("is not interactive when connected and online", () => {

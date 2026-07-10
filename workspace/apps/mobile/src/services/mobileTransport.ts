@@ -55,6 +55,14 @@ export class MobileRpcClient
   // Dedupes concurrent connect attempts: the WebRTC handshake is eager + async,
   // so a stray call() racing connectAndWait() must not open a second pipe.
   private connecting: Promise<RpcClient> | null = null;
+  // Identity token for the in-flight `establishConnection()`. `teardown()` clears
+  // it, so a handshake that resolves AFTER a disconnect/updateConfig closes the
+  // pipe it produced instead of adopting it. Without this, a disconnect mid-connect
+  // captured `this.connection` (still null) and closed nothing, then the pending
+  // handshake assigned `this.connection` + status "connected" — leaking a live
+  // pipe + keepalive when the app backgrounds or ShellClient.dispose() unmounts
+  // mid-connect.
+  private activeConnectToken: object | null = null;
   private currentCallerId: string | null = null;
   private statusState: ConnectionStatus = "disconnected";
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -77,6 +85,9 @@ export class MobileRpcClient
   connect(): void {
     this.setStatus("connecting");
     void this.ensureRpc().catch((error) => {
+      // A superseded connect means a newer teardown/connect already owns the
+      // status — don't clobber it or log a scary failure.
+      if (error instanceof ConnectSupersededError) return;
       console.warn("[MobileRpcClient] Failed to connect WebRTC pipe:", error);
       this.setStatus("disconnected");
     });
@@ -87,6 +98,11 @@ export class MobileRpcClient
     try {
       await this.connectAndWaitWithRetry(timeoutMs);
     } catch (error) {
+      if (error instanceof ConnectSupersededError) {
+        // Torn down mid-connect (disconnect/dispose); let the caller reject
+        // without a spurious "disconnected" flash — a new connect owns status.
+        throw error;
+      }
       console.warn("[MobileRpcClient] Failed to connect mobile RPC transport:", error);
       this.setStatus("disconnected");
       throw error;
@@ -237,6 +253,8 @@ export class MobileRpcClient
   }
 
   private async establishConnection(): Promise<RpcClient> {
+    const token = {};
+    this.activeConnectToken = token;
     const stored = await loadShellCredential();
     if (!stored) {
       throw new Error("No stored WebRTC shell credential — re-pair this device");
@@ -246,6 +264,14 @@ export class MobileRpcClient
       ice: stored.pairing.ice ?? "all",
     });
     const connection = await reconnectViaWebRtc(stored, (kind) => this.emitRecovery(kind));
+    if (this.activeConnectToken !== token) {
+      // A disconnect()/updateConfig()/reconnect() ran while this handshake was in
+      // flight. Close the pipe we just produced (and its keepalive) rather than
+      // adopting it, so a teardown-during-connect genuinely tears down.
+      await connection.close().catch(() => undefined);
+      throw new ConnectSupersededError();
+    }
+    this.activeConnectToken = null;
     this.connection = connection;
     this.currentCallerId = connection.callerId;
     this.rpc = connection.rpc;
@@ -285,6 +311,10 @@ export class MobileRpcClient
         }
         return;
       } catch (error) {
+        // An intentional teardown (disconnect/dispose/updateConfig) landed
+        // mid-connect. Do NOT retry — that would resurrect a pipe the caller
+        // just asked to drop. Propagate so the awaiting init() unwinds.
+        if (error instanceof ConnectSupersededError) throw error;
         lastError = error;
         await this.teardown();
         const remainingMs = deadline - Date.now();
@@ -313,6 +343,10 @@ export class MobileRpcClient
   }
 
   private async teardown(): Promise<void> {
+    // Invalidate any in-flight establishConnection() so it closes (rather than
+    // adopts) the pipe it is about to produce, and let a fresh connect start.
+    this.activeConnectToken = null;
+    this.connecting = null;
     const connection = this.connection;
     this.connection = null;
     this.rpc = null;
@@ -343,6 +377,14 @@ export class MobileRpcClient
    */
   private emitRecovery(kind: RecoveryKind): void {
     for (const listener of this.recoveryListeners.get(kind) ?? []) void listener();
+  }
+}
+
+/** Thrown by an in-flight establishConnection() that teardown() invalidated. */
+class ConnectSupersededError extends Error {
+  constructor() {
+    super("WebRTC connect superseded by disconnect/reconnect");
+    this.name = "ConnectSupersededError";
   }
 }
 

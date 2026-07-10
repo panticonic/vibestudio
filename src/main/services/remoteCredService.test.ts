@@ -79,6 +79,8 @@ describe("remoteCredService", () => {
     const service = createRemoteCredService({
       startupMode: localStartupMode,
       getServerClient: () => ({ isConnected: () => true, call: vi.fn() }) as never,
+      // Active requires the live session to genuinely be the remote pipe.
+      getConnectionMode: () => "remote",
     });
     await expect(service.handler(shellCtx, "getCurrent", [])).resolves.toMatchObject({
       configured: true,
@@ -86,6 +88,23 @@ describe("remoteCredService", () => {
       bootstrap: "device",
       deviceId: "dev_self",
       workspaceName: "main",
+    });
+  });
+
+  it("reports a stored pairing as NOT active when the live client is the loopback fallback", async () => {
+    mocks.store.value = sampleStored;
+    const { createRemoteCredService } = await import("./remoteCredService.js");
+    // Pipe is "connected" but the mode is local (a --skip-remote-pairing fallback):
+    // the green "connected to remote" banner would be a lie, so isActive is false.
+    const service = createRemoteCredService({
+      startupMode: localStartupMode,
+      getServerClient: () => ({ isConnected: () => true, call: vi.fn() }) as never,
+      getConnectionMode: () => "local",
+    });
+    await expect(service.handler(shellCtx, "getCurrent", [])).resolves.toMatchObject({
+      configured: true,
+      isActive: false,
+      bootstrap: "device",
     });
   });
 

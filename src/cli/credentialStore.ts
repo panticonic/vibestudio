@@ -27,7 +27,13 @@ export interface CliCredentials {
 }
 
 export function credentialPath(): string {
-  return path.join(os.homedir(), ".config", "vibestudio", "cli-credentials.json");
+  // Honor XDG_CONFIG_HOME so the CLI, remote-doctor, and remote-setup-signaling
+  // all agree on the config dir (otherwise a split-brain: doctor writes to
+  // $XDG_CONFIG_HOME while this store reads ~/.config).
+  const configRoot = process.env["XDG_CONFIG_HOME"]
+    ? path.join(process.env["XDG_CONFIG_HOME"], "vibestudio")
+    : path.join(os.homedir(), ".config", "vibestudio");
+  return path.join(configRoot, "cli-credentials.json");
 }
 
 export function loadCliCredentials(): CliCredentials | null {
@@ -37,6 +43,12 @@ export function loadCliCredentials(): CliCredentials | null {
   try {
     parsed = JSON.parse(fs.readFileSync(p, "utf8")) as Partial<CliCredentials>;
   } catch {
+    // The file EXISTS but is unreadable/corrupt — surface it rather than silently
+    // reporting "not paired", which sends the user down a re-pair path blind.
+    console.warn(
+      `[vibestudio] credential file exists but is not valid JSON: ${p}\n` +
+        `             delete it and re-pair, or restore a good copy.`
+    );
     return null;
   }
   if (
@@ -48,6 +60,10 @@ export function loadCliCredentials(): CliCredentials | null {
     (parsed.pairing !== undefined && !isStoredPairing(parsed.pairing)) ||
     (parsed.hubCredential !== undefined && !isHubCredential(parsed.hubCredential))
   ) {
+    console.warn(
+      `[vibestudio] credential file exists but failed validation: ${p}\n` +
+        `             it is malformed or from an incompatible version — re-pair to regenerate it.`
+    );
     return null;
   }
   return parsed as CliCredentials;

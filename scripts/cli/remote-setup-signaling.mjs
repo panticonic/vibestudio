@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parseSignalingEndpoint } from "./lib/connect-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
@@ -40,8 +41,24 @@ function run(command, args, cwd) {
   });
 }
 
+// Returns the normalized endpoint (or null if --url was not supplied). Throws a
+// clear error for an empty or malformed value — a bad URL persisted to config
+// makes every later command that reads config.signalingUrl throw on load.
+function validateUrl(url) {
+  // url === null → the --url flag was not supplied at all; nothing to persist.
+  if (url === null) return null;
+  if (url === "") {
+    throw new Error("--url requires a wss:// or https:// signaling endpoint value");
+  }
+  const parsed = parseSignalingEndpoint(url);
+  if (parsed.kind === "error") {
+    throw new Error(`--url is not a valid signaling endpoint: ${parsed.reason}`);
+  }
+  return parsed.url;
+}
+
 function writeConfig(url) {
-  if (!url) return;
+  if (url === null) return;
   const configDir = process.env.XDG_CONFIG_HOME
     ? path.join(process.env.XDG_CONFIG_HOME, "vibestudio")
     : path.join(os.homedir(), ".config", "vibestudio");
@@ -59,12 +76,15 @@ async function main() {
     printHelp();
     return;
   }
+  // Validate the endpoint BEFORE the (slow) wrangler deploy so a typo fails fast
+  // instead of after a successful deploy.
+  const validatedUrl = validateUrl(options.url);
   if (options.dryRun) {
     console.log(`[remote-setup-signaling] ${wrangler} deploy`);
   } else {
     await run(wrangler, ["deploy"], signalingDir);
   }
-  writeConfig(options.url);
+  writeConfig(validatedUrl);
 }
 
 main().catch((error) => {

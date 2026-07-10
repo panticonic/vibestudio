@@ -237,7 +237,7 @@ Pair a Vibestudio device
 The gateway binds loopback only; remote clients reach it over WebRTC (paired by
 QR). There is no `--host` / `--public-url` / `--protocol` / TLS flag — those were
 decommissioned with remote-mode public ingress. OAuth/webhook routes resolve
-through the callback relay (`VIBESTUDIO_RELAY_OAUTH_BASE_URL`).
+through the callback relay (`VIBESTUDIO_RELAY_URL`).
 
 The public server is always a hub. Clients pair with the hub, choose a
 workspace, and then connect to `/_workspace/<name>`. Workspace flags are

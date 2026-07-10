@@ -9,6 +9,10 @@ export default [
       "apps/mobile/*.config.js",
       "apps/mobile/index.js",
       "workspace/apps/mobile/src/polyfills/*.js",
+      // Cross-runtime bridge test: imports Cloudflare Worker source, so it sits
+      // in no single tsconfig project (excluded from host tsc); runs under
+      // vitest. `project: true` can't resolve a project for it → not lintable.
+      "src/server/services/relaySeam.integration.test.ts",
     ],
   },
   js.configs.recommended,

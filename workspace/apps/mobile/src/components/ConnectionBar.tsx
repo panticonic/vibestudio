@@ -1,11 +1,11 @@
 /**
- * ConnectionBar -- Status bar showing WebSocket connection state.
+ * ConnectionBar -- Status bar showing the WebRTC pipe connection state.
  *
  * Displays a thin colored bar at the top of the screen:
  * - Connected: green, auto-hides after 3 seconds
  * - Connecting: yellow, stays visible (initial connection)
  * - Reconnecting: yellow, stays visible (after a previous connection)
- * - No network: red, stays visible (device offline)
+ * - No network: red, stays visible (device has no network link at all)
  * - Disconnected: red, stays visible (server unreachable)
  */
 
@@ -39,11 +39,18 @@ const STATUS_CONFIG: Record<ConnectionStatus, StatusConfig> = {
 
 /**
  * Derive the display config from connection status + network reachability.
- * - No network: "No network" with disconnected color, regardless of transport status
+ * - Connected: a live pipe IS reachable by definition — never overridden by a
+ *   NetInfo "no internet" signal. This is what makes a LAN-only home server
+ *   (Wi-Fi without internet, ICE over the local link) show "Connected".
+ * - No network: "No network" only when there's genuinely no link AND the pipe
+ *   isn't up.
  * - Connecting after a disconnect: "Reconnecting..." if transport was previously connected
  * - Otherwise: standard status label
  */
 function getDisplayConfig(status: ConnectionStatus, networkReachable: boolean, wasConnected: boolean): StatusConfig {
+  if (status === "connected") {
+    return STATUS_CONFIG.connected;
+  }
   if (!networkReachable) {
     return { label: "No network", colorKey: "statusDisconnected" };
   }
@@ -96,8 +103,9 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
       }),
     ]).start();
 
-    // Auto-hide when connected (after 3 seconds)
-    if (status === "connected" && networkReachable) {
+    // Auto-hide when connected (after 3 seconds). A live pipe is reachable by
+    // definition, so don't gate this on NetInfo's "internet reachable" signal.
+    if (status === "connected") {
       hideTimer.current = setTimeout(() => {
         Animated.parallel([
           Animated.timing(opacity, {
@@ -123,8 +131,9 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
 
   // The bar is actionable whenever the connection is in a problem state
   // (disconnected, or offline) so the user is never stuck without a way to
-  // retry or re-pair.
-  const isProblem = status === "disconnected" || !networkReachable;
+  // retry or re-pair. A live pipe is never a problem, even if NetInfo reports
+  // "no internet" (LAN-only), so a connected status is excluded.
+  const isProblem = status !== "connected" && (status === "disconnected" || !networkReachable);
 
   const handlePress = useCallback(() => {
     const reconnect = () => shellClient?.transport.reconnect();

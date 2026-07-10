@@ -66,6 +66,40 @@ describe("DeviceAuthStore", () => {
     );
   });
 
+  it("throttles lastUsedAt persistence for a churny reconnecting device", () => {
+    const filePath = tempFile();
+    let now = 1000;
+    const store = new DeviceAuthStore(filePath, () => now);
+    const credential = store.issueDevice({ label: "Desktop" });
+
+    // First refresh persists (previous lastUsedAt was unset).
+    now = 100_000;
+    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8")).devices[0].lastUsedAt).toBe(100_000);
+
+    // A reconnect within the persist interval updates memory but NOT disk.
+    now = 101_000;
+    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    expect(store.listDevices()[0]!.lastUsedAt).toBe(101_000);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8")).devices[0].lastUsedAt).toBe(100_000);
+
+    // Past the interval it persists again.
+    now = 200_000;
+    store.validateRefresh(credential.deviceId, credential.refreshToken);
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8")).devices[0].lastUsedAt).toBe(200_000);
+  });
+
+  it("fails loud with the path and a recovery hint when the store JSON is corrupt", () => {
+    const filePath = tempFile();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, "{ this is not valid json ", "utf8");
+    expect(() => new DeviceAuthStore(filePath)).toThrow(/corrupt/i);
+    expect(() => new DeviceAuthStore(filePath)).toThrow(
+      new RegExp(filePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    );
+    expect(() => new DeviceAuthStore(filePath)).toThrow(/recovery/i);
+  });
+
   it("defaults pairing codes to a one hour lifetime", () => {
     const filePath = tempFile();
     let now = 1000;
@@ -239,6 +273,47 @@ describe("DeviceAuthStore pairing rooms (per-invite rooms, plan §2.1)", () => {
     // Double revoke does not re-fire.
     expect(store.revokeDevice(credential.deviceId)).toBe(false);
     expect(released).toEqual(["room-revoked"]);
+  });
+
+  it("guards a live device's room against release while releasing unbound rooms", () => {
+    vi.useFakeTimers();
+    const filePath = tempFile();
+    const store = new DeviceAuthStore(filePath);
+    const released: string[] = [];
+    store.onPairingRoomReleased((room) => released.push(room));
+
+    const liveCode = store.createPairingCode(60_000, { room: "room-live" });
+    store.completePairing({ code: liveCode, label: "Phone" });
+    expect(store.listDevices()[0]!.room).toBe("room-live");
+
+    // Pending invite that (incorrectly) shares the live device's room.
+    store.createPairingCode(10_000, { room: "room-live" });
+    // Pending invite on an unrelated room.
+    store.createPairingCode(10_000, { room: "room-idle" });
+
+    vi.advanceTimersByTime(20_000);
+
+    // The live device's room is protected; only the unbound room is released.
+    expect(released).toEqual(["room-idle"]);
+  });
+
+  it("hasEverPaired reflects durable pairing state, not the pending-code map", () => {
+    vi.useFakeTimers();
+    const filePath = tempFile();
+    const store = new DeviceAuthStore(filePath);
+    expect(store.hasEverPaired()).toBe(false);
+
+    // A pending (never-redeemed) invite does not count as "paired".
+    const code = store.createPairingCode(10_000, { room: "room-x" });
+    expect(store.hasEverPaired()).toBe(false);
+
+    store.completePairing({ code, label: "Phone" });
+    expect(store.hasEverPaired()).toBe(true);
+
+    // Persists across reload even after the code has long expired.
+    vi.advanceTimersByTime(3_600_000);
+    const reloaded = new DeviceAuthStore(filePath);
+    expect(reloaded.hasEverPaired()).toBe(true);
   });
 
   it("codes without rooms never fire room hooks", () => {

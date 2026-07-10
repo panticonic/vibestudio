@@ -202,7 +202,7 @@ WebRTC (paired by QR), and the gateway binds loopback only. Third-party inbound
 that genuinely needs a public HTTPS URL (OAuth provider redirects, webhook
 advertisements) goes through the **callback relay** (`apps/webhook-relay`, plan
 §7), which backhauls to this server. OAuth redirect URIs are built from
-`VIBESTUDIO_RELAY_OAUTH_BASE_URL` (the relay origin). There is no `--public-url` /
+`VIBESTUDIO_RELAY_URL` (the relay origin). There is no `--public-url` /
 `VIBESTUDIO_PUBLIC_URL` / `publicUrl.ts` — those were decommissioned with
 remote-mode public ingress.
 

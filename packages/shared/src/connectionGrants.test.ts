@@ -108,6 +108,36 @@ describe("ConnectionGrantService", () => {
     grants.stop();
   });
 
+  it("bounds redeemed grants per principal (evicts oldest, keeps newest valid)", () => {
+    const entityCache = new EntityCache();
+    entityCache._onActivate(makePanelRecord("panel:one"));
+    const grants = new ConnectionGrantService({ entityCache });
+
+    // Mint + redeem far more grants than the per-principal cap (16); a churny
+    // reconnecting principal must not grow the map without bound.
+    const tokens: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const { token } = grants.grant("panel:one", "shell:test");
+      expect(grants.redeem(token)).toEqual({ principalId: "panel:one", issuedBy: "shell:test" });
+      tokens.push(token);
+    }
+
+    // The oldest redeemed grants were evicted…
+    expect(grants.validate(tokens[0]!)).toBeNull();
+    expect(grants.validate(tokens[23]!)).toBeNull();
+    // …but the newest cap-worth remain valid until revocation.
+    expect(grants.validate(tokens[39]!)).toEqual({
+      principalId: "panel:one",
+      principalKind: "panel",
+      issuedBy: "shell:test",
+    });
+    expect(grants.validate(tokens[24]!)).not.toBeNull();
+    // Revocation still clears everything for the principal.
+    expect(grants.revokeForPrincipal("panel:one")).toBe(16);
+    expect(grants.validate(tokens[39]!)).toBeNull();
+    grants.stop();
+  });
+
   it("rejects expired grants", async () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(makePanelRecord("panel:one"));

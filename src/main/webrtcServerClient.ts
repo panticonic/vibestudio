@@ -128,6 +128,13 @@ export async function createWebRtcServerClient(
     if (type === "relay") {
       console.warn("[webrtc-client] TURN relay engaged — P2P failed or forced");
     }
+    // Re-drive the connection-status callback so the shell re-reads candidateType()
+    // and re-emits `server-connection-changed` with the fresh path. A mid-connection
+    // host→relay switch (or a late nomination) changes no status, so without this
+    // the subtle "Relayed" hint would only surface on the next status transition.
+    // Reuses the existing status channel — no new IPC surface — and is a no-op for
+    // the shell's replay guard (the status value is unchanged).
+    args.onConnectionStatusChanged?.(transport.status());
   });
   if (args.onServerEvent) {
     mainSession.onMessage((envelope) => {
@@ -290,6 +297,13 @@ export async function createWebRtcServerClient(
     },
     candidateType(): RtcCandidateType | null {
       return lastCandidateType;
+    },
+    nudge(): void {
+      // Liveness probe passthrough (§3.1): on sleep/wake or a network change the
+      // pipe can be dead while status() still reads "connected". A nudge pings
+      // out-of-band; a missing pong within the deadline tears the pipe down so
+      // reconnect kicks in — a healthy pipe answers and is untouched.
+      transport.nudge();
     },
     async close(): Promise<void> {
       closing = true;

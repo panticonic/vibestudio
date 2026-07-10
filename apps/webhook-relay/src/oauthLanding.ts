@@ -49,9 +49,23 @@ function parseTransactionId(url: URL): string | undefined {
   const prefix = "/oauth/callback/";
   if (url.pathname.startsWith(prefix)) {
     const segment = url.pathname.slice(prefix.length).split("/")[0];
-    if (segment) return decodeURIComponent(segment);
+    if (segment) {
+      // A malformed %-escape (e.g. a lone "%") must NOT throw a URIError that
+      // surfaces as a 500 — fail closed as a missing tx (clean 400).
+      return safeDecodeURIComponent(segment) ?? undefined;
+    }
   }
   return url.searchParams.get("transactionId") ?? undefined;
+}
+
+/** decodeURIComponent that returns null on a malformed sequence rather than
+ * throwing a URIError. Mirrors the same guard in ./registry. */
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
 }
 
 export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps): Response {
@@ -59,6 +73,7 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
   const code = url.searchParams.get("code") ?? undefined;
   const state = url.searchParams.get("state") ?? undefined;
   const error = url.searchParams.get("error") ?? undefined;
+  const errorDescription = url.searchParams.get("error_description") ?? undefined;
 
   if (!transactionId) {
     return htmlError(400, "Invalid callback", "This OAuth callback is missing its transaction id.");
@@ -77,15 +92,18 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
   if (registration.platform === "mobile") {
     // Reaching the landing HTML means the OS deep-link did not fire. Refuse to
     // forward — the mobile path is the app forwarding over the pipe, not the
-    // relay backhaul. (Fail loud, no silent second path.)
+    // relay backhaul. (Fail loud, no silent second path.) A non-200 so monitoring
+    // sees the failed deep-link instead of a "success" hit.
     return htmlError(
-      200,
+      404,
       "Open the Vibestudio app",
       "This sign-in should have opened the Vibestudio app automatically. Make sure the app is installed, then start the connection again."
     );
   }
 
-  // desktop: forward {state, code} verbatim down the owning server's backhaul.
+  // desktop: forward {state, code, error} verbatim down the owning server's
+  // backhaul. We forward even a provider error so the server can fail the pending
+  // transaction promptly rather than waiting for it to time out.
   const delivered = deps.deliverToBackhaul(registration.serverId, {
     t: "oauth-callback",
     transactionId,
@@ -101,6 +119,18 @@ export function handleOAuthLanding(url: URL, now: number, deps: OAuthLandingDeps
     );
   }
   deps.consume(transactionId);
+  if (error) {
+    // The provider itself rejected the sign-in (consent denied, invalid client,
+    // …). Reflect reality with a non-200 that surfaces the provider's own message
+    // instead of a misleading "Sign-in complete."
+    return htmlError(
+      400,
+      "Sign-in failed",
+      errorDescription
+        ? `The sign-in provider reported an error: ${error} — ${errorDescription}`
+        : `The sign-in provider reported an error: ${error}`
+    );
+  }
   return htmlPage(200, "Sign-in complete", "You can close this window and return to Vibestudio.");
 }
 
@@ -190,7 +220,6 @@ export function buildAppleAppSiteAssociation(config: UniversalLinkConfig): unkno
           appIDs: config.appleAppIds,
           components: [
             { "/": "/oauth/callback/*", comment: "OAuth provider callbacks" },
-            { "/": "/oauth/linkback/*", comment: "OAuth account-linking callbacks" },
             { "/": "/pair", comment: "Pairing trampoline" },
           ],
         },

@@ -51,6 +51,58 @@ import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
 const log = createDevLogger("PanelAssetFacade");
 
 /**
+ * GENEROUS fail-loud backstops (never tight enough to abort a slow-but-healthy
+ * load). Without them an offline/unreachable server parks every panel asset
+ * request forever (the RPC has no implicit deadline and reconnects are
+ * unbounded) → a blank webview with no error. Two independent backstops:
+ *
+ *  - CONNECT: cap the time-to-first-response (the `gateway.fetch` stream call
+ *    resolving at all). A dead pipe never returns a `Response`, so this is what
+ *    unsticks the request and surfaces "can't reach your server — reconnecting".
+ *  - STALL: once bytes are flowing, cap the gap between chunks — NOT the total
+ *    duration. A multi-MB bundle over slow TURN keeps arming the timer on every
+ *    chunk, so only a genuine no-progress stall trips it.
+ */
+const ASSET_CONNECT_BACKSTOP_MS = 30_000;
+const ASSET_STALL_BACKSTOP_MS = 30_000;
+
+/** Distinguishes a backstop/cancel abort from a generic pipe error (nicer copy). */
+class AssetBackstopError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "AssetBackstopError";
+  }
+}
+
+/**
+ * Await the first response, but abort (and reject loud) if it never arrives
+ * within the connect backstop — an offline server otherwise parks here forever.
+ */
+async function withConnectBackstop<T>(
+  run: () => Promise<T>,
+  controller: AbortController,
+  reqPath: string,
+  connectMs: number
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(
+        new AssetBackstopError(
+          `no response from your server within ${connectMs / 1000}s for ${reqPath}`
+        )
+      );
+    }, connectMs);
+  });
+  try {
+    return await Promise.race([run(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
  * Optional server-supplied content digest. The gateway serving panel artifacts
  * does not emit this today (see gatewayFetchService — artifacts are hashed at
  * build time but the hash isn't surfaced as a response header), so the façade
@@ -66,6 +118,18 @@ export interface PanelAssetFacadeOptions {
    * cache disabled and an ephemeral port is used.
    */
   stateDir?: string;
+  /**
+   * Backstop windows (ms). Defaults are GENEROUS ({@link ASSET_CONNECT_BACKSTOP_MS}
+   * / {@link ASSET_STALL_BACKSTOP_MS}); tests override them to small values to
+   * exercise the offline-server path without a 30s wait.
+   */
+  connectBackstopMs?: number;
+  stallBackstopMs?: number;
+}
+
+interface ResolvedBackstops {
+  connectMs: number;
+  stallMs: number;
 }
 
 function collectForwardHeaders(req: http.IncomingMessage): Record<string, string> {
@@ -146,8 +210,12 @@ export async function startPanelAssetFacade(
     await cache.init();
   }
 
+  const backstops: ResolvedBackstops = {
+    connectMs: options.connectBackstopMs ?? ASSET_CONNECT_BACKSTOP_MS,
+    stallMs: options.stallBackstopMs ?? ASSET_STALL_BACKSTOP_MS,
+  };
   const server = http.createServer((req, res) => {
-    void handleRequest(serverClient, cache, req, res);
+    void handleRequest(serverClient, cache, backstops, req, res);
   });
 
   const port = await listenWithStablePort(server, portFile);
@@ -219,6 +287,7 @@ function writePersistedPort(portFile: string, port: number): void {
 async function handleRequest(
   serverClient: Pick<ServerClient, "stream">,
   cache: AssetDiskCache | null,
+  backstops: ResolvedBackstops,
   req: http.IncomingMessage,
   res: http.ServerResponse
 ): Promise<void> {
@@ -249,12 +318,28 @@ async function handleRequest(
       ? (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>)
       : null;
 
+  // One controller for the whole request: the connect/stall backstops and the
+  // webview-cancel path all abort it, which cancels the underlying pipe stream so
+  // we stop pulling multi-MB bytes over the (paid) pipe nobody will read.
+  const controller = new AbortController();
+  res.on("close", () => {
+    if (!res.writableEnded && !controller.signal.aborted) {
+      controller.abort();
+    }
+  });
+
   const fetcher = async (): Promise<FetchedResponse> => {
-    const response = await serverClient.stream(
-      "gateway",
-      "fetch",
-      [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
-      requestBody ? { body: requestBody } : undefined
+    const response = await withConnectBackstop(
+      () =>
+        serverClient.stream(
+          "gateway",
+          "fetch",
+          [{ path: gatewayPath, method, headers: forwardHeaders, gzip: true }],
+          { signal: controller.signal, ...(requestBody ? { body: requestBody } : {}) }
+        ),
+      controller,
+      reqPath,
+      backstops.connectMs
     );
     return normalizeResponse(response);
   };
@@ -273,26 +358,36 @@ async function handleRequest(
         res.end(asset.body);
         return;
       }
-      writePassthrough(reqPath, res, outcome.response);
+      writePassthrough(reqPath, res, outcome.response, controller, backstops.stallMs);
       return;
     }
 
-    writePassthrough(reqPath, res, await fetcher());
+    writePassthrough(reqPath, res, await fetcher(), controller, backstops.stallMs);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log.warn(`Panel asset fetch failed for ${reqPath}: ${message}`);
-    if (res.writableEnded) return;
+    // A webview cancel aborts the controller too; that's not an error worth a body.
+    if (res.writableEnded || res.destroyed) return;
+    const unreachable = err instanceof AssetBackstopError;
+    log.warn(
+      `Panel asset fetch ${unreachable ? "backstopped" : "failed"} for ${reqPath}: ${message}`
+    );
     if (!res.headersSent) {
-      res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
+      res.writeHead(unreachable ? 504 : 502, { "Content-Type": "text/plain; charset=utf-8" });
     }
-    res.end("Panel asset bridge error");
+    res.end(
+      unreachable
+        ? "Can't reach your server — reconnecting. This panel will retry automatically."
+        : "Panel asset bridge error"
+    );
   }
 }
 
 function writePassthrough(
   reqPath: string,
   res: http.ServerResponse,
-  response: FetchedResponse
+  response: FetchedResponse,
+  controller: AbortController,
+  stallMs: number
 ): void {
   res.writeHead(
     response.status,
@@ -305,9 +400,41 @@ function writePassthrough(
   // Pipe the streamed body straight to the webview (Node uses chunked transfer
   // since Content-Length was stripped). Tear down on error either way.
   const nodeBody = Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]);
+
+  // Stall backstop: arm on start, re-arm on every chunk. Only a genuine
+  // no-progress gap (server wedged mid-transfer) trips it — a slow-but-steady
+  // transfer keeps it disarmed indefinitely.
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearStall = () => {
+    if (stallTimer) {
+      clearTimeout(stallTimer);
+      stallTimer = undefined;
+    }
+  };
+  const armStall = () => {
+    clearStall();
+    stallTimer = setTimeout(() => {
+      log.warn(
+        `Panel asset stream stalled for ${reqPath} (>${stallMs / 1000}s, no progress) — aborting`
+      );
+      controller.abort();
+      nodeBody.destroy(new AssetBackstopError("panel asset stream stalled"));
+    }, stallMs);
+  };
+  armStall();
+  nodeBody.on("data", armStall);
+  nodeBody.on("end", clearStall);
+  nodeBody.on("close", clearStall);
   nodeBody.on("error", (err) => {
+    clearStall();
     log.warn(`Panel asset stream errored for ${reqPath}: ${err.message}`);
     if (!res.writableEnded) res.destroy(err);
+  });
+  // Webview canceled the panel mid-boot: stop pulling bytes over the pipe by
+  // destroying the source (Readable.fromWeb cancels the underlying web stream).
+  res.on("close", () => {
+    clearStall();
+    if (!res.writableEnded && !nodeBody.destroyed) nodeBody.destroy();
   });
   nodeBody.pipe(res);
 }

@@ -1620,6 +1620,54 @@ async function main() {
     })
   );
 
+  // ── Relay backhaul: OAuth callbacks + third-party webhooks ride one
+  // authenticated server→relay pipe (the home server has no public endpoint).
+  // Inert until start(); returns null when no relay is configured. Created
+  // before the credential/webhook services so its client can be their
+  // registrar, with handlers that close over the refs assigned below. ──
+  const { startRelayBackhaul, getRelayOrigin } = await import("./services/relayBackhaulClient.js");
+  // Holder (not bare `let`s) so the backhaul handler closures can read the
+  // service refs without TypeScript narrowing them to null across the closure
+  // boundary; both are filled once the container builds the services.
+  const relayServices: {
+    credential: {
+      resolveRelayOAuthCallback: (frame: {
+        transactionId: string;
+        state?: string;
+        code?: string;
+        error?: string;
+      }) => Promise<void>;
+    } | null;
+    webhook: {
+      internal: {
+        deliverRelayWebhook: (
+          frame: import("./services/relayBackhaulClient.js").RelayWebhookFrame
+        ) => Promise<import("./services/relayBackhaulClient.js").WebhookAck>;
+        reannounceRelaySubscriptions: () => Promise<void>;
+      };
+    } | null;
+  } = { credential: null, webhook: null };
+  const relayBackhaul = startRelayBackhaul({
+    serverId: deviceAuthStore.getServerId(),
+    onWebhook: async (frame) => {
+      if (!relayServices.webhook) {
+        return { ok: false, permanent: false, reason: "webhook ingress not ready" };
+      }
+      return relayServices.webhook.internal.deliverRelayWebhook(frame);
+    },
+    onOAuthCallback: async (frame) => {
+      await relayServices.credential?.resolveRelayOAuthCallback(frame);
+    },
+  });
+  // The credential registrar wants `.register`; the client exposes
+  // `.registerOAuth`. Adapt (client is const, so the narrowing survives here).
+  const relayOAuthRegistrar = relayBackhaul
+    ? {
+        register: (id: string, platform: "mobile" | "desktop") =>
+          relayBackhaul.client.registerOAuth(id, platform),
+      }
+    : undefined;
+
   // ── Credential service ──
   {
     const { createCredentialService } = await import("./services/credentialService.js");
@@ -1642,6 +1690,7 @@ async function main() {
       clientConfigStore,
       auditLog,
       eventService,
+      relayOAuthRegistrar,
       connectionLookup: {
         getAuthorizingShell: (principalId: string) =>
           rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
@@ -1745,6 +1794,7 @@ async function main() {
     }) as ReturnType<typeof createCredentialService> & {
       routes?: import("./routeRegistry.js").ServiceRouteDecl[];
     };
+    relayServices.credential = credentialService;
     container.registerManaged(
       serviceWithHttpRoutes(
         {
@@ -1976,10 +2026,10 @@ async function main() {
         );
         webhookIngress = createWebhookIngressService({
           relaySigningSecret: process.env["VIBESTUDIO_RELAY_SIGNING_SECRET"],
-          relayPublicBaseUrl:
-            process.env["VIBESTUDIO_WEBHOOK_PUBLIC_URL"] ?? "https://vibestudio.app",
+          relayOrigin: getRelayOrigin(),
+          relayRegistrar: relayBackhaul?.client,
           // No public ingress: direct-mode webhooks only resolve co-located (loopback).
-          // Remote webhooks ride the multi-tenant callback relay (relayPublicBaseUrl).
+          // Remote webhooks ride the multi-tenant callback relay over the backhaul.
           directPublicBaseUrl: getLocalGatewayUrl("webhook direct base URL"),
           rpc: {
             call: (targetId, method, ...args) =>
@@ -1995,6 +2045,7 @@ async function main() {
             );
           },
         });
+        relayServices.webhook = webhookIngress;
         if (webhookIngress.routes.length > 0) {
           routeRegistry.registerHttpServiceRoutes(webhookIngress.routes);
         }
@@ -3608,6 +3659,14 @@ async function main() {
   // ── Start all services in dependency order ──
   await container.startAll();
 
+  // The webhook + credential services are built now, so their refs are set:
+  // start the backhaul (no-op when no relay is configured) and re-announce any
+  // persisted relay-mode webhook subscriptions so the relay resumes routing.
+  relayBackhaul?.start();
+  await relayServices.webhook?.internal
+    .reannounceRelaySubscriptions()
+    .catch((err: unknown) => console.warn("[Server] relay subscription re-announce failed:", err));
+
   // ── WebRTC ingress pool (now that rpcServerForGateway is live) ──
   // Activated by default. The server presents a persistent DTLS cert
   // (stable QR `fp`) and arms ONE answerer pipe per signaling room: one room per
@@ -4028,6 +4087,20 @@ async function main() {
       startupPairingExpiryTimer = null;
     }
 
+    await relayBackhaul
+      ?.stop()
+      .catch((err) => console.warn("[Server] relay backhaul stop failed:", err));
+
+    // Close the WebRTC ingress pool (started outside the service container, so
+    // stopAll() never touches it) — remote clients get a clean close instead of
+    // an abrupt ICE drop.
+    if (webrtcIngress) {
+      await webrtcIngress
+        .close()
+        .catch((err) => console.warn("[Server] WebRTC ingress close failed:", err));
+      webrtcIngress = null;
+    }
+
     const prepareBudgetMs = Math.max(0, Math.min(2000, 8000 - (Date.now() - shutdownStartedAt)));
     if (prepareBudgetMs > 0) {
       await lifecycleDriver
@@ -4061,10 +4134,10 @@ async function main() {
   // up (the natural GC for a spawn the desktop never managed to attach).
   if (startupPairingCodes.length > 0) {
     startupPairingExpiryTimer = setTimeout(() => {
-      const allStartupCodesStillPending = startupPairingCodes.every((code) =>
-        deviceAuthStore.hasPendingPairingCode(code)
-      );
-      if (!allStartupCodesStillPending) return;
+      // At the TTL deadline the startup codes have already lazily/proactively
+      // expired, so the old `every(hasPendingPairingCode)` check read false and
+      // never fired. Ask the durable question instead: has ANY device paired?
+      if (deviceAuthStore.hasEverPaired()) return;
       console.warn(
         `[Server] Startup pairing code expired after ${Math.round(
           DEFAULT_PAIRING_CODE_TTL_MS / 60_000

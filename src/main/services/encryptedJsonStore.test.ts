@@ -22,9 +22,9 @@ interface Sample {
   secret: string;
 }
 
-function isSample(value: unknown): value is Sample {
+function parseSample(value: unknown): Sample | null {
   const v = value as Sample | null | undefined;
-  return !!v && typeof v.id === "string" && typeof v.secret === "string";
+  return !!v && typeof v.id === "string" && typeof v.secret === "string" ? v : null;
 }
 
 function makeStore(cipher: StoreCipher) {
@@ -36,7 +36,7 @@ function makeStore(cipher: StoreCipher) {
       cipher,
       fs,
       dirname: path.dirname,
-      validate: isSample,
+      parse: parseSample,
       secretDescription: "the test secret",
     }),
     filePath,
@@ -84,7 +84,7 @@ describe("encryptedJsonStore", () => {
     expect(store.load()).toBeNull();
   });
 
-  it("returns null when validate rejects the decoded value", () => {
+  it("returns null when parse rejects the decoded value", () => {
     const { store } = makeStore(xorCipher);
     store.save({ id: "abc" } as unknown as Sample);
     expect(store.load()).toBeNull();

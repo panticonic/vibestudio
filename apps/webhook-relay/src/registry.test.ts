@@ -290,9 +290,9 @@ describe("RelayRegistry — OAuth profile (state-keyed handoff, one path per pla
     const resp = await registry.fetch(
       new Request("https://relay.example/oauth/callback/tx-m?code=AUTHCODE&state=CSRFSTATE"),
     );
-    // Reaching the landing for a mobile tx means the deep-link failed: fail loud,
-    // never silently forward down the desktop path.
-    expect(resp.status).toBe(200);
+    // Reaching the landing for a mobile tx means the deep-link failed: fail loud
+    // with a non-200 (monitoring sees it), never silently forward down desktop.
+    expect(resp.status).toBe(404);
     expect(await resp.text()).toContain("Vibestudio app");
     expect(ws.frames().some((f) => f.t === "oauth-callback")).toBe(false);
   });
@@ -435,6 +435,154 @@ describe("RelayRegistry — backhaul auth (the trust anchor)", () => {
       }),
     );
     expect(resp.status).toBe(401);
+  });
+});
+
+describe("RelayRegistry — backhaul eviction (zombie duplicate)", () => {
+  it("evicts a same-serverId incumbent so a handoff targets the fresh socket, not the dead one", async () => {
+    const { registry } = makeRegistry();
+    const ws1 = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws1 as unknown as WebSocket);
+    // A second backhaul for the SAME serverId (unclean reconnect / restart).
+    const ws2 = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws2 as unknown as WebSocket);
+    // Incumbent superseded; the fresh socket owns the slot.
+    expect(ws1.readyState).toBe(3);
+    expect(ws2.readyState).toBe(1);
+
+    // A desktop OAuth handoff must reach ws2, never the dead ws1 (which would
+    // silently lose it while the landing showed "Sign-in complete").
+    await send(registry, ws2, { t: "register-oauth", transactionId: "tx-evict", platform: "desktop" });
+    const resp = await registry.fetch(
+      new Request("https://relay.example/oauth/callback/tx-evict?code=C&state=S"),
+    );
+    expect(resp.status).toBe(200);
+    expect(ws2.frames().some((f) => f.t === "oauth-callback")).toBe(true);
+    expect(ws1.frames().some((f) => f.t === "oauth-callback")).toBe(false);
+  });
+});
+
+describe("RelayRegistry — webhook ingress guards", () => {
+  it("rejects an over-cap webhook body with 413 and buffers nothing (fail loud, no lost delivery)", async () => {
+    const { registry, state } = makeRegistry();
+    const ws = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
+    await send(registry, ws, { t: "register-webhook", subscriptionId: "sub-big" });
+    const huge = "x".repeat(1_500_001);
+    const resp = await ingress(registry, "sub-big", huge);
+    expect(resp.status).toBe(413);
+    expect(state.storage.keys("buf:")).toHaveLength(0);
+  });
+
+  it("rejects the newest delivery with 507 once the per-subscription buffer cap is reached", async () => {
+    const { registry, state } = makeRegistry();
+    const ws = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
+    await send(registry, ws, { t: "register-webhook", subscriptionId: "sub-cap" });
+    ws.close(); // offline: every delivery buffers durably
+    // Pre-seed the buffer to the cap via direct storage puts (fast, deterministic).
+    const now = Date.now();
+    const batch: Record<string, unknown> = {};
+    for (let i = 0; i < 256; i++) {
+      const id = `pre-${i}`;
+      batch["buf:" + id] = {
+        deliveryId: id,
+        subscriptionId: "sub-cap",
+        serverId: "serverA",
+        method: "POST",
+        path: "/i/sub-cap",
+        query: "",
+        headers: {},
+        bodyBase64: "",
+        bodySha256: "",
+        createdAt: now,
+        expiresAt: now + 60_000,
+        attempts: 0,
+        lastAttemptAt: 0,
+      };
+    }
+    for (const [k, v] of Object.entries(batch)) await state.storage.put(k, v);
+    expect(state.storage.keys("buf:")).toHaveLength(256);
+
+    const resp = await ingress(registry, "sub-cap", JSON.stringify({ n: 1 }));
+    expect(resp.status).toBe(507);
+    // The buffer did not grow past the cap.
+    expect(state.storage.keys("buf:")).toHaveLength(256);
+  });
+});
+
+describe("RelayRegistry — OAuth landing hardening", () => {
+  it("fails closed with 400 (not 500) on a malformed transactionId %-escape", async () => {
+    const { registry } = makeRegistry();
+    const resp = await registry.fetch(
+      new Request("https://relay.example/oauth/callback/%zz?code=c&state=s"),
+    );
+    expect(resp.status).toBe(400);
+  });
+
+  it("desktop provider error: forwards it down the backhaul AND renders a non-200 surfacing the message", async () => {
+    const { registry } = makeRegistry();
+    const ws = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
+    await send(registry, ws, { t: "register-oauth", transactionId: "tx-err", platform: "desktop" });
+    const resp = await registry.fetch(
+      new Request(
+        "https://relay.example/oauth/callback/tx-err?error=access_denied&error_description=User%20denied&state=S",
+      ),
+    );
+    expect(resp.status).toBe(400);
+    const body = await resp.text();
+    expect(body).toContain("access_denied");
+    expect(body).toContain("User denied");
+    // The error is still forwarded so the server fails the transaction promptly.
+    const cb = ws.frames().find((f) => f.t === "oauth-callback");
+    expect(cb).toMatchObject({ transactionId: "tx-err", error: "access_denied" });
+  });
+});
+
+describe("RelayRegistry — alarm (retry + TTL eviction)", () => {
+  it("evicts a buffered webhook past its TTL and does not reschedule once the buffer drains", async () => {
+    const { registry, state } = makeRegistry();
+    let clock = 1_000_000;
+    registry.now = () => clock;
+    const ws = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
+    await send(registry, ws, { t: "register-webhook", subscriptionId: "sub-ttl" });
+    ws.close(); // offline: the delivery buffers durably
+    await ingress(registry, "sub-ttl", JSON.stringify({ n: 1 }));
+    expect(state.storage.keys("buf:")).toHaveLength(1);
+
+    // Jump past the 24h TTL. The runtime clears the pending alarm before alarm() runs.
+    clock += 25 * 60 * 60 * 1000;
+    await state.storage.deleteAlarm();
+    await registry.alarm();
+
+    expect(state.storage.keys("buf:")).toHaveLength(0);
+    expect(await state.storage.getAlarm()).toBeNull();
+  });
+
+  it("re-sends a live buffered webhook and reschedules while entries remain", async () => {
+    const { registry, state } = makeRegistry();
+    let clock = 2_000_000;
+    registry.now = () => clock;
+    const ws = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws as unknown as WebSocket);
+    await send(registry, ws, { t: "register-webhook", subscriptionId: "sub-live" });
+    ws.close(); // buffer while offline; lastAttemptAt stays 0
+    await ingress(registry, "sub-live", JSON.stringify({ n: 2 }));
+    expect(state.storage.keys("buf:")).toHaveLength(1);
+
+    // The owner reconnects (fresh socket). The alarm is the retry path.
+    const ws2 = new FakeWebSocket();
+    registry.acceptBackhaul("serverA", ws2 as unknown as WebSocket);
+    clock += 60_000; // > 30s retry interval, < 24h TTL
+    await state.storage.deleteAlarm();
+    await registry.alarm();
+
+    // Re-sent to the open backhaul, still buffered (unacked), alarm rescheduled.
+    expect(ws2.frames().some((f) => f.t === "webhook")).toBe(true);
+    expect(state.storage.keys("buf:")).toHaveLength(1);
+    expect(await state.storage.getAlarm()).not.toBeNull();
   });
 });
 

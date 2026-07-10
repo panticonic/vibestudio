@@ -10,7 +10,7 @@ The server binds loopback only and remote clients reach it over WebRTC, so there
 is no per-server public URL for OAuth providers to redirect to. Provider redirect
 URIs that need a public HTTPS endpoint resolve through the **callback relay**
 (`apps/webhook-relay`, plan §7): the relay owns a stable public origin
-(`VIBESTUDIO_RELAY_OAUTH_BASE_URL`), receives the provider's redirect, and backhauls
+(`VIBESTUDIO_RELAY_URL`), receives the provider's redirect, and backhauls
 the authorization code to the originating loopback server over its pipe. Each user
 registers the relay's `…/oauth/callback` URL with their own OAuth provider clients
 (in their own Google / GitHub / etc developer console).

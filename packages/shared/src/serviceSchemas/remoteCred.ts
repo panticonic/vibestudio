@@ -49,11 +49,11 @@ export type RemoteCredPairingCodeArgs = z.infer<typeof RemoteCredPairingCodeArgs
 export const RemoteCredCurrentSchema = z.object({
   configured: z.boolean(),
   isActive: z.boolean(),
-  bootstrap: z.enum(["device", "admin-token", "hybrid", "none"]),
-  url: z.string().optional(),
-  tokenPreview: z.string().optional(),
+  // A remote is reached over a paired WebRTC pipe ("device") or not configured
+  // ("none"). The old cleartext "admin-token"/"hybrid" URL remotes were deleted
+  // (§8c), along with the `url`/`tokenPreview`/`hubUrl` fields they carried.
+  bootstrap: z.enum(["device", "none"]),
   deviceId: z.string().optional(),
-  hubUrl: z.string().optional(),
   workspaceName: z.string().optional(),
 });
 export type RemoteCredCurrent = z.infer<typeof RemoteCredCurrentSchema>;
@@ -105,7 +105,7 @@ const OkResultSchema = z.object({ ok: z.boolean() });
 export const remoteCredMethods = defineServiceMethods({
   getCurrent: {
     description:
-      "Report the locally stored remote-server credential: whether it's configured/active, bootstrap kind, URL, workspace, and a masked token preview.",
+      "Report the locally stored remote-server credential: whether it's configured/active, the bootstrap kind (device|none), the paired device id, and the workspace name.",
     args: z.tuple([]),
     returns: RemoteCredCurrentSchema,
     access: REMOTE_CRED_READ_ACCESS,

@@ -14,7 +14,8 @@ export interface TurnEnv {
   TURN_KEY_ID?: string;
   /** Cloudflare Realtime TURN API token (secret) — `wrangler secret put`. */
   TURN_KEY_API_TOKEN?: string;
-  /** Credential lifetime in seconds. Defaults to 24h; must outlive a session. */
+  /** Credential lifetime in seconds. Defaults to a 1h connection-lifetime
+   * backstop; must outlive a single pairing/session but not linger for a day. */
   TURN_TTL_SECONDS?: string;
   /**
    * LOCAL-DEV coturn for testing WebRTC against an Android emulator (which sits
@@ -32,7 +33,10 @@ export interface TurnEnv {
 /** Free Cloudflare STUN — always usable, no credentials required. */
 const CLOUDFLARE_STUN = "stun:stun.cloudflare.com:3478";
 const TURN_API_BASE = "https://rtc.live.cloudflare.com/v1/turn/keys";
-const DEFAULT_TTL_SECONDS = 86_400;
+// Connection-lifetime backstop, NOT a day. A pairing + its session is minutes;
+// 1h leaves generous slack for ICE-restart while bounding the cost/exposure of
+// a leaked credential. Operators can override via TURN_TTL_SECONDS ([vars]).
+const DEFAULT_TTL_SECONDS = 3_600;
 
 /**
  * Returns the ICE servers a peer should use this session.
@@ -45,6 +49,18 @@ const DEFAULT_TTL_SECONDS = 86_400;
  *   Cloudflare STUN server. This cannot traverse symmetric NAT and announces
  *   itself as such (`note` field) — a deploy that needs TURN MUST set secrets.
  */
+/**
+ * Whether this deploy can mint real TURN credentials (local-dev coturn or
+ * Cloudflare Realtime keys). When false, `mintIceServers` returns the free STUN
+ * baseline only — there is nothing billable to gate.
+ */
+export function turnIsProvisioned(env: TurnEnv): boolean {
+  if (env.VIBESTUDIO_LOCAL_TURN_HOST && env.VIBESTUDIO_LOCAL_TURN_USER && env.VIBESTUDIO_LOCAL_TURN_PASS) {
+    return true;
+  }
+  return Boolean(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN);
+}
+
 export async function mintIceServers(
   env: TurnEnv,
   fetchImpl: typeof fetch = fetch,

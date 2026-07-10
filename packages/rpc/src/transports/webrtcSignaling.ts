@@ -24,6 +24,23 @@ export interface SignalingClient {
    * prefers these over any static `iceServers` in the pairing payload.
    */
   fetchIceServers?(): Promise<RtcIceServer[]>;
+  /**
+   * Proven-live seam: fired once the room WebSocket has actually OPENED (the
+   * relay is reachable), and immediately if it already opened before the
+   * handler subscribed. The answerer's rejoin supervisor resets its backoff
+   * ONLY on this — never on mere client construction, which the WS-eager
+   * `createSignalingClient` performs without ever throwing for an unreachable
+   * host (a down worker would otherwise be hammered ~1 socket/sec forever).
+   * Optional so in-memory fakes/adapters that cannot open async may omit it.
+   */
+  onOpen?(handler: () => void): () => void;
+  /**
+   * Fired when the peer joins the room (`peer-joined`). The offerer re-sends its
+   * current offer on this so a late-arriving server — or one that recovered
+   * after a signaling-buffer overflow — receives an offer instead of waiting
+   * out the connect deadline. Optional (fakes/adapters may omit it).
+   */
+  onPeerJoined?(handler: () => void): () => void;
   /** Signal that the room dropped/closed (so the transport can fail loud). */
   onClosed(handler: (reason?: string) => void): () => void;
   close(): void;

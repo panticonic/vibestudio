@@ -19,14 +19,20 @@ const WRITE_ACCESS: MethodAccessDescriptor = {
 
 export const appMethods = defineServiceMethods({
   getInfo: {
-    description: "App version plus connection mode/host and current server connection status.",
+    description:
+      "App version plus connection mode/host, current server connection status, and the selected ICE path (relay vs direct).",
     args: z.tuple([]),
     returns: z.custom<AppInfo>(),
     access: READ_ACCESS,
     examples: [
       {
         args: [],
-        returns: { version: "1.0.0", connectionMode: "local", connectionStatus: "connected" },
+        returns: {
+          version: "1.0.0",
+          connectionMode: "local",
+          connectionStatus: "connected",
+          connectionCandidateType: null,
+        },
       },
     ],
   },

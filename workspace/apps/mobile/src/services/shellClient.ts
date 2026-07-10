@@ -186,6 +186,11 @@ class MobilePanels implements PanelHost {
   // events into the right panel's webview. A mutable field (not a constructor
   // dep) because the webview refs live in the UI, which mounts after init().
   private deliverToPanelFn: ((panelId: string, envelope: unknown) => void) | null = null;
+  // Host→panel envelopes that arrived before the UI registered its delivery sink
+  // (init() completes before MainScreen mounts). Bounded per panel; flushed in
+  // order by setDeliverToPanel so relay replies/events never silently vanish.
+  private readonly pendingDeliveries = new Map<string, unknown[]>();
+  private static readonly MAX_PENDING_DELIVERIES_PER_PANEL = 256;
   private readonly panelRuntime: PanelRuntimeClient;
   private readonly browserData: BrowserDataClient;
   private readonly workspaceRpc: WorkspaceRpcClient;
@@ -249,7 +254,7 @@ class MobilePanels implements PanelHost {
         callbacks: {
           navigateToPanel: this.deps.navigateToPanel,
         },
-        deliverToPanel: (panelId, envelope) => this.deliverToPanelFn?.(panelId, envelope),
+        deliverToPanel: (panelId, envelope) => this.deliverToPanel(panelId, envelope),
         getPanelLease: (panelId) => this.runtimeConnectionBySlot.get(panelId),
       });
     }
@@ -546,6 +551,34 @@ class MobilePanels implements PanelHost {
   /** Register the host→panel envelope delivery sink (called by the UI layer). */
   setDeliverToPanel(fn: (panelId: string, envelope: unknown) => void): void {
     this.deliverToPanelFn = fn;
+    if (this.pendingDeliveries.size === 0) return;
+    for (const [panelId, envelopes] of this.pendingDeliveries) {
+      for (const envelope of envelopes) fn(panelId, envelope);
+    }
+    this.pendingDeliveries.clear();
+  }
+  /**
+   * Route one host→panel envelope to the UI sink, or buffer it (bounded) until
+   * the sink is registered. Never silently drops: an unbounded backlog trims the
+   * oldest with a warning rather than growing without limit.
+   */
+  private deliverToPanel(panelId: string, envelope: unknown): void {
+    if (this.deliverToPanelFn) {
+      this.deliverToPanelFn(panelId, envelope);
+      return;
+    }
+    let queue = this.pendingDeliveries.get(panelId);
+    if (!queue) {
+      queue = [];
+      this.pendingDeliveries.set(panelId, queue);
+    }
+    queue.push(envelope);
+    if (queue.length > MobilePanels.MAX_PENDING_DELIVERIES_PER_PANEL) {
+      queue.shift();
+      console.warn(
+        `[MobilePanels] host→panel delivery buffer overflow for ${panelId} — dropping oldest envelope`
+      );
+    }
   }
   private requireManager(): PanelManager {
     if (!this.panelManager) throw new Error("Panels not initialized");
@@ -797,6 +830,14 @@ export class ShellClient {
   }
   reconnect(): void {
     this.transport.reconnect();
+  }
+  /**
+   * Release reclaimable memory (the panel-asset LRU, up to 256 MiB). Called when
+   * the app backgrounds or the OS raises a memory warning; cached assets are
+   * content-addressed and re-fetch over the pipe on next use.
+   */
+  trimMemory(): void {
+    this.facade?.trimCache();
   }
   onNavigateToPanel(listener: (panelId: string) => void): () => void {
     this.navigationListeners.add(listener);

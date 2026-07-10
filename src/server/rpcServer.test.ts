@@ -470,6 +470,87 @@ describe("RpcServer attachWebRtcPipe (v2 pipe contract)", () => {
   });
 });
 
+describe("RpcServer attachWebRtcPipe — negative handshake fails closed (un-authed open)", () => {
+  // A redeemer that (like the real createPairingRedeemer) ASSUMES a string token
+  // — its presence proves the missing/non-string-token guard runs BEFORE any
+  // downstream string operation (`token.startsWith(...)`) that would otherwise
+  // throw uncaught / into a swallowing catch that strands the session.
+  const stringAssumingRedeemer = ((token: string) => {
+    if (token.startsWith("refresh:") || token.startsWith("agent:")) return null;
+    return null;
+  }) as unknown as ConstructorParameters<typeof RpcServer>[0]["redeemPairingCredential"];
+
+  it("an open with a MISSING token yields open-result success:false terminal:true and never throws", () => {
+    const { server } = createServer({ redeemPairingCredential: stringAssumingRedeemer });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    // decodeControlFrame requires only `sid`, not `token` — a missing token must
+    // fail closed at the handshake, never throw into the pipe.
+    expect(() =>
+      p.sendControl({ t: "open", sid: "s1" } as unknown as SessionControlFrame)
+    ).not.toThrow();
+
+    const openResult = p.controlOfType("open-result");
+    expect(openResult).toHaveLength(1);
+    expect(openResult[0]!.frame).toMatchObject({
+      t: "open-result",
+      sid: "s1",
+      success: false,
+      terminal: true,
+    });
+  });
+
+  it("an open with a non-string token yields open-result success:false terminal:true and never throws", () => {
+    const { server } = createServer({ redeemPairingCredential: stringAssumingRedeemer });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    expect(() =>
+      p.sendControl({ t: "open", sid: "s1", token: 42 } as unknown as SessionControlFrame)
+    ).not.toThrow();
+    expect(p.controlOfType("open-result")[0]!.frame).toMatchObject({
+      success: false,
+      terminal: true,
+    });
+  });
+
+  it("an open with an INVALID (unknown) token yields open-result success:false terminal:true", () => {
+    const { server } = createServer({ redeemPairingCredential: stringAssumingRedeemer });
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    p.sendControl({ t: "open", sid: "s1", token: "not-a-real-grant" });
+    expect(p.controlOfType("open-result")[0]!.frame).toMatchObject({
+      success: false,
+      terminal: true,
+    });
+  });
+
+  it("caps concurrent logical sessions per pipe (pre-auth flood backstop)", () => {
+    const { server } = createServer();
+    // Stub handleConnection so opens accumulate shims without real auth work.
+    const stub = vi.fn(() => {});
+    testServer(server).handleConnection = stub;
+    const p = createFakePipe();
+    server.attachWebRtcPipe(p.pipe);
+
+    const CAP = 512; // matches RpcServer.MAX_SESSIONS_PER_PIPE
+    for (let i = 0; i < CAP; i++) {
+      p.sendControl({ t: "open", sid: `s${i}`, token: "grant" });
+    }
+    // Up to the cap, opens are accepted (handleConnection stubbed → no result).
+    expect(p.controlOfType("open-result")).toHaveLength(0);
+    // The (cap+1)th DISTINCT sid is refused with a terminal open-result…
+    p.sendControl({ t: "open", sid: "over", token: "grant" });
+    const rejected = p.controlOfType("open-result");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.frame).toMatchObject({ sid: "over", success: false, terminal: true });
+    // …and handleConnection was NOT driven for the refused open.
+    expect(stub).toHaveBeenCalledTimes(CAP);
+  });
+});
+
 describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancellation)", () => {
   function streamRequest(requestId: string, method = "files.stream"): RpcMessage {
     return { type: "stream-request", requestId, fromId: "panel:nav-a", method, args: [] };

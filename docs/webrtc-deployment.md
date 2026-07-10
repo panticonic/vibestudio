@@ -199,7 +199,14 @@ For a managed SSH/systemd host:
 vibestudio remote deploy user@host --port 3030 --workspace default --signal-url wss://signal.vibestudio.app/
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
+vibestudio remote deploy remove user@host --purge
 ```
+
+Deploy writes the systemd unit with an absolute `ExecStart` (resolved via
+`command -v vibestudio` on the host), waits for the loopback gateway `/healthz`
+before minting the first invite, and — on `update` — restarts the unit so the
+new build takes over. `remove --purge` also uninstalls the npm package and
+deletes the WebRTC identity material (paired devices must re-pair).
 
 ## Pair A Client
 
@@ -219,7 +226,7 @@ Set server-side relay origin configuration to the same apex origin when enabling
 remote OAuth/webhooks:
 
 ```bash
-export VIBESTUDIO_RELAY_OAUTH_BASE_URL=https://vibestudio.app
+export VIBESTUDIO_RELAY_URL=https://vibestudio.app
 ```
 
 The relay does not have a per-server upstream URL. Each home server opens an

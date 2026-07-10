@@ -132,6 +132,18 @@ const HELLO_TIMEOUT_MS = 10_000;
 const RECONNECT_BASE_DELAY_MS = 1_000;
 const RECONNECT_MAX_DELAY_MS = 30_000;
 const RECONNECT_JITTER_MS = 500;
+/**
+ * Per-attempt establish deadline for a RECONNECT (bug #2). Unlike the initial
+ * connect — which the caller bounds via `connectTimer` and closes on rejection —
+ * a reconnect attempt is purely event-driven: if the answer never arrives while
+ * the room WS stays healthy, the re-armed connect promise (with no timer) leaves
+ * status stuck at "connecting" forever, `reconnectTimer` is null so `onPipeDown`
+ * can't fire, and `nudge()` no-ops. This is a GENEROUS fail-loud backstop for a
+ * truly-stuck attempt, NOT an SLA: it matches the ~30s initial-connect scale
+ * (relayed DTLS handshakes take seconds) with headroom, so it can never abort a
+ * viable in-flight connect — on expiry it routes to onPipeDown → backoff retry.
+ */
+const RECONNECT_ESTABLISH_DEADLINE_MS = 35_000;
 /** Per-attempt deadline on a session open (§3.3) — a lost `open-result` can no
  * longer hang `ready()`; the attempt retries under per-session backoff. */
 const SESSION_OPEN_DEADLINE_MS = 20_000;
@@ -152,6 +164,33 @@ const PIPE_LANE = "__pipe";
 export const PIPE_CLOSED_CODE = "PIPE_CLOSED";
 export const FINGERPRINT_MISMATCH_CODE = "DTLS_FINGERPRINT_MISMATCH";
 export const STREAM_RECEIVE_OVERFLOW_CODE = "STREAM_RECEIVE_OVERFLOW";
+/** A logical session is terminally closed (client close / lease revoke / server
+ * terminal close) — distinct from an auth failure so callers don't misdiagnose a
+ * revocation as a bad credential (bug #10). */
+export const SESSION_CLOSED_CODE = "SESSION_CLOSED";
+
+/** Injectable diagnostics sink so desktop/mobile can route transport logs into
+ * their telemetry instead of the hardcoded console (matches the answerer/ingress
+ * `warn` injection). Both default to the matching `console` method. */
+export interface WebRtcTransportLogger {
+  warn?: (...args: unknown[]) => void;
+  error?: (...args: unknown[]) => void;
+}
+
+/** Reconnect progress surfaced to the UX so a stalled reconnect shows
+ * "reconnecting, attempt N" instead of a silent forever-spinner. */
+export interface ReconnectProgress {
+  /** 1-based attempt counter (resets to 0 once a pipe comes up). */
+  attempt: number;
+  /** 'scheduled' (backoff armed), 'connecting' (attempt in flight), or
+   * 'failed' (attempt errored/stalled — a new backoff follows). */
+  phase: "scheduled" | "connecting" | "failed";
+  /** Human-readable cause of the (re)connect. */
+  reason: string;
+  /** Whether the last failure was in the SIGNALING layer vs the peer/ICE layer —
+   * lets the UX say "can't reach the rendezvous" vs "can't reach your machine". */
+  layer: "signaling" | "peer" | null;
+}
 
 function errorWithCode(message: string, code: string): Error {
   const e = new Error(message) as Error & { code?: string };
@@ -236,6 +275,10 @@ export interface WebRtcTransportOptions {
   /** Observability: selected ICE candidate type changed (host/srflx/**relay**);
    * fired with `null` on pipe-down. Same feed as `transport.onCandidateType`. */
   onCandidateType?: (type: RtcCandidateType | null) => void;
+  /** Injectable diagnostics sink (defaults to `console`). */
+  logger?: WebRtcTransportLogger;
+  /** Reconnect progress feed — same events as `transport.onReconnectProgress`. */
+  onReconnectProgress?: (progress: ReconnectProgress) => void;
 }
 
 export interface WebRtcTransport {
@@ -253,6 +296,10 @@ export interface WebRtcTransport {
   /** Candidate-type feed for the relay alarm (§9.8): fired with the selected
    * type when the pipe comes up and `null` when it goes down. */
   onCandidateType(handler: (type: RtcCandidateType | null) => void): () => void;
+  /** Reconnect progress feed: fires as a reconnect is scheduled, attempted, and
+   * when an attempt fails/stalls — so the UX can show "reconnecting, attempt N"
+   * instead of a silent spinner. Not fired for the initial connect. */
+  onReconnectProgress(handler: (progress: ReconnectProgress) => void): () => void;
   /**
    * Send one logical bulk frame for `streamId`: mux-encoded (§1.2) and chunked
    * under the negotiated size (DATA payloads split into independent DATA
@@ -283,6 +330,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   let signaling: SignalingClient | null = null;
   const role = options.role ?? "offerer";
   const log = options.logPrefix ?? "[webrtc]";
+  const logWarn = options.logger?.warn ?? console.warn.bind(console);
+  const logError = options.logger?.error ?? console.error.bind(console);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -311,6 +360,15 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   let dirty = false;
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Per-attempt establish deadline for RECONNECTS (bug #2) — a stuck reconnect
+   * whose answer never arrives fails loud here instead of hanging in
+   * "connecting" forever. Armed at the start of a reconnect establish, cleared
+   * on "connected" / teardown / close. */
+  let establishDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Layer that caused the most recent establish failure — distinguishes a
+   * signaling-down failure from a peer-unreachable one in the connect timeout
+   * message and the reconnect-progress feed (UX/DX). */
+  let lastFailureLayer: "signaling" | "peer" | null = null;
 
   // --- hello negotiation (§1.1) ---------------------------------------------
   let pinVerified = false;
@@ -332,7 +390,41 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
 
   const statusListeners = new Set<(status: RpcConnectionStatus) => void>();
   const candidateTypeListeners = new Set<(type: RtcCandidateType | null) => void>();
+  const reconnectProgressListeners = new Set<(progress: ReconnectProgress) => void>();
+  /** Last value handed to the candidate-type feed — de-dupes re-emits so the
+   * relay alarm only sees genuine transitions (bug #4). `undefined` = nothing
+   * emitted yet. */
+  let lastCandidateType: RtcCandidateType | null | undefined = undefined;
   const sessions = new Map<string, SessionImpl>();
+
+  function emitReconnectProgress(phase: ReconnectProgress["phase"], reason: string): void {
+    const progress: ReconnectProgress = {
+      attempt: reconnectAttempt,
+      phase,
+      reason,
+      layer: lastFailureLayer,
+    };
+    try {
+      options.onReconnectProgress?.(progress);
+    } catch (error) {
+      logWarn(`${log} onReconnectProgress option threw`, error);
+    }
+    for (const listener of [...reconnectProgressListeners]) {
+      try {
+        listener(progress);
+      } catch (error) {
+        logWarn(`${log} reconnect-progress listener threw`, error);
+      }
+    }
+  }
+
+  /** Classify a pipe-down reason as a signaling-layer vs peer/ICE-layer failure
+   * (UX/DX: distinguish "can't reach rendezvous" from "can't reach your machine"). */
+  function classifyFailureLayer(reason: string): "signaling" | "peer" {
+    return /signal|sendDescription|setRemoteDescription|ice-servers/i.test(reason)
+      ? "signaling"
+      : "peer";
+  }
 
   /**
    * §3.4 delivery-gap closure: outbound ROUTED REQUEST and RESPONSE frames
@@ -405,7 +497,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         `stream ${streamId} exceeded the ${STREAM_RECEIVE_CAP_BYTES}-byte receive buffer (${bufferedBytes} buffered)`,
         STREAM_RECEIVE_OVERFLOW_CODE,
       );
-      console.warn(`${log} ${error.message}`);
+      logWarn(`${log} ${error.message}`);
       const active = activeStreams.get(streamId);
       inboundMux.fail(streamId, error);
       if (active) {
@@ -440,22 +532,24 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       try {
         listener(next);
       } catch (error) {
-        console.warn(`${log} status listener threw`, error);
+        logWarn(`${log} status listener threw`, error);
       }
     }
   }
 
   function emitCandidateType(type: RtcCandidateType | null): void {
+    if (type === lastCandidateType) return; // de-dupe: only genuine transitions (bug #4)
+    lastCandidateType = type;
     try {
       options.onCandidateType?.(type);
     } catch (error) {
-      console.warn(`${log} onCandidateType option threw`, error);
+      logWarn(`${log} onCandidateType option threw`, error);
     }
     for (const listener of candidateTypeListeners) {
       try {
         listener(type);
       } catch (error) {
-        console.warn(`${log} candidate-type listener threw`, error);
+        logWarn(`${log} candidate-type listener threw`, error);
       }
     }
   }
@@ -552,6 +646,35 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
 
   // -- inbound control demux ----------------------------------------------------
 
+  /**
+   * FAIL-CLOSED DTLS pin check (bug #3, §6.1). Returns true once the observed
+   * remote fingerprint matches the pinned `fp`. Returns false while the
+   * fingerprint is not yet observable (DTLS not settled) — the caller must NOT
+   * process the frame in that window. A mismatch hard-closes the pipe and
+   * returns false. Shared by `tryComplete` and the inbound dispatch gate so no
+   * non-hello frame is ever processed over an unpinned pipe.
+   */
+  function tryVerifyPin(): boolean {
+    if (pinVerified) return true;
+    if (!peer) return false;
+    const observed = peer.remoteFingerprint();
+    if (!observed) return false; // DTLS not settled yet — a later trigger retries
+    if (normalizeFingerprint(observed) !== normalizeFingerprint(pairing.fingerprint)) {
+      // FAIL CLOSED — a signaling box that swapped the fingerprint is rejected;
+      // no RPC ever flows over an unpinned pipe (plan §6.1, proven §11).
+      const error = errorWithCode(
+        `DTLS fingerprint mismatch: observed ${observed} != pinned ${pairing.fingerprint}`,
+        FINGERPRINT_MISMATCH_CODE,
+      );
+      logError(`${log} ${error.message}`);
+      rejectConnect?.(error);
+      void hardClose();
+      return false;
+    }
+    pinVerified = true;
+    return true;
+  }
+
   function handleControlMessage(data: Uint8Array, forGeneration: number): void {
     if (forGeneration !== generation || closed) return;
     let full: Uint8Array | null;
@@ -577,7 +700,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       return;
     }
     if (!remoteHello) {
-      // §1.1: the FIRST control frame in each direction must be the hello.
+      // §1.1: the FIRST control frame in each direction must be the hello. The
+      // hello is deliberately NOT pin-gated: pin verification needs DTLS up
+      // (the fingerprint can be briefly null exactly when the hello lands), and
+      // handleRemoteHello → tryComplete verifies the pin the moment it settles.
       if (frame.t !== SESSION_HELLO) {
         onPipeDown(`protocol violation: '${frame.t}' frame before hello`);
         return;
@@ -585,6 +711,14 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       handleRemoteHello(frame, forGeneration);
       return;
     }
+    // FAIL-CLOSED pin gate before dispatch (bug #3): no non-hello frame
+    // (open-result/routed/event/…) is ever actioned over an UNPINNED pipe. In
+    // the correct protocol these only arrive after we've sent `open` — i.e.
+    // after status went "connected", which requires pinVerified — so this drops
+    // only a frame from the theoretical fingerprint-null race the code
+    // anticipates (line ~717). A genuine mismatch has already hard-closed via
+    // tryComplete/tryVerifyPin, so a dropped frame can never leak plaintext RPC.
+    if (!pinVerified) return;
     switch (frame.t) {
       case SESSION_HELLO:
         onPipeDown("protocol violation: duplicate hello");
@@ -634,7 +768,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         return;
       case "routed-event-error":
         // Best-effort events: warn only (parity with wsClient.ts:204-212).
-        console.warn(`${log} routed event undeliverable`, frame);
+        logWarn(`${log} routed event undeliverable`, frame);
         return;
       default:
         // open/close/route/stream-* are answerer-handled; offerer ignores.
@@ -644,6 +778,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
 
   function handleBulkMessage(data: Uint8Array, forGeneration: number): void {
     if (forGeneration !== generation || closed) return;
+    // FAIL-CLOSED pin gate (bug #3): bulk (stream-body) frames only flow after a
+    // stream-open, i.e. well after pinVerified — drop anything arriving over an
+    // unpinned pipe rather than demuxing it. A mismatch has already hard-closed.
+    if (!pinVerified) return;
     if (!remoteHello) {
       onPipeDown("protocol violation: bulk message before hello");
       return;
@@ -713,23 +851,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   function tryComplete(forGeneration: number): void {
     if (forGeneration !== generation || closed || status === "connected") return;
     if (!peer || !control || !bulk) return;
-    if (!pinVerified) {
-      const observed = peer.remoteFingerprint();
-      if (!observed) return; // DTLS not settled yet — a later trigger retries
-      if (normalizeFingerprint(observed) !== normalizeFingerprint(pairing.fingerprint)) {
-        // FAIL CLOSED — a signaling box that swapped the fingerprint is rejected;
-        // no RPC ever flows over an unpinned pipe (plan §6.1, proven §11).
-        const error = errorWithCode(
-          `DTLS fingerprint mismatch: observed ${observed} != pinned ${pairing.fingerprint}`,
-          FINGERPRINT_MISMATCH_CODE,
-        );
-        console.error(`${log} ${error.message}`);
-        rejectConnect?.(error);
-        void hardClose();
-        return;
-      }
-      pinVerified = true;
-    }
+    if (!tryVerifyPin()) return; // DTLS not settled or FAIL-CLOSED mismatch (bug #3)
     if (control.readyState !== "open" || bulk.readyState !== "open") return; // wait for channel-open
     if (!helloSent) {
       // Advertise min(chunkSize option, the channel's REAL maxMessageSize with a
@@ -766,6 +888,8 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     );
     lastPongAt = Date.now();
     reconnectAttempt = 0;
+    lastFailureLayer = null;
+    clearEstablishDeadline(); // the attempt succeeded — no stuck-reconnect backstop needed
     startKeepalive();
     emitCandidateType(peer.selectedCandidateType());
     // (Re)open every live session over the (re)established pipe. Runs BEFORE the
@@ -814,20 +938,28 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     for (const session of sessions.values()) session.onPipeDown(reason);
   }
 
+  function clearEstablishDeadline(): void {
+    if (establishDeadlineTimer !== null) {
+      clearTimeout(establishDeadlineTimer);
+      establishDeadlineTimer = null;
+    }
+  }
+
   function onPipeDown(reason: string): void {
     if (closed) return;
+    lastFailureLayer = classifyFailureLayer(reason);
     if (establishing) {
       // §3.2: never a concurrent teardown — flag it; recovery re-runs after the
       // in-flight establish settles.
       if (!dirty) {
         dirty = true;
-        console.warn(`${log} pipe down during establish: ${reason}`);
+        logWarn(`${log} pipe down during establish: ${reason}`);
         failPipe(reason);
       }
       return;
     }
     if (reconnectTimer !== null) return; // already down; recovery scheduled
-    console.warn(`${log} pipe down: ${reason}`);
+    logWarn(`${log} pipe down: ${reason}`);
     failPipe(reason);
     scheduleReestablish(reason);
   }
@@ -841,10 +973,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       RECONNECT_MAX_DELAY_MS,
     );
     reconnectAttempt++;
+    emitReconnectProgress("scheduled", reason);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      console.warn(`${log} re-establishing pipe (attempt ${reconnectAttempt}, after: ${reason})`);
-      void runEstablish(reason);
+      logWarn(`${log} re-establishing pipe (attempt ${reconnectAttempt}, after: ${reason})`);
+      void runEstablish(reason, /* isReconnect */ true);
     }, delay);
     unrefTimer(reconnectTimer);
   }
@@ -854,15 +987,24 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
    * here, so there is exactly one in-flight establishPeer, always. A down-event
    * during the attempt sets `dirty`, consumed after the attempt settles.
    */
-  async function runEstablish(reason: string): Promise<void> {
+  async function runEstablish(reason: string, isReconnect = false): Promise<void> {
     if (closed || establishing) return;
     establishing = true;
     dirty = false;
     setStatus("connecting");
+    if (isReconnect) {
+      emitReconnectProgress("connecting", reason);
+      // Arm the per-attempt establish deadline (bug #2). The initial connect is
+      // bounded by connectTimer + the caller closing on rejection; a reconnect
+      // has no such owner, so a stuck attempt (answer never arrives, room WS
+      // healthy) would otherwise hang in "connecting" forever. GENEROUS
+      // backstop — see RECONNECT_ESTABLISH_DEADLINE_MS.
+      armEstablishDeadline(reason);
+    }
     try {
       await establishPeer();
     } catch (error) {
-      console.warn(
+      logWarn(
         `${log} establish failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       dirty = true;
@@ -872,9 +1014,31 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     if (closed) return;
     if (dirty) {
       dirty = false;
+      clearEstablishDeadline();
       setStatus("disconnected");
+      if (isReconnect) emitReconnectProgress("failed", `${reason} (attempt failed)`);
       scheduleReestablish(`${reason} (attempt failed)`);
     }
+    // NOTE: when establishPeer() resolves cleanly but the pipe is not yet
+    // "connected" (offer sent, awaiting answer/ICE/hello), the establish
+    // deadline armed above stays live and is the ONLY thing that can rescue a
+    // stalled attempt — it fires onPipeDown → backoff. Cleared on "connected".
+  }
+
+  /** Arm the reconnect establish deadline: on expiry, if still not connected,
+   * declare the pipe down so the backoff loop retries (bug #2). */
+  function armEstablishDeadline(reason: string): void {
+    clearEstablishDeadline();
+    establishDeadlineTimer = setTimeout(() => {
+      establishDeadlineTimer = null;
+      if (closed || status === "connected") return;
+      logWarn(
+        `${log} reconnect establish stalled (no pipe within ${RECONNECT_ESTABLISH_DEADLINE_MS}ms) — retrying`,
+      );
+      emitReconnectProgress("failed", `establish stalled: ${reason}`);
+      onPipeDown("reconnect establish deadline exceeded");
+    }, RECONNECT_ESTABLISH_DEADLINE_MS);
+    unrefTimer(establishDeadlineTimer);
   }
 
   /** Tear down the current peer/channels/schedulers and reset per-pipe codec
@@ -940,16 +1104,47 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     const thisGeneration = ++generation;
     const sig = options.createSignaling();
     signaling = sig;
+    // The offer we last sent — re-sent on `peer-joined` (bug #2) so a
+    // late-arriving server recovers without waiting out the establish deadline.
+    let lastLocalOffer: { type: "offer" | "answer"; sdp: string } | null = null;
+    // Signaling is CRITICAL only until the descriptions have been exchanged.
+    // Before that, a room-WS drop means we can never complete → tear down.
+    // AFTER the remote description is applied, ICE/DTLS can finish on its own
+    // (the candidates already exchanged nominate a pair, DTLS handshakes
+    // in-band), so an idle-close of the room WS must NOT abort a viable
+    // in-flight connect (bug #6). The reconnect establish deadline (bug #2) is
+    // the backstop if that lenient window never actually completes.
+    let signalingCritical = true;
     // Registered BEFORE any await: a signaling drop during setup must count as
     // a down-event (previously it fell through the cracks until the offer send
-    // failed). Once the pipe is connected it is independent of signaling, so an
-    // idle-close of the room WS must NOT tear down a healthy pipe.
+    // failed). Once the pipe is connected it is independent of signaling, and
+    // once descriptions are exchanged ICE/DTLS no longer needs it either.
     unsubs.push(
       sig.onClosed((reason) => {
         if (thisGeneration !== generation || closed) return;
-        if (status !== "connected") onPipeDown(`signaling closed: ${reason ?? ""}`);
+        if (status === "connected") return; // healthy pipe outlives signaling
+        if (!signalingCritical) {
+          // Descriptions exchanged — let ICE/DTLS finish; the establish
+          // deadline backstops a window that never completes.
+          logWarn(
+            `${log} signaling closed after description exchange (${reason ?? ""}) — letting ICE/DTLS finish`,
+          );
+          return;
+        }
+        onPipeDown(`signaling closed: ${reason ?? ""}`);
       }),
     );
+    if (role === "offerer" && sig.onPeerJoined) {
+      unsubs.push(
+        sig.onPeerJoined(() => {
+          if (thisGeneration !== generation || closed || status === "connected") return;
+          if (!lastLocalOffer) return; // offer not created yet — the normal send covers it
+          void sig
+            .sendDescription(lastLocalOffer)
+            .catch((error) => logWarn(`${log} re-send offer on peer-joined`, error));
+        }),
+      );
+    }
     const iceServers = sig.fetchIceServers
       ? await sig.fetchIceServers()
       : pairing.iceServers ?? [];
@@ -1029,11 +1224,14 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         if (thisGeneration !== generation || closed) return;
       }
       remoteDescApplied = true;
+      // Descriptions exchanged — a signaling drop from here can no longer abort
+      // this attempt (bug #6); ICE/DTLS complete in-band.
+      signalingCritical = false;
       for (const cand of pendingCandidates.splice(0)) {
         try {
           await pc.addRemoteCandidate(cand);
         } catch (error) {
-          console.warn(`${log} addRemoteCandidate (buffered)`, error);
+          logWarn(`${log} addRemoteCandidate (buffered)`, error);
         }
       }
     };
@@ -1042,19 +1240,20 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     // that makes the pipe unusable (description exchange) is a down-event, never
     // an unhandled rejection crash (§3.2).
     unsubs.push(
-      pc.onLocalDescription((desc) =>
+      pc.onLocalDescription((desc) => {
+        if (desc.type === "offer") lastLocalOffer = desc; // remembered for peer-joined re-send (bug #2)
         void sig.sendDescription(desc).catch((error) => {
-          console.warn(`${log} sendDescription`, error);
+          logWarn(`${log} sendDescription`, error);
           if (thisGeneration === generation) onPipeDown("signaling sendDescription failed");
-        }),
-      ),
+        });
+      }),
       pc.onLocalCandidate((cand) =>
-        void sig.sendCandidate(cand).catch((error) => console.warn(`${log} sendCandidate`, error)),
+        void sig.sendCandidate(cand).catch((error) => logWarn(`${log} sendCandidate`, error)),
       ),
       sig.onDescription((desc) => {
         if (thisGeneration !== generation || closed) return;
         void applyRemoteDescription(desc).catch((error) => {
-          console.warn(`${log} setRemoteDescription`, error);
+          logWarn(`${log} setRemoteDescription`, error);
           if (thisGeneration === generation) onPipeDown("setRemoteDescription failed");
         });
       }),
@@ -1064,10 +1263,22 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           pendingCandidates.push(cand);
           return;
         }
-        void pc.addRemoteCandidate(cand).catch((error) => console.warn(`${log} addRemoteCandidate`, error));
+        void pc.addRemoteCandidate(cand).catch((error) => logWarn(`${log} addRemoteCandidate`, error));
       }),
       pc.onConnectionStateChange((state) => onConnectionState(state, thisGeneration)),
     );
+    // Re-emit the candidate type on every selected-pair change (bug #4): the
+    // one-shot read at hello-complete misses a still-null nomination and a
+    // mid-connection switch to relay. De-duped by emitCandidateType; gated on
+    // the live pipe so a change during teardown doesn't resurface.
+    if (pc.onSelectedCandidateChange) {
+      unsubs.push(
+        pc.onSelectedCandidateChange((type) => {
+          if (thisGeneration !== generation || closed || status !== "connected") return;
+          emitCandidateType(type);
+        }),
+      );
+    }
 
     if (role === "offerer") {
       const offer = await pc.createOffer();
@@ -1162,6 +1373,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    clearEstablishDeadline();
     teardownPipe();
     try {
       signaling?.close();
@@ -1400,7 +1612,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     private sessionClosed = false;
 
     constructor(private readonly opts: WebRtcSessionOptions) {
-      this.sid = opts.sid ?? opts.connectionId ?? `s-${Math.abs(hashString(JSON.stringify(opts.connectionId ?? opts.clientLabel ?? Math.random())))}`;
+      // Fallback sid MUST be unique per instance: the old hash was over
+      // clientLabel only, so two label-only sessions collided and the second
+      // silently closed the first (bug #9). A random nonce guarantees
+      // uniqueness while an explicit sid/connectionId still wins for stability.
+      this.sid = opts.sid ?? opts.connectionId ?? `s-${randomToken()}`;
     }
 
     callerId(): string | undefined {
@@ -1446,7 +1662,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           token = await this.opts.getToken();
         } catch (error) {
           if (gen !== this.openGen || this.sessionClosed || closed) return;
-          console.warn(`${log} session ${this.sid} getToken failed`, error);
+          logWarn(`${log} session ${this.sid} getToken failed`, error);
           // Non-terminal open failure → per-session backoff retry (§3.3).
           this.clearDeadline();
           this.scheduleRetry("getToken failed");
@@ -1476,7 +1692,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       this.deadlineTimer = setTimeout(() => {
         this.deadlineTimer = null;
         if (gen !== this.openGen || this.sessionClosed || closed || this.openSettled) return;
-        console.warn(`${log} session ${this.sid} open attempt timed out after ${SESSION_OPEN_DEADLINE_MS}ms`);
+        logWarn(`${log} session ${this.sid} open attempt timed out after ${SESSION_OPEN_DEADLINE_MS}ms`);
         this.scheduleRetry("open deadline");
       }, SESSION_OPEN_DEADLINE_MS);
       unrefTimer(this.deadlineTimer);
@@ -1502,7 +1718,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         this.retryTimer = null;
         if (this.sessionClosed || closed || !this.isCurrent()) return;
         if (status !== "connected") return; // pipe recovery reopens on completion
-        console.warn(`${log} session ${this.sid} reopening (attempt ${this.retryAttempt}, after: ${reason})`);
+        logWarn(`${log} session ${this.sid} reopening (attempt ${this.retryAttempt}, after: ${reason})`);
         void this.reopen().catch(() => undefined);
       }, delay);
       unrefTimer(this.retryTimer);
@@ -1523,7 +1739,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
           this.terminate(error);
           return;
         }
-        console.warn(`${log} session ${this.sid} open rejected (non-terminal): ${error.message}`);
+        logWarn(`${log} session ${this.sid} open rejected (non-terminal): ${error.message}`);
         this.clearDeadline();
         this.scheduleRetry("open rejected");
         return;
@@ -1556,7 +1772,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       try {
         this.opts.onRecovery?.(kind);
       } catch (error) {
-        console.warn(`${log} session ${this.sid} onRecovery threw`, error);
+        logWarn(`${log} session ${this.sid} onRecovery threw`, error);
       }
       this.lastServerBootId = frame.serverBootId;
       // §3.4 delivery gap: a routed REQUEST or RESPONSE that was queued but
@@ -1596,7 +1812,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // Non-terminal (e.g. 4008 session-not-open after a server-side desync):
       // sends must wait for the reopen, so re-arm the open promise and schedule
       // a backoff reopen — the desync self-heals within one round-trip (§1.5).
-      console.warn(`${log} session ${this.sid} closed non-terminally (${code ?? "?"}: ${reason ?? ""}) — reopening`);
+      logWarn(`${log} session ${this.sid} closed non-terminally (${code ?? "?"}: ${reason ?? ""}) — reopening`);
       this.clearDeadline();
       this.ensureOpenPromise();
       this.scheduleRetry(`server closed (${code ?? "?"})`);
@@ -1634,7 +1850,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
         try {
           listener(envelope);
         } catch (error) {
-          console.warn(`${log} session ${this.sid} message listener threw`, error);
+          logWarn(`${log} session ${this.sid} message listener threw`, error);
         }
       }
     }
@@ -1672,10 +1888,12 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
 
     private async ensureReadyForOutbound(): Promise<void> {
-      if (this.sessionClosed) throw errorWithCode("Session is closed", "SESSION_AUTH_FAILED");
+      // A closed session is a TERMINAL/revocation condition, not an auth failure
+      // (bug #10): callers must not misdiagnose a lease revoke as a bad credential.
+      if (this.sessionClosed) throw errorWithCode("Session is closed", SESSION_CLOSED_CODE);
       if (status !== "connected") throw errorWithCode("Not connected to server", PIPE_CLOSED_CODE);
       if (this.openPromise) await this.openPromise;
-      if (this.sessionClosed) throw errorWithCode("Session is closed", "SESSION_AUTH_FAILED");
+      if (this.sessionClosed) throw errorWithCode("Session is closed", SESSION_CLOSED_CODE);
       if (status !== "connected") throw errorWithCode("Not connected to server", PIPE_CLOSED_CODE);
     }
 
@@ -1786,9 +2004,18 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       // The caller closes the transport on rejection, stopping the retry loop.
       const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
       connectTimer = setTimeout(() => {
+        // Name the layer that actually failed instead of always blaming the peer
+        // (UX/DX): a signaling-down or hung ICE-server fetch is a different fix
+        // for the user than an unreachable machine.
+        const cause =
+          lastFailureLayer === "signaling"
+            ? "signaling/rendezvous unreachable"
+            : lastFailureLayer === "peer"
+              ? "peer unreachable"
+              : "peer unreachable (no signal observed)";
         rejectConnect?.(
           errorWithCode(
-            `WebRTC connect timed out after ${connectTimeoutMs}ms (peer unreachable)`,
+            `WebRTC connect timed out after ${connectTimeoutMs}ms (${cause})`,
             PIPE_CLOSED_CODE
           )
         );
@@ -1811,6 +2038,9 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       return () => statusListeners.delete(handler);
     },
     openSession(opts: WebRtcSessionOptions): WebRtcSession {
+      // Fail loud on a closed transport (bug #8): silently registering a session
+      // that can never open leaks it and hangs any ready() awaiter forever.
+      if (closed) throw errorWithCode("Transport closed", PIPE_CLOSED_CODE);
       const session = new SessionImpl(opts);
       // A live duplicate sid is explicitly closed first (§3.3) — the old
       // instance announces its own close while it still owns the map slot.
@@ -1828,6 +2058,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       candidateTypeListeners.add(handler);
       return () => candidateTypeListeners.delete(handler);
     },
+    onReconnectProgress(handler: (progress: ReconnectProgress) => void): () => void {
+      reconnectProgressListeners.add(handler);
+      return () => reconnectProgressListeners.delete(handler);
+    },
     sendBulkFrame,
     nudge,
     close(): Promise<void> {
@@ -1838,10 +2072,10 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   return transport;
 }
 
-function hashString(input: string): number {
-  let h = 0;
-  for (let i = 0; i < input.length; i++) {
-    h = (Math.imul(31, h) + input.charCodeAt(i)) | 0;
-  }
-  return h;
+/** Unguessable, collision-free token for a fallback session id (bug #9). Prefers
+ * the platform crypto UUID; falls back to time + randomness where unavailable. */
+function randomToken(): string {
+  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }

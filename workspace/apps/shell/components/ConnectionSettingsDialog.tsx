@@ -1,17 +1,24 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Dialog, Flex, Text, TextField, Callout, Box } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { AppDialog } from "@workspace/ui";
 import { createConnectDeepLink, parseConnectLink, type ConnectPairing } from "@vibestudio/shared/connect";
 import {
+  app,
   incomingPairLink,
   remoteCred,
   type RemoteCredCurrent,
   type TestConnectionResult,
 } from "../shell/client";
 import { useShellOverlay } from "../shell/useShellOverlay";
+import { useShellEvent } from "../shell/useShellEvent";
 import { PairedDevicesSection } from "./PairedDevicesSection";
 import { AppUpdatesSection } from "./AppUpdatesSection";
+
+type LiveConnection = {
+  status: "connected" | "connecting" | "disconnected";
+  isRemote: boolean;
+};
 
 interface Props {
   open: boolean;
@@ -26,6 +33,27 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const [live, setLive] = useState<LiveConnection | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    app
+      .getInfo()
+      .then((info) =>
+        setLive({
+          status: info.connectionStatus ?? "connected",
+          isRemote: (info.connectionMode ?? "local") === "remote",
+        })
+      )
+      .catch(() => {});
+  }, [open]);
+
+  useShellEvent(
+    "server-connection-changed",
+    useCallback((payload: { status: LiveConnection["status"]; isRemote: boolean }) => {
+      setLive({ status: payload.status, isRemote: payload.isRemote });
+    }, [])
+  );
 
   useEffect(() => {
     // A `vibestudio://connect` link carries the full WebRTC pairing material
@@ -66,15 +94,28 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  const onPasteLink = () => {
-    const raw = window.prompt("Paste Vibestudio pairing link");
-    if (!raw) return;
+  // `window.prompt` throws in Electron renderers ("prompt() is and will not be
+  // supported"). Read the clipboard directly into the in-dialog text field
+  // instead, validating (shape/version) before accepting it.
+  const onPasteLink = async () => {
+    setError(null);
+    let raw: string;
+    try {
+      raw = (await navigator.clipboard.readText()).trim();
+    } catch {
+      setError("Couldn't read the clipboard — paste the link into the field instead.");
+      return;
+    }
+    if (!raw) {
+      setError("Clipboard is empty — copy the pairing link first.");
+      return;
+    }
     const parsed = parseConnectLink(raw);
     if (parsed.kind === "error") {
       setError(parsed.reason);
       return;
     }
-    setPairLink(raw.trim());
+    setPairLink(raw);
   };
 
   const savePairing = async () => {
@@ -127,18 +168,30 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
           <Callout.Root size="1" color="green" mb="3">
             <Callout.Text>
               Currently connected to{" "}
-              {current.url ?? current.workspaceName ?? `remote server (device ${current.deviceId})`}
+              {current.workspaceName ?? `your server (device ${current.deviceId})`}
+            </Callout.Text>
+          </Callout.Root>
+        ) : current?.configured && live?.isRemote && live.status === "connecting" ? (
+          // A transient blip — calm, reassuring, NOT the scary re-pair banner.
+          <Callout.Root size="1" color="blue" mb="3">
+            <Callout.Text>Reconnecting to your server…</Callout.Text>
+          </Callout.Root>
+        ) : current?.configured && live?.isRemote && live.status === "disconnected" ? (
+          <Callout.Root size="1" color="amber" mb="3">
+            <Callout.Text>
+              Disconnected — Vibestudio will reconnect automatically when your server is reachable.
             </Callout.Text>
           </Callout.Root>
         ) : current?.configured ? (
-          <Callout.Root size="1" color={current.bootstrap === "device" ? "red" : "amber"} mb="3">
+          // Stored remote, but we're NOT on the remote pipe (fell back to local):
+          // the genuine "re-pair" case.
+          <Callout.Root size="1" color="red" mb="3">
             <Callout.Icon>
               <ExclamationTriangleIcon />
             </Callout.Icon>
             <Callout.Text>
-              {current.bootstrap === "device"
-                ? "Device credential rejected or inactive — re-pair from the server."
-                : `Credentials are saved (${current.url}) but app is running in local mode. Relaunch to apply.`}
+              Your saved server isn&apos;t connected — running locally. Re-pair from the server to
+              reconnect.
             </Callout.Text>
           </Callout.Root>
         ) : null}
@@ -149,7 +202,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
               <Text as="label" size="2" weight="medium">
                 Pairing link
               </Text>
-              <Button size="1" variant="soft" disabled={busy} onClick={onPasteLink}>
+              <Button size="1" variant="soft" disabled={busy} onClick={() => void onPasteLink()}>
                 Paste link
               </Button>
             </Flex>

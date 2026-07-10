@@ -43,5 +43,11 @@
     }
   },
   "include": ["src/**/*", "packages/**/*"],
-  "exclude": ["node_modules", "dist", "**/dist", "packages/mobile-webrtc"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/dist",
+    "packages/mobile-webrtc",
+    "src/server/services/relaySeam.integration.test.ts"
+  ]
 }

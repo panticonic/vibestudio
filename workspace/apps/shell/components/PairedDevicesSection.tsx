@@ -41,6 +41,9 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
     if (!connectOpen || !invite || pairedDevice) return;
     let cancelled = false;
     const poll = async () => {
+      // Stop polling once the invite has expired — the QR is no longer scannable,
+      // so continuing to hammer listDevices is pointless (the UI shows "Expired").
+      if (!invite || Date.now() >= invite.expiresAt) return;
       try {
         const next = await remoteCred.listDevices();
         if (cancelled) return;
@@ -63,6 +66,14 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
     setBusyId(deviceId);
     try {
       await remoteCred.revokeDevice(deviceId);
+      if (deviceId === currentDeviceId) {
+        // Revoking THIS device: the pipe it authenticates is now dying. Match the
+        // warning copy — clear the local credential and relaunch into local mode
+        // rather than leaving the app on a dead pipe. (relaunch never returns.)
+        await remoteCred.clear();
+        await remoteCred.relaunch();
+        return;
+      }
       await load();
     } catch (err) {
       setError((err as Error).message);
@@ -99,6 +110,9 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
   const remaining = `${Math.floor(remainingSeconds / 60)}:${String(
     remainingSeconds % 60
   ).padStart(2, "0")}`;
+  // Expired = the countdown reached 0 with nobody paired yet. The QR is stale, so
+  // present a clear "Expired — regenerate" instead of a dead-but-scannable code.
+  const expired = !!invite && remainingMs <= 0 && !pairedDevice;
 
   return (
     <Flex direction="column" gap="2" mt="4">
@@ -108,7 +122,7 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
         </Text>
         <Flex gap="2">
           <Button size="1" variant="soft" disabled={inviteBusy} onClick={() => void createInvite()}>
-            {inviteBusy ? "Creating..." : "Connect a phone"}
+            {inviteBusy ? "Creating..." : "Connect a device"}
           </Button>
           <Button size="1" variant="soft" onClick={() => void load()}>
             Refresh
@@ -117,26 +131,47 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
       </Flex>
       <Dialog.Root open={connectOpen} onOpenChange={setConnectOpen}>
         <Dialog.Content maxWidth="560px">
-          <Dialog.Title>Connect a phone</Dialog.Title>
+          <Dialog.Title>Connect a device</Dialog.Title>
           {invite ? (
             <Flex direction="column" gap="4">
               <Flex gap="4" align="start" wrap="wrap">
-                <PairingQrCode value={invite.pairUrl} size={248} />
+                <Box style={{ opacity: expired ? 0.35 : 1, transition: "opacity 150ms" }}>
+                  <PairingQrCode value={invite.pairUrl} size={248} />
+                </Box>
                 <Flex direction="column" gap="3" style={{ minWidth: 0, flex: "1 1 220px" }}>
                   <Text size="2">
-                    Scan this QR with the phone camera. No app yet? The link walks you through install.
+                    Scan this QR with a phone camera, or open the link on another desktop. No app
+                    yet? The link walks you through install.
                   </Text>
                   <Text size="2">
                     Server <Code>{invite.srv ?? invite.serverId}</Code>
                   </Text>
-                  <Text size="2">
-                    Expires in <Code>{remaining}</Code>
-                  </Text>
-                  <Badge color={pairedDevice ? "green" : "gray"} style={{ width: "fit-content" }}>
-                    {pairedDevice
-                      ? `Paired ${pairedDevice.label || pairedDevice.platform || "device"}`
-                      : "Waiting for device..."}
-                  </Badge>
+                  {expired ? (
+                    <Flex direction="column" gap="2" style={{ width: "fit-content" }}>
+                      <Badge color="amber">Expired</Badge>
+                      <Button
+                        size="1"
+                        disabled={inviteBusy}
+                        onClick={() => void createInvite()}
+                      >
+                        {inviteBusy ? "Regenerating..." : "Regenerate"}
+                      </Button>
+                    </Flex>
+                  ) : (
+                    <>
+                      <Text size="2">
+                        Expires in <Code>{remaining}</Code>
+                      </Text>
+                      <Badge
+                        color={pairedDevice ? "green" : "gray"}
+                        style={{ width: "fit-content" }}
+                      >
+                        {pairedDevice
+                          ? `Paired ${pairedDevice.label || pairedDevice.platform || "device"}`
+                          : "Waiting for device..."}
+                      </Badge>
+                    </>
+                  )}
                 </Flex>
               </Flex>
               <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>

@@ -90,6 +90,16 @@ export interface RtcPeerConnectionLike {
   remoteFingerprint(): string | null;
   /** Selected ICE candidate-pair type — surfaced so over-relaying is loud (§12). */
   selectedCandidateType(): RtcCandidateType | null;
+  /**
+   * Fired whenever the selected ICE candidate PAIR changes — i.e. the value
+   * `selectedCandidateType()` returns transitions (null → host/srflx/relay on
+   * nomination, or a mid-connection switch e.g. host → relay after a NAT
+   * rebind). The relay alarm (§9.8) depends on this: emitting the candidate
+   * type ONCE at hello-complete misses a still-null nomination and every later
+   * switch to relay. Optional — native adapters that cannot observe pair
+   * changes omit it, and the transport falls back to the one-shot read.
+   */
+  onSelectedCandidateChange?(handler: (type: RtcCandidateType | null) => void): () => void;
   readonly connectionState: RtcConnectionState;
   onConnectionStateChange(handler: (state: RtcConnectionState) => void): () => void;
   /** A local SDP (offer/answer) is ready to send to the peer via signaling. */

@@ -334,6 +334,11 @@ interface NativePeerConnection {
   onLocalDescription(cb: (sdp: string, type: string) => void): void;
   onLocalCandidate(cb: (candidate: string, mid: string) => void): void;
   onStateChange(cb: (state: string) => void): void;
+  // ICE-transport state transitions (checking → connected → completed, and a
+  // disconnected → connected cycle on a NAT rebind). libdatachannel has no
+  // dedicated "selected candidate pair changed" event, so we poll the selected
+  // pair on these transitions to surface a late nomination or a host→relay switch.
+  onIceStateChange?(cb: (state: string) => void): void;
   state(): string;
   getSelectedCandidatePair?():
     | { local?: NativeCandidateInfo; remote?: NativeCandidateInfo }
@@ -471,19 +476,44 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
   private readonly stateFanout = new Fanout<[RtcConnectionState]>();
   private readonly localDescFanout = new Fanout<[RtcSessionDescription]>();
   private readonly localCandFanout = new Fanout<[RtcIceCandidate]>();
+  private readonly candidateTypeFanout = new Fanout<[RtcCandidateType | null]>();
   // Last SDP passed to setRemoteDescription — cached so remoteFingerprint() can
   // parse the a=fingerprint line even when this binding exposes neither a native
   // remoteFingerprint() nor a remoteDescription() accessor (node-datachannel 0.32).
   private remoteSdp: string | null = null;
+  // Last candidate type handed to candidateTypeFanout — de-dupes the poll so only
+  // genuine transitions surface (`undefined` = nothing emitted yet, distinct from
+  // an emitted `null`).
+  private lastEmittedCandidateType: RtcCandidateType | null | undefined = undefined;
 
   constructor(private readonly pc: NativePeerConnection) {
-    pc.onStateChange((raw) => this.stateFanout.emit(normalizeConnectionState(raw)));
+    pc.onStateChange((raw) => {
+      this.stateFanout.emit(normalizeConnectionState(raw));
+      // The aggregate connection state reaching 'connected' is the latest a pair
+      // can be nominated, so poll here too (covers bindings without onIceStateChange).
+      this.pollSelectedCandidate();
+    });
+    // libdatachannel exposes no candidate-pair-changed event; the ICE-state
+    // transitions are the closest signal. Poll the selected pair on each so a late
+    // nomination or a mid-connection host→relay switch actually surfaces (§9.8).
+    pc.onIceStateChange?.(() => this.pollSelectedCandidate());
     pc.onLocalDescription((sdp, type) =>
       this.localDescFanout.emit({ sdp, type: type === "answer" ? "answer" : "offer" })
     );
     pc.onLocalCandidate((candidate, mid) =>
       this.localCandFanout.emit({ candidate, sdpMid: mid, sdpMLineIndex: null })
     );
+  }
+
+  /** Read the current selected-pair type and emit it iff it changed (de-duped).
+   * Skipped when nobody is listening so it never touches the native accessor for
+   * no reason. */
+  private pollSelectedCandidate(): void {
+    if (this.candidateTypeFanout.size === 0) return;
+    const type = this.selectedCandidateType();
+    if (type === this.lastEmittedCandidateType) return;
+    this.lastEmittedCandidateType = type;
+    this.candidateTypeFanout.emit(type);
   }
 
   createDataChannel(label: string, init?: RtcDataChannelInit): RtcDataChannelLike {
@@ -568,6 +598,10 @@ export class WrappedPeerConnection implements RtcPeerConnectionLike {
     // crash the 'connected' handler that surfaces the relay alarm.
     const pair = safeCall(() => this.pc.getSelectedCandidatePair?.() ?? null, null);
     return candidateTypeFromPair(pair);
+  }
+
+  onSelectedCandidateChange(handler: (type: RtcCandidateType | null) => void): () => void {
+    return this.candidateTypeFanout.add(handler);
   }
 
   get connectionState(): RtcConnectionState {

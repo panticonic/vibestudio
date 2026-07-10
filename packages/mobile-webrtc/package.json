@@ -6,6 +6,7 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./connectLink": "./src/connectLink.ts",
     "./bundleDelivery": "./src/bundleDelivery.ts",
     "./reactNativeWebRtcPeer": "./src/reactNativeWebRtcPeer.ts",
     "./polyfills": "./src/polyfills.ts"

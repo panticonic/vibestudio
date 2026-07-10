@@ -28,6 +28,7 @@ import {
   encodeControlFrame,
   SESSION_CLOSED,
   SESSION_NOT_OPEN_CLOSE_CODE,
+  SESSION_OPEN_RESULT,
   type SessionControlFrame,
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import {
@@ -844,12 +845,35 @@ export class RpcServer {
 
   private handleAuth(
     ws: WebSocket,
-    token: string,
+    token: unknown,
     requestedConnectionId?: string,
     clientLabel?: string,
     clientSessionId?: string,
     clientPlatform?: ClientPlatform
   ): void {
+    // Un-authed handshake MUST fail closed, never throw. Both entry points reach
+    // here — the WS first-message parse and the WebRTC pipe's `open` frame
+    // (handleConnection → onFirstMessage → handleAuth) — and neither guarantees a
+    // string token: `{"type":"ws:auth"}` / `{"t":"open","sid":"x"}` carry none.
+    // Downstream redemption assumes a string (`token.startsWith(...)`), so a
+    // missing/non-string token would throw uncaught (WS) or into a swallowing
+    // catch that strands the session. Reject it loud+closed instead. For a shim
+    // this ws:auth-result failure translates to open-result success:false
+    // terminal:true; for a real WS it is a normal auth failure.
+    if (typeof token !== "string" || token.length === 0) {
+      log.warn("rejecting ws:auth: missing or non-string token", {
+        clientLabel: clientLabel ?? null,
+        clientPlatform: clientPlatform ?? null,
+      });
+      const msg: WsServerMessage = {
+        type: "ws:auth-result",
+        success: false,
+        error: "Missing or invalid auth token",
+      };
+      ws.send(JSON.stringify(msg));
+      ws.close(4006, "Missing or invalid auth token");
+      return;
+    }
     // Admin tokens are management-only. RPC clients must use caller tokens.
     if (this.deps.tokenManager.validateAdminToken(token)) {
       const msg: WsServerMessage = {
@@ -891,6 +915,13 @@ export class RpcServer {
       }
     }
     if (!entry) {
+      // Fail-loud observability: a device/panel/agent presented a token that
+      // matched no grant, bearer, or pairing/refresh credential. Log the device
+      // label/platform for diagnosis — NEVER the token itself.
+      log.warn("rejecting ws:auth: no valid credential", {
+        clientLabel: clientLabel ?? null,
+        clientPlatform: clientPlatform ?? null,
+      });
       const msg: WsServerMessage = {
         type: "ws:auth-result",
         success: false,
@@ -918,6 +949,27 @@ export class RpcServer {
     const connectionId = requestedConnectionId || randomUUID();
     const connectionKey = this.connectionKey(callerId, connectionId);
 
+    // Panel lease gate FIRST — before clearing this connection's grace timer or
+    // resolving its reconnect waiters. If the lease is denied (4090) the prior
+    // connection's grace path must stay intact: the grace timer is the ONLY place
+    // failRoutedRequestsForCallee runs, so cancelling it here would hang in-flight
+    // routed requests forever, and resolving the waiters would wake parked
+    // relayCalls into the "no client found" invariant throw. Gate, THEN (only on
+    // success) clear the timer / wake the waiters.
+    if (callerKind === "panel") {
+      const auth = this.deps.runtimeCoordinator?.authorizePanelConnection(callerId, connectionId);
+      if (!auth?.ok) {
+        const msg: WsServerMessage = {
+          type: "ws:auth-result",
+          success: false,
+          error: auth?.reason ?? "Panel runtime coordinator is unavailable",
+        };
+        ws.send(JSON.stringify(msg));
+        ws.close(4090, "Panel runtime lease denied");
+        return;
+      }
+    }
+
     const pendingTimer = this.disconnectTimers.get(connectionKey);
     if (pendingTimer) {
       clearTimeout(pendingTimer);
@@ -935,25 +987,20 @@ export class RpcServer {
       connectionWaiter.resolve();
     }
 
-    if (callerKind === "panel") {
-      const auth = this.deps.runtimeCoordinator?.authorizePanelConnection(callerId, connectionId);
-      if (!auth?.ok) {
-        const msg: WsServerMessage = {
-          type: "ws:auth-result",
-          success: false,
-          error: auth?.reason ?? "Panel runtime coordinator is unavailable",
-        };
-        ws.send(JSON.stringify(msg));
-        ws.close(4090, "Panel runtime lease denied");
-        return;
-      }
-    }
-
     const existing = this.connections.getConnection(callerId, connectionId);
     if (existing) {
-      existing.ws.close(4002, "Replaced by new connection");
-      this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
+      // De-register the old connection BEFORE closing it. A real `ws` closes
+      // asynchronously (handleClose runs after we return, by which point the
+      // replacement is registered, so it sees wasReplaced). But
+      // SessionWebSocketShim.close() fires its close handlers SYNCHRONOUSLY — so
+      // unless `existing` is already de-registered, that inline handleClose runs
+      // the FULL real-disconnect path (spurious markDisconnected / panel churn +
+      // freshly-armed reconnect waiters and a grace timer that this very cleanup
+      // would then strand). De-registering first makes wasReplaced===true for the
+      // synchronous shim exactly as it already is for the async real WS.
       this.cleanupClient(existing);
+      this.sessions.markDisconnected(existing.caller.runtime.id, existing.caller.runtime.kind);
+      existing.ws.close(4002, "Replaced by new connection");
     }
     const { sessionDirty } = this.sessions.markConnected(callerId, callerKind);
     const caller = this.verifiedCallerFor(callerId, callerKind, agentBinding);
@@ -979,6 +1026,15 @@ export class RpcServer {
         callerId,
         sinceLastDisconnectMs:
           previousDisconnectAt === undefined ? null : Date.now() - previousDisconnectAt,
+      });
+    } else if (callerKind === "shell") {
+      // Fail-loud observability: a paired device (or host shell) authenticated.
+      // Log the device label/platform so operators can see WHICH device attached
+      // (the pipe's first-connect log only knows the room, not the principal).
+      log.info("device connected", {
+        callerId,
+        clientLabel: clientLabel ?? null,
+        clientPlatform: clientPlatform ?? null,
       });
     }
 
@@ -3234,6 +3290,25 @@ export class RpcServer {
   private static readonly SESSION_NOT_OPEN_CLOSED_INTERVAL_MS = 2000;
 
   /**
+   * Hard cap on the per-pipe `notOpenClosedAt` rate-limiter map. The interval
+   * sweep only evicts entries older than the window, so a peer flooding MANY
+   * unique fake sids WITHIN one window leaves every entry "recent" and the sweep
+   * frees nothing — the map would grow unbounded. Past this cap we additionally
+   * evict oldest-first (insertion order) so it can never exceed the ceiling.
+   * Generous: a legitimate multi-panel client tracks at most a handful of sids.
+   */
+  private static readonly SESSION_NOT_OPEN_MAX_TRACKED = 1024;
+
+  /**
+   * Generous ceiling on concurrent logical sessions (shims) per WebRTC pipe.
+   * Each `open` drives a full handleConnection (10s auth timer + auth work), so
+   * an unbounded flood of opens is a pre-auth DoS. A legitimate client multiplexes
+   * its panels + shell — dozens at most — so this is far above any real need; a
+   * re-open of an already-tracked sid is never blocked.
+   */
+  private static readonly MAX_SESSIONS_PER_PIPE = 512;
+
+  /**
    * Bound on one inbound upload's UNCONSUMED bytes (plan §1.6). SCTP delivers
    * reliably and cannot be paused mid-stream, so a consumer that falls more
    * than this far behind gets the body errored (and the request fails loudly)
@@ -3320,11 +3395,20 @@ export class RpcServer {
       const last = notOpenClosedAt.get(sid);
       if (last !== undefined && now - last < RpcServer.SESSION_NOT_OPEN_CLOSED_INTERVAL_MS) return;
       // Bound the map: a client inventing sids must not grow it without limit.
-      if (notOpenClosedAt.size >= 1024) {
+      if (notOpenClosedAt.size >= RpcServer.SESSION_NOT_OPEN_MAX_TRACKED) {
+        // First free anything past the rate-limit window…
         for (const [staleSid, at] of notOpenClosedAt) {
           if (now - at >= RpcServer.SESSION_NOT_OPEN_CLOSED_INTERVAL_MS) {
             notOpenClosedAt.delete(staleSid);
           }
+        }
+        // …then hard-cap: a peer flooding >cap unique sids WITHIN one window
+        // leaves every entry "recent" so the sweep frees nothing. Evict oldest
+        // (Map preserves insertion order) until we are back under the ceiling.
+        while (notOpenClosedAt.size >= RpcServer.SESSION_NOT_OPEN_MAX_TRACKED) {
+          const oldest = notOpenClosedAt.keys().next().value;
+          if (oldest === undefined) break;
+          notOpenClosedAt.delete(oldest);
         }
       }
       notOpenClosedAt.set(sid, now);
@@ -3688,6 +3772,24 @@ export class RpcServer {
       }
       switch (frame.t) {
         case "open": {
+          // Generous pre-auth DoS backstop: cap concurrent logical sessions per
+          // pipe. Each open drives a full handleConnection (10s auth timer + auth
+          // work), so an unbounded open flood would pin resources before any auth.
+          // A re-open of an already-tracked sid is never blocked (it replaces).
+          if (!shims.has(frame.sid) && shims.size >= RpcServer.MAX_SESSIONS_PER_PIPE) {
+            log.warn(
+              `WebRTC pipe: refusing open for ${frame.sid} — session cap ` +
+                `(${RpcServer.MAX_SESSIONS_PER_PIPE}) reached; possible pre-auth flood`
+            );
+            writeControlFrame({
+              t: SESSION_OPEN_RESULT,
+              sid: frame.sid,
+              success: false,
+              error: "Too many concurrent sessions on this connection",
+              terminal: true,
+            });
+            return;
+          }
           // A re-sent SESSION_OPEN on reconnect means the prior pipe generation's
           // shim is stale (its connection is gone, but the answerer pipe + this
           // closure survive the ICE re-establish). Tear it down — firing the old

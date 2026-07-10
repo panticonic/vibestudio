@@ -72,6 +72,13 @@ interface PairingCodeRecord {
 
 export const DEFAULT_PAIRING_CODE_TTL_MS = 60 * 60 * 1000;
 
+/**
+ * Minimum advance in a device's `lastUsedAt` before validateRefresh persists it
+ * again. Bounds store rewrites for a reconnecting device to ~once/minute while
+ * keeping last-seen resolution useful.
+ */
+const LAST_USED_PERSIST_INTERVAL_MS = 60 * 1000;
+
 export interface IssuedDeviceCredential {
   deviceId: string;
   refreshToken: string;
@@ -186,7 +193,30 @@ export class DeviceAuthStore {
     if (!record) return;
     if (record.expiryTimer) clearTimeout(record.expiryTimer);
     this.pairingCodes.delete(codeHash);
-    if (record.room) this.roomReleasedHandler?.(record.room);
+    // Release the invite's room ONLY if no live device is bound to it. A device
+    // is persisted with the room its pairing code carried; if that room is still
+    // (or also) referenced by a live device record, disarming it here would tear
+    // down that device's answerer pipe mid-session. An unredeemed invite whose
+    // room no device claims is disarmed as before (frees the armed room).
+    if (record.room && !this.isRoomBoundToActiveDevice(record.room)) {
+      this.roomReleasedHandler?.(record.room);
+    }
+  }
+
+  /** True when a non-revoked device is currently bound to this signaling room. */
+  private isRoomBoundToActiveDevice(room: string): boolean {
+    return this.state.devices.some((device) => !device.revokedAt && device.room === room);
+  }
+
+  /**
+   * Whether ANY device has ever paired with this server. Drives the startup
+   * pairing-TTL self-shutdown: a fresh spawn that no client ever attached to
+   * cleans itself up. Checked at the TTL deadline (by which the startup codes
+   * have already lazily expired), so it must reflect durable pairing state — a
+   * persisted device record — not the transient pending-code map.
+   */
+  hasEverPaired(): boolean {
+    return this.state.devices.length > 0;
   }
 
   validateRefresh(deviceId: string, refreshToken: string): DeviceRecord {
@@ -198,8 +228,17 @@ export class DeviceAuthStore {
     if (!constantTimeStringEqual(presentedHash, record.refreshTokenHash)) {
       throw authError("INVALID_REFRESH_CREDENTIAL", "Invalid refresh credential", 401);
     }
-    record.lastUsedAt = this.now();
-    this.save();
+    // `lastUsedAt` is advisory telemetry. A churny device that reconnects many
+    // times a minute would otherwise rewrite the WHOLE store JSON on every
+    // reconnect. Keep the in-memory value fresh, but only persist when it has
+    // advanced past a coarse interval — bounding disk writes without losing
+    // meaningful last-seen resolution.
+    const now = this.now();
+    const previous = record.lastUsedAt ?? 0;
+    record.lastUsedAt = now;
+    if (now - previous >= LAST_USED_PERSIST_INTERVAL_MS) {
+      this.save();
+    }
     return record;
   }
 
@@ -310,9 +349,22 @@ export class DeviceAuthStore {
     if (!fs.existsSync(this.filePath)) {
       return { serverId: `srv_${randomBase64Url(18)}`, devices: [], agents: [] };
     }
-    const raw = JSON.parse(
-      fs.readFileSync(this.filePath, "utf8")
-    ) as Partial<StoredDeviceAuthState>;
+    let raw: Partial<StoredDeviceAuthState>;
+    try {
+      raw = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as Partial<StoredDeviceAuthState>;
+    } catch (error) {
+      // Fail loud (never silently auto-reset — that would discard every paired
+      // device), but make the failure recoverable by an operator: name the file
+      // and the exact repair. Moving it aside lets the server mint a fresh store
+      // on next start, at the cost of re-pairing all devices.
+      throw new Error(
+        `Device auth store is corrupt and could not be parsed: ${this.filePath}\n` +
+          `  cause: ${error instanceof Error ? error.message : String(error)}\n` +
+          `  recovery: inspect the file; if unrecoverable, move it aside to reset ` +
+          `(e.g. \`mv "${this.filePath}" "${this.filePath}.corrupt-$(date +%s)"\`) — ` +
+          `NOTE this unpairs every device and they must re-pair.`
+      );
+    }
     return {
       serverId:
         typeof raw.serverId === "string" && raw.serverId

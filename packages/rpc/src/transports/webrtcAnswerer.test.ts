@@ -726,6 +726,19 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
+  it("fails LOUD on a padded (>512B) duplicate hello — size-independent (bug #11)", async () => {
+    const h = makeHarness();
+    const { control } = await pairUp(h);
+    expect(h.pipe.status()).toBe("connected");
+    // A duplicate hello padded past the 512B ping-sniff limit used to slip
+    // straight through to the session demux; it must now drop the pipe.
+    deliverControl(control, offererHello({ pad: "z".repeat(1000) }));
+    await tick();
+    expect(h.downs.some((d) => /duplicate hello/.test(d))).toBe(true);
+    expect(h.pipe.status()).toBe("disconnected");
+    await h.pipe.close();
+  });
+
   it("rejoins signaling with backoff, never swallowing a close, without dropping the pipe", async () => {
     vi.useFakeTimers();
     const signals: FakeSignaling[] = [];
@@ -754,11 +767,19 @@ describe("WebRTC answerer pipe (v2)", () => {
     expect(h.pipe.status()).toBe("connected"); // healthy pipe untouched
     expect(h.downs).toEqual([]);
 
-    await vi.advanceTimersByTimeAsync(1_501); // first backoff: 1s + jitter <= 500ms
+    await vi.advanceTimersByTimeAsync(1_501); // first backoff (attempt 0): 1s + jitter <= 500ms
     expect(signals).toHaveLength(2); // rejoined — into the mid-attempt corpse
 
-    await vi.advanceTimersByTimeAsync(1_501); // its immediate close was observed
-    expect(signals).toHaveLength(3); // ...and retried, not swallowed
+    // GROWTH (bug #1): the corpse never proved LIVE (no WS open / inbound
+    // frame), so its rejoin backoff DOUBLED to ~2s (attempt 1) instead of
+    // resetting to ~1s on mere construction. A short advance must NOT reconnect
+    // yet — under the old constant-cadence bug another ~1s socket would already
+    // have fired here (hammering a down worker ~1/s forever).
+    await vi.advanceTimersByTimeAsync(400);
+    expect(signals).toHaveLength(2); // still waiting out the GROWN backoff
+
+    await vi.advanceTimersByTimeAsync(2_500); // past the ~2s backoff → retried, not swallowed
+    expect(signals).toHaveLength(3);
 
     // The new room delivers a re-pairing offer — the pipe answers on it.
     signals[2]!.deliverOffer();

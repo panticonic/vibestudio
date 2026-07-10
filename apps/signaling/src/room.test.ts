@@ -206,6 +206,38 @@ function iceRequest(roomId = "r1"): Request {
   } as unknown as Request;
 }
 
+/** ice-servers request from a specific client IP (for rate-limit tests). */
+function iceRequestFrom(ip: string, roomId = "r1"): Request {
+  return {
+    url: `https://sig.test/room/${roomId}/ice-servers`,
+    method: "GET",
+    headers: new Headers({ "CF-Connecting-IP": ip }),
+  } as unknown as Request;
+}
+
+/** Cloudflare TURN env + a stubbed successful generate-ice-servers response. */
+function stubTurnMint(): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({
+        iceServers: [
+          { urls: ["turn:turn.cloudflare.com:3478?transport=udp"], username: "u", credential: "p" },
+        ],
+      }),
+    }))
+  );
+}
+
+const TURN_ENV: SignalingRoomEnv = {
+  ENVIRONMENT: "test",
+  TURN_KEY_ID: "key-1",
+  TURN_KEY_API_TOKEN: "secret-1",
+};
+
 const offer = JSON.stringify({ t: "description", desc: { type: "offer", sdp: "OFFER-SDP" } });
 const answer = JSON.stringify({ t: "description", desc: { type: "answer", sdp: "ANSWER-SDP" } });
 const candidate = JSON.stringify({
@@ -493,7 +525,7 @@ describe("SignalingRoom", () => {
       "https://rtc.live.cloudflare.com/v1/turn/keys/key-1/credentials/generate-ice-servers",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ ttl: 86400 }),
+        body: JSON.stringify({ ttl: 3600 }),
       })
     );
     const body = (await res.json()) as { iceServers: Array<{ urls: string[] }> };
@@ -523,6 +555,67 @@ describe("SignalingRoom", () => {
     expect(res.status).toBe(502);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain("mint failed");
+  });
+
+  it("gates TURN minting: one cold grace for the offerer's pre-join fetch, then denies the unpaired room", async () => {
+    stubTurnMint();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { room } = makeRoom(TURN_ENV);
+
+    // First fetch on a cold room (the offerer's fetch racing its own WS join):
+    // granted once so a legitimate pairing is never starved.
+    const first = await room.fetch(iceRequest());
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-signaling-turn")).toBe("minted");
+
+    // The room never got a real join, so the grace is spent — further unpaired
+    // requests are refused (drive-by cred farming can't repeat for free).
+    const second = await room.fetch(iceRequest());
+    expect(second.status).toBe(403);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("allows TURN minting once a real WS join has armed the room", async () => {
+    stubTurnMint();
+    const { room } = makeRoom(TURN_ENV);
+
+    // A genuine peer joins → the room is armed. TURN mints freely thereafter
+    // (the answerer's fetch and any ICE-restart re-fetch are all legitimate).
+    await room.fetch(upgradeRequest("offerer"));
+    const first = await room.fetch(iceRequest());
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-signaling-turn")).toBe("minted");
+    const second = await room.fetch(iceRequest());
+    expect(second.status).toBe(200);
+  });
+
+  it("keeps STUN-only unconditionally available even for an unpaired room (gate is TURN-only)", async () => {
+    // No TURN provisioned → nothing billable to gate → always serve, no 403.
+    const { room } = makeRoom({ ENVIRONMENT: "test" });
+    const a = await room.fetch(iceRequest());
+    const b = await room.fetch(iceRequest());
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(a.headers.get("x-signaling-turn")).toBe("stun-only");
+  });
+
+  it("rate-limits ice-servers past the per-IP window with 429", async () => {
+    stubTurnMint();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { room } = makeRoom(TURN_ENV);
+    // Arm the room so the gate passes and we isolate the rate limiter.
+    await room.fetch(upgradeRequest("offerer"));
+
+    // 30 requests/min/IP are allowed; the 31st from the same IP is refused.
+    let last = await room.fetch(iceRequestFrom("9.9.9.9"));
+    for (let i = 1; i < 30; i++) last = await room.fetch(iceRequestFrom("9.9.9.9"));
+    expect(last.status).toBe(200);
+    const over = await room.fetch(iceRequestFrom("9.9.9.9"));
+    expect(over.status).toBe(429);
+
+    // A different IP still gets through (the limit is per-IP, not global-first).
+    const other = await room.fetch(iceRequestFrom("8.8.8.8"));
+    expect(other.status).toBe(200);
   });
 
   it("rejects a non-websocket request to the room path", async () => {

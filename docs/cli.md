@@ -103,16 +103,32 @@ vibestudio remote deploy user@host --port 3030 --workspace default --signal-url 
 vibestudio remote deploy status user@host
 vibestudio remote deploy logs user@host
 vibestudio remote deploy update user@host --artifact ./vibestudio-server.tgz
-vibestudio remote deploy remove user@host
+vibestudio remote deploy remove user@host [--purge]
 vibestudio remote doctor
 vibestudio remote repair-identity --yes
 ```
 
-Deploy installs a `systemd --user` unit, enables linger, starts
-`vibestudio remote serve` bound to loopback, then runs `remote invite` and
-`remote doctor` over SSH. The post-start doctor checks the selected workspace
+Deploy installs a `systemd --user` unit, enables linger, and starts
+`vibestudio remote serve` bound to loopback. The unit's `ExecStart` uses the
+absolute path resolved from `command -v vibestudio` on the host (so it survives
+nvm / user-prefix npm installs). Deploy then polls the loopback gateway
+`/healthz` for readiness (up to 60s) before running `remote invite` and
+`remote doctor` over SSH — the post-start doctor checks the selected workspace
 child identity at
 `$HOME/.config/vibestudio/workspaces/<workspace>/state/webrtc/identity.pem`.
+
+`update` reuses `deploy` and explicitly restarts the unit, so a new build
+replaces the running old binary. `remove` disables and deletes the unit; add
+`--purge` to also uninstall the `@panticonic/vibestudio-server` npm package and
+delete the WebRTC identity material (every paired device must then re-pair).
+Workspace source directories are always left intact.
+
+`remote doctor` runs a checklist: the `node-datachannel` native addon, absence of
+the deleted `VIBESTUDIO_WEBRTC_CERT`/`KEY` env vars, the `identity.pem` layout
+(present, mode `0600`, cert+key), signaling reachability (a real `role=answerer`
+room dial, not the endpoint root), and — when a deployed unit is present on the
+host — the unit's active state and gateway port. Server-only checks are skipped,
+not failed, when run as a client-side preflight.
 
 `remote serve`, `mobile pair`, and server startup resolve signaling as:
 flag > environment > config > hosted default (`wss://signal.vibestudio.app`).

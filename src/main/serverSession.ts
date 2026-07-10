@@ -32,7 +32,11 @@ import type { ConnectedStartupMode } from "./startupMode.js";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "@vibestudio/shared/serviceSchemas/workspace";
 import { authMethods } from "@vibestudio/shared/serviceSchemas/auth";
-import { serverRpcWsUrl, type ConnectPairing } from "@vibestudio/shared/connect";
+import {
+  serverRpcWsUrl,
+  normalizeFingerprint,
+  type ConnectPairing,
+} from "@vibestudio/shared/connect";
 
 const log = createDevLogger("ServerSession");
 
@@ -122,6 +126,8 @@ export function connectRemoteViaWebRtc(
 export async function establishServerSession(args: {
   mode: ConnectedStartupMode | null;
   pendingPairing?: ConnectPairing;
+  /** Human-readable label for a freshly-paired device (from the pairing dialog). */
+  pendingPairLabel?: string;
   /**
    * Suppress returning-device auto-dial for this launch. Used by the chooser
    * fallback after a failed remote launch so a local workspace choice stays local.
@@ -136,7 +142,7 @@ export async function establishServerSession(args: {
 
   // (a) FRESH pair: the bootstrap chooser handed us a pairing link this launch.
   if (pendingPairing) {
-    return establishFreshPairSession(pendingPairing, args);
+    return establishFreshPairSession(pendingPairing, args, args.pendingPairLabel);
   }
   // (b) Returning device: a paired WebRTC remote persisted on a prior launch.
   const storedRemote = skipStoredRemote ? null : loadStoredRemotePairing();
@@ -331,7 +337,8 @@ async function establishRemoteSession(
  */
 async function establishFreshPairSession(
   pairing: ConnectPairing,
-  args: RemoteConnectArgs
+  args: RemoteConnectArgs,
+  label?: string
 ): Promise<SessionConnection> {
   const issuedCredential: { current: { deviceId: string; refreshToken: string } | null } = {
     current: null,
@@ -352,14 +359,37 @@ async function establishFreshPairSession(
     onRecovery: args.onRecovery,
   });
   if (!issuedCredential.current) {
-    throw new Error("Fresh WebRTC pairing completed without an issued device credential");
+    // The one-time code did not yield a credential — nothing to persist, but the
+    // pipe is up. Close it so we don't leak the connection, then fail loud.
+    await serverClient.close().catch(() => {});
+    throw new Error(
+      "Fresh WebRTC pairing completed without an issued device credential — mint a new invite and try again."
+    );
   }
+  const credential = issuedCredential.current;
   const authClient = createTypedServiceClient("auth", authMethods, (svc, m, a) =>
     serverClient.call(svc, m, a)
   );
-  const info = await authClient.getConnectionInfo();
+
+  // The one-time code is ALREADY consumed server-side; the invite is spent. So we
+  // must persist the issued credential no matter what — losing it here orphans the
+  // pairing (the server thinks this device is paired; we can never reconnect) and
+  // forces the user to mint a fresh invite. `getConnectionInfo` gives the canonical
+  // serverId key; if it fails (transient RPC error) we fall back to a stable
+  // fingerprint-derived key so the next launch can still reconnect via refresh.
+  let serverId: string;
+  try {
+    serverId = (await authClient.getConnectionInfo()).serverId;
+  } catch (error) {
+    serverId = `webrtc:${normalizeFingerprint(pairing.fp)}`;
+    log.warn(
+      `[Server] getConnectionInfo failed after pairing; persisting under fingerprint-derived id (${serverId}): ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
   saveDeviceCredential({
-    serverId: info.serverId,
+    serverId,
     transport: "webrtc",
     pairing: {
       room: pairing.room,
@@ -368,12 +398,20 @@ async function establishFreshPairSession(
       ice: pairing.ice,
       srv: pairing.srv,
     },
-    deviceId: issuedCredential.current.deviceId,
-    refreshToken: issuedCredential.current.refreshToken,
+    deviceId: credential.deviceId,
+    refreshToken: credential.refreshToken,
+    ...(label ? { label } : {}),
     pairedAt: Date.now(),
   });
   log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
-  return buildRemoteSessionConnection(serverClient);
+  try {
+    return await buildRemoteSessionConnection(serverClient);
+  } catch (error) {
+    // The credential is persisted (above), so the next launch reconnects; here the
+    // pipe is unusable, so close it rather than leaking the connection.
+    await serverClient.close().catch(() => {});
+    throw error;
+  }
 }
 
 /**

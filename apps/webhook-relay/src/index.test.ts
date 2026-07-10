@@ -113,7 +113,6 @@ describe("webhook relay Worker — universal-link host", () => {
     expect(doc.applinks.details[0].appIDs).toEqual(["ABCDE12345.app.vibestudio.mobile"]);
     expect(doc.applinks.details[0].components.map((component: any) => component["/"])).toEqual([
       "/oauth/callback/*",
-      "/oauth/linkback/*",
       "/pair",
     ]);
   });

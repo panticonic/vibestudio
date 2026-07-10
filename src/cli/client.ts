@@ -287,10 +287,14 @@ function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
   if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
 
   const positional = inv.positionals[0];
-  if (positional?.startsWith("vibestudio://")) opts.link = positional;
+  if (
+    positional?.startsWith("vibestudio://") ||
+    positional?.startsWith("https://vibestudio.app/pair")
+  )
+    opts.link = positional;
   else if (positional) {
     throw new UsageError(
-      `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link with --pair.`
+      `Unexpected argument for terminal start: ${positional}. Pass a vibestudio://connect link or an https://vibestudio.app/pair URL (also accepted via --pair).`
     );
   }
 

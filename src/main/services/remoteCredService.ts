@@ -35,6 +35,26 @@ function remoteCredentialPersistenceDisabled(): boolean {
   return value === "1" || value === "true";
 }
 
+/**
+ * Relaunch-arg prefix carrying the user-entered device label across the
+ * exchangePairingCode relaunch, so the freshly-paired desktop persists a label
+ * instead of showing up unlabeled (bug 11). Read by {@link readPendingPairLabel}
+ * at startup and threaded into the fresh-pair persistence.
+ */
+const PAIR_LABEL_ARG_PREFIX = "--vibestudio-pair-label=";
+
+/** Extract the device label carried on a relaunch (see {@link PAIR_LABEL_ARG_PREFIX}). */
+export function readPendingPairLabel(argv: readonly string[] = process.argv): string | undefined {
+  const arg = argv.find((a) => a.startsWith(PAIR_LABEL_ARG_PREFIX));
+  if (!arg) return undefined;
+  try {
+    const value = decodeURIComponent(arg.slice(PAIR_LABEL_ARG_PREFIX.length)).trim();
+    return value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Read the persisted WebRTC remote pairing, if any (consumed by serverSession). */
 export function loadStoredRemotePairing(): StoredRemote | null {
   return loadStoredRemotePairingFromStore();
@@ -103,11 +123,14 @@ export function saveStoredRemote(value: StoredRemote): void {
 export interface RemoteCredCurrent {
   configured: boolean;
   isActive: boolean;
-  bootstrap: "device" | "admin-token" | "hybrid" | "none";
-  url?: string;
-  tokenPreview?: string;
+  /**
+   * Only ever "device" (a paired WebRTC remote) or "none". The old
+   * "admin-token"/"hybrid" cleartext-remote kinds were deleted (§8c); their UI
+   * branches are dead. `url`/`tokenPreview`/`hubUrl` likewise no longer exist —
+   * a remote is reached over WebRTC, not by URL.
+   */
+  bootstrap: "device" | "none";
   deviceId?: string;
-  hubUrl?: string;
   workspaceName?: string;
 }
 
@@ -158,6 +181,14 @@ function authClientFor(client: ServerClient) {
 export function createRemoteCredService(deps: {
   startupMode: StartupMode;
   getServerClient?: () => ServerClient | null;
+  /**
+   * The current session's transport mode. `getCurrent` reports a remote as
+   * ACTIVE only when the live client is genuinely the remote pipe — after a
+   * `--skip-remote-pairing` fallback the live client is the LOCAL loopback one,
+   * and reporting its `isConnected()` as "remote active" is a lie (the dialog
+   * would show a green "connected to remote" while actually on local).
+   */
+  getConnectionMode?: () => "local" | "remote";
   getViewManager?: () => ViewManager;
 }): ServiceDefinition {
   const liveServerClient = (): ServerClient | null => deps.getServerClient?.() ?? null;
@@ -178,14 +209,17 @@ export function createRemoteCredService(deps: {
       }
       switch (method) {
         case "getCurrent": {
-          // Reflect the persisted WebRTC pairing. A stored remote means this
-          // process connected to it remotely (establishServerSession picks it up
-          // before spawning local), so "active" is "stored + live pipe".
+          // Reflect the persisted WebRTC pairing. "Active" requires BOTH a stored
+          // remote AND that the live session is genuinely the remote pipe — not
+          // the loopback client we fell back to after a failed remote connect
+          // (`--skip-remote-pairing`). Reporting the loopback client's
+          // `isConnected()` as remote-active would show a false green banner.
           const stored = loadStoredRemotePairing();
           const client = liveServerClient();
+          const onRemotePipe = deps.getConnectionMode?.() === "remote";
           return {
             configured: !!stored,
-            isActive: !!stored && (client?.isConnected() ?? false),
+            isActive: !!stored && onRemotePipe && (client?.isConnected() ?? false),
             bootstrap: stored ? "device" : "none",
             deviceId: stored?.deviceId,
             workspaceName: stored?.workspaceName,
@@ -246,7 +280,7 @@ export function createRemoteCredService(deps: {
           // getPendingConnectLink hands it to establishServerSession, which dials it
           // and KEEPS the pipe as the session (the issued device credential persists
           // on onPaired). The shell-reachable analogue of the bootstrap pair-remote IPC.
-          const { link } = (args[0] ?? {}) as { link?: string };
+          const { link, label } = (args[0] ?? {}) as { link?: string; label?: string };
           const parsed = parseConnectLink(typeof link === "string" ? link : "");
           if (parsed.kind === "error") {
             return {
@@ -257,9 +291,16 @@ export function createRemoteCredService(deps: {
           }
           const { kind: _kind, ...pairing } = parsed;
           const deepLink = createConnectDeepLink(pairing);
-          // Drop any prior pairing arg so relaunches don't accumulate stale links.
-          const relaunchArgs = process.argv.slice(1).filter((a) => !a.startsWith("vibestudio://"));
+          // Drop any prior pairing/label arg so relaunches don't accumulate stale
+          // ones, then carry the fresh link (and the device label the dialog sent,
+          // so the paired desktop shows a name instead of unlabeled — bug 11).
+          const relaunchArgs = process.argv
+            .slice(1)
+            .filter((a) => !a.startsWith("vibestudio://") && !a.startsWith(PAIR_LABEL_ARG_PREFIX));
           relaunchArgs.push(deepLink);
+          if (typeof label === "string" && label.trim()) {
+            relaunchArgs.push(`${PAIR_LABEL_ARG_PREFIX}${encodeURIComponent(label.trim())}`);
+          }
           relaunchApp({ args: relaunchArgs });
           return { ok: true } satisfies TestConnectionResult; // unreachable; relaunchApp exits
         }

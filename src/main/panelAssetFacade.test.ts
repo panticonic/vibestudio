@@ -74,8 +74,13 @@ describe("startPanelAssetFacade", () => {
     // Assert the forwarded descriptor outside the façade's try/catch so a failed
     // expectation surfaces directly instead of being masked as a 502.
     expect(stream).toHaveBeenCalledTimes(1);
-    // 4th arg = stream options; GETs carry none (§1.6 — bodies only on non-GET/HEAD).
-    expect(stream).toHaveBeenCalledWith("gateway", "fetch", expect.any(Array), undefined);
+    // 4th arg = stream options; GETs carry an abort signal (backstop / webview
+    // cancel) but NO body (§1.6 — bodies only on non-GET/HEAD).
+    const options = (stream.mock.calls[0] as unknown[] | undefined)?.[3] as
+      | { signal?: AbortSignal; body?: unknown }
+      | undefined;
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
+    expect(options?.body).toBeUndefined();
     expect(captured?.path).toBe("/apps/shell/?contextId=ctx-1");
     expect(captured?.method).toBe("GET");
     // Desktop now requests gzip on the wire (parity with mobile).
@@ -129,6 +134,57 @@ describe("startPanelAssetFacade", () => {
       const res = await fetch(`http://127.0.0.1:${facade.port}/apps/shell/bundle.js`);
       expect(res.status).toBe(502);
       expect(await res.text()).toContain("Panel asset bridge error");
+    } finally {
+      await facade.close();
+    }
+  });
+});
+
+describe("panel asset façade backstops (offline / stalled server)", () => {
+  it("surfaces a clear 504 when the server never responds (connect backstop)", async () => {
+    // An offline server: the gateway.fetch stream never resolves. Without a
+    // backstop the request parks forever → blank webview. With one it fails loud.
+    const stream = vi.fn<GatewayStream>(
+      () => new Promise<Response>(() => {}) // never resolves
+    );
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      connectBackstopMs: 100,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${facade.port}/apps/shell/bundle.js`);
+      expect(res.status).toBe(504);
+      expect(await res.text()).toMatch(/can't reach your server/i);
+    } finally {
+      await facade.close();
+    }
+  });
+
+  it("cancels the pipe stream when the webview aborts mid-body", async () => {
+    let cancelled = false;
+    // A body that emits one chunk then stalls; its cancel() flags the teardown.
+    const stream = vi.fn<GatewayStream>(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("first-chunk"));
+          // never close — waits for a downstream cancel
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return new Response(body, { status: 200 });
+    });
+    const facade = await startPanelAssetFacade(fakeServerClient(stream));
+    try {
+      const ac = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${facade.port}/apps/shell/stream.js`, {
+        signal: ac.signal,
+      });
+      const reader = res.body!.getReader();
+      await reader.read(); // pull the first chunk so the body is actively streaming
+      ac.abort(); // webview closes the panel mid-boot
+      // The façade's res 'close' handler destroys the source → cancels the web stream.
+      await vi.waitFor(() => expect(cancelled).toBe(true), { timeout: 2000 });
     } finally {
       await facade.close();
     }
@@ -312,10 +368,10 @@ describe("panel asset façade request bodies (§1.6)", () => {
     await expect(uploaded!).resolves.toBe('{"hello":"upload"}');
   });
 
-  it("GET requests carry no body option (wire unchanged)", async () => {
-    const optionsSeen: unknown[] = [];
+  it("GET requests carry a signal but no body (wire body unchanged)", async () => {
+    const optionsSeen: Array<{ signal?: AbortSignal; body?: unknown } | undefined> = [];
     const stream = vi.fn<StreamWithOptions>(async (_service, _method, _args, options) => {
-      optionsSeen.push(options);
+      optionsSeen.push(options as { signal?: AbortSignal; body?: unknown });
       return new Response("ok", { status: 200 });
     });
     const facade = await startPanelAssetFacade(fakeServerClient(stream as never));
@@ -324,6 +380,8 @@ describe("panel asset façade request bodies (§1.6)", () => {
     } finally {
       await facade.close();
     }
-    expect(optionsSeen).toEqual([undefined]);
+    expect(optionsSeen).toHaveLength(1);
+    expect(optionsSeen[0]?.signal).toBeInstanceOf(AbortSignal);
+    expect(optionsSeen[0]?.body).toBeUndefined();
   });
 });

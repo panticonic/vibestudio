@@ -54,13 +54,23 @@ export function createConnectPairUrl(pairing) {
 
 export function parseConnectLink(rawUrl) {
   if (typeof rawUrl !== "string") return { kind: "error", reason: "Deep link must be a string" };
+  const prefix = "vibestudio://connect";
+  // The prefix must be followed by a real delimiter — otherwise
+  // `vibestudio://connect-anything?…` would parse as a connect link (the host is
+  // exactly `connect`, no more).
+  const afterScheme = rawUrl.slice(prefix.length);
+  const isSchemeLink =
+    rawUrl.startsWith(prefix) &&
+    (afterScheme === "" || afterScheme[0] === "?" || afterScheme[0] === "/" || afterScheme[0] === "#");
   let rawParams;
-  if (rawUrl.startsWith("vibestudio://connect")) {
+  if (isSchemeLink) {
     const queryStart = rawUrl.indexOf("?");
     if (queryStart < 0) {
       return { kind: "error", reason: "Deep link is missing pairing parameters" };
     }
-    rawParams = rawUrl.slice(queryStart + 1);
+    // Strip any `#fragment` so it can't fold into the last query value.
+    const fragmentStart = rawUrl.indexOf("#", queryStart);
+    rawParams = fragmentStart >= 0 ? rawUrl.slice(queryStart + 1, fragmentStart) : rawUrl.slice(queryStart + 1);
   } else if (rawUrl.startsWith(`${PAIR_LINK_ORIGIN}${PAIR_LINK_PATH}`)) {
     let url;
     try {

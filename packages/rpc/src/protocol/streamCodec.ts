@@ -245,9 +245,23 @@ export interface DecodedFramedStream {
   body: ReadableStream<Uint8Array>;
 }
 
+/**
+ * GENEROUS deadline on the first HEAD frame. A server that accepts a
+ * `stream-open` but never emits HEAD (a wedged upstream) would otherwise hang
+ * `await headPromise` — and therefore the caller's `stream()`/`proxyFetch` —
+ * forever. Comparable to the session-open deadline (~20s): fail LOUD, not
+ * hang. Only fires when the wire is genuinely silent — a real (even empty)
+ * response resolves HEAD (or resolves it to null on END) and clears it, and a
+ * caller-supplied AbortSignal still preempts it.
+ */
+const STREAM_HEAD_TIMEOUT_MS = 20_000;
+
 export interface DecodeFramedStreamOptions {
   /** Called when the decoded response body consumer cancels before END/ERROR. */
   onBodyCancel?: (reason?: unknown) => void;
+  /** Override the HEAD deadline (ms). `0`/`Infinity` disables it (e.g. a plain
+   * in-memory decode with no wire that can hang). Defaults to ~20s. */
+  headTimeoutMs?: number;
 }
 
 /**
@@ -269,6 +283,38 @@ export async function decodeFramedStream(
     resolveHead = resolve;
     rejectHead = reject;
   });
+  // HEAD deadline (fail loud, never hang): any settle of headPromise clears it.
+  let headTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearHeadTimer = (): void => {
+    if (headTimer !== null) {
+      clearTimeout(headTimer);
+      headTimer = null;
+    }
+  };
+  {
+    const rawResolveHead = resolveHead;
+    const rawRejectHead = rejectHead;
+    resolveHead = (head) => {
+      clearHeadTimer();
+      rawResolveHead(head);
+    };
+    rejectHead = (error) => {
+      clearHeadTimer();
+      rawRejectHead(error);
+    };
+  }
+  const headTimeoutMs = options?.headTimeoutMs ?? STREAM_HEAD_TIMEOUT_MS;
+  if (Number.isFinite(headTimeoutMs) && headTimeoutMs > 0) {
+    headTimer = setTimeout(() => {
+      headTimer = null;
+      if (!headSeen) {
+        rejectHead(
+          new Error(`Streaming RPC HEAD not received within ${headTimeoutMs}ms`),
+        );
+      }
+    }, headTimeoutMs);
+    (headTimer as unknown as { unref?: () => void }).unref?.();
+  }
   let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let bodyClosed = false;
   let headSeen = false;

@@ -46,6 +46,11 @@ export function createAppService(deps: {
             connectionMode: deps.connectionMode,
             remoteHost: deps.remoteHost,
             connectionStatus: deps.serverClient?.getConnectionStatus?.() ?? "connected",
+            // Selected ICE path so a fresh badge mount shows "Relayed" on an
+            // already-stable relay pipe, not only after the next transition.
+            // Only the WebRTC client exposes candidateType(); the loopback WS
+            // client omits it, so call defensively → null (unknown / local).
+            connectionCandidateType: deps.serverClient?.candidateType?.() ?? null,
           };
 
         case "getSystemTheme":

@@ -128,6 +128,13 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
       const listeners = new Map();
       const envelopeListeners = new Set();
       const streamListeners = new Set();
+      // Buffer host→panel messages that arrive before the panel's RPC client has
+      // registered onEnvelope/onStreamMessage, then flush to the first handler —
+      // otherwise the earliest replies/events (which race handler registration)
+      // would be dropped inside the page. Bounded to avoid unbounded growth.
+      const MAX_BUFFERED_MESSAGES = 512;
+      const bufferedEnvelopes = [];
+      const bufferedStreamMsgs = [];
       let nextListenerId = 1;
       const enableDebug = ${enableDebug ? "true" : "false"};
 
@@ -268,11 +275,24 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
       // Bridge-stream messages (§1.6 upload hop: response head/chunk/end/error)
       // ride the same injection channel tagged __vibestudioBridgeStream and demux to
       // the stream listeners instead.
+      function bufferMessage(buffer, value) {
+        buffer.push(value);
+        if (buffer.length > MAX_BUFFERED_MESSAGES) buffer.shift();
+      }
+
       function deliverEnvelope(envelope) {
         if (envelope && envelope.__vibestudioBridgeStream === true) {
+          if (streamListeners.size === 0) {
+            bufferMessage(bufferedStreamMsgs, envelope.msg);
+            return;
+          }
           for (const handler of streamListeners) {
             try { handler(envelope.msg); } catch (_) {}
           }
+          return;
+        }
+        if (envelopeListeners.size === 0) {
+          bufferMessage(bufferedEnvelopes, envelope);
           return;
         }
         for (const handler of envelopeListeners) {
@@ -316,6 +336,12 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         postEnvelope: (envelope) => callHost("postEnvelope", [envelope]),
         onEnvelope: (handler) => {
           envelopeListeners.add(handler);
+          if (bufferedEnvelopes.length) {
+            const flush = bufferedEnvelopes.splice(0, bufferedEnvelopes.length);
+            for (const envelope of flush) {
+              try { handler(envelope); } catch (_) {}
+            }
+          }
           return () => envelopeListeners.delete(handler);
         },
         // §1.6 upload hop (see @vibestudio/rpc bridgeStream.ts): the postMessage
@@ -334,6 +360,12 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         },
         onStreamMessage: (handler) => {
           streamListeners.add(handler);
+          if (bufferedStreamMsgs.length) {
+            const flush = bufferedStreamMsgs.splice(0, bufferedStreamMsgs.length);
+            for (const msg of flush) {
+              try { handler(msg); } catch (_) {}
+            }
+          }
           return () => streamListeners.delete(handler);
         },
         getPanelInit: () => callHost("getPanelInit", []),
@@ -405,6 +437,14 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
   // bridge methods such as openExternal. Initialised to the configured
   // panel URL.
   const currentUrlRef = useRef<string>(url);
+  // Host→panel envelope delivery is a fire-and-forget injectJavaScript, whose
+  // `window.__vibestudioMobileHost && …` guard evaluates false while the webview
+  // is (re)loading or navigating — so an envelope injected in that window used to
+  // silently vanish and the panel's pending RPC call hung until timeout. Queue
+  // envelopes while the bridge isn't ready and flush them once it is (load end).
+  // Bounded: an overflow trims the oldest with a warning rather than growing.
+  const bridgeReadyRef = useRef(false);
+  const pendingEnvelopesRef = useRef<unknown[]>([]);
   const loadStartedAtRef = useRef<number>(Date.now());
   const lastLoadProgressAtRef = useRef<number>(Date.now());
   const lastLoadProgressRef = useRef(0);
@@ -432,15 +472,40 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
     [managed]
   );
 
+  const MAX_PENDING_ENVELOPES = 512;
+
+  const injectEnvelope = useCallback((envelope: unknown) => {
+    webViewRef.current?.injectJavaScript(
+      `window.__vibestudioMobileHost&&window.__vibestudioMobileHost.deliverEnvelope(${serializeForInjection(envelope)}); true;`
+    );
+  }, []);
+
   const deliverEnvelope = useCallback(
     (envelope: unknown) => {
       if (!managed) return;
-      webViewRef.current?.injectJavaScript(
-        `window.__vibestudioMobileHost&&window.__vibestudioMobileHost.deliverEnvelope(${serializeForInjection(envelope)}); true;`
-      );
+      if (!bridgeReadyRef.current) {
+        const queue = pendingEnvelopesRef.current;
+        queue.push(envelope);
+        if (queue.length > MAX_PENDING_ENVELOPES) {
+          queue.shift();
+          console.warn(
+            `[PanelWebView:${panelId}] envelope queue overflow while bridge not ready — dropping oldest`
+          );
+        }
+        return;
+      }
+      injectEnvelope(envelope);
     },
-    [managed]
+    [injectEnvelope, managed, panelId]
   );
+
+  const flushPendingEnvelopes = useCallback(() => {
+    bridgeReadyRef.current = true;
+    const queue = pendingEnvelopesRef.current;
+    if (queue.length === 0) return;
+    pendingEnvelopesRef.current = [];
+    for (const envelope of queue) injectEnvelope(envelope);
+  }, [injectEnvelope]);
 
   useImperativeHandle(
     ref,
@@ -472,6 +537,8 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
     loadStartedAtRef.current = Date.now();
     lastLoadProgressAtRef.current = Date.now();
     lastLoadProgressRef.current = 0;
+    // A new document wipes the injected bridge; hold envelopes until it reloads.
+    bridgeReadyRef.current = false;
     setHasError(false);
     setIsLoading(true);
     setErrorMessage("");
@@ -503,9 +570,13 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
       webViewRef.current?.stopLoading();
       setIsLoading(false);
       setHasError(true);
+      // The real failure is the WebRTC pipe to the workspace, not a network URL:
+      // the panel loads from an on-device loopback façade, so printing that
+      // 127.0.0.1 address only confused. Point the user at the connection status
+      // bar (which knows the live pipe state) instead.
       setErrorMessage(
-        `Timed out loading the panel after ${seconds}s.\n\n` +
-          `Check that the phone can reach the Vibestudio server and retry.\n\n${stalledUrl}`
+        `The panel didn't finish loading after ${seconds}s.\n\n` +
+          `Check the connection status bar at the top for your workspace connection, then retry.`
       );
     }, MANAGED_PANEL_TIMEOUT_CHECK_MS);
 
@@ -703,6 +774,11 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
     lastLoadProgressAtRef.current = Date.now();
     lastLoadProgressRef.current = 1;
     setIsLoading(false);
+    // The injected bridge (injectedJavaScriptBeforeContentLoaded) has run by
+    // load end; deliver anything queued while the webview was (re)loading. The
+    // in-page bootstrap additionally buffers until the panel registers its
+    // onEnvelope/onStreamMessage handlers, so nothing is lost either side.
+    if (managed) flushPendingEnvelopes();
     if (!managed || (!diagnosticsEnabled && !__DEV__)) return;
     webViewRef.current?.injectJavaScript(`
         (function () {
@@ -728,13 +804,15 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(fu
           true;
         })();
       `);
-  }, [diagnosticsEnabled, logDiagnostic, managed, panelId]);
+  }, [diagnosticsEnabled, flushPendingEnvelopes, logDiagnostic, managed, panelId]);
 
   const handleLoadStart = useCallback(
     (syntheticEvent: { nativeEvent: { url?: string } }) => {
       loadStartedAtRef.current = Date.now();
       lastLoadProgressAtRef.current = Date.now();
       lastLoadProgressRef.current = 0;
+      // A (re)load restarts the JS context; hold envelopes until load end.
+      bridgeReadyRef.current = false;
       if (
         typeof syntheticEvent.nativeEvent.url === "string" &&
         syntheticEvent.nativeEvent.url.length > 0

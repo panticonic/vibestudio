@@ -25,10 +25,14 @@ import {
   Text,
   View,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Clipboard from "@react-native-clipboard/clipboard";
 import { Camera, useCameraDevice, useCodeScanner } from "react-native-vision-camera";
-import { parseConnectLink } from "@vibestudio/shared/connect";
+import {
+  parseConnectLink,
+  isConnectLink,
+  markConnectLinkConsumed,
+  consumeConnectLinkReplay,
+} from "@vibestudio/mobile-webrtc/connectLink";
 import {
   establishWebRtcConnection,
   reconnectViaWebRtc,
@@ -55,8 +59,6 @@ import {
 import { name as appName } from "./app.json";
 import { VibestudioLogo } from "./VibestudioLogo";
 
-const CONSUMED_CONNECT_LINK_KEY = "vibestudio:connect:consumed-url";
-const CONSUMED_CONNECT_LINK_TTL_MS = 10 * 60 * 1000;
 const nativeHost = NativeModules.VibestudioMobileHost;
 
 function smokePhase(phase) {
@@ -87,46 +89,6 @@ function pairingLabel(pairing) {
   } catch {
     return "this Vibestudio server";
   }
-}
-
-async function markConnectLinkConsumed(rawUrl) {
-  if (!isConnectLink(rawUrl)) return;
-  await AsyncStorage.setItem(
-    CONSUMED_CONNECT_LINK_KEY,
-    JSON.stringify({ url: rawUrl, consumedAt: Date.now() })
-  );
-}
-
-async function consumeConnectLinkReplay(rawUrl) {
-  if (!isConnectLink(rawUrl)) return false;
-  let parsed = null;
-  try {
-    const raw = await AsyncStorage.getItem(CONSUMED_CONNECT_LINK_KEY);
-    parsed = raw ? JSON.parse(raw) : null;
-  } catch {
-    return false;
-  }
-  if (
-    !parsed ||
-    typeof parsed.url !== "string" ||
-    typeof parsed.consumedAt !== "number"
-  ) {
-    return false;
-  }
-  const age = Date.now() - parsed.consumedAt;
-  const stale = age < 0 || age > CONSUMED_CONNECT_LINK_TTL_MS;
-  if (stale) {
-    await AsyncStorage.removeItem(CONSUMED_CONNECT_LINK_KEY).catch(() => {});
-  }
-  return parsed.url === rawUrl && !stale;
-}
-
-function isConnectLink(rawUrl) {
-  return (
-    typeof rawUrl === "string" &&
-    (rawUrl.startsWith("vibestudio://connect") ||
-      rawUrl.startsWith("https://vibestudio.app/pair"))
-  );
 }
 
 async function activateApprovedWorkspaceApp(connection, options = {}) {
