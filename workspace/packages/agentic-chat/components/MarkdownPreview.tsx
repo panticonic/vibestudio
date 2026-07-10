@@ -45,9 +45,12 @@ const markdownPreviewComponents: Components = {
   strong: ({ children }) => <strong className="markdown-preview-strong">{children}</strong>,
   em: ({ children }) => <em className="markdown-preview-emphasis">{children}</em>,
   del: ({ children }) => <s className="markdown-preview-deleted">{children}</s>,
-  code: ({ children }) => (
-    <code className="markdown-preview-code">{String(children ?? "").replace(/\n$/, "")}</code>
-  ),
+  code: ({ children, className }) =>
+    className?.includes("language-mermaid") ? (
+      <span className="markdown-preview-image">Diagram</span>
+    ) : (
+      <code className="markdown-preview-code">{String(children ?? "").replace(/\n$/, "")}</code>
+    ),
   pre: ({ children }) => <span className="markdown-preview-codeblock">{children} </span>,
   br: () => <span className="markdown-preview-break"> </span>,
   input: ({ checked }) => (

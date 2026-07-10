@@ -16,6 +16,7 @@ async function getMdx() {
 import {
   createMdxComponents,
   markdownComponents,
+  streamingMarkdownComponents,
   type MdxActionHandlers,
 } from "./markdownComponents";
 
@@ -164,7 +165,11 @@ export const MessageContent = React.memo(function MessageContent({ content, isSt
 
   return (
     <div className="message-prose">
-      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={isStreaming ? streamingMarkdownComponents : markdownComponents}
+      >
         {content}
       </ReactMarkdown>
     </div>

@@ -1,5 +1,6 @@
-import type { ComponentType, ReactNode } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
 import type { Components } from "react-markdown";
+import { Diagram, MermaidDiagram } from "./MermaidDiagram";
 import {
   Badge,
   Blockquote,
@@ -176,7 +177,78 @@ function createActionButton(actions?: MdxActionHandlers) {
   };
 }
 
-export const markdownComponents: Components = {
+const MERMAID_LANGUAGE_RE = /\blanguage-mermaid\b/;
+
+function extractText(children: ReactNode): string {
+  if (typeof children === "string") return children;
+  if (typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(extractText).join("");
+  return "";
+}
+
+function hasMermaidChild(children: ReactNode): boolean {
+  return Children.toArray(children).some((child) => {
+    if (!isValidElement(child)) return false;
+    const className = (child.props as { className?: unknown }).className;
+    return typeof className === "string" && MERMAID_LANGUAGE_RE.test(className);
+  });
+}
+
+// Fenced-code handling. Diagram fences (```mermaid) render as diagrams only in
+// the non-streaming component set — mid-stream the fence is incomplete, so it
+// stays a plain code block and flips to a diagram when the message completes
+// (same gating as rehype-highlight / MDX in MessageContent.tsx).
+function createCodeComponents({ diagrams }: { diagrams: boolean }): Pick<Components, "code" | "pre"> {
+  return {
+    code: ({ children, className }) => {
+      if (diagrams && typeof className === "string" && MERMAID_LANGUAGE_RE.test(className)) {
+        return <MermaidDiagram code={extractText(children)} />;
+      }
+
+      // In react-markdown v9 the `inline` prop was removed.
+      // Block code (fences/indented) is always wrapped in <pre> by react-markdown,
+      // so our `pre` handler takes care of the block wrapper (.ns-codeblock).
+      // Here we just decide raw <code> (block) vs Radix <Code> (inline).
+      const hasLanguageClass = className?.includes("language-") ?? false;
+      const hasNewlines =
+        typeof children === "string"
+          ? children.includes("\n")
+          : Array.isArray(children)
+            ? children.some((c) => typeof c === "string" && c.includes("\n"))
+            : false;
+
+      if (hasLanguageClass || hasNewlines) {
+        // Block code — rendered inside <pre> by the pre handler below
+        return (
+          <code className={className} style={{ display: "block" }}>
+            {children}
+          </code>
+        );
+      }
+
+      // Inline code, OR single-line no-language fence (pre handler catches that case
+      // and .ns-codeblock CSS resets the Radix styling — see styles.css)
+      const text = String(children ?? "").replace(/\n$/, "");
+      return <Code size="2">{text}</Code>;
+    },
+    pre: ({ children }) => {
+      // A mermaid fence already rendered as a block-level diagram frame —
+      // don't wrap it in <pre> (invalid nesting and unwanted code styling)
+      if (diagrams && hasMermaidChild(children)) {
+        return <>{children}</>;
+      }
+      return (
+        <Box my="2">
+          <pre className="ns-codeblock" style={{ margin: 0 }}>
+            {children}
+          </pre>
+        </Box>
+      );
+    },
+  };
+}
+
+const baseMarkdownComponents: Components = {
   h1: ({ children }) => (
     <Heading size="6" mb="2">
       {children}
@@ -203,40 +275,6 @@ export const markdownComponents: Components = {
     </Text>
   ),
   a: ({ href, children }) => <Link href={href ?? ""}>{children}</Link>,
-  code: ({ children, className }) => {
-    // In react-markdown v9 the `inline` prop was removed.
-    // Block code (fences/indented) is always wrapped in <pre> by react-markdown,
-    // so our `pre` handler takes care of the block wrapper (.ns-codeblock).
-    // Here we just decide raw <code> (block) vs Radix <Code> (inline).
-    const hasLanguageClass = className?.includes("language-") ?? false;
-    const hasNewlines =
-      typeof children === "string"
-        ? children.includes("\n")
-        : Array.isArray(children)
-          ? children.some((c) => typeof c === "string" && c.includes("\n"))
-          : false;
-
-    if (hasLanguageClass || hasNewlines) {
-      // Block code — rendered inside <pre> by the pre handler below
-      return (
-        <code className={className} style={{ display: "block" }}>
-          {children}
-        </code>
-      );
-    }
-
-    // Inline code, OR single-line no-language fence (pre handler catches that case
-    // and .ns-codeblock CSS resets the Radix styling — see styles.css)
-    const text = String(children ?? "").replace(/\n$/, "");
-    return <Code size="2">{text}</Code>;
-  },
-  pre: ({ children }) => (
-    <Box my="2">
-      <pre className="ns-codeblock" style={{ margin: 0 }}>
-        {children}
-      </pre>
-    </Box>
-  ),
   blockquote: ({ children }) => <Blockquote>{children}</Blockquote>,
   ul: ({ children }) => (
     <ul style={{ paddingLeft: "var(--space-4)", marginBottom: "var(--space-2)" }}>
@@ -299,6 +337,18 @@ export const markdownComponents: Components = {
   em: ({ children }) => <Text style={{ fontStyle: "italic" }}>{children}</Text>,
 };
 
+// Default set: diagram fences render as diagrams (use for completed messages).
+export const markdownComponents: Components = {
+  ...baseMarkdownComponents,
+  ...createCodeComponents({ diagrams: true }),
+};
+
+// Streaming set: diagram fences stay plain code blocks until the message completes.
+export const streamingMarkdownComponents: Components = {
+  ...baseMarkdownComponents,
+  ...createCodeComponents({ diagrams: false }),
+};
+
 export const mdxComponents: Record<string, unknown> = {
   ...markdownComponents,
   Badge,
@@ -315,6 +365,8 @@ export const mdxComponents: Record<string, unknown> = {
   Text,
   Icons,
   FeedbackFormTitle,
+  Diagram,
+  Mermaid: Diagram,
 };
 
 export function createMdxComponents(actions?: MdxActionHandlers): Record<string, unknown> {
