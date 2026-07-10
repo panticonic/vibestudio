@@ -1,5 +1,13 @@
 # Agentic Architecture: Channels, Workers, and In-Process Pi
 
+> ⚠️ **Table-level detail predates the Unified Log rework.** The topology and
+> event flow below still hold, but persistence is migrating to the unified
+> log model (`docs/stage0-unified-log-spec.md`, `docs/ws1-agent-loop-spec.md`,
+> `docs/ws2-channel-spec.md`): storage of record is `log_heads`/`log_events`
+> with `trajectory_*` projections in `workspace/workers/gad-store/index.ts`.
+> Read the `pi_sessions`/`delivery_cursor`/`pending_calls` DO-table detail as
+> historical; the specs win where they disagree.
+
 ## Overview
 
 Vibestudio's agentic system is a 2-layer server-side architecture. Pi

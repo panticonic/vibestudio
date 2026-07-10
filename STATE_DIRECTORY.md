@@ -79,11 +79,11 @@ The only SQLite files Vibestudio owns are workerd Durable Object databases:
 ```
 .databases/
   workerd-do/
-    vibestudio_internal:ScopeStoreDO/
+    vibestudio_internal:EvalDO/
       <object-hash>.sqlite
     vibestudio_internal:WebhookStoreDO/
       <object-hash>.sqlite
-    vibestudio_internal:PanelStoreDO/
+    vibestudio_internal:WorkspaceDO/
       <object-hash>.sqlite
     vibestudio_internal:BrowserDataDO/
       <object-hash>.sqlite
@@ -93,9 +93,9 @@ The only SQLite files Vibestudio owns are workerd Durable Object databases:
 
 The internal stores are:
 
-- `ScopeStoreDO` (`objectKey: "global"`) for REPL scope snapshots.
+- `EvalDO` (per-owner object key) for eval REPL scopes.
 - `WebhookStoreDO` (`objectKey: "global"`) for webhook ingress subscriptions.
-- `PanelStoreDO` (`objectKey: <workspaceId>`) for panel tree and panel FTS.
+- `WorkspaceDO` (`objectKey: <workspaceId>`) for entity/slot state and panel FTS (replaced `PanelStoreDO`/`ScopeStoreDO`).
 - `BrowserDataDO` (`objectKey: "global"`) for imported browser data.
 
 Legacy host-owned SQLite files are removed on server startup. There are no

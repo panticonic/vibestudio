@@ -1,5 +1,11 @@
 # Pi-Native Vibestudio: Deep Dive
 
+> ⚠️ **Session-persistence detail predates the Unified Log rework.** The
+> in-process rationale, extension model, and PiRunner lifecycle below still
+> hold, but `pi_sessions`/JSONL-resume detail is historical — persistence is
+> migrating to the unified log model (`docs/stage0-unified-log-spec.md`,
+> `docs/ws1-agent-loop-spec.md`); the specs win where they disagree.
+
 ## Why Pi runs in-process
 
 Before this rearchitecture, Vibestudio used a 4-layer pipeline:

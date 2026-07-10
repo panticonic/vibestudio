@@ -1,3 +1,8 @@
+---
+name: news
+description: Agentic news aggregation in three tiers — deterministic feed polling, light agent triage, and deep scheduled briefings via workers/news-agent.
+---
+
 # News
 
 Agentic news aggregation in three tiers:

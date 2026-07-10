@@ -33,7 +33,7 @@ Framework-owned storage is implemented as internal DO classes in
 | `WorkspaceDO` | `workspace-sync` | workspace id | `entities`, `slots`, `slot_history`, `workspace_meta`, `panel_search_metadata`, `lifecycle_*` (unified entity/slot model; replaced the former `PanelStoreDO`) |
 | `BrowserDataDO` | `browser-data` | `global` | bookmarks, history, history FTS, passwords, cookies, autofill, permissions, import log |
 
-`PanelStoreDO` and `BrowserDataDO` use FTS5 in workerd. Tests that assert FTS
+`WorkspaceDO` and `BrowserDataDO` use FTS5 in workerd. Tests that assert FTS
 behavior run against real workerd, not the `sql.js` unit harness.
 
 ## Registration Channel
