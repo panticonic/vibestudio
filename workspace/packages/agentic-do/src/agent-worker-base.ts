@@ -781,7 +781,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       { name: "setModel", description: "Set the live model in provider:model format" },
       {
         name: "setThinkingLevel",
-        description: "Set live effort level: minimal, low, medium, or high",
+        description: "Set live effort level: minimal, low, medium, high, xhigh, or max",
       },
       {
         name: "setApprovalLevel",

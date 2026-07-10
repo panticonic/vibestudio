@@ -7,7 +7,7 @@
 
 import type { InvocationTransport, ParticipantRef } from "@workspace/agentic-protocol";
 
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** How the executor authenticates a model call (design §6.3):
  *  "url-bound" — resolve a stored URL-bound credential (suspends on absence);

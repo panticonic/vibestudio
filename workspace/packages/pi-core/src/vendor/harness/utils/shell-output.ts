@@ -1,16 +1,8 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.78.0; see PROVENANCE.md and vendor.sh
-import {
-	type ExecutionEnv,
-	type ExecutionEnvExecOptions,
-	ExecutionError,
-	err,
-	ok,
-	type Result,
-	toError,
-} from "../types.js";
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
+import { type ExecutionEnv, ExecutionError, err, ok, type Result, type ShellExecOptions, toError } from "../types.js";
 import { DEFAULT_MAX_BYTES, truncateTail } from "./truncate.js";
 
-export interface ShellCaptureOptions extends Omit<ExecutionEnvExecOptions, "onStdout" | "onStderr"> {
+export interface ShellCaptureOptions extends Omit<ShellExecOptions, "onStdout" | "onStderr"> {
 	onChunk?: (chunk: string) => void;
 }
 

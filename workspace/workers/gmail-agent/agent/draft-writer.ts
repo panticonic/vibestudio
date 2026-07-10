@@ -1,9 +1,12 @@
-import { complete, getModel as getPiModel, type Context } from "@earendil-works/pi-ai";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
+import type { Context } from "@earendil-works/pi-ai";
 import type { GmailMessage, GmailThread } from "@workspace/gmail";
 import { header, latestMessage, textFromPart } from "../sync/thread-model.js";
 import { DRAFT_REPLY_SYSTEM_PROMPT } from "./prompts.js";
 
-function textContentFromAssistant(message: Awaited<ReturnType<typeof complete>>): string {
+const PI_MODELS = builtinModels();
+
+function textContentFromAssistant(message: Awaited<ReturnType<typeof PI_MODELS.complete>>): string {
   return message.content
     .filter((block): block is { type: "text"; text: string } => block.type === "text")
     .map((block) => block.text)
@@ -48,10 +51,10 @@ export async function generateDraftReplyBody(opts: {
   if (colonIdx < 0) throw new Error(`Model must be "provider:model", got: ${opts.modelRef}`);
   const provider = opts.modelRef.slice(0, colonIdx);
   const modelId = opts.modelRef.slice(colonIdx + 1);
-  const model = getPiModel(provider as never, modelId as never);
+  const model = PI_MODELS.getModel(provider, modelId);
   if (!model) throw new Error(`No model metadata found for model provider: ${provider}`);
 
-  const response = await complete(model, buildDraftReplyContext(opts.thread), {
+  const response = await PI_MODELS.complete(model, buildDraftReplyContext(opts.thread), {
     apiKey: opts.apiKey,
     temperature: 0.2,
     maxTokens: 300,

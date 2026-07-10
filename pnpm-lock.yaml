@@ -7,13 +7,13 @@ settings:
 overrides:
   react: 19.0.0
   react-dom: 19.0.0
-  '@earendil-works/pi-ai': 0.78.0
+  '@earendil-works/pi-ai': 0.80.6
   protobufjs: ^7.5.5
 
 patchedDependencies:
-  '@earendil-works/pi-ai@0.78.0':
-    hash: 48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d
-    path: workspace/packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch
+  '@earendil-works/pi-ai@0.80.6':
+    hash: 40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5
+    path: workspace/packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch
 
 importers:
 
@@ -29,8 +29,8 @@ importers:
         specifier: ^3.2.2
         version: 3.2.2(react@19.0.0)
       '@earendil-works/pi-ai':
-        specifier: 0.78.0
-        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        specifier: 0.80.6
+        version: 0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@ghostery/adblocker':
         specifier: ^2.13.4
         version: 2.13.4
@@ -1438,8 +1438,8 @@ packages:
     peerDependencies:
       react: 19.0.0
 
-  '@earendil-works/pi-ai@0.78.0':
-    resolution: {integrity: sha512-q0hUrvT6ngT6cgBX0oIbzfQfmzztgdkZobP8OTL+sCOOBlnG6+1YRt8g7zO9CC/4NdeYEqa7uGqWdQhH0fjCLA==}
+  '@earendil-works/pi-ai@0.80.6':
+    resolution: {integrity: sha512-7xfLk8sANBp+bpPEbjoOZTbPxsa+++b1JXAoSJsNa3vbs9AHHEclmvg54XLQcxH+fuwaeti/g2jeIfJ+mVYLpA==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -2468,8 +2468,13 @@ packages:
     resolution: {integrity: sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q==}
     engines: {node: '>= 10.0.0'}
 
-  '@mistralai/mistralai@2.2.1':
-    resolution: {integrity: sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ==}
+  '@mistralai/mistralai@2.2.6':
+    resolution: {integrity: sha512-W8pX7zHxjJvMIpw8JMxeJEleapXX0Q9NPszdNzqkM3MIEoIGPObdodujj+WHteXEvGfaP/AMwlNyRfEzSY6dQQ==}
+    peerDependencies:
+      '@opentelemetry/api': ^1.9.0
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
 
   '@modelcontextprotocol/sdk@1.25.3':
     resolution: {integrity: sha512-vsAMBMERybvYgKbg/l4L1rhS7VXV1c0CtyJg72vwxONVX0l4ZfKVAnZEWTQixJGTzKnELjQ59e4NbdFDALRiAQ==}
@@ -2611,6 +2616,10 @@ packages:
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
     engines: {node: '>=8.0.0'}
+
+  '@opentelemetry/semantic-conventions@1.43.0':
+    resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
+    engines: {node: '>=14'}
 
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
@@ -9879,12 +9888,13 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
       '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))
-      '@mistralai/mistralai': 2.2.1
+      '@mistralai/mistralai': 2.2.6(@opentelemetry/api@1.9.0)
+      '@opentelemetry/api': 1.9.0
       '@smithy/node-http-handler': 4.7.3
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
@@ -11049,11 +11059,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@mistralai/mistralai@2.2.1':
+  '@mistralai/mistralai@2.2.6(@opentelemetry/api@1.9.0)':
     dependencies:
+      '@opentelemetry/semantic-conventions': 1.43.0
       ws: 8.19.0
       zod: 3.25.76
       zod-to-json-schema: 3.25.1(zod@3.25.76)
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -11299,8 +11312,9 @@ snapshots:
       - bluebird
       - supports-color
 
-  '@opentelemetry/api@1.9.0':
-    optional: true
+  '@opentelemetry/api@1.9.0': {}
+
+  '@opentelemetry/semantic-conventions@1.43.0': {}
 
   '@pkgjs/parseargs@0.11.0':
     optional: true

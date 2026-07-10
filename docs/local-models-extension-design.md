@@ -82,20 +82,21 @@ Codebase (paths verified 2026-07-07):
 - **Extensions do not render UI**; they pair with a panel in `workspace/panels/<name>/`
   and return `openPanel` descriptors (pattern: `git-bridge/upstream.ts:526`). Panels
   call back via `extensions.use("@workspace-extensions/<name>")`.
-- **All models come from pi-ai** (`@earendil-works/pi-ai` v0.78.0, vendored+patched).
-  `Model<TApi>` (`dist/types.d.ts:478`) carries `api`, `provider`, `baseUrl`, `compat`;
-  `Provider` and `Api` are **open string types**, and `stream(model, ctx, opts)`
-  dispatches purely on `model.api` (`dist/stream.js:23-29`). The
-  `"openai-completions"` handler already does streaming + tool calls against an
-  arbitrary `baseUrl` (`dist/providers/openai-completions.js:382`) — and **requires a
-  non-empty `options.apiKey`** (throws `No API key for provider` otherwise,
-  `openai-completions.js:72-74`), which §6.3 accounts for. The static registry
-  (`models.generated.js`) has **no runtime injection API**.
+- **All models come from pi-ai** (`@earendil-works/pi-ai` v0.80.6, vendored+patched).
+  `Model<TApi>` carries `api`, `provider`, `baseUrl`, and `compat`; `ProviderId`
+  and `Api` remain open string types. Pi 0.80 adds explicit `Models` provider
+  collections, while the agent executor retains the temporary `/compat` API
+  dispatcher for journaled and local model literals that are not members of a
+  built-in provider collection. The `"openai-completions"` implementation in
+  `dist/api/openai-completions.js` already supports streaming and tool calls
+  against an arbitrary `baseUrl` and requires a non-empty `options.apiKey`,
+  which §6.3 accounts for. The app uses Pi's static built-in catalog as one
+  input and materializes local extension models separately.
 - **The app catalog is built in one place**: `buildModelCatalog()` in
   `workspace/workers/model-settings/index.ts:41-93`, served as
   `ModelSettingsSnapshot` (protocol `vibestudio.models.v1`) to both the chat panel
   picker and agent config. Fallback default logic: `pickFallbackModel`
-  (`model-settings/index.ts:203-208`), currently `openai-codex:gpt-5.5` → first
+  (`model-settings/index.ts:203-208`), currently `openai-codex:gpt-5.6-sol` → first
   recommended → first model.
 - **The single LLM call site for agents** is
   `workspace/packages/agentic-do/src/effect-executors/model-call.ts`
@@ -473,8 +474,8 @@ snapshot, so the picker updates live when a download finishes or a server dies.
 
 ### 6.2 Executor refactor: journaled `modelSpec` replaces registry lookups — for every provider
 
-`model-call.ts:582` currently resolves models from pi-ai's static registry and aborts
-on a miss (`:648-656`). We do not bolt a local-only side channel next to that — we
+The pre-refactor executor resolved models from pi-ai's static registry and
+aborted on a miss. We do not bolt a local-only side channel next to that — we
 replace the resolution model outright (pre-release; the old path has no tenure):
 
 - `ModelRequestDescriptor` gains two **required** fields, journaled together:
@@ -624,7 +625,7 @@ from *Connected / Recommended / All* to **status-first**:
 ┌ Search ─────────────────────────────┐
 │ ▸ Ready                             │   status dot ● green
 │   ● Claude Sonnet 5     anthropic   │   badges: reasoning/vision/ctx (existing)
-│   ● GPT-5.5             openai-codex│
+│   ● GPT-5.6 Sol         openai-codex│
 │   ● Qwen3 8B      local · on-device │   local entries: "on-device · free" chip,
 │   ● LFM2.5 1.2B   local · fallback  │   tok/s estimate from last benchmark
 │ ▸ Available to start                │   ◐ amber — local models that load on use

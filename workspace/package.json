@@ -4,7 +4,7 @@
   "type": "module",
   "packageManager": "pnpm@10.12.4",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.19.0"
   },
   "scripts": {
     "build": "pnpm --filter \"@workspace/*\" --filter \"@workspace-about/*\" --filter \"@workspace-apps/*\" --filter \"@workspace-extensions/*\" --filter \"@workspace-panels/*\" --filter \"@workspace-skills/*\" --filter \"@workspace-workers/*\" build",
@@ -33,12 +33,12 @@
     "overrides": {
       "react": "19.0.0",
       "react-dom": "19.0.0",
-      "@earendil-works/pi-ai": "0.78.0",
+      "@earendil-works/pi-ai": "0.80.6",
       "protobufjs": "^7.5.5"
     },
     "patchedDependencies": {
       "re2@1.24.0": "../patches/re2@1.24.0.patch",
-      "@earendil-works/pi-ai@0.78.0": "packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch"
+      "@earendil-works/pi-ai@0.80.6": "packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch"
     }
   }
 }

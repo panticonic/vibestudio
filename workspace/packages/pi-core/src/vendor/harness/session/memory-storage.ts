@@ -1,4 +1,4 @@
-// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.78.0; see PROVENANCE.md and vendor.sh
+// @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.80.6; see PROVENANCE.md and vendor.sh
 import {
 	type LeafEntry,
 	SessionError,
@@ -28,7 +28,9 @@ function buildLabelsById(entries: SessionTreeEntry[]): Map<string, string> {
 
 function generateEntryId(byId: { has(id: string): boolean }): string {
 	for (let i = 0; i < 100; i++) {
-		const id = uuidv7().slice(0, 8);
+		// The uuidv7 prefix is timestamp-derived and nearly constant between calls,
+		// so short ids must come from the random tail.
+		const id = uuidv7().slice(-8);
 		if (!byId.has(id)) return id;
 	}
 	return uuidv7();

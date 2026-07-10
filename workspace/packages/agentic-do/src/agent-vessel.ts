@@ -583,7 +583,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const modelId = modelRef.slice(modelRef.indexOf(":") + 1);
     if (modelProviderId !== providerId) return null;
     try {
-      const { getModel } = await import("@earendil-works/pi-ai");
+      const { getBuiltinModel: getModel } = await import("@earendil-works/pi-ai/providers/all");
       const registryModel = getModel(modelProviderId as never, modelId as never) as
         | { baseUrl?: string }
         | undefined;
@@ -1076,11 +1076,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     );
   }
 
-  private sendOrderedSignalMessage(
-    channelId: string,
-    content: string,
-    contentType?: string
-  ): void {
+  private sendOrderedSignalMessage(channelId: string, content: string, contentType?: string): void {
     void serializeByKey(this.signalChains, channelId, () =>
       this.createChannelClient(channelId)
         .sendSignal(this.participantId(), content, contentType)
@@ -1160,7 +1156,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const seed: StoredSettings = {};
     if (typeof c["model"] === "string" && c["model"]) seed.model = c["model"];
     const tl = c["thinkingLevel"];
-    if (tl === "minimal" || tl === "low" || tl === "medium" || tl === "high")
+    if (
+      tl === "minimal" ||
+      tl === "low" ||
+      tl === "medium" ||
+      tl === "high" ||
+      tl === "xhigh" ||
+      tl === "max"
+    )
       seed.thinkingLevel = tl;
     const al = c["approvalLevel"];
     if (al === 0 || al === 1 || al === 2) seed.approvalLevel = al;
@@ -2355,9 +2358,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       case "setThinkingLevel": {
         const level = (args as { level?: unknown } | null)?.level;
-        if (level !== "minimal" && level !== "low" && level !== "medium" && level !== "high") {
+        if (
+          level !== "minimal" &&
+          level !== "low" &&
+          level !== "medium" &&
+          level !== "high" &&
+          level !== "xhigh" &&
+          level !== "max"
+        ) {
           return {
-            result: { error: "setThinkingLevel requires level: minimal, low, medium, or high" },
+            result: {
+              error: "setThinkingLevel requires level: minimal, low, medium, high, xhigh, or max",
+            },
             isError: true,
           };
         }
@@ -3190,7 +3202,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const providerId = model.includes(":") ? model.slice(0, model.indexOf(":")) : "anthropic";
     const modelId = model.includes(":") ? model.slice(model.indexOf(":") + 1) : model;
     try {
-      const { getModel } = await import("@earendil-works/pi-ai");
+      const { getBuiltinModel: getModel } = await import("@earendil-works/pi-ai/providers/all");
       const registryModel = getModel(providerId as never, modelId as never) as
         | { baseUrl?: string }
         | undefined;
@@ -4828,8 +4840,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
     if ("thinkingLevel" in patch) {
       const l = patch["thinkingLevel"];
-      if (l !== "minimal" && l !== "low" && l !== "medium" && l !== "high") {
-        throw new Error("thinkingLevel must be minimal|low|medium|high");
+      if (
+        l !== "minimal" &&
+        l !== "low" &&
+        l !== "medium" &&
+        l !== "high" &&
+        l !== "xhigh" &&
+        l !== "max"
+      ) {
+        throw new Error("thinkingLevel must be minimal|low|medium|high|xhigh|max");
       }
       next.thinkingLevel = l;
     }

@@ -177,7 +177,7 @@ describe("ChatInput /model command", () => {
     const onReplaceAgent = vi.fn(async () => {});
     const onCallMethodResult = vi.fn(async () => ({
       model: "openai-codex:gpt-5.5",
-      thinkingLevel: "low",
+      thinkingLevel: "max",
       approvalLevel: 1,
       respondPolicy: "from-participants",
       respondFrom: ["user-1"],
@@ -222,7 +222,7 @@ describe("ChatInput /model command", () => {
     expect(onReplaceAgent).toHaveBeenCalledWith("agent-1", undefined, {
       model: "local:lfm2.5-1.2b",
       handle: "ai-chat",
-      thinkingLevel: "low",
+      thinkingLevel: "max",
       approvalLevel: 1,
       respondPolicy: "from-participants",
       respondFrom: ["user-1"],

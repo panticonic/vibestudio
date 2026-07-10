@@ -80,7 +80,7 @@ Location: `workspace/packages/agentic-do/src/agent-worker-base.ts`
 
 | Hook                          | Default                                                                  | Purpose                                                                                   |
 | ----------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `getDefaultModel()`           | subclass override required; `AiChatWorker` uses `"openai-codex:gpt-5.5"` | Default model id in `provider:model` format; subscription config can override per channel |
+| `getDefaultModel()`           | subclass override required; `AiChatWorker` uses `"openai-codex:gpt-5.6-sol"` | Default model id in `provider:model` format; subscription config can override per channel |
 | `getDefaultThinkingLevel()`   | `"medium"`                                                               | Default Pi thinking level; state/config can override per channel                          |
 | `getApprovalLevel(channelId)` | `2` (full auto)                                                          | 0 = ask all, 1 = auto safe tools, 2 = full auto                                           |
 | `shouldProcess(event)`        | Panel messages only                                                      | Filter incoming channel events                                                            |

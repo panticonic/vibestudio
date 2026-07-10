@@ -56,6 +56,8 @@ const THINKING_LABELS: Record<AgentThinkingLevel, string> = {
   low: "Low",
   medium: "Medium",
   high: "High",
+  xhigh: "Extra high",
+  max: "Max",
 };
 
 const APPROVAL_LABELS: Record<string, string> = {
@@ -64,15 +66,7 @@ const APPROVAL_LABELS: Record<string, string> = {
   "2": "Full-auto",
 };
 
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: ReactNode;
-}) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <Flex direction="column" gap="1">
       <Text size="2" weight="medium">
@@ -132,7 +126,7 @@ export function AgentConfigForm({
       ? value.thinkingLevel
       : thinkingLevels.includes("high")
         ? "high"
-        : thinkingLevels[thinkingLevels.length - 1] ?? "high";
+        : (thinkingLevels[thinkingLevels.length - 1] ?? "high");
 
   const policy: AgentRespondPolicy = value.respondPolicy ?? "all";
 
@@ -279,10 +273,7 @@ export function AgentConfigForm({
         </Text>
         {showAdvanced && (
           <Box mt="2">
-            <Field
-              label="System prompt (optional)"
-              hint="Appended to the workspace system prompt."
-            >
+            <Field label="System prompt (optional)" hint="Appended to the workspace system prompt.">
               <TextArea
                 value={value.systemPrompt ?? ""}
                 onChange={(e) => set({ systemPrompt: e.target.value })}

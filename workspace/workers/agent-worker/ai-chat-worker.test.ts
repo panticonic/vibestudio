@@ -1,10 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { PROVIDER_CREDENTIAL_SETUPS, DEFAULT_MODEL } from "@workspace/agentic-do";
-import {
-  AGENTIC_EVENT_PAYLOAD_KIND,
-  AGENTIC_PROTOCOL_VERSION,
-} from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 
 import { AiChatWorker } from "./ai-chat-worker.js";
@@ -136,9 +133,7 @@ describe("AiChatWorker", () => {
   it("exposes the shared provider connect presets to the credential flow", async () => {
     const worker = await makeWorker();
     for (const providerId of Object.keys(PROVIDER_CREDENTIAL_SETUPS)) {
-      expect(worker.credentialSetup(providerId)).toEqual(
-        PROVIDER_CREDENTIAL_SETUPS[providerId]
-      );
+      expect(worker.credentialSetup(providerId)).toEqual(PROVIDER_CREDENTIAL_SETUPS[providerId]);
     }
     expect(worker.credentialSetup("nope")).toBeNull();
   });
@@ -283,17 +278,21 @@ describe("AiChatWorker", () => {
     // settings survive re-read (Ref-kind KV)
     const after = await worker.onMethodCall("ch-1", "tc-3", "getAgentSettings", {});
     expect((after.result as { model: string }).model).toBe("anthropic:claude-sonnet-4-6");
+    const effort = await worker.onMethodCall("ch-1", "tc-effort", "setThinkingLevel", {
+      level: "max",
+    });
+    expect((effort.result as { thinkingLevel: string }).thinkingLevel).toBe("max");
     // config is per-AGENT, not per-channel: a sibling channel of the same agent sees the change
     const other = await worker.onMethodCall("ch-2", "tc-4", "getAgentSettings", {});
     expect((other.result as { model: string }).model).toBe("anthropic:claude-sonnet-4-6");
+    expect((other.result as { thinkingLevel: string }).thinkingLevel).toBe("max");
   });
 
   it("validates standard method arguments", async () => {
     const worker = await makeWorker();
     expect((await worker.onMethodCall("ch-1", "tc-1", "setModel", {})).isError).toBe(true);
     expect(
-      (await worker.onMethodCall("ch-1", "tc-2", "setThinkingLevel", { level: "extreme" }))
-        .isError
+      (await worker.onMethodCall("ch-1", "tc-2", "setThinkingLevel", { level: "extreme" })).isError
     ).toBe(true);
     expect(
       (await worker.onMethodCall("ch-1", "tc-3", "setApprovalLevel", { level: 9 })).isError

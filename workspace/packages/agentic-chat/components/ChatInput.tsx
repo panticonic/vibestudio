@@ -1,5 +1,15 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Box, Button, Callout, Card, Flex, IconButton, Spinner, Text, TextArea } from "@radix-ui/themes";
+import {
+  Box,
+  Button,
+  Callout,
+  Card,
+  Flex,
+  IconButton,
+  Spinner,
+  Text,
+  TextArea,
+} from "@radix-ui/themes";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import {
   isAgentParticipantType,
@@ -30,7 +40,7 @@ function isUsableEntry(model: ModelCatalogEntry): boolean {
   return state === "ready" || state === "startable";
 }
 
-const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+const THINKING_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
 const RESPOND_POLICIES = new Set([
   "all",
   "mentioned",
@@ -611,7 +621,14 @@ export function ChatInput() {
         </Box>
         {/* Transient "Sending…" ghost — the only sub-row, shown only in flight. */}
         {pendingSendCount > 0 && (
-          <Flex align="center" justify="end" gap="1" mt="1" className="chat-sending-ghost" aria-live="polite">
+          <Flex
+            align="center"
+            justify="end"
+            gap="1"
+            mt="1"
+            className="chat-sending-ghost"
+            aria-live="polite"
+          >
             <Spinner size="1" />
             <Text size="1" color="gray">
               Sending…

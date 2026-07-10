@@ -156,11 +156,11 @@ The entry point must:
 Returns the default model id in `provider:model` format. `AgentWorkerBase`
 requires subclasses to override this hook. Subscription config can still
 override the effective model per channel. The default chat worker uses
-`"openai-codex:gpt-5.5"`.
+`"openai-codex:gpt-5.6-sol"`.
 
 ```typescript
 protected getDefaultModel(): string {
-  return 'openai-codex:gpt-5.5';
+  return 'openai-codex:gpt-5.6-sol';
 }
 ```
 
@@ -170,9 +170,11 @@ out-of-the-box; custom providers can be registered via `models.json`.
 
 ### getDefaultThinkingLevel(): ThinkingLevel
 
-Returns the default Pi thinking level. Default: `"medium"`. Allowed:
-`"minimal" | "low" | "medium" | "high"`. Live state and subscription config
-override this per channel.
+Returns the default Pi thinking level. Default: `"medium"`. Enabled levels:
+`"minimal" | "low" | "medium" | "high" | "xhigh" | "max"`. The UI shows only
+levels advertised by the selected model; pi-ai clamps programmatic values that
+the model does not support. Live state and subscription config override this
+per channel.
 
 ```typescript
 protected getDefaultThinkingLevel() {
@@ -532,7 +534,7 @@ export class CodeReviewWorker extends AgentWorkerBase {
   // The system prompt is composed from Vibestudio base + workspace/meta/AGENTS.md.
   // Override getDefaultModel() to select a specific model for code review:
   protected override getDefaultModel(): string {
-    return "openai-codex:gpt-5.5";
+    return "openai-codex:gpt-5.6-sol";
   }
 
   protected override getParticipantInfo(

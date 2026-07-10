@@ -7,13 +7,13 @@ settings:
 overrides:
   react: 19.0.0
   react-dom: 19.0.0
-  '@earendil-works/pi-ai': 0.78.0
+  '@earendil-works/pi-ai': 0.80.6
   protobufjs: ^7.5.5
 
 patchedDependencies:
-  '@earendil-works/pi-ai@0.78.0':
-    hash: 48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d
-    path: packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch
+  '@earendil-works/pi-ai@0.80.6':
+    hash: 40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5
+    path: packages/harness/patches/@earendil-works__pi-ai@0.80.6.patch
   re2@1.24.0:
     hash: a4a166273fe3817fd493cfc042f1d966f4ada60f1234330cd306e798259b549b
     path: ../patches/re2@1.24.0.patch
@@ -739,8 +739,8 @@ importers:
   packages/agentic-do:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.78.0
-        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.80.6
+        version: 0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(ws@8.21.0)(zod@3.25.76)
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
@@ -894,8 +894,8 @@ importers:
   packages/harness:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.78.0
-        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.80.6
+        version: 0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(ws@8.21.0)(zod@3.25.76)
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
@@ -1067,8 +1067,8 @@ importers:
   packages/pi-core:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.78.0
-        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.80.6
+        version: 0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(ws@8.21.0)(zod@3.25.76)
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1802,8 +1802,8 @@ importers:
   workers/gmail-agent:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.78.0
-        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.80.6
+        version: 0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(ws@8.21.0)(zod@3.25.76)
       '@workspace/agentic-do':
         specifier: workspace:*
         version: link:../../packages/agentic-do
@@ -1862,8 +1862,8 @@ importers:
   workers/model-settings:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: 0.78.0
-        version: 0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)
+        specifier: 0.80.6
+        version: 0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(ws@8.21.0)(zod@3.25.76)
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
@@ -2415,8 +2415,8 @@ packages:
     peerDependencies:
       react: 19.0.0
 
-  '@earendil-works/pi-ai@0.78.0':
-    resolution: {integrity: sha512-q0hUrvT6ngT6cgBX0oIbzfQfmzztgdkZobP8OTL+sCOOBlnG6+1YRt8g7zO9CC/4NdeYEqa7uGqWdQhH0fjCLA==}
+  '@earendil-works/pi-ai@0.80.6':
+    resolution: {integrity: sha512-7xfLk8sANBp+bpPEbjoOZTbPxsa+++b1JXAoSJsNa3vbs9AHHEclmvg54XLQcxH+fuwaeti/g2jeIfJ+mVYLpA==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
@@ -2971,8 +2971,13 @@ packages:
   '@mermaid-js/parser@1.2.0':
     resolution: {integrity: sha512-oYPyv8A4As1yH5Bx+04iQEQxXuIQDe0GKCNSRgao6z8AM9jixXIfP0vsppRLvGf+nKIOb9/LdpWA4YuJiVvESA==}
 
-  '@mistralai/mistralai@2.2.1':
-    resolution: {integrity: sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ==}
+  '@mistralai/mistralai@2.2.6':
+    resolution: {integrity: sha512-W8pX7zHxjJvMIpw8JMxeJEleapXX0Q9NPszdNzqkM3MIEoIGPObdodujj+WHteXEvGfaP/AMwlNyRfEzSY6dQQ==}
+    peerDependencies:
+      '@opentelemetry/api': ^1.9.0
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
 
   '@mozilla/readability@0.6.0':
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
@@ -3052,6 +3057,14 @@ packages:
     resolution: {integrity: sha512-Az/dueoPerJsbbjRxu8a558wKY+gONUrfoy3Hs++5OqbeMsR0dYe6P+4oN6twrLFyzAhEA1tEoZRvQTFDRmvQg==}
     peerDependencies:
       react-native: '*'
+
+  '@opentelemetry/api@1.9.0':
+    resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
+    engines: {node: '>=8.0.0'}
+
+  '@opentelemetry/semantic-conventions@1.43.0':
+    resolution: {integrity: sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg==}
+    engines: {node: '>=14'}
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -7565,7 +7578,7 @@ snapshots:
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.1
       '@smithy/fetch-http-handler': 5.6.3
-      '@smithy/node-http-handler': 4.7.3
+      '@smithy/node-http-handler': 4.9.3
       '@smithy/types': 4.15.1
       tslib: 2.8.1
 
@@ -8093,12 +8106,13 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-ai@0.78.0(patch_hash=48de69a75b9724e8ddac1b8837bb6902c8ff6f2ebc2e212f7fe672de743cb02d)(ws@8.21.0)(zod@3.25.76)':
+  '@earendil-works/pi-ai@0.80.6(patch_hash=40fda9d7e7a6423b43e4252691fe4e18b900e80e0688108e376b057d049b8fb5)(ws@8.21.0)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.91.1(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
       '@google/genai': 1.52.0
-      '@mistralai/mistralai': 2.2.1
+      '@mistralai/mistralai': 2.2.6(@opentelemetry/api@1.9.0)
+      '@opentelemetry/api': 1.9.0
       '@smithy/node-http-handler': 4.7.3
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
@@ -8845,11 +8859,14 @@ snapshots:
     dependencies:
       '@chevrotain/types': 11.1.2
 
-  '@mistralai/mistralai@2.2.1':
+  '@mistralai/mistralai@2.2.6(@opentelemetry/api@1.9.0)':
     dependencies:
+      '@opentelemetry/semantic-conventions': 1.43.0
       ws: 8.21.0
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -8906,6 +8923,10 @@ snapshots:
   '@notifee/react-native@9.1.8(react-native@0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0))':
     dependencies:
       react-native: 0.79.7(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.0.0)
+
+  '@opentelemetry/api@1.9.0': {}
+
+  '@opentelemetry/semantic-conventions@1.43.0': {}
 
   '@protobufjs/aspromise@1.1.2': {}
 

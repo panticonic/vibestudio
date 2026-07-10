@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PubSubClient } from "@workspace/pubsub";
 import { Theme } from "@radix-ui/themes";
 import { MessageList } from "./MessageList.js";
-import { MessageCard } from "./MessageCard.js";
+import { agentConfigFromSettings, MessageCard } from "./MessageCard.js";
 import { channelParticipantId } from "../types.js";
 import type { ChatMessage } from "../types.js";
 import { useChannelMessages } from "../hooks/useChannelMessages.js";
@@ -51,6 +51,23 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
     isAtBottomRef: { current: true },
   }),
 }));
+
+describe("agent settings parsing", () => {
+  it("preserves a wrapped max effort setting", () => {
+    expect(
+      agentConfigFromSettings(
+        {
+          model: { value: "openai-codex:gpt-5.6-sol" },
+          thinkingLevel: { value: "max" },
+        },
+        null
+      )
+    ).toMatchObject({
+      model: "openai-codex:gpt-5.6-sol",
+      thinkingLevel: "max",
+    });
+  });
+});
 
 function TranscriptView({ client }: { client: PubSubClient }) {
   const { messages } = useChannelMessages(client);
@@ -178,7 +195,12 @@ describe("transcript delivery markers", () => {
         complete: true,
         receipts: { byParticipant: { "agent:alice": "read" }, aggregate: "read" },
       },
-      { "agent:alice": { id: "agent:alice", metadata: { name: "Alice", type: "agent", handle: "alice" } } }
+      {
+        "agent:alice": {
+          id: "agent:alice",
+          metadata: { name: "Alice", type: "agent", handle: "alice" },
+        },
+      }
     );
     // Agent recipients are framed as "taken into account".
     expect(screen.getByLabelText(/Alice: taken into account/i)).toBeTruthy();

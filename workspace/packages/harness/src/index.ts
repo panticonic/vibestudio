@@ -6,7 +6,7 @@
 // event-sourced @workspace/agent-loop + the AgentLoopDriver in
 // @workspace/agentic-do (unified-log Stage B cut). The harness package keeps
 // the local tools, prompt composition, and shared types.
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 // Stable runner-level error codes (Phase 7).
 export { AgentWorkerError } from "./errors.js";

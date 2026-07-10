@@ -154,7 +154,7 @@ For each OAuth-backed credential provider we ship or document:
 
 The OpenAI/Codex default must continue to use URL-bound credentials and the
 server-supported OAuth PKCE path. The default model is
-`openai-codex:gpt-5.5`.
+`openai-codex:gpt-5.6-sol`.
 
 ### TODO: Webhook Provider Setup
 

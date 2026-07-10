@@ -1,7 +1,7 @@
 {
   "name": "@workspace/pi-core",
   "version": "0.1.0",
-  "description": "Vendored subset of @earendil-works/pi-agent-core (types, compaction, session tree, system prompt, skills, prompt templates) — see PROVENANCE.md",
+  "description": "Vendored subset of @earendil-works/pi-agent-core v0.80.6 (types, compaction, session tree, system prompt, skills, prompt templates) — see PROVENANCE.md",
   "type": "module",
   "private": true,
   "exports": {
@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.80.6",
     "ignore": "7.0.5",
     "typebox": "1.1.38",
     "yaml": "2.9.0"

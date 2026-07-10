@@ -13,8 +13,9 @@ import { fakeGmailClient } from "@workspace/gmail/test-utils";
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import { ids } from "@workspace/agent-loop";
+import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
 
-import { GmailAgentWorker } from "./gmail-agent-worker.js";
+import { GmailAgentWorker, triageModelCandidates } from "./gmail-agent-worker.js";
 import { GMAIL_MESSAGE_TYPES } from "./cards/cards.js";
 
 const WORKSPACE_ROOT = path.resolve(__dirname, "../..");
@@ -422,6 +423,17 @@ class TestGmailAgentWorker extends GmailAgentWorker {
 }
 
 describe("GmailAgentWorker", () => {
+  it("uses Luna as the cheap Codex triage tier and keeps Sol as fallback", () => {
+    expect(triageModelCandidates("openai-codex:gpt-5.6-sol")).toEqual([
+      "openai-codex:gpt-5.6-luna",
+      "openai-codex:gpt-5.6-sol",
+    ]);
+    expect(getBuiltinModel("openai-codex", "gpt-5.6-luna")).toMatchObject({
+      id: "gpt-5.6-luna",
+      provider: "openai-codex",
+    });
+  });
+
   it("bumps the base vessel schema version so base + gmail migrations run", () => {
     expect(GmailAgentWorker.schemaVersion).toBeGreaterThan(AgentWorkerBase.schemaVersion);
   });

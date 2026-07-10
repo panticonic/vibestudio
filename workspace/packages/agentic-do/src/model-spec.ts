@@ -11,7 +11,11 @@
  * (the loopback api-key is injected executor-side at call time, §6.3).
  */
 
-import { getModel, getModels, getProviders } from "@earendil-works/pi-ai";
+import {
+  getBuiltinModel as getModel,
+  getBuiltinModels as getModels,
+  getBuiltinProviders as getProviders,
+} from "@earendil-works/pi-ai/providers/all";
 import type { AgentModelSpec, ModelAuthMode } from "@workspace/agent-loop";
 
 export const LOCAL_PROVIDER_ID = "local";

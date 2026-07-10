@@ -8,7 +8,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.80.6",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",

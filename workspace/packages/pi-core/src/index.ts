@@ -1,5 +1,5 @@
 /**
- * @workspace/pi-core — vendored subset of @earendil-works/pi-agent-core v0.78.0.
+ * @workspace/pi-core — vendored subset of @earendil-works/pi-agent-core v0.80.6.
  *
  * This barrel mirrors the upstream `dist/index.js`, restricted to the vendored
  * modules (see PROVENANCE.md). Intentionally NOT exported: agent.ts (Agent),

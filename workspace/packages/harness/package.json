@@ -10,7 +10,7 @@
     "./web-extract": "./src/web-extract.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.80.6",
     "@mozilla/readability": "^0.6.0",
     "@vibestudio/extension": "workspace:*",
     "@vibestudio/rpc": "workspace:*",

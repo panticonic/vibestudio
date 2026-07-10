@@ -340,7 +340,7 @@ export class ${className} extends AgentWorkerBase {
 
   // --- Hook: default model id (provider:model format) ---
   // protected override getDefaultModel(): string {
-  //   return "openai-codex:gpt-5.5";
+  //   return "openai-codex:gpt-5.6-sol";
   // }
 
   // --- Hook: default thinking level ---

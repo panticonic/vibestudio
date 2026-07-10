@@ -6,7 +6,8 @@
  * `message.completed` with authoritative blocks.
  */
 
-import { stream, type Context, type Message } from "@earendil-works/pi-ai";
+import { stream } from "@earendil-works/pi-ai/compat";
+import type { Context, Message } from "@earendil-works/pi-ai";
 import {
   buildModelContext,
   classifyModelFailure,

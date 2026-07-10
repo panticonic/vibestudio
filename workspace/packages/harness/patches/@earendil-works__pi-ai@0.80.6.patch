@@ -1,8 +1,8 @@
-diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-codex-responses.js
-index f92c66f..8d43844 100644
---- a/dist/providers/openai-codex-responses.js
-+++ b/dist/providers/openai-codex-responses.js
-@@ -239,6 +239,19 @@ export const streamOpenAICodexResponses = (model, context, options) => {
+diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
+index 803c76a..33dafef 100644
+--- a/dist/api/openai-codex-responses.js
++++ b/dist/api/openai-codex-responses.js
+@@ -265,6 +265,19 @@ export const stream = (model, context, options) => {
                              : response.status === 429
                                  ? capRetryDelayMs(retryAfterDelayMs, options)
                                  : retryAfterDelayMs;
@@ -22,7 +22,7 @@ index f92c66f..8d43844 100644
                          await sleep(delayMs, options?.signal);
                          continue;
                      }
-@@ -260,6 +273,20 @@ export const streamOpenAICodexResponses = (model, context, options) => {
+@@ -286,6 +299,20 @@ export const stream = (model, context, options) => {
                      // Network errors are retryable
                      if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
                          const delayMs = BASE_DELAY_MS * 2 ** attempt;
@@ -43,7 +43,7 @@ index f92c66f..8d43844 100644
                          await sleep(delayMs, options?.signal);
                          continue;
                      }
-@@ -656,6 +683,86 @@ function closeWebSocketSilently(socket, code = 1000, reason = "done") {
+@@ -699,6 +726,86 @@ function closeWebSocketSilently(socket, code = 1000, reason = "done") {
      }
      catch { }
  }
@@ -118,7 +118,7 @@ index f92c66f..8d43844 100644
 +            closeWebSocketSilently(socket, 1000, "unsupported_runtime_socket_shape");
 +            throw new Error("Codex WebSocket upgrade returned a pass-through WebSocket that cannot be consumed by this runtime");
 +        }
-+        return { socket };
++        return socket;
 +    }
 +    finally {
 +        if (timeout) {
@@ -130,9 +130,9 @@ index f92c66f..8d43844 100644
  function scheduleSessionWebSocketExpiry(sessionId, entry) {
      if (entry.idleTimer) {
          clearTimeout(entry.idleTimer);
-@@ -670,16 +777,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
- async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS) {
-     const WebSocketCtor = await getWebSocketConstructor();
+@@ -713,16 +820,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
+ async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS, env) {
+     const WebSocketCtor = await getWebSocketConstructor(env);
      if (!WebSocketCtor) {
 +        const fetchUpgrade = await connectWebSocketViaFetchUpgrade(url, headers, signal, connectTimeoutMs);
 +        if (fetchUpgrade) {
@@ -155,17 +155,16 @@ index f92c66f..8d43844 100644
          }
          catch (error) {
              reject(error instanceof Error ? error : new Error(String(error)));
-@@ -736,8 +850,8 @@ async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT
+@@ -779,7 +893,7 @@ async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT
      });
  }
- async function acquireWebSocket(url, headers, sessionId, signal, connectTimeoutMs) {
+ async function acquireWebSocket(url, headers, sessionId, signal, connectTimeoutMs, env) {
 -    if (!sessionId) {
 +    if (!sessionId || !shouldReuseSessionWebSockets()) {
-         const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs);
+         const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs, env);
          return {
              socket,
-             reused: false,
-@@ -1053,6 +1156,10 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
+@@ -1100,6 +1214,10 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
          }
      }
      try {
@@ -176,7 +175,7 @@ index f92c66f..8d43844 100644
          socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
          await processResponsesStream(startWebSocketOutputOnFirstEvent(mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs)), output, stream, onStart), output, stream, model, {
              serviceTier: options?.serviceTier,
-@@ -1168,4 +1275,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
+@@ -1220,4 +1338,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
      headers.set("session-id", requestId);
      return headers;
  }

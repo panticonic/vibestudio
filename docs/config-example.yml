@@ -10,10 +10,10 @@
 # Format: "provider:model" or detailed config object
 
 models:
-  smart: openai-codex:gpt-5.5
-  coding: openai-codex:gpt-5.5
-  fast: openai-codex:gpt-5.5
-  cheap: openai-codex:gpt-5.5
+  smart: openai-codex:gpt-5.6-sol
+  coding: openai-codex:gpt-5.6-sol
+  fast: openai-codex:gpt-5.6-sol
+  cheap: openai-codex:gpt-5.6-sol
 
 # ============================================================================
 # Build Cache Configuration

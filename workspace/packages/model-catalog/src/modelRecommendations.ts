@@ -14,7 +14,7 @@ interface FlagshipRule {
 const FLAGSHIP_RULES: FlagshipRule[] = [
   {
     provider: "openai-codex",
-    prefer: [/codex/i, /gpt-5/i],
+    prefer: [/-sol$/i, /codex/i, /gpt-5/i],
     exclude: [/\bmini\b|\bnano\b|\bspark\b/i],
   },
   { provider: "anthropic", prefer: [/opus/i, /sonnet/i] },
