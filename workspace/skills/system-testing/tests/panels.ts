@@ -3,6 +3,7 @@ import {
   finalMessageHasAll,
   finalMessageHasField,
   finalMessageHasNumericField,
+  getToolCalls,
   noFailedInvocations,
   noIncompleteInvocations,
 } from "./_helpers.js";
@@ -35,6 +36,34 @@ function checkedWithNumericField(
   return finalMessageHasNumericField(result, field);
 }
 
+function successfulEvalCode(result: Parameters<typeof finalMessageHasAll>[0]): string {
+  return getToolCalls(result)
+    .filter(
+      (call) =>
+        call.name === "eval" &&
+        call.execution?.status === "complete" &&
+        call.execution.isError !== true
+    )
+    .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
+    .join("\n");
+}
+
+function requireCreatePanelEvidence(result: Parameters<typeof finalMessageHasAll>[0]) {
+  const code = successfulEvalCode(result);
+  const required = ["openPanel", "lightweightPage", "consoleHistory"];
+  const missing = required.filter((token) => !code.includes(token));
+  if (missing.length > 0) {
+    return {
+      passed: false,
+      reason: `Successful eval did not exercise ${missing.join(", ")}`,
+    };
+  }
+  if (!/(?:captureScreenshot|\.screenshot\s*\()/.test(code)) {
+    return { passed: false, reason: "Successful eval did not capture a screenshot" };
+  }
+  return { passed: true };
+}
+
 export const panelTests: TestCase[] = [
   {
     name: "create-panel",
@@ -42,7 +71,10 @@ export const panelTests: TestCase[] = [
     category: "panels",
     prompt:
       "Exercise opening a spectrolite panel as a child panel using the documented @workspace/runtime panel APIs only. Do not inspect guessed internal source paths. Get a screenshot, retrieve host-captured console logs from the running panel, and run JavaScript in the child panel through handle.cdp.lightweightPage(). Finish with PANEL_OPEN_OK and handle=<panel-id>.",
-    validate: (result) => checkedWithField(result, ["PANEL_OPEN_OK"], "handle"),
+    validate: (result) => {
+      const base = checkedWithField(result, ["PANEL_OPEN_OK"], "handle");
+      return base.passed ? requireCreatePanelEvidence(result) : base;
+    },
   },
   {
     name: "browser-panel",

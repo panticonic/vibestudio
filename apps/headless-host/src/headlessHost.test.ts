@@ -267,4 +267,27 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(releaseAndUnload).not.toHaveBeenCalledWith(pinnedIdle, "idle");
     expect(releaseAndUnload).not.toHaveBeenCalledWith(fresh, "idle");
   });
+
+  it("serves the captureScreenshot host command through the hosted page", async () => {
+    const host = new HeadlessHost(config());
+    const result = {
+      data: "cG5n",
+      mimeType: "image/png" as const,
+      width: 800,
+      height: 600,
+    };
+    const captureScreenshot = vi.fn(async () => result);
+    Object.assign(host as unknown as { pages: unknown }, {
+      pages: { captureScreenshot },
+    });
+
+    await expect(
+      (
+        host as unknown as {
+          handleHostCommand(slotId: string, action: string, args: unknown[]): Promise<unknown>;
+        }
+      ).handleHostCommand("panel:tree/panel-1", "captureScreenshot", [{ format: "png" }])
+    ).resolves.toEqual(result);
+    expect(captureScreenshot).toHaveBeenCalledWith("panel:tree/panel-1", { format: "png" });
+  });
 });

@@ -205,6 +205,17 @@ maybeDescribe("headless browser panel integration", () => {
     });
     expect(Buffer.byteLength(screenshot.data, "base64")).toBeGreaterThan(500);
 
+    const hostScreenshot = await workerConnection.rpc.call<{
+      data: string;
+      mimeType: string;
+      width: number;
+      height: number;
+    }>("main", "panelCdp.screenshot", [panel.id, { format: "png" }]);
+    expect(Buffer.byteLength(hostScreenshot.data, "base64")).toBeGreaterThan(500);
+    expect(hostScreenshot.mimeType).toBe("image/png");
+    expect(hostScreenshot.width).toBeGreaterThan(0);
+    expect(hostScreenshot.height).toBeGreaterThan(0);
+
     await workerConnection.rpc.call("main", "panelCdp.navigate", [
       panel.id,
       `${fixture.baseUrl}/second`,

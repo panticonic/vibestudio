@@ -4,7 +4,8 @@ Import panel APIs from `@workspace/runtime`.
 
 Panel handles are server-mediated APIs. Panels, workers, and Durable Objects can
 list, inspect, open, and mutate UI panels through `panelTree`; CDP is served by
-the Electron host that currently holds the target panel's runtime lease.
+the active CDP-capable host (desktop Electron or the fallback headless host)
+that currently holds the target panel's runtime lease.
 In panel code, import `panelTree` as a top-level runtime export. Do not use
 `workspace.panelTree`; `workspace` is the workspace catalog/source/unit
 namespace. Use top-level `openPanel` to create panels.
@@ -159,8 +160,9 @@ Outside React, use `agentApi.registerStateProvider(key, () => value)` from
 reported on each `state()` call, so keep providers cheap and side-effect free.
 
 Mobile hosts implement these methods through the WebView bridge. CDP access is
-served by CDP-capable Electron hosts through `handle.cdp.lightweightPage()` and
-the direct `handle.cdp` navigation helpers. CDP automation works for **any**
+served by the active desktop or headless CDP host through
+`handle.cdp.lightweightPage()` and the direct `handle.cdp` helpers. CDP
+automation works for **any**
 panel target — workspace panels and browser panels alike, including the panel
 you are running in (`panelTree.self()`). Panels held by non-CDP hosts reject CDP
 access instead of being silently taken over. CDP access is still approval-gated
@@ -177,6 +179,19 @@ actions (`click`, `fill`, `check`, `selectOption`, …), reads (`innerText`,
 `handle.cdp.getCdpEndpoint()`. There is no generic `handle.cdp.page()` alias.
 Because the client is workerd-native, `handle.cdp.*` automation works wherever
 you hold a panel handle, including server-side eval.
+
+For diagnostics that must work for hidden or unslotted panels, use the
+host-mediated operations on the handle:
+
+```ts
+const shot = await handle.cdp.captureScreenshot({ format: "png" });
+const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 50 });
+```
+
+`captureScreenshot()` returns `{ data, mimeType, width, height }`, where `data`
+is base64. `consoleHistory()` returns host-captured messages from before and
+after the automation client connected. A lightweight page's
+`page.screenshot({ type: "jpeg", quality: 80 })` instead returns raw bytes.
 
 Approval-gated panel operations wait for a visible shell approval decision. If
 no decision arrives before the approval deadline, the request fails with an

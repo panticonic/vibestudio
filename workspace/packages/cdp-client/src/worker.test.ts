@@ -289,13 +289,20 @@ describe("worker CDP client", () => {
     await expect(page.getByRole("combobox").selectOption("two")).resolves.toEqual(["two"]);
   });
 
-  it("captures a screenshot via Page.captureScreenshot", async () => {
+  it("captures a screenshot via Page.captureScreenshot and maps type to CDP format", async () => {
     installFakeWebSocket();
     const browser = await BrowserImpl.connect("ws://cdp");
     const page = browser.contexts()[0]!.pages()[0]!;
-    const shot = await page.screenshot();
+    const shot = await page.screenshot({ type: "jpeg", quality: 80 });
     expect(shot).toBeInstanceOf(Uint8Array);
     expect(shot.length).toBeGreaterThan(0);
+    const capture = FakeWebSocket.sent
+      .filter((entry) => entry.method === "Page.captureScreenshot")
+      .pop();
+    expect(capture).toEqual({
+      method: "Page.captureScreenshot",
+      params: { format: "jpeg", quality: 80 },
+    });
   });
 
   it("exposes a raw CdpConnection for protocol-level work", async () => {

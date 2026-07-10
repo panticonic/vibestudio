@@ -39,6 +39,18 @@ export interface LoadPanelInput {
   tabId: number;
 }
 
+export interface PanelScreenshotOptions {
+  format?: "png" | "jpeg";
+  quality?: number;
+}
+
+export interface PanelScreenshotResult {
+  data: string;
+  mimeType: "image/png" | "image/jpeg";
+  width: number;
+  height: number;
+}
+
 export class PageHost {
   private readonly pages = new Map<string, PanelPage>();
   private readonly contextsById = new Map<string, string>(); // contextId → browserContextId
@@ -210,6 +222,35 @@ export class PageHost {
     }
   }
 
+  async captureScreenshot(
+    slotId: string,
+    options: PanelScreenshotOptions = {}
+  ): Promise<PanelScreenshotResult> {
+    const page = this.requirePage(slotId);
+    page.lastUsedAt = Date.now();
+    const format = options.format === "jpeg" ? "jpeg" : "png";
+    const result = (await this.cdp.send(
+      "Page.captureScreenshot",
+      {
+        format,
+        ...(format === "jpeg" && typeof options.quality === "number"
+          ? { quality: options.quality }
+          : {}),
+      },
+      page.mgmtSessionId
+    )) as { data?: unknown };
+    if (typeof result.data !== "string") {
+      throw new Error("Page.captureScreenshot returned no image data");
+    }
+    const { width, height } = readScreenshotSize(result.data, format);
+    return {
+      data: result.data,
+      mimeType: format === "jpeg" ? "image/jpeg" : "image/png",
+      width,
+      height,
+    };
+  }
+
   /** Relay a bridge cdp:command into the page's relay session tree. */
   async relaySend(
     slotId: string,
@@ -330,4 +371,50 @@ export class PageHost {
         return;
     }
   }
+}
+
+function readScreenshotSize(
+  base64: string,
+  format: "png" | "jpeg"
+): { width: number; height: number } {
+  const bytes = Buffer.from(base64, "base64");
+  if (format === "png") {
+    if (
+      bytes.length < 24 ||
+      bytes[0] !== 0x89 ||
+      bytes.subarray(1, 4).toString("ascii") !== "PNG"
+    ) {
+      throw new Error("Page.captureScreenshot returned invalid PNG data");
+    }
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+    throw new Error("Page.captureScreenshot returned invalid JPEG data");
+  }
+  let offset = 2;
+  while (offset + 3 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === undefined || marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x00 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd8)) continue;
+    if (offset + 1 >= bytes.length) break;
+    const segmentLength = bytes.readUInt16BE(offset);
+    if (segmentLength < 2 || offset + segmentLength > bytes.length) break;
+    const isStartOfFrame =
+      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isStartOfFrame && segmentLength >= 7) {
+      return {
+        width: bytes.readUInt16BE(offset + 5),
+        height: bytes.readUInt16BE(offset + 3),
+      };
+    }
+    offset += segmentLength;
+  }
+  throw new Error("Page.captureScreenshot returned JPEG data without dimensions");
 }
