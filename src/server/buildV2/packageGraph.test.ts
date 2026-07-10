@@ -272,6 +272,32 @@ describe("discoverPackageGraph extension units", () => {
   });
 });
 
+describe("discoverPackageGraph package exports", () => {
+  it("records concrete export entries but not wildcard patterns as literal build targets", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-export-pattern-"));
+    try {
+      const skillDir = path.join(root, "skills", "system-testing");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace-skills/system-testing",
+          exports: {
+            ".": "./index.ts",
+            "./stages": "./stages.ts",
+            "./tests/*": "./tests/*.ts",
+          },
+        })
+      );
+
+      const node = discoverPackageGraph(root).get("@workspace-skills/system-testing");
+      expect(node.exports).toEqual([".", "./stages"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("discoverPackageGraph app units", () => {
   it("discovers app packages under flat workspace/apps paths", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-graph-"));

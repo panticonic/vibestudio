@@ -46,8 +46,34 @@ export function resolveExportSubpath(
   conditions: readonly string[],
 ): string | null {
   const exportValue = exports[subpath];
-  if (exportValue === undefined) return null;
-  return resolveConditionValue(exportValue, conditions);
+  if (exportValue !== undefined) return resolveConditionValue(exportValue, conditions);
+
+  // package.json export maps may expose a family of subpaths with one `*`,
+  // e.g. `"./tests/*": "./tests/*.ts"`. BuildV2 and the type checker share
+  // this resolver, so treating export keys as exact-only makes a package that
+  // is valid to Node impossible to import through either surface.
+  const patterns = Object.keys(exports)
+    .map((key) => ({ key, star: key.indexOf("*") }))
+    .filter(({ star }) => star >= 0)
+    // Match Node's useful specificity rule: longest prefix first, then the
+    // longest whole pattern (which prefers a more-specific suffix).
+    .sort((a, b) => b.star - a.star || b.key.length - a.key.length);
+
+  for (const { key, star } of patterns) {
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) continue;
+    if (subpath.length < prefix.length + suffix.length) continue;
+
+    const matchEnd = suffix.length === 0 ? subpath.length : subpath.length - suffix.length;
+    const matched = subpath.slice(prefix.length, matchEnd);
+    const target = resolveConditionValue(exports[key], conditions);
+    // The most-specific matching key owns the subpath. A null/unresolvable
+    // target is an explicit blocker; do not fall through to a broader pattern.
+    return target ? target.replaceAll("*", matched) : null;
+  }
+
+  return null;
 }
 
 function resolveConditionValue(
