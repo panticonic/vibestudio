@@ -158,9 +158,7 @@ async function createSinglePanelBridge(options?: {
     vi.fn(() => ({ assigned: true, lease: { holderLabel: "Desktop" } }));
   const bridge = await createServerPanelTreeBridge({
     container: {
-      get: vi.fn((name: string) =>
-        name === "rpcServer" ? { server: { callTarget } } : cdpBridge
-      ),
+      get: vi.fn((name: string) => (name === "rpcServer" ? { server: { callTarget } } : cdpBridge)),
     },
     dispatcher: { dispatch },
     workspace: {},
@@ -188,7 +186,12 @@ describe("createServerPanelTreeBridge ergonomic panel lifecycle", () => {
 
     await expect(
       bridge({ callerId: "server", callerKind: "server", method: "focus", args: [slot.slot_id] })
-    ).resolves.toMatchObject({ panelId: slot.slot_id, status: "focused", focused: true, loaded: true });
+    ).resolves.toMatchObject({
+      panelId: slot.slot_id,
+      status: "focused",
+      focused: true,
+      loaded: true,
+    });
     expect(ensureDefaultCdpHostForSlot).toHaveBeenCalled();
   });
 

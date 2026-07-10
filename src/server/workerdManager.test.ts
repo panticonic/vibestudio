@@ -208,9 +208,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.startWorker(
-        startArgs({ env: { NON_SECRET_PROBE: "configured" } })
-      );
+      await mgr.startWorker(startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
 
       const code = await mgr.getWorkerCode("hello");
       expect(code?.env["NON_SECRET_PROBE"]).toBe("configured");
