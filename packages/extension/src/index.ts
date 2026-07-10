@@ -65,6 +65,8 @@ export interface ExtensionSource {
 export interface RegistryEntry extends UnitRegistryEntryBase {
   unitKind: "extension";
   source: ExtensionSource;
+  /** Present on extensions.list() wire results; registry persistence may omit it. */
+  shortName?: string;
 }
 
 /**

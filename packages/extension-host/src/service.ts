@@ -519,7 +519,13 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
       case "streamingMethods":
         return this.streamingMethodsFor(args[0] as string);
       case "list":
-        return this.registry.list();
+        return this.registry.list().map((entry) => ({
+          ...entry,
+          shortName:
+            entry.source.repo.split("/").filter(Boolean).at(-1) ??
+            entry.name.split("/").filter(Boolean).at(-1) ??
+            entry.name,
+        }));
       case "on":
         return this.subscribe(ctx, args[0] as string, args[1] as string);
       case "ready":

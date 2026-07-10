@@ -40,7 +40,30 @@ async function writeProjectFiles(
   // build-gate the new repo into main.
   await vcs.edit({ edits });
   await vcs.commit({ message, repoPaths: [root] });
-  await vcs.push({ repoPaths: [root] });
+  const push = await vcs.push({ repoPaths: [root] });
+  if (push.status === "build-failed") {
+    const diagnostics = push.reports
+      .flatMap((report) =>
+        report.builds.flatMap((build) =>
+          build.diagnostics.map(
+            (diagnostic) =>
+              `${diagnostic.file}:${diagnostic.line}:${diagnostic.column} ${diagnostic.message}`
+          )
+        )
+      )
+      .slice(0, 8);
+    throw new Error(
+      `Created and committed ${root} in the current context, but it was not published to main because the build gate failed${
+        diagnostics.length > 0 ? `:\n${diagnostics.join("\n")}` : "."
+      } Fix the diagnostics and push again before opening the main build.`
+    );
+  }
+  if (push.status === "diverged") {
+    const repos = push.divergences.map((divergence) => divergence.repoPath).join(", ");
+    throw new Error(
+      `Created and committed ${root} in the current context, but it was not published because main diverged for ${repos || root}. Merge or rebase explicitly, then push before opening the main build.`
+    );
+  }
 }
 
 const TYPE_DIRS: Record<string, string> = {
@@ -130,6 +153,7 @@ export async function createProject(params: {
             type: "module",
             vibestudio: {
               title,
+              entry: "index.ts",
               ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
             },
             dependencies: {
@@ -185,6 +209,15 @@ export async function createProject(params: {
             type: "module",
             vibestudio: {
               title,
+              entry: "index.tsx",
+              exposeModules: [
+                "react",
+                "react/jsx-runtime",
+                "react/jsx-dev-runtime",
+                "@radix-ui/themes",
+                "@workspace/runtime",
+                "@workspace/react",
+              ],
               ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
             },
             dependencies: {

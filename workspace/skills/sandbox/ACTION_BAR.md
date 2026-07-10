@@ -33,6 +33,26 @@ When creating an action-bar file inside a workspace repo namespace such as
 that path names `panels/action-bar-review` as a repo root rather than a file
 inside a repo.
 
+The native `write`/`edit` tools record workspace source changes in VCS and do
+not accept `.tmp`, `.vibestudio`, or other scratch paths. For a transient action
+bar, create it through eval's runtime filesystem instead:
+
+```ts
+const stem = await fs.mktemp("action-bar");
+const actionBarPath = `${stem.replace(/^\/+/, "")}.tsx`;
+await fs.writeFile(actionBarPath, `
+  export default function ActionBar() {
+    return <div>Temporary controls</div>;
+  }
+`);
+return actionBarPath;
+```
+
+Pass the returned context-relative `actionBarPath` to `load_action_bar`, clear
+the bar when done, then remove the TSX file. (`mktemp` reserves an unused name;
+it does not create the `stem` file.) Use a checked-in repo-shaped path when the
+action bar is meant to persist.
+
 Action bars can call agent methods by handle without first resolving a
 participant id:
 

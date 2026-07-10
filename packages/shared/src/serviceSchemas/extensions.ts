@@ -30,6 +30,9 @@ export const extensionRegistryEntrySchema = z
   .object({
     unitKind: z.literal("extension"),
     name: z.string(),
+    shortName: z
+      .string()
+      .describe("Unscoped workspace name (for example test-runner); name remains canonical."),
     version: z.string(),
     source: z
       .object({
@@ -100,7 +103,8 @@ export const extensionsMethods = defineServiceMethods({
     examples: [{ args: ["shell"] }],
   },
   list: {
-    description: "List all installed extensions with their registry/runtime status.",
+    description:
+      "List installed extensions with canonical package name, shortName, source repo, and runtime status. Invoke accepts the canonical name, shortName, or source repo.",
     args: z.tuple([]),
     returns: z.array(extensionRegistryEntrySchema),
     access: READ_ACCESS,

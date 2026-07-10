@@ -146,11 +146,10 @@ Execute TypeScript/JavaScript code server-side in your own persistent sandbox (a
 | `buildPanelLink(source, opts)` | Build a URL for panel navigation (panel/component code — not in eval)            |
 | `panel.focusPanel(panelId)`    | Focus an existing panel by ID (panel/component code — not in eval)               |
 
-`openPanel(source)` creates a new panel for main/pushed code. It does not take a
-build `ref` and it must not be used as proof that context-local panel edits are
-running. To run panel code from the current context branch, use a host/navigation
-path that explicitly carries `ref: \`ctx:${ctx.contextId}\``; `contextId` alone
-only selects the panel's filesystem/storage context.
+`openPanel(source)` creates a new panel for main/pushed code. To run code from
+the current context branch, pass `ref: \`ctx:${ctx.contextId}\`` explicitly (and
+usually `contextId: ctx.contextId` for matching storage). `contextId` alone only
+selects the panel's filesystem/storage context; it does not select code.
 
 In **eval**, `rpc` is the same portable client shape used by panels and workers:
 `rpc.call(target, method, args)`. Raw server services target `"main"`, for
@@ -165,6 +164,11 @@ availability with `rpc.call("main", "extensions.list", [])`. **In panel/componen
 use the typed client `extensions.use(name)` instead (panel-runtime sugar over the
 same RPC). Individual extension methods can still request their own approvals when
 the operation needs one, such as running tests.
+
+`extensions.list()` rows expose `name` (the canonical scoped package name),
+`shortName` (for example `test-runner`), and `source.repo` (for example
+`extensions/test-runner`). Invocation accepts any of those identifiers; prefer
+the canonical name in durable code and docs.
 
 The panel-runtime `extensions.use(name)` is synchronous and returns a method
 proxy; do not `await` it and do not call `.catch(...)` on it. Catch the method
@@ -497,7 +501,7 @@ eval({ code: `
   const result = await services.extensions.invoke(
     "@workspace-extensions/test-runner",
     "run",
-    ["packages/my-lib"],
+    [{ target: "packages/my-lib" }],
   ).catch((error) => ({
     error: String(error),
   }));
@@ -617,7 +621,7 @@ You can drive panel lifecycle from eval, panel code, or an
 ```tsx
 import { openPanel } from "@workspace/runtime";
 // Opens the main/pushed build. Plain openPanel() does not infer code provenance
-// from your contextId.
+// from your contextId; pass { ref: `ctx:${contextId}` } when intended.
 await openPanel("panels/my-app");
 ```
 

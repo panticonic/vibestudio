@@ -219,6 +219,19 @@ function makeHost(
 }
 
 describe("ExtensionHost invocation attribution", () => {
+  it("lists canonical and short extension identifiers", async () => {
+    const { host, extensionNode } = makeHost();
+    const service = host.createServiceDefinition();
+
+    await expect(service.handler(panelCtx(), "list", [])).resolves.toEqual([
+      expect.objectContaining({
+        name: extensionNode.name,
+        shortName: "git-tools",
+        source: expect.objectContaining({ repo: "extensions/git-tools" }),
+      }),
+    ]);
+  });
+
   it("invokes extensions through a configured provider slot", async () => {
     const extensionTransport = {
       call: vi.fn(async () => "ok"),

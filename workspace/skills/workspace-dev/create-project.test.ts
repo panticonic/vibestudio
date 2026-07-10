@@ -163,10 +163,90 @@ describe("createProject", () => {
     );
     expect(mocks.edit).not.toHaveBeenCalled();
   });
+
+  it("declares the generated panel entry explicitly", async () => {
+    const { createProject } = await import("./create-project.js");
+
+    await createProject({ projectType: "panel", name: "hello", title: "Hello" });
+
+    expect(JSON.parse(mocks.files.get("panels/hello/package.json") as string)).toMatchObject({
+      vibestudio: {
+        title: "Hello",
+        entry: "index.tsx",
+        exposeModules: expect.arrayContaining([
+          "react",
+          "react/jsx-runtime",
+          "@radix-ui/themes",
+          "@workspace/react",
+        ]),
+      },
+    });
+  });
+
+  it("does not report a scaffold as published when the build gate rejects it", async () => {
+    mocks.push.mockResolvedValueOnce({
+      status: "build-failed",
+      reports: [
+        {
+          repoPath: "panels/broken",
+          unitName: "@workspace-panels/broken",
+          kind: "panel",
+          role: "pushed",
+          required: true,
+          status: "failed",
+          builds: [
+            {
+              target: "runtime",
+              diagnostics: [
+                {
+                  source: "esbuild",
+                  severity: "error",
+                  file: "panels/broken/index.tsx",
+                  line: 3,
+                  column: 7,
+                  message: "Could not resolve import",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const { createProject } = await import("./create-project.js");
+
+    await expect(createProject({ projectType: "panel", name: "broken" })).rejects.toThrow(
+      /not published to main.*panels\/broken\/index\.tsx:3:7 Could not resolve import/s
+    );
+  });
 });
 
 describe("forkProject", () => {
   beforeEach(resetRuntimeMocks);
+
+  it("does not report a fork as committed when publication diverges", async () => {
+    addFile(
+      "packages/source/package.json",
+      JSON.stringify({ name: "@workspace/source", exports: { ".": "./index.ts" } })
+    );
+    addFile("packages/source/index.ts", "export const source = true;\n");
+    mocks.push.mockResolvedValueOnce({
+      status: "diverged",
+      divergences: [
+        {
+          repoPath: "packages/new",
+          base: "base",
+          mainTip: "main",
+          upstreamCommits: [],
+          mergeable: "clean",
+        },
+      ],
+    });
+    const { forkProject } = await import("./create-project.js");
+
+    await expect(
+      forkProject({ from: "packages/source", to: "packages/new" })
+    ).rejects.toThrow(/not published because main diverged.*packages\/new/s);
+  });
 
   it("rewrites a single-class worker fork and preserves binary files", async () => {
     addDir("workers/source/.git");

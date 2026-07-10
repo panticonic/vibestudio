@@ -38,6 +38,21 @@ you are inspecting.
 eval({ code: `console.log("hello")` })
 ```
 
+Console capture belongs to eval itself; no panel, CDP session, or testkit helper
+is needed. A single successful eval may emit several lines and return a compact
+summary:
+
+```ts
+console.log("line 1");
+console.log("line 2");
+console.log("line 3");
+return { lines: 3 };
+```
+
+The tool result contains the captured console text plus the return value. Use
+panel `cdp.consoleHistory()` only when the task specifically asks for console
+messages produced inside a rendered panel.
+
 For multi-file code, put the entry point in a context-relative file and use `path`:
 
 ```
