@@ -423,6 +423,11 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     await this.unitHost.whenReconciled();
   }
 
+  /** Declared extensions are classified (entries + staged approvals); builds may still run. */
+  async whenDeclarationsStaged(): Promise<void> {
+    await this.unitHost.whenDeclarationsStaged();
+  }
+
   /** Build/start a single declared extension. */
   private async applyDeclared(
     node: ReturnType<ExtensionHost["findExtensionNode"]>,

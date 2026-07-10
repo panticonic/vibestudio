@@ -272,6 +272,13 @@ export interface BuildSystemRootOptions {
    * under user data but dependencies are installed from <appRoot>/workspace.
    */
   dependencyWorkspaceRoot?: string;
+  /**
+   * Awaited before the initial missing-build prewarm pool starts, so the
+   * background compiles do not steal CPU from launch-critical app/extension
+   * builds during startup. Best-effort: rejections are swallowed and the wait
+   * is capped, so prewarm always eventually runs.
+   */
+  holdInitialPrewarm?: () => Promise<void>;
 }
 
 export interface BuildSystemV2 extends RepoPushValidator {
@@ -583,28 +590,34 @@ export async function initBuildSystemV2(
     console.log(
       `[BuildV2] Prewarming ${missingInitialBuilds.length} missing non-app units in background...`
     );
-    initialBuildPrewarm = new Promise<void>((resolve) => {
-      setImmediate(() => {
-        if (shuttingDown) {
-          resolve();
-          return;
-        }
-        void prewarmInitialBuilds({
-          nodes: missingInitialBuilds,
-          evMap,
-          graph,
-          workspaceRoot,
-          stateHash,
-          recordBuildEvent,
-        }).then(resolve, (error: unknown) => {
-          console.error(
-            "[BuildV2] Initial build prewarm failed:",
-            error instanceof Error ? error.message : String(error)
-          );
-          resolve();
-        });
+    const holdInitialPrewarm = rootOptions.holdInitialPrewarm;
+    initialBuildPrewarm = (async () => {
+      if (holdInitialPrewarm) {
+        // Startup-critical unit builds go first. Cap the hold so prewarm still
+        // runs when startup stalls (e.g. an unanswered trust approval).
+        await Promise.race([
+          holdInitialPrewarm().catch(() => {}),
+          new Promise<void>((resolve) => setTimeout(resolve, INITIAL_PREWARM_MAX_HOLD_MS).unref()),
+        ]);
+        console.log(`[BuildV2] Startup builds settled; starting initial build prewarm`);
+      } else {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      if (shuttingDown) return;
+      await prewarmInitialBuilds({
+        nodes: missingInitialBuilds,
+        evMap,
+        graph,
+        workspaceRoot,
+        stateHash,
+        recordBuildEvent,
+      }).catch((error: unknown) => {
+        console.error(
+          "[BuildV2] Initial build prewarm failed:",
+          error instanceof Error ? error.message : String(error)
+        );
       });
-    });
+    })();
   } else {
     console.log(`[BuildV2] All builds up-to-date`);
   }
@@ -1703,6 +1716,9 @@ async function prewarmInitialBuilds(opts: InitialBuildPrewarmOptions): Promise<v
   });
   console.log(`[BuildV2] Initial build prewarm complete`);
 }
+
+/** Upper bound on deferring the initial prewarm behind startup unit builds. */
+const INITIAL_PREWARM_MAX_HOLD_MS = 3 * 60 * 1000;
 
 function initialBuildPrewarmConcurrency(): number {
   const raw = Number.parseInt(process.env["VIBESTUDIO_INITIAL_BUILD_CONCURRENCY"] ?? "", 10);

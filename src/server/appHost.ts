@@ -524,6 +524,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     await this.unitHost.whenReconciled();
   }
 
+  /** Declared apps are classified (entries + staged approvals); builds may still run. */
+  async whenDeclarationsStaged(): Promise<void> {
+    await this.unitHost.whenDeclarationsStaged();
+  }
+
   async shutdown(): Promise<void> {
     await this.terminalRunner?.stopAll();
   }
@@ -1316,7 +1321,12 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     source?: string | null,
     opts: { waitForApproval?: boolean } = {}
   ): Promise<ReactNativeHostReadiness> {
-    await this.whenReconciled();
+    // Pairing polls (waitForApproval: false) report in-flight builds as a
+    // preparing state instead of blocking on the full unit reconcile; see
+    // ensureElectronReady for the launch-gate contract.
+    const nonBlocking = opts.waitForApproval === false;
+    if (nonBlocking) await this.unitHost.whenDeclarationsStaged();
+    else await this.whenReconciled();
 
     const first = this.reactNativeReadinessSnapshot(source);
     if (first.ready) return first;
@@ -1363,6 +1373,12 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     }
 
     this.acceptReactNativeLaunchPreflight(candidate, declared);
+    if (nonBlocking) {
+      const entry = this.registry.get(candidate.name);
+      if (entry && (entry.status === "building" || entry.status === "pending-approval")) {
+        return this.reactNativeReadinessSnapshot(candidate.source);
+      }
+    }
     await this.reconcileHostTargetDeclaration("react-native", declared, opts);
     return this.reactNativeReadinessSnapshot(candidate.source);
   }
@@ -1436,7 +1452,14 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     source?: string | null,
     opts: { waitForApproval?: boolean } = {}
   ): Promise<ElectronHostReadiness> {
-    await this.whenReconciled();
+    // Launch-gate polls (waitForApproval: false) must not block on the full
+    // unit reconcile — that made desktop readiness wait for every declared
+    // unit to finish building. Wait only until declarations are classified,
+    // then report an in-flight build as not-ready ("building" details map to
+    // a preparing launch state); app status events re-poll until ready.
+    const nonBlocking = opts.waitForApproval === false;
+    if (nonBlocking) await this.unitHost.whenDeclarationsStaged();
+    else await this.whenReconciled();
 
     const first = this.electronReadinessSnapshot(source);
     if (first.ready) return first;
@@ -1459,6 +1482,13 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         reason: "Electron app is not declared in meta/vibestudio.yml",
         details: [`Declare ${candidate.source} under apps: before desktop clients can pair.`],
       };
+    }
+
+    if (nonBlocking) {
+      const entry = this.registry.get(candidate.name);
+      if (entry && (entry.status === "building" || entry.status === "pending-approval")) {
+        return this.electronReadinessSnapshot(candidate.source);
+      }
     }
 
     await this.reconcileHostTargetDeclaration("electron", declared, opts);

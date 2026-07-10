@@ -97,9 +97,12 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
       if (decision === "deny") {
         for (const request of requests) request.applyDenied();
       } else {
-        for (const request of applyOrder(requests)) {
-          await request.applyApproved();
-        }
+        // Kick off extension requests first but apply all requests
+        // concurrently: awaiting each host batch in turn made every app build
+        // wait for every extension to finish. An app that builds through a
+        // provider extension may transiently fail while its provider is still
+        // activating; the app host re-applies it on provider registration.
+        await Promise.all(applyOrder(requests).map((request) => request.applyApproved()));
       }
       for (const request of requests) request.resolve();
     } catch (err) {

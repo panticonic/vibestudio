@@ -732,12 +732,31 @@ async function main() {
       (host): host is TrustedUnitHostInstance => host !== null
     );
   let startupWorkspaceUnitReconcile: Promise<void> | null = null;
+  // Resolved once startup unit reconcile AND any approval-gated applies have
+  // settled (or startup fails); holds the build system's background prewarm
+  // pool off the CPUs while launch-critical unit builds run.
+  let releaseStartupUnitsSettled: () => void = () => {};
+  const startupUnitsSettled = new Promise<void>((resolve) => {
+    releaseStartupUnitsSettled = resolve;
+  });
   const { HostTargetLaunchCoordinator } = await import("./hostTargetLaunchCoordinator.js");
+  // Launch/session state only needs declared units to be CLASSIFIED (pending
+  // entries upserted, approval batches staged with the coordinator) — waiting
+  // for the whole startup reconcile made the launch gate sit behind every unit
+  // build. Race against the reconcile promise so a pass that fails before
+  // staging still releases the gate (with its error surfaced by resolveLaunch).
+  const startupUnitDeclarationsStaged = (): Promise<void> => {
+    if (!startupWorkspaceUnitReconcile) return Promise.resolve();
+    const staged = Promise.all(
+      trustedUnitHosts().map((host) => host.whenDeclarationsStaged())
+    ).then(() => {});
+    return Promise.race([staged, startupWorkspaceUnitReconcile]);
+  };
   const hostTargetLaunchCoordinator = new HostTargetLaunchCoordinator({
     approvalQueue,
     eventService,
     startupApprovals: unitApprovalCoordinator,
-    awaitStartupUnitReconcile: () => startupWorkspaceUnitReconcile ?? Promise.resolve(),
+    awaitStartupUnitReconcile: startupUnitDeclarationsStaged,
     getAppHost: () => appHostForGateway,
     getTrustedUnitHosts: trustedUnitHosts,
   });
@@ -1081,7 +1100,11 @@ async function main() {
         workspacePath,
         workspaceVcs,
         appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
-        { appRoot, dependencyWorkspaceRoot: buildDependencyWorkspaceRoot }
+        {
+          appRoot,
+          dependencyWorkspaceRoot: buildDependencyWorkspaceRoot,
+          holdInitialPrewarm: () => startupUnitsSettled,
+        }
       );
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -3905,6 +3928,11 @@ async function main() {
     }
   };
   startupWorkspaceUnitReconcile = runStartupWorkspaceUnitReconcile();
+  void startupWorkspaceUnitReconcile
+    .catch(() => {})
+    .then(() => Promise.all(trustedUnitHosts().map((host) => host.whenSettled())))
+    .catch(() => {})
+    .finally(() => releaseStartupUnitsSettled());
   if (!requireMobileReady && !requireElectronReady) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
